@@ -5,6 +5,15 @@
 // and auto-switches to the right cockpit); full CHIRP CSV round-trip so channels
 // flow Nexus ⇄ CHIRP ⇄ real radios. Store + model live in features/memories.ts
 // (shared with the cockpit MemoryStrip and the Program section's save).
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT, because this screen is nearly all units: every
+// dial and TX frequency, every offset, every CTCSS tone and DTCS code, the mode names and the
+// mode/CTCSS datalists, the callsign, the group names the operator typed, the HF and VHF/UHF
+// section labels, the POTA/SOTA programme names, the `value` of every <select> (the label is
+// prose, the value is what is stored), and the export FILE NAME's slug. The weekday
+// abbreviations are date formatting rather than catalog prose — the same ruling the DXpedition
+// calendar carries — and stay here with the rest of the schedule handling.
 import { Fragment, useEffect, useRef, useState, type InputHTMLAttributes } from 'react'
 import {
   addGroup,
@@ -35,6 +44,8 @@ import { fmtDistanceKm, useUnits, type Units } from '../units'
 import { importPack, STARTER_PACKS, type Pack } from '../features/packs'
 import { saveTextToDownloads } from '../api'
 import { pushToast } from '../toast'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 import { modChord } from '../platform'
 import { parseOperatorNumber } from '../numInput'
 
@@ -54,17 +65,47 @@ export interface MemoriesViewProps {
 /** The sidebar's built-in views ahead of the custom groups. */
 type Selection = 'all' | 'fav' | 'nets' | { group: string }
 
+/** The programmes' own names — the same letters in every language (the rule is in i18n/index.ts). */
+const POTA_SOTA_PROGRAMS = 'POTA/SOTA'
+
+/**
+ * The channel-kind words. Each KEY is the stored value (a token); only the word is prose.
+ *
+ * They resolve LAZILY, through getters, for the reason `features/needVisuals.ts` documents:
+ * this is a module constant read during render, so looking the words up at import time would
+ * freeze whichever locale happened to load first. The record's shape is unchanged.
+ */
 const KIND_LABEL: Record<MemoryKind, string> = {
-  repeater: 'Repeater',
-  simplex: 'Simplex',
-  hfnet: 'HF net',
-  calling: 'Calling',
-  pota: 'POTA/SOTA',
-  digital: 'Digital',
-  satellite: 'Satellite',
-  emcomm: 'EmComm',
-  reference: 'Reference',
-  other: 'Other',
+  get repeater() {
+    return t('memories.kind.repeater')
+  },
+  get simplex() {
+    return t('memories.kind.simplex')
+  },
+  get hfnet() {
+    return t('memories.kind.hfnet')
+  },
+  get calling() {
+    return t('memories.kind.calling')
+  },
+  get pota() {
+    return POTA_SOTA_PROGRAMS
+  },
+  get digital() {
+    return t('memories.kind.digital')
+  },
+  get satellite() {
+    return t('memories.kind.satellite')
+  },
+  get emcomm() {
+    return t('memories.kind.emcomm')
+  },
+  get reference() {
+    return t('memories.kind.reference')
+  },
+  get other() {
+    return t('memories.kind.other')
+  },
 }
 
 const MODE_SUGGESTIONS = ['USB', 'LSB', 'FM', 'NFM', 'AM', 'CW', 'FT8', 'FT4']
@@ -185,8 +226,25 @@ export function MemoriesView({
   const fileRef = useRef<HTMLInputElement>(null)
 
   const groupSel = typeof sel === 'object' ? sel.group : null
-  const selName =
-    sel === 'all' ? 'All' : sel === 'fav' ? 'Favorites' : sel === 'nets' ? 'Nets' : (bank.groups.find((g) => g.id === groupSel)?.name ?? 'Group')
+  const groupName = bank.groups.find((g) => g.id === groupSel)?.name
+  // The export FILE NAME is built from an invariant slug, never from the view's displayed name:
+  // the ASCII squeeze in `exportCsv` would strip a translated name to nothing on any locale that
+  // does not write in ASCII, and every export would come out called `nexus-memories-.csv`.
+  const selSlug =
+    sel === 'all' ? 'all' : sel === 'fav' ? 'favorites' : sel === 'nets' ? 'nets' : (groupName ?? 'group')
+  // One whole placeholder per view rather than a name spliced into "Search …": lower-casing a
+  // translated noun is wrong in every language that capitalises them. The GROUP name is the
+  // operator's own text, so it keeps the lower-casing it has always had.
+  const searchPlaceholder =
+    sel === 'all'
+      ? t('memories.search.placeholder.all')
+      : sel === 'fav'
+        ? t('memories.search.placeholder.fav')
+        : sel === 'nets'
+          ? t('memories.search.placeholder.nets')
+          : groupName
+            ? t('memories.search.placeholder.group', { group: groupName.toLowerCase() })
+            : t('memories.search.placeholder.groupless')
 
   const query = q.trim().toLowerCase()
   const filtered = bank.memories.filter((m) => {
@@ -272,13 +330,15 @@ export function MemoriesView({
       return r.bank
     })
     // Report added and refreshed separately — "already up to date" is only honest when
-    // the re-install genuinely changed nothing.
-    const ch = (n: number) => `${n} channel${n === 1 ? '' : 's'}`
+    // the re-install genuinely changed nothing. Each clause is its OWN message with its own
+    // plural: one entry cannot select a form for two different counts.
     const parts: string[] = []
-    if (added > 0) parts.push(`added ${ch(added)}`)
-    if (updated > 0) parts.push(`refreshed ${ch(updated)}`)
+    if (added > 0) parts.push(t('memories.packs.toast.added', { count: added }))
+    if (updated > 0) parts.push(t('memories.packs.toast.refreshed', { count: updated }))
     pushToast(
-      parts.length > 0 ? `${pack.name} — ${parts.join(', ')}` : `${pack.name} — already up to date`,
+      parts.length > 0
+        ? t('memories.packs.toast', { pack: pack.name, parts: parts.join(', ') })
+        : t('memories.packs.toast.upToDate', { pack: pack.name }),
       'success',
       3000,
     )
@@ -297,7 +357,9 @@ export function MemoriesView({
       return res.bank
     })
     pushToast(
-      added ? `Saved ${dialMhz.toFixed(3)} ${dialMode}` : `${dialMhz.toFixed(3)} ${dialMode} is already saved`,
+      added
+        ? t('memories.toast.saved', { freq: dialMhz.toFixed(3), mode: dialMode })
+        : t('memories.toast.alreadySaved', { freq: dialMhz.toFixed(3), mode: dialMode }),
       added ? 'success' : 'info',
       2500,
     )
@@ -323,12 +385,14 @@ export function MemoriesView({
 
   const exportCsv = () => {
     if (shown.length === 0) {
-      pushToast('Nothing to export in this view', 'info', 2500)
+      pushToast(t('memories.export.empty'), 'info', 2500)
       return
     }
-    const name = `nexus-memories-${selName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`
+    const name = `nexus-memories-${selSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`
     void saveTextToDownloads(name, toChirpCsv(shown))
-      .then((path) => pushToast(`Exported ${shown.length} channel${shown.length === 1 ? '' : 's'} → ${path}`, 'success', 5000))
+      .then((path) =>
+        pushToast(t('memories.export.done', { count: shown.length, path }), 'success', 5000),
+      )
       .catch((e) => pushToast(String(e), 'error'))
   }
 
@@ -338,7 +402,7 @@ export function MemoriesView({
       .then((text) => {
         const rows = parseChirpCsv(text)
         if (rows.length === 0) {
-          pushToast('No channels found — is this a CHIRP CSV?', 'info', 4000)
+          pushToast(t('memories.import.notChirp'), 'info', 4000)
           return
         }
         let added = 0
@@ -352,8 +416,11 @@ export function MemoriesView({
           return next
         })
         const skipped = rows.length - added
+        // Two counts, two messages, each with its own plural — and the skipped clause carries
+        // its own leading space so a locale that drops it is not left with a double space.
         pushToast(
-          `Imported ${added} channel${added === 1 ? '' : 's'}${skipped ? ` (${skipped} duplicate${skipped === 1 ? '' : 's'} skipped)` : ''}`,
+          t('memories.import.done', { count: added }) +
+            (skipped ? t('memories.import.dupes', { count: skipped }) : ''),
           'success',
           5000,
         )
@@ -368,11 +435,11 @@ export function MemoriesView({
     return (
       <div className="mv-editor">
         <label className="mv-field">
-          <span>Name</span>
+          <span>{t('memories.editor.name.label')}</span>
           <CommitInput resetKey={`${m.id}:name:${m.name}`} value={m.name} onCommit={(v) => up({ name: v })} />
         </label>
         <label className="mv-field">
-          <span>Kind</span>
+          <span>{t('memories.editor.kind.label')}</span>
           <select value={m.kind} onChange={(e) => up({ kind: e.target.value as MemoryKind })}>
             {(Object.keys(KIND_LABEL) as MemoryKind[]).map((k) => (
               <option key={k} value={k}>
@@ -382,7 +449,7 @@ export function MemoriesView({
           </select>
         </label>
         <label className="mv-field">
-          <span>RX MHz</span>
+          <span>{t('memories.editor.rx.label')}</span>
           <CommitInput
             resetKey={`${m.id}:rx:${m.rxMhz}`}
             inputMode="decimal"
@@ -391,7 +458,7 @@ export function MemoriesView({
           />
         </label>
         <label className="mv-field">
-          <span>Mode</span>
+          <span>{t('memories.editor.mode.label')}</span>
           <CommitInput
             resetKey={`${m.id}:mode:${m.mode}`}
             list="mv-modes"
@@ -402,20 +469,21 @@ export function MemoriesView({
         {showOffset && (
           <>
             <label className="mv-field">
-              <span>Offset</span>
+              <span>{t('memories.editor.offset.label')}</span>
+              {/* The LABEL is prose; the `value` is what is stored and sent to the radio. */}
               <select
                 value={m.offsetDir ?? 'simplex'}
                 onChange={(e) => up({ offsetDir: e.target.value as OffsetDir })}
               >
-                <option value="simplex">Simplex</option>
-                <option value="plus">+ up</option>
-                <option value="minus">− down</option>
-                <option value="split">Odd split</option>
+                <option value="simplex">{t('memories.editor.offset.simplex')}</option>
+                <option value="plus">{t('memories.editor.offset.plus')}</option>
+                <option value="minus">{t('memories.editor.offset.minus')}</option>
+                <option value="split">{t('memories.editor.offset.split')}</option>
               </select>
             </label>
             {(m.offsetDir === 'plus' || m.offsetDir === 'minus') && (
               <label className="mv-field">
-                <span>Offset MHz</span>
+                <span>{t('memories.editor.offsetMhz.label')}</span>
                 <CommitInput
                   resetKey={`${m.id}:off:${m.offsetMhz ?? 0}`}
                   inputMode="decimal"
@@ -426,7 +494,7 @@ export function MemoriesView({
             )}
             {m.offsetDir === 'split' && (
               <label className="mv-field">
-                <span>TX MHz</span>
+                <span>{t('memories.editor.txMhz.label')}</span>
                 <CommitInput
                   resetKey={`${m.id}:tx:${m.txMhz ?? m.rxMhz}`}
                   inputMode="decimal"
@@ -436,20 +504,20 @@ export function MemoriesView({
               </label>
             )}
             <label className="mv-field">
-              <span>Tone</span>
+              <span>{t('memories.editor.tone.label')}</span>
               <select
                 value={m.toneMode ?? 'none'}
                 onChange={(e) => up({ toneMode: e.target.value as ToneMode })}
               >
-                <option value="none">None</option>
-                <option value="tone">Tone (encode)</option>
-                <option value="tsql">TSQL (enc+dec)</option>
-                <option value="dtcs">DTCS</option>
+                <option value="none">{t('memories.editor.tone.none')}</option>
+                <option value="tone">{t('memories.editor.tone.tone')}</option>
+                <option value="tsql">{t('memories.editor.tone.tsql')}</option>
+                <option value="dtcs">{t('memories.editor.tone.dtcs')}</option>
               </select>
             </label>
             {(m.toneMode === 'tone' || m.toneMode === 'tsql') && (
               <label className="mv-field">
-                <span>CTCSS Hz</span>
+                <span>{t('memories.editor.ctcss.label')}</span>
                 <CommitInput
                   resetKey={`${m.id}:ctcss:${m.ctcssEncHz ?? ''}`}
                   list="mv-ctcss"
@@ -461,7 +529,7 @@ export function MemoriesView({
             )}
             {m.toneMode === 'dtcs' && (
               <label className="mv-field">
-                <span>DTCS code</span>
+                <span>{t('memories.editor.dtcs.label')}</span>
                 <CommitInput
                   resetKey={`${m.id}:dtcs:${m.dtcsCode ?? ''}`}
                   type="number"
@@ -471,7 +539,7 @@ export function MemoriesView({
               </label>
             )}
             <label className="mv-field">
-              <span>Callsign</span>
+              <span>{t('memories.editor.callsign.label')}</span>
               <CommitInput
                 resetKey={`${m.id}:call:${m.callsign ?? ''}`}
                 value={m.callsign ?? ''}
@@ -483,8 +551,8 @@ export function MemoriesView({
         {m.kind === 'hfnet' && (
           <>
             <div className="mv-field mv-days">
-              <span>Days</span>
-              <div className="mv-daychips" role="group" aria-label="Net days (UTC)">
+              <span>{t('memories.editor.days.label')}</span>
+              <div className="mv-daychips" role="group" aria-label={t('memories.editor.days.aria')}>
                 {DAY_LABELS.map((d, i) => {
                   const days = m.net?.days ?? []
                   const on = days.includes(i)
@@ -514,7 +582,7 @@ export function MemoriesView({
               </div>
             </div>
             <label className="mv-field">
-              <span>Start (UTC)</span>
+              <span>{t('memories.editor.start.label')}</span>
               <input
                 type="time"
                 value={m.net?.utcTime ?? ''}
@@ -533,11 +601,11 @@ export function MemoriesView({
               />
             </label>
             <div className="mv-field mv-net-alert">
-              <span>Remind me</span>
+              <span>{t('memories.editor.remind.label')}</span>
               <span className="mv-net-alert-row">
                 <input
                   type="checkbox"
-                  aria-label="Enable a reminder for this net"
+                  aria-label={t('memories.editor.remind.aria')}
                   checked={m.net?.alertEnabled ?? false}
                   onChange={(e) =>
                     up({
@@ -555,7 +623,7 @@ export function MemoriesView({
                   type="number"
                   min={1}
                   max={120}
-                  aria-label="Reminder lead time in minutes"
+                  aria-label={t('memories.editor.lead.aria')}
                   resetKey={`${m.id}:lead:${m.net?.alertLeadMin ?? 10}`}
                   value={String(m.net?.alertLeadMin ?? 10)}
                   onCommit={(v) => {
@@ -571,13 +639,13 @@ export function MemoriesView({
                     })
                   }}
                 />
-                <span className="mv-net-alert-unit">min before (UTC schedule)</span>
+                <span className="mv-net-alert-unit">{t('memories.editor.lead.unit')}</span>
               </span>
             </div>
           </>
         )}
         <label className="mv-field mv-notes">
-          <span>Notes</span>
+          <span>{t('memories.editor.notes.label')}</span>
           <CommitInput
             resetKey={`${m.id}:notes:${m.notes ?? ''}`}
             value={m.notes ?? ''}
@@ -586,8 +654,8 @@ export function MemoriesView({
         </label>
         {bank.groups.length > 0 && (
           <div className="mv-field mv-groups">
-            <span>Groups</span>
-            <div className="mv-groupchips" role="group" aria-label="Group membership">
+            <span>{t('memories.editor.groups.label')}</span>
+            <div className="mv-groupchips" role="group" aria-label={t('memories.editor.groups.aria')}>
               {bank.groups.map((g) => {
                 const on = m.groups.includes(g.id)
                 return (
@@ -610,7 +678,7 @@ export function MemoriesView({
           </div>
         )}
         <button type="button" className="mv-editor-done" onClick={() => setEditingId(null)}>
-          Done
+          {t('memories.editor.done')}
         </button>
       </div>
     )
@@ -652,7 +720,7 @@ export function MemoriesView({
   )
 
   return (
-    <section className="memories-view" aria-label="Memories">
+    <section className="memories-view" aria-label={t('memories.aria')}>
       <datalist id="mv-modes">
         {MODE_SUGGESTIONS.map((m) => (
           <option key={m} value={m} />
@@ -676,20 +744,17 @@ export function MemoriesView({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mv-packs-head">
-              <h3 id="mv-packs-title">Starter packs</h3>
+              <h3 id="mv-packs-title">{t('memories.packs.title')}</h3>
               <button
                 type="button"
                 className="mv-packs-close"
                 onClick={() => setShowPacks(false)}
-                aria-label="Close"
+                aria-label={t('memories.packs.close.aria')}
               >
                 ✕
               </button>
             </div>
-            <p className="mv-packs-sub">
-              One-click channel sets. Duplicates are skipped, so installing again is safe. Net
-              schedules are UTC and approximate — enable a reminder per net.
-            </p>
+            <p className="mv-packs-sub">{t('memories.packs.sub')}</p>
             <ul className="mv-packs-list">
               {STARTER_PACKS.map((pack) => {
                 const installed = bank.groups.some((g) => g.name === pack.name)
@@ -699,11 +764,14 @@ export function MemoriesView({
                       <span className="mv-pack-name">{pack.name}</span>
                       <span className="mv-pack-desc">{pack.description}</span>
                       <span className="mv-pack-meta">
-                        {pack.memories.length} channels · {pack.region}
+                        {t('memories.packs.meta', {
+                          count: pack.memories.length,
+                          region: pack.region,
+                        })}
                       </span>
                     </div>
                     <button type="button" className="mv-pack-add" onClick={() => installPack(pack)}>
-                      {installed ? 'Update' : 'Install'}
+                      {installed ? t('memories.packs.update') : t('memories.packs.install')}
                     </button>
                   </li>
                 )
@@ -714,9 +782,9 @@ export function MemoriesView({
       )}
 
       <aside className="mv-side">
-        {sideItem('all', 'All memories', bank.memories.length)}
-        {sideItem('fav', '★ Favorites', bank.memories.filter((m) => m.favorite).length)}
-        {sideItem('nets', 'Nets', bank.memories.filter((m) => m.kind === 'hfnet').length)}
+        {sideItem('all', t('memories.side.all'), bank.memories.length)}
+        {sideItem('fav', t('memories.side.fav'), bank.memories.filter((m) => m.favorite).length)}
+        {sideItem('nets', t('memories.side.nets'), bank.memories.filter((m) => m.kind === 'hfnet').length)}
         {bank.groups.length > 0 && <div className="mv-side-sep" />}
         {bank.groups.map((g) => (
           <div key={g.id} className="mv-side-group">
@@ -738,7 +806,11 @@ export function MemoriesView({
             )}
             {groupSel === g.id && renamingGroup !== g.id && (
               <span className="mv-side-tools">
-                <button type="button" onClick={() => setRenamingGroup(g.id)} title="Rename group">
+                <button
+                  type="button"
+                  onClick={() => setRenamingGroup(g.id)}
+                  title={t('memories.side.group.rename.title')}
+                >
                   ✎
                 </button>
                 <button
@@ -747,7 +819,7 @@ export function MemoriesView({
                     commit((b) => deleteGroup(b, g.id))
                     setSel('all')
                   }}
-                  title="Delete group (memories stay)"
+                  title={t('memories.side.group.delete.title')}
                 >
                   ✕
                 </button>
@@ -765,7 +837,7 @@ export function MemoriesView({
         >
           <input
             value={newGroupName}
-            placeholder="New group…"
+            placeholder={t('memories.side.newGroup.placeholder')}
             onChange={(e) => setNewGroupName(e.target.value)}
           />
           <button type="submit" disabled={!newGroupName.trim()}>
@@ -779,70 +851,78 @@ export function MemoriesView({
           <input
             className="mv-search"
             value={q}
-            placeholder={`Search ${selName.toLowerCase()}…`}
+            placeholder={searchPlaceholder}
             onChange={(e) => setQ(e.target.value)}
           />
           <button
             type="button"
             className={`mv-tool${grid ? '' : ' active'}`}
             onClick={() => setGrid(false)}
-            title="List view — clean rows with an inline editor"
+            title={t('memories.toolbar.list.title')}
           >
-            List
+            {t('memories.toolbar.list.label')}
           </button>
           <button
             type="button"
             className={`mv-tool${grid ? ' active' : ''}`}
             onClick={() => setGrid(true)}
-            title="Grid view — the CHIRP-style spreadsheet"
+            title={t('memories.toolbar.grid.title')}
           >
-            Grid
+            {t('memories.toolbar.grid.label')}
           </button>
           <span className="mv-toolbar-gap" />
           <button
             type="button"
             className="mv-tool"
             onClick={saveCurrent}
-            title="Save the current dial frequency + mode as a memory"
+            title={t('memories.toolbar.save.title')}
           >
-            ＋ Save {dialMhz > 0 ? dialMhz.toFixed(3) : '—'} {dialMode}
+            {t('memories.toolbar.save.label', {
+              freq: dialMhz > 0 ? dialMhz.toFixed(3) : '—',
+              mode: dialMode,
+            })}
           </button>
-          <button type="button" className="mv-tool" onClick={addNew} title="Add a memory by hand">
-            ＋ New
+          <button
+            type="button"
+            className="mv-tool"
+            onClick={addNew}
+            title={t('memories.toolbar.new.title')}
+          >
+            {t('memories.toolbar.new.label')}
           </button>
           <button
             type="button"
             className="mv-tool"
             onClick={() => fileRef.current?.click()}
-            title="Import a CHIRP CSV (duplicates are skipped)"
+            title={t('memories.toolbar.import.title')}
           >
-            Import CSV
+            {t('memories.toolbar.import.label')}
           </button>
           <button
             type="button"
             className="mv-tool"
             onClick={exportCsv}
-            title={`Export the ${shown.length} shown channel${shown.length === 1 ? '' : 's'} as a CHIRP CSV (imports into ~1,000 radio models)`}
+            title={t('memories.toolbar.export.title', { count: shown.length })}
           >
-            Export CSV ({shown.length})
+            {t('memories.toolbar.export.label', { count: shown.length })}
           </button>
           {onPopOut && (
             <button
               type="button"
               className="mv-tool"
               onClick={onPopOut}
-              title="Pop Memories out into its own window (multi-monitor)"
+              title={t('memories.toolbar.popOut.title')}
             >
-              ↗ Pop out
+              {t('memories.toolbar.popOut.label')}
             </button>
           )}
           <button
             type="button"
             className="mv-tool"
             onClick={() => setShowPacks(true)}
-            title="Install curated channel sets — nets, calling frequencies, POTA, digital"
+            title={t('memories.toolbar.packs.title')}
           >
-            Packs
+            {t('memories.toolbar.packs.label')}
           </button>
           <input
             ref={fileRef}
@@ -861,19 +941,16 @@ export function MemoriesView({
           <div className="mv-empty">
             {bank.memories.length === 0 ? (
               <>
-                <p>No memories yet.</p>
+                <p>{t('memories.empty.none')}</p>
                 <p className="mv-empty-hint">
-                  Start with a <strong>starter pack</strong> — nets, calling frequencies, POTA, and
-                  digital watering holes, ready to go. Or save the current frequency with{' '}
-                  <strong>＋ Save</strong>, import a CHIRP CSV, or send repeaters here from the Program
-                  section. Star a memory (★) and it shows on the MEM strip in every cockpit.
+                  <T k="memories.empty.hint" tags={{ b: <strong /> }} />
                 </p>
                 <button type="button" className="mv-empty-packs" onClick={() => setShowPacks(true)}>
-                  Browse starter packs
+                  {t('memories.empty.browsePacks')}
                 </button>
               </>
             ) : (
-              <p>Nothing matches this view.</p>
+              <p>{t('memories.empty.noMatch')}</p>
             )}
           </div>
         ) : grid ? (
@@ -881,14 +958,14 @@ export function MemoriesView({
             <table className="mv-grid">
               <thead>
                 <tr>
-                  <th aria-label="Favorite">★</th>
-                  {th('name', 'Name')}
-                  {th('rxMhz', 'RX MHz')}
-                  {th('mode', 'Mode')}
-                  <th>Offset</th>
-                  <th>Tone</th>
-                  {th('kind', 'Kind')}
-                  <th aria-label="Actions" />
+                  <th aria-label={t('memories.grid.column.favorite')}>★</th>
+                  {th('name', t('memories.grid.column.name'))}
+                  {th('rxMhz', t('memories.grid.column.rx'))}
+                  {th('mode', t('memories.grid.column.mode'))}
+                  <th>{t('memories.grid.column.offset')}</th>
+                  <th>{t('memories.grid.column.tone')}</th>
+                  {th('kind', t('memories.grid.column.kind'))}
+                  <th aria-label={t('memories.grid.column.actions')} />
                 </tr>
               </thead>
               <tbody>
@@ -908,7 +985,7 @@ export function MemoriesView({
                         type="button"
                         className={`mv-star${m.favorite ? ' on' : ''}`}
                         onClick={() => commit((b) => toggleFavorite(b, m.id))}
-                        title={m.favorite ? 'Unstar (remove from cockpit strips)' : 'Star (show on cockpit strips)'}
+                        title={m.favorite ? t('memories.row.unstar.title') : t('memories.row.star.title')}
                       >
                         {m.favorite ? '★' : '☆'}
                       </button>
@@ -945,13 +1022,17 @@ export function MemoriesView({
                     </td>
                     <td className="mv-ro">{KIND_LABEL[m.kind]}</td>
                     <td className="mv-row-actions">
-                      <button type="button" onClick={() => onRecall(m)} title="Tune to this memory">
-                        Tune
+                      <button
+                        type="button"
+                        onClick={() => onRecall(m)}
+                        title={t('memories.grid.tune.title')}
+                      >
+                        {t('memories.grid.tune.label')}
                       </button>
                       <button
                         type="button"
                         onClick={() => commit((b) => deleteMemory(b, m.id))}
-                        title="Delete this memory"
+                        title={t('memories.row.delete.title')}
                       >
                         ✕
                       </button>
@@ -983,8 +1064,15 @@ export function MemoriesView({
                       className={`mv-rank${offStrip ? ' off' : ''}`}
                       title={
                         offStrip
-                          ? `Rank ${rank} — past the ${STRIP_FAVORITE_LIMIT} chips the cockpit MEM strip shows. Move it up with ▲.`
-                          : `Chip ${rank} on the cockpit MEM strip${rank <= 9 ? ` · ${modChord(rank)}` : ''}`
+                          ? t('memories.rank.off.title', {
+                              rank,
+                              limit: STRIP_FAVORITE_LIMIT,
+                            })
+                          : t('memories.rank.on.title', {
+                              rank,
+                              // A keyboard chord, not prose — `modChord` names the key.
+                              hotkey: rank <= 9 ? ` · ${modChord(rank)}` : '',
+                            })
                       }
                     >
                       {rank}
@@ -994,7 +1082,7 @@ export function MemoriesView({
                     type="button"
                     className={`mv-star${m.favorite ? ' on' : ''}`}
                     onClick={() => commit((b) => toggleFavorite(b, m.id))}
-                    title={m.favorite ? 'Unstar (remove from cockpit strips)' : 'Star (show on cockpit strips)'}
+                    title={m.favorite ? t('memories.row.unstar.title') : t('memories.row.star.title')}
                   >
                     {m.favorite ? '★' : '☆'}
                   </button>
@@ -1002,7 +1090,10 @@ export function MemoriesView({
                     type="button"
                     className="mv-row-main"
                     onClick={() => onRecall(m)}
-                    title={`Tune to ${m.rxMhz.toFixed(4)} MHz ${m.mode}`}
+                    title={t('memories.row.main.title', {
+                      freq: m.rxMhz.toFixed(4),
+                      mode: m.mode,
+                    })}
                   >
                     <span className="mv-row-name">{m.name}</span>
                     <span className="mv-row-freq">
@@ -1022,21 +1113,29 @@ export function MemoriesView({
                     <span className="mv-row-move">
                       <button
                         type="button"
-                        aria-label={`Move ${m.name} up`}
+                        aria-label={t('memories.row.moveUp.aria', { name: m.name })}
                         onClick={() =>
                           commit((b) => (rankView ? moveFavorite(b, m.id, -1) : moveMemory(b, m.id, -1)))
                         }
-                        title={rankView ? `Move up one rank (1–${STRIP_FAVORITE_LIMIT} are the strip)` : 'Move up'}
+                        title={
+                          rankView
+                            ? t('memories.row.moveUp.rank.title', { limit: STRIP_FAVORITE_LIMIT })
+                            : t('memories.row.moveUp.title')
+                        }
                       >
                         ▲
                       </button>
                       <button
                         type="button"
-                        aria-label={`Move ${m.name} down`}
+                        aria-label={t('memories.row.moveDown.aria', { name: m.name })}
                         onClick={() =>
                           commit((b) => (rankView ? moveFavorite(b, m.id, 1) : moveMemory(b, m.id, 1)))
                         }
-                        title={rankView ? `Move down one rank (1–${STRIP_FAVORITE_LIMIT} are the strip)` : 'Move down'}
+                        title={
+                          rankView
+                            ? t('memories.row.moveDown.rank.title', { limit: STRIP_FAVORITE_LIMIT })
+                            : t('memories.row.moveDown.title')
+                        }
                       >
                         ▼
                       </button>
@@ -1046,15 +1145,15 @@ export function MemoriesView({
                     type="button"
                     className="mv-row-tune"
                     onClick={() => onRecall(m)}
-                    title="Tune — sets frequency, mode, offset, and tone, and opens the right cockpit"
+                    title={t('memories.row.tune.title')}
                   >
-                    Tune
+                    {t('memories.row.tune.label')}
                   </button>
                   <button
                     type="button"
                     className={`mv-row-edit${editingId === m.id ? ' active' : ''}`}
                     onClick={() => setEditingId(editingId === m.id ? null : m.id)}
-                    title="Edit"
+                    title={t('memories.row.edit.title')}
                   >
                     ✎
                   </button>
@@ -1062,7 +1161,7 @@ export function MemoriesView({
                     type="button"
                     className="mv-row-del"
                     onClick={() => commit((b) => deleteMemory(b, m.id))}
-                    title="Delete this memory"
+                    title={t('memories.row.delete.title')}
                   >
                     ✕
                   </button>

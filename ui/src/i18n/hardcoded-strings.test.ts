@@ -168,6 +168,70 @@ const MIGRATED = [
   'components/FieldDayView.tsx',
   'components/ContestCalendarPane.tsx',
   'fdEvent.ts',
+  // Batch 7 (2026-08-18) — the Satellites section, the Connect Passes pane and the nine
+  // composers behind them. One 3,900-line planning surface plus nine small modules, and the
+  // units rule lands on the SKY and the DIAL: bird names, NORAD ids, TLE epochs, every
+  // uplink/downlink frequency and offset, the SatNOGS transponder descriptions with their
+  // per-leg mode names, azimuths, elevations, ranges, altitudes and the compass letters all
+  // stay in the code, as do the mode names the radio binding prints (MODE_FM/MODE_SSB), the
+  // NORAD label and the passband plot's centre tick. Two things this batch proves the earlier
+  // ones did not: an INSTRUMENT can have text that is not prose — the sky dome's `az 143°`
+  // plates are sized from the string by viewBox arithmetic, so they are tick labels and are
+  // deliberately not migrated — and a module-level LABEL TABLE with a wire value beside every
+  // label (`satVfo.ts`, read by two components) migrates through getters exactly as
+  // `needVisuals.ts` did, so Settings ▸ Radio reads it unchanged. It also carried the tree's
+  // heaviest run of mid-sentence conditionals: the Doppler row's six states, the badge's
+  // four, the readiness rail's uplink offers and the TX-sideband note are each ONE entry with
+  // the variable clause interpolated.
+  'components/SatellitesView.tsx',
+  'features/satHealth.ts',
+  'features/satLane.ts',
+  'features/satVfo.ts',
+  'features/satAlarm.ts',
+  'features/issAutoArm.ts',
+  'features/tleMessages.ts',
+  'features/elementBands.ts',
+  'features/satPassAlert.ts',
+  'components/prop/SatPassesPane.tsx',
+  // Batch 8 (2026-08-18) — memories, recall and radio programming. The densest UNITS surface
+  // of the low-risk half: every string on these screens sits beside a dial frequency, a step,
+  // a CTCSS tone, an offset or a band name, and all of those stay in the code — as do the
+  // rig-model names in the Program section's "Max name" list (FT-60, Baofeng, Yaesu, Anytone
+  // are tokens exactly as a callsign is), the mode and CTCSS datalists, and the `value` of
+  // every <select>, whose LABEL moved while the stored token did not. Three things this batch
+  // settles that the earlier seven did not. A string can be operator-visible AND legally
+  // fixed: the two repeater directories' attribution lines are written verbatim into the
+  // exported CSV as well as shown in the footer, so they are constants, not entries. A
+  // FILE NAME must not be built from a translated word — the export slug is invariant now,
+  // because the old ASCII squeeze would have reduced a non-Latin view name to
+  // `nexus-memories-.csv`. And a name spliced into "Search …" was replaced by one whole
+  // placeholder per view: lower-casing a translated noun is wrong wherever nouns capitalise.
+  // The five hand-rolled plurals in MemoriesView became `{{count}}` entries; the two-count
+  // reports (imported/skipped, added/refreshed, saved/already-there) are one entry per count.
+  'components/MemoriesView.tsx',
+  'components/RadioProgView.tsx',
+  'components/MemoryStrip.tsx',
+  'components/RecallPanel.tsx',
+  'components/BandPicker.tsx',
+  'components/BandStrip.tsx',
+  'components/FrequencyControl.tsx',
+  'components/RadioPicker.tsx',
+  'components/RadioSwitcher.tsx',
+  'rigFormChecks.ts',
+  // Batch 13 (2026-08-19) — Settings ▸ Radio's audio half (Audio, Headphone monitor,
+  // Satellite Doppler, Orbital elements, Rotator) and the SETUP WIZARD, migrated together
+  // because the wizard's steps ARE those settings: two surfaces asking the same question in
+  // two wordings is how the pair drifted before, and one catalog now holds both. The units
+  // rule lands on the HARDWARE here — sound-card device names, sample rates, the dB and ×
+  // gain readings, every baud rate, rotator model names and Hamlib model numbers, azimuth and
+  // elevation degrees, Keplerian element sources and epochs, and the callsign/grid/address
+  // EXAMPLES (WIZARD_EXAMPLES, ROTATOR_EXAMPLES) all stay in the code. Two things this batch
+  // settles: a CONFIGURATION control on the transmit path is not a transmit control — Tx
+  // Power's drive slider moved exactly as PTT Method did in batch 12, while `SetupHealth`'s
+  // Prove TX, which really does key a carrier, did not (see PARTIAL below); and the wizard's
+  // 14 mid-sentence conditionals are each ONE entry with the variable clause interpolated
+  // whole, including the "swap them" sentence, whose BUTTON is supplied by the call site.
+  'components/SetupWizard.tsx',
 ]
 
 /**
@@ -175,16 +239,33 @@ const MIGRATED = [
  *
  * They are scanned for KEYS (so the catalog checks below see the entries they use) but NOT
  * for hardcoded strings, because the un-migrated remainder of the file is still English by
- * design. `SettingsPanel.tsx` is 9,000 lines and its Spots & Alerts sections were migrated
- * with the panels they configure — putting the whole file on MIGRATED would report the other
- * 8,900 lines, and leaving it off entirely would make every key those two sections use look
- * like an orphan.
+ * design. `SettingsPanel.tsx` is 9,000 lines: its Spots & Alerts and Contesting sections were
+ * migrated with the panels they configure, batch 9 (2026-08-19) took the SHELL — the panel
+ * chrome, the tab rail, Save, the toasts/confirms its handlers raise — plus the whole
+ * Appearance tab (Workspace + Features + Accessibility), batch 10 (2026-08-19) took the
+ * Logging & Connectors sections down to the Confirmations fieldset: Connections, Worked-before
+ * (B4) & dupes, Integrations & Feeds with its Antenna gain disclosure, DXKeeper, N3FJP, N1MM+,
+ * the LoTW users list and the callsign→state database, and batch 11 (2026-08-19) took
+ * Confirmations itself — LoTW, eQSL, QRZ, HamQTH, ClubLog, HRDLog, RepeaterBook and
+ * Cloudlog/Wavelog. Batch 12 (2026-08-19) took the first three sections of the Radio tab —
+ * the dual-radio roster with its band coverage and band+mode routing table, Profiles, and Rig
+ * & CAT down to Test CAT, Advanced included — and batch 13 the rest of that tab's audio half:
+ * Audio, Headphone monitor, Satellite Doppler, Orbital elements and Rotator. Putting the file
+ * on MIGRATED would report the tabs still to come; leaving it off entirely would make every
+ * key those sections use look like an orphan.
+ *
+ * `SetupHealth.tsx` is here for a DIFFERENT and much narrower reason, and it is the only kind
+ * that may be added: every string in it is migrated except one CONTROL — Prove TX, which keys
+ * a bounded tune carrier. Transmit-path controls and their accessible names move in their own
+ * batch, with the stop-line sweeps re-run, so the button's label, its tooltip and the consent
+ * prompt in front of it stay as written and the file cannot be clean yet. It graduates to
+ * MIGRATED the moment that batch lands; nothing else is deferred in it.
  *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be
  * added to it to dodge a failing check.
  */
-const PARTIAL = ['components/SettingsPanel.tsx']
+const PARTIAL = ['components/SettingsPanel.tsx', 'components/SetupHealth.tsx']
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
 const VISIBLE_ATTRS = new Set([

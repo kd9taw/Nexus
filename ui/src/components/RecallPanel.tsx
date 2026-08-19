@@ -1,8 +1,15 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT: the callsign and its initials, the grid squares,
+// the band and mode of every prior contact, the RST pair, the operator's own notes and comments,
+// and the distance/bearing line (`units.ts` formats that at the display edge). The month
+// abbreviations in `fmtDate` are date formatting, not catalog prose — the same ruling the
+// DXpedition calendar carries — so they stay here with the rest of the date handling.
 import type { LoggedQso } from '../types'
 import type { CallHistory } from '../features/callHistory'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '../grid'
+import { t } from '../i18n'
 import { useUnits } from '../units'
 
 interface Props {
@@ -91,14 +98,25 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
   // keeps that error visible instead of silently wrong.
   const coarse = (g: string | null | undefined) => Boolean(g?.trim()) && g!.trim().length < 6
   const approx = [
-    coarse(myGrid) ? `your ${myGrid!.trim().toUpperCase()} square (set a 6-character grid in Settings to sharpen it)` : '',
-    !them || (lat != null && lon != null) || !coarse(grid) ? '' : `their ${grid!.trim().toUpperCase()} square`,
+    coarse(myGrid) ? t('recall.geo.approx.mine', { grid: myGrid!.trim().toUpperCase() }) : '',
+    !them || (lat != null && lon != null) || !coarse(grid)
+      ? ''
+      : t('recall.geo.approx.theirs', { grid: grid!.trim().toUpperCase() }),
   ].filter(Boolean)
-  const geoTitle =
-    'Great-circle distance · true bearing from your QTH' +
-    (approx.length ? ` — approximate: computed from the center of ${approx.join(' and ')}` : '')
+  // Whole sentences, never a clause glued onto a head: the "approximate" case is its own
+  // message, and the word joining the two squares lives inside a message of its own — a
+  // language that pairs them differently can only do that if the conjunction is translatable.
+  const squares =
+    approx.length === 2 ? t('recall.geo.approx.both', { mine: approx[0], theirs: approx[1] }) : approx[0]
+  const geoTitle = approx.length ? t('recall.geo.title.approx', { squares }) : t('recall.geo.title')
   const confirmed = hist.confirmedCount > 0
-  const needed = newEntity ? 'New DXCC!' : newBandSlot ? 'New band-slot' : newModeSlot ? 'New mode-slot' : null
+  const needed = newEntity
+    ? t('recall.need.entity')
+    : newBandSlot
+      ? t('recall.need.band')
+      : newModeSlot
+        ? t('recall.need.mode')
+        : null
   const prior = [...hist.qsos].sort((a, b) => b.whenUnix - a.whenUnix)
   const lastNote = prior.find((q) => (q.notes ?? '').trim())?.notes?.trim()
   // The link needs only the CALLSIGN (operator, 2026-07-31: open the call's QRZ page from the
@@ -147,13 +165,15 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
         <button
           type="button"
           className="recall-avatar"
-          title={`Open ${cu} on QRZ (browser)`}
-          aria-label={`Open ${cu} on QRZ (browser)`}
+          title={t('recall.qrz.title', { call: cu })}
+          aria-label={t('recall.qrz.title', { call: cu })}
           // preventDefault on mousedown (the park-picker guard, above in LogEntry): the
           // browser-default focus-on-mousedown must not yank the caret out of the log form
           // mid-entry — the opened browser window takes over; nothing in-app moves or scrolls.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => void withErrorToast(() => openQrzPage(cu), `Could not open ${cu} on QRZ`)}
+          onClick={() =>
+            void withErrorToast(() => openQrzPage(cu), t('recall.qrz.error', { call: cu }))
+          }
         >
           {avatarInner}
           <span className="recall-avatar-qrz" aria-hidden>
@@ -168,7 +188,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
           <div className="recall-where">
             {/* Names the button the operator actually sees: the log strip's callbook button is
                 "Lookup" (it answers from QRZ or HamQTH), not "QRZ". */}
-            {where || <span className="recall-where-empty">Tab or press Lookup for name / QTH</span>}
+            {where || <span className="recall-where-empty">{t('recall.where.empty')}</span>}
           </div>
           {geo && (
             <div className="recall-geo mono" title={geoTitle}>
@@ -178,17 +198,23 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
         </div>
         <div className="recall-badges">
           {hist.dupeThisBand && band && (
-            <span className="recall-badge dupe" title={`Already worked on ${band} — logging now would be a dupe. Counts any mode on the band unless Settings’ “match mode too” is on.`}>
-              Dupe {band}
+            <span className="recall-badge dupe" title={t('recall.dupe.title', { band })}>
+              {t('recall.dupe.label', { band })}
             </span>
           )}
           {confirmed && (
-            <span className="recall-badge ok" title={`${hist.confirmedCount} of ${hist.count} prior QSOs confirmed`}>
+            <span
+              className="recall-badge ok"
+              title={t('recall.confirmed.title', {
+                confirmed: hist.confirmedCount,
+                count: hist.count,
+              })}
+            >
               ✓
             </span>
           )}
           {needed && (
-            <span className="recall-badge need" title="Worth working — a new one for your log">
+            <span className="recall-badge need" title={t('recall.need.title')}>
               ★ {needed}
             </span>
           )}
@@ -196,7 +222,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
       </div>
 
       {lastNote && (
-        <div className="recall-note" title="Your most recent note on this station">
+        <div className="recall-note" title={t('recall.note.title')}>
           📝 {lastNote}
         </div>
       )}
@@ -204,11 +230,11 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
       {prior.length > 0 && (
         <div className="recall-log">
           <div className="recall-log-head">
-            Previous contacts <span className="recall-log-count">{prior.length}</span>
+            {t('recall.log.head')} <span className="recall-log-count">{prior.length}</span>
           </div>
           {/* role=list: jsdom/AT reachability for rows scrolled under the em ceiling —
               carried over from the compact variant's list when compact was deleted. */}
-          <div className="recall-log-list" role="list" aria-label={`Previous contacts with ${cu}`}>
+          <div className="recall-log-list" role="list" aria-label={t('recall.log.aria', { call: cu })}>
             {prior.map((q, i) => {
               // Comment only — the private note is surfaced once, in the 📝 line above (showing
               // it here too would duplicate the newest QSO's note).

@@ -1,5 +1,11 @@
+// ⚠️ PARTIALLY MIGRATED (i18n/hardcoded-strings.test.ts). The three dots and their tooltips
+// read from the catalog; the numbers beside them — the dB reading, the forward watts — are
+// measurements the strip formats invariantly, and `rigDetail` is the rig's own answer, passed
+// through as a value. The one thing NOT migrated is the Prove TX control below: it keys a tune
+// carrier, so it moves with the transmit-path batch, when the stop-line sweeps are re-run.
 import type { ReactNode } from 'react'
 import type { CatTestResult } from '../types'
+import { t } from '../i18n'
 import { rxLevelDb } from './LevelMeter'
 
 /** One health dot. A `<button>` when it can navigate to the fix, a `<span>` when it cannot —
@@ -77,51 +83,68 @@ export function SetupHealth({
   // While keying: green once forward power registers (RF is being made → CAT/PTT/rig all work).
   const txClass = tuning ? (watts != null && watts > 0 ? 'ok' : 'bad') : 'unknown'
   return (
-    <div className="setup-health" role="status" aria-label="Setup health">
-      <span className="setup-health-title">Setup health</span>
+    <div className="setup-health" role="status" aria-label={t('setup.health.title')}>
+      <span className="setup-health-title">{t('setup.health.title')}</span>
       {/* Each dot is a BUTTON when the host can navigate (Settings) and plain text when it
           cannot (the wizard, which already has the controls on screen). The wording drops
           "below" in the button form — it now goes there. */}
       <HealthItem
         className={`health-item ${cls(rigOk)}`}
-        title={rigDetail || (onGoTo ? 'CAT not tested yet — open Rig Control' : 'CAT not tested yet — use Test CAT below')}
+        title={
+          rigDetail ||
+          (onGoTo ? t('setup.health.rig.title.link') : t('setup.health.rig.title.plain'))
+        }
         onGoTo={onGoTo && (() => onGoTo('rig-control'))}
       >
-        <span className="health-dot" /> Rig{' '}
-        {rigOk === true ? 'responding' : rigOk === false ? 'not answering' : 'untested'}
+        <span className="health-dot" />{' '}
+        {rigOk === true
+          ? t('setup.health.rig.responding')
+          : rigOk === false
+            ? t('setup.health.rig.notAnswering')
+            : t('setup.health.rig.untested')}
       </HealthItem>
       <HealthItem
         className={`health-item ${radio?.audioError ? 'bad' : rxLive ? 'ok' : 'unknown'}`}
         title={
           radio?.audioError ||
           (rxLive
-            ? 'Receiving audio'
+            ? t('setup.health.rx.title.ok')
             : onGoTo
-              ? 'No RX audio — open the audio device settings'
-              : 'No RX audio — check the audio device below')
+              ? t('setup.health.rx.title.link')
+              : t('setup.health.rx.title.plain'))
         }
         onGoTo={onGoTo && (() => onGoTo('audio'))}
       >
-        <span className="health-dot" /> RX audio{' '}
-        {radio?.audioError ? 'error' : rxDb != null ? `${rxDb} dB` : '—'}
+        <span className="health-dot" />{' '}
+        {radio?.audioError
+          ? t('setup.health.rx.error')
+          : rxDb != null
+            ? t('setup.health.rx.reading', { db: rxDb })
+            : t('setup.health.rx.none')}
       </HealthItem>
       <span
         className={`health-item ${txClass}`}
         title={
           tuning
-            ? 'Keying a tune carrier — forward power confirms the CAT → PTT → RF path'
+            ? t('setup.health.tx.title.keying')
             : radio?.txEnabled
-              ? 'Transmit is enabled'
-              : 'Transmit is off'
+              ? t('setup.health.tx.title.on')
+              : t('setup.health.tx.title.off')
         }
       >
-        <span className="health-dot" /> TX{' '}
+        <span className="health-dot" />{' '}
         {tuning
-          ? `keying${watts != null ? ` · ${watts.toFixed(0)} W` : '…'}`
+          ? watts != null
+            ? t('setup.health.tx.keying.power', { watts: watts.toFixed(0) })
+            : t('setup.health.tx.keying.waiting')
           : radio?.txEnabled
-            ? 'on'
-            : 'off'}
+            ? t('setup.health.tx.on')
+            : t('setup.health.tx.off')}
       </span>
+      {/* ⚠️ NOT MIGRATED, DELIBERATELY. Prove TX keys a bounded tune carrier (`apiSetTune`) —
+          it is a transmit-path control, so its label, its tooltip and the consent prompt in
+          front of it stay exactly as written until the transmit-path batch moves them with the
+          stop-line sweeps re-run. This is why the file sits on the guard's PARTIAL list. */}
       {onProveTx && !tuning && (
         <button
           type="button"

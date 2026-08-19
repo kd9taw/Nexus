@@ -2536,6 +2536,2427 @@ export const EN = {
   'settings.fieldDay.power.hint':
     'Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.',
 
+  // ── Satellites ──────────────────────────────────────────────────────────────────────
+  // The Satellites section, the Connect Passes pane, and the nine composers behind them.
+  //
+  // The units rule is nearly the whole review here, and it lands on the SKY and the DIAL.
+  // Staying in the code, never entries: bird names, NORAD ids, TLE epochs, every uplink and
+  // downlink frequency, the SatNOGS transponder descriptions and their per-leg mode names,
+  // grids, azimuths, elevations, ranges, altitudes, the compass letters, the mode names the
+  // radio binding prints (FM/SSB), and the `value` of every <select> on these screens.
+  //
+  // Abbreviations an operator reads OFF AN INSTRUMENT stay verbatim where they sit inside a
+  // sentence: AOS, LOS, TCA, TLE, NORAD, VFO, MHz/kHz/Hz, km, and the ± × Δ ↑ ↓ symbols are
+  // amateur-satellite vocabulary, the same in every language, and a translator leaves them
+  // exactly as they are. The sky dome's own plate text (`az 143°` / `el 47°`, `▲ AOS`,
+  // `▼ LOS`) is not here at all: those plates are SIZED from the string, in viewBox units,
+  // by arithmetic the component documents at length — they are instrument tick labels.
+
+  // What a bird's catalog record says about it (features/satHealth.ts) — one chip, rendered
+  // by every surface that names a bird. SatNOGS is the database's own name.
+  'sat.health.silent.label': 'silent',
+  'sat.health.silent.title':
+    'In orbit, but the catalog lists no live amateur transmitter — the pass geometry is real, there is nothing to work on it.',
+  'sat.health.dead.label': 'dead',
+  'sat.health.dead.title':
+    'SatNOGS reports this bird silent. Its passes are still computed from real elements; working it is not expected.',
+  'sat.health.reentered.label': 're-entered',
+  'sat.health.reentered.title':
+    'SatNOGS reports this bird has re-entered — it is gone. Any pass shown is modelled from the last elements on file.',
+  'sat.health.preLaunch.label': 'pre-launch',
+  'sat.health.preLaunch.title':
+    'SatNOGS has this bird on record but not yet deployed — nothing to work until it launches.',
+  // An upstream status this build has never seen. `{{status}}` is the SOURCE's own word,
+  // printed as it arrived — only the frame around it moves.
+  'sat.health.unknown.title': 'SatNOGS reports this bird\'s status as "{{status}}".',
+  'sat.health.noElements.label': 'no elements',
+  'sat.health.noElements.title':
+    'No source carries orbital elements for this bird right now, so its passes cannot be computed. It stays starred; rows return when elements do.',
+  'sat.health.staleElements.label': 'stale elements',
+  'sat.health.staleElements.title':
+    'The newest elements on file are past the 30-day ceiling where SGP4 accuracy is gone. Refresh elements, or wait for the next automatic refresh.',
+  'sat.health.noPosition.label': 'no position',
+  'sat.health.noPosition.title':
+    'Current elements, but the propagator refused a position for them — a decaying orbit does this. Nothing is being hidden; there is genuinely no place to draw.',
+
+  // The set-wide element bands (features/elementBands.ts) — one wording for the Satellites
+  // header, the Now-Bar lane, the Connect Passes pane, the Settings fieldset and the refresh
+  // toast, so two surfaces can never describe one catalog differently. `14 d` and `30 d` are
+  // the thresholds themselves.
+  'sat.elements.pastLine': '{{past}} of {{total}} past 14 d',
+  'sat.elements.parts.aging': '{{count}} past 14 d',
+  'sat.elements.parts.heldBack': {
+    one: '{{count}} sits out past 30 d',
+    other: '{{count}} sit out past 30 d',
+  },
+  // English says "birds" at every count, one included. That wording predates this migration
+  // and the phase changes no visible text; a locale that needs forms adds them here.
+  'sat.elements.summary.birds': '{{count}} birds',
+  'sat.elements.sentence.aging': {
+    one: '{{count}} bird is past the 14-day line and drifting.',
+    other: '{{count}} birds are past the 14-day line and drifting.',
+  },
+  'sat.elements.sentence.heldBack': {
+    one: '{{count}} bird is past 30 days and sits out until fresh elements arrive.',
+    other: '{{count}} birds are past 30 days and sit out until fresh elements arrive.',
+  },
+
+  // The Now-Bar `sat` lane (features/satLane.ts): a two- or three-word chip, and the detail
+  // that carries the fix. Celestrak and hamradiotools.io are the sources' own names.
+  'sat.lane.blocked.message': 'Sat: Celestrak blocked',
+  'sat.lane.blocked.detail':
+    'Celestrak refused direct element fetches (HTTP 403/404) — direct attempts are stopped for 24 h. The hamradiotools.io mirror keeps retrying; elements may age until it lands.',
+  'sat.lane.unusable.message': 'Sat: elements unusable',
+  'sat.lane.unusable.detail':
+    'Every cached element set is over 30 days old — satellite surfaces refuse to point or tune on them. Refresh in Settings ▸ Radio ▸ Orbital elements, or import a fresh file.',
+  'sat.lane.stale.message': 'Sat: elements {{days}} d old',
+  'sat.lane.stale.detail':
+    'Orbital elements are past the 14-day stale line — pass times, pointing and Doppler drift with age. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.',
+  'sat.lane.mostlyStale.message': 'Sat: {{label}}',
+  'sat.lane.mostlyStale.detail':
+    "Most of the element sets you hold are past the 14-day stale line — {{label}}. The typical bird is still current, so the age reads calm; the rest of the catalog's pass times, pointing and Doppler are drifting. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.",
+
+  // The satellite VFO-mapping enumeration (features/satVfo.ts) — LABELS ONLY. Every `value`
+  // ('off', 'a-down-b-up', …) is a persisted token and stays in the code, and so do the VFO
+  // names and the rig model in the one example: A, B, Main and Sub are printed on the
+  // radio's own front panel, and IC-9700 is what it says on the box.
+  'sat.vfoMap.off': 'Not set — downlink only',
+  'sat.vfoMap.downlinkOnly': 'Downlink only (receive)',
+  'sat.vfoMap.uplinkOnly': 'Uplink only (transmit)',
+  'sat.vfoMap.aDownBUp': 'VFO A = downlink, VFO B = uplink',
+  'sat.vfoMap.aUpBDown': 'VFO A = uplink, VFO B = downlink',
+  'sat.vfoMap.mainDownSubUp': 'Main = downlink, Sub = uplink (IC-9700 full duplex)',
+  'sat.vfoMap.mainUpSubDown': 'Main = uplink, Sub = downlink',
+
+  // The ⏰ per-pass alarm (features/satAlarm.ts). TWO whole messages rather than one sentence
+  // with a variable clause dropped into the middle: the bird is up, or it is about to rise.
+  'sat.alarm.up': '⏰ {{name}} is UP now (LOS {{los}}) · max {{maxEl}}°',
+  'sat.alarm.rises': '⏰ {{name}} rises {{aos}} (~{{mins}} min) · max {{maxEl}}°',
+  'sat.alarm.stop': 'Stop alarm',
+
+  // ISS SSTV auto-arm (features/issAutoArm.ts). The dial and the mode are interpolated from
+  // the module's own constants and never become text: a decimal comma reaching 145.800 is an
+  // operating fault, not a cosmetic one. ISS and SSTV are the station's and the mode's names.
+  'sat.iss.optOut': 'ISS auto-arm off — SSTV disarmed, dial restored',
+  'sat.iss.los': 'ISS LOS — SSTV disarmed, dial restored',
+  'sat.iss.armed': 'ISS overhead — tuned {{dial}} {{mode}}, SSTV armed',
+
+  // The manual element-refresh result (features/tleMessages.ts) — one composer for the
+  // Update-now toast and the Settings "Last refresh" line, so the two can never drift.
+  // `{{source}}` is the serving source's own name, printed as it arrives.
+  'sat.refresh.mirrorDown': 'Mirror unreachable — fetched from Celestrak: {{count}} birds',
+  'sat.refresh.ok': 'Orbital elements updated — {{count}} birds ({{source}})',
+  'sat.refresh.blocked':
+    'Celestrak refused direct element fetches — direct attempts are stopped for 24 h; the mirror keeps retrying.',
+  'sat.refresh.mirrorUnreachableCurrent':
+    "The element mirror isn't reachable (it goes live with the next release); your elements are {{age}} d old — current.",
+  'sat.refresh.mirrorUnreachableStale':
+    'The element mirror is unreachable and your elements are {{days}} d old — import a fresh element file or retry later.',
+  'sat.refresh.mirrorUnreachableEmpty':
+    'The element mirror is unreachable and no usable elements are cached — import an element file to get the satellite surfaces running.',
+  'sat.refresh.failed':
+    'Element update failed — no source delivered a usable set; retry shortly or import an element file.',
+
+  // AOS/LOS alerts for the armed pass track (features/satPassAlert.ts).
+  'sat.passAlert.rotorLost':
+    '🛰 {{name}}: the rotator stopped answering — point it yourself. The pass, the transponder and Doppler keep running.',
+  'sat.passAlert.inProgress': '🛰 {{name}} pass in progress — {{mins}} min left, max el {{maxEl}}°',
+  'sat.passAlert.aos': '🛰 AOS {{name}} — point {{az}}°, max el {{maxEl}}°, {{mins}} min pass',
+  // The LOS report is a HEAD plus up to two whole sentences about what came back. Each is a
+  // complete statement joined with a space — never a fragment glued into the middle of one.
+  'sat.passAlert.los': '🛰 {{name}} pass complete — LOS.',
+  'sat.passAlert.los.dial': 'Dial handed back.',
+  'sat.passAlert.los.split': 'Uplink split released.',
+  'sat.passAlert.los.rotorPark': 'Rotor parking.',
+  'sat.passAlert.los.rotorReady': 'Rotor moving to the ready position.',
+
+  // The Connect ▸ Passes pane (components/prop/SatPassesPane.tsx) — the compact glance view.
+  // `sat.passesPane.line` is also the pane's Basic projection, so it is one whole sentence.
+  'sat.passesPane.noElements': 'No orbital elements yet — satellite data loads once online.',
+  'sat.passesPane.noPasses':
+    'No passes over your QTH in the next 24 h (set your grid in Settings?).',
+  'sat.passesPane.line': 'Next: {{name}} {{when}}, max {{maxEl}}° {{aos}}→{{los}}.',
+  'sat.passesPane.now': 'now',
+  'sat.passesPane.inMins': 'in {{mins}} min',
+  'sat.passesPane.favFilter.aria': 'Filter to ★ birds',
+  'sat.passesPane.favFilter.on':
+    'Showing your ★ birds (map + globe follow) — click to show all satellites',
+  'sat.passesPane.favFilter.off':
+    'Showing all satellites — click to show only your ★ birds (map + globe follow)',
+  'sat.passesPane.favFilter.all': 'All',
+  'sat.passesPane.stale.title': 'Orbital elements decay; pass times drift as they age',
+  'sat.passesPane.stale': 'stale elements ({{days}} d) — times are approximate',
+  'sat.passesPane.mostlyStale.title':
+    'The typical bird in your catalog is still current, so the times below are good for it — but most of the set is past the 14-day line, or held back past 30 days. Refresh elements from the Satellites section.',
+  'sat.passesPane.mostlyStale': '{{label}} — most times are approximate',
+  'sat.passesPane.favEmpty': 'No passes for your ★ birds in the next 24 h.',
+  'sat.passesPane.chase.on': 'Chasing — sorts first, footprint ring on the map. Click to stop.',
+  'sat.passesPane.chase.off':
+    'Chase this bird — sort its passes first + draw its footprint on the map',
+  'sat.passesPane.peakEl.title': 'Peak elevation {{el}}° — higher = longer, stronger pass',
+  'sat.passesPane.arc.title': 'Rise → set compass directions',
+  'sat.passesPane.duration': '{{mins}} min',
+
+  // ── Satellites ▸ the section ─────────────────────────────────────────────────────────
+  'sat.head.title': 'Satellites',
+  'sat.head.sub': 'passes over your grid',
+  'sat.head.bands.title':
+    'Elements past the 14-day line still fly the pass, with drifting times; elements past 30 days are not used at all — each of those birds is listed, with its reason, in the Birds list.',
+  'sat.head.stale.title':
+    'Orbital elements are {{days}} days old — pass times and Doppler drift with element age. Click to refresh now; they also refresh automatically every 6 h when the network allows.',
+  // The chip voice is uppercase, so the unit is spelled out ("9 d" would render "9 D"), and
+  // it is always plural — stale starts past 14 days. `TLE` is the element set's own name.
+  'sat.head.stale.chip': 'TLE {{days}} days — STALE',
+  'sat.head.stale.refreshing': '· refreshing…',
+  'sat.head.stale.refresh': '· refresh',
+  'sat.head.quiet.title':
+    'Orbital elements are {{days}} days old (the median of the {{sets}} sets in use). They refresh automatically every 6 h when the network allows; click to refresh now.',
+  'sat.head.quiet.titleEmpty':
+    'No usable orbital elements are cached. Click to fetch them now; you can also import a file under Settings ▸ Radio ▸ Orbital elements.',
+  'sat.head.quiet.refreshing': '⟳ refreshing…',
+  'sat.head.quiet.refresh': '⟳ refresh elements',
+  'sat.head.popOut.title': 'Open in its own window',
+  'sat.head.seed.notice':
+    'Starred {{count}} active birds to get you started — change them any time with the ★ beside any bird.',
+  'sat.head.seed.dismiss.aria': 'Dismiss the starred-birds notice',
+  'sat.head.seed.dismiss.title': 'Dismiss — your ★ birds stay exactly as they are',
+
+  // The pass-quality ladder — the section's ONE vocabulary for "how good is this pass",
+  // read by the Next/Best strip and by the discovery band's elevation cell.
+  'sat.quality.overhead': 'overhead pass',
+  'sat.quality.high': 'high pass',
+  'sat.quality.workable': 'workable pass',
+  'sat.quality.low': 'low horizon pass',
+
+  // The countdown to a pass, and the two states a pass itself can be in.
+  'sat.countdown.now': 'NOW',
+  'sat.countdown.mins': 'in {{mins}} min',
+  'sat.countdown.hours': 'in {{hours}} h',
+  'sat.state.inPass': 'IN PASS — {{mins}} min to LOS',
+  'sat.state.prepositioning': 'slewing to the AOS azimuth',
+
+  // The why-line under a strip row. ONE sentence: the fragments it used to be could not be
+  // reordered by a language that words "already up, 47° high pass, 11 min" differently.
+  'sat.why': '{{when}} — {{el}}° {{quality}}, {{dur}} min, {{aos}}→{{los}}{{status}}',
+  // Reported by the backscan rather than modelled: the pass out-lasted the scan window, so
+  // its rise time is unknown and its duration is a lower bound (the code marks it `+`).
+  'sat.why.alreadyUp': 'already up',
+  'sat.why.alive': ' · reported alive (SatNOGS)',
+  'sat.why.reported': ' · reported {{status}} (SatNOGS)',
+
+  // What a pass would EARN, in the app's need-chip vocabulary.
+  'sat.earn.entities.title': {
+    one: "{{count}} never-worked entity reachable through this pass's footprint: {{names}}{{more}}",
+    other:
+      "{{count}} never-worked entities reachable through this pass's footprint: {{names}}{{more}}",
+  },
+  // Satellite VUCC is the award programme's own name — an operator applies for it by that
+  // name, and a translated one names nothing.
+  'sat.earn.grids.title': {
+    one: "{{count}} new Satellite VUCC grid reachable through this pass's footprint: {{grids}}{{more}}",
+    other:
+      "{{count}} new Satellite VUCC grids reachable through this pass's footprint: {{grids}}{{more}}",
+  },
+  'sat.earn.more': ' +{{count}} more',
+
+  // The sky dome. Only the WORDS are here — every angle, the compass letters and the plate
+  // text the geometry is sized from stay in the component.
+  'sat.dome.aria.bird':
+    'Sky dome for {{name}}, north up. Satellite at azimuth {{az}} degrees, elevation {{el}} degrees.',
+  'sat.dome.aria.track':
+    'Sky dome for {{name}}, north up. Pass track from azimuth {{aos}} to {{los}} degrees, maximum elevation {{maxEl}} degrees.',
+  'sat.dome.aos.title': 'AOS — rises at {{az}} ({{wind}}) {{time}}',
+  'sat.dome.los.title': 'LOS — sets at {{az}} ({{wind}}) {{time}}',
+  'sat.dome.ghost.title': 'Antenna: commanded az/el (not a rotator read-back)',
+  'sat.dome.ghost.azOnly.title':
+    'Antenna: azimuth {{az}} commanded — az-only rotator, no elevation sent',
+  'sat.dome.bird.title': '{{name}} — az {{az}} el {{el}}',
+  'sat.dome.azEl': 'az {{az}} el {{el}}',
+  'sat.dome.antenna.noCommand': 'armed — no rotor command sent yet',
+  'sat.dome.antenna.azOnly': 'az {{az}} · elevation not commanded (az-only rotator)',
+  'sat.dome.readout.satellite': 'Satellite',
+  'sat.dome.readout.range': 'Range',
+  'sat.dome.readout.range.title': 'Slant range — how far the bird is FROM YOU.',
+  'sat.dome.readout.km': '{{km}} km',
+  'sat.dome.readout.rangeRate': ' · {{rate}} km/s {{trend}}',
+  'sat.dome.readout.closing': 'closing',
+  'sat.dome.readout.opening': 'opening',
+  'sat.dome.readout.altitude': 'Altitude',
+  'sat.dome.readout.altitude.title':
+    'Altitude — how far above the earth the bird is. Not range (its distance from you).',
+  'sat.dome.readout.antenna': 'Antenna',
+  'sat.dome.readout.antenna.title':
+    'What the rotator was COMMANDED — not a read-back. Δ is the true angular gap to the bird.',
+  'sat.dome.readout.riseSet': 'Rise / set',
+
+  // The AOS · TCA · LOS timeline under the dome.
+  'sat.timeline.aos': 'AOS {{time}}',
+  'sat.timeline.los': 'LOS {{time}}',
+  'sat.timeline.peak': '{{tca}}max {{maxEl}}°',
+  'sat.timeline.tca': 'TCA {{time}} · ',
+  'sat.timeline.nextPass': 'next pass {{countdown}}',
+
+  // The Doppler readout. When nothing is being tuned it says WHY, in the words of the thing
+  // the operator would have to change.
+  'sat.doppler.head': 'Doppler',
+  'sat.doppler.none.off':
+    'Doppler is off — nothing is being tuned (Settings ▸ Radio ▸ Satellite Doppler).',
+  'sat.doppler.none.pickConfirm':
+    'No transponder selected — pick one below; once your mapping is confirmed for this radio, Doppler tunes your uplink and the dial stays yours.',
+  'sat.doppler.none.pickUplink':
+    'No transponder selected — pick one below and Doppler tunes your uplink; the dial stays yours.',
+  'sat.doppler.none.pick': 'No transponder selected — pick one below to put the dial under Doppler.',
+  'sat.doppler.none.unconfirmed':
+    'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned.',
+  'sat.doppler.none.beforeAos':
+    'Doppler corrects from AOS — nothing to correct until the bird is up.',
+  'sat.doppler.none.noTuning': 'Doppler has not reported a tuning for this pass yet.',
+  // ONE sentence, two surfaces: the Doppler readout's reason and the chooser's state line
+  // say the same thing about the same bird, and they must never drift apart.
+  'sat.uplinkOnly.noLeg':
+    'Your uplink-only mapping has nothing to drive here — this bird has no separate uplink. Nothing is being tuned.',
+  'sat.leg.downlink': '↓ Downlink',
+  'sat.leg.uplink': '↑ Uplink',
+  'sat.doppler.txMode.title':
+    "The TX (split) VFO's sideband — this bird's uplink runs {{mode}} while the downlink does not, and the radio's TX leg is set to match. Commanded by the engine with the Doppler tuning; shown here so a swapped sideband is never a surprise.",
+  // The inverting mark and its lesson — one chip and one tooltip, rendered by the Doppler
+  // head, the readiness rail and every transponder card.
+  'sat.inverting.label': 'INVERTING',
+  'sat.inverting.title':
+    'Inverting linear transponder: tune the downlink UP and your uplink goes DOWN, and the sidebands swap (LSB up, USB down).',
+
+  // The transponder passband strip.
+  'sat.passband.head': 'Passband',
+  'sat.passband.inverting': 'inverting — tune up, transmit down',
+  'sat.passband.nonInverting': 'non-inverting — both legs move the same way',
+  'sat.passband.inverting.word': 'inverting',
+  'sat.passband.nonInverting.word': 'non-inverting',
+  'sat.passband.aria':
+    'Transponder passband, {{mode}}, ±{{half}} kHz either side of centre. Downlink {{down}} from centre, uplink {{up}} from centre.',
+  'sat.passband.lane.downlink': 'Downlink',
+  'sat.passband.lane.uplink': 'Uplink',
+  'sat.passband.mark.title':
+    '{{glyph}} {{leg}}{{freq}} — offset {{offset}} from passband centre{{clamped}}',
+  'sat.passband.mark.freq': ' — {{hz}} Hz',
+  'sat.passband.mark.clamped': ' (outside the passband — the mark is parked on the edge)',
+  'sat.passband.axis.title': 'kHz from passband centre',
+  'sat.passband.noWidth':
+    'No passband to tune inside — this is a single channel, or SatNOGS carries no width for it. There is no axis to draw; the offsets below are still exact.',
+  'sat.passband.readout.doppler': 'Doppler {{shift}}',
+  'sat.passband.readout.offset': 'offset {{offset}}',
+  'sat.passband.readout.width': '±{{half}} kHz from centre',
+
+  // SatNOGS `type` in operator words, for the chooser cards.
+  'sat.kind.beacon': 'beacon',
+  'sat.kind.linear': 'linear',
+  'sat.kind.fmRepeater': 'FM repeater',
+
+  // The readiness rail — five gates, each not-ready row carrying its own fix.
+  'sat.rail.gate.pass': 'Pass',
+  'sat.rail.gate.rotor': 'Rotor',
+  'sat.rail.gate.transponder': 'Transponder',
+  'sat.rail.gate.doppler': 'Doppler',
+  'sat.rail.gate.elements': 'Elements',
+  'sat.rail.pass.armedIn': 'armed — AOS in {{mins}} min',
+  'sat.rail.pass.armed': 'armed',
+  'sat.rail.stop.title':
+    'Stop this track (rotor halts if it holds one; the dial is handed back)',
+  'sat.rail.rotor.lost':
+    'stopped answering — pointing is yours; the pass, Doppler and your transponder keep running',
+  'sat.rail.rotor.notInTrack': 'not in this track — re-arm to take the rotor',
+  'sat.rail.rotor.none': 'no rotator configured — Settings ▸ Radio ▸ Rotator',
+  'sat.rail.rotor.tracking': 'tracking · cmd az {{az}}{{el}}',
+  'sat.rail.rotor.azOnly': ' (az only)',
+  'sat.rail.rotor.armed': 'armed — takes the rotor 5 min before AOS',
+  'sat.rail.transponder.none': 'none — the dial stays yours',
+  'sat.rail.transponder.auto': ' picked for you',
+  'sat.rail.transponder.change': 'change',
+  'sat.rail.transponder.pick': 'pick',
+  'sat.rail.transponder.goTo': 'Go to the transponder chooser below',
+  'sat.rail.transponder.nothingToPick':
+    'No transmitters listed for this bird (SatNOGS) — nothing to pick',
+  'sat.rail.doppler.off': 'off — nothing is being tuned',
+  'sat.rail.doppler.waitingConfirm':
+    'waiting for a transponder — once your mapping is confirmed for this radio, Doppler tunes your uplink; the dial stays yours',
+  'sat.rail.doppler.waitingUplink':
+    'waiting for a transponder — then Doppler tunes your uplink; the dial stays yours',
+  'sat.rail.doppler.waiting': 'waiting for a transponder — then the downlink follows the bird',
+  'sat.rail.doppler.simplex': 'on — one channel: both legs ride the same dial',
+  'sat.rail.doppler.simplexUplinkOnly':
+    'one channel and an uplink-only mapping — nothing is being tuned; the dial stays yours',
+  'sat.rail.doppler.both': 'correcting the downlink and the uplink',
+  'sat.rail.doppler.downlink': 'correcting the downlink. {{next}}',
+  'sat.rail.doppler.uplink': 'correcting the uplink — the dial stays yours',
+  'sat.rail.doppler.uplinkOnly': 'uplink-only mapping, nothing is being tuned. {{next}}',
+  // What ONE confirmation would hand over, named for the radio that would receive it.
+  'sat.rail.doppler.yourRadio': 'your radio',
+  'sat.rail.uplink.confirm': 'Confirm the uplink and Doppler drives {{rig}} as {{pair}}.',
+  'sat.rail.uplink.confirmMapping':
+    'Confirm {{mapping}} for {{rig}} and Doppler drives its uplink.',
+  'sat.rail.uplink.switchMapping':
+    'Your mapping cannot carry this pass on {{rig}} — switch it to {{pair}} and Doppler drives the uplink.',
+  'sat.rail.uplink.ask': 'Pick which VFO carries your uplink to have Doppler tune that too.',
+  'sat.rail.uplink.yours': 'The transmit VFO stays yours.',
+  'sat.rail.doppler.turnOn': 'turn on',
+  'sat.rail.doppler.turnOn.title':
+    'Turn Doppler correction back on (the same switch as Settings ▸ Radio ▸ Satellite Doppler)',
+  'sat.rail.uplink.switch.label': 'switch mapping',
+  'sat.rail.uplink.confirm.label': 'confirm uplink',
+  'sat.rail.uplink.switch.title':
+    'Switch {{rig}} to {{pair}}. Your mapping cannot carry this pass on this radio — nothing was written to it — and this is the layout Nexus drives here. Nothing changes until you click, and a wrong mapping transmits on your own downlink.',
+  'sat.rail.uplink.confirm.title':
+    'Confirm {{pair}} for {{rig}}. Nexus read this from your radio model; nothing reaches your transmit VFO until you confirm it, and a wrong mapping transmits on your own downlink.',
+  'sat.rail.uplink.confirmMapping.title':
+    'Confirm {{mapping}} — your chosen mapping — for {{rig}}. Nothing reaches its transmit VFO until you confirm it for this radio, and a wrong mapping transmits on your own downlink.',
+  'sat.rail.vfoMap.aria': 'Satellite VFO mapping',
+  'sat.rail.vfoMap.title':
+    'Which VFO carries your uplink — match it to how your radio is wired. A wrong mapping transmits on your own downlink, into the satellite\'s output passband, on top of everyone else working the bird. Picking one confirms it for the radio Doppler is driving. Every mapping except Uplink only keeps the downlink corrected; Uplink only hands your one VFO to the transmit leg.',
+  'sat.rail.elements.current': '{{age}} d old — current',
+  'sat.rail.elements.stale': '{{days}} days old — pointing and Doppler drift',
+  'sat.rail.elements.refresh': 'refresh',
+  'sat.rail.elements.refresh.title':
+    'Fetch fresh orbital elements now. This armed pass keeps its frozen set — re-arm to track with the fresh one.',
+
+  // Which rig will move (the radio binding line), and the way back onto the bird.
+  'sat.binding.name': 'Radio',
+  'sat.binding.thisRadio': 'this radio',
+  'sat.binding.legs': ' — {{legs}} MHz{{note}}',
+  'sat.binding.note': ' — {{note}}',
+  'sat.binding.pegged': '🔒 pinned',
+  'sat.binding.unpegged': '🔓 pin this radio',
+  'sat.binding.pegged.title':
+    'Peg-lock is ON — this bird stays on the active radio; band+mode routing will not hand it to another rig. Click to unlock.',
+  'sat.binding.unpegged.title':
+    'Peg-lock is OFF — a pick routes to the radio that owns the band and mode class. Click to pin the active radio instead.',
+  'sat.lockOn.name': 'Dial',
+  'sat.lockOn.state': 'moved off the transponder? put the radio back on the bird',
+  'sat.lockOn.label': 'Lock on',
+  'sat.lockOn.title':
+    'Re-run your transponder pick — routes, sets the band and mode, writes both legs, and re-centres you in the passband. Use it after moving the dial off the transponder by hand, or when the rig came back somewhere else.',
+
+  // The tracking badge on the arm bar.
+  'sat.badge.rotorLost.title':
+    'The rotator stopped answering, so this track let it go — point the antenna yourself. The pass clock, the transponder and Doppler carry on to LOS.',
+  'sat.badge.passOnly.title':
+    'Pass timing only — nothing is driven: no rotor in this track, and Doppler is not driving the dial (correction switched off, no transponder held, or an uplink-only mapping that is not driving this pass). The pass clock and geometry still run.',
+  'sat.badge.dopplerOnly.title': 'No rotator in this track — Doppler {{what}}; nothing moves an antenna',
+  'sat.badge.dopplerOnly.dialNow': 'is steering the radio dial',
+  'sat.badge.dopplerOnly.dialAtAos': 'takes the radio dial at AOS',
+  'sat.badge.dopplerOnly.splitNow': 'is steering the TX (split) VFO — the dial stays yours',
+  'sat.badge.dopplerOnly.splitAtAos': 'takes the TX (split) VFO at AOS — the dial stays yours',
+  'sat.badge.rotorWaiting.title':
+    'The rotor has NOT been commanded yet — auto-track takes it 5 min before AOS',
+  'sat.badge.rotorDriving.title':
+    'Auto-track is driving the rotor — angles shown are what was COMMANDED (rotctld read-back lives on the rotor strip/pane)',
+  'sat.badge.open.title':
+    "Open this pass's detail (sky dome, readiness rail) — tracking is not affected",
+  'sat.badge.armed': 'armed',
+  'sat.badge.tracking': 'tracking',
+  'sat.badge.mode.rotorLost': ' · rotor stopped answering',
+  'sat.badge.mode.dopplerOnly': ' · Doppler only',
+  'sat.badge.mode.passOnly': ' · pass timing only',
+  'sat.badge.mode.rotorOnly': ' · rotor only',
+  'sat.badge.risesAz': 'rises az {{az}}°',
+  'sat.badge.cmdAz': 'cmd az {{az}}° {{el}}',
+  'sat.badge.azOnly': '(az only)',
+  // The one stop shared by the rail and the badge — the same act, so the same word.
+  'sat.track.stop': '■ stop',
+  'sat.track.stop.rotor.title': 'Stop auto-tracking (rotor halts)',
+  'sat.track.stop.noRotor.title': 'Stop this track (no rotor involved; the dial is handed back)',
+  'sat.detail.close.aria': "Close this bird's detail",
+  'sat.detail.close.title':
+    'Close — a tracked pass keeps tracking; the badge on this bar brings you back',
+
+  // The gate ladder and the Next/Best strip.
+  'sat.noGrid':
+    'Set your grid square (Settings ▸ Station) first — passes are computed over YOUR location, and without a locator there is nothing honest to show.',
+  'sat.strip.next.label': 'Next',
+  'sat.strip.next.why':
+    'The two soonest workable passes (10° peak or better), any bird — a pass already in progress leads',
+  'sat.strip.best.label': 'Best 24 h',
+  'sat.strip.best.why':
+    'The two highest-quality passes in the next 24 h — max elevation first, duration breaking ties',
+  'sat.strip.row.title': '{{name}} — {{why}}',
+  'sat.strip.fav.title': 'One of your ★ birds',
+  'sat.work.label': '▶ Work this pass',
+  'sat.work.title.rotor':
+    'Work this pass: opens the bird, picks its transponder, arms rotor auto-track + the pass clock (Doppler tunes when its switches are on)',
+  'sat.work.title.noRotor':
+    'Work this pass: opens the bird, picks its transponder, starts the pass clock + Doppler (no rotator configured — nothing will move)',
+  'sat.work.short': '▶ Work',
+
+  // The 48 h schedule, its sortable headers and the discovery band beneath it.
+  'sat.schedule.head': 'Schedule — favorites, next {{hours}} h',
+  'sat.schedule.sortBy': 'Sort by {{label}}',
+  'sat.schedule.column.bird': 'Bird',
+  'sat.schedule.column.aos': 'AOS local',
+  'sat.schedule.column.maxEl': 'Max el',
+  'sat.schedule.column.dur': 'Dur',
+  'sat.schedule.column.path': 'Path',
+  'sat.schedule.column.status': 'Status',
+  'sat.schedule.column.needed': 'Needed',
+  'sat.schedule.empty.noFavs':
+    'No ★ birds yet — star a bird (☆ in the rows below, or in the Birds list) and its passes, alarms and needed-grid chips appear here.',
+  'sat.schedule.empty.noPasses':
+    'No upcoming passes for your favorites in the next {{hours}} h{{why}}.',
+  'sat.schedule.empty.noElements':
+    ' — waiting for orbital elements (first fetch needs the network once)',
+  'sat.schedule.empty.excluded':
+    ' (birds whose elements are older than 30 days are excluded until a refresh)',
+  'sat.schedule.unstar.title':
+    'Unstar removes the bird from this schedule and disarms its alarm',
+  'sat.schedule.alive.label': 'alive',
+  'sat.schedule.alive.title': 'SatNOGS community reports it transmitting',
+  'sat.schedule.dead.title':
+    'SatNOGS reports it silent/re-entered — geometry still shown, working it is unlikely',
+  'sat.schedule.alarm.on': 'Alarm armed — click to disarm',
+  'sat.schedule.alarm.off': 'Wake me before this bird rises (per-bird, survives restarts)',
+  'sat.schedule.alarm.lead.title': 'Lead time before AOS',
+  'sat.schedule.stop.title': 'Stop this track',
+  'sat.discovery.chip': 'Other birds overhead · {{count}} workable · 24 h',
+  'sat.discovery.chip.title':
+    'Birds outside your ★ set flying a workable pass (10° peak or better) over your grid in the next 24 h — one row per bird, its best pass. Star one to move it into your schedule.',
+  'sat.discovery.bar':
+    "Other birds — each row is that bird's best pass in the next 24 h · ☆ moves it into your schedule",
+  'sat.discovery.star.title':
+    'Star to move this bird into your schedule above — it gains needed-grid chips, the pass alarm and the 48 h view',
+  'sat.discovery.workable.title': 'Workable passes (10° peak or better) in the next 24 h',
+  'sat.discovery.workable': '{{count}} in 24 h',
+  'sat.discovery.altitude.title': 'Current altitude',
+  'sat.discovery.altitude': '{{km}} km up',
+  'sat.discovery.clamped.title':
+    'Rose before the 6 h scan window — its true rise time is unknown here',
+  'sat.discovery.showAll': 'show all {{count}} ▾',
+  'sat.discovery.empty':
+    'no other birds with a workable pass (10° peak or better) over your grid in the next 24 h',
+
+  // The radio quadrant: what the dial is doing, and what to point it at.
+  'sat.radio.frequencies.head': 'Frequencies',
+  'sat.radio.idle.noBird':
+    'Open a bird to see its transponders; arm a pass and the live dial, the Doppler shift and your place in the passband read out here.',
+  'sat.radio.idle.noTrack':
+    'Arm a pass (▶ Work this pass) and the live dial, the Doppler shift and your place in the passband read out here.',
+  'sat.transponder.head': 'Transponder',
+  'sat.transponder.list.aria': 'Transponder — where Doppler puts the dial',
+  'sat.transponder.none.aria': 'Work no transponder — leave the dial to me',
+  'sat.transponder.none.label': 'None — leave the dial to me',
+  'sat.transponder.card.aria': 'Work {{description}}',
+  'sat.transponder.auto': 'picked for you — change it here if this is not the one',
+  'sat.transponder.showAll': 'show all {{count}} ▾',
+  'sat.transponder.showAll.title': 'Show every workable transmitter SatNOGS lists for this bird',
+  'sat.transponder.dead': 'reported dead (SatNOGS) — not workable',
+  'sat.transponder.showDead': 'show {{count}} inactive',
+  'sat.transponder.showDead.title':
+    'Transmitters SatNOGS reports dead/re-entered — shown for the record, never workable',
+  // The TX-sideband note. `{{tx}}`, `{{up}}` and `{{down}}` are the record's own mode names.
+  'sat.transponder.txMode.commanded':
+    'TX sideband: the uplink (split) VFO is set to <b>{{tx}}</b> — the downlink stays {{down}} while Doppler runs this pass.',
+  'sat.transponder.txMode.notCommanded':
+    'This bird lists {{up}} up / {{down}} down (SatNOGS) — the TX sideband is not being commanded for this pass ({{why}}).',
+  'sat.transponder.txMode.why.dopplerOff': 'Doppler correction is off',
+  'sat.transponder.txMode.why.notDriving': 'Doppler is not driving the uplink on this radio',
+  'sat.transponder.txMode.why.shared': 'the legs share a sideband, or the mode is yours',
+  'sat.transponder.txMode.forecast':
+    'TX sideband: this bird runs {{up}} up / {{down}} down (SatNOGS). Once your uplink mapping is confirmed for the radio in use, the TX (split) VFO is set to match while a tracked pass runs.',
+  'sat.transponder.state.dopplerOff':
+    'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.',
+  'sat.transponder.state.uplinkOnly.driving':
+    'Your uplink-only mapping keeps the dial yours — only the transmit VFO is tuned.',
+  'sat.transponder.state.uplinkOnly.unconfirmed':
+    'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned. Confirm it on the pass rail.',
+  'sat.transponder.state.uplinkOnly.pending':
+    'Your uplink-only mapping keeps the dial yours — the transmit VFO is tuned once it is confirmed for the radio in use and a tracked pass runs.',
+  'sat.transponder.state.tuning':
+    'Doppler tunes this transponder while auto-track is following the pass.',
+  'sat.transponder.otherBird':
+    'Doppler holds a transponder on {{name}}. Picking one here takes the dial from it.',
+  // ⚠️ The attribution itself: the source's name and the licence identifier are what the
+  // CC-BY-SA terms require to be reproduced, so they stay exactly as they are.
+  'sat.credit.satnogs': 'frequencies & status: SatNOGS DB (CC-BY-SA 4.0)',
+  'sat.credit.noBird': 'Open a bird to choose which transponder Doppler puts the dial on.',
+  'sat.credit.noData': 'no transponder data yet — fetched from SatNOGS DB when online',
+  'sat.credit.noTransmitters': 'no transmitters listed for this bird (SatNOGS DB)',
+
+  // The pass line that stands in for the dome when there is no pass in the detail's window.
+  'sat.passline.beyond': 'next pass over you rises {{time}} ({{countdown}})',
+  'sat.passline.none': 'no pass over you in the next 24 h',
+
+  // The log strip's note. ⚠️ PROP_MODE and SAT_NAME are ADIF field names — wire identifiers
+  // an operator types into their own log — and LoTW and VUCC are the programmes' own names.
+  'sat.log.note':
+    'Logs an ordinary contact from your dial, exactly as the Phone and CW log panels do. It is <b>not</b> tagged as a satellite QSO: Nexus does not write the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward neither LoTW satellite credit <b>nor Nexus’s own satellite totals</b>. Add <b>both</b> fields yourself if you want that credit — one without the other is refused at signing, and on 2 m the grid otherwise counts toward your terrestrial VUCC, which a satellite contact does not earn.',
+  'sat.log.note.title':
+    'Logs an ordinary contact from your dial, exactly as the Phone and CW log panels do. It is NOT tagged as a satellite QSO: Nexus does not write the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward neither LoTW satellite credit nor Nexus\'s own satellite totals. Add BOTH fields yourself if you want that credit — one without the other is refused at signing, and on 2 m the grid otherwise counts toward your terrestrial VUCC, which a satellite contact does not earn.',
+
+  // The Birds catalog.
+  'sat.birds.head': 'Birds ({{count}})',
+  'sat.birds.search.placeholder': 'search…',
+  'sat.birds.star.title': '★ favorites drive the schedule, the map emphasis, and alarms',
+  'sat.birds.alt': 'alt {{km}} km',
+  'sat.birds.alt.title':
+    'Altitude — how far above the earth the bird is right now. Not range (its distance from you).',
+  'sat.birds.empty': 'no elements yet — first fetch needs the network once',
+
+  // The toasts the section raises, and the >14 d arm confirm.
+  'sat.toast.track': 'Pass track {{name}}: {{doing}}',
+  'sat.toast.track.rotor': 'armed — the rotor stays yours until 5 min before AOS',
+  'sat.toast.track.doppler': 'armed — no rotor in this track; Doppler takes the dial at AOS',
+  'sat.toast.track.passOnly': 'armed — pass timing only; the dial stays yours',
+  'sat.toast.track.following': 'following the pass',
+  'sat.toast.track.nothing': 'Nothing to track — no matching pass to arm',
+  'sat.toast.track.failed': 'Track failed: {{error}}',
+  'sat.toast.transponder.cleared': 'Transponder cleared — the dial is yours',
+  'sat.toast.transponder.working': 'Working {{name}} {{label}}{{auto}}',
+  'sat.toast.transponder.working.auto': ' (picked for you — change below)',
+  'sat.toast.transponder.failed': 'Transponder not selected: {{error}}',
+  'sat.toast.doppler.failed': 'Doppler setting: {{error}}',
+  'sat.toast.peg.failed': 'Peg-lock: {{error}}',
+  'sat.toast.vfoMap.failed': 'VFO mapping: {{error}}',
+  'sat.armConfirm.title': 'Stale orbital elements',
+  'sat.armConfirm.body':
+    '{{name}}: elements are {{days}} days old — pointing and Doppler will be off.',
+  'sat.armConfirm.refreshing': 'Refreshing…',
+  'sat.armConfirm.refresh': 'Refresh elements',
+  'sat.armConfirm.armAnyway': 'Arm anyway',
+  'sat.armConfirm.cancel': 'Cancel',
+
+  // ── Memories (the saved-channel manager and the cockpit MEM strip) ──────────────────
+  // ⚠️ Almost everything an operator READS on this screen is a unit, and none of it is here:
+  // the dial and TX frequencies, offsets, CTCSS tones and DTCS codes, the mode names and the
+  // mode/CTCSS datalists, callsigns, the group names the operator typed, the HF and VHF/UHF
+  // section labels, and the POTA/SOTA programme name (a constant in the component, as it is
+  // in `needVisuals.ts`). Weekday abbreviations are date formatting rather than prose and stay
+  // in the component too. The `value` of every <select> is the STORED token; only its label is
+  // here — and the export file name is built from a slug, never from the words below.
+  'memories.aria': 'Memories',
+
+  // The channel kinds. Each entry's key is the value the memory stores.
+  'memories.kind.repeater': 'Repeater',
+  'memories.kind.simplex': 'Simplex',
+  'memories.kind.hfnet': 'HF net',
+  'memories.kind.calling': 'Calling',
+  'memories.kind.digital': 'Digital',
+  'memories.kind.satellite': 'Satellite',
+  'memories.kind.emcomm': 'EmComm',
+  'memories.kind.reference': 'Reference',
+  'memories.kind.other': 'Other',
+
+  // The sidebar: the three built-in views, then the operator's own groups.
+  'memories.side.all': 'All memories',
+  'memories.side.fav': '★ Favorites',
+  'memories.side.nets': 'Nets',
+  'memories.side.group.rename.title': 'Rename group',
+  'memories.side.group.delete.title': 'Delete group (memories stay)',
+  'memories.side.newGroup.placeholder': 'New group…',
+
+  // One WHOLE placeholder per view rather than "Search " plus a name: a name spliced into a
+  // sentence cannot be reordered, and lower-casing a translated noun is wrong in every
+  // language that capitalises them. The group's own name is the operator's text.
+  'memories.search.placeholder.all': 'Search all…',
+  'memories.search.placeholder.fav': 'Search favorites…',
+  'memories.search.placeholder.nets': 'Search nets…',
+  'memories.search.placeholder.group': 'Search {{group}}…',
+  'memories.search.placeholder.groupless': 'Search group…',
+
+  // The toolbar. `{{freq}}` and `{{mode}}` are the live dial — tokens, never formatted.
+  'memories.toolbar.list.label': 'List',
+  'memories.toolbar.list.title': 'List view — clean rows with an inline editor',
+  'memories.toolbar.grid.label': 'Grid',
+  'memories.toolbar.grid.title': 'Grid view — the CHIRP-style spreadsheet',
+  'memories.toolbar.save.label': '＋ Save {{freq}} {{mode}}',
+  'memories.toolbar.save.title': 'Save the current dial frequency + mode as a memory',
+  'memories.toolbar.new.label': '＋ New',
+  'memories.toolbar.new.title': 'Add a memory by hand',
+  'memories.toolbar.import.label': 'Import CSV',
+  'memories.toolbar.import.title': 'Import a CHIRP CSV (duplicates are skipped)',
+  'memories.toolbar.export.label': 'Export CSV ({{count}})',
+  'memories.toolbar.export.title': {
+    one: 'Export the {{count}} shown channel as a CHIRP CSV (imports into ~1,000 radio models)',
+    other: 'Export the {{count}} shown channels as a CHIRP CSV (imports into ~1,000 radio models)',
+  },
+  'memories.toolbar.popOut.label': '↗ Pop out',
+  'memories.toolbar.popOut.title': 'Pop Memories out into its own window (multi-monitor)',
+  'memories.toolbar.packs.label': 'Packs',
+  'memories.toolbar.packs.title':
+    'Install curated channel sets — nets, calling frequencies, POTA, digital',
+
+  // The empty state. The hint names two buttons that are entries of their own; a translation
+  // has to keep the three consistent, which is why they read as the same words here.
+  'memories.empty.none': 'No memories yet.',
+  'memories.empty.hint':
+    'Start with a <b>starter pack</b> — nets, calling frequencies, POTA, and digital watering holes, ready to go. Or save the current frequency with <b>＋ Save</b>, import a CHIRP CSV, or send repeaters here from the Program section. Star a memory (★) and it shows on the MEM strip in every cockpit.',
+  'memories.empty.browsePacks': 'Browse starter packs',
+  'memories.empty.noMatch': 'Nothing matches this view.',
+
+  // The CHIRP-style grid. The column headers name technical quantities and the UNIT inside
+  // one (MHz) is a token — reword the header around it, never the unit.
+  'memories.grid.column.favorite': 'Favorite',
+  'memories.grid.column.name': 'Name',
+  'memories.grid.column.rx': 'RX MHz',
+  'memories.grid.column.mode': 'Mode',
+  'memories.grid.column.offset': 'Offset',
+  'memories.grid.column.tone': 'Tone',
+  'memories.grid.column.kind': 'Kind',
+  'memories.grid.column.actions': 'Actions',
+  'memories.grid.tune.label': 'Tune',
+  'memories.grid.tune.title': 'Tune to this memory',
+
+  // A row in either view. Recall is a RETUNE — it moves the dial, it never transmits.
+  'memories.row.star.title': 'Star (show on cockpit strips)',
+  'memories.row.unstar.title': 'Unstar (remove from cockpit strips)',
+  'memories.row.main.title': 'Tune to {{freq}} MHz {{mode}}',
+  'memories.row.moveUp.aria': 'Move {{name}} up',
+  'memories.row.moveDown.aria': 'Move {{name}} down',
+  'memories.row.moveUp.title': 'Move up',
+  'memories.row.moveDown.title': 'Move down',
+  'memories.row.moveUp.rank.title': 'Move up one rank (1–{{limit}} are the strip)',
+  'memories.row.moveDown.rank.title': 'Move down one rank (1–{{limit}} are the strip)',
+  'memories.row.tune.label': 'Tune',
+  'memories.row.tune.title':
+    'Tune — sets frequency, mode, offset, and tone, and opens the right cockpit',
+  'memories.row.edit.title': 'Edit',
+  'memories.row.delete.title': 'Delete this memory',
+  // The ★ view's rank badge. `{{hotkey}}` is the keyboard chord, printed by `modChord`.
+  'memories.rank.on.title': 'Chip {{rank}} on the cockpit MEM strip{{hotkey}}',
+  'memories.rank.off.title':
+    'Rank {{rank}} — past the {{limit}} chips the cockpit MEM strip shows. Move it up with ▲.',
+
+  // The inline editor. TSQL, DTCS, CTCSS and the +/− signs are the radio's own vocabulary;
+  // only the words around them are prose.
+  'memories.editor.name.label': 'Name',
+  'memories.editor.kind.label': 'Kind',
+  'memories.editor.rx.label': 'RX MHz',
+  'memories.editor.mode.label': 'Mode',
+  'memories.editor.offset.label': 'Offset',
+  'memories.editor.offset.simplex': 'Simplex',
+  'memories.editor.offset.plus': '+ up',
+  'memories.editor.offset.minus': '− down',
+  'memories.editor.offset.split': 'Odd split',
+  'memories.editor.offsetMhz.label': 'Offset MHz',
+  'memories.editor.txMhz.label': 'TX MHz',
+  'memories.editor.tone.label': 'Tone',
+  'memories.editor.tone.none': 'None',
+  'memories.editor.tone.tone': 'Tone (encode)',
+  'memories.editor.tone.tsql': 'TSQL (enc+dec)',
+  'memories.editor.tone.dtcs': 'DTCS',
+  'memories.editor.ctcss.label': 'CTCSS Hz',
+  'memories.editor.dtcs.label': 'DTCS code',
+  'memories.editor.callsign.label': 'Callsign',
+  'memories.editor.days.label': 'Days',
+  'memories.editor.days.aria': 'Net days (UTC)',
+  'memories.editor.start.label': 'Start (UTC)',
+  'memories.editor.remind.label': 'Remind me',
+  'memories.editor.remind.aria': 'Enable a reminder for this net',
+  'memories.editor.lead.aria': 'Reminder lead time in minutes',
+  'memories.editor.lead.unit': 'min before (UTC schedule)',
+  'memories.editor.notes.label': 'Notes',
+  'memories.editor.groups.label': 'Groups',
+  'memories.editor.groups.aria': 'Group membership',
+  'memories.editor.done': 'Done',
+
+  // Starter packs. The pack's name, description and region are the pack's own data.
+  'memories.packs.title': 'Starter packs',
+  'memories.packs.close.aria': 'Close',
+  'memories.packs.sub':
+    'One-click channel sets. Duplicates are skipped, so installing again is safe. Net schedules are UTC and approximate — enable a reminder per net.',
+  'memories.packs.meta': '{{count}} channels · {{region}}',
+  'memories.packs.install': 'Install',
+  'memories.packs.update': 'Update',
+  // Two counts in one report, so each clause is its own entry with its own plural — one
+  // message cannot select a form for both (the `logbook.import.dupes` ruling).
+  'memories.packs.toast': '{{pack}} — {{parts}}',
+  'memories.packs.toast.added': {
+    one: 'added {{count}} channel',
+    other: 'added {{count}} channels',
+  },
+  'memories.packs.toast.refreshed': {
+    one: 'refreshed {{count}} channel',
+    other: 'refreshed {{count}} channels',
+  },
+  'memories.packs.toast.upToDate': '{{pack}} — already up to date',
+
+  // What the section says after it acts.
+  'memories.toast.saved': 'Saved {{freq}} {{mode}}',
+  'memories.toast.alreadySaved': '{{freq}} {{mode}} is already saved',
+  'memories.export.empty': 'Nothing to export in this view',
+  'memories.export.done': {
+    one: 'Exported {{count}} channel → {{path}}',
+    other: 'Exported {{count}} channels → {{path}}',
+  },
+  'memories.import.notChirp': 'No channels found — is this a CHIRP CSV?',
+  'memories.import.done': {
+    one: 'Imported {{count}} channel',
+    other: 'Imported {{count}} channels',
+  },
+  // Its own statement, with its own count and its own leading separator.
+  'memories.import.dupes': {
+    one: ' ({{count}} duplicate skipped)',
+    other: ' ({{count}} duplicates skipped)',
+  },
+
+  // The cockpit MEM strip. `{{hotkey}}` is a keyboard chord and `{{tone}}` the clause below.
+  'memories.strip.aria': 'Memory quick recall',
+  'memories.strip.label': 'MEM',
+  'memories.strip.label.title': 'Memory quick recall — your ★-starred memories',
+  'memories.strip.save.title': 'Save {{freq}} {{mode}} as a favorite memory',
+  'memories.strip.chip.title': '{{name}} — {{freq}} MHz {{mode}}{{tone}} (click to tune{{hotkey}})',
+  'memories.strip.chip.tone': ' · tone {{hz}}',
+  'memories.strip.manage.title':
+    'Open Memories — manage channels, groups, nets, and CHIRP import/export',
+  'memories.strip.manage.title.overflow': {
+    one: 'Open Memories — {{count}} more favorite past the {{limit}} this strip shows. Re-rank them with ▲▼ under ★ Favorites.',
+    other:
+      'Open Memories — {{count}} more favorites past the {{limit}} this strip shows. Re-rank them with ▲▼ under ★ Favorites.',
+  },
+
+  // ── Program (the radio-programming workbench) ───────────────────────────────────────
+  // ⚠️ The machines' own data is not here: callsigns, output frequencies, offsets, tones,
+  // band chips, the DMR/D-STAR/Fusion badges, distances and octants, cities and states, and
+  // the channel names as the radio will show them. Nor are four things the component keeps as
+  // constants: the two directories' names, the ATTRIBUTION each requires (also written into
+  // the exported CSV, so it cannot vary by locale), the example grid and frequency, and the
+  // persisted project name. The rig models in the "Max name" list are tokens in
+  // `features/radioprog.ts`.
+  'program.title': 'Program',
+  'program.sub':
+    'Build channel lists for your radios — repeaters near a location, exported for CHIRP or tuned on your rig',
+
+  // Where to search from.
+  'program.origin.aria': 'Search origin',
+  'program.origin.label': 'Near',
+  // `{{grid}}` is the station locator with its separator, or nothing at all.
+  'program.origin.station.label': 'My station {{grid}}',
+  'program.origin.station.title': 'Your station grid from Settings',
+  'program.origin.grid.label': 'Grid',
+  'program.origin.grid.aria': 'Grid square',
+  'program.origin.city.label': 'City',
+  'program.origin.city.aria': 'City',
+  // A HUMAN example, not a technical one: a locale should offer a place its operators know.
+  'program.origin.city.placeholder': 'Gatlinburg, TN',
+  'program.city.search': 'Search',
+  'program.city.searching': 'Searching…',
+  'program.city.noMatch': 'No places matched — try "City, State"',
+  'program.city.matches.aria': 'Matching places',
+  'program.recent.aria': 'Recent searches',
+  'program.recent.label': 'Recent',
+  'program.recent.chip.title': 'Reuse this search origin',
+
+  // How far. Every radius is formatted by `units.ts` at the display edge.
+  'program.radius.aria': 'Search radius',
+  'program.radius.label': 'Radius',
+  'program.radius.auto.label': 'Auto',
+  'program.radius.auto.title': "Radius from the selected bands' realistic repeater reach",
+  'program.radius.auto.hint': '= {{radius}} ({{bands}})',
+  'program.radius.auto.allBands': 'all bands',
+
+  // The fetch, and what the directory answered with.
+  'program.fetch.label': '⟳ Fetch repeaters',
+  'program.fetch.busy': '⟳ Fetching…',
+  'program.fetch.title': 'Fetch repeaters within {{radius}}',
+  'program.fetch.title.noOrigin': 'Pick a valid origin first (grid or city)',
+  'program.fetch.retry': 'Retry',
+  'program.stamp.title': 'Directory data age (cached per source, weekly)',
+  'program.stamp.stale': ' · stale (fetch failed, cached data shown)',
+  'program.age.mins': '{{mins}}m ago',
+  'program.age.hours': '{{hours}}h ago',
+  'program.age.days': '{{days}}d ago',
+  // `{{source}}` is the directory's own name and `{{band}}` a band name — both tokens.
+  'program.coverageGap':
+    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <b>Settings ▸ Integrations</b> fills the gap.',
+
+  // Narrowing the results. The band chips and the FM chip are mode/band names, not prose.
+  'program.filters.aria': 'Result filters',
+  'program.filters.allBands': 'All',
+  'program.filters.fm.title': 'FM repeaters only — what v1 programs',
+  'program.filters.digital.label': '+Digital',
+  'program.filters.digital.title':
+    'Also list DMR / D-STAR / Fusion machines (badged; programming them comes later)',
+  'program.filters.onAir.label': 'On-air only',
+  'program.filters.onAir.title': 'Hide machines the directory marks off-air',
+  'program.filters.search.placeholder': 'Filter call / city…',
+  'program.filters.search.aria': 'Filter results',
+  'program.count': '{{shown}} of {{total}} shown · nearest first',
+  'program.addAll.label': '＋ Add all shown',
+  'program.addAll.confirm.title': 'Add {{count}} channels?',
+  'program.addAll.confirm.ok': 'Add channels',
+
+  // The results list, and what it says when it has nothing. Two whole sentences for the
+  // empty case: where the mode word sits belongs to the translator.
+  'program.results.aria': 'Repeaters',
+  'program.results.prompt':
+    'Pick a location and press <b>Fetch repeaters</b> — results land here; ADD the machines you want on your radio.',
+  'program.results.none': 'No repeaters within {{radius}}.',
+  'program.results.none.fm': 'No FM repeaters within {{radius}}.',
+  'program.results.tryWider': 'Try {{radius}}',
+  'program.results.showDigital': 'Show digital',
+  'program.row.offAir': 'OFF-AIR',
+  'program.row.star.title':
+    'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning',
+  'program.row.unstar.title':
+    'Unstar — keeps the channel in Memories, drops it off the cockpit strip',
+  // Tune is a RETUNE of the CAT rig — frequency, shift, offset and tone. It never transmits.
+  'program.row.tune.label': 'Tune',
+  'program.row.tune.title': 'Tune your CAT rig to this repeater now (FM + shift + offset + tone)',
+  'program.row.add.label': '＋ Add',
+  'program.row.added.label': '✓ Added',
+  'program.row.add.title': 'Add to the channel list',
+  'program.row.remove.title': 'Remove from the channel list',
+  'program.row.add.digital.title':
+    'Digital repeater — programming DMR/D-STAR/Fusion comes in a later version',
+
+  // The channel list being built — the artifact this section exists to produce.
+  'program.builder.title': 'Channel list',
+  'program.builder.nameCap.label': 'Max name',
+  'program.builder.nameCap.title':
+    "Your radio's channel-name length — auto names re-derive to fit (hand-edited names are kept)",
+  'program.builder.startAt.label': 'Start at',
+  'program.builder.startAt.title': 'First memory slot number (keep your existing channels)',
+  'program.builder.empty':
+    'No channels yet — fetch repeaters on the left and ADD the ones you want on your radio.',
+  'program.chan.name.aria': 'Channel {{n}} name',
+  'program.chan.dup.title': 'Duplicate name — the radio will show two identical channels',
+  // `{{cap}}` is a character count and `{{name}}` the name as the radio will display it.
+  'program.chan.over.title': 'Longer than {{cap}} — exports as "{{name}}"',
+  'program.chan.moveUp.aria': 'Move up',
+  'program.chan.moveDown.aria': 'Move down',
+  'program.chan.remove.aria': 'Remove',
+
+  // Getting the list out — by hand, by CSV, or into Nexus's own memory bank.
+  'program.deliver.byHand.label': 'Add by hand…',
+  'program.deliver.byHand.title':
+    "Type in a repeater or simplex channel the directory doesn't have (or has wrong)",
+  'program.deliver.import.label': 'Import CHIRP CSV…',
+  'program.deliver.import.title':
+    'Import a CHIRP CSV — the same format Export for CHIRP writes, and what CHIRP itself saves',
+  'program.deliver.exportChirp.label': 'Export for CHIRP…',
+  'program.deliver.exportChirp.title':
+    'Save a CHIRP-ready CSV — CHIRP (free) flashes nearly every radio from it',
+  'program.deliver.exportCsv.label': 'Export CSV',
+  'program.deliver.exportCsv.title': 'Plain CSV — spreadsheets, Anytone CPS, RT Systems',
+  'program.deliver.saveBank.label': 'Save to Memory Bank',
+  'program.deliver.saveBank.title':
+    "Save these channels into Nexus's own memory bank (the Phone cockpit's MEMORY recall list) — recall retunes the rig with shift + tone",
+  'program.deliver.clear.label': 'Clear',
+  'program.clear.confirm.title': 'Clear the whole channel list?',
+  'program.clear.confirm.ok': 'Clear list',
+
+  // Entering a machine the directory has wrong or missing. `{{example}}` is a dial frequency
+  // the component supplies; the +/− and the tone unit are the radio's vocabulary.
+  'program.manual.freq': 'Frequency (MHz), e.g. {{example}}',
+  'program.manual.name': 'Name (blank = frequency)',
+  'program.manual.offset': 'Offset: + / - / blank for simplex',
+  'program.manual.tone': 'CTCSS tone Hz (blank = none)',
+  // ⚠️ `Frequency` and `Mode` here are CHIRP's own CSV column names — wire identifiers.
+  'program.import.notChirp': 'Not a CHIRP CSV — need a header row with Frequency and Mode',
+  'program.import.done': 'Imported {{count}} channels from CHIRP CSV',
+  'program.export.noFm': 'No FM channels in the list — digital channels export in a later version',
+  'program.export.saved': 'Saved {{path}}',
+  // ⚠️ `CHIRP ▸ File ▸ Import` is another program's menu path — keep it as CHIRP prints it.
+  'program.export.saved.chirp':
+    'Saved {{path}} — open CHIRP ▸ File ▸ Import, then upload to your radio',
+
+  // What the workbench says after it acts. The shift is a sign and a number of MHz.
+  'program.tune.done': 'Tuned {{freq}} {{mode}} — {{shift}}{{tone}}',
+  'program.tune.simplex': 'simplex',
+  'program.tune.tone': ' · tone {{hz}}',
+  'program.star.unstarred': '{{name}} unstarred — still in Memories',
+  'program.star.starred': '{{name}} starred — already in Memories',
+  'program.star.saved': '{{name}} ★ — on the cockpit MEM strip and in Memories',
+  // The already-there clause is INTERPOLATED into the sentence, not glued after it: it
+  // carries the second count, which one message cannot pluralise beside the first.
+  'program.saveBank.done': {
+    one: '{{count}} channel saved to Memories{{dupes}} — star ★ the ones you want on the cockpit MEM strip',
+    other:
+      '{{count}} channels saved to Memories{{dupes}} — star ★ the ones you want on the cockpit MEM strip',
+  },
+  'program.saveBank.dupes': ' ({{count}} already there)',
+  'program.saveBank.allDupes': 'All of these are already in Memories',
+  'program.saveBank.noFm': 'No FM channels to save',
+
+  // The how-to before the first CHIRP export. The menu paths are CHIRP's own.
+  'program.chirp.title': 'Flash with CHIRP',
+  'program.chirp.description':
+    'Nexus builds the list; CHIRP drives the cable. One list, every radio you own.',
+  'program.chirp.step.save': 'Nexus saves a CHIRP-ready CSV to your Downloads.',
+  'program.chirp.step.import':
+    'Open CHIRP (free, ~1,000 radios) → <b>File ▸ Import</b> and pick the file.',
+  'program.chirp.step.upload':
+    'Connect your programming cable → <b>Radio ▸ Upload To Radio</b>.',
+  'program.chirp.link': 'Get CHIRP ↗',
+  'program.chirp.dontShow': "Don't show this again — just save the file",
+  'program.chirp.save': 'Save the CSV',
+
+  // ── The mid-QSO recall card ─────────────────────────────────────────────────────────
+  // ⚠️ The callsign, the grid squares, the band and mode of each prior contact, the RST pair,
+  // the operator's own comments and the distance/bearing line are all data and stay in the
+  // component — as do the month abbreviations, which are date formatting.
+  'recall.qrz.title': 'Open {{call}} on QRZ (browser)',
+  'recall.qrz.error': 'Could not open {{call}} on QRZ',
+  // Names the button the operator can see: the log strip's callbook button reads "Lookup".
+  'recall.where.empty': 'Tab or press Lookup for name / QTH',
+  // Two whole statements, and the conjunction between the two squares is inside a message of
+  // its own — a language that pairs them differently can only do it if it can translate the
+  // joining word.
+  'recall.geo.title': 'Great-circle distance · true bearing from your QTH',
+  'recall.geo.title.approx':
+    'Great-circle distance · true bearing from your QTH — approximate: computed from the center of {{squares}}',
+  'recall.geo.approx.mine':
+    'your {{grid}} square (set a 6-character grid in Settings to sharpen it)',
+  'recall.geo.approx.theirs': 'their {{grid}} square',
+  'recall.geo.approx.both': '{{mine}} and {{theirs}}',
+  'recall.dupe.label': 'Dupe {{band}}',
+  'recall.dupe.title':
+    'Already worked on {{band}} — logging now would be a dupe. Counts any mode on the band unless Settings’ “match mode too” is on.',
+  'recall.confirmed.title': '{{confirmed}} of {{count}} prior QSOs confirmed',
+  // ⚠️ DXCC is the award programme's own name — a token inside the sentence.
+  'recall.need.entity': 'New DXCC!',
+  'recall.need.band': 'New band-slot',
+  'recall.need.mode': 'New mode-slot',
+  'recall.need.title': 'Worth working — a new one for your log',
+  'recall.note.title': 'Your most recent note on this station',
+  'recall.log.head': 'Previous contacts',
+  'recall.log.aria': 'Previous contacts with {{call}}',
+
+  // ── The band controls (the licensed-band picker, the frequency control) ─────────────
+  // ⚠️ Band names are both the LABEL and the VALUE of the pickers' options — `pickBand` sends
+  // the value to the engine — so neither is here. Nor are the channel presets, their dial
+  // frequencies, the HF/VHF/UHF group names or the USB/FM mode buttons. The 🔒 chip is a
+  // readout of `txAllowed`: it reports that the engine is already blocking transmit, and is
+  // not a transmit control.
+  'bandPicker.select.title':
+    'Band — your last frequency on this band in this mode this session, else the start of your licensed segment',
+  'bandPicker.txLock.label': '🔒 TX locked',
+  'bandPicker.txLock.title':
+    'This frequency/mode is outside your license privileges — transmit is blocked. Pick a band above, or change your license class in Settings.',
+
+  'freq.control.aria': 'Frequency control',
+  'freq.channel.label': 'Band / Channel',
+  'freq.channel.aria': 'Band channel preset',
+  'freq.channel.title': 'Pick a band-plan channel',
+  'freq.channel.presets': '— Presets —',
+  'freq.channel.custom': '{{band}} (custom)',
+  'freq.dial.label': 'Dial (MHz)',
+  'freq.band.title': 'Current band',
+  'freq.mode.aria': 'Phone mode',
+
+  // ── The band-activity strip (the cockpits' "Band activity" pane) ────────────────────
+  // ⚠️ Band and mode names, the scale's edge frequencies, the dial reading and every value in
+  // a spot's tooltip are tokens and stay in the component. `{{mode}}` below is CW or SSB.
+  // Deliberately NOT shared with the band map's entries, which read the same in English
+  // today: the two surfaces word their own tooltips, and a shared key could not be split
+  // later without orphaning both translations.
+  'bandStrip.offPlan': '{{band}} — off the band plan',
+  'bandStrip.empty.noPlan': 'no band-plan data for {{band}}',
+  'bandStrip.empty.thisFrequency': 'this frequency',
+  'bandStrip.count': {
+    one: '{{count}} {{mode}} spot · {{band}}',
+    other: '{{count}} {{mode}} spots · {{band}}',
+  },
+  'bandStrip.empty.none': 'no {{mode}} spots on {{band}} yet',
+  'bandStrip.legend.label': 'Legend',
+  'bandStrip.legend.title': 'Show/hide the colour + type key',
+  'bandStrip.popout.label': '⧉ Band map',
+  'bandStrip.popout.title': 'Open the vertical band map in its own window',
+  'bandStrip.track.title': '{{band}}: {{lo}}–{{hi}} MHz',
+  'bandStrip.track.title.tunable': '{{band}}: {{lo}}–{{hi}} MHz — scroll to tune',
+  'bandStrip.shade.title': 'Your licensed phone segment on this band',
+  // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment.
+  'bandStrip.spot.title': '{{detail}} — click to work',
+  'bandStrip.age.secs': '{{secs}}s ago',
+  'bandStrip.age.mins': '{{mins}}m ago',
+  'bandStrip.age.hours': '{{hours}}h ago',
+  // The "you are here" marker: two whole tooltips, because the blocked one is a different
+  // statement rather than a tail. It is a readout, not a transmit control.
+  'bandStrip.dial.title': 'You: {{freq}} MHz',
+  'bandStrip.dial.title.blocked':
+    'You: {{freq}} MHz — transmit blocked (outside your privileges)',
+
+  // ── Multi-radio (the launch picker and the switcher pills) ──────────────────────────
+  // ⚠️ Each radio's profile name, its band and its dial frequency are interpolated as tokens.
+  // The peg lock pins which radio a band change may move; it is not a transmit control.
+  'radios.picker.aria': 'Choose radio',
+  'radios.picker.title': 'Which radio?',
+  'radios.picker.sub':
+    'You have two radios running at once. Pick the radio this window will operate — you can open a second window for the other. They share one logbook.',
+  'radios.picker.inUse.title': '{{name}} is already open in another window',
+  'radios.picker.inUse.tag': 'in use',
+  'radios.picker.choose.title': 'Operate {{name}}',
+  'radios.picker.single': 'Use one radio (follow bands on a single window)',
+
+  'radios.switcher.aria': 'Active radio',
+  'radios.switcher.active.title': '{{name}} — active radio ({{band}} · {{freq}} MHz)',
+  'radios.switcher.switch.title': 'Switch to {{name}} (last on {{band}} · {{freq}} MHz)',
+  // ⚠️ CAT is the rig-control protocol's own name, here and in the two entries below it.
+  'radios.switcher.catDead.title':
+    'Switch to {{name}} — ⚠ CAT not responding (check its rig, cable, and COM port)',
+  'radios.switcher.catDead.aria': 'CAT not responding',
+  'radios.switcher.catDead.band': 'no CAT',
+  'radios.peg.on.label': '🔒 Pegged',
+  'radios.peg.off.label': '🔓 Peg',
+  'radios.peg.on.title':
+    'Peg-lock ON — the active radio stays put; selecting a band won’t auto-switch radios. Click to unlock.',
+  'radios.peg.off.title':
+    'Peg-lock OFF — selecting a band may auto-switch to the radio that covers it. Click to pin the active radio.',
+
+  // ── Settings ▸ Radio — the pre-save rig checks (`rigFormChecks.ts`) ─────────────────
+  // ⚠️ `{{port}}` is the device name exactly as the OS enumerated it (`COM5`,
+  // `/dev/cu.usbserial-A`), and `/dev/cu.…`, CAT, PTT and None/VOX are the settings' own
+  // vocabulary — every one of them names a thing the operator has to pick by that name.
+  'settings.radio.check.noPort': 'No serial port chosen — a rig model is set, so CAT needs a port.',
+  'settings.radio.check.portMissing':
+    '{{port}} is not connected right now — check the rig is powered on, or pick another port.',
+  'settings.radio.check.dialIn':
+    '{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.',
+  'settings.radio.check.catNoModel':
+    'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
+
+  // ── Settings ▸ the panel shell (chrome, tab rail, Save) ─────────────────────────────
+  // The frame every Settings tab renders inside. `{{id}}` is the build stamp — an identifier,
+  // never a formatted number — and "Nexus", "Test CAT" and "Save" name things the operator
+  // reads on screen, so they stay exactly as they are inside these sentences.
+  'settings.panel.title': 'Settings',
+  'settings.panel.subtitle': 'operator, rig & network',
+  'settings.panel.loading': 'Loading settings…',
+  'settings.panel.build': 'build {{id}}',
+  'settings.panel.build.title':
+    "This install's build stamp — confirm a fresh install actually took",
+  'settings.panel.update.label': 'Check for updates',
+  'settings.panel.update.title': 'Check for a newer Nexus release',
+  'settings.panel.tabs.aria': 'Settings sections',
+  'settings.panel.save': 'Save',
+  'settings.panel.saving': 'Saving…',
+  'settings.panel.saved': 'Saved',
+
+  // The tab rail. ⚠️ Phone, CW and Digital are MODE NAMES — invariant tokens — so they are
+  // deliberately ABSENT here and render from the panel's own literal list in every language;
+  // `SETTINGS_TABS` in `components/SettingsPanel.tsx` says so at the array.
+  'settings.tabs.station': 'Station',
+  'settings.tabs.radio': 'Radio',
+  'settings.tabs.spots': 'Spots & Alerts',
+  'settings.tabs.logging': 'Logging & Connectors',
+  'settings.tabs.contesting': 'Contesting',
+  'settings.tabs.appearance': 'Appearance',
+
+  // What Save says when the form is refused. The rig checks' own wording lives above, in
+  // `settings.radio.check.*` — this is only the panel's fallback when one carries no message.
+  'settings.save.callsignFirst': 'Enter your callsign on the Station tab before saving.',
+  'settings.save.checkRadio': 'Check the radio settings.',
+  'settings.save.failed': 'Could not save settings.',
+
+  // ── Settings ▸ the panel's own toasts, confirms and live applies ────────────────────
+  // Raised by the panel's handlers rather than by any one section, so they are grouped here
+  // by the act. ⚠️ Every interpolated value is a TOKEN and stays one: `{{file}}` a file name,
+  // `{{device}}` / `{{port}}` the OS's own device and port names, `{{ip}}` an address,
+  // `{{name}}` a radio or profile name the operator typed, `{{id}}` a radio number. LoTW,
+  // eQSL, QRZ, HamQTH, ClubLog, HRDLog.net, RepeaterBook, hearham.com, Cloudlog, SmartSDR,
+  // DAX, CAT and CI-V are the names of the services and protocols themselves.
+  'settings.backup.restore.confirm.title': 'Replace your current setup with {{file}}?',
+  'settings.backup.restore.confirm.body':
+    'Your radios, preferences, memory channels, watchlist and chase sets will be replaced. Your contact log is not affected. This cannot be undone.',
+  'settings.backup.restore.confirm.action': 'Restore',
+  'settings.backup.restore.done': 'Settings restored — check your radio and Test CAT',
+  'settings.backup.restore.failed': 'Restore failed',
+
+  'settings.audio.rxGain.failed': 'Could not apply RX gain',
+  'settings.audio.txPower.failed': 'Could not set TX power',
+  // What one sound-card option READS when the saved device is not among the ones we offer.
+  // The device NAME is the OS's, and it is never translated — only the note after it is.
+  'settings.audio.device.notInList': '{{device}} — saved, not in the list',
+
+  'settings.satellites.vfoMap.failed': 'Could not confirm the VFO mapping',
+
+  'settings.workingFreq.reset.confirm.title': 'Clear all working-frequency overrides?',
+  'settings.workingFreq.reset.confirm.body': 'The stock WSJT-X frequency table is restored.',
+  'settings.workingFreq.reset.confirm.action': 'Clear overrides',
+
+  // The radio roster. `settings.radios.thisRadio` and `.unnamed` are the stand-ins a radio
+  // with no name of its own is called by; they fill the `{{name}}` slot, so the sentence
+  // around them stays one whole sentence.
+  'settings.radios.thisRadio': 'this radio',
+  'settings.radios.unnamed': 'radio {{id}}',
+  'settings.radios.add.failed': 'Could not add a radio',
+  'settings.radios.remove.confirm.title': 'Remove {{name}}?',
+  'settings.radios.remove.confirm.body':
+    "This deletes its CAT/audio config, its rigctld port and its band coverage. Your contact log is not affected. This can't be undone.",
+  'settings.radios.remove.confirm.action': 'Remove radio',
+  'settings.radios.remove.failed': 'Could not remove the radio',
+  'settings.radios.rename.failed': 'Could not rename the radio',
+  'settings.radios.bands.failed': 'Could not set band coverage',
+  'settings.radios.default.failed': 'Could not set the default radio',
+  'settings.radios.switch.failed': 'Could not switch radios',
+  // Two confirms, one wording for the button. Kept as separate entries because they guard
+  // two different acts — editing another radio's config, and moving the station onto it.
+  'settings.radios.edit.confirm.title':
+    'Discard unsaved changes to the radio you were editing?',
+  'settings.radios.edit.confirm.body': 'The edits you have not saved for that radio are lost.',
+  'settings.radios.edit.confirm.action': 'Discard and switch',
+  'settings.radios.makeActive.confirm.title':
+    'Discard unsaved changes and switch the operating radio?',
+  'settings.radios.makeActive.confirm.body':
+    'The carrier is dropped before the swap. Unsaved edits to the radio you were editing are lost.',
+  'settings.radios.makeActive.confirm.action': 'Discard and switch',
+  'settings.routing.rules.failed': 'Could not save the routing rules',
+
+  // Radio detection. `settings.detect.unknownRadio` is the word an unidentified device is
+  // called by in the three "Applied …" reports — it fills `{{device}}`, never a fragment.
+  'settings.detect.usb.failed': 'USB radio detection failed',
+  'settings.detect.flex.scanFailed': 'Flex LAN scan: {{error}}',
+  'settings.detect.none':
+    'No radios found — USB: plug in + power on; Flex: must be on this network.',
+  'settings.detect.unknownRadio': 'radio',
+  'settings.detect.applied.interface':
+    'Applied {{device}} on {{port}} — now pick your Rig Model, then Save',
+  'settings.detect.applied.identifying':
+    'Applied {{device}} on {{port}} — identifying via Auto-test…',
+  'settings.detect.applied.review': 'Applied {{device}} on {{port}} — review + Save settings',
+  // ⚠️ The port numbers (5002, 60001) are what the operator types into SmartSDR CAT and into
+  // Network Address. They are dial settings, not prose, and stay exactly as written.
+  'settings.detect.flex.applied':
+    'Applied {{radio}} at {{ip}} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.',
+  'settings.detect.flex.found':
+    'Found {{radio}} at {{ip}} — model and radio IP applied. SmartSDR CAT is Windows-only, so set Network Address yourself: the address of a Windows PC on this network running SmartSDR CAT (slice A is its port 5002). Native panadapter/DAX below talk to the radio directly and need no such PC.',
+
+  'settings.cat.callsignRequired': 'Callsign is required.',
+  'settings.cat.savedNotTested':
+    "Saved to {{name}}. CAT can only be tested on the radio you're operating — make {{name}} active to test it.",
+  'settings.cat.test.failed': 'Could not run the CAT test.',
+  'settings.cat.autoTest.failed': 'Could not run the port auto-test.',
+
+  'settings.profiles.saved': 'Profile "{{name}}" saved',
+  'settings.profiles.loaded': 'Loaded profile "{{name}}"',
+
+  // The credential stores and the two-way syncs. The sync reports are ONE sentence each with
+  // the optional clauses interpolated whole, never glued from fragments; `{{count}}` picks the
+  // plural form and `Intl.PluralRules` owns which form that is.
+  'settings.connections.test.testing': 'testing…',
+  'settings.connections.sync.unmatched': ' · {{count}} unmatched',
+  'settings.connections.lotw.password.saveFailed': 'Could not save the LoTW password',
+  'settings.connections.lotw.password.saved': 'LoTW password saved to the system keychain',
+  'settings.connections.lotw.password.clearFailed': 'Could not clear the LoTW password',
+  'settings.connections.lotw.password.cleared': 'LoTW password cleared from the keychain',
+  'settings.connections.lotw.sync.failed': 'LoTW sync failed',
+  'settings.connections.lotw.sync.done':
+    'LoTW: {{confirmed}} newly confirmed, {{credited}} credited{{promoted}}{{unmatched}}',
+  'settings.connections.lotw.sync.promoted': {
+    one: ' · {{count}} upload now on file',
+    other: ' · {{count}} uploads now on file',
+  },
+  'settings.connections.eqsl.password.saveFailed': 'Could not save the eQSL password',
+  'settings.connections.eqsl.password.saved': 'eQSL password saved — auto-upload to eQSL is ON',
+  'settings.connections.eqsl.password.clearFailed': 'Could not clear the eQSL password',
+  'settings.connections.eqsl.password.cleared':
+    'eQSL password cleared — auto-upload to eQSL is off',
+  'settings.connections.eqsl.sync.failed': 'eQSL sync failed',
+  // ⚠️ DXCC and WAS are award programme names — a translator leaves both exactly as they are.
+  'settings.connections.eqsl.sync.done':
+    'eQSL: {{confirmed}} newly confirmed (not DXCC/WAS credit){{unmatched}}',
+  'settings.connections.qrz.password.saveFailed': 'Could not save the QRZ password',
+  'settings.connections.qrz.password.saved': 'QRZ password saved to the system keychain',
+  'settings.connections.qrz.password.clearFailed': 'Could not clear the QRZ password',
+  'settings.connections.qrz.password.cleared': 'QRZ password cleared from the keychain',
+  'settings.connections.qrz.key.saveFailed': 'Could not save the QRZ Logbook key',
+  'settings.connections.qrz.key.saved': 'QRZ Logbook key saved — auto-upload to QRZ is ON',
+  'settings.connections.qrz.key.clearFailed': 'Could not clear the QRZ Logbook key',
+  'settings.connections.qrz.key.cleared': 'QRZ Logbook key cleared — auto-upload to QRZ is off',
+  'settings.connections.qrz.sync.failed': 'QRZ sync failed',
+  // ⚠️ QSO is the hobby's own word for a contact — it does not inflect into another language.
+  'settings.connections.qrz.sync.done': {
+    one: 'QRZ: {{count}} new QSO, {{confirmed}} newly confirmed{{unmatched}}',
+    other: 'QRZ: {{count}} new QSOs, {{confirmed}} newly confirmed{{unmatched}}',
+  },
+  'settings.connections.hamqth.password.saveFailed': 'Could not save the HamQTH password',
+  'settings.connections.hamqth.password.saved': 'HamQTH password saved to the system keychain',
+  'settings.connections.hamqth.password.clearFailed': 'Could not clear the HamQTH password',
+  'settings.connections.hamqth.password.cleared': 'HamQTH password cleared from the keychain',
+  'settings.connections.clublog.password.saveFailed': 'Could not save the ClubLog password',
+  'settings.connections.clublog.password.saved':
+    'ClubLog app-password saved — auto-upload to ClubLog is ON',
+  'settings.connections.clublog.password.clearFailed': 'Could not clear the ClubLog password',
+  'settings.connections.clublog.password.cleared':
+    'ClubLog password cleared — auto-upload to ClubLog is off',
+  'settings.connections.hrdlog.code.saveFailed': 'Could not save the HRDLog.net upload code',
+  'settings.connections.hrdlog.code.saved':
+    'HRDLog.net code saved — auto-upload to HRDLog.net is ON',
+  'settings.connections.hrdlog.code.clearFailed': 'Could not clear the HRDLog.net upload code',
+  'settings.connections.hrdlog.code.cleared':
+    'HRDLog.net code cleared — auto-upload to HRDLog.net is off',
+  'settings.connections.repeaterbook.token.saveFailed': 'Could not save the RepeaterBook token',
+  'settings.connections.repeaterbook.token.saved':
+    'RepeaterBook token saved — the Program section now uses RepeaterBook',
+  'settings.connections.repeaterbook.token.clearFailed':
+    'Could not clear the RepeaterBook token',
+  'settings.connections.repeaterbook.token.cleared':
+    'RepeaterBook token cleared — the Program section falls back to hearham.com',
+  'settings.connections.cloudlog.key.saveFailed': 'Could not save the Cloudlog API key',
+  'settings.connections.cloudlog.key.saved': 'Cloudlog API key saved to the keychain',
+  'settings.connections.cloudlog.key.clearFailed': 'Could not clear the Cloudlog API key',
+  'settings.connections.cloudlog.key.cleared': 'Cloudlog API key cleared from the keychain',
+
+  // ── Settings ▸ Radio ▸ Radios (the roster, band coverage, band+mode routing) ────────
+  // ⚠️ EVERY INTERPOLATED VALUE HERE IS A TOKEN AND STAYS ONE: `{{name}}` is a radio's own
+  // name, `{{rig}}` a Hamlib model name, `{{cat}}` a COM port / host:port / OmniRig slot,
+  // `{{ip}}` an address, `{{audio}}` the OS's own sound-device name, `{{port}}` a TCP port,
+  // `{{bands}}` a list of band names and `{{mode}}` a routing mode class. The band and mode
+  // names written into the sentences (2 m, FT8, FM, APRS) are that same vocabulary and are
+  // not translated either — they name what the operator selects. The FIVE ROUTING MODE
+  // CLASSES are deliberately absent from this file: they are mode names, and the panel's
+  // `ROUTE_MODES` must match the Rust `RouteMode::label`, so they stay in the code.
+  'settings.radios.legend': 'Radios',
+  // The two stand-ins a radio with no name of its own is called by inside a sentence; they
+  // fill a `{{name}}` slot, so the sentence around them stays one whole sentence.
+  'settings.radios.anotherRadio': 'another radio',
+  'settings.radios.selectedRadio': 'the selected radio',
+  'settings.radios.editingNote':
+    "<b>Editing {{name}}</b> — not your operating radio. <b>Save</b> writes only this radio's CAT / audio config; your active radio and station-wide settings are untouched.",
+  'settings.radios.name.placeholder': 'Radio name',
+  'settings.radios.active.badge': 'Active',
+  'settings.radios.active.title': 'Your operating radio.',
+  'settings.radios.editing.badge': 'Editing',
+  'settings.radios.editing.title': 'The Rig / CAT + Audio form below is editing this radio.',
+  'settings.radios.edit.action': 'Edit',
+  'settings.radios.edit.title':
+    "Edit this radio's CAT / audio below — WITHOUT changing your operating radio (no swap, no dropped carrier).",
+  'settings.radios.makeActive.action': 'Make active',
+  'settings.radios.makeActive.title':
+    'Make this your operating radio (swaps rigs; drops any carrier first).',
+  'settings.radios.remove.action': 'Remove',
+  'settings.radios.remove.title': 'Remove this radio from the roster',
+  'settings.radios.remove.title.blocked':
+    'This is your operating radio — make another radio active first, then remove this one.',
+  // The roster card's summary line, and it is ONE entry because the words BETWEEN the tokens
+  // are labels — "CAT", "audio", "CAT helper port" — that a language ordering them differently
+  // cannot be served four fragments of. The Flex clause is optional and is interpolated whole.
+  'settings.radios.card.meta':
+    '{{rig}} · CAT {{cat}}{{flex}} · audio {{audio}} · CAT helper port {{port}}',
+  'settings.radios.card.meta.flex': ' · Flex radio {{ip}}',
+  'settings.radios.card.omnirig': 'Set up in OmniRig',
+  'settings.radios.card.noModel': 'No rig model set',
+  'settings.radios.card.noAddress': 'no address',
+  'settings.radios.card.noPort': 'no COM port',
+  'settings.radios.card.audioDefault': 'default',
+  'settings.radios.bands.hint': 'Covers bands (for auto band-routing; none = covers all):',
+  'settings.radios.add.action': '+ Add radio',
+  'settings.radios.hint.multi':
+    "The Rig / CAT + Audio settings below edit “{{name}}”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio.",
+  'settings.radios.hint.single':
+    'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.',
+  // The accessible name is its own entry, not a slice of the hint below it: a hint is a whole
+  // sentence and a control's name is a name, and the two are free to differ in a language.
+  'settings.radios.simultaneous.aria': 'Run both radios at the same time',
+  'settings.radios.simultaneous.hint':
+    '<b>Run both radios at the same time</b> — launch Nexus and it asks which radio this window drives; open a second window for the other. Both share one logbook. Leave off if you only ever use one radio at a time (you can still switch between them from the top bar).',
+
+  // Band + mode routing. `{{n}}` is a rule's position in the table, counted from 1.
+  'settings.routing.intro':
+    '<b>Route by band AND mode</b> — band coverage above sends a whole band to one radio. Add rules here when TWO radios share a band and the MODE decides which one: 2 m FT8 to the digital rig, 2 m FM and APRS to the FM rig. Rules are checked top to bottom and the FIRST match wins; anything no rule matches falls back to band coverage, then to the default radio.',
+  'settings.routing.empty': "No rules — routing is by band only (today's behavior).",
+  'settings.routing.rule.mode.aria': 'Rule {{n}} mode',
+  'settings.routing.rule.mode.any': 'Any mode',
+  // "Satellite" is a CONTEXT designation, not a sixth mode class (the panel says so at the
+  // dropdown), so unlike the five mode classes beside it, it is prose and moves.
+  'settings.routing.rule.satellite': 'Satellite',
+  'settings.routing.rule.satellite.title':
+    'Satellite passes only: picking a transponder checks Satellite rules before the mode rules, so the FM & APRS rule can keep terrestrial packet while satellites go to the sat rig. Terrestrial tunes never match this rule.',
+  'settings.routing.rule.radio.aria': 'Rule {{n}} radio',
+  'settings.routing.rule.up.title': 'Check this rule earlier (first match wins)',
+  'settings.routing.rule.up.aria': 'Move rule {{n}} up',
+  'settings.routing.rule.down.title': 'Check this rule later',
+  'settings.routing.rule.down.aria': 'Move rule {{n}} down',
+  'settings.routing.rule.remove.aria': 'Remove rule {{n}}',
+  // One line, three holes — never three glued fragments. `.anyMode` is the mid-sentence form
+  // of `.rule.mode.any` and is a separate entry on purpose: lower-casing a translated noun is
+  // wrong wherever nouns capitalise.
+  'settings.routing.rule.summary': '{{bands}} · {{mode}} → {{radio}}',
+  'settings.routing.rule.summary.anyBand': 'Any band',
+  'settings.routing.rule.summary.anyMode': 'any mode',
+  'settings.routing.rule.summary.radio': 'Radio {{id}}',
+  'settings.routing.add.action': '+ Add routing rule',
+  'settings.routing.default.label': 'Everything else',
+  'settings.routing.default.aria': 'Default radio',
+  'settings.routing.default.stay': 'Stay on the current radio',
+  'settings.routing.test.label': 'Test a band + mode',
+  'settings.routing.test.band.aria': 'Test band',
+  'settings.routing.test.mode.aria': 'Test mode',
+  'settings.routing.test.action': 'Where would this go?',
+  'settings.routing.test.result': '{{band}} {{mode}} → <b>{{radio}}</b>',
+
+  // ── Settings ▸ Radio ▸ Profiles ─────────────────────────────────────────────────────
+  // A whole-station config saved under a name the operator types. The example name is human
+  // prose — a locale should offer one its operators recognise — while VHF inside it is the
+  // band class and stays as written.
+  'settings.profiles.legend': 'Profiles',
+  'settings.profiles.list.label': 'Saved profiles',
+  'settings.profiles.list.none': '— Select a profile —',
+  'settings.profiles.list.hint': 'Switch a whole rig / antenna / CAT / band setup in one move.',
+  'settings.profiles.load.action': 'Load',
+  'settings.profiles.load.title':
+    'Apply this profile — merged onto your current settings. Your callsign, license class, radio roster and sync history never come from a profile, and anything the profile predates keeps its current value.',
+  'settings.profiles.delete.action': 'Delete',
+  'settings.profiles.save.label': 'Save current as',
+  'settings.profiles.save.placeholder': 'e.g. Portable VHF',
+  'settings.profiles.save.action': 'Save',
+  'settings.profiles.save.hint': 'Snapshots the current settings under a name.',
+
+  // ── Settings ▸ Radio ▸ Rig & CAT ────────────────────────────────────────────────────
+  // THE DENSEST INVARIANT-TOKEN SURFACE IN SETTINGS, so read the rule before adding an entry
+  // here. Everything an operator TYPES OR PICKS on this screen is a token and is NOT in this
+  // file: COM / `/dev/cu.…` device names, baud rates, Hamlib model numbers and model names,
+  // host:port addresses, IPs, TCP port numbers, CI-V addresses and OmniRig's own RIG 1 / RIG 2
+  // slot names. So is the `value` of every <select> — only the LABEL moved. What the sentences
+  // below DO carry, verbatim and untranslated, are the names of things the operator has to go
+  // and find somewhere else: CAT, PTT, RTS, DTR, VOX, rigctld, Hamlib, OmniRig, SmartSDR CAT,
+  // DAX, VITA-49, Thetis, PowerSDR, piHPSDR, Digirig, SO2R, CI-V, DATA-U / USB-D / PKTUSB,
+  // SERIAL-B, CP210x, "Enhanced", the Icom menu path and the rig and interface model names.
+  'settings.rigControl.legend': 'Rig & CAT',
+
+  // PTT. A configuration <select>, not a transmit control: the labels are prose, the stored
+  // `value` is the token the radio loop reads, and nothing about keying changed.
+  'settings.rigControl.ptt.label': 'PTT Method',
+  'settings.rigControl.ptt.hint': 'How transmit is keyed.',
+  'settings.rigControl.ptt.cat': 'CAT (via rigctld)',
+  'settings.rigControl.ptt.rts': 'Serial RTS',
+  'settings.rigControl.ptt.dtr': 'Serial DTR',
+  'settings.rigControl.ptt.vox': 'VOX (no keying)',
+  'settings.rigControl.pttPort.label': 'PTT Serial Port',
+  // `{{example}}` is the platform's own device-name example, supplied by the panel as an
+  // invariant token (RIG_EXAMPLES) — a "localised" COM16 names no port on any machine.
+  'settings.rigControl.pttPort.placeholder': 'e.g. {{example}} — blank = use the CAT port',
+  'settings.rigControl.pttPort.hint':
+    'COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R) that routes PTT on its own port, separate from CAT. Leave blank if keying shares the CAT port, which is how a single-cable interface like a Digirig Mobile is wired; CAT keeps working either way. <b>Per radio</b>: each rig on an SO2R box has its own keying port, and this one follows the radio you switch to.',
+  'settings.rigControl.catRts.label': 'Interface keys RTS on the CAT port',
+  'settings.rigControl.catRts.hint':
+    'Tick this if your interface keys the radio from the CAT port’s RTS line — a Digirig Mobile and most other one-cable interfaces are wired this way. Nexus then holds RTS down, instead of leaving it up where it puts some rigs into transmit the moment the port opens. <b>If your radio transmits as soon as Nexus starts, this is the setting.</b> Leave it off if a plain serial cable goes straight to the radio: the radio may be using that line for flow control, and taking it away can cost you CAT.',
+
+  // Detection. `{{radio}}`, `{{ip}}`, `{{port}}`, `{{chip}}` and `{{device}}` are all names the
+  // OS or the radio reported; `{{note}}` is the backend's own sentence about a driver, passed
+  // through as a value and translated in phase 3, never here. The two "· …" clauses are whole
+  // optional clauses with their own separator, exactly as the sync reports above are.
+  'settings.rigControl.detect.label': 'Zero-config setup',
+  'settings.rigControl.detect.action': 'Detect my radio',
+  'settings.rigControl.detect.scanning': 'Scanning…',
+  'settings.rigControl.detect.use': 'Use this',
+  'settings.rigControl.detect.hint':
+    'One scan for everything: USB radios (fills model, port, sound device) AND FlexRadios on the network (fills the SmartSDR CAT config). Review, then Save.',
+  'settings.rigControl.detect.flex.name': '{{radio}} — network',
+  'settings.rigControl.detect.flex.meta':
+    '{{ip}} · via SmartSDR CAT on this PC (slice A, TCP 5002)',
+  'settings.rigControl.detect.unknownRadio': 'Unknown radio',
+  'settings.rigControl.detect.civ.isCiv': ' · CI-V port — use this one',
+  'settings.rigControl.detect.civ.notCiv': ' · second port, not CI-V',
+  'settings.rigControl.detect.interface':
+    'This is an interface cable, not a radio — pick your rig in <em>Rig Model</em> below. {{note}}',
+  'settings.rigControl.detect.noModel':
+    '⚠ Found the port but not the exact model — normal when the rig sits behind a generic USB bridge chip that reports only its own name (common on Icom, Yaesu, Kenwood, Elecraft, and Xiegu). Pick your rig in <em>Rig Model</em> below, or click <em>Auto-test</em> (it tries the common rigs to find the right port + baud for you).',
+  'settings.rigControl.detect.driverLink': 'driver ↗',
+
+  // The rig picker. The model NAMES and NUMBERS are Hamlib's and never move; the count line is
+  // a plural, so `Intl.PluralRules` picks the form instead of a hand-rolled `s`.
+  'settings.rigControl.rigModel.label': 'Rig Model',
+  'settings.rigControl.rigModel.filter.placeholder': 'Find a rig — type a name or model number',
+  'settings.rigControl.rigModel.filter.aria': 'Filter the rig model list',
+  'settings.rigControl.rigModel.filter.none':
+    'No model matches — clear the box, or enter the model number directly.',
+  'settings.rigControl.rigModel.filter.count': {
+    one: '{{count}} model match.',
+    other: '{{count}} models match.',
+  },
+  'settings.rigControl.rigModel.none': '— None —',
+  'settings.rigControl.rigModel.number.placeholder': 'or enter model #',
+  'settings.rigControl.rigModel.number.aria': 'Enter a Hamlib rig model number directly',
+  'settings.rigControl.rigModel.showAll.aria': 'Show all Hamlib rig models',
+  // The loading clause is interpolated whole rather than glued on, so a language that marks
+  // the state elsewhere in the sentence can move it.
+  'settings.rigControl.rigModel.showAll.hint':
+    'Show all models{{loading}} — the list above defaults to ~50 curated common rigs; check this for the full Hamlib catalog.',
+  'settings.rigControl.rigModel.showAll.loading': ' (loading…)',
+  'settings.rigControl.rigModel.hint':
+    'Hamlib rig model. Not listed? Type its model number directly — Hamlib may still support it even without a friendly name here.',
+
+  // Connection kind. `{{availability}}` is the whole closing sentence about OmniRig on this
+  // platform — one of the two entries below it, never a fragment.
+  'settings.rigControl.conn.label': 'Connection',
+  'settings.rigControl.conn.serial': 'Serial (USB / COM port)',
+  'settings.rigControl.conn.network': 'Network (host:port — SDR software, or a remote rig)',
+  'settings.rigControl.conn.omnirig': 'OmniRig (the radio is set up in OmniRig)',
+  'settings.rigControl.conn.omnirig.unavailable': 'OmniRig — Windows only',
+  'settings.rigControl.conn.hint':
+    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio.',
+  'settings.rigControl.conn.omnirig.hint':
+    "<b>OmniRig</b> hands rig control to VE3NEA's OmniRig server, the one most Windows logging and contest programs already use. Set the radio up <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there, so the Rig Model, Serial Port and Baud above are not used. {{availability}}",
+  'settings.rigControl.conn.omnirig.unavailable.why':
+    'It is greyed out here because OmniRig is a Windows program and this is not Windows.',
+  'settings.rigControl.conn.omnirig.install':
+    'Install and run OmniRig first; Nexus will not start without it.',
+  // ⚠️ RIG 1 / RIG 2 are the labels OmniRig's OWN window uses. They are how the operator
+  // matches this picker to that window, so they stay in the panel, untranslated.
+  'settings.rigControl.omnirig.label': 'OmniRig radio',
+  'settings.rigControl.omnirig.aria': 'OmniRig rig slot',
+  'settings.rigControl.omnirig.hint':
+    "Which of OmniRig's two radios this Nexus radio drives. OmniRig's own window labels them RIG 1 and RIG 2 — pick the one whose rig type matches this radio. A two-radio station can put one on each.",
+
+  // Network address. Every port number in these sentences is a number the operator types into
+  // another program's field — a dial setting, not prose — and stays exactly as written.
+  'settings.rigControl.netAddr.label': 'Network Address',
+  'settings.rigControl.dax.action': '⚡ Pair DAX audio ({{device}})',
+  'settings.rigControl.dax.title':
+    "SmartSDR's DAX virtual audio devices were detected — one click sets them as Nexus's audio in/out (bit-clean digital audio, no sound card)",
+  'settings.rigControl.dax.paired': 'DAX paired: {{input}} → in, {{output}} → out',
+  'settings.rigControl.netAddr.hint':
+    "host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so 127.0.0.1:5002 with the FLEX-6xxx / 8xxx model works out of the box; audio rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001, C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the slice you run digital on. (Direct-to-radio :4992 needs Hamlib's experimental native model and failed on real hardware.) Other rigs: a remote rigctld's host:port with their normal model.",
+  'settings.rigControl.netAddr.sdrPorts':
+    'Running an SDR program? Read the port out of the program, don\'t guess it: <b>Thetis</b> → Setup ▸ Serial/Network/Midi CAT ▸ <em>TCP/IP CAT Server</em> (its own box, factory 13013 — not the <em>TCI Server</em> box beside it, factory 50001; TCI is a different protocol and the Hamlib we ship has no backend for it, so pick a CAT profile such as "Thetis" and use the CAT server port); <b>SmartSDR CAT</b> → 5002; <b>piHPSDR</b> → 19090. Whatever it shows, type that.',
+
+  // The serial port and its two rig-specific notes. Each note is ONE sentence per platform,
+  // because what it says is a different answer, not a different ending; the Xiegu COM-number
+  // clause is the one genuinely optional half and is interpolated whole.
+  'settings.rigControl.serialPort.label': 'Serial Port',
+  'settings.rigControl.serialPort.placeholder': 'Select or type, e.g. {{example}}',
+  'settings.rigControl.serialPort.refresh.action': 'Refresh',
+  'settings.rigControl.serialPort.refresh.title': 'Re-scan serial ports',
+  'settings.rigControl.serialPort.autoTest.action': 'Auto-test',
+  'settings.rigControl.serialPort.autoTest.title':
+    'Probe each USB port (read-only — never transmits) and auto-select the one that drives your rig',
+  'settings.rigControl.serialPort.hint.mac':
+    'Serial device (/dev/cu.…) for rig control — or Auto-test to find it.',
+  'settings.rigControl.serialPort.hint.other':
+    'COM / serial device for rig control — or Auto-test to find it.',
+  'settings.rigControl.serialPort.xiegu':
+    '<b>Xiegu:</b> the radio makes two serial ports — CAT is on the <b>SERIAL-B</b> one{{note}}.',
+  'settings.rigControl.serialPort.xiegu.comNumber': ' (often the higher COM number)',
+  'settings.rigControl.serialPort.icom.mac':
+    '<b>Icom:</b> this radio makes two /dev/cu.* ports and only one speaks CI-V — with the Silicon Labs VCP driver it is usually the first of the pair (plain <b>cu.SLAB_USBtoUART</b>; the dead twin gets a numeric suffix). The other one never answers.',
+  'settings.rigControl.serialPort.icom.other':
+    '<b>Icom:</b> this radio makes two COM ports and only one speaks CI-V — in Device Manager it is the CP210x port marked <b>Enhanced</b> (Icom\'s driver: “Serial Port A (CI-V)”). The “Standard” / “Serial Port B” one never answers.',
+
+  // ⚠️ THE BAUD RATES THEMSELVES ARE NOT HERE AND NEVER WILL BE. The picker renders them from
+  // `STANDARD_BAUDS`; the two written into this hint are the rates a rig's own menu offers,
+  // spelled the way that menu spells them.
+  'settings.rigControl.baud.label': 'Baud',
+  'settings.rigControl.baud.hint':
+    "Serial baud rate — match your rig's CAT setting (most modern rigs: 38,400 or 115,200). Native Icom CI-V scope needs 115,200 here <em>and</em> on the rig.",
+
+  // Split operation. The three choices are WSJT-X's own Split Operation wording (the panel
+  // keeps parity with it) and the hint names each one, so the two move together.
+  'settings.rigControl.split.label': 'Split operation',
+  'settings.rigControl.split.none': 'None',
+  'settings.rigControl.split.rig': 'Rig',
+  'settings.rigControl.split.fakeit': 'Fake It',
+  'settings.rigControl.split.hint':
+    'Keeps your transmitted audio between 1500–2000 Hz by shifting the TX dial in 500 Hz steps, so audio harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B split. Fake It = retunes the VFO around each over (works on any CAT rig). None = stock WSJT-X default, transmits at the raw audio offset.',
+
+  // The multiplier beside this label (×1.00) is a number and is rendered by the panel.
+  'settings.rigControl.wheel.label': 'Wheel tuning sensitivity',
+  'settings.rigControl.wheel.aria': 'Mouse-wheel tuning sensitivity',
+  'settings.rigControl.wheel.hint':
+    'How far the dial moves per mouse-wheel notch. Lower it if a high-resolution or free-spin mouse tunes too far per flick; raise it to tune faster. Applies to the frequency readout and the Phone/CW scope wheel.',
+
+  // ── Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ─────────────────────────────────────────
+  'settings.rigControl.advanced.title': 'Advanced',
+  'settings.rigControl.rigctldPort.label': 'rigctld TCP Port',
+  'settings.rigControl.rigctldPort.hint': 'Port Nexus launches rigctld on.',
+  'settings.rigControl.plainSsb.label': 'Data modes use plain SSB',
+  'settings.rigControl.plainSsb.hint':
+    "<b>Leave this off unless you know you need it.</b> Nexus normally puts the radio in its DATA submode (DATA-U / USB-D / PKTUSB) for FT8, FT4, RTTY-AFSK and SSTV, because on most rigs that is the only mode where the USB codec reaches the transmitter. Turn this on and Nexus commands plain <b>USB/LSB</b> for those modes instead, and stays there — through band changes and when you call a station. Correct if your transmit audio goes in the <b>microphone</b> path, as with an interface wired to the mic jack (some RIGblaster models) — or if you simply prefer plain USB to the DATA submode (for its wider receive passband, say) and your rig is set to send its USB-codec audio in SSB, which on many modern rigs (FT-991A, IC-7300 and the like) is a single menu item. Either way the rig has to put the audio you're feeding onto the air in plain SSB: where it does not — the codec feeds only the data port and nothing carries in SSB — plain SSB takes audio from the mic and the radio transmits <b>no RF at all</b>, a red TX light and nothing on the air. <b>Per radio</b>, since it depends on how that rig is cabled and set. True FSK RTTY is unaffected — it keeps the rig's own RTTY mode.",
+  'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
+  'settings.rigControl.icomNative.hint':
+    'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',
+  'settings.rigControl.flexPan.label': 'Flex native panadapter (early access)',
+  'settings.rigControl.flexPan.hint':
+    "Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref controls. <b>Unverified on hardware</b>, so it's opt-in: needs the Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the scope stays blank or the app hitches, turn it back off. Save to apply.",
+  'settings.rigControl.flexAudio.label': 'Flex native DAX audio (early access)',
+  'settings.rigControl.flexAudio.hint':
+    'Carry this FlexRadio\'s audio straight over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices — which are <b>invisible under Remote Desktop</b>. <b>Both directions:</b> the decoders read the rig\'s receive audio directly, and transmit audio goes out over DAX too, which disconnects the rig\'s microphone while this is on. Turning it off, switching radio or quitting Nexus puts the mic back. <b>Unverified on hardware</b>, opt-in: needs the Flex IP set and SmartSDR reachable. If decodes or transmit stop, turn it back off. Save to apply.',
+  // ⚠️ `{{path}}` is a file path the backend chose. Markers are parsed BEFORE values are
+  // substituted, so a path that happens to contain `<b>` is text, never markup.
+  'settings.rigControl.civLog.label': 'CI-V bus diagnostic log',
+  'settings.rigControl.civLog.failed': 'Could not toggle the CI-V diagnostic log',
+  'settings.rigControl.civLog.recording':
+    "<b>Recording</b> to <code>{{path}}</code> — this keeps running while you're on other screens, so go to the FT8 or Phone cockpit and reproduce the issue (Tune or transmit) now. Come back and turn it off when done, then send that file. It shows exactly what's on the bus during the fault.",
+  'settings.rigControl.civLog.idle':
+    'Records every byte to/from the radio on the native CI-V path to a file in your Downloads — a support tool for hardware-only issues like the IC-9700 PTT flicker. Turn on, reproduce the problem, turn off, then send the file.',
+  'settings.rigControl.flexIp.label': 'Flex radio IP (native panadapter + DAX)',
+  'settings.rigControl.flexIp.hint':
+    "Your FlexRadio's LAN IP (SmartSDR API, port 4992) — turns on the native RF panadapter. This is the <em>radio's</em> address, not the SmartSDR-CAT port above.",
+  'settings.rigControl.sharingPort.label': 'Sharing port',
+  'settings.rigControl.sharingPort.hint':
+    'The "Share this radio" address other programs connect to (Hamlib NET rigctl default 4532). Change it only if something else on this computer already owns the port.',
+
+  // Test CAT reads the rig's frequency back. It is a read-only probe, not a transmit control.
+  'settings.rigControl.testCat.action': 'Test CAT',
+  'settings.rigControl.testCat.testing': 'Testing…',
+  'settings.rigControl.testCat.title': 'Save settings, connect to the rig, and read its frequency',
+
+  // ── Settings ▸ Radio ▸ Audio ────────────────────────────────────────────────────────
+  // ⚠️ THE DEVICE NAMES ARE NOT HERE AND NEVER WILL BE. Every entry in these pickers is
+  // whatever the OS enumerated ("USB Audio CODEC", "Speakers (Realtek)", a DAX channel) — the
+  // panel renders them straight, and `settings.audio.device.notInList` (with the sync toasts
+  // above) is the only prose that goes near one. Sample rates, dB readings, the × gain
+  // multiplier and the drive percentage are numbers the panel formats invariantly.
+  'settings.audio.legend': 'Audio',
+  // The multi-radio banner: ONE sentence with the radio's own name interpolated, never
+  // "for" + name + "." glued — that ordering does not survive translation. `{{radio}}` is a
+  // profile name the operator typed; the fallback below is prose because there is no name yet.
+  'settings.audio.multiRadio.note':
+    '🎚 Audio devices below are for <b>{{radio}}</b>. Each radio has its OWN input/output — click “Edit” on another radio (in Radios above) to set its audio. The live RX audio + waterfall follow whichever radio is active.',
+  'settings.audio.multiRadio.selectedRadio': 'the selected radio',
+  // The empty `value` of these pickers, whose label says "let the OS choose". The VALUE is ''
+  // in every language; only this label moves. Shared with the wizard's two audio pickers.
+  'settings.audio.device.systemDefault': 'System default',
+  'settings.audio.input.label': 'Input Device (RX)',
+  'settings.audio.input.hint': 'Sound card carrying receive audio.',
+  'settings.audio.refresh.action': 'Refresh',
+  'settings.audio.refresh.title': 'Re-scan audio devices',
+  'settings.audio.output.label': 'Output Device (TX)',
+  'settings.audio.output.hint': 'Sound card feeding the rig (transmit).',
+  'settings.audio.spectrum.label': 'Live input spectrum',
+  'settings.audio.spectrum.idle':
+    'Flat — no audio on the selected input. Check the device above (radio on? right codec?).',
+  'settings.audio.spectrum.hint':
+    'What the selected input hears, live — band noise should show as a moving floor. Confirms the RIGHT device before you leave Settings.',
+  // ⚠️ TX POWER IS THE DRIVE-LEVEL SLIDER, NOT A TRANSMIT CONTROL. It sets how hard the sound
+  // card feeds the rig; it cannot key, unkey or stop anything, and it is on no cockpit's
+  // stop-line census. Same reading as PTT Method above — the words moved, the path did not.
+  'settings.audio.txPower.label': 'Tx Power',
+  'settings.audio.txPower.aria': 'Transmit drive level',
+  'settings.audio.txPower.hint':
+    "The audio <b>drive</b> into the rig — the SAME control as the cockpit <b>Pwr</b> slider (they always match now). Trim down until your rig's ALC is just zero. This is <em>not</em> the rig's RF watts — set those on the radio.",
+  'settings.audio.rxLevel.label': 'RX Level',
+  'settings.audio.rxLevel.meter': 'RX audio level',
+  'settings.audio.rxLevel.hint':
+    "A dB scale like WSJT-X — aim for around 30 dB. Anything from ~15–60 dB decodes fine; red means too hot (back off RX Gain or the rig's audio).",
+  'settings.audio.rxGain.label': 'RX Gain',
+  'settings.audio.rxGain.aria': 'RX capture gain',
+  'settings.audio.rxGain.hint':
+    'Boost a quiet interface until RX Level reads around 30 dB — the meter responds as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much.',
+
+  // ── Settings ▸ Radio ▸ Headphone monitor ────────────────────────────────────────────
+  // "System default" inside these sentences names the picker entry above, so it reads the
+  // same word the operator just chose — translate them together.
+  'settings.headphoneMonitor.legend': 'Headphone monitor',
+  'settings.headphoneMonitor.enable.label': 'Enable monitor',
+  'settings.headphoneMonitor.enable.aria': 'Enable headphone monitor',
+  'settings.headphoneMonitor.enable.hint':
+    "Plays the exact audio the decoder hears — for level / RFI diagnosis and listening to the band. Off by default; UNVERIFIED on-air until the attended session. Guards against the rig's TX device by name (System default is resolved to its real device first) — if your devices go by multiple names, pick your headphones explicitly rather than System default.",
+  'settings.headphoneMonitor.device.label': 'Monitor Output Device',
+  'settings.headphoneMonitor.device.hint':
+    "Your headphones or speakers — must NOT be the rig's TX output device.",
+  'settings.headphoneMonitor.level.label': 'Monitor Level',
+  'settings.headphoneMonitor.level.aria': 'Headphone monitor level',
+  'settings.headphoneMonitor.level.hint':
+    'Headphone listening volume (does not affect TX).',
+
+  // ── Settings ▸ Radio ▸ Satellite Doppler ────────────────────────────────────────────
+  // ⚠️ The MAPPING LABELS are not here — they live in `features/satVfo.ts` beside the wire
+  // value each one stores, because the Satellites readiness rail shows the same list and two
+  // copies of a list that decides WHERE THE RADIO TRANSMITS would be a wrong-uplink generator.
+  // Hz and ms are unit symbols and the numbers in these hints (20 Hz, 1000 ms) are the facts
+  // themselves; VFO, AOS, LOS, SSB and CAT are the hobby's own vocabulary and stay verbatim.
+  'settings.satelliteDoppler.legend': 'Satellite Doppler',
+  'settings.satelliteDoppler.note':
+    'Corrects both legs of a pass: the downlink you listen on and the uplink you transmit on. Nexus tunes only while auto-track is following a pass and you have picked a transponder in the Satellites section. The downlink needs no setup here; the uplink is confirmed once per radio, on the pass itself.',
+  'settings.satelliteDoppler.enable.label': 'Doppler correction',
+  'settings.satelliteDoppler.enable.aria': 'Enable satellite Doppler correction',
+  'settings.satelliteDoppler.enable.hint':
+    'Retunes the radio through a pass so you stay on the station you are working. On: the downlink follows the bird as soon as you arm a pass and hold a transponder. Clearing this stops both legs.',
+  'settings.satelliteDoppler.vfoMap.label': 'VFO mapping',
+  'settings.satelliteDoppler.vfoMap.aria': 'Satellite VFO mapping',
+  'settings.satelliteDoppler.vfoMap.otherRadio':
+    'The uplink mapping is confirmed per radio, for the radio you are operating. Confirm it for this radio on the pass rail during a pass, or make it the active radio first.',
+  'settings.satelliteDoppler.vfoMap.hint':
+    "Which VFO carries your uplink. Match this to how your radio is wired. <b>A wrong mapping transmits on your own downlink</b> — into the satellite's output passband, on top of everyone else working the bird. Picking one applies immediately and confirms it for the radio you are operating; a second radio gets its own confirmation on the pass rail. Every mapping except Uplink only keeps the downlink corrected.",
+  'settings.satelliteDoppler.minShift.label': 'Minimum shift (Hz)',
+  'settings.satelliteDoppler.minShift.aria': 'Minimum Doppler shift before retuning (Hz)',
+  'settings.satelliteDoppler.minShift.hint':
+    'Corrections smaller than this are not sent. 20 Hz is inaudible on SSB and keeps the CAT link quiet. 0 sends every update.',
+  'settings.satelliteDoppler.interval.label': 'Update interval (ms)',
+  'settings.satelliteDoppler.interval.aria': 'Doppler update interval (milliseconds)',
+  'settings.satelliteDoppler.interval.hint':
+    'Shortest gap between corrections. 1000 ms is what a low-orbit pass needs. Shorter fights your own tuning knob and saturates a serial CAT link.',
+  'settings.satelliteDoppler.passSounds.label': 'Pass alert sounds',
+  'settings.satelliteDoppler.passSounds.aria': 'Audible tones at pass start and end',
+  'settings.satelliteDoppler.passSounds.hint':
+    'A rising tone the moment an armed pass starts and a falling one when it ends, alongside the popup — hear AOS with your hands on the rotor. On by default; clearing this silences only the tones, never the popups.',
+
+  // ── Settings ▸ Radio ▸ Orbital elements ─────────────────────────────────────────────
+  // ⚠️ TLE, Keplerian elements, SupGP, the epoch, CelesTrak, SatNOGS, AMSAT and the CC BY-SA
+  // 4.0 licence name are all invariant — they name a data format, its sources and the terms
+  // they ship under. So is `{{source}}`, which is the backend's own one-word provenance
+  // ("mirror", "celestrak", "import"), and `{{date}}`, an ISO date the panel slices out
+  // invariantly — a locale-formatted element date would name a different day in half the
+  // world. The status line is a LIST of independent chips joined with " · " (the shape
+  // `elementBandSummary` already uses), not a sentence, so each chip is its own entry.
+  'settings.orbitalElements.legend': 'Orbital elements',
+  'settings.orbitalElements.update.action': 'Update now',
+  'settings.orbitalElements.update.busy': 'Updating…',
+  'settings.orbitalElements.import.action': 'Import from file',
+  'settings.orbitalElements.import.busy': 'Importing…',
+  'settings.orbitalElements.import.title':
+    "Import a downloaded element file (Celestrak TLE, AMSAT keps, a new launch's SupGP set) — the offline-shack escape hatch. Imports persist across refreshes; the newest epoch per satellite wins.",
+  'settings.orbitalElements.import.ok':
+    'Elements imported — {{imported}} imported, {{total}} total',
+  // `{{error}}` is the raw failure, passed through as a value and translated in phase 3.
+  'settings.orbitalElements.import.failed': 'Element import failed: {{error}}',
+  // English says "birds" at every count; the param is named `count` so a locale that needs
+  // plural forms can supply them without the English wording changing.
+  'settings.orbitalElements.status.birds': '{{count}} birds',
+  'settings.orbitalElements.status.fetched': 'fetched {{date}}',
+  'settings.orbitalElements.status.neverFetched': 'never fetched',
+  'settings.orbitalElements.status.imported': '{{count}} imported',
+  'settings.orbitalElements.status.empty':
+    'Not loaded yet — fetched on first launch, then refreshed every 6 h.',
+  'settings.orbitalElements.hint':
+    'Keplerian elements (TLEs) for the amateur satellites — pass times, pointing and Doppler all come from them. Refreshed every 6 h from hamradiotools.io: the bird list comes from the SatNOGS database (CC BY-SA 4.0), the elements from CelesTrak and SatNOGS. Import a file for an offline shack or a just-launched bird.',
+  // `{{detail}}` is `tleRefreshMessage`'s operator-voiced sentence — already a catalog string
+  // (batch 7), composed there and interpolated whole here.
+  'settings.orbitalElements.lastRefresh': 'Last refresh: {{detail}}',
+
+  // ── Settings ▸ Radio ▸ Rotator ──────────────────────────────────────────────────────
+  // ⚠️ NOT HERE, and none of it may move: the ROTATOR MODEL NAMES and their Hamlib model
+  // numbers (`ROTATOR_MODELS` — checked against the generated caps fixture, so they cannot
+  // even be typed from a manual), the serial-port device examples, every baud rate, and the
+  // azimuth/elevation degrees an operator types. `rotctld`, `rotctl -l`, `Hamlib`, `az`, `el`,
+  // `LOS` and the `°` symbol are the vocabulary of the thing being configured and stay
+  // verbatim inside these sentences.
+  'settings.rotator.legend': 'Rotator',
+  'settings.rotator.note':
+    'The rotator itself, and its pointing manners. The manners apply to satellite auto-track.',
+  'settings.rotator.model.label': 'Rotator model',
+  'settings.rotator.model.none': 'None',
+  'settings.rotator.model.other': 'Other Hamlib model #…',
+  'settings.rotator.model.number.placeholder': 'Hamlib rotator model number (rotctl -l lists them)',
+  'settings.rotator.model.number.aria': 'Hamlib rotator model number',
+  'settings.rotator.model.hint':
+    'Nexus runs the control daemon (rotctld) for you, the same way it does CAT. Then use the Rotor pane in Connect, ↗ on Needed rows, or the compass anywhere.',
+  'settings.rotator.port.label': 'Rotator port & baud',
+  'settings.rotator.port.aria': 'Rotator serial port',
+  'settings.rotator.baud.aria': 'Rotator baud rate',
+  'settings.rotator.baud.title': 'Serial baud rate for the rotator controller',
+  // ⚠️ `{{rate}}` and `{{set}}` ARRIVE AS ALREADY-FORMATTED STRINGS, and that is a defect this
+  // batch deliberately did not fix: the panel still builds them with `toLocaleString()`, so a
+  // German install reads "9.600" for a baud rate — the same known hole the Rig & CAT baud
+  // picker has, named in `i18n.invariant.test.ts`'s "what this guard does NOT prove". Passing
+  // the numbers instead would render "9600" and change visible English, which this phase's
+  // contract forbids. It wants the same change that fixes the baud picker.
+  'settings.rotator.baud.hint.any':
+    'Match the rate your controller is set to — Hamlib does not offer one fixed rate for this model.',
+  'settings.rotator.baud.hint.fixed':
+    'This controller runs at {{rate}} baud — the rate its Hamlib backend declares. Leave it here.',
+  'settings.rotator.baud.hint.wrong':
+    '<b>This controller runs at {{rate}} baud, not {{set}}</b> — at the wrong rate it never answers and reads as broken hardware. Set {{rate}}, or re-pick the model above to fill it in.',
+  'settings.rotator.external.label': 'External rotctld (advanced)',
+  // `{{example}}` is a host:port the panel supplies as an invariant token.
+  'settings.rotator.external.placeholder': 'host:port — e.g. {{example}}',
+  'settings.rotator.external.aria': 'External rotctld address (advanced)',
+  'settings.rotator.external.hint':
+    'Point Nexus at a rotctld you run yourself (or one on another machine). It OVERRIDES the model and port above and stops the integrated daemon. Needs the port — a bare host name is not an address.',
+  'settings.rotator.park.label': 'Park position (° az / el)',
+  'settings.rotator.park.az.aria': 'Park azimuth (degrees)',
+  'settings.rotator.park.el.aria': 'Park elevation (degrees)',
+  'settings.rotator.park.hint':
+    'The stow position — wind-safe, or wherever your mast rests. Used only when After a pass is set to Park.',
+  'settings.rotator.ready.label': 'Ready position (° az / el)',
+  'settings.rotator.ready.az.aria': 'Ready azimuth (degrees)',
+  'settings.rotator.ready.el.aria': 'Ready elevation (degrees)',
+  'settings.rotator.ready.hint':
+    'Where the antenna waits for the next pass. Used only when After a pass is set to Ready.',
+  // The three choices below are a <select>: each stored `value` ('stop', 'park', 'ready') is
+  // the token, and only the label moved. The hint names all three, so they translate together.
+  'settings.rotator.postPass.label': 'After a pass',
+  'settings.rotator.postPass.aria': 'What the rotator does after a pass',
+  'settings.rotator.postPass.stop': 'Stop — leave the antenna where the pass ended',
+  'settings.rotator.postPass.park': 'Park — drive to the park position',
+  'settings.rotator.postPass.ready': 'Ready — drive to the ready position',
+  'settings.rotator.postPass.hint':
+    'Stop is the default and moves nothing: the antenna stays pointed where the bird set. Park and Ready drive the rotator on their own at LOS, so set those positions above first.',
+  'settings.rotator.tolerance.label': 'Tolerance (° az / el)',
+  'settings.rotator.tolerance.az.aria': 'Azimuth tolerance (degrees)',
+  'settings.rotator.tolerance.el.aria': 'Elevation tolerance (degrees)',
+  'settings.rotator.tolerance.hint':
+    "A new target closer than this is not commanded. Without a deadband the rotator hunts and the relays chatter for the whole pass. 2° is about a G-5500's own resolution.",
+  'settings.rotator.calibration.label': 'Calibration trim (° az / el)',
+  'settings.rotator.calibration.az.aria': 'Azimuth calibration trim (degrees)',
+  'settings.rotator.calibration.el.aria': 'Elevation calibration trim (degrees)',
+  'settings.rotator.calibration.hint':
+    'Added to every command. Use it when the controller reads one heading and the boom points at another.',
+  'settings.rotator.flip.label': 'Allow flip',
+  'settings.rotator.flip.aria': 'Allow the rotator to flip past 90 degrees elevation',
+  'settings.rotator.flip.hint':
+    'Takes a high pass by turning azimuth 180° and running elevation past 90°, instead of swinging the mast around at the top of the pass. Off by default: <b>many rotators cannot mechanically go past 90° elevation</b>. Check your controller before turning this on.',
+
+  // ── Setup health (the three-dot strip: Settings ▸ Radio and the wizard's verify stage) ──
+  // ⚠️ ONE STRING FROM THIS STRIP IS NOT HERE, and it is deliberate: Prove TX keys a tune
+  // carrier, so its label, tooltip and consent prompt move with the transmit-path batch. The
+  // dots themselves are STATUS, not controls. Each state is a whole phrase rather than a
+  // "Rig" + state glue — the word order is not universal and the state word is not always
+  // last. The dB reading and the forward watts are measurements the strip formats invariantly.
+  'setup.health.title': 'Setup health',
+  'setup.health.rig.title.link': 'CAT not tested yet — open Rig Control',
+  'setup.health.rig.title.plain': 'CAT not tested yet — use Test CAT below',
+  'setup.health.rig.responding': 'Rig responding',
+  'setup.health.rig.notAnswering': 'Rig not answering',
+  'setup.health.rig.untested': 'Rig untested',
+  'setup.health.rx.title.ok': 'Receiving audio',
+  'setup.health.rx.title.link': 'No RX audio — open the audio device settings',
+  'setup.health.rx.title.plain': 'No RX audio — check the audio device below',
+  'setup.health.rx.error': 'RX audio error',
+  'setup.health.rx.reading': 'RX audio {{db}} dB',
+  'setup.health.rx.none': 'RX audio —',
+  'setup.health.tx.title.keying':
+    'Keying a tune carrier — forward power confirms the CAT → PTT → RF path',
+  'setup.health.tx.title.on': 'Transmit is enabled',
+  'setup.health.tx.title.off': 'Transmit is off',
+  'setup.health.tx.keying.power': 'TX keying · {{watts}} W',
+  'setup.health.tx.keying.waiting': 'TX keying…',
+  'setup.health.tx.on': 'TX on',
+  'setup.health.tx.off': 'TX off',
+
+  // ── The setup wizard (first run, and the Settings ▸ re-open path) ───────────────────
+  // The wizard's steps ARE the Radio settings above, so the two were migrated together and
+  // must be reworded together — a wizard that says one thing and Settings another is how the
+  // pair drifted before. The same invariant-token line holds here as on that tab: device and
+  // port names, model names and numbers, baud rates, IPs and host:port addresses, callsign and
+  // grid examples, the ADIF file extensions and the program names inside these sentences
+  // (WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog, SmartSDR CAT, DAX) all stay in the
+  // component. So does every `value` this dialog writes — the license `id`, the connection
+  // kind, the pack id.
+  //
+  // ⚠️ A twin of the license block below lives at `gettingStarted.license.shot.*`: the guide
+  // shows a PICTURE of this step. They are separate keys on purpose (one is a depiction, one
+  // is the live control) — reword them together.
+  'setup.title': 'Set up Nexus',
+  'setup.steps.station': 'Your station',
+  'setup.steps.rig': 'Your rig',
+  'setup.steps.log': 'Your log',
+  'setup.steps.finish': 'Finish',
+  'setup.steps.aria': 'Step {{n}} of {{total}}: {{title}}',
+
+  // Step 1 — station identity. The callsign and grid EXAMPLES are tokens and stay in the
+  // component; `{{short}}` / `{{long}}` are two of them, quoted inside the error sentence.
+  'setup.station.title': 'Who’s on the air?',
+  'setup.station.sub':
+    'Your grid square is the anchor for everything location-based — satellite passes, propagation, the map, and DXpedition windows are all computed from it.',
+  'setup.station.callsign.label': 'Callsign',
+  'setup.station.grid.label': 'Grid square',
+  'setup.station.grid.invalid':
+    'Not a Maidenhead locator — 4 or 6 characters, like {{short}} or {{long}}.',
+  'setup.station.grid.hint':
+    'Maidenhead locator (qrz.com shows yours). Give all 6 — 4 characters pins you to the middle of a ~100-mile square, and every distance and bearing is measured from there.',
+
+  // Step 2 — rig & audio. `{{radio}}`, `{{port}}`, `{{ip}}`, `{{chip}}` and `{{device}}` are
+  // names the OS or the radio reported; `{{error}}` and the probe's own `detail` line are raw
+  // answers passed through as values. The "· …" clauses carry their own separator because
+  // each is appended to a line the caller built.
+  'setup.rig.title': 'How does the radio connect?',
+  'setup.rig.sub':
+    'One detect finds everything — USB rigs and FlexRadios on the network. Skippable; Settings ▸ Radio ▸ Rig & CAT has all of this later (including Test CAT).',
+  'setup.rig.detect.action': '🔍 Detect my radio',
+  'setup.rig.detect.busy': 'Detecting…',
+  'setup.rig.detect.failed':
+    'Detection hit an error: {{error}}. You can still pick your rig by hand below, or skip and set it up later.',
+  'setup.rig.detect.empty':
+    'Nothing found — USB: plug in + power on; Flex: must be on this network. Or skip and set it up later.',
+  // The two halves of one scan can fail independently; each is a whole sentence, and the
+  // panel joins whichever failed with " · " before the sentence above quotes the lot.
+  'setup.rig.detect.usbFailed': 'USB scan failed: {{error}}',
+  'setup.rig.detect.flexFailed': 'Flex network scan failed: {{error}}',
+  'setup.rig.detect.flex.row': '<b>{{radio}}</b> on the network ({{ip}})',
+  'setup.rig.detect.flex.via': ' · via SmartSDR CAT',
+  'setup.rig.detect.rig.row': '<b>{{radio}}</b> on {{port}}',
+  'setup.rig.flexNote.windows':
+    '{{radio}} at {{ip}} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001), radio address saved for the native panadapter/DAX. Test CAT below.',
+  'setup.rig.flexNote.other':
+    '{{radio}} at {{ip}} — model and radio address saved. SmartSDR CAT is Windows-only: put the address of a Windows PC running it (slice A = its port 5002) in Network Address below, then Test CAT.',
+  'setup.rig.selected': 'Selected: {{radio}} on {{port}}{{baud}}',
+  'setup.rig.selected.baud': ' @ {{baud}} baud',
+  'setup.rig.selected.unnamedRadio': 'radio',
+  'setup.rig.autoTest.action': '🔎 Auto-test my ports',
+  'setup.rig.autoTest.busy': 'Testing ports — {{seconds}}s (can take up to a minute)…',
+  'setup.rig.autoTest.title':
+    'Probes every USB port until a radio answers — read-only, never transmits',
+  'setup.rig.autoTest.failed': 'Auto-test failed: {{error}}',
+  'setup.rig.model.label': 'Which radio is this?',
+  'setup.rig.model.placeholder': 'Pick your rig model…',
+  // The bare model NUMBER an out-of-catalog rig is known by — the number stays a token.
+  'setup.rig.model.unnamed': 'Model {{model}}',
+  'setup.rig.model.unknownResponder': 'unknown',
+  'setup.rig.model.seeded':
+    'The port answered, but the exact model is a guess ({{radio}} responded). Pick your radio so its real command set is used.',
+  'setup.rig.model.confirm':
+    'Confirm the exact model — fixed-rate rigs get their baud set automatically.',
+  'setup.rig.conn.serial.label': 'USB / Serial',
+  'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
+  'setup.rig.conn.network.label': 'Network',
+  'setup.rig.conn.network.blurb': 'FlexRadio / remote rigctld',
+  'setup.rig.address.label': 'Address',
+  'setup.rig.network.hint':
+    'A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR CAT app on this PC — its default TCP port 5002 drives slice A (per-slice ports: B=60001, C=60002) — and audio through DAX. Other network rigs: pick their model later in Settings ▸ Radio ▸ Rig & CAT.',
+  'setup.rig.dax.title':
+    "SmartSDR's DAX virtual audio devices were detected — pairs them as Nexus's audio in/out",
+  'setup.rig.audioIn.label': 'Audio in',
+  'setup.rig.audioOut.label': 'Audio out',
+  'setup.rig.testCat.action': '⚡ Test CAT',
+  'setup.rig.testCat.busy': 'Testing…',
+  'setup.rig.testCat.title':
+    "Saves what you've entered so far, then asks the radio for its frequency",
+  'setup.rig.second.action': '＋ I have a second radio',
+  'setup.rig.second.title': 'Adds a radio profile and probes the remaining USB ports for it',
+  'setup.rig.second.probing':
+    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; this can take up to a minute)…',
+  'setup.rig.second.saved': 'Second radio: {{radio}} on {{port}} — saved to its own profile.',
+  'setup.rig.second.addFailed': "Couldn't add the radio: {{error}}",
+  'setup.rig.second.model.label': 'Which radio is the second one?',
+  'setup.rig.second.model.placeholder': 'Pick the model…',
+  'setup.rig.second.model.seeded':
+    'The port answered but the exact model is a guess — pick the radio so its real command set is used.',
+  // `<a>` is the "swap them" BUTTON, supplied by the call site — the catalog names the span,
+  // never the element. The non-breaking space keeps the link off a line of its own.
+  'setup.rig.second.swap':
+    'Both radios use identical USB sound cards, shared out one each. If you later see the <em>wrong</em> rig’s meters move when audio plays,\u00a0<a>swap them</a>.',
+  'setup.rig.second.twoWindows':
+    'To run both radios at the same time, open Nexus twice — each window drives one radio (the launcher asks which).',
+
+  // Step 3 — the ADIF import. `.adi` / `.adif` are file extensions and the logger names are
+  // products; both stay verbatim. The counts are plurals, so `Intl.PluralRules` picks the
+  // form instead of the hand-rolled `s` this step used to carry.
+  'setup.log.title': 'Bring in your existing log',
+  'setup.log.sub':
+    "Nexus works best when it knows your history. Importing your ADIF log is what powers <b>worked-before</b> flags, the <b>Needed</b> board (new DXCC / states / grids), and your <b>awards</b> progress — without it, the app starts blind and treats every station as new. This is optional and you can import anytime from the Logbook, but it's the single biggest thing that makes the app useful on day one.",
+  'setup.log.import.action': 'Import my ADIF log…',
+  'setup.log.import.again': 'Import another ADIF file',
+  'setup.log.import.busy': 'Importing…',
+  'setup.log.import.failed': 'Import failed: {{error}}',
+  'setup.log.result.imported': {
+    one: '✓ Imported <b>{{count}}</b> QSO{{dupes}}. Your worked-before and Needed board are now seeded.',
+    other:
+      '✓ Imported <b>{{count}}</b> QSOs{{dupes}}. Your worked-before and Needed board are now seeded.',
+  },
+  'setup.log.result.dupes': '{{count}} already present',
+  'setup.log.result.allDupes': "✓ All {{count}} QSOs were already in your log — you're seeded.",
+  'setup.log.result.none':
+    '⚠ No QSOs found in that file — is it a standard ADIF (.adi/.adif) export?',
+  'setup.log.sources':
+    'From WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog — any standard ADIF (.adi/.adif) export. Nothing leaves your computer; duplicates are detected and skipped.',
+
+  // Step 4 — license, starter packs, the walkthrough offer. The license CLASS NAMES are prose
+  // here exactly as they are in Settings ▸ Station (`settings.station.licenseClass.*`); the
+  // `id` beside each one is the token that turns the privilege lockout on.
+  'setup.finish.title': 'You get everything',
+  'setup.finish.sub':
+    'Every mode and every section starts ON — FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. Nexus is one program instead of six; there’s nothing to unlock. If you ever want a leaner app, trim sections in Settings.',
+  'setup.finish.license.title': 'What’s your license?',
+  'setup.finish.license.sub':
+    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Pick “Outside the US” for no limits.',
+  'setup.finish.license.technician': 'Technician',
+  'setup.finish.license.technician.blurb': 'US — limited HF + full VHF/UHF',
+  'setup.finish.license.general': 'General',
+  'setup.finish.license.general.blurb': 'US — most HF privileges',
+  'setup.finish.license.extra': 'Amateur Extra',
+  'setup.finish.license.extra.blurb': 'US — full privileges',
+  'setup.finish.license.open': 'Outside the US',
+  'setup.finish.license.open.blurb': 'No transmit limits',
+  'setup.finish.packs.title': 'Start with some channels?',
+  'setup.finish.packs.sub':
+    'Optional — a ready-made set of common frequencies and nets, added to your Memories. Change or remove any of them later in the Memories section.',
+  // `{{region}}` is the pack's own region name, carried as data by `features/packs.ts`.
+  'setup.finish.packs.meta': '{{count}} channels · {{region}}',
+  'setup.finish.guide.title': 'Want a walkthrough of what you just set up?',
+  'setup.finish.guide.label': 'Show me Getting started',
+  'setup.finish.guide.blurb': 'The four things, in order — opens when this closes',
+
+  'setup.nav.back': '← Back',
+  'setup.nav.skip': 'I’ll set it up myself',
+  'setup.nav.next': 'Next →',
+  'setup.nav.finish': 'Finish — everything on',
+
+  // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
+  // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
+  // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,
+  // the connector NAME and identity are data, and every event message in the log is written
+  // by the connector that raised it. They are values this surface renders, not its prose.
+  // `ACTION=STATUS` is the QRZ API's own parameter and `logbook.qrz.com ▸ Settings ▸ API` is
+  // a path through QRZ's website — both stay exactly as written in every language.
+  'settings.connections.legend': 'Connections',
+  'settings.connections.test.busy': 'Testing…',
+  'settings.connections.qrz.test.action': 'Test',
+  'settings.connections.qrz.test.title':
+    'Round-trips the QRZ Logbook API (ACTION=STATUS) — proves the key works without logging anything',
+  // ⚠️ `{{detail}}` is the round trip's own answer — inserted verbatim, never translated. Two
+  // whole messages rather than a shared "✓/✗" stem plus a tail: the failure carries a second
+  // sentence the success has no use for, and where it belongs is the translator's decision.
+  'settings.connections.qrz.test.ok': '✓ QRZ Logbook reachable: {{detail}}',
+  'settings.connections.qrz.test.fail':
+    '✗ QRZ test failed: {{detail}} (Uploads need the per-logbook <b>API key</b> from logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)',
+  'settings.connections.log.title': 'Connection log',
+  'settings.connections.log.hint': 'every save, sync, push, and failure lands here',
+  'settings.connections.log.empty':
+    'No events yet this session — save a credential or run a sync and it shows here.',
+
+  // ── Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes ────────────────────
+  // ⚠️ B4 is the hobby's own shorthand for "worked before" and Dupe is what the badge is
+  // called; band names (40m), mode names (FT8, phone) and the program name WSJT-X are
+  // invariant. The legend holds a real `&` — the JSX wrote `&amp;`, but React escapes a text
+  // child itself, so an entity here would render as the literal characters.
+  'settings.b4.legend': 'Worked-before (B4) & dupes',
+  'settings.b4.matchMode.label': 'Match mode too',
+  'settings.b4.matchMode.hint':
+    'Off (the default, and WSJT-X’s): working a station on 40m marks them B4-on-band for 40m in every mode, and the log strip’s Dupe badge counts any mode on the band. On: 40m FT8 and 40m phone are separate contacts — the solid B4 chip and the Dupe badge require the mode to match as well. The hollow B4 chip (worked anywhere) is unaffected either way.',
+
+  // ── Settings ▸ Logging & Connectors ▸ Integrations & Feeds ─────────────────────────
+  // ⚠️ Everything this section names on the wire is invariant and stays in the panel: the
+  // UDP addresses and ports it offers as field examples, the file names (ALL.TXT, .wav) and
+  // the program names (WSJT-X, JTDX, JTAlert, GridTracker, HRD, OpenHamClock) inside these
+  // sentences. Two labels are invariant as WHOLE strings and are still in the panel because
+  // they are nothing but names — `WSJT-X UDP API` and `PSK Reporter`, the same rule that
+  // leaves the Phone/CW/Digital tab labels literal. So are the cluster presets, which name
+  // real nodes.
+  'settings.integrations.legend': 'Integrations & Feeds',
+  'settings.integrations.local.title': 'Local APIs & Loggers',
+  'settings.integrations.wsjtxUdp.hint': 'for JTAlert / GridTracker / loggers',
+  'settings.integrations.udpAddr.label': 'UDP Address',
+  'settings.integrations.udpAddr.hint': 'host:port for the UDP feed',
+  'settings.integrations.hrdLogging.label': 'Ham Radio Deluxe logging',
+  'settings.integrations.hrdLogging.hint':
+    "push each QSO to HRD Logbook over its QSO-Forwarding UDP port (HRD must be running; don't also run JTAlert/QSO Relay into HRD or you'll double-log)",
+  'settings.integrations.hrdAddr.label': 'HRD UDP Address',
+  'settings.integrations.hrdAddr.hint':
+    'HRD QSO-Forwarding host:port (default 127.0.0.1:2333)',
+  'settings.integrations.hrd.linkUp': '● HRD reachable — contacts are forwarding',
+  // ⚠️ `contact(s)` is left exactly as it shipped. The plural path would render "1 contact"
+  // where this renders "1 contact(s)", and changing the English is a wording decision, not a
+  // migration. `{{count}}` is a queue depth the panel formats invariantly.
+  'settings.integrations.hrd.linkDown':
+    '○ HRD not reachable — {{count}} contact(s) queued, will send when HRD is back',
+  'settings.integrations.companionAddr.label': 'Companion UDP address',
+  'settings.integrations.companionAddr.hint':
+    'Where Nexus listens for WSJT-X/JTDX in Companion source mode.',
+  'settings.integrations.allTxt.label': 'Write ALL.TXT decode log',
+  'settings.integrations.allTxt.hint':
+    'WSJT-X-format decode log for GridTracker / loggers to tail. Written only while this is on, and it first appears after the next decode.',
+  // A whole extra sentence, not a tail glued onto the hint above — it appears only once the
+  // file exists, and a translator may place it wherever their language wants it. `{{path}}`
+  // is a file system path: verbatim, always.
+  'settings.integrations.allTxt.path': 'Saved at <code>{{path}}</code>.',
+  'settings.integrations.allTxt.reveal': 'Reveal in folder',
+  'settings.integrations.qsoWav.label': 'Save a WAV per logged QSO',
+  'settings.integrations.qsoWav.hint': 'Auto-records the last ~60 s of RX audio on log.',
+  'settings.integrations.qsoWav.path':
+    'Saved in <code>{{path}}</code>, created the first time you record.',
+  'settings.integrations.qsoWav.reveal': 'Open recordings folder',
+  // The <option> VALUES ('none', 'decodes', 'all') are persisted tokens and stay in the panel.
+  'settings.integrations.saveWav.label': 'Save received audio (.wav per period)',
+  'settings.integrations.saveWav.none': 'None (default)',
+  'settings.integrations.saveWav.decodes': 'Save periods with decodes',
+  'settings.integrations.saveWav.all': 'Save all periods',
+  'settings.integrations.saveWav.hint':
+    'WAVs land in recordings/periods (12 kHz mono, ~360 KB each). "All" writes ~2 GB/day of continuous monitoring — use for decoder debugging, not always-on.',
+  'settings.integrations.spotSources.title': 'Spot Sources',
+  'settings.integrations.pskreporter.hint': 'upload spots to the global map',
+  'settings.integrations.clusterSpots.label': 'DX Cluster / RBN spots',
+  'settings.integrations.clusterSpots.hint':
+    'Surface "new ones" from the Reverse Beacon Network on the Needed board + Connect. Takes effect on restart.',
+  'settings.integrations.clusterNodes.label': 'Phone/SSB cluster nodes',
+  'settings.integrations.clusterNodes.empty':
+    'No nodes — add one below to get SSB/phone needs (RBN only carries CW + digital).',
+  'settings.integrations.clusterNodes.remove.title': 'Remove this cluster node',
+  // ⚠️ `{{host}}` is a node address. Two whole accessible names rather than one with a
+  // "node" fragment substituted in: a fragment cannot be declined, and half the languages
+  // this will be read in decline it.
+  'settings.integrations.clusterNodes.remove.aria': 'Remove {{host}}',
+  'settings.integrations.clusterNodes.remove.ariaBlank': 'Remove node',
+  'settings.integrations.clusterNodes.add.option': '+ Add a known node…',
+  'settings.integrations.clusterNodes.addCustom.title': 'Add a custom node row',
+  'settings.integrations.clusterNodes.addCustom.action': '+ Custom',
+  'settings.integrations.clusterNodes.hint':
+    'We connect to ALL listed nodes and union their human SSB/phone spots — more nodes = wider phone coverage (RBN CW + digital connect automatically; RBN endpoints are ignored here). An added node connects on the next Save; removing one takes effect on restart.',
+  'settings.integrations.propagation.title': 'Propagation',
+  'settings.integrations.openingWatch.label': 'Near-region opening watch',
+  'settings.integrations.openingWatch.hint':
+    'Watch VHF/10 m activity near your QTH (not just your own contacts) so openings flag "open around you" before you\'ve worked anyone. Takes effect on restart.',
+  // ⚠️ `ITU-R P.533` is the recommendation's number — the same token the propagation panes
+  // keep as a constant (ENGINE_P533). The <option> values ('heuristic', 'p533') are persisted
+  // and stay in the panel.
+  'settings.integrations.propEngine.label': 'Prediction engine',
+  'settings.integrations.propEngine.heuristic': 'Modelled (fast heuristic)',
+  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics)',
+  'settings.integrations.propEngine.hint':
+    'Drives the per-station path outlook + 24h band×hour grid. P.533 is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
+  // The collapsed disclosure inside Integrations & Feeds. ⚠️ dBi, TX and RX are units and the
+  // radio's own two states.
+  'settings.antennaGain.title': 'Antenna gain (advanced)',
+  'settings.antennaGain.label': 'Antenna gain (dBi) — TX / RX',
+  'settings.antennaGain.tx.aria': 'TX antenna gain (dBi)',
+  'settings.antennaGain.rx.aria': 'RX antenna gain (dBi)',
+  'settings.antennaGain.hint':
+    'Used by the P.533 link budget only. 0 = a simple wire/vertical (isotropic); a 3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or takeoff-angle modelling, and the fast heuristic ignores it.',
+
+  // ── Settings ▸ Logging & Connectors ▸ DXKeeper ─────────────────────────────────────
+  // ⚠️ The legend (`DXKeeper (DXLab Suite)`) and the `DXLab Base Port` label are still in the
+  // panel, and for two different reasons. The legend is nothing but product names. The label
+  // NAMES A CONTROL IN ANOTHER APPLICATION'S ENGLISH INTERFACE — the hint below it sends the
+  // operator to DXKeeper's own Network Service panel to read the number off a field called
+  // "Base Port", and a translated label sends them looking for a field that is not there.
+  // The quoted `Base Port`, `Auto upload` and `QSL Configuration` inside these sentences are
+  // the same thing and stay verbatim.
+  'settings.dxkeeper.note':
+    'Pushes each logged QSO into <b>DXKeeper</b> over its TCP Network Service. Enable it in DXKeeper under <em>Configuration ▸ Defaults ▸ Network Service</em> first.',
+  'settings.dxkeeper.host.label': 'DXKeeper host',
+  // `{{example}}` is an IP address the panel supplies as an invariant token (LOGGER_EXAMPLES).
+  'settings.dxkeeper.host.placeholder': '{{example}} (empty = off)',
+  'settings.dxkeeper.host.hint': 'Usually 127.0.0.1 — same PC. Leave blank to disable.',
+  // `{{port}}` is base + 1, computed and interpolated invariantly.
+  'settings.dxkeeper.basePort.hint':
+    "The <em>Base Port</em> from DXKeeper's Network Service panel (default 52000). DXKeeper itself listens on <b>{{port}}</b> — Nexus adds the 1 for you.",
+  'settings.dxkeeper.uploads.label': 'Let DXKeeper do the uploads',
+  'settings.dxkeeper.uploads.hint':
+    'Off by default: Nexus already uploads to LoTW / eQSL / ClubLog / QRZ, so turning this on would upload every QSO twice. Note DXKeeper ignores this for Club Log and QRZ if <em>Auto upload</em> is ticked on its own QSL Configuration tab — untick it there.',
+
+  // ── Settings ▸ Logging & Connectors ▸ N3FJP ────────────────────────────────────────
+  // ⚠️ `N3FJP`, `ACLog`, `Field Day Contest Log` and `Network Status Display` are the club
+  // logger's own names; `ENTER` is the key its scoring path is named after and `ADDDIRECT` is
+  // the API command that replaces it. All of them are wire-level or product names and stay as
+  // written. The host/port EXAMPLES are invariant tokens in the panel.
+  'settings.n3fjp.legend': 'N3FJP Integration (club master log)',
+  'settings.n3fjp.note':
+    "Each FD contact lands in the club's <b>N3FJP Field Day Contest Log</b> the moment you log it — so the whole club's score updates in real time. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
+  'settings.n3fjp.host.label': 'N3FJP host',
+  'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
+  'settings.n3fjp.host.hint':
+    'IP or hostname of the master log computer. Leave blank to disable.',
+  'settings.n3fjp.port.label': 'N3FJP port',
+  'settings.n3fjp.port.hint': "N3FJP's API TCP port (default 1100).",
+  'settings.n3fjp.useEnter.label': 'Use ENTER for Field Day scoring',
+  'settings.n3fjp.useEnter.hint':
+    "Log each FD contact with N3FJP's <b>ENTER</b> sequence, which scores the contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code> insert (may not score). On by default.",
+  'settings.n3fjp.reportBand.label': 'Report my band to N3FJP',
+  'settings.n3fjp.reportBand.hint':
+    "Tell N3FJP which band you're on (no CAT needed), so the club's Network Status Display band board shows this position. Off by default.",
+  'settings.n3fjp.forwardAll.label': 'Forward every QSO',
+  'settings.n3fjp.forwardAll.hint':
+    "Also push <b>every</b> logged QSO (not just Field Day) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the Field-Day push.",
+  'settings.n3fjp.test.label': 'Connection test',
+  'settings.n3fjp.test.title': 'Save settings, then test the N3FJP TCP connection',
+  'settings.n3fjp.test.action': 'Test N3FJP',
+  'settings.n3fjp.test.hint':
+    'Run this at the club site before the event starts to confirm the API link works.',
+
+  // ── Settings ▸ Logging & Connectors ▸ N1MM+ ────────────────────────────────────────
+  // ⚠️ The port number 12060 is the contest logger's own broadcast port and stays in the
+  // sentence that names it. The address the toggle fills in for a blank field is a VALUE that
+  // is written to settings, not an example, and never came near this file.
+  'settings.n1mm.legend': 'N1MM+ Integration',
+  'settings.n1mm.addr.label': 'N1MM contact broadcast address',
+  'settings.n1mm.addr.placeholder': '{{example}} (empty = off)',
+  'settings.n1mm.addr.hint':
+    'Where the N1MM contact packets go (host:port, UDP). Name the port — consumers stack on one host, and 12060 is often already taken by another logger. Leave blank to disable.',
+  // The state sentence that follows the hint — one whole sentence per state, because what it
+  // says is a different answer, not a different ending. The second one names the toggle below
+  // it: reword the toggle's label and this sentence moves with it.
+  'settings.n1mm.addr.sending': 'Sending for every logged QSO.',
+  'settings.n1mm.addr.idle':
+    'An address alone sends nothing outside a Field Day event — turn on Broadcast every QSO below for everyday logging.',
+  'settings.n1mm.broadcastAll.label': 'Broadcast every QSO',
+  'settings.n1mm.broadcastAll.hint':
+    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point OpenHamClock or GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
+
+  // ── Settings ▸ Logging & Connectors ▸ LoTW users list ──────────────────────────────
+  // ⚠️ `{{count}}` arrives ALREADY FORMATTED by the panel (the grouping is that call site's,
+  // not this file's — `t()` has no locale-aware formatter and never will), `{{date}}` is an
+  // ISO day stamp, `{{detail}}` is a fetch error, and `L` is the mark a decode line carries.
+  // LoTW, ARRL and WSJT-X are names.
+  'settings.lotwUsers.legend': 'LoTW users list',
+  'settings.lotwUsers.fetch.action': 'Fetch now',
+  'settings.lotwUsers.fetch.busy': 'Fetching…',
+  'settings.lotwUsers.fetch.done': 'LoTW list loaded — {{count}} calls',
+  'settings.lotwUsers.fetch.failed': 'LoTW list fetch failed: {{detail}}',
+  'settings.lotwUsers.status': '{{count}} calls · fetched {{date}}',
+  'settings.lotwUsers.empty':
+    'Not fetched yet — decode lists gain an L mark on calls that upload to LoTW.',
+  'settings.lotwUsers.maxAge.label': 'Count as a LoTW user if uploaded within (days)',
+  'settings.lotwUsers.maxAge.hint':
+    'ARRL\'s activity list updates weekly — refetching more often just returns "unchanged". Manual fetch by design (WSJT-X convention).',
+
+  // ── Settings ▸ Logging & Connectors ▸ Callsign → state database ────────────────────
+  // ⚠️ `Callsign→state` names the index itself and keeps its arrow; `New State` is the need
+  // category the Needed board lights up; FCC is the licensing authority and hamradiotools.io
+  // is where the file comes from. `{{count}}` is formatted by the panel, as above.
+  'settings.callsignState.legend': 'Callsign → state database',
+  'settings.callsignState.update.action': 'Update now',
+  'settings.callsignState.update.busy': 'Updating…',
+  'settings.callsignState.update.done':
+    'Callsign→state database updated — {{count}} US calls',
+  'settings.callsignState.update.failed': 'Callsign→state update failed: {{detail}}',
+  'settings.callsignState.status': '{{count}} US calls · fetched {{date}}',
+  'settings.callsignState.empty':
+    'Not loaded yet — downloads on first launch, then auto-refreshes weekly.',
+  'settings.callsignState.hint':
+    'A callsign→state index (from the FCC license file) so a New State lights up on cluster / CW / SSB spots that carry no grid. Refreshed weekly from hamradiotools.io; a live decode grid refines it for rovers.',
+
+  // ── Settings ▸ Logging & Connectors ▸ Confirmations ────────────────────────────────
+  // The QSL services, one featgroup each. Everything below is a LABEL or a HINT: no key,
+  // password, token or upload code is read, written or interpolated by any entry here, and the
+  // Set/Forget buttons these words sit on call the same handlers they always did.
+  //
+  // ⚠️ WHAT STAYED IN THE PANEL, and it is nearly all names. The featgroup titles (`LoTW`,
+  // `eQSL`, `QRZ`, `HamQTH`, `ClubLog`, `HRDLog`, `RepeaterBook`, `Cloudlog / Wavelog`) are the
+  // services' own names and nothing else, so they never came here — a translated service name
+  // names no service. The token-shaped placeholders (`rbuapp_…`, the example Cloudlog URL, the
+  // profile id `1`) are invariant values in `CONFIRMATION_EXAMPLES`.
+  //
+  // ⚠️ WHAT IS VERBATIM INSIDE THESE SENTENCES, for the same reason the DXKeeper hints keep
+  // `Base Port`: each one NAMES SOMETHING THE OPERATOR MUST FIND SOMEWHERE ELSE, spelled the way
+  // that other place spells it. `TQSL` and its `Station Location`, its `-l` argument and the
+  // `"use the location in the ADIF file"` setting; `STATION_CALLSIGN` / `MY_GRIDSQUARE`, which
+  // are ADIF field names; ClubLog's `Application Password` and `App Passwords` page;
+  // RepeaterBook's `API Apps` page; HRDLog's `Options`; Cloudlog's `Account ▸ API Keys` and
+  // `Station Locations`; the host names (`eQSL.cc`, `QRZ.com`, `HamQTH.com`, `HRDLog.net`,
+  // `hearham.com`, `clublog.org/requestapikey.php`); `DXCC`, `WAS` and `ARRL`, which name award
+  // programmes and the authority that grants them; and `Upload to LoTW (N)`, whose `(N)` is the
+  // Logbook's own key. `{{when}}` arrives ALREADY FORMATTED from the panel — the same rule the
+  // LoTW-users `{{count}}` follows.
+  'settings.confirmations.legend': 'Confirmations',
+
+  // The Set/Forget pair sits under seven credentials with the same two words and, four times
+  // over, the same tooltip. One entry each: it is one control, said once.
+  'settings.confirmations.credential.set.action': 'Set',
+  'settings.confirmations.credential.forget.action': 'Forget',
+  'settings.confirmations.credential.forget.title':
+    'Remove the stored password from the system keychain',
+
+  'settings.confirmations.lotw.username.label': 'LoTW username',
+  'settings.confirmations.lotw.username.placeholder': 'your LoTW account login',
+  'settings.confirmations.lotw.username.hint':
+    'Often your callsign, but not always — use your LoTW account login. Save settings to apply.',
+  'settings.confirmations.lotw.password.label': 'LoTW password',
+  'settings.confirmations.lotw.password.placeholder': 'LoTW website password',
+  // Names the Set button beside it: reword that and this sentence moves with it.
+  'settings.confirmations.lotw.password.hint':
+    'Your LoTW <b>website</b> password (not your TQSL certificate password). Stored in the OS keychain, never on disk; not shown again after you click Set.',
+  'settings.confirmations.lotw.sync.label': 'LoTW confirmations',
+  'settings.confirmations.lotw.sync.action': 'Download confirmations',
+  'settings.confirmations.lotw.sync.busy': 'Downloading…',
+  'settings.confirmations.lotw.sync.hint':
+    'This only pulls confirmations <b>down</b>. To send your contacts <em>to</em> LoTW, use <b>Upload to LoTW (N)</b> in the Logbook. Pulls new confirmations into your log and marks which of your uploads LoTW now holds on file (so they read “waiting on the other op,” not “never uploaded”). The first pull covers your whole history (can be slow); later ones are incremental.',
+  'settings.confirmations.lotw.stationLocation.label': 'LoTW Station Location',
+  'settings.confirmations.lotw.stationLocation.placeholder': 'exact TQSL Station Location name',
+  'settings.confirmations.lotw.stationLocation.hint':
+    'For <b>uploading</b> to LoTW (the "Upload to LoTW" button in the Logbook). Signing is done by your installed <b>TQSL</b> against this named Station Location — set it up in TQSL first; the name must match exactly. No certificate or password is stored by Nexus.',
+  'settings.confirmations.lotw.adifLocation.label': 'Sign from ADIF location (travelers)',
+  'settings.confirmations.lotw.adifLocation.aria': 'Sign LoTW uploads from the ADIF location',
+  'settings.confirmations.lotw.adifLocation.hint':
+    'Turn on if you set TQSL to <em>"use the location in the ADIF file"</em> and don\'t create named Station Locations (handy if you travel). Nexus then stamps your call + grid (STATION_CALLSIGN / MY_GRIDSQUARE) into the upload and omits the <code>-l</code> argument, so TQSL signs from those and the Station Location above isn\'t required. <b>The whole batch is signed from your current grid above</b>, so if you operate from more than one location, upload <em>before</em> you move — otherwise earlier contacts are signed with the new grid.',
+  'settings.confirmations.lotw.tqslPath.label': 'TQSL path (optional)',
+  'settings.confirmations.lotw.tqslPath.placeholder': 'auto-detect (leave blank)',
+  'settings.confirmations.lotw.tqslPath.hint':
+    'Only if TQSL is installed somewhere non-standard; otherwise leave blank to auto-detect.',
+  'settings.confirmations.lotw.autoUpload.label': 'Upload to LoTW automatically',
+  'settings.confirmations.lotw.autoUpload.hint':
+    "Every few hours, Nexus hands your un-uploaded contacts to TQSL in one batch and TQSL signs and sends them — the same thing the Logbook's <b>Upload to LoTW</b> button does, on a timer. Needs TQSL installed and the Station Location above. If a batch is refused, this stops and waits for you rather than retrying; save any LoTW setting to start it again.",
+  // A whole sentence, not a clause: it says why the switch above is dead, and it is only ever
+  // shown while it is. Same for the run stamp — one sentence per state, never a glued ending.
+  'settings.confirmations.lotw.autoUpload.blocked':
+    'Unavailable while “Sign from ADIF location” is on: an unattended batch would sign older contacts with wherever you are NOW.',
+  'settings.confirmations.lotw.autoUpload.lastRun': 'Last run: {{when}}.',
+
+  'settings.confirmations.eqsl.username.label': 'eQSL username',
+  'settings.confirmations.eqsl.username.placeholder': 'your eQSL.cc account login',
+  'settings.confirmations.eqsl.username.hint':
+    'Your eQSL.cc login (often your callsign). Save settings to apply.',
+  'settings.confirmations.eqsl.password.label': 'eQSL password',
+  'settings.confirmations.eqsl.password.placeholder': 'eQSL.cc account password',
+  'settings.confirmations.eqsl.password.hint':
+    'Stored in the OS keychain, never on disk; not shown again after you click Set.',
+  'settings.confirmations.eqsl.sync.label': 'eQSL confirmations',
+  'settings.confirmations.eqsl.sync.action': 'Sync eQSL now',
+  'settings.confirmations.eqsl.sync.busy': 'Syncing…',
+  'settings.confirmations.eqsl.sync.hint':
+    "Download eQSL confirmations into your log. These count as confirmations but <b>not</b> for DXCC/WAS (ARRL doesn't accept eQSL) — a separate tier.",
+  'settings.confirmations.eqsl.upload.label': 'Auto-upload QSOs to eQSL',
+  'settings.confirmations.eqsl.upload.hint':
+    'Upload each logged QSO to eQSL.cc as you log it (needs the eQSL username + password above).',
+
+  'settings.confirmations.qrz.username.label': 'QRZ username',
+  'settings.confirmations.qrz.username.placeholder': 'your QRZ.com account login',
+  'settings.confirmations.qrz.username.hint':
+    "Used to look up a callsign's name + grid when logging. Save settings to apply.",
+  'settings.confirmations.qrz.password.label': 'QRZ password',
+  'settings.confirmations.qrz.password.placeholder': 'QRZ.com account password',
+  'settings.confirmations.qrz.password.hint':
+    'Your QRZ.com login password — <b>this is what powers callbook lookups</b> (name, QTH, grid), and it is separate from the Logbook API key below (that key only uploads QSOs). Stored in the OS keychain, never on disk. Grid & state need a QRZ XML subscription; free accounts return only name/address/country.',
+  'settings.confirmations.qrz.apiKey.label': 'QRZ Logbook API key',
+  'settings.confirmations.qrz.apiKey.placeholder': 'from your QRZ logbook settings page',
+  'settings.confirmations.qrz.apiKey.forget.title':
+    'Remove the stored Logbook key from the system keychain',
+  'settings.confirmations.qrz.apiKey.hint':
+    "A <b>separate</b> key (not the login password) from your QRZ logbook's settings page — used to upload logged QSOs.",
+  'settings.confirmations.qrz.upload.label': 'Auto-upload QSOs to QRZ',
+  'settings.confirmations.qrz.upload.hint':
+    'Push each logged QSO to your QRZ logbook (needs the Logbook API key above).',
+  'settings.confirmations.qrz.autoSync.label': 'Pull confirmations automatically',
+  'settings.confirmations.qrz.autoSync.hint':
+    'As people confirm on QRZ, the confirmations flow in on their own — no need to press Sync. After the first run only what CHANGED is fetched. QRZ confirmations show as confirmed but never count toward DXCC or WAS, which need LoTW or a card.',
+  'settings.confirmations.qrz.autoSync.lastPull': 'Last pull: {{when}}.',
+  'settings.confirmations.qrz.sync.label': 'Two-way sync',
+  'settings.confirmations.qrz.sync.title':
+    'FETCH your online QRZ logbook and merge it in — pulls QSOs you logged elsewhere plus their confirmations',
+  'settings.confirmations.qrz.sync.action': 'Sync from QRZ now',
+  'settings.confirmations.qrz.sync.busy': 'Syncing…',
+  'settings.confirmations.qrz.sync.hint':
+    'Pull your QRZ logbook <b>down</b> — adds QSOs you logged elsewhere (e.g. a phone app in the field) and marks QRZ-confirmed contacts. QRZ confirmations count as confirmations but <b>not</b> for DXCC/WAS. Safe to run repeatedly (deduped). Needs the Logbook API key above.',
+
+  'settings.confirmations.hamqth.username.label': 'HamQTH username',
+  'settings.confirmations.hamqth.username.placeholder': 'your HamQTH.com account login',
+  'settings.confirmations.hamqth.username.hint':
+    "A <b>free</b> callbook used as a fallback when QRZ isn't configured or has no match — a HamQTH account returns name, grid & US state at no charge. Save settings to apply.",
+  'settings.confirmations.hamqth.password.label': 'HamQTH password',
+  'settings.confirmations.hamqth.password.placeholder': 'HamQTH.com account password',
+  'settings.confirmations.hamqth.password.hint': 'Stored in the OS keychain, never on disk.',
+
+  'settings.confirmations.clublog.email.label': 'ClubLog email',
+  'settings.confirmations.clublog.email.placeholder':
+    'your ClubLog account email (not a callsign)',
+  'settings.confirmations.clublog.email.hint':
+    'Your ClubLog login email. Save settings to apply.',
+  'settings.confirmations.clublog.callsign.label': 'ClubLog callsign',
+  'settings.confirmations.clublog.callsign.placeholder': 'defaults to your callsign',
+  'settings.confirmations.clublog.callsign.hint':
+    'The ClubLog logbook to upload into (empty = your callsign).',
+  'settings.confirmations.clublog.password.label': 'ClubLog app-password',
+  'settings.confirmations.clublog.password.placeholder': 'a ClubLog Application Password',
+  'settings.confirmations.clublog.password.forget.title':
+    'Remove the stored ClubLog password from the system keychain',
+  'settings.confirmations.clublog.password.hint':
+    'Use a ClubLog <b>Application Password</b> (Settings → App Passwords), not your main password. Stored in the OS keychain.',
+  'settings.confirmations.clublog.apiKey.label': 'ClubLog API key (application-level)',
+  'settings.confirmations.clublog.apiKey.placeholder':
+    'blank = use the key bundled with this build (if any)',
+  'settings.confirmations.clublog.apiKey.hint':
+    "This is the <b>application</b> credential, not yours — official installer builds bundle one, and you only need email + app-password above. Building from source? Request a free key at clublog.org/requestapikey.php and paste it here (open-source can't ship one — ClubLog auto-revokes published keys).",
+  'settings.confirmations.clublog.upload.label': 'Auto-upload QSOs to ClubLog',
+  'settings.confirmations.clublog.upload.hint':
+    'Push each logged QSO to ClubLog in real time (needs the email + app-password above; official builds bundle the API key).',
+
+  'settings.confirmations.hrdlog.code.label': 'HRDLog.net upload code',
+  'settings.confirmations.hrdlog.code.placeholder': 'your hrdlog.net upload code',
+  'settings.confirmations.hrdlog.code.forget.title':
+    'Remove the stored HRDLog.net code from the system keychain',
+  'settings.confirmations.hrdlog.code.hint':
+    'The upload code from your HRDLog.net account (Options → your code). Uploads log under your station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate from the HRD Logbook UDP push under Logging.',
+  'settings.confirmations.hrdlog.upload.label': 'Auto-upload QSOs to HRDLog.net',
+  'settings.confirmations.hrdlog.upload.hint':
+    'Push each logged QSO to HRDLog.net (needs the upload code above). HRDLog.net is a live-logging and awards site — it is <b>not</b> an ARRL confirmation source, so an upload here never earns DXCC/WAS credit.',
+
+  'settings.confirmations.repeaterbook.token.label': 'RepeaterBook API token',
+  'settings.confirmations.repeaterbook.token.forget.title':
+    'Remove the stored RepeaterBook token from the system keychain',
+  'settings.confirmations.repeaterbook.token.hint':
+    "Optional. Without a token the <b>Program</b> section uses the open hearham.com directory. Add a personal token (from your RepeaterBook account's <b>API Apps</b> page) to pull from RepeaterBook.com under your own account instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is pending RepeaterBook's approval; if RepeaterBook is unreachable, Program falls back to hearham.com.",
+
+  'settings.confirmations.cloudlog.note':
+    'Auto-forward each logged QSO to your self-hosted <b>Cloudlog</b> or <b>Wavelog</b> logbook (HTTP). The API key is a per-instance token for your own server — enter it, your station-profile id, and turn on the toggle.',
+  'settings.confirmations.cloudlog.url.label': 'Base URL',
+  'settings.confirmations.cloudlog.url.hint':
+    'Your Cloudlog/Wavelog site root. Leave blank to disable.',
+  'settings.confirmations.cloudlog.stationId.label': 'Station profile id',
+  'settings.confirmations.cloudlog.stationId.hint':
+    'The station-location profile to log against (Cloudlog ▸ Station Locations).',
+  'settings.confirmations.cloudlog.apiKey.label': 'API key',
+  'settings.confirmations.cloudlog.apiKey.placeholder': 'your instance API key',
+  'settings.confirmations.cloudlog.apiKey.forget.title':
+    'Remove the stored Cloudlog key from the system keychain',
+  'settings.confirmations.cloudlog.apiKey.hint':
+    'Cloudlog ▸ Account ▸ API Keys — a key with read/write. Stored in the OS keychain, never on disk.',
+  'settings.confirmations.cloudlog.upload.label': 'Auto-forward QSOs',
+  'settings.confirmations.cloudlog.upload.hint':
+    "Push every logged QSO to the instance above as it's logged.",
+
+  // ── Settings ▸ Appearance ▸ Workspace ───────────────────────────────────────────────
+  // ⚠️ Every scale here is a PERCENT of a technical quantity, so it is interpolated as an
+  // invariant number and the `%` stays glued to it. The chips themselves (`100%`, `175%`)
+  // are numbers alone and never enter this file.
+  'settings.workspace.legend': 'Workspace',
+  'settings.workspace.theme.label': 'Theme',
+  'settings.workspace.theme.hint':
+    'Light reads best outdoors in daylight; the top bar’s Field chip boosts contrast and size in whichever theme you use.',
+  'settings.workspace.scale.label': 'UI scale',
+  'settings.workspace.scale.mode.aria': 'UI scale mode',
+  'settings.workspace.scale.auto': 'Auto (fit)',
+  'settings.workspace.scale.manual': 'Manual',
+  'settings.workspace.scale.aria': 'UI scale',
+  // `&apos;` in the JSX was a plain ASCII apostrophe; `&rsquo;` above was a typographic one.
+  // They are different characters and the rendered text must not change, so both are kept.
+  'settings.workspace.scale.cap.label': "Max scale (auto won't exceed)",
+  'settings.workspace.scale.cap.aria': 'Maximum UI scale',
+  'settings.workspace.scale.cap.unreachable':
+    'This window only fits up to {{fits}}% — a larger window or monitor unlocks {{wanted}}%.',
+  // Three WHOLE messages rather than a shared opening plus a tail: the second sentence is a
+  // different answer in each case, and a translator needs to read the one they are writing.
+  'settings.workspace.scale.auto.hint.tooSmall':
+    "Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). This window maxes out at {{fits}}% — raising the cap can't help until you enlarge the window, or switch to Manual to force a bigger scale.",
+  'settings.workspace.scale.auto.hint.limited':
+    'Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). This window fits up to {{fits}}%; bigger caps need a larger window or monitor. The waterfall stays sharp.',
+  'settings.workspace.scale.auto.hint.full':
+    'Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). The waterfall stays sharp. Raise the max for big monitors.',
+  'settings.workspace.scale.manual.hint':
+    'Fixed scale. Switch to Auto to fit the interface to the window automatically.',
+  'settings.workspace.density.label': 'Density',
+  'settings.workspace.density.aria': 'Information density',
+  'settings.workspace.density.standard': 'Comfortable',
+  'settings.workspace.density.dense': 'Compact',
+  'settings.workspace.density.hint':
+    'How tightly rows and controls pack. Compact fits more on screen.',
+  'settings.workspace.panes.label': 'Pane sizes',
+  'settings.workspace.panes.reset': 'Reset pane sizes',
+  'settings.workspace.panes.hint': 'Restore the default left/right pane widths.',
+
+  // ── Settings ▸ Appearance ▸ Features ────────────────────────────────────────────────
+  // ⚠️ Each feature's NAME and one-line description, and the category headings they are
+  // grouped under, come from `features/registry.ts` and are interpolated or rendered as
+  // values — they are not in this file, and they move with that registry. What is here is
+  // the section's own chrome. The Field Day master's label and its two accessible names are
+  // shared with Settings ▸ Contesting above (`settings.fieldDay.mode.*`): one toggle, one
+  // wording, two places it is offered — only the hint differs, so only the hint is here.
+  'settings.features.legend': 'Features',
+  'settings.features.alwaysOn': 'always on',
+  'settings.features.toggle.aria.enable': 'Enable {{feature}}',
+  'settings.features.toggle.aria.disable': 'Disable {{feature}}',
+  'settings.features.dependsOn': 'Turning on also enables {{feature}}.',
+  'settings.features.profile.label': 'Profile',
+  'settings.features.profile.aria': 'Feature profile',
+  'settings.features.profile.confirm.title': 'Switch to “{{profile}}”?',
+  'settings.features.profile.confirm.body': 'This replaces your custom feature set.',
+  'settings.features.profile.confirm.action': 'Switch',
+  'settings.features.profile.custom.label': 'Custom',
+  'settings.features.profile.custom.title':
+    'Custom — a blended feature set (manual toggles or multiple goals)',
+  'settings.features.profile.hint.custom':
+    'Custom — a blended feature set. Pick a single goal above to reset to its defaults.',
+  'settings.features.profile.hint.preset':
+    'Pick a goal to set sensible defaults — every feature stays toggleable below. Switching profiles re-applies its set.',
+  'settings.features.rerunWizard': 'Re-run setup…',
+  'settings.features.core.title': 'Core — always on',
+  'settings.features.fieldDay.hint':
+    'Turn on for Field Day weekend — reveals the Field Day workspace, the Class/Section exchange across all modes, and the setup tab. Off the rest of the year (nothing shows). Stays on across restarts until you turn it off; Save settings to apply.',
+
+  // ── Settings ▸ Appearance ▸ Accessibility ───────────────────────────────────────────
+  // ⚠️ The <select> VALUES ('off', 'needed', 'all') are persisted tokens and stay in the
+  // panel; only these labels are read. CQ is a Q-code and TX / RX are the radio's own two
+  // states — a translator leaves all three exactly as they are.
+  'settings.accessibility.legend': 'Accessibility & eyes-free',
+  'settings.accessibility.note':
+    'Speech and sound cues for operating by ear (screen-reader users, or anyone who wants audible feedback). The keyboard and screen-reader labels throughout Nexus are always on — these settings only control what comes out of the speakers.',
+  'settings.accessibility.announce.label': 'Announce decodes (screen reader)',
+  'settings.accessibility.announce.off': 'Off',
+  'settings.accessibility.announce.needed': 'Needed only (calling you / new / watched)',
+  'settings.accessibility.announce.all': 'All (adds a per-cycle CQ summary)',
+  'settings.accessibility.announce.hint':
+    'What a screen reader speaks as decodes arrive. Silent without a reader running. "Needed" mirrors your alerts; "All" adds a spoken batch summary each cycle.',
+  'settings.accessibility.txRxEarcon.label': 'TX / RX earcon',
+  'settings.accessibility.txRxEarcon.hint':
+    'A rising tone when you key up, falling when you unkey — know your TX state by ear.',
+  'settings.accessibility.decodeTick.label': 'Decode-batch tick',
+  'settings.accessibility.decodeTick.hint':
+    "A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.",
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning

@@ -1,5 +1,15 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts), and its steps ARE the
+// Settings ▸ Radio sections — the two were migrated in one batch and must be reworded in one
+// change, or the wizard and the panel drift apart again. What stays in this file is the same
+// vocabulary Settings ▸ Radio keeps: device and port names, Hamlib model names and numbers,
+// baud rates, IPs and host:port addresses, the callsign/grid EXAMPLES (WIZARD_EXAMPLES), the
+// ADIF extensions and every `value` this dialog writes — the license `id`, the connection
+// kind, the pack id. The LABEL beside each of those moved; the token did not.
 import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
+import type { MessageKey } from '../i18n'
 import type { ProfileId } from '../features/profiles'
 import type { FeatureId, View } from '../features/registry'
 import type { AudioDevices, CatTestResult, DetectedRig, ImportStats, Settings } from '../types'
@@ -81,12 +91,43 @@ interface Props {
 // License class → sets the transmit-privilege lockout + the licensed-segment band dropdown.
 // "Outside the US" = Open (no transmit limits). Single-select; defaults to Open so the
 // lockout is opt-in (a US op declares their class to turn it on).
-const LICENSE: { id: string; label: string; blurb: string }[] = [
-  { id: 'technician', label: 'Technician', blurb: 'US — limited HF + full VHF/UHF' },
-  { id: 'general', label: 'General', blurb: 'US — most HF privileges' },
-  { id: 'extra', label: 'Amateur Extra', blurb: 'US — full privileges' },
-  { id: 'open', label: 'Outside the US', blurb: 'No transmit limits' },
+// The `id` is the stored token; the class NAME and its blurb are prose, exactly as they are in
+// Settings ▸ Station, so they resolve from the catalog at the call site.
+const LICENSE: { id: string; labelKey: MessageKey; blurbKey: MessageKey }[] = [
+  {
+    id: 'technician',
+    labelKey: 'setup.finish.license.technician',
+    blurbKey: 'setup.finish.license.technician.blurb',
+  },
+  {
+    id: 'general',
+    labelKey: 'setup.finish.license.general',
+    blurbKey: 'setup.finish.license.general.blurb',
+  },
+  {
+    id: 'extra',
+    labelKey: 'setup.finish.license.extra',
+    blurbKey: 'setup.finish.license.extra.blurb',
+  },
+  {
+    id: 'open',
+    labelKey: 'setup.finish.license.open',
+    blurbKey: 'setup.finish.license.open.blurb',
+  },
 ]
+
+/**
+ * The callsign, grid and address EXAMPLES this dialog shows — invariant tokens, not prose.
+ * Same rule as `RIG_EXAMPLES` in the Settings panel: a "localised" N0CALL is not a reserved
+ * example callsign anywhere, and a translated grid names a square in the wrong ocean. The two
+ * grids are quoted inside the invalid-locator sentence, which interpolates them.
+ */
+const WIZARD_EXAMPLES = {
+  callsign: 'N0CALL',
+  grid: 'FN31',
+  gridFull: 'FN31pr',
+  netAddr: '127.0.0.1:5002',
+} as const
 
 /** Strict Maidenhead check — a persisted locator must be a real one, not just
  * something the lenient distance parser happens to swallow. */
@@ -124,7 +165,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       // this modal wizard. A 0/0 result (non-ADIF file) is surfaced as a warning, not a success.
       setImportStats(await importAdif(await f.text()))
     } catch (err) {
-      setImportError(`Import failed: ${err instanceof Error ? err.message : String(err)}`)
+      setImportError(
+        t('setup.log.import.failed', {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
     } finally {
       setImporting(false)
     }
@@ -218,7 +263,13 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         }
         setProbeNote(r.detail)
       })
-      .catch((e) => setProbeNote(`Auto-test failed: ${e instanceof Error ? e.message : String(e)}`))
+      .catch((e) =>
+        setProbeNote(
+          t('setup.rig.autoTest.failed', {
+            error: e instanceof Error ? e.message : String(e),
+          }),
+        ),
+      )
       .finally(() => setProbing(false))
   }
   /** Confirm the exact model: fixed-baud rigs get their one true rate (the Settings
@@ -305,7 +356,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       setSecond({
         id: -1,
         probing: false,
-        note: `Couldn't add the radio: ${e instanceof Error ? e.message : String(e)}`,
+        note: t('setup.rig.second.addFailed', {
+          error: e instanceof Error ? e.message : String(e),
+        }),
       })
     }
   }
@@ -432,7 +485,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   const audioLabel = (name: string, kind: 'input' | 'output') =>
     audio[kind].includes(name)
       ? (audioLabels[kind][name] ?? name)
-      : `${name} — saved, not in the list`
+      : t('settings.audio.device.notInList', { device: name })
 
   const runDetect = () => {
     setDetecting(true)
@@ -445,12 +498,12 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       if (rigsR.status === 'fulfilled') setDetected(rigsR.value)
       else {
         setDetected([])
-        errs.push(`USB scan failed: ${String(rigsR.reason)}`)
+        errs.push(t('setup.rig.detect.usbFailed', { error: String(rigsR.reason) }))
       }
       if (flexR.status === 'fulfilled') setDetectedFlex(flexR.value)
       else {
         setDetectedFlex([])
-        errs.push(`Flex network scan failed: ${String(flexR.reason)}`)
+        errs.push(t('setup.rig.detect.flexFailed', { error: String(flexR.reason) }))
       }
       setDetectError(errs.length ? errs.join(' · ') : null)
       setDetecting(false)
@@ -505,10 +558,15 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     // still live here (2026-08-17 Flex audit, wave-1 #29). Without it, both native toggles are
     // offered in Settings for a wizard-onboarded Flex and neither can ever start a worker.
     if (f.ip) setFlexRadioIp(f.ip)
+    // The radio's own name + nickname is a TOKEN assembled here, quotes included, and handed
+    // to the sentence whole. (The discovery row below quotes the nickname with typographic
+    // quotes and this note with straight ones — an inconsistency this batch is not allowed to
+    // change, because the contract is that no visible text moves.)
+    const named = `${f.model}${f.nickname ? ` "${f.nickname}"` : ''}`
     setFlexNote(
       IS_WINDOWS
-        ? `${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001), radio address saved for the native panadapter/DAX. Test CAT below.`
-        : `${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — model and radio address saved. SmartSDR CAT is Windows-only: put the address of a Windows PC running it (slice A = its port 5002) in Network Address below, then Test CAT.`,
+        ? t('setup.rig.flexNote.windows', { radio: named, ip: f.ip })
+        : t('setup.rig.flexNote.other', { radio: named, ip: f.ip }),
     )
   }
   const runCatTest = () => {
@@ -522,7 +580,14 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       .finally(() => setCatTesting(false))
   }
 
-  const stepTitles = ['Your station', 'Your rig', 'Your log', 'Finish']
+  // The four steps in order. One key per step, read by the dot, its tooltip AND the progress
+  // label, so a reworded step cannot end up saying two different things in one dialog.
+  const steps: { titleKey: MessageKey }[] = [
+    { titleKey: 'setup.steps.station' },
+    { titleKey: 'setup.steps.rig' },
+    { titleKey: 'setup.steps.log' },
+    { titleKey: 'setup.steps.finish' },
+  ]
 
   return (
     <Dialog
@@ -531,50 +596,54 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       onOpenChange={(o) => {
         if (!o) onSkip()
       }}
-      title="Set up Nexus"
+      title={t('setup.title')}
       hideTitle
     >
-      <div className="wizard-dots" aria-label={`Step ${step + 1} of ${stepTitles.length}: ${stepTitles[step]}`}>
-        {stepTitles.map((t, i) => (
+      <div
+        className="wizard-dots"
+        aria-label={t('setup.steps.aria', {
+          n: step + 1,
+          total: steps.length,
+          title: t(steps[step].titleKey),
+        })}
+      >
+        {steps.map((s, i) => (
           <button
-            key={t}
+            key={s.titleKey}
             type="button"
             className={`wizard-dot${i === step ? ' cur' : ''}${i < step ? ' done' : ''}`}
             // Same gate as Next: a malformed grid can't be walked past via the dots.
             disabled={step === 0 && gridState === 'bad' && i !== 0}
             onClick={() => setStep(i)}
-            title={t}
+            title={t(s.titleKey)}
           >
-            <span className="wizard-dot-n">{i + 1}</span> {t}
+            <span className="wizard-dot-n">{i + 1}</span> {t(s.titleKey)}
           </button>
         ))}
       </div>
 
       {step === 0 && (
         <>
-          <h2 className="wizard-title">Who&rsquo;s on the air?</h2>
-          <p className="wizard-sub">
-            Your grid square is the anchor for everything location-based — satellite passes,
-            propagation, the map, and DXpedition windows are all computed from it.
-          </p>
+          <h2 className="wizard-title">{t('setup.station.title')}</h2>
+          <p className="wizard-sub">{t('setup.station.sub')}</p>
           <div className="wizard-fields">
             <label className="wizard-field">
-              <span>Callsign</span>
+              <span>{t('setup.station.callsign.label')}</span>
               <input
                 type="text"
                 value={mycall}
-                placeholder="N0CALL"
+                placeholder={WIZARD_EXAMPLES.callsign}
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(e) => setMycall(e.target.value.toUpperCase())}
               />
             </label>
             <label className="wizard-field">
-              <span>Grid square</span>
+              <span>{t('setup.station.grid.label')}</span>
               <input
                 type="text"
                 value={mygrid}
-                placeholder="FN31"
+                placeholder={WIZARD_EXAMPLES.grid}
                 autoComplete="off"
                 spellCheck={false}
                 className={gridState === 'bad' ? 'bad' : ''}
@@ -591,8 +660,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 role={gridState === 'bad' ? 'alert' : undefined}
               >
                 {gridState === 'bad'
-                  ? 'Not a Maidenhead locator — 4 or 6 characters, like FN31 or FN31pr.'
-                  : 'Maidenhead locator (qrz.com shows yours). Give all 6 — 4 characters pins you to the middle of a ~100-mile square, and every distance and bearing is measured from there.'}
+                  ? t('setup.station.grid.invalid', {
+                      short: WIZARD_EXAMPLES.grid,
+                      long: WIZARD_EXAMPLES.gridFull,
+                    })
+                  : t('setup.station.grid.hint')}
               </span>
             </label>
           </div>
@@ -601,26 +673,19 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
 
       {step === 1 && (
         <>
-          <h2 className="wizard-title">How does the radio connect?</h2>
-          <p className="wizard-sub">
-            One detect finds everything — USB rigs and FlexRadios on the network.
-            Skippable; Settings ▸ Radio ▸ Rig &amp; CAT has all of this later (including Test CAT).
-          </p>
+          <h2 className="wizard-title">{t('setup.rig.title')}</h2>
+          <p className="wizard-sub">{t('setup.rig.sub')}</p>
           <div className="wizard-detect">
             <button type="button" className="wizard-btn" disabled={detecting} onClick={runDetect}>
-              {detecting ? 'Detecting…' : '🔍 Detect my radio'}
+              {detecting ? t('setup.rig.detect.busy') : t('setup.rig.detect.action')}
             </button>
             {detectError && (
               <span className="wizard-field-hint" role="alert" style={{ color: 'var(--danger, #e5484d)' }}>
-                Detection hit an error: {detectError}. You can still pick your rig by hand below, or
-                skip and set it up later.
+                {t('setup.rig.detect.failed', { error: detectError })}
               </span>
             )}
             {!detectError && detected != null && detected.length === 0 && detectedFlex.length === 0 && (
-              <span className="wizard-field-hint">
-                Nothing found — USB: plug in + power on; Flex: must be on this network.
-                Or skip and set it up later.
-              </span>
+              <span className="wizard-field-hint">{t('setup.rig.detect.empty')}</span>
             )}
             {detectedFlex.map((f) => (
               <button
@@ -629,12 +694,16 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 className={`wizard-detect-row${rigConn === 'network' && rigModel === 2036 ? ' sel' : ''}`}
                 onClick={() => applyDetectedFlex(f)}
               >
-                <b>
-                  {f.model}
-                  {f.nickname ? ` “${f.nickname}”` : ''}
-                </b>{' '}
-                on the network ({f.ip})
-                <span className="wizard-field-hint"> · via SmartSDR CAT</span>
+                {/* The model + its nickname (in the radio's own quotes) is one token. */}
+                <T
+                  k="setup.rig.detect.flex.row"
+                  tags={{ b: <b /> }}
+                  vals={{
+                    radio: `${f.model}${f.nickname ? ` “${f.nickname}”` : ''}`,
+                    ip: f.ip,
+                  }}
+                />
+                <span className="wizard-field-hint">{t('setup.rig.detect.flex.via')}</span>
               </button>
             ))}
             {(detected ?? []).map((r) => (
@@ -644,15 +713,26 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 className={`wizard-detect-row${serialPort === r.portName ? ' sel' : ''}`}
                 onClick={() => applyDetected(r)}
               >
-                <b>{r.suggestedModelName ?? r.product ?? 'Unknown radio'}</b> on {r.portName}
+                <T
+                  k="setup.rig.detect.rig.row"
+                  tags={{ b: <b /> }}
+                  vals={{
+                    radio:
+                      r.suggestedModelName ??
+                      r.product ??
+                      t('settings.rigControl.detect.unknownRadio'),
+                    port: r.portName,
+                  }}
+                />
                 <span className="wizard-field-hint">
                   {' '}
                   · {r.chip}
-                  {/* Dual-UART Icoms: two rows say the same rig — tag the CI-V side. */}
+                  {/* Dual-UART Icoms: two rows say the same rig — tag the CI-V side. The two
+                      clauses are the panel's own, shared so the two surfaces cannot drift. */}
                   {r.civSide === true
-                    ? ' · CI-V port — use this one'
+                    ? t('settings.rigControl.detect.civ.isCiv')
                     : r.civSide === false
-                      ? ' · second port, not CI-V'
+                      ? t('settings.rigControl.detect.civ.notCiv')
                       : ''}
                 </span>
               </button>
@@ -660,8 +740,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             {flexNote && <span className="wizard-field-hint">{flexNote}</span>}
             {rigConn === 'serial' && serialPort && (
               <span className="wizard-field-hint">
-                Selected: {rigModelName ?? 'radio'} on {serialPort}
-                {baud ? ` @ ${baud} baud` : ''}
+                {t('setup.rig.selected', {
+                  radio: rigModelName ?? t('setup.rig.selected.unnamedRadio'),
+                  port: serialPort,
+                  baud: baud ? t('setup.rig.selected.baud', { baud }) : '',
+                })}
               </span>
             )}
             {/* Auto-test: the port_prober sweep (seeded with the common rigs at their
@@ -673,11 +756,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 className="wizard-btn"
                 disabled={probing}
                 onClick={runProbe}
-                title="Probes every USB port until a radio answers — read-only, never transmits"
+                title={t('setup.rig.autoTest.title')}
               >
                 {probing
-                  ? `Testing ports — ${probeElapsed}s (can take up to a minute)…`
-                  : '🔎 Auto-test my ports'}
+                  ? t('setup.rig.autoTest.busy', { seconds: probeElapsed })
+                  : t('setup.rig.autoTest.action')}
               </button>
             )}
             {probeNote && (
@@ -694,7 +777,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
           {rigConn === 'serial' && (rigModel != null || serialPort) && (
             <div className="wizard-fields">
               <label className="wizard-field">
-                <span>Which radio is this?</span>
+                <span>{t('setup.rig.model.label')}</span>
                 <select
                   className={modelSeeded ? 'bad' : ''}
                   aria-invalid={modelSeeded || undefined}
@@ -706,11 +789,13 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                   }}
                 >
                   <option value={0} disabled>
-                    Pick your rig model…
+                    {t('setup.rig.model.placeholder')}
                   </option>
                   {/* Keep an out-of-catalog preselection visible rather than blanking it. */}
                   {rigModel != null && !models.some(([m]) => m === rigModel) && (
-                    <option value={rigModel}>{rigModelName ?? `Model ${rigModel}`}</option>
+                    <option value={rigModel}>
+                      {rigModelName ?? t('setup.rig.model.unnamed', { model: rigModel })}
+                    </option>
                   )}
                   {models.map(([num, name]) => (
                     <option key={num} value={num}>
@@ -723,8 +808,10 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                   role={modelSeeded ? 'alert' : undefined}
                 >
                   {modelSeeded
-                    ? `The port answered, but the exact model is a guess (${rigModelName ?? 'unknown'} responded). Pick your radio so its real command set is used.`
-                    : 'Confirm the exact model — fixed-rate rigs get their baud set automatically.'}
+                    ? t('setup.rig.model.seeded', {
+                        radio: rigModelName ?? t('setup.rig.model.unknownResponder'),
+                      })
+                    : t('setup.rig.model.confirm')}
                 </span>
               </label>
             </div>
@@ -736,8 +823,8 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               aria-pressed={rigConn === 'serial'}
               onClick={() => setRigConn('serial')}
             >
-              <span className="wizard-mode-label">USB / Serial</span>
-              <span className="wizard-mode-blurb">Most rigs — one cable</span>
+              <span className="wizard-mode-label">{t('setup.rig.conn.serial.label')}</span>
+              <span className="wizard-mode-blurb">{t('setup.rig.conn.serial.blurb')}</span>
             </button>
             <button
               type="button"
@@ -745,30 +832,25 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               aria-pressed={rigConn === 'network'}
               onClick={() => setRigConn('network')}
             >
-              <span className="wizard-mode-label">Network</span>
-              <span className="wizard-mode-blurb">FlexRadio / remote rigctld</span>
+              <span className="wizard-mode-label">{t('setup.rig.conn.network.label')}</span>
+              <span className="wizard-mode-blurb">{t('setup.rig.conn.network.blurb')}</span>
             </button>
           </div>
 
           {rigConn === 'network' && (
             <div className="wizard-detect">
               <label className="wizard-field">
-                <span>Address</span>
+                <span>{t('setup.rig.address.label')}</span>
                 <input
                   type="text"
                   value={rigAddr}
-                  placeholder="127.0.0.1:5002"
+                  placeholder={WIZARD_EXAMPLES.netAddr}
                   autoComplete="off"
                   spellCheck={false}
                   onChange={(e) => setRigAddr(e.target.value)}
                 />
               </label>
-              <span className="wizard-field-hint">
-                A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR
-                CAT app on this PC — its default TCP port 5002 drives slice A (per-slice
-                ports: B=60001, C=60002) — and audio through DAX. Other network rigs:
-                pick their model later in Settings ▸ Radio ▸ Rig &amp; CAT.
-              </span>
+              <span className="wizard-field-hint">{t('setup.rig.network.hint')}</span>
               {dax && !isDaxPaired(audioIn, audioOut) && (
                 <button
                   type="button"
@@ -777,9 +859,10 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                     setAudioIn(dax.input)
                     setAudioOut(dax.output)
                   }}
-                  title="SmartSDR's DAX virtual audio devices were detected — pairs them as Nexus's audio in/out"
+                  title={t('setup.rig.dax.title')}
                 >
-                  ⚡ Pair DAX audio ({dax.input})
+                  {/* The panel's own wording — the same button, said once. */}
+                  {t('settings.rigControl.dax.action', { device: dax.input })}
                 </button>
               )}
             </div>
@@ -787,9 +870,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
 
           <div className="wizard-fields">
             <label className="wizard-field">
-              <span>Audio in</span>
+              <span>{t('setup.rig.audioIn.label')}</span>
               <select value={audioIn} onChange={(e) => setAudioIn(e.target.value)}>
-                <option value="">System default</option>
+                <option value="">{t('settings.audio.device.systemDefault')}</option>
                 {/* Saved-but-unplugged device stays selectable (the Settings rule) —
                     a blank select that can only LOSE the saved routing is a trap. */}
                 {[...new Set([...(audioIn ? [audioIn] : []), ...audio.input])].map((d) => (
@@ -800,9 +883,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               </select>
             </label>
             <label className="wizard-field">
-              <span>Audio out</span>
+              <span>{t('setup.rig.audioOut.label')}</span>
               <select value={audioOut} onChange={(e) => setAudioOut(e.target.value)}>
-                <option value="">System default</option>
+                <option value="">{t('settings.audio.device.systemDefault')}</option>
                 {[...new Set([...(audioOut ? [audioOut] : []), ...audio.output])].map((d) => (
                   <option key={d} value={d}>
                     {audioLabel(d, 'output')}
@@ -818,9 +901,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               className="wizard-btn"
               disabled={catTesting}
               onClick={runCatTest}
-              title="Saves what you've entered so far, then asks the radio for its frequency"
+              title={t('setup.rig.testCat.title')}
             >
-              {catTesting ? 'Testing…' : '⚡ Test CAT'}
+              {catTesting ? t('setup.rig.testCat.busy') : t('setup.rig.testCat.action')}
             </button>
             {catResult && (
               <span className={`wizard-field-hint${catResult.ok ? '' : ' bad'}`}>
@@ -844,27 +927,29 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                   type="button"
                   className="wizard-btn"
                   onClick={() => void addSecondRadio()}
-                  title="Adds a radio profile and probes the remaining USB ports for it"
+                  title={t('setup.rig.second.title')}
                 >
-                  ＋ I have a second radio
+                  {t('setup.rig.second.action')}
                 </button>
               )}
               {second?.probing && (
                 <span className="wizard-field-hint" role="status">
-                  Probing the other ports — {secondElapsed}s (radio 1&rsquo;s port is skipped;
-                  this can take up to a minute)…
+                  {t('setup.rig.second.probing', { seconds: secondElapsed })}
                 </span>
               )}
               {second && !second.probing && (
                 <span className="wizard-field-hint" role="status">
                   {second.portName
-                    ? `Second radio: ${second.modelName ?? 'radio'} on ${second.portName} — saved to its own profile.`
+                    ? t('setup.rig.second.saved', {
+                        radio: second.modelName ?? t('setup.rig.selected.unnamedRadio'),
+                        port: second.portName,
+                      })
                     : second.note}
                 </span>
               )}
               {second && !second.probing && second.seeded && (
                 <label className="wizard-field">
-                  <span>Which radio is the second one?</span>
+                  <span>{t('setup.rig.second.model.label')}</span>
                   <select
                     className="bad"
                     aria-invalid
@@ -876,10 +961,12 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                     }}
                   >
                     <option value={0} disabled>
-                      Pick the model…
+                      {t('setup.rig.second.model.placeholder')}
                     </option>
                     {second.model != null && !models.some(([m]) => m === second.model) && (
-                      <option value={second.model}>{second.modelName ?? `Model ${second.model}`}</option>
+                      <option value={second.model}>
+                        {second.modelName ?? t('setup.rig.model.unnamed', { model: second.model })}
+                      </option>
                     )}
                     {models.map(([num, name]) => (
                       <option key={num} value={num}>
@@ -888,26 +975,31 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                     ))}
                   </select>
                   <span className="wizard-field-hint bad" role="alert">
-                    The port answered but the exact model is a guess — pick the radio so its
-                    real command set is used.
+                    {t('setup.rig.second.model.seeded')}
                   </span>
                 </label>
               )}
               {second && !second.probing && second.portName && swapOffer && (
                 <span className="wizard-field-hint">
-                  Both radios use identical USB sound cards, shared out one each. If you later
-                  see the <em>wrong</em> rig&rsquo;s meters move when audio plays,&nbsp;
-                  <button type="button" className="settings-linkbtn" onClick={() => void swapAudio()}>
-                    swap them
-                  </button>
-                  .
+                  {/* The "swap them" control is supplied HERE — the catalog names the span it
+                      wraps and can never introduce an element of its own. */}
+                  <T
+                    k="setup.rig.second.swap"
+                    tags={{
+                      em: <em />,
+                      a: (
+                        <button
+                          type="button"
+                          className="settings-linkbtn"
+                          onClick={() => void swapAudio()}
+                        />
+                      ),
+                    }}
+                  />
                 </span>
               )}
               {second && !second.probing && second.portName && (
-                <span className="wizard-field-hint">
-                  To run both radios at the same time, open Nexus twice — each window drives
-                  one radio (the launcher asks which).
-                </span>
+                <span className="wizard-field-hint">{t('setup.rig.second.twoWindows')}</span>
               )}
             </div>
           )}
@@ -916,13 +1008,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
 
       {step === 2 && (
         <>
-          <h2 className="wizard-title">Bring in your existing log</h2>
+          <h2 className="wizard-title">{t('setup.log.title')}</h2>
           <p className="wizard-sub">
-            Nexus works best when it knows your history. Importing your ADIF log is what powers{' '}
-            <strong>worked-before</strong> flags, the <strong>Needed</strong> board (new DXCC / states
-            / grids), and your <strong>awards</strong> progress — without it, the app starts blind and
-            treats every station as new. This is optional and you can import anytime from the Logbook,
-            but it's the single biggest thing that makes the app useful on day one.
+            <T k="setup.log.sub" tags={{ b: <strong /> }} />
           </p>
           <div className="wizard-log-import">
             <input
@@ -938,7 +1026,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               disabled={importing}
               onClick={() => logFileRef.current?.click()}
             >
-              {importing ? 'Importing…' : importStats ? 'Import another ADIF file' : 'Import my ADIF log…'}
+              {importing
+                ? t('setup.log.import.busy')
+                : importStats
+                  ? t('setup.log.import.again')
+                  : t('setup.log.import.action')}
             </button>
             {importError && (
               <p className="wizard-log-error" role="alert">
@@ -948,46 +1040,44 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             {importStats &&
               (importStats.added > 0 ? (
                 <p className="wizard-log-result" role="status">
-                  ✓ Imported <strong>{importStats.added}</strong>{' '}
-                  QSO{importStats.added === 1 ? '' : 's'}
-                  {importStats.skipped ? ` · ${importStats.skipped} already present` : ''}. Your
-                  worked-before and Needed board are now seeded.
+                  {/* The dupe clause is interpolated WHOLE, with its own separator — a
+                      language that orders the sentence differently moves it as one piece. */}
+                  <T
+                    k="setup.log.result.imported"
+                    tags={{ b: <strong /> }}
+                    vals={{
+                      count: importStats.added,
+                      dupes: importStats.skipped
+                        ? ` · ${t('setup.log.result.dupes', { count: importStats.skipped })}`
+                        : '',
+                    }}
+                  />
                 </p>
               ) : importStats.skipped > 0 ? (
                 <p className="wizard-log-result" role="status">
-                  ✓ All {importStats.skipped} QSOs were already in your log — you're seeded.
+                  {t('setup.log.result.allDupes', { count: importStats.skipped })}
                 </p>
               ) : (
                 <p className="wizard-log-error" role="status">
-                  ⚠ No QSOs found in that file — is it a standard ADIF (.adi/.adif) export?
+                  {t('setup.log.result.none')}
                 </p>
               ))}
-            <p className="wizard-license-sub">
-              From WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog — any standard ADIF (.adi/.adif)
-              export. Nothing leaves your computer; duplicates are detected and skipped.
-            </p>
+            <p className="wizard-license-sub">{t('setup.log.sources')}</p>
           </div>
         </>
       )}
 
       {step === 3 && (
         <>
-          <h2 className="wizard-title">You get everything</h2>
-          <p className="wizard-sub">
-            Every mode and every section starts ON — FT8/FT4, Phone, CW, RTTY, SSTV, APRS,
-            satellites, the maps, the lot. Nexus is one program instead of six; there&rsquo;s
-            nothing to unlock. If you ever want a leaner app, trim sections in Settings.
-          </p>
+          <h2 className="wizard-title">{t('setup.finish.title')}</h2>
+          <p className="wizard-sub">{t('setup.finish.sub')}</p>
           {/* The goal-profile picker that used to live here is gone (operator, 2026-08-09:
               "I want it to start with it all") — asking a newcomer to scope the app down
               before they have seen it was the opposite of easy-and-powerful-defaults. The
               profiles remain in Settings ▸ Appearance for anyone who wants a lean set. */}
 
-          <h3 className="wizard-modes-title">What’s your license?</h3>
-          <p className="wizard-license-sub">
-            Sets your transmit privileges — the app parks the dial in your licensed band segments
-            and won’t let you transmit outside them. Pick “Outside the US” for no limits.
-          </p>
+          <h3 className="wizard-modes-title">{t('setup.finish.license.title')}</h3>
+          <p className="wizard-license-sub">{t('setup.finish.license.sub')}</p>
           <div className="wizard-modes">
             {LICENSE.map((l) => (
               <button
@@ -997,19 +1087,16 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 aria-pressed={license === l.id}
                 onClick={() => setLicense(l.id)}
               >
-                <span className="wizard-mode-label">{l.label}</span>
-                <span className="wizard-mode-blurb">{l.blurb}</span>
+                <span className="wizard-mode-label">{t(l.labelKey)}</span>
+                <span className="wizard-mode-blurb">{t(l.blurbKey)}</span>
               </button>
             ))}
           </div>
 
           {bankWasEmpty && (
             <>
-              <h3 className="wizard-modes-title">Start with some channels?</h3>
-              <p className="wizard-license-sub">
-                Optional — a ready-made set of common frequencies and nets, added to your Memories.
-                Change or remove any of them later in the Memories section.
-              </p>
+              <h3 className="wizard-modes-title">{t('setup.finish.packs.title')}</h3>
+              <p className="wizard-license-sub">{t('setup.finish.packs.sub')}</p>
               <div className="wizard-modes">
                 {STARTER_PACKS.map((p) => (
                   <button
@@ -1021,7 +1108,10 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                   >
                     <span className="wizard-mode-label">{p.name}</span>
                     <span className="wizard-mode-blurb">
-                      {p.memories.length} channels · {p.region}
+                      {t('setup.finish.packs.meta', {
+                        count: p.memories.length,
+                        region: p.region,
+                      })}
                     </span>
                   </button>
                 ))}
@@ -1031,7 +1121,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
 
           {onOpenGuide && (
             <>
-              <h3 className="wizard-modes-title">Want a walkthrough of what you just set up?</h3>
+              <h3 className="wizard-modes-title">{t('setup.finish.guide.title')}</h3>
               <div className="wizard-modes">
                 <button
                   type="button"
@@ -1039,10 +1129,8 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                   aria-pressed={wantGuide}
                   onClick={() => setWantGuide(!wantGuide)}
                 >
-                  <span className="wizard-mode-label">Show me Getting started</span>
-                  <span className="wizard-mode-blurb">
-                    The four things, in order — opens when this closes
-                  </span>
+                  <span className="wizard-mode-label">{t('setup.finish.guide.label')}</span>
+                  <span className="wizard-mode-blurb">{t('setup.finish.guide.blurb')}</span>
                 </button>
               </div>
             </>
@@ -1055,11 +1143,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         <div className="wizard-actions-right">
           {step > 0 && (
             <button type="button" className="wizard-skip" onClick={() => setStep(step - 1)}>
-              ← Back
+              {t('setup.nav.back')}
             </button>
           )}
           <button type="button" className="wizard-skip" onClick={onSkip}>
-            I’ll set it up myself
+            {t('setup.nav.skip')}
           </button>
           {step < 3 ? (
             <button
@@ -1069,7 +1157,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               disabled={step === 0 && gridState === 'bad'}
               onClick={() => setStep(step + 1)}
             >
-              Next →
+              {t('setup.nav.next')}
             </button>
           ) : (
             <button
@@ -1077,7 +1165,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               className="wizard-go"
               onClick={() => finish(['everything'], 'operate', [])}
             >
-              Finish — everything on
+              {t('setup.nav.finish')}
             </button>
           )}
         </div>
