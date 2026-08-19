@@ -833,6 +833,17 @@ export async function allTxtLocation(): Promise<string> {
   return invoke<string>('all_txt_location')
 }
 
+/** Where `nexus-diag.log` lives — the file we ask an operator to send when something goes
+ * wrong. Always written, no toggle. */
+export async function diagLogLocation(): Promise<string> {
+  return invoke<string>('diag_log_location')
+}
+
+/** Reveal `nexus-diag.log` in the file manager (falls back to opening its folder). */
+export async function revealDiagLog(): Promise<void> {
+  return invoke<void>('reveal_diag_log')
+}
+
 /** The absolute folder where per-QSO recordings land (to show in Settings). Per-PROFILE: a second
  * radio records under its own config dir, which is the whole of why "it is not writing the file"
  * gets reported when nothing has failed. */

@@ -45,7 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounds itself: two files, about 8 MB in total worst case, and the older one is simply
   renamed aside rather than rewritten, so a big log never slows a launch down. Passwords, API
   keys and tokens are masked before anything is written — the file is meant to be attachable
-  to a public bug report.
+  to a public bug report. Settings ▸ Logging & Connectors ▸ Integrations & Feeds names it and
+  has its own Reveal button, and the settings search finds it under "diagnostic log", "log
+  file" or "troubleshooting".
 
 - **Periodic logbook backups, in a `backups/` folder beside your log.** Nexus now keeps dated
   snapshots of `log.adi`: at most one a day, only when the log has actually changed, **plus**

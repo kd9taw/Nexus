@@ -89,7 +89,7 @@ import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
-import { allTxtLocation, recordingsLocation, revealAllTxt, revealRecordings } from '../api'
+import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, revealDiagLog, revealRecordings } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
@@ -691,6 +691,7 @@ export function SettingsPanel({
     return () => window.removeEventListener('resize', onResize)
   }, [MAX_STEP])
   const [allTxtPath, setAllTxtPath] = useState('')
+  const [diagLogPath, setDiagLogPath] = useState('')
   const [recordingsPath, setRecordingsPath] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'saved'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -742,6 +743,11 @@ export function SettingsPanel({
     allTxtLocation()
       .then((p) => {
         if (alive) setAllTxtPath(p)
+      })
+      .catch(() => {})
+    diagLogLocation()
+      .then((p) => {
+        if (alive) setDiagLogPath(p)
       })
       .catch(() => {})
     recordingsLocation()
@@ -7274,6 +7280,36 @@ export function SettingsPanel({
                     className="settings-linkbtn"
                     onClick={() => {
                       revealAllTxt().catch(() => {})
+                    }}
+                  >
+                    Reveal in folder
+                  </button>
+                </div>
+
+                {/* The diagnostic log has no toggle — it is written from the first moments of
+                    startup, deliberately, because the failures worth diagnosing are the early
+                    ones. That is exactly why it needs a line HERE: it was the one
+                    operator-facing artefact nothing in the interface named, on a file we ask
+                    people to send us when something goes wrong. */}
+                <div className="settings-field">
+                  <span className="settings-label">Diagnostic log</span>
+                  <span className="settings-hint">
+                    Always on. A plain-text record of what Nexus did — startup steps, the CAT and
+                    audio device open, updater checks, and any failure — so a “it won’t start” or
+                    “it stopped decoding” report has something to look at. Passwords, API keys and
+                    tokens are masked before anything is written, so it is safe to attach to a bug
+                    report. Bounded to two files, about 8 MB in total.
+                    {diagLogPath && (
+                      <>
+                        {' '}Saved at <code>{diagLogPath}</code>.
+                      </>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => {
+                      revealDiagLog().catch(() => {})
                     }}
                   >
                     Reveal in folder

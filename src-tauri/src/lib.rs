@@ -2015,6 +2015,41 @@ fn all_txt_location() -> String {
     all_txt_path().to_string_lossy().into_owned()
 }
 
+/// The resolved absolute `nexus-diag.log` path — the file an operator is asked to send when
+/// something goes wrong, and until now the only operator-facing artefact with nowhere in the
+/// interface that names it. It is written unconditionally from the first moments of startup
+/// (see the `applog::init` call in `run`), so unlike ALL.TXT there is no toggle beside it.
+#[tauri::command]
+fn diag_log_location() -> String {
+    diag_log_path().to_string_lossy().into_owned()
+}
+
+/// Reveal `nexus-diag.log` in the operator's file manager.
+///
+/// Mirrors `reveal_all_txt`, including its fallback: if the file is somehow absent, open the
+/// folder rather than failing — an operator sent looking for a log should always land
+/// somewhere useful, and everything else worth attaching (ALL.TXT, the crash report) is in
+/// that same folder anyway.
+#[tauri::command]
+fn reveal_diag_log(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = diag_log_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if path.exists() {
+        app.opener()
+            .reveal_item_in_dir(&path)
+            .map_err(|e| e.to_string())
+    } else if let Some(dir) = path.parent() {
+        app.opener()
+            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+            .map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Where received SSTV images are saved — the same operator-findable local data
 /// dir as ALL.TXT (`%LOCALAPPDATA%\Nexus\sstv-gallery` on Windows,
 /// `~/.local/share/Nexus/sstv-gallery` on Unix). Each finished image lands here
@@ -17346,6 +17381,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             save_png_to_downloads,
             civ_diagnostic_log,
             all_txt_location,
+            diag_log_location,
+            reveal_diag_log,
             recordings_location,
             sstv_delete_image,
             reveal_recordings,
