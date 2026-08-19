@@ -320,9 +320,19 @@ const MIGRATED = [
  * Cloudlog/Wavelog. Batch 12 (2026-08-19) took the first three sections of the Radio tab —
  * the dual-radio roster with its band coverage and band+mode routing table, Profiles, and Rig
  * & CAT down to Test CAT, Advanced included — and batch 13 the rest of that tab's audio half:
- * Audio, Headphone monitor, Satellite Doppler, Orbital elements and Rotator. Putting the file
- * on MIGRATED would report the tabs still to come; leaving it off entirely would make every
- * key those sections use look like an orphan.
+ * Audio, Headphone monitor, Satellite Doppler, Orbital elements and Rotator. Batch 16
+ * (2026-08-19) took the Digital tab: the FT8/FT4 section's Logging Behavior, Decoder and
+ * Station Housekeeping sub-groups, and the six weak-signal mode sections after it (JT65,
+ * MSK144, Beacons — WSPR & FST4W, FST4, Q65, Quick-reply macros). Putting the file on
+ * MIGRATED would report the tabs still to come; leaving it off entirely would make every key
+ * those sections use look like an orphan.
+ *
+ * ⚠️ AND THE DIGITAL TAB IS THE OTHER REASON THIS FILE CANNOT GRADUATE YET, on the same
+ * ruling that keeps `SetupHealth.tsx` below: the FT8/FT4 section's first two sub-groups,
+ * "Transmit & Sequencing" and "Auto-CQ & Caller Selection", are the FT-mode TX / timing /
+ * QSO-management surface. Their labels, hints and accessible names stay written in the panel
+ * until the transmit-path batch moves them with the stop-line sweeps re-run — WSJT-X parity
+ * there is a compatibility contract, and it cannot be verified in CI.
  *
  * `SetupHealth.tsx` is here for a DIFFERENT and much narrower reason, and it is the only kind
  * that may be added: every string in it is migrated except one CONTROL — Prove TX, which keys

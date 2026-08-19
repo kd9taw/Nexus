@@ -4483,6 +4483,211 @@ export const EN = {
   'setup.nav.next': 'Next →',
   'setup.nav.finish': 'Finish — everything on',
 
+  // ── Settings ▸ Digital (FT8/FT4) ────────────────────────────────────────────────────
+  //
+  // ⚠️ TWO SUB-GROUPS OF THIS SECTION ARE MISSING FROM THIS FILE ON PURPOSE. "Transmit &
+  // Sequencing" and "Auto-CQ & Caller Selection" are the FT-mode TX / timing / QSO-management
+  // surface — the T/R period, the TX watchdog, disable-after-73, double-click-arms-TX, the
+  // tune timeout, the CQ budget, the blocked-caller list and the best-caller pick. Every label
+  // and accessible name in them stays written in `SettingsPanel.tsx` until the transmit-path
+  // batch moves them with the stop-line sweeps re-run. What follows is the REST of the
+  // section (Logging Behavior, Decoder, Station Housekeeping) and the six weak-signal mode
+  // sections under it.
+  //
+  // ⚠️ EVERY NUMBER BELOW IS AN INVARIANT TECHNICAL QUANTITY and must survive translation
+  // exactly as written — the decoder's 200–2900 Hz passband and its 4000 Hz ceiling, the
+  // ±25 Hz single-decode window, Hound's 1000 Hz split, ~0.5 s of clock error, every T/R
+  // period in seconds, the tone-spacing multipliers (2x … 16x), the WSPR dBm ladder and
+  // MSK144's 72 ms frame. So is every NAME an operator matches against another program or
+  // puts on the air: the mode names (FT8, FT4, JT65, MSK144, WSPR, FST4, FST4W, Q65,
+  // TempoFast/TempoDeep), the A…E submode letters, the Q-codes (QSO, CQ, QRM), the message
+  // tokens (RRR, RR73, 73), the redundancy versions RV0/RV1/RV2, and WSJT-X's own option
+  // names quoted from its interface. None of them is ever produced by a formatter — they are
+  // written here as the prose around them is, and re-pointing or grouping one (a decimal
+  // comma, a thousands separator) would be an operating fault, not a cosmetic one.
+  'settings.digital.legend': 'Digital (FT8/FT4)',
+
+  // Logging Behavior. "Prompt me to log QSO" is the WSJT-X checkbox this one mirrors, quoted
+  // from that program's interface; RRR / RR73 / 73 are the messages themselves.
+  'settings.digital.logging.title': 'Logging Behavior',
+  'settings.digital.autoLog.label': 'Auto-log QSOs',
+  'settings.digital.autoLog.hint': 'Automatically log completed contacts to the ADIF logbook.',
+  'settings.digital.promptToLog.label': 'Prompt before logging',
+  'settings.digital.promptToLog.hint':
+    'Show a confirm-and-edit popup when a QSO completes instead of logging silently (WSJT-X “Prompt me to log QSO”). No effect unless Auto-log is on.',
+  'settings.digital.preferRrr.label': 'Roger with RRR (not RR73)',
+  'settings.digital.preferRrr.hint':
+    'Acknowledge the final report with a bare RRR (partner still owes a 73) instead of the combined RR73. Off = RR73 (modern FT8 practice).',
+  'settings.digital.clearDxAfterLog.label': 'Clear DX call after logging',
+  'settings.digital.clearDxAfterLog.hint':
+    'Wipe the DX Call / DX Grid fields once a contact is logged (WSJT-X option, off by default).',
+
+  // Decoder. The depth chips and the DXpedition chips are a radio group whose accessible name
+  // is the field's own label, so each pair reads from ONE entry rather than two identical ones.
+  // ⚠️ "Hound" is not here: it is WSJT-X's name for the calling side of a DXpedition QSO, a
+  // role token exactly as Fox is, and it stays in the component beside its <option> value.
+  'settings.digital.decoder.title': 'Decoder',
+  'settings.digital.decodeDepth.label': 'Decode depth',
+  'settings.digital.decodeDepth.fast': 'Fast',
+  'settings.digital.decodeDepth.normal': 'Normal',
+  'settings.digital.decodeDepth.deep': 'Deep',
+  'settings.digital.decodeDepth.hint':
+    'Deep finds the most signals (WSJT-X default); Fast saves CPU on old hardware. All Decoder settings drive the native decoder — on a WSJT-X UDP source (companion mode) decodes arrive already made and none of them apply.',
+  // F low / F high name the two edges of the search range. `F` is the frequency symbol and the
+  // Hz beside it is a unit; the word next to each is what moves.
+  'settings.digital.passband.label': 'Decoder passband (Hz)',
+  'settings.digital.passband.low': 'F low',
+  'settings.digital.passband.low.aria': 'Decoder F low (Hz)',
+  'settings.digital.passband.high': 'F high',
+  'settings.digital.passband.high.aria': 'Decoder F high (Hz)',
+  'settings.digital.passband.hint':
+    "The decoder's search range. Default 200–2900 Hz. Raise F high toward 4000 Hz to decode stations calling above ~2.9 kHz (common on crowded FT8 bands); lower the range to focus on a narrow filter or dodge strong close-in QRM.",
+  'settings.digital.apDecode.label': 'A-priori (AP) decoding — FT8',
+  'settings.digital.apDecode.hint':
+    'Retry marginal signals against hypotheses built from your call, the DX call and the QSO state (WSJT-X "Enable AP", on by default) — including the cross-cycle replay of last cycle\'s QSOs. FT8 only: FT4\'s AP is part of its Normal/Deep depth and has no separate switch.',
+  'settings.digital.apCqOnly.label': 'AP: CQ hypothesis only',
+  'settings.digital.apCqOnly.hint':
+    'Limit AP to the "CQ" guess — no MyCall/DxCall hypotheses (FT8 and FT4). WSJT-X switches to this by itself after 5 minutes without transmitting, as a guard against stale-context false decodes; here it is your explicit choice. Off = full AP, the stock behavior.',
+  'settings.digital.singleDecode.label': 'Single decode',
+  'settings.digital.singleDecode.hint':
+    'Decode only within ±25 Hz of your green RX marker (the same one-station window WSJT-X uses for a double-click re-decode) instead of the whole passband — isolates one weak station and saves CPU. FT8 and FT4 only: 50 Hz is narrower than a single JT65, Q65 or MSK144 signal, so those modes keep the full passband. Applies while the RX marker sits inside the passband above; off = full passband, the stock behavior.',
+  'settings.digital.dxpedition.label': 'DXpedition mode',
+  'settings.digital.dxpedition.off': 'Off',
+  'settings.digital.dxpedition.hint':
+    "Off = normal FT8/FT4 operation. Hound = DXpedition pile-up discipline (calls above 1000 Hz; your report auto-moves to the Fox's frequency).",
+
+  // Station Housekeeping. ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit
+  // control — it chooses whether the station announces itself, and it can neither key nor
+  // unkey anything. Same reading as Tx Power's drive slider in batch 13; nothing here is on
+  // any cockpit's stop-line census. The watts placeholder ("e.g. 100") is a power value and
+  // stays in the component, as the example addresses in Rig & CAT do.
+  'settings.digital.housekeeping.title': 'Station Housekeeping',
+  'settings.digital.journeyStreak.label': 'Journey — track a weekly streak',
+  'settings.digital.journeyStreak.hint':
+    'Off by default. A gentle “weeks on the air” counter on the Journey board — never a daily streak, never a penalty for a break.',
+  'settings.digital.beacon.label': 'Beacon — announce presence (CQ)',
+  'settings.digital.beacon.hint':
+    "Off = passive (hunt & pounce): Nexus listens and only transmits when you act. On = periodically calls CQ to announce you're on frequency.",
+  'settings.digital.harq.label': 'IR-HARQ — combine retransmissions',
+  'settings.digital.harq.hint':
+    'On (default) = a weak frame that fails is recovered by joint-combining its retransmissions (RV0+RV1+RV2), and unacknowledged QSO overs escalate redundancy. Off = RV0-only (each frame decoded on its own).',
+  'settings.digital.clockCheck.label': 'Clock check (NTP)',
+  'settings.digital.clockCheck.hint':
+    'Periodically check your PC clock against an NTP server and show the offset in the top bar. TempoFast/TempoDeep are slot-timed to UTC — keep it within ~0.5 s (NTP / time.is; off-grid: GPS). Turn off for fully-offline operation (no network calls).',
+  'settings.digital.stationPower.label': 'Station power (W)',
+  'settings.digital.stationPower.hint':
+    'Your transmit power in watts — unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
+  // The units preference. The <option> VALUES ('auto', 'metric', 'imperial') are persisted
+  // tokens and stay in the component; km, °C, mi and °F are unit symbols inside these labels.
+  'settings.digital.units.label': 'Units',
+  'settings.digital.units.auto': 'Automatic (from your system)',
+  'settings.digital.units.metric': 'Metric (km, °C)',
+  'settings.digital.units.imperial': 'Imperial (mi, °F)',
+  'settings.digital.units.hint':
+    "Distances, temperature and wind speed. Automatic follows your operating system's region. Applies everywhere in the app immediately.",
+
+  // ── Settings ▸ JT65 ─────────────────────────────────────────────────────────────────
+  // ⚠️ `60\u00a0s` is a NON-BREAKING SPACE, written as an escape so it cannot be lost to a
+  // careless edit: the period and its unit must not be split across a line. A translation
+  // keeps it. A, B and C are the submode names both stations have to agree on.
+  'settings.jt65.legend': 'JT65 — classic EME',
+  'settings.jt65.submode.label': 'Submode (tone spacing)',
+  'settings.jt65.submode.a': 'A — HF standard, narrowest',
+  'settings.jt65.submode.b': 'B — 2x spacing',
+  'settings.jt65.submode.c': 'C — 4x spacing, most Doppler-tolerant',
+  'settings.jt65.submode.hint':
+    'JT65 always uses a 60\u00a0s T/R period, so spacing is the only choice. A is what you want on HF; EME operators move up to B or C as Doppler spread on the higher bands smears the tones. Both stations must use the same submode.',
+  'settings.jt65.hint':
+    'The classic weak-signal and moonbounce mode, decoded and transmitted. Messages are the older 22-character format, not the 37-character one FT8 and friends use.',
+
+  // ── Settings ▸ MSK144 ───────────────────────────────────────────────────────────────
+  // The two periods with no prose beside them (10 s, and the plain rows in FST4 below) are
+  // pure tokens and stay in the component — there is nothing in them to translate.
+  'settings.msk144.legend': 'MSK144 — meteor scatter',
+  'settings.msk144.period.label': 'T/R period',
+  'settings.msk144.period.fast': '5 s — fast turnaround, big showers',
+  'settings.msk144.period.standard': '15 s — the 6 m standard',
+  'settings.msk144.period.sparse': '30 s — sparse pings, more to stack',
+  'settings.msk144.period.hint':
+    'MSK144 sends a 72\u00a0ms message over and over, so a single meteor trail lasting a tenth of a second can carry the whole thing. Shorter periods turn the exchange around faster during a shower; longer ones give the decoder more frames to stack when pings are sparse. Both stations must use the same period.',
+  'settings.msk144.hint':
+    'MSK144 transmits for nearly the whole period, sending the same 72 ms frame hundreds of times — that is how meteor scatter works, and a contact can take many minutes of apparent silence. The audio frequency is fixed at a 1500 Hz centre; the signal is 1 kHz wide, so there is nowhere to tune it. Shorthand (MSK40) messages are off, matching WSJT-X’s default.',
+
+  // ── Settings ▸ Beacons — WSPR & FST4W ───────────────────────────────────────────────
+  // ⚠️ The dBm ladder (23 = 200 mW … 43 = 20 W) is what gets PUBLISHED to a propagation
+  // database and read back by other operators, so those numbers are as invariant as a dial
+  // reading. Two fields answer in two whole sentences rather than a stem plus a tail: when the
+  // rotation is scheduling, "ignored" and "how many stations are in it" are different
+  // statements, and which clause leads is the translator's decision.
+  'settings.beacons.legend': 'Beacons — WSPR & FST4W',
+  'settings.beacons.txPercent.label': 'Transmit %',
+  'settings.beacons.txPercent.title':
+    'Round Robin is scheduling — this percentage is not used. Set the slot to 0 to schedule by percentage.',
+  'settings.beacons.txPercent.hint.roundRobin':
+    '<b>Ignored while Round Robin is active</b> — the rotation decides which intervals transmit. Set the slot to 0 to schedule by percentage again.',
+  'settings.beacons.txPercent.hint':
+    'Fraction of intervals to transmit on. 0 = listen only. A beacon that transmits every interval hears nothing, so a minority is the convention — 20–30% is typical. Below 40% Nexus also avoids back-to-back transmissions while still hitting the rate you asked for.',
+  'settings.beacons.power.label': 'Transmit power (dBm)',
+  'settings.beacons.power.hint':
+    '<b>Required, and it has to be real.</b> WSPR reports are published to a public propagation database that other operators draw conclusions from, so a wrong figure corrupts their data as well as yours. The beacon stays silent until this is set. 23 = 200 mW, 30 = 1 W, 37 = 5 W, 43 = 20 W.',
+  'settings.beacons.rrSlot.label': 'FST4W Round Robin slot',
+  'settings.beacons.rrSlot.hint':
+    '0 = use the transmit-% schedule. Otherwise your slot in a coordinated rotation: stations agreeing on the same slot count and each taking a different slot never transmit at the same time, because the assignment is fixed by UTC. A rotation needs at least 2 slots.',
+  'settings.beacons.rrSlots.label': 'Round Robin slots',
+  'settings.beacons.rrSlots.hint.degenerate':
+    '<b>A one-station rotation is no rotation</b> — Round Robin needs at least 2 slots, so it is off and the transmit-% schedule applies.',
+  'settings.beacons.rrSlots.hint': 'How many stations are in the rotation. Ignored when the slot is 0.',
+  'settings.beacons.hint':
+    'Beacons transmit your callsign, grid and power — there is no QSO sequence, so Call CQ and S&P are inactive on these tiers. Transmit still has to be armed as usual; the schedule never keys a radio whose transmit you have not enabled.',
+
+  // ── Settings ▸ FST4 (QSO) / FST4W (beacon) ──────────────────────────────────────────
+  // ⚠️ `<...>` inside the hint is what a HASHED CALLSIGN actually looks like on screen — the
+  // literal characters, wrapped by a <code> element the call site supplies. It is not a marker
+  // and the renderer cannot read it as one, so it survives translation as the text it is.
+  'settings.fst4.legend': 'FST4 (QSO) / FST4W (beacon)',
+  'settings.fst4.period.label': 'T/R period',
+  'settings.fst4.period.shortestBeacon': '120 s — shortest FST4W beacon interval',
+  'settings.fst4.period.deepest': '1800 s — deepest',
+  'settings.fst4.period.hint':
+    'Shared by both tiers. Longer periods hear weaker signals at fewer exchanges per hour. FST4W beacons run at 120/300/900/1800 s; FST4 QSO work is usually 15–60 s. Both stations (or the beacon you are listening for) must be on the same period.',
+  'settings.fst4.hint':
+    '<b>FST4</b> is the QSO mode; <b>FST4W</b> is the WSPR-like beacon mode — pick which one on the tier selector. Nexus decodes both and transmits neither. Note that FST4W hashed callsigns show as <code><...></code>: the lookup table upstream fills from a file this build does not carry.',
+
+  // ── Settings ▸ Q65 ──────────────────────────────────────────────────────────────────
+  // A…E are the submode names, and the multiplier beside each one is the tone spacing it
+  // buys; both stations have to be on the same pair, so both are tokens inside these labels.
+  'settings.q65.legend': 'Q65 — EME / VHF+ scatter',
+  'settings.q65.period.label': 'T/R period',
+  'settings.q65.period.tropo': '15 s — troposcatter',
+  'settings.q65.period.meteor': '30 s — 6 m meteor / ionoscatter',
+  'settings.q65.period.eme': '60 s — EME (most common)',
+  'settings.q65.period.deepEme': '120 s — deep EME',
+  'settings.q65.period.microwaveEme': '300 s — deepest, microwave EME',
+  'settings.q65.period.hint':
+    'Longer periods integrate longer and hear weaker signals, at one exchange per period. Both stations must use the <b>same</b> period. Changing this changes the decode frame length, so it takes effect on the next slot.',
+  'settings.q65.submode.label': 'Submode (tone spacing)',
+  'settings.q65.submode.a': 'A — narrowest, most sensitive',
+  'settings.q65.submode.b': 'B — 2x spacing',
+  'settings.q65.submode.c': 'C — 4x spacing',
+  'settings.q65.submode.d': 'D — 8x spacing',
+  'settings.q65.submode.e': 'E — 16x spacing, most Doppler-tolerant',
+  'settings.q65.submode.hint':
+    'Wider spacing survives more Doppler spread and frequency drift but costs sensitivity. Move up the letters as the path degrades — EME on the higher bands usually needs B or C.',
+  'settings.q65.hint':
+    'Q65 transmits and receives. The period and submode set both what you hear and what you send, and BOTH STATIONS MUST MATCH — a correspondent on a different period or submode will not decode you.',
+
+  // ── Settings ▸ Quick-reply macros ───────────────────────────────────────────────────
+  // ⚠️ The QSO set's label is NOT here: QSO is a Q-code, the same three letters in every
+  // language, so it is a token in the component — exactly as CQ inside "Band / CQ" is a token
+  // inside a label whose other word is prose. The macro TEXT itself is the operator's own and
+  // was never translatable.
+  'settings.quickReply.legend': 'Quick-reply macros',
+  'settings.quickReply.chat.label': 'Chat',
+  'settings.quickReply.chat.hint': 'Comma-separated chips for Chat.',
+  'settings.quickReply.qso.hint': 'Chips for sequenced QSOs.',
+  'settings.quickReply.band.label': 'Band / CQ',
+  'settings.quickReply.band.hint': 'Open broadcasts — the Call CQ launchpad + band feed.',
+
   // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
   // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
   // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,

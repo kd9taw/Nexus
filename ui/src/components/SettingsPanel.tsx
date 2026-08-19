@@ -71,10 +71,16 @@ import { pushToast, withErrorToast } from '../toast'
 // toasts/confirms its handlers raise), the whole Appearance tab (Workspace + Features +
 // Accessibility), the Logging & Connectors sections above Confirmations (Connections,
 // Worked-before (B4) & dupes, Integrations & Feeds, DXKeeper, N3FJP, N1MM+, the LoTW users
-// list and the callsign→state database), the Spots & Alerts sections (Pounce + Alerts) and the
-// two Contesting sections (Contest Category + Field Day Setup). Every remaining tab's
-// fieldsets are still hardcoded English and are deliberately outside the i18n guard's scope;
-// see its header.
+// list and the callsign→state database), the Spots & Alerts sections (Pounce + Alerts), the
+// two Contesting sections (Contest Category + Field Day Setup), and the Digital tab — the
+// FT8/FT4 section's Logging Behavior, Decoder and Station Housekeeping sub-groups plus JT65,
+// MSK144, Beacons, FST4, Q65 and the quick-reply macros. Every remaining tab's fieldsets are
+// still hardcoded English and are deliberately outside the i18n guard's scope; see its header.
+//
+// ⚠️ ONE RANGE IS DELIBERATELY STILL ENGLISH INSIDE A MIGRATED SECTION: Digital's "Transmit &
+// Sequencing" and "Auto-CQ & Caller Selection" sub-groups. They are the FT-mode TX / timing /
+// QSO-management surface, and they move in the transmit-path batch with the stop-line sweeps
+// re-run. The comment beside them says so at the call site.
 import { t, type MessageKey } from '../i18n'
 import { T } from '../i18n/T'
 import { FD_EVENT_NAMES } from '../fdEvent'
@@ -705,6 +711,17 @@ const ROTATOR_EXAMPLES = {
  * the stored slot number, which is the `value` beside it.
  */
 const OMNIRIG_SLOTS: Record<1 | 2, string> = { 1: 'RIG 1', 2: 'RIG 2' }
+
+/**
+ * The quick-reply macro set named for a Q-code.
+ *
+ * Same category as `OMNIRIG_SLOTS`: QSO is the hobby's own three letters, identical in every
+ * language, so it is a token rather than a catalog entry — exactly as the CQ inside the
+ * "Band / CQ" label beside it is a token inside a label whose other word is prose. It lives
+ * here rather than inline because a bare word in JSX text is what the i18n guard reads as
+ * un-migrated English (i18n/hardcoded-strings.test.ts).
+ */
+const MACRO_SET_QSO = 'QSO'
 
 export function SettingsPanel({
   onSaved,
@@ -4943,7 +4960,16 @@ export function SettingsPanel({
           {/* ---- Digital (FT8/FT4) — was "Operating"; ~90% FT8 sequencing/decoder knobs ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-digital-ft8-ft4">
-            <legend>Digital (FT8/FT4)</legend>
+            <legend>{t('settings.digital.legend')}</legend>
+            {/* ⚠️ THE NEXT TWO SUB-GROUPS ARE DELIBERATELY NOT MIGRATED, and stay in English
+                here until the transmit-path batch moves them. "Transmit & Sequencing" and
+                "Auto-CQ & Caller Selection" are the FT-mode TX / timing / QSO-management
+                surface — the T/R period, the TX watchdog, disable-after-73, double-click-arms-
+                TX, the tune timeout, the CQ budget, the blocked-caller list and the best-caller
+                pick. Every label, hint and accessible name in them moves in its own batch with
+                the stop-line sweeps re-run, deliberately, because WSJT-X parity here is a
+                compatibility contract that cannot be checked in CI. Everything BELOW them —
+                Logging Behavior, Decoder, Station Housekeeping — is in the catalog. */}
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">Transmit &amp; Sequencing</span>
               <div className="settings-grid">
@@ -5188,11 +5214,11 @@ export function SettingsPanel({
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Logging Behavior</span>
+              <span className="settings-featgroup-title">{t('settings.digital.logging.title')}</span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-log QSOs</span>
+                    <span className="settings-label">{t('settings.digital.autoLog.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5203,12 +5229,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">Automatically log completed contacts to the ADIF logbook.</span>
+                  <span className="settings-hint">{t('settings.digital.autoLog.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Prompt before logging</span>
+                    <span className="settings-label">{t('settings.digital.promptToLog.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5219,15 +5245,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Show a confirm-and-edit popup when a QSO completes instead of logging silently
-                    (WSJT-X “Prompt me to log QSO”). No effect unless Auto-log is on.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.promptToLog.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Roger with RRR (not RR73)</span>
+                    <span className="settings-label">{t('settings.digital.preferRrr.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5238,15 +5261,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Acknowledge the final report with a bare RRR (partner still owes a 73) instead of
-                    the combined RR73. Off = RR73 (modern FT8 practice).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.preferRrr.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Clear DX call after logging</span>
+                    <span className="settings-label">{t('settings.digital.clearDxAfterLog.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5257,20 +5277,23 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Wipe the DX Call / DX Grid fields once a contact is logged (WSJT-X option,
-                    off by default).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.clearDxAfterLog.hint')}</span>
                 </div>
               </div>
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Decoder</span>
+              <span className="settings-featgroup-title">{t('settings.digital.decoder.title')}</span>
               <div className="settings-grid">
                 <div className="settings-field">
-                  <span className="settings-label">Decode depth</span>
-                  <div className="theme-switcher" role="group" aria-label="Decode depth">
+                  <span className="settings-label">{t('settings.digital.decodeDepth.label')}</span>
+                  {/* The chip row is a radio group whose accessible name IS the field label —
+                      one entry, read twice, rather than two identical ones that could drift. */}
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.digital.decodeDepth.label')}
+                  >
                     {([1, 2, 3] as const).map((d) => (
                       <button
                         key={d}
@@ -5282,22 +5305,22 @@ export function SettingsPanel({
                           setForm((prev) => (prev ? { ...prev, decodeDepth: d } : prev))
                         }}
                       >
-                        {d === 1 ? 'Fast' : d === 2 ? 'Normal' : 'Deep'}
+                        {d === 1
+                          ? t('settings.digital.decodeDepth.fast')
+                          : d === 2
+                            ? t('settings.digital.decodeDepth.normal')
+                            : t('settings.digital.decodeDepth.deep')}
                       </button>
                     ))}
                   </div>
-                  <span className="settings-hint">
-                    Deep finds the most signals (WSJT-X default); Fast saves CPU on old hardware.
-                    All Decoder settings drive the native decoder — on a WSJT-X UDP source
-                    (companion mode) decodes arrive already made and none of them apply.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.decodeDepth.hint')}</span>
                 </div>
 
                 <div className="settings-field">
-                  <span className="settings-label">Decoder passband (Hz)</span>
+                  <span className="settings-label">{t('settings.digital.passband.label')}</span>
                   <div className="settings-input-row">
                     <label className="settings-inline-label">
-                      <span>F low</span>
+                      <span>{t('settings.digital.passband.low')}</span>
                       <input
                         id="decode-flow"
                         className="settings-input"
@@ -5307,7 +5330,7 @@ export function SettingsPanel({
                         max={2900}
                         step={1}
                         value={form.decodeFLowHz ?? 200}
-                        aria-label="Decoder F low (Hz)"
+                        aria-label={t('settings.digital.passband.low.aria')}
                         onChange={(e) => {
                           if (e.target.value === '') return // mid-edit clear: keep the prior value
                           markDirty()
@@ -5331,7 +5354,7 @@ export function SettingsPanel({
                       />
                     </label>
                     <label className="settings-inline-label">
-                      <span>F high</span>
+                      <span>{t('settings.digital.passband.high')}</span>
                       <input
                         id="decode-fhigh"
                         className="settings-input"
@@ -5341,7 +5364,7 @@ export function SettingsPanel({
                         max={4000}
                         step={1}
                         value={form.decodeFHighHz ?? 2900}
-                        aria-label="Decoder F high (Hz)"
+                        aria-label={t('settings.digital.passband.high.aria')}
                         onChange={(e) => {
                           if (e.target.value === '') return // mid-edit clear: keep the prior value
                           markDirty()
@@ -5365,16 +5388,12 @@ export function SettingsPanel({
                       />
                     </label>
                   </div>
-                  <span className="settings-hint">
-                    The decoder&apos;s search range. Default 200–2900 Hz. Raise F high toward 4000 Hz
-                    to decode stations calling above ~2.9 kHz (common on crowded FT8 bands); lower the
-                    range to focus on a narrow filter or dodge strong close-in QRM.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.passband.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">A-priori (AP) decoding — FT8</span>
+                    <span className="settings-label">{t('settings.digital.apDecode.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5385,17 +5404,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Retry marginal signals against hypotheses built from your call, the DX call and
-                    the QSO state (WSJT-X &quot;Enable AP&quot;, on by default) — including the
-                    cross-cycle replay of last cycle&apos;s QSOs. FT8 only: FT4&apos;s AP is part of
-                    its Normal/Deep depth and has no separate switch.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.apDecode.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">AP: CQ hypothesis only</span>
+                    <span className="settings-label">{t('settings.digital.apCqOnly.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5406,17 +5420,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Limit AP to the &quot;CQ&quot; guess — no MyCall/DxCall hypotheses (FT8 and
-                    FT4). WSJT-X switches to this by itself after 5 minutes without transmitting,
-                    as a guard against stale-context false decodes; here it is your explicit
-                    choice. Off = full AP, the stock behavior.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.apCqOnly.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Single decode</span>
+                    <span className="settings-label">{t('settings.digital.singleDecode.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5427,21 +5436,21 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Decode only within ±25 Hz of your green RX marker (the same one-station window
-                    WSJT-X uses for a double-click re-decode) instead of the whole passband —
-                    isolates one weak station and saves CPU. FT8 and FT4 only: 50 Hz is narrower
-                    than a single JT65, Q65 or MSK144 signal, so those modes keep the full
-                    passband. Applies while the RX marker sits inside the passband above; off =
-                    full passband, the stock behavior.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.singleDecode.hint')}</span>
                 </div>
 
                 <div className="settings-field">
-                  <span className="settings-label">DXpedition mode</span>
-                  <div className="theme-switcher" role="group" aria-label="DXpedition mode">
+                  <span className="settings-label">{t('settings.digital.dxpedition.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.digital.dxpedition.label')}
+                  >
                     {([
-                      { value: 'none' as const, label: 'Off' },
+                      { value: 'none' as const, label: t('settings.digital.dxpedition.off') },
+                      // ⚠️ "Hound" stays in the code: it is WSJT-X's own name for the calling
+                      // side of a DXpedition QSO, a role token exactly as Fox is, and it names
+                      // nothing once translated (i18n/index.ts, the invariant-token rule).
                       { value: 'hound' as const, label: 'Hound' },
                     ]).map((op) => (
                       <button
@@ -5458,20 +5467,25 @@ export function SettingsPanel({
                       </button>
                     ))}
                   </div>
-                  <span className="settings-hint">
-                    Off = normal FT8/FT4 operation. Hound = DXpedition pile-up discipline (calls
-                    above 1000 Hz; your report auto-moves to the Fox&apos;s frequency).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.dxpedition.hint')}</span>
                 </div>
               </div>
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Station Housekeeping</span>
+              <span className="settings-featgroup-title">
+                {t('settings.digital.housekeeping.title')}
+              </span>
               <div className="settings-grid">
+                {/* ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit control: it
+                    chooses whether the station announces itself, and it can neither key, unkey
+                    nor stop anything. Same reading as Tx Power's drive slider — nothing in this
+                    sub-group is on any cockpit's stop-line census. */}
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Journey — track a weekly streak</span>
+                    <span className="settings-label">
+                      {t('settings.digital.journeyStreak.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -5482,15 +5496,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Off by default. A gentle &ldquo;weeks on the air&rdquo; counter on the Journey
-                    board — never a daily streak, never a penalty for a break.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.journeyStreak.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Beacon — announce presence (CQ)</span>
+                    <span className="settings-label">{t('settings.digital.beacon.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5501,15 +5512,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Off = passive (hunt &amp; pounce): Nexus listens and only transmits when you act.
-                    On = periodically calls CQ to announce you&apos;re on frequency.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.beacon.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">IR-HARQ — combine retransmissions</span>
+                    <span className="settings-label">{t('settings.digital.harq.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5520,16 +5528,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    On (default) = a weak frame that fails is recovered by joint-combining its
-                    retransmissions (RV0+RV1+RV2), and unacknowledged QSO overs escalate redundancy.
-                    Off = RV0-only (each frame decoded on its own).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.harq.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Clock check (NTP)</span>
+                    <span className="settings-label">{t('settings.digital.clockCheck.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5540,16 +5544,14 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Periodically check your PC clock against an NTP server and show the offset in the
-                    top bar. TempoFast/TempoDeep are slot-timed to UTC — keep it within ~0.5 s (NTP / time.is;
-                    off-grid: GPS). Turn off for fully-offline operation (no network calls).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.clockCheck.hint')}</span>
                 </div>
 
+                {/* The placeholder below is a POWER in watts — a token, so it stays written
+                    here exactly as the example addresses and device names in Rig & CAT do. */}
                 <div className="settings-field">
                   <label className="settings-label" htmlFor="station-power">
-                    Station power (W)
+                    {t('settings.digital.stationPower.label')}
                   </label>
                   <input
                     id="station-power"
@@ -5575,15 +5577,12 @@ export function SettingsPanel({
                       )
                     }}
                   />
-                  <span className="settings-hint">
-                    Your transmit power in watts — unlocks the Journey miles-per-watt &amp; QRP feats.
-                    Leave blank if unknown.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.stationPower.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-label" htmlFor="units">
-                    Units
+                    {t('settings.digital.units.label')}
                   </label>
                   <select
                     id="units"
@@ -5591,14 +5590,11 @@ export function SettingsPanel({
                     value={form.units ?? 'auto'}
                     onChange={(e) => update('units', e.target.value)}
                   >
-                    <option value="auto">Automatic (from your system)</option>
-                    <option value="metric">Metric (km, °C)</option>
-                    <option value="imperial">Imperial (mi, °F)</option>
+                    <option value="auto">{t('settings.digital.units.auto')}</option>
+                    <option value="metric">{t('settings.digital.units.metric')}</option>
+                    <option value="imperial">{t('settings.digital.units.imperial')}</option>
                   </select>
-                  <span className="settings-hint">
-                    Distances, temperature and wind speed. Automatic follows your operating
-                    system's region. Applies everywhere in the app immediately.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.units.hint')}</span>
                 </div>
               </div>
             </div>
@@ -5608,65 +5604,51 @@ export function SettingsPanel({
           {/* ---- JT65: submode only. One fixed 60 s period, unlike the others. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-jt65">
-            <legend>JT65 &mdash; classic EME</legend>
+            <legend>{t('settings.jt65.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Submode (tone spacing)</span>
+                <span className="settings-label">{t('settings.jt65.submode.label')}</span>
+                {/* The <option> VALUE is the WSJT-X submode index the settings file stores;
+                    only the label is read, and the A/B/C in it is the submode's own name. */}
                 <select
                   className="settings-input"
                   value={String(form.jt65Submode ?? 0)}
                   onChange={(e) => updateNum('jt65Submode', Number(e.target.value))}
                 >
-                  <option value="0">A &mdash; HF standard, narrowest</option>
-                  <option value="1">B &mdash; 2x spacing</option>
-                  <option value="2">C &mdash; 4x spacing, most Doppler-tolerant</option>
+                  <option value="0">{t('settings.jt65.submode.a')}</option>
+                  <option value="1">{t('settings.jt65.submode.b')}</option>
+                  <option value="2">{t('settings.jt65.submode.c')}</option>
                 </select>
-                <span className="settings-hint">
-                  JT65 always uses a 60&nbsp;s T/R period, so spacing is the only choice. A is
-                  what you want on HF; EME operators move up to B or C as Doppler spread on the
-                  higher bands smears the tones. Both stations must use the same submode.
-                </span>
+                <span className="settings-hint">{t('settings.jt65.submode.hint')}</span>
               </label>
             </div>
-            <span className="settings-hint">
-              The classic weak-signal and moonbounce mode, decoded and transmitted. Messages are
-              the older 22-character format, not the 37-character one FT8 and friends use.
-            </span>
+            <span className="settings-hint">{t('settings.jt65.hint')}</span>
           </fieldset>
           )}
 
           {/* ---- MSK144: meteor scatter. Period is the whole setting. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-msk144">
-            <legend>MSK144 &mdash; meteor scatter</legend>
+            <legend>{t('settings.msk144.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">T/R period</span>
+                <span className="settings-label">{t('settings.msk144.period.label')}</span>
+                {/* "10 s" carries no prose at all — it is a period and its unit, so there is
+                    nothing in it to translate and it stays written here. */}
                 <select
                   className="settings-input"
                   value={String(form.msk144PeriodS ?? 15)}
                   onChange={(e) => updateNum('msk144PeriodS', Number(e.target.value))}
                 >
-                  <option value="5">5 s &mdash; fast turnaround, big showers</option>
+                  <option value="5">{t('settings.msk144.period.fast')}</option>
                   <option value="10">10 s</option>
-                  <option value="15">15 s &mdash; the 6 m standard</option>
-                  <option value="30">30 s &mdash; sparse pings, more to stack</option>
+                  <option value="15">{t('settings.msk144.period.standard')}</option>
+                  <option value="30">{t('settings.msk144.period.sparse')}</option>
                 </select>
-                <span className="settings-hint">
-                  MSK144 sends a 72&nbsp;ms message over and over, so a single meteor trail lasting
-                  a tenth of a second can carry the whole thing. Shorter periods turn the exchange
-                  around faster during a shower; longer ones give the decoder more frames to stack
-                  when pings are sparse. Both stations must use the same period.
-                </span>
+                <span className="settings-hint">{t('settings.msk144.period.hint')}</span>
               </label>
             </div>
-            <span className="settings-hint">
-              MSK144 transmits for nearly the whole period, sending the same 72 ms frame
-              hundreds of times &mdash; that is how meteor scatter works, and a contact can
-              take many minutes of apparent silence. The audio frequency is fixed at a
-              1500 Hz centre; the signal is 1 kHz wide, so there is nowhere to tune it.
-              Shorthand (MSK40) messages are off, matching WSJT-X&rsquo;s default.
-            </span>
+            <span className="settings-hint">{t('settings.msk144.hint')}</span>
           </fieldset>
           )}
 
@@ -5681,39 +5663,30 @@ export function SettingsPanel({
           const rrDegenerate = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) < 2
           return (
           <fieldset className="settings-section" id="settings-beacons-wspr-fst4w">
-            <legend>Beacons — WSPR &amp; FST4W</legend>
+            <legend>{t('settings.beacons.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Transmit %</span>
+                <span className="settings-label">{t('settings.beacons.txPercent.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
                   min={0}
                   max={100}
                   disabled={rrActive}
-                  title={rrActive ? 'Round Robin is scheduling — this percentage is not used. Set the slot to 0 to schedule by percentage.' : undefined}
+                  title={rrActive ? t('settings.beacons.txPercent.title') : undefined}
                   value={String(form.beaconTxPercent ?? 0)}
                   onChange={(e) => updateNum('beaconTxPercent', Number(e.target.value))}
                 />
                 <span className="settings-hint">
                   {rrActive ? (
-                    <>
-                      <strong>Ignored while Round Robin is active</strong> &mdash; the
-                      rotation decides which intervals transmit. Set the slot to 0 to
-                      schedule by percentage again.
-                    </>
+                    <T k="settings.beacons.txPercent.hint.roundRobin" tags={{ b: <strong /> }} />
                   ) : (
-                    <>
-                      Fraction of intervals to transmit on. 0 = listen only. A beacon that
-                      transmits every interval hears nothing, so a minority is the convention
-                      &mdash; 20&ndash;30% is typical. Below 40% Nexus also avoids
-                      back-to-back transmissions while still hitting the rate you asked for.
-                    </>
+                    t('settings.beacons.txPercent.hint')
                   )}
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Transmit power (dBm)</span>
+                <span className="settings-label">{t('settings.beacons.power.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -5723,15 +5696,11 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('beaconPowerDbm', Number(e.target.value))}
                 />
                 <span className="settings-hint">
-                  <strong>Required, and it has to be real.</strong> WSPR reports are
-                  published to a public propagation database that other operators draw
-                  conclusions from, so a wrong figure corrupts their data as well as
-                  yours. The beacon stays silent until this is set. 23 = 200 mW,
-                  30 = 1 W, 37 = 5 W, 43 = 20 W.
+                  <T k="settings.beacons.power.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">FST4W Round Robin slot</span>
+                <span className="settings-label">{t('settings.beacons.rrSlot.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -5740,15 +5709,10 @@ export function SettingsPanel({
                   value={String(form.beaconRrSlot ?? 0)}
                   onChange={(e) => updateNum('beaconRrSlot', Number(e.target.value))}
                 />
-                <span className="settings-hint">
-                  0 = use the transmit-% schedule. Otherwise your slot in a coordinated
-                  rotation: stations agreeing on the same slot count and each taking a
-                  different slot never transmit at the same time, because the assignment
-                  is fixed by UTC. A rotation needs at least 2 slots.
-                </span>
+                <span className="settings-hint">{t('settings.beacons.rrSlot.hint')}</span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Round Robin slots</span>
+                <span className="settings-label">{t('settings.beacons.rrSlots.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -5759,23 +5723,14 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">
                   {rrDegenerate ? (
-                    <>
-                      <strong>A one-station rotation is no rotation</strong> &mdash; Round
-                      Robin needs at least 2 slots, so it is off and the transmit-%
-                      schedule applies.
-                    </>
+                    <T k="settings.beacons.rrSlots.hint.degenerate" tags={{ b: <strong /> }} />
                   ) : (
-                    <>How many stations are in the rotation. Ignored when the slot is 0.</>
+                    t('settings.beacons.rrSlots.hint')
                   )}
                 </span>
               </label>
             </div>
-            <span className="settings-hint">
-              Beacons transmit your callsign, grid and power &mdash; there is no QSO
-              sequence, so Call CQ and S&amp;P are inactive on these tiers. Transmit
-              still has to be armed as usual; the schedule never keys a radio whose
-              transmit you have not enabled.
-            </span>
+            <span className="settings-hint">{t('settings.beacons.hint')}</span>
           </fieldset>
           )
           })()}
@@ -5784,10 +5739,12 @@ export function SettingsPanel({
                slot clock; the tier picks QSO vs beacon. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-fst4">
-            <legend>FST4 (QSO) / FST4W (beacon)</legend>
+            <legend>{t('settings.fst4.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">T/R period</span>
+                <span className="settings-label">{t('settings.fst4.period.label')}</span>
+                {/* The five rows with no prose beside them are a period and its unit — nothing
+                    in them to translate, so they stay written here. */}
                 <select
                   className="settings-input"
                   value={String(form.fst4PeriodS ?? 120)}
@@ -5796,24 +5753,16 @@ export function SettingsPanel({
                   <option value="15">15 s</option>
                   <option value="30">30 s</option>
                   <option value="60">60 s</option>
-                  <option value="120">120 s — shortest FST4W beacon interval</option>
+                  <option value="120">{t('settings.fst4.period.shortestBeacon')}</option>
                   <option value="300">300 s</option>
                   <option value="900">900 s</option>
-                  <option value="1800">1800 s — deepest</option>
+                  <option value="1800">{t('settings.fst4.period.deepest')}</option>
                 </select>
-                <span className="settings-hint">
-                  Shared by both tiers. Longer periods hear weaker signals at fewer exchanges per
-                  hour. FST4W beacons run at 120/300/900/1800 s; FST4 QSO work is usually
-                  15&ndash;60 s. Both stations (or the beacon you are listening for) must be on the
-                  same period.
-                </span>
+                <span className="settings-hint">{t('settings.fst4.period.hint')}</span>
               </label>
             </div>
             <span className="settings-hint">
-              <strong>FST4</strong> is the QSO mode; <strong>FST4W</strong> is the WSPR-like beacon
-              mode &mdash; pick which one on the tier selector. Nexus decodes both and transmits
-              neither. Note that FST4W hashed callsigns show as <code>&lt;...&gt;</code>: the
-              lookup table upstream fills from a file this build does not carry.
+              <T k="settings.fst4.hint" tags={{ b: <strong />, code: <code /> }} />
             </span>
           </fieldset>
           )}
@@ -5822,62 +5771,54 @@ export function SettingsPanel({
                decode frame length, so they belong with the mode, not the radio. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-q65">
-            <legend>Q65 &mdash; EME / VHF+ scatter</legend>
+            <legend>{t('settings.q65.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">T/R period</span>
+                <span className="settings-label">{t('settings.q65.period.label')}</span>
                 <select
                   className="settings-input"
                   value={String(form.q65PeriodS ?? 60)}
                   onChange={(e) => updateNum('q65PeriodS', Number(e.target.value))}
                 >
-                  <option value="15">15 s — troposcatter</option>
-                  <option value="30">30 s — 6 m meteor / ionoscatter</option>
-                  <option value="60">60 s — EME (most common)</option>
-                  <option value="120">120 s — deep EME</option>
-                  <option value="300">300 s — deepest, microwave EME</option>
+                  <option value="15">{t('settings.q65.period.tropo')}</option>
+                  <option value="30">{t('settings.q65.period.meteor')}</option>
+                  <option value="60">{t('settings.q65.period.eme')}</option>
+                  <option value="120">{t('settings.q65.period.deepEme')}</option>
+                  <option value="300">{t('settings.q65.period.microwaveEme')}</option>
                 </select>
                 <span className="settings-hint">
-                  Longer periods integrate longer and hear weaker signals, at one exchange per
-                  period. Both stations must use the <strong>same</strong> period. Changing this
-                  changes the decode frame length, so it takes effect on the next slot.
+                  <T k="settings.q65.period.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Submode (tone spacing)</span>
+                <span className="settings-label">{t('settings.q65.submode.label')}</span>
+                {/* The <option> VALUE is the submode index the settings file stores; only the
+                    label is read, and the A…E in it is the submode's own name. */}
                 <select
                   className="settings-input"
                   value={String(form.q65Submode ?? 0)}
                   onChange={(e) => updateNum('q65Submode', Number(e.target.value))}
                 >
-                  <option value="0">A — narrowest, most sensitive</option>
-                  <option value="1">B — 2x spacing</option>
-                  <option value="2">C — 4x spacing</option>
-                  <option value="3">D — 8x spacing</option>
-                  <option value="4">E — 16x spacing, most Doppler-tolerant</option>
+                  <option value="0">{t('settings.q65.submode.a')}</option>
+                  <option value="1">{t('settings.q65.submode.b')}</option>
+                  <option value="2">{t('settings.q65.submode.c')}</option>
+                  <option value="3">{t('settings.q65.submode.d')}</option>
+                  <option value="4">{t('settings.q65.submode.e')}</option>
                 </select>
-                <span className="settings-hint">
-                  Wider spacing survives more Doppler spread and frequency drift but costs
-                  sensitivity. Move up the letters as the path degrades — EME on the higher bands
-                  usually needs B or C.
-                </span>
+                <span className="settings-hint">{t('settings.q65.submode.hint')}</span>
               </label>
             </div>
-            <span className="settings-hint">
-              Q65 transmits and receives. The period and submode set both what you hear and
-              what you send, and BOTH STATIONS MUST MATCH &mdash; a correspondent on a
-              different period or submode will not decode you.
-            </span>
+            <span className="settings-hint">{t('settings.q65.hint')}</span>
           </fieldset>
           )}
 
           {/* ---- Digital quick-reply macros (moved out of the old Alerts/Macros orphan) ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-quick-reply-macros">
-            <legend>Quick-reply macros</legend>
+            <legend>{t('settings.quickReply.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Chat</span>
+                <span className="settings-label">{t('settings.quickReply.chat.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
@@ -5886,10 +5827,10 @@ export function SettingsPanel({
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">Comma-separated chips for Chat.</span>
+                <span className="settings-hint">{t('settings.quickReply.chat.hint')}</span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">QSO</span>
+                <span className="settings-label">{MACRO_SET_QSO}</span>
                 <input
                   className="settings-input"
                   type="text"
@@ -5898,10 +5839,10 @@ export function SettingsPanel({
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">Chips for sequenced QSOs.</span>
+                <span className="settings-hint">{t('settings.quickReply.qso.hint')}</span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Band / CQ</span>
+                <span className="settings-label">{t('settings.quickReply.band.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
@@ -5910,7 +5851,7 @@ export function SettingsPanel({
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">Open broadcasts — the Call CQ launchpad + band feed.</span>
+                <span className="settings-hint">{t('settings.quickReply.band.hint')}</span>
               </label>
             </div>
           </fieldset>
