@@ -67,7 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callsigns, grid squares, band and mode names, Q-codes, RST, POTA/SOTA references and ADIF
   field names read the same in every language. In particular a frequency never picks up a German
   decimal comma — 14.074 is 14.074, and a test fails the build if a comma ever appears in a
-  translated number. Roughly 2,900 phrases are covered; the cockpits' last few screens land next.
+  translated number. Every screen is covered — about 4,600 phrases — except the transmit
+  controls themselves (Stop TX, Tune, the TX arm switch, ATU and the TX/RX indicator), which
+  stay in English until they can be changed as their own reviewed step. Those are the controls
+  that stop a transmission, and they are not something to get wrong in a language nobody here
+  reads.
 
 ### Fixed
 
