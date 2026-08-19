@@ -43,6 +43,7 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast } from './toast'
+import { t } from './i18n'
 import { setUnitsMirror } from './units'
 import { doubleBeep, processDecodes, txEarcon } from './alerts'
 import { openingToastSpec } from './openingAlert'
@@ -160,6 +161,14 @@ import { GettingStartedGuide } from './components/GettingStartedGuide'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { maybeCheckForUpdate } from './features/updateCheck'
+
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
+// renders no cockpit control of its own, so what moved is its OWN prose — the loading line,
+// the two rail resizers, the status lane, the crash escape, and the toasts its handlers
+// raise. Every callsign, band, mode, dial reading, tier and source label those toasts carry
+// is DATA, interpolated invariantly and never translated (`i18n/index.ts`). The DEFAULT_MACROS
+// below are transmitted text — Q-codes and on-air phrases — so they stay in the code, and the
+// section names come from the feature registry, which owns those words.
 
 const ONBOARD_KEY = 'tempo-onboarded'
 // First-run setup wizard: shown once on a fresh install, re-openable from Settings.
@@ -471,7 +480,7 @@ export default function App() {
     }
     // Switching mode lands on that mode's cockpit (FT8/FT4 → Operate, Tempo → Chat).
     setView(w === 'dx' ? 'operate' : 'chat')
-    void withErrorToast(() => apiSetArea(w), 'Could not switch mode').then((s) => {
+    void withErrorToast(() => apiSetArea(w), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -480,7 +489,7 @@ export default function App() {
   useEffect(() => {
     const err = snap?.radio.audioError
     if (err) {
-      setStatus('audio', { tier: 'critical', message: 'RADIO STOPPED', detail: err })
+      setStatus('audio', { tier: 'critical', message: t('shell.lane.audio.message'), detail: err })
     } else {
       setStatus('audio', null)
     }
@@ -492,7 +501,7 @@ export default function App() {
     const warn = snap?.radio.radioConfigWarning
     setStatus(
       'radioConfig',
-      warn ? { tier: 'warning', message: 'RADIO CONFIG', detail: warn } : null,
+      warn ? { tier: 'warning', message: t('shell.lane.radioConfig.message'), detail: warn } : null,
     )
   }, [snap?.radio.radioConfigWarning])
 
@@ -503,7 +512,7 @@ export default function App() {
     const warn = snap?.radio.recordingWarning
     setStatus(
       'recording',
-      warn ? { tier: 'warning', message: 'RECORDING', detail: warn } : null,
+      warn ? { tier: 'warning', message: t('shell.lane.recording.message'), detail: warn } : null,
     )
   }, [snap?.radio.recordingWarning])
 
@@ -610,16 +619,15 @@ export default function App() {
           if (p.source === 'offline') {
             setStatus('prop', {
               tier: 'warning',
-              message: 'Prop: no live data',
-              detail:
-                'No live propagation data yet — set your callsign in Settings and check your internet connection.',
+              message: t('shell.lane.prop.offline.message'),
+              detail: t('shell.lane.prop.offline.detail'),
             })
           } else if (p.source === 'cached') {
             const ageMin = Math.max(0, Math.round((Date.now() / 1000 - p.asOf) / 60))
             setStatus('prop', {
               tier: 'warning',
-              message: `Prop: cached ${ageMin}m`,
-              detail: 'Live propagation refetch failed — showing the last-good snapshot.',
+              message: t('shell.lane.prop.cached.message', { minutes: ageMin }),
+              detail: t('shell.lane.prop.cached.detail'),
             })
           } else {
             setStatus('prop', null)
@@ -1007,7 +1015,7 @@ export default function App() {
   }, [snap, activePeer, typingTick])
 
   const handleSelect = useCallback((call: string) => {
-    void withErrorToast(() => apiSelectPeer(call), 'Could not select station').then(
+    void withErrorToast(() => apiSelectPeer(call), t('shell.error.selectStation')).then(
       (s) => s && setSnap(s),
     )
   }, [])
@@ -1019,16 +1027,16 @@ export default function App() {
   const handleArchive = useCallback(async (peer: string) => {
     if (
       !(await confirmDialog({
-        title: `Delete the conversation with ${peer}?`,
-        body: "Any messages still waiting to send will be cancelled. This can't be undone.",
-        confirmLabel: 'Delete conversation',
+        title: t('shell.conversation.delete.title', { peer }),
+        body: t('shell.conversation.delete.body'),
+        confirmLabel: t('shell.conversation.delete.action'),
         danger: true,
       }))
     )
       return
     void withErrorToast(
       () => apiArchiveConversation(peer),
-      'Could not delete conversation',
+      t('shell.conversation.delete.failed'),
     ).then((s) => s && setSnap(s))
   }, [])
 
@@ -1036,7 +1044,7 @@ export default function App() {
   // dot selects (or, if already selected, clears) that station — and the roster
   // highlights it too, since StationList already keys its highlight off activePeer.
   const handleMapSelect = useCallback((call: string | null) => {
-    void withErrorToast(() => apiSelectPeer(call), 'Could not select station').then(
+    void withErrorToast(() => apiSelectPeer(call), t('shell.error.selectStation')).then(
       (s) => s && setSnap(s),
     )
   }, [])
@@ -1056,7 +1064,7 @@ export default function App() {
       if (a.freqMhz) {
         workSpot(kind as 'digital' | 'phone' | 'cw', a.freqMhz, a.band, a.call)
           .then((snap) => setSnap(snap))
-          .catch(() => pushToast(`Could not QSY to ${a.call}`, 'error'))
+          .catch(() => pushToast(t('shell.pounce.qsy.failed', { call: a.call }), 'error'))
       }
       dismissPounce()
     },
@@ -1070,7 +1078,7 @@ export default function App() {
       // we'd flash a FALSE "Working KD9TAW" success toast.
       const me = mycallRef.current.trim().toUpperCase()
       if (me && call.trim().toUpperCase().split('/')[0] === me.split('/')[0]) {
-        pushToast(`${call} is your own call`, 'info', 2500)
+        pushToast(t('shell.ownCall', { call }), 'info', 2500)
         return
       }
       // Route by the CONTACT's protocol, not the current view: a Tempo/TempoFast contact stays in
@@ -1081,15 +1089,15 @@ export default function App() {
       // current FT8/digital behaviour below — the "tier: None = keep" convention.)
       if (tier === 'TempoFast' || tier === 'TempoDeep') {
         handleWorkspace('msg')
-        void withErrorToast(() => apiSelectPeer(call), `Could not open ${call}`).then((s) => {
+        void withErrorToast(() => apiSelectPeer(call), t('shell.tempo.open.failed', { call })).then((s) => {
           if (s) setSnap(s)
         })
-        pushToast(`▶ ${call} — open in Tempo`, 'success', 3000)
+        pushToast(t('shell.tempo.opened', { call }), 'success', 3000)
         return
       }
       void withErrorToast(
         () => apiCallStation(call, grid, message, snr, freq),
-        `Could not work ${call}`,
+        t('shell.work.failed', { call }),
       ).then((s) => {
         if (s) {
           setSnap(s)
@@ -1098,7 +1106,7 @@ export default function App() {
           // (Never bounce to the chat-style 'qso' view and lose the band.)
           setView('operate')
           // Immediate confirmation the action took (and TX is now armed for it).
-          pushToast(`▶ Working ${call} — transmitting your call`, 'success', 4000)
+          pushToast(t('shell.work.started', { call }), 'success', 4000)
         }
       })
     },
@@ -1155,7 +1163,7 @@ export default function App() {
 
   const handleConfirmLog = useCallback(
     (record: LoggedQso) => {
-      void withErrorToast(() => apiConfirmPendingLog(record), 'Could not log QSO').then((s) => {
+      void withErrorToast(() => apiConfirmPendingLog(record), t('shell.log.failed')).then((s) => {
         if (s) {
           setSnap(s)
           noteLoggedForDxClear()
@@ -1169,7 +1177,7 @@ export default function App() {
   )
 
   const handleDiscardLog = useCallback(() => {
-    void withErrorToast(() => apiDiscardPendingLog(), 'Could not discard QSO').then((s) => {
+    void withErrorToast(() => apiDiscardPendingLog(), t('shell.log.discard.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -1179,7 +1187,7 @@ export default function App() {
       if (!activePeer) return
       void withErrorToast(
         () => apiSendMessage(activePeer, text),
-        'Message could not be sent',
+        t('shell.message.failed'),
       ).then((s) => s && setSnap(s)) // instant echo — no 300 ms poll wait
     },
     [activePeer],
@@ -1195,7 +1203,7 @@ export default function App() {
     // so a select failure can't throw an unhandled rejection.
     if (!s) return
     setSnap(s)
-    void withErrorToast(() => apiSelectPeer('*'), 'Could not open the band feed').then(
+    void withErrorToast(() => apiSelectPeer('*'), t('shell.bandFeed.failed')).then(
       (s2) => s2 && setSnap(s2),
     )
   }, [])
@@ -1205,11 +1213,11 @@ export default function App() {
   const handleResend = useCallback((m: import('./types').ChatMessage) => {
     const peer = m.to
     if (!peer) return
-    void withErrorToast(() => resendChat(peer, m.ackId ?? null), `Could not re-send to ${peer}`).then(
+    void withErrorToast(() => resendChat(peer, m.ackId ?? null), t('shell.resend.failed', { peer })).then(
       (s) => {
         if (s) {
           setSnap(s)
-          pushToast(`↻ Re-sending to ${peer}`, 'success', 3000)
+          pushToast(t('shell.resend.sending', { peer }), 'success', 3000)
         }
       },
     )
@@ -1217,7 +1225,7 @@ export default function App() {
 
   const handleBroadcast = useCallback(
     (text: string) => {
-      void withErrorToast(() => apiBroadcast(text), 'Could not broadcast').then(surfaceBandFeed)
+      void withErrorToast(() => apiBroadcast(text), t('shell.broadcast.failed')).then(surfaceBandFeed)
     },
     [surfaceBandFeed],
   )
@@ -1229,27 +1237,27 @@ export default function App() {
     // The launchpad button now STARTS the CQ run (keep calling until answered) and no
     // longer force-navigates away — the run state lives in the Tempo header, so the
     // affordance never vanishes after one press (the audited CQ dead-end).
-    void withErrorToast(() => apiSetChatCq(true), 'Could not call CQ').then((s) => {
+    void withErrorToast(() => apiSetChatCq(true), t('shell.cq.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleToggleCqRun = useCallback(() => {
     const next = (snap?.chatCq ?? 'off') === 'off'
-    void withErrorToast(() => apiSetChatCq(next), 'Could not toggle the CQ run').then((s) => {
+    void withErrorToast(() => apiSetChatCq(next), t('shell.cqRun.toggle.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [snap?.chatCq])
 
   const handleResumeCqRun = useCallback(() => {
-    void withErrorToast(() => apiResumeChatCq(), 'Could not resume the CQ run').then((s) => {
+    void withErrorToast(() => apiResumeChatCq(), t('shell.cqRun.resume.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleToggleBeacon = useCallback(() => {
     const next = !(snap?.radio.beacon ?? false)
-    void withErrorToast(() => apiSetBeacon(next), 'Could not toggle the heartbeat').then((s) => {
+    void withErrorToast(() => apiSetBeacon(next), t('shell.beacon.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [snap?.radio.beacon])
@@ -1258,7 +1266,7 @@ export default function App() {
     (dialMhz: number, band: string, mode: string) => {
       void withErrorToast(
         () => apiSetFrequency(dialMhz, band, mode),
-        'Could not set frequency',
+        t('shell.frequency.failed'),
       ).then((s) => {
         if (s) setSnap(s)
       })
@@ -1279,7 +1287,7 @@ export default function App() {
       if (!k) return
       const cur = settingsRef.current?.blockedCalls ?? []
       const next = cur.includes(k) ? cur.filter((c) => c !== k) : [...cur, k]
-      void withErrorToast(() => apiSetBlockedCalls(next), 'Could not update the blocklist').then(
+      void withErrorToast(() => apiSetBlockedCalls(next), t('shell.blocklist.failed')).then(
         (s2) => {
           if (s2) setSnap(s2)
           setSettings((prev) => (prev ? { ...prev, blockedCalls: next } : prev))
@@ -1293,7 +1301,7 @@ export default function App() {
     (dialMhz: number, band: string, mode: string) => {
       void withErrorToast(
         () => apiSstvTune(dialMhz, band, mode),
-        'Could not set frequency',
+        t('shell.frequency.failed'),
       ).then((s) => {
         if (s) setSnap(s)
       })
@@ -1307,7 +1315,7 @@ export default function App() {
   const handleTuneChannel = useCallback((dialMhz: number, band: string, mode: string) => {
     void withErrorToast(
       () => apiTuneChannel(dialMhz, band, mode),
-      'Could not set frequency',
+      t('shell.frequency.failed'),
     ).then((s) => {
       if (s) setSnap(s)
     })
@@ -1318,7 +1326,7 @@ export default function App() {
   // must be put in FM explicitly — otherwise it keeps the prior section's DATA/USB mode and the
   // 2 m packet never demodulates. Clearing the mode override is handled backend-side on the next QSY.
   const handleAprsTune = useCallback((dialMhz: number) => {
-    void withErrorToast(() => aprsTune(dialMhz), 'Could not tune to APRS').then((s) => {
+    void withErrorToast(() => aprsTune(dialMhz), t('shell.aprs.tune.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -1326,20 +1334,20 @@ export default function App() {
   const handleSetTxEnabled = useCallback((enabled: boolean) => {
     void withErrorToast(
       () => apiSetTxEnabled(enabled),
-      enabled ? 'Could not enable transmit' : 'Could not mute transmit',
+      enabled ? t('shell.tx.enable.failed') : t('shell.tx.mute.failed'),
     ).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleSetTxLevel = useCallback((level: number) => {
-    void withErrorToast(() => apiSetTxLevel(level), 'Could not set TX level').then((s) => {
+    void withErrorToast(() => apiSetTxLevel(level), t('shell.tx.level.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleSetTune = useCallback((on: boolean) => {
-    void withErrorToast(() => apiSetTune(on), 'Could not toggle tune').then((s) => {
+    void withErrorToast(() => apiSetTune(on), t('shell.tune.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -1348,7 +1356,7 @@ export default function App() {
   // operator verify CAT→PTT→RF (forward power registers). Always invoked from behind a confirm
   // dialog (operator's TX-approval condition); the TX watchdog backs up the auto-unkey.
   const handleProveTx = useCallback(() => {
-    void withErrorToast(() => apiSetTune(true), 'Could not key the transmitter').then((s) => {
+    void withErrorToast(() => apiSetTune(true), t('shell.proveTx.failed')).then((s) => {
       if (s) setSnap(s)
       window.setTimeout(() => {
         void apiSetTune(false)
@@ -1359,7 +1367,7 @@ export default function App() {
   }, [])
 
   const handleHaltTx = useCallback(() => {
-    void withErrorToast(() => apiHaltTx(), 'Could not stop transmit').then((s) => {
+    void withErrorToast(() => apiHaltTx(), t('shell.halt.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -1367,13 +1375,13 @@ export default function App() {
   // Dual-radio: switch the active radio (rig loop swaps rigs, carrier dropped first) and toggle
   // peg-lock. The returned snapshot echoes the new active radio + tune instantly.
   const handleSetActiveRadio = useCallback((id: number) => {
-    void withErrorToast(() => apiSetActiveRadio(id), 'Could not switch radios').then((s) => {
+    void withErrorToast(() => apiSetActiveRadio(id), t('shell.radio.switch.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleSetPegLock = useCallback((on: boolean) => {
-    void withErrorToast(() => apiSetPegLock(on), 'Could not set peg-lock').then((s) => {
+    void withErrorToast(() => apiSetPegLock(on), t('shell.pegLock.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -1386,25 +1394,25 @@ export default function App() {
     // but returns a normal snapshot, which read as silent success here.
     const me = mycallRef.current.trim().toUpperCase()
     if (me && call.trim().toUpperCase().split('/')[0] === me.split('/')[0]) {
-      pushToast(`${call} is your own call`, 'info', 2500)
+      pushToast(t('shell.ownCall', { call }), 'info', 2500)
       return
     }
     void withErrorToast(
       () => apiOverrideNextTx(call, grid, text),
-      `Could not queue TX to ${call}`,
+      t('shell.overrideTx.failed', { call }),
     ).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleSetTxEven = useCallback((even: boolean) => {
-    void withErrorToast(() => apiSetTxEven(even), 'Could not set transmit period').then((s) => {
+    void withErrorToast(() => apiSetTxEven(even), t('shell.txPeriod.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleSetTxCycleAuto = useCallback((auto: boolean) => {
-    void withErrorToast(() => apiSetTxCycleAuto(auto), 'Could not set the cycle mode').then(
+    void withErrorToast(() => apiSetTxCycleAuto(auto), t('shell.cycleMode.failed')).then(
       (s) => {
         if (s) setSnap(s)
       },
@@ -1412,7 +1420,7 @@ export default function App() {
   }, [])
 
   const handleSetHoldTxFreq = useCallback((on: boolean) => {
-    void withErrorToast(() => apiSetHoldTxFreq(on), 'Could not toggle Hold Tx').then((s) => {
+    void withErrorToast(() => apiSetHoldTxFreq(on), t('shell.holdTx.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -1427,7 +1435,7 @@ export default function App() {
         : target === 'tx'
           ? () => apiSetTxOffset(hz)
           : () => apiSetTxOffset(hz).then(() => apiSetRxOffset(hz))
-    void withErrorToast(call, 'Could not set offset').then((s) => {
+    void withErrorToast(call, t('shell.offset.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -1440,17 +1448,17 @@ export default function App() {
     (band: string, freqMhz?: number) => {
       const ch = bandPlan.find((c) => c.band === band)
       if (!ch) {
-        pushToast(`No channel for ${band} in the band plan`, 'error', 3000)
+        pushToast(t('shell.qsy.noChannel', { band }), 'error', 3000)
         return
       }
       const dial = freqMhz ?? ch.dialMhz
       void withErrorToast(
         () => apiSetFrequency(dial, ch.band, ch.mode),
-        `Could not QSY to ${band}`,
+        t('shell.qsy.failed', { band }),
       ).then((s) => {
         if (s) {
           setSnap(s)
-          pushToast(`QSY ${dial.toFixed(3)} MHz — listening`, 'success', 2500)
+          pushToast(t('shell.qsy.done', { dial: dial.toFixed(3) }), 'success', 2500)
         }
       })
     },
@@ -1474,7 +1482,7 @@ export default function App() {
       // heavyweight settings write for a hidden feature. Guide them to enable it instead.
       if ((target === 'cw' && !cwEnabled) || (target === 'phone' && !phoneEnabled)) {
         pushToast(
-          `Enable the ${target === 'cw' ? 'CW' : 'Phone'} section in Settings to recall this memory`,
+          t('shell.recall.sectionOff', { section: target === 'cw' ? 'CW' : 'Phone' }),
           'info',
           4000,
         )
@@ -1503,7 +1511,7 @@ export default function App() {
           // asserted, gated path excluded above.
           const s2 = await workSpot(opMode, plan.freqMhz, band)
           if (!s2) {
-            pushToast('Recall failed — check CAT', 'error', 3000)
+            pushToast(t('shell.recall.failed'), 'error', 3000)
             return
           }
           setSnap(s2)
@@ -1526,13 +1534,21 @@ export default function App() {
             target === 'phone' && mode !== 'USB' && mode !== 'LSB' && mode !== 'FM'
           pushToast(
             phoneUncommandable
-              ? `${m.name} — ${plan.freqMhz.toFixed(3)} MHz · set ${plan.mode} on the rig`
-              : `${m.name} — ${plan.freqMhz.toFixed(3)} MHz ${plan.mode}`,
+              ? t('shell.recall.done.setMode', {
+                  name: m.name,
+                  freq: plan.freqMhz.toFixed(3),
+                  mode: plan.mode,
+                })
+              : t('shell.recall.done', {
+                  name: m.name,
+                  freq: plan.freqMhz.toFixed(3),
+                  mode: plan.mode,
+                }),
             'success',
             2500,
           )
         } catch (e) {
-          pushToast(`Recall failed: ${e instanceof Error ? e.message : e}`, 'error', 4000)
+          pushToast(t('shell.recall.error', { error: `${e instanceof Error ? e.message : e}` }), 'error', 4000)
         }
       })()
     },
@@ -1577,10 +1593,15 @@ export default function App() {
         if (fired.has(key)) continue
         fired.add(key)
         pushToast(
-          `Net ${untilPhrase(r.startMs, now)}: ${r.memory.name} — ${r.memory.rxMhz.toFixed(3)} ${r.memory.mode}`,
+          t('shell.net.reminder', {
+            until: untilPhrase(r.startMs, now),
+            name: r.memory.name,
+            freq: r.memory.rxMhz.toFixed(3),
+            mode: r.memory.mode,
+          }),
           'info',
           300_000,
-          { prominent: true, action: () => recallMemory(r.memory), actionLabel: 'Tune' },
+          { prominent: true, action: () => recallMemory(r.memory), actionLabel: t('shell.net.tune') },
         )
       }
     }
@@ -1598,38 +1619,39 @@ export default function App() {
   const handlePointAntenna = useCallback(async (call: string) => {
     try {
       const bearing = await pointRotatorAtCall(call)
-      pushToast(`↗ Pointing antenna to ${Math.round(bearing)}° (${call})`, 'success', 3000)
+      pushToast(t('shell.rotator.pointed', { bearing: Math.round(bearing), call }), 'success', 3000)
     } catch (e) {
-      pushToast(typeof e === 'string' ? e : `Couldn't point the antenna at ${call}`, 'error', 4000)
+      pushToast(typeof e === 'string' ? e : t('shell.rotator.failed', { call }), 'error', 4000)
     }
   }, [])
 
   // resolvable frequency at all falls back to a plain band QSY.
   const handleWorkNeeded = useCallback(
     (alert: NeedAlert) => {
-      const t = workTarget(alert, bandPlan)
-      if (!t) {
+      // `target`, not `t` — `t` is the translator in this file.
+      const target = workTarget(alert, bandPlan)
+      if (!target) {
         handleQsy(alert.band)
         return
       }
       // The Needed board now lists ALL modes (W1), but the CW/Phone cockpits are opt-in
       // features. If the target cockpit is disabled, don't navigate into a hidden view
       // (that dumped the operator on the landing page) — just QSY the rig to the spot.
-      if ((t.view === 'cw' && !cwEnabled) || (t.view === 'phone' && !phoneEnabled)) {
+      if ((target.view === 'cw' && !cwEnabled) || (target.view === 'phone' && !phoneEnabled)) {
         handleQsy(alert.band)
         return
       }
       // RTTY is a Digital submode with an opt-in cockpit. When it's disabled, don't strand
       // the operator on a hidden view — QSY to the spot's EXACT frequency (RTTY spots always
       // carry one) so they can still work it from wherever they are.
-      if (t.view === 'rtty' && !rttyEnabled) {
-        handleQsy(alert.band, t.freqMhz)
+      if (target.view === 'rtty' && !rttyEnabled) {
+        handleQsy(alert.band, target.freqMhz)
         return
       }
       // 'operate' is the digital cockpit, so its operating mode is 'digital'. RTTY passes
       // through as 'rtty' — the backend + [view] rig-mode effect apply the RTTY policy.
       const opMode: 'digital' | 'phone' | 'cw' | 'rtty' =
-        t.view === 'operate' ? 'digital' : t.view
+        target.view === 'operate' ? 'digital' : target.view
       void (async () => {
         // A digital spot carries its protocol in alert.mode — the FT8/FT4 tier rides the
         // SAME atomic workSpot call, else clicking an FT4 spot QSYs but leaves the decoder
@@ -1645,8 +1667,8 @@ export default function App() {
           if ((m === 'FT4' || m === 'FT8') && tierRef.current !== m) tier = m
         }
         const s = await withErrorToast(
-          () => workSpot(opMode, t.freqMhz, t.band, t.call, tier),
-          `Could not work ${t.call} — check CAT`,
+          () => workSpot(opMode, target.freqMhz, target.band, target.call, tier),
+          t('shell.work.failed.cat', { call: target.call }),
         )
         // On failure DON'T navigate or poison the guard ref — the backend made no change
         // (atomic), so the view-effect can still apply the mode on a later nav.
@@ -1656,11 +1678,15 @@ export default function App() {
         lastOpModeRef.current = opMode
         // CW/Phone log forms consume a prefill; the digital + RTTY cockpits don't (digital
         // auto-sequences on a decode double-click, RTTY has its own net picker) — just the QSY.
-        if (t.view === 'cw' || t.view === 'phone') {
-          setPendingWork({ call: t.call, view: t.view, ts: Date.now() })
+        if (target.view === 'cw' || target.view === 'phone') {
+          setPendingWork({ call: target.call, view: target.view, ts: Date.now() })
         }
-        setView(t.view)
-        pushToast(`▶ ${t.call} — ${alert.mode} ${t.band}, ready to log`, 'success', 4000)
+        setView(target.view)
+        pushToast(
+          t('shell.work.ready', { call: target.call, mode: alert.mode, band: target.band }),
+          'success',
+          4000,
+        )
       })()
     },
     [bandPlan, handleQsy, cwEnabled, phoneEnabled, rttyEnabled],
@@ -1745,11 +1771,15 @@ export default function App() {
       const kind = cockpit
       void withErrorToast(
         () => workSpot(kind as 'digital' | 'phone' | 'cw', s.freqMhz, s.band, s.call),
-        `Could not work ${s.call} — check CAT`,
+        t('shell.work.failed.cat', { call: s.call }),
       ).then((snap) => {
         if (!snap) return
         setSnap(snap)
-        pushToast(`▶ ${s.call} — ${s.band} ${s.freqMhz.toFixed(3)} MHz`, 'success', 3000)
+        pushToast(
+          t('shell.work.here', { call: s.call, band: s.band, freq: s.freqMhz.toFixed(3) }),
+          'success',
+          3000,
+        )
       })
     },
     [],
@@ -1786,38 +1816,38 @@ export default function App() {
   }, [])
 
   const handleSetMode = useCallback((mode: ModeRequest) => {
-    void withErrorToast(() => apiSetMode(mode), 'Could not switch mode').then((s) => {
+    void withErrorToast(() => apiSetMode(mode), t('shell.error.switchMode')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleQsoResend = useCallback(() => {
-    void withErrorToast(() => apiQsoResend(), 'Could not resend').then((s) => {
+    void withErrorToast(() => apiQsoResend(), t('shell.resend.qso.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleQsoFreetext = useCallback((text: string) => {
-    void withErrorToast(() => apiQsoFreetext(text), 'Could not send free text').then((s) => {
+    void withErrorToast(() => apiQsoFreetext(text), t('shell.freetext.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
 
   const handleLogCurrent = useCallback(() => {
-    void withErrorToast(() => apiLogCurrentQso(), 'Could not log QSO').then((r) => {
+    void withErrorToast(() => apiLogCurrentQso(), t('shell.log.failed')).then((r) => {
       if (r) {
         setSnap(r.snapshot)
         // The engine's verdict, not the call returning (#100): every false is a deliberate
         // logbook-integrity refusal (already logged, no active QSO, no report exchanged),
         // and a green "Logged QSO" over one claimed a write that never happened.
         if (r.logged) {
-          pushToast('Logged QSO', 'success', 2500)
+          pushToast(t('shell.toast.logged'), 'success', 2500)
           noteLoggedForDxClear()
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
         } else {
-          pushToast('Nothing to log — the QSO already closed or no report was exchanged', 'info', 4000)
+          pushToast(t('shell.toast.nothingToLog'), 'info', 4000)
         }
       }
     })
@@ -1861,8 +1891,8 @@ export default function App() {
     [],
   )
 
-  const handleTier = useCallback((t: Tier) => {
-    void withErrorToast(() => apiSetTier(t), 'Could not change tier').then((s) => {
+  const handleTier = useCallback((next: Tier) => {
+    void withErrorToast(() => apiSetTier(next), t('shell.tier.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -1932,10 +1962,10 @@ export default function App() {
       // Bind the dx workspace, THEN set the exact tier — each wrapped so a backend
       // failure surfaces a toast (matching handleTier) instead of failing silently
       // or leaving an unhandled rejection.
-      void withErrorToast(() => apiSetArea('dx'), 'Could not switch to Digital')
+      void withErrorToast(() => apiSetArea('dx'), t('shell.digital.failed'))
         .then((s) => {
           if (s) setSnap(s)
-          return withErrorToast(() => apiSetTier(wantTier), 'Could not change tier')
+          return withErrorToast(() => apiSetTier(wantTier), t('shell.tier.failed'))
         })
         .then((s) => {
           if (s) setSnap(s)
@@ -1947,14 +1977,14 @@ export default function App() {
   const handleSourceChange = useCallback((k: SourceKind) => {
     // Companion bind can fail (port busy) → withErrorToast surfaces it and the
     // backend stays on the previous source.
-    void withErrorToast(() => apiSetSource(k), 'Could not switch signal source').then((s) => {
+    void withErrorToast(() => apiSetSource(k), t('shell.source.switchFailed')).then((s) => {
       if (s) {
         setSnap(s)
         // Confirm the switch even when no decodes follow (e.g. Companion idle).
         pushToast(
           k === 'companion'
-            ? `Source: ${s.radio.sourceLabel} — listening for WSJT-X/JTDX/MSHV on :2237`
-            : `Source: ${s.radio.sourceLabel}`,
+            ? t('shell.source.companion', { source: s.radio.sourceLabel })
+            : t('shell.source.set', { source: s.radio.sourceLabel }),
           'success',
           3500,
         )
@@ -2005,7 +2035,7 @@ export default function App() {
         .then((s) => s && setSnap(s))
         .catch((e) =>
           pushToast(
-            `Setup didn't fully save: ${e instanceof Error ? e.message : e} — check Settings`,
+            t('shell.wizard.saveFailed', { error: `${e instanceof Error ? e.message : e}` }),
             'error',
             0,
           ),
@@ -2055,8 +2085,8 @@ export default function App() {
   // Per-view window title + a polite "now on X" announcement (navigation is
   // otherwise silent to a screen reader).
   useEffect(() => {
-    const label = featureById(effectiveView)?.label ?? 'Settings'
-    document.title = `${label} — Nexus`
+    const label = featureById(effectiveView)?.label ?? t('features.settings.label')
+    document.title = t('shell.windowTitle', { section: label })
     announce(label)
   }, [effectiveView])
   // TX state → assertive announce + opt-in earcon. Snap-safe (null pre-connect).
@@ -2065,7 +2095,7 @@ export default function App() {
   useEffect(() => {
     if (!snap) return
     if (prevTxRef.current !== null && prevTxRef.current !== txNow) {
-      announce(txNow ? 'Transmitting' : 'Receiving', { assertive: true })
+      announce(txNow ? t('shell.tx.announce.on') : t('shell.tx.announce.off'), { assertive: true })
       if (settings?.soundTxState) txEarcon(txNow)
     }
     prevTxRef.current = txNow
@@ -2074,7 +2104,7 @@ export default function App() {
   if (!snap) {
     return (
       <div className="app loading">
-        <span>Connecting to Nexus…</span>
+        <span>{t('shell.loading')}</span>
       </div>
     )
   }
@@ -2198,7 +2228,7 @@ export default function App() {
         needScopes={needScopes}
         myGrid={snap.mygrid}
         compact
-        title="Band Activity — heard on the band"
+        title={t('shell.bandActivity.title')}
       />
       <LinkPill link={snap.link} radio={snap.radio} />
     </aside>
@@ -2220,7 +2250,7 @@ export default function App() {
         className="pane-splitter left"
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize stations panel (double-click to reset)"
+        aria-label={t('shell.rail.stations.aria')}
         onPointerDown={startResize('left')}
         onDoubleClick={resetWidths}
       />
@@ -2229,7 +2259,7 @@ export default function App() {
         className="pane-splitter right"
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize waterfall pane (double-click to reset)"
+        aria-label={t('shell.rail.waterfall.aria')}
         onPointerDown={startResize('right')}
         onDoubleClick={resetWidths}
       />
@@ -2545,7 +2575,7 @@ export default function App() {
               onToggleRoam={() =>
                 void withErrorToast(
                   () => apiQsySetEnabled(!(snap.qsy?.enabled ?? false)),
-                  'Could not toggle Roam',
+                  t('shell.roam.toggle.failed'),
                 ).then((s) => s && setSnap(s))
               }
               onRoamSettings={() => setRoamOpen(true)}
@@ -2564,13 +2594,13 @@ export default function App() {
             />,
           )}
           {roamOpen && (
-            <div className="roam-modal" role="dialog" aria-label="Roam settings">
+            <div className="roam-modal" role="dialog" aria-label={t('shell.roam.aria')}>
               <div className="roam-modal-body">
                 <button
                   type="button"
                   className="roam-modal-close"
                   onClick={() => setRoamOpen(false)}
-                  aria-label="Close Roam settings"
+                  aria-label={t('shell.roam.close.aria')}
                 >
                   ✕
                 </button>
@@ -2717,10 +2747,15 @@ export default function App() {
             React `key`) clears the fallback on navigation without remounting those
             hosts every section change — see the ErrorBoundary header. */}
         <ErrorBoundary
-          label={featureById(effectiveView)?.label ?? 'This section'}
+          label={featureById(effectiveView)?.label ?? t('shell.crash.section')}
           resetKey={effectiveView}
           action={{
-            label: crashEscape === effectiveView ? 'Try again' : `Back to ${featureById(crashEscape)?.label ?? 'Operate'}`,
+            label:
+              crashEscape === effectiveView
+                ? t('shell.crash.retry')
+                : t('shell.crash.back', {
+                    section: featureById(crashEscape)?.label ?? t('features.operate.label'),
+                  }),
             onClick: () => handleView(crashEscape),
           }}
         >

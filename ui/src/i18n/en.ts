@@ -5446,6 +5446,434 @@ export const EN = {
   'aprs.card.age.hours': '{{hours}} h',
   'aprs.card.age.days': '{{days}} d',
 
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  // THE SHELL — chrome, navigation, and the ⊞ panel menu.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // Everything an operator sees BETWEEN the cockpits: the rail he navigates with, the
+  // Now-Bar above it, the app's own toasts and status lane, the ⊞ menu that removes a pane,
+  // the frame every pane wears, and the two registries (features, goal profiles) whose words
+  // reach Settings and the wizard.
+  //
+  // ⚠️ THE VOCABULARY HERE IS HALF TOKENS. A section named for a MODE keeps its name in the
+  // code, never here: CW, Phone, RTTY, PSK, SSTV, APRS, FT, Tempo, TempoFast/TempoDeep. So do
+  // the programme and event names (POTA, SOTA, Field Day) and the link report's field names
+  // (RV, dT) and unit symbols (MHz, Hz, dB). What moved is the prose AROUND them — and mode,
+  // band and programme names written INSIDE a sentence stay written there, exactly as they
+  // are everywhere else in this file: they are this application's technical vocabulary, not
+  // words a translator replaces.
+
+  // ── The shell: loading, window title, the rails, the crash escape ───────────────────
+  'shell.loading': 'Connecting to Nexus…',
+  // `Nexus` is the program's name — the same word in every language.
+  'shell.windowTitle': '{{section}} — Nexus',
+  // Screen-reader announcement of the radio's transmit state. Not a control: the TX controls
+  // themselves live in the cockpits and move with them.
+  'shell.tx.announce.on': 'Transmitting',
+  'shell.tx.announce.off': 'Receiving',
+  'shell.rail.stations.aria': 'Resize stations panel (double-click to reset)',
+  'shell.rail.waterfall.aria': 'Resize waterfall pane (double-click to reset)',
+  'shell.bandActivity.title': 'Band Activity — heard on the band',
+  'shell.roam.aria': 'Roam settings',
+  'shell.roam.close.aria': 'Close Roam settings',
+  // The crash panel's escape. `{{section}}` is a section name from the feature registry.
+  'shell.crash.section': 'This section',
+  'shell.crash.retry': 'Try again',
+  'shell.crash.back': 'Back to {{section}}',
+
+  // ── The status lane (status.ts → the Now-Bar) ───────────────────────────────────────
+  // A lane item PERSISTS while its condition holds, so its wording is what the operator
+  // stares at. `detail` is the backend's own message where one exists and is interpolated as
+  // data, never translated.
+  'shell.lane.audio.message': 'RADIO STOPPED',
+  'shell.lane.radioConfig.message': 'RADIO CONFIG',
+  'shell.lane.recording.message': 'RECORDING',
+  'shell.lane.prop.offline.message': 'Prop: no live data',
+  'shell.lane.prop.offline.detail':
+    'No live propagation data yet — set your callsign in Settings and check your internet connection.',
+  'shell.lane.prop.cached.message': 'Prop: cached {{minutes}}m',
+  'shell.lane.prop.cached.detail':
+    'Live propagation refetch failed — showing the last-good snapshot.',
+
+  // ── Deleting a conversation ─────────────────────────────────────────────────────────
+  // Raised by BOTH hosts — the main window and a torn-off panel — deliberately in the same
+  // words: it is one act, and the two mirrors drifting apart is what put the guard here.
+  'shell.conversation.delete.title': 'Delete the conversation with {{peer}}?',
+  'shell.conversation.delete.body':
+    "Any messages still waiting to send will be cancelled. This can't be undone.",
+  'shell.conversation.delete.action': 'Delete conversation',
+  'shell.conversation.delete.failed': 'Could not delete conversation',
+
+  // ── What the shell says when an action fails, and when it lands ─────────────────────
+  // Every `{{call}}`, `{{band}}`, `{{mode}}`, `{{freq}}` and `{{source}}` below is a token
+  // interpolated as data — a callsign, a band or mode name, a dial reading, the source label
+  // the engine reports. None of them is translated, and none is locale-formatted.
+  'shell.error.switchMode': 'Could not switch mode',
+  'shell.error.selectStation': 'Could not select station',
+  'shell.ownCall': '{{call}} is your own call',
+  'shell.tempo.open.failed': 'Could not open {{call}}',
+  'shell.tempo.opened': '▶ {{call}} — open in Tempo',
+  'shell.work.failed': 'Could not work {{call}}',
+  'shell.work.started': '▶ Working {{call}} — transmitting your call',
+  'shell.work.failed.cat': 'Could not work {{call}} — check CAT',
+  'shell.work.ready': '▶ {{call}} — {{mode}} {{band}}, ready to log',
+  'shell.work.here': '▶ {{call}} — {{band}} {{freq}} MHz',
+  'shell.pounce.qsy.failed': 'Could not QSY to {{call}}',
+  'shell.log.failed': 'Could not log QSO',
+  'shell.log.discard.failed': 'Could not discard QSO',
+  'shell.toast.logged': 'Logged QSO',
+  'shell.toast.nothingToLog':
+    'Nothing to log — the QSO already closed or no report was exchanged',
+  'shell.message.failed': 'Message could not be sent',
+  'shell.bandFeed.failed': 'Could not open the band feed',
+  'shell.resend.failed': 'Could not re-send to {{peer}}',
+  'shell.resend.sending': '↻ Re-sending to {{peer}}',
+  'shell.resend.qso.failed': 'Could not resend',
+  'shell.freetext.failed': 'Could not send free text',
+  'shell.broadcast.failed': 'Could not broadcast',
+  'shell.cq.failed': 'Could not call CQ',
+  'shell.cqRun.toggle.failed': 'Could not toggle the CQ run',
+  'shell.cqRun.resume.failed': 'Could not resume the CQ run',
+  'shell.beacon.failed': 'Could not toggle the heartbeat',
+  'shell.frequency.failed': 'Could not set frequency',
+  'shell.blocklist.failed': 'Could not update the blocklist',
+  'shell.aprs.tune.failed': 'Could not tune to APRS',
+  'shell.tx.enable.failed': 'Could not enable transmit',
+  'shell.tx.mute.failed': 'Could not mute transmit',
+  'shell.tx.level.failed': 'Could not set TX level',
+  'shell.tune.failed': 'Could not toggle tune',
+  'shell.proveTx.failed': 'Could not key the transmitter',
+  'shell.halt.failed': 'Could not stop transmit',
+  'shell.radio.switch.failed': 'Could not switch radios',
+  'shell.pegLock.failed': 'Could not set peg-lock',
+  'shell.overrideTx.failed': 'Could not queue TX to {{call}}',
+  'shell.txPeriod.failed': 'Could not set transmit period',
+  'shell.cycleMode.failed': 'Could not set the cycle mode',
+  'shell.holdTx.failed': 'Could not toggle Hold Tx',
+  'shell.offset.failed': 'Could not set offset',
+  'shell.tier.failed': 'Could not change tier',
+  'shell.digital.failed': 'Could not switch to Digital',
+  'shell.source.switchFailed': 'Could not switch signal source',
+  'shell.roam.toggle.failed': 'Could not toggle Roam',
+  'shell.qsy.failed': 'Could not QSY to {{band}}',
+  'shell.qsy.noChannel': 'No channel for {{band}} in the band plan',
+  'shell.qsy.done': 'QSY {{dial}} MHz — listening',
+  // `{{section}}` is CW or Phone — a mode name, so it is a token the sentence carries.
+  'shell.recall.sectionOff': 'Enable the {{section}} section in Settings to recall this memory',
+  'shell.recall.failed': 'Recall failed — check CAT',
+  'shell.recall.error': 'Recall failed: {{error}}',
+  'shell.recall.done': '{{name}} — {{freq}} MHz {{mode}}',
+  // The phone policy commands SSB and FM only; anything else is tuned but not commanded, and
+  // the operator is told to set it himself rather than sold a mode the app never sent.
+  'shell.recall.done.setMode': '{{name}} — {{freq}} MHz · set {{mode}} on the rig',
+  'shell.net.reminder': 'Net {{until}}: {{name}} — {{freq}} {{mode}}',
+  'shell.net.tune': 'Tune',
+  'shell.rotator.pointed': '↗ Pointing antenna to {{bearing}}° ({{call}})',
+  'shell.rotator.failed': "Couldn't point the antenna at {{call}}",
+  // `WSJT-X`, `JTDX` and `MSHV` are program names and `:2237` their agreed UDP port.
+  'shell.source.companion': 'Source: {{source}} — listening for WSJT-X/JTDX/MSHV on :2237',
+  'shell.source.set': 'Source: {{source}}',
+  'shell.wizard.saveFailed': "Setup didn't fully save: {{error}} — check Settings",
+
+  // ── A torn-off panel window ─────────────────────────────────────────────────────────
+  'detached.connecting': 'Connecting to the radio…',
+  'detached.fieldDay.inactive': 'Field Day isn’t active.',
+  'detached.unavailable': 'Panel “{{panel}}” isn’t available as a standalone window yet.',
+
+  // ── The navigation rail ─────────────────────────────────────────────────────────────
+  // Every `label` a MODE names — FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS — and the two
+  // programme/event names (Field Day, POTA/SOTA) stay in `components/ModeNav.tsx`. Their
+  // TOOLTIPS are prose and live here.
+  'nav.aria': 'Operating mode',
+  'nav.digital.group.label': 'Digital',
+  'nav.digital.group.aria': 'Digital modes',
+  'nav.digital.ft.title': 'FT weak-signal cockpit — FT8 / FT4 (pick the tier in the top bar)',
+  'nav.digital.tempo.title':
+    'Tempo — two-way free-text calling (TempoFast / TempoDeep), with Roam (coordinated QSY) inside',
+  'nav.digital.rtty.title': 'RTTY — Baudot teletype (45.45 baud): streaming decode + F-key macros',
+  'nav.digital.psk.title':
+    'PSK31 — narrow-band keyboard mode: click a trace on the waterfall, read the ragchew (receive)',
+  'nav.digital.sstv.title': 'SSTV — slow-scan TV: received images decode into the gallery',
+  'nav.digital.aprs.title':
+    'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon',
+  'nav.phone.title': 'Phone (SSB) operating — PTT, sideband, RF power, panadapter (casual)',
+  'nav.cw.title': 'CW operating — keyboard + F-key macros, WPM, spectrum (casual)',
+  'nav.connect.label': 'Connect',
+  'nav.connect.title':
+    'Connect — THE map: grayline globe + live spots + openings + propagation, with click-to-work',
+  'nav.needed.label': 'Needed',
+  'nav.needed.title': "Needed — what you still need that's on the air now; single-click to QSY",
+  'nav.spots.label': 'Spots',
+  'nav.spots.title':
+    'Spots — every cluster/RBN spot on the air (the raw firehose); filter by band/mode',
+  'nav.dxped.label': 'DXped',
+  'nav.dxped.title': 'DXpeditions — active now, the forward calendar, and what you need from each',
+  'nav.sats.label': 'Satellites',
+  'nav.sats.title':
+    'Satellites — pass times over your grid, favorites, polar plots, and rotor tracking',
+  'nav.logbook.label': 'Logbook',
+  'nav.logbook.title': 'Logbook — your ADIF contacts',
+  'nav.awards.label': 'Awards',
+  'nav.awards.title':
+    'Awards — your Journey (firsts, ladders, milestones) + official DXCC/WAS/WAZ progress',
+  'nav.stats.label': 'Stats',
+  'nav.stats.title':
+    'Statistics — your logbook sliced: QSOs by band/mode/year/hour, top DXCC entities, states, confirmations',
+  'nav.fieldDay.title': 'Field Day — contest rate workspace',
+  'nav.pota.title': "POTA / SOTA — parks & summits: who's on now (hunt) + tag your activation",
+  'nav.memories.label': 'Memories',
+  'nav.memories.title':
+    'Memories — saved channels: repeaters, nets, calling freqs; groups + ★ favorites; one click to tune',
+  'nav.program.label': 'Program',
+  'nav.program.title':
+    'Program — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
+  'nav.order.reset.label': 'Reset order',
+  'nav.order.reset.title': 'Reset the section order to default',
+  'nav.mode.title': 'Active operating mode',
+  // The operating-mode badge. `QSO` is a Q-code and `FIELD DAY` the event's name, so only the
+  // conversational mode's word is prose.
+  'nav.mode.chat': 'CHAT',
+  // One word for the gear: its tooltip, its accessible name and its visible label are the
+  // same claim about the same button.
+  'nav.settings.label': 'Settings',
+
+  // ── The Now-Bar ─────────────────────────────────────────────────────────────────────
+  // Three chips answering the three questions an operator actually asks, plus the connector
+  // pills. The feed NAMES (Cluster, Phone, PSKR) are the services' own and stay in the code.
+  'nowbar.aria': 'Now: band, getting out, and top need',
+  'nowbar.label': 'NOW',
+  // Compact ages. The unit letter rides inside the message with its number so a translation
+  // can never separate the two.
+  'nowbar.age.secs': '{{secs}}s',
+  'nowbar.age.mins': '{{mins}}m',
+  'nowbar.age.hours': '{{hours}}h',
+  'nowbar.band.label': 'Band',
+  'nowbar.band.open': 'open',
+  'nowbar.band.fair': 'fair',
+  'nowbar.band.quiet': 'quiet',
+  'nowbar.band.closed': 'closed',
+  // The chip's own tooltip, used only when the advisory carries no reason of its own (that
+  // reason is backend prose, interpolated as data — it moves in phase 3).
+  'nowbar.band.title.connect': 'Open Connect — the map + nowcast',
+  'nowbar.band.title.plain': 'Band activity',
+  'nowbar.out.label': 'Out',
+  // Reads the same at every value in English ("1 hear you" as much as "3 hear you"), so it is
+  // one string: giving it plural forms would enshrine the English wording, and rewording it
+  // is a text change this phase does not make.
+  'nowbar.out.hearYou': '{{count}} hear you',
+  'nowbar.out.none': 'no spots of you yet',
+  // `PSK Reporter` is the service's name; `{{band}}` a band name.
+  'nowbar.out.title': '{{hear}} station(s) hear you · you hear {{ihear}} (PSK Reporter, {{band}})',
+  'nowbar.out.title.none': 'No propagation data yet',
+  'nowbar.need.label': 'Need',
+  'nowbar.need.value': '{{entity}} {{band}} · {{likelihood}}',
+  'nowbar.need.none': 'nothing workable now',
+  // Two WHOLE sentences rather than one with a tail: "live-confirmed" is a claim about the
+  // expedition, and a language that puts it elsewhere in the sentence must be able to.
+  // `{{where}}` is the entity with its bearing, both data.
+  'nowbar.need.where': '{{entity}} {{azimuth}}',
+  'nowbar.need.title': '{{call}} ({{where}}) — {{need}} on {{band}}, likelihood {{likelihood}}',
+  'nowbar.need.title.confirmed':
+    '{{call}} ({{where}}) — {{need}} on {{band}}, likelihood {{likelihood}} (live-confirmed)',
+  'nowbar.need.title.none': 'No DXpedition needs workable right now',
+  'nowbar.prop.live': 'PROP LIVE',
+  'nowbar.prop.partial': 'PROP PARTIAL',
+  'nowbar.prop.cached': 'PROP CACHED',
+  'nowbar.prop.offline': 'NO LIVE DATA',
+  'nowbar.prop.title':
+    'Propagation nowcast data is {{source}} — separate from the Cluster/PSKR connection pills',
+  // The connector pills. Each state is a WHOLE sentence: "connected but quiet" and "cannot
+  // reach the server" are different claims, and they were one broken-looking "waiting" once.
+  'nowbar.feed.live.value': 'live {{age}}',
+  'nowbar.feed.live.value.noAge': 'live',
+  'nowbar.feed.live.title': '{{name}}: receiving (last {{age}} ago)',
+  'nowbar.feed.connected.value': 'connected',
+  'nowbar.feed.connected.title':
+    '{{name}}: connected — no reports yet (normal until you transmit or the band stirs)',
+  'nowbar.feed.connecting.value': 'connecting…',
+  'nowbar.feed.connecting.title': '{{name}}: trying to reach the server',
+  'nowbar.feed.reconnecting.value': 'reconnecting…',
+  'nowbar.feed.reconnecting.title': '{{name}}: connection dropped — retrying',
+  'nowbar.feed.reconnecting.title.age':
+    '{{name}}: connection dropped — retrying (last event {{age}} ago)',
+  'nowbar.feed.idle.value': 'idle {{age}}',
+  'nowbar.feed.idle.title': '{{name}}: connected, no data for {{age}} (a quiet band is normal)',
+  // Defensive: an unknown future backend state renders visibly rather than as a fake idle.
+  'nowbar.feed.unknown.title': '{{name}}: {{state}}',
+  // The optional host/detail a pill carries. One entry owns the parenthesis and the space, so
+  // no caller ever glues them on.
+  'nowbar.feed.title.detail': '{{title}} ({{detail}})',
+
+  // ── The Tempo cockpit header ────────────────────────────────────────────────────────
+  // The tier NAMES (TempoFast/TempoDeep and their Fast/Deep slots) are the modes' own.
+  'tempo.header.tier.aria': 'Tempo tier',
+  'tempo.header.tier.fast.title': 'TempoFast — fast conversational tier',
+  'tempo.header.tier.deep.title': 'TempoDeep — robust weak-signal tier (15 s)',
+  // TX drive: a CONFIGURATION control on the transmit path, not a transmit control (the
+  // batch-13 ruling — Tx Power moved, Prove TX did not).
+  'tempo.header.power.label': 'Pwr',
+  'tempo.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+  'tempo.header.cqRun.aria': 'CQ run',
+  'tempo.header.cqRun.off': '📢 Call CQ',
+  'tempo.header.cqRun.off.title':
+    'Start a CQ run — keep calling CQ every idle TX slot until someone answers',
+  'tempo.header.cqRun.paused': 'CQ paused ✕',
+  'tempo.header.cqRun.paused.title':
+    'CQ run paused (you are in a conversation) — click to stop the run',
+  'tempo.header.cqRun.on': '📢 Calling CQ… ✕',
+  'tempo.header.cqRun.on.title': 'Calling CQ every idle TX slot — click to stop',
+  'tempo.header.cqRun.resume': '▶ Resume',
+  'tempo.header.cqRun.resume.title':
+    'Resume calling CQ now (it auto-resumes after the conversation goes quiet)',
+
+  // ── The ⊞ Panels menu ───────────────────────────────────────────────────────────────
+  // The ENTRIES are not here: each cockpit names its own panels, and those words move with
+  // the cockpit. What lives here is the menu itself — the button, the popover, and the two
+  // controls that put a mis-tick right.
+  'panels.button': '⊞ Panels',
+  'panels.button.hidden': '⊞ Panels · {{count}} hidden',
+  'panels.button.title':
+    'Show or hide the panels on this screen — untick one and its neighbours expand into the space it leaves',
+  'panels.popover.aria': 'Panels on this screen',
+  'panels.tag.popped': 'popped out',
+  'panels.undo': 'Undo last change',
+  'panels.undo.title': 'Put the layout back the way it was before the last change',
+  'panels.reset': 'Reset layout',
+  'panels.reset.title': 'Show every panel again (the stock layout)',
+
+  // ── The cockpit pane frame ──────────────────────────────────────────────────────────
+  // `{{title}}` is the pane's own name, supplied by the cockpit.
+  'pane.popOut.aria': 'Open {{title}} in its own window',
+  'pane.popOut.title': 'Open this pane in its own window (for a second monitor)',
+  'pane.hide.aria': 'Hide {{title}}',
+  'pane.hide.title': 'Hide this pane (restore it from the ⊞ Panels menu)',
+
+  // ── Drag handles ────────────────────────────────────────────────────────────────────
+  // One entry for both handles (`Splitter` sizes a panel, `SplitterSeam` splits two): the
+  // tooltip makes the same statement about the same gesture, and `{{label}}` — the
+  // separator's accessible name — is what says which handle it is.
+  'splitter.title': 'Drag to resize ({{label}})',
+
+  // ── The theme chips ─────────────────────────────────────────────────────────────────
+  'theme.aria': 'Theme',
+  'theme.light.label': 'Light',
+  'theme.light.title': 'Light (sunlight)',
+  'theme.dark.label': 'Dark',
+  'theme.dark.title': 'Dark (shack)',
+
+  // ── The waterfall palette picker ────────────────────────────────────────────────────
+  // Two wordings, and the difference is load-bearing: an UNSCOPED picker drives the master
+  // value four cockpits share, a SCOPED one drives that mode's key alone. Naming the modes it
+  // actually reaches is why this control stopped lying. (The palette NAMES come from
+  // `waterfall.ts`, which this batch does not own.)
+  'waterfall.palette.aria.scoped': 'Waterfall color palette (this mode)',
+  'waterfall.palette.aria.shared':
+    'Waterfall color palette (Phone, CW, RTTY and SSTV — FT has its own)',
+  'waterfall.palette.title.scoped': 'Waterfall color palette — applies to this mode',
+  'waterfall.palette.title.shared':
+    'Waterfall color palette — shared by Phone, CW, RTTY and SSTV. The FT waterfall keeps its own.',
+
+  // ── Toasts ──────────────────────────────────────────────────────────────────────────
+  // The default action word, used when a toast offers an action but names none. Toast BODIES
+  // arrive already translated from whoever raised them.
+  'toast.action.default': 'Work',
+  'toast.dismiss': 'Dismiss notification',
+
+  // ── The link pill ───────────────────────────────────────────────────────────────────
+  // `dB` is a unit and `RV` the report's own field name; the verdict words are prose.
+  'link.quality.solid': 'Solid {{snr}} dB',
+  'link.quality.marginal': 'Marginal RV{{rv}}',
+  'link.quality.weak': 'Weak {{snr}} dB',
+  'link.dial.label': 'Dial',
+  'link.band.label': 'Band',
+  'link.tier.label': 'Tier',
+  'link.audioFreq.label': 'Audio f',
+
+  // ── The feature registry (features/registry.ts) ─────────────────────────────────────
+  // A feature is a SECTION or a CAPABILITY, and its label + one-liner reach the operator in
+  // Settings ▸ Features and in the setup wizard. The six sections named for a MODE keep their
+  // names in the registry; so do Field Day and POTA / SOTA, which name an event and two
+  // programmes. Everything else is prose.
+  'features.category.operate': 'Operate',
+  'features.category.dxAwards': 'DX & Awards',
+  'features.category.contesting': 'Contesting',
+  'features.category.propagation': 'Propagation',
+  'features.category.logging': 'Logging',
+  'features.category.system': 'System',
+  'features.operate.label': 'Operate',
+  'features.operate.oneLine': 'The waterfall-first cockpit — decode, tune, and work stations.',
+  'features.cw.oneLine': 'CW operating — keyboard + F-key macros, WPM, spectrum, casual ragchew.',
+  'features.phone.oneLine':
+    'Phone (SSB) operating — PTT, band-aware sideband, RF power, panadapter.',
+  'features.rtty.oneLine':
+    'RTTY operating — 45.45 baud Baudot: streaming decode, F-key macros, FSK/AFSK keying.',
+  'features.psk.oneLine':
+    'PSK31 — narrow-band keyboard mode: click a trace, read the ragchew (receive).',
+  'features.sstv.oneLine':
+    'SSTV — slow-scan images auto-decode into a gallery (Martin/Scottie/Robot/PD).',
+  'features.aprs.oneLine':
+    'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon.',
+  'features.logbook.label': 'Logbook',
+  'features.logbook.oneLine': 'Your ADIF contacts — the system of record.',
+  'features.settings.label': 'Settings',
+  'features.settings.oneLine': 'Operator, rig, network, and feature configuration.',
+  'features.nowBar.label': 'Now Bar',
+  'features.nowBar.oneLine': 'The persistent at-a-glance status strip (UTC, band, state, alerts).',
+  'features.chat.label': 'Chat',
+  'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
+  'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
+  'features.connect.label': 'Connect',
+  'features.connect.oneLine':
+    'Situational awareness — the grayline map + live propagation in one view.',
+  'features.needed.label': 'Needed',
+  'features.needed.oneLine': "What you still need that's on the air now — single-click to QSY.",
+  'features.spots.label': 'Spots',
+  'features.spots.oneLine':
+    'Every cluster/RBN spot on the air — the raw firehose, filter by band/mode.',
+  'features.dxped.label': 'DXpeditions',
+  'features.dxped.oneLine':
+    'DXpeditions — active now, the forward calendar, and your needed status.',
+  'features.sats.label': 'Satellites',
+  'features.sats.oneLine':
+    'Satellite passes over YOUR grid — when to try which bird, favorites first.',
+  'features.memories.label': 'Memories',
+  'features.memories.oneLine':
+    'Saved channels — repeaters, HF nets, calling freqs: groups, ★ favorites, one-click tune, CHIRP CSV, starter packs + opt-in net reminders.',
+  'features.program.label': 'Program',
+  'features.program.oneLine':
+    'Program your radios — local repeaters to a channel list: CHIRP CSV, rig memories, or tune-now.',
+  'features.awards.label': 'Awards',
+  'features.awards.oneLine':
+    'Journey + official awards — firsts, sub-award ladders, DXCC/WAZ/WAS progress.',
+  'features.stats.label': 'Stats',
+  'features.stats.oneLine':
+    'Your logbook, sliced — QSOs by band, mode, year, hour, entity, and confirmations.',
+  'features.pota.oneLine': "Parks/Summits on the air — who's on now (hunt) + tag your activation.",
+  'features.gamification.label': 'Achievements',
+  'features.gamification.oneLine': 'Celebrate milestone unlocks (toasts + badges).',
+
+  // ── Goal profiles (features/profiles.ts) ────────────────────────────────────────────
+  // A profile is a named bundle of features, chosen by GOAL. `POTA / SOTA` is the two
+  // programmes' own names; `6m` and `VHF` are a band and a band group, written into the
+  // label with the prose around them.
+  'profiles.starter.label': 'Just getting started',
+  'profiles.starter.blurb':
+    'Make some FT8/FT4 contacts. A clean cockpit and a simple log — extras stay out of the way.',
+  'profiles.dx.label': 'DX chasing & awards',
+  'profiles.dx.blurb':
+    'Chase new ones: awards (DXCC/Challenge/Honor Roll/WAZ), propagation, the map, and the DXpedition board.',
+  'profiles.contest.label': 'Contesting',
+  'profiles.contest.blurb':
+    'Run rate: the contest workspace and field log, with awards and prop out of the way.',
+  'profiles.pota.blurb':
+    'Activate and hunt: the map and a field log for parks-and-peaks operating.',
+  'profiles.vhf.label': '6m / VHF & openings',
+  'profiles.vhf.blurb':
+    'Catch the band coming alive: Connect (map + openings), satellite passes, and the DXpedition board.',
+  'profiles.everything.label': 'Everything (expert)',
+  'profiles.everything.blurb':
+    'Turn the whole console on. Every section and capability enabled.',
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning

@@ -1,3 +1,7 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The palette NAMES
+// are `MASTER_PALETTES`' own (`waterfall.ts`, which this batch does not own) and arrive as
+// data; the `value` of each option is the persisted token and is never prose.
+import { t } from '../i18n'
 import { MASTER_PALETTES } from '../waterfall'
 import { useWaterfallPalette } from '../waterfallPalette'
 
@@ -26,18 +30,14 @@ export function PalettePicker({
   // changing the palette in Phone, CW, RTTY or SSTV was told it reached every mode while it
   // silently did not reach the FT waterfall. Name the modes it actually drives.
   const label = scope
-    ? 'Waterfall color palette (this mode)'
-    : 'Waterfall color palette (Phone, CW, RTTY and SSTV — FT has its own)'
+    ? t('waterfall.palette.aria.scoped')
+    : t('waterfall.palette.aria.shared')
   return (
     <select
       className={className}
       value={palette}
       aria-label={label}
-      title={
-        scope
-          ? 'Waterfall color palette — applies to this mode'
-          : 'Waterfall color palette — shared by Phone, CW, RTTY and SSTV. The FT waterfall keeps its own.'
-      }
+      title={scope ? t('waterfall.palette.title.scoped') : t('waterfall.palette.title.shared')}
       onChange={(e) => setPalette(e.target.value)}
     >
       {MASTER_PALETTES.map((p) => (

@@ -116,7 +116,7 @@ import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { FeaturesApi } from '../useFeatures'
-import { FEATURES, featureById, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
+import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
 import { PROFILE_LIST } from '../features/profiles'
 import { checkForUpdateManual } from '../features/updateCheck'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
@@ -2705,10 +2705,10 @@ export function SettingsPanel({
               if (inCat.length === 0 && !isContesting) return null
               return (
                 <div className="settings-featgroup" key={cat}>
-                  {/* ⚠️ The category heading is the REGISTRY's own vocabulary (`FeatureCategory`
-                      in `features/registry.ts`) — both the group key and the word on screen. It
-                      moves when that registry does, with every feature label beside it. */}
-                  <span className="settings-featgroup-title">{cat}</span>
+                  {/* ⚠️ The category is the REGISTRY's own vocabulary (`FeatureCategory` in
+                      `features/registry.ts`). The union value is the group KEY; the word on
+                      screen resolves through the registry, beside every feature label. */}
+                  <span className="settings-featgroup-title">{featureCategoryLabel(cat)}</span>
                   <div className="settings-grid">
                     {isContesting && (
                       <div className="settings-field">

@@ -258,6 +258,50 @@ const MIGRATED = [
   'components/MessageBubble.tsx',
   'components/FreetextMeter.tsx',
   'components/AprsStationCard.tsx',
+  // Batch 15 (2026-08-19) — the shell: its chrome, the navigation rail, the ⊞ panel menu,
+  // and the two registries whose words reach Settings and the wizard. The first batch whose
+  // surface is what sits BETWEEN the cockpits, so it is where the vocabulary split is
+  // widest: a section named for a MODE keeps its name in the code (CW, Phone, RTTY, PSK,
+  // SSTV, APRS, FT, Tempo, TempoFast/TempoDeep), as do the ones named for an EVENT or a
+  // PROGRAMME (Field Day, POTA / SOTA), the Q-code in the mode badge, the three feed names
+  // the Now-Bar pills carry (Cluster, Phone, PSKR), and the link report's own field names
+  // and unit symbols (RV, dT, MHz, Hz — LINK_TOKENS). Everything around them moved.
+  //
+  // Three things this batch settles that the fourteen before it did not. A REGISTRY OF
+  // FEATURES migrates exactly as a registry of badges did (batch 3): `registry.ts` and
+  // `profiles.ts` resolve each label, one-liner and blurb through getters, so SettingsPanel,
+  // the wizard and RevealNudge read them unchanged — the single consumer line that did move
+  // is the Features tab's category HEADING, which the batch-9 comment beside it said would
+  // move when this registry did. A file whose SOURCE a test parses moves its guard with it:
+  // `App.logtoast.test.ts` looked for the literal 'Logged QSO' inside the handler and now
+  // follows the key, asserting exactly what it asserted before. And the Now-Bar's connector
+  // pills were the batch's concatenation: six states each assembled from a stem, an optional
+  // age clause and an optional host suffix, and each is ONE catalog sentence now — including
+  // the two forms of "retrying", because "retrying" and "retrying, last event 4m ago" are
+  // two statements and not a stem plus a tail.
+  //
+  // Nothing on a transmit path moved. App.tsx owns the halt_tx / TX-enable wiring and the
+  // Esc bindings, PanelsMenu renders the ⊞ vocabulary the stop line is defined against, and
+  // CockpitPaneFrame's header states the rule — but none of the three renders a stop
+  // CONTROL: what moved here is menu entries, pane titles and the failure toasts those
+  // handlers raise, no one of which any stop-line sweep can see. The Tempo header's drive
+  // slider moved on the batch-13 ruling (a configuration control on the transmit path is not
+  // a transmit control) and its ▲ TX indicator, a state token, did not move at all.
+  'App.tsx',
+  'DetachedPanel.tsx',
+  'components/ModeNav.tsx',
+  'components/NowBar.tsx',
+  'components/TempoHeader.tsx',
+  'components/PanelsMenu.tsx',
+  'components/ThemeSwitcher.tsx',
+  'components/PalettePicker.tsx',
+  'components/Toasts.tsx',
+  'components/Splitter.tsx',
+  'components/SplitterSeam.tsx',
+  'components/LinkPill.tsx',
+  'components/panes/CockpitPaneFrame.tsx',
+  'features/profiles.ts',
+  'features/registry.ts',
 ]
 
 /**

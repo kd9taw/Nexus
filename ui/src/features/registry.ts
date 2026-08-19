@@ -7,6 +7,20 @@
 //
 // This module is pure data + pure helpers (no React, no storage) so it is fully
 // unit-testable in node.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). A feature's `label`
+// and `oneLine` reach the operator in Settings ▸ Features and in the setup wizard, and they
+// resolve THROUGH GETTERS: this is a module constant a dozen surfaces index directly, so
+// looking the words up at import time would freeze whichever locale loaded first and no
+// re-render could move it (the `features/needVisuals.ts` lesson). The record's SHAPE is
+// unchanged — every consumer still reads `.label` / `.oneLine`, so nothing downstream moved.
+//
+// THE LABELS ARE MIXED, and the split is the invariant-token rule (`i18n/index.ts`): a
+// section named for a MODE keeps its name here (CW, Phone, RTTY, PSK, SSTV, APRS), as do the
+// two named for an EVENT or a PROGRAMME (Field Day, POTA / SOTA) — a translated mode or
+// programme name names nothing. Every other label, and every one-liner, is prose.
+
+import { t, type MessageKey } from '../i18n'
 
 /** The view the user is looking at. Lives here because features ARE the views;
  * `ModeNav` and `App` import it from here. */
@@ -80,6 +94,54 @@ export interface FeatureDef {
 }
 
 /**
+ * The heading a category group carries in Settings ▸ Features.
+ *
+ * The union value is the KEY — it is what groups the registry — and the WORD on screen is
+ * prose, so the two are no longer the same string. `POTA/SOTA` is the exception the rule
+ * expects: two programme names, carried verbatim.
+ */
+export function featureCategoryLabel(cat: FeatureCategory): string {
+  switch (cat) {
+    case 'Operate':
+      return t('features.category.operate')
+    case 'DX & Awards':
+      return t('features.category.dxAwards')
+    case 'Contesting':
+      return t('features.category.contesting')
+    case 'Propagation':
+      return t('features.category.propagation')
+    case 'Logging':
+      return t('features.category.logging')
+    case 'System':
+      return t('features.category.system')
+    case 'POTA/SOTA':
+      // The two programmes' own names — key and word are the same string here.
+      return cat
+  }
+}
+
+/**
+ * One feature, with its words looked up when they are READ rather than at import (see the
+ * file header). Used by every entry whose LABEL is prose; the eight named for a mode, an
+ * event or a programme are written out below with the name in place and a getter for the
+ * one-liner alone.
+ */
+function feature(
+  v: Omit<FeatureDef, 'label' | 'oneLine'> & { labelKey: MessageKey; oneLineKey: MessageKey },
+): FeatureDef {
+  const { labelKey, oneLineKey, ...rest } = v
+  return {
+    ...rest,
+    get label() {
+      return t(labelKey)
+    },
+    get oneLine() {
+      return t(oneLineKey)
+    },
+  }
+}
+
+/**
  * The catalog. Only features that actually exist today are listed (so the
  * "every section has a real view" invariant holds); future modules
  * (POTA/SOTA, opening detection, DXpedition board, need-aware spotting) slot in
@@ -87,9 +149,9 @@ export interface FeatureDef {
  */
 export const FEATURES: FeatureDef[] = [
   // ---- Core spine (always on) ----
-  {
+  feature({
     id: 'operate',
-    label: 'Operate',
+    labelKey: 'features.operate.label',
     kind: 'section',
     category: 'Operate',
     core: true,
@@ -97,10 +159,11 @@ export const FEATURES: FeatureDef[] = [
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'operate',
     workspace: 'dx',
-    oneLine: 'The waterfall-first cockpit — decode, tune, and work stations.',
-  },
+    oneLineKey: 'features.operate.oneLine',
+  }),
   {
     id: 'cw',
+    // The mode's own name.
     label: 'CW',
     kind: 'section',
     category: 'Operate',
@@ -111,7 +174,9 @@ export const FEATURES: FeatureDef[] = [
     intents: [],
     view: 'cw',
     // Global (no workspace): the CW operating cockpit — keyboard + macros key the rig.
-    oneLine: 'CW operating — keyboard + F-key macros, WPM, spectrum, casual ragchew.',
+    get oneLine() {
+      return t('features.cw.oneLine')
+    },
   },
   {
     id: 'phone',
@@ -125,7 +190,9 @@ export const FEATURES: FeatureDef[] = [
     intents: [],
     view: 'phone',
     // Global (no workspace): the Phone (SSB/FM) cockpit — PTT + rig control + logging.
-    oneLine: 'Phone (SSB) operating — PTT, band-aware sideband, RF power, panadapter.',
+    get oneLine() {
+      return t('features.phone.oneLine')
+    },
   },
   {
     id: 'rtty',
@@ -139,7 +206,9 @@ export const FEATURES: FeatureDef[] = [
     view: 'rtty',
     // Global (no workspace): entering the skeleton asserts nothing on the rig; the
     // FSK/AFSK rig-mode policy lands with the TX wiring.
-    oneLine: 'RTTY operating — 45.45 baud Baudot: streaming decode, F-key macros, FSK/AFSK keying.',
+    get oneLine() {
+      return t('features.rtty.oneLine')
+    },
   },
   {
     id: 'psk',
@@ -155,7 +224,9 @@ export const FEATURES: FeatureDef[] = [
     // rig; the receiver auto-arms (with the SSTV/APRS decline memory) and the
     // waterfall click tunes the DECODER. Transmit arrives with Keyboard Modes
     // Phase 2.
-    oneLine: 'PSK31 — narrow-band keyboard mode: click a trace, read the ragchew (receive).',
+    get oneLine() {
+      return t('features.psk.oneLine')
+    },
   },
   {
     id: 'sstv',
@@ -168,7 +239,9 @@ export const FEATURES: FeatureDef[] = [
     intents: [],
     view: 'sstv',
     // Global (no workspace — RX-first): viewing the gallery never touches the rig.
-    oneLine: 'SSTV — slow-scan images auto-decode into a gallery (Martin/Scottie/Robot/PD).',
+    get oneLine() {
+      return t('features.sstv.oneLine')
+    },
   },
   {
     id: 'aprs',
@@ -181,45 +254,47 @@ export const FEATURES: FeatureDef[] = [
     intents: [],
     view: 'aprs',
     // Global (no workspace — RX-first): monitoring decodes packets; a beacon is an explicit send.
-    oneLine: 'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon.',
+    get oneLine() {
+      return t('features.aprs.oneLine')
+    },
   },
-  {
+  feature({
     id: 'logbook',
-    label: 'Logbook',
+    labelKey: 'features.logbook.label',
     kind: 'section',
     category: 'Logging',
     core: true,
     dependsOn: [],
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'logbook',
-    oneLine: 'Your ADIF contacts — the system of record.',
-  },
-  {
+    oneLineKey: 'features.logbook.oneLine',
+  }),
+  feature({
     id: 'settings',
-    label: 'Settings',
+    labelKey: 'features.settings.label',
     kind: 'section',
     category: 'System',
     core: true,
     dependsOn: [],
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'settings',
-    oneLine: 'Operator, rig, network, and feature configuration.',
-  },
-  {
+    oneLineKey: 'features.settings.oneLine',
+  }),
+  feature({
     id: 'nowBar',
-    label: 'Now Bar',
+    labelKey: 'features.nowBar.label',
     kind: 'capability',
     category: 'System',
     core: true,
     dependsOn: [],
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
-    oneLine: 'The persistent at-a-glance status strip (UTC, band, state, alerts).',
-  },
+    oneLineKey: 'features.nowBar.oneLine',
+  }),
 
   // ---- Optional sections ----
-  {
+  feature({
     id: 'chat',
-    label: 'Chat',
+    labelKey: 'features.chat.label',
     kind: 'section',
     category: 'Operate',
     core: true, // the spine of the MSG area — the original Tempo TempoFast/TempoDeep chat, always available
@@ -227,8 +302,8 @@ export const FEATURES: FeatureDef[] = [
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'chat',
     workspace: 'msg',
-    oneLine: 'Free-form QSO text (TempoFast/TempoDeep).',
-  },
+    oneLineKey: 'features.chat.oneLine',
+  }),
   {
     // NOTE: Field Day VISIBILITY is not driven by this persisted feature flag — it is
     // owned by the Field Day master switch `settings.fdActive` (a persisted backend bool,
@@ -236,6 +311,7 @@ export const FEATURES: FeatureDef[] = [
     // for the nav + view-redirect, so the two can never diverge. This entry stays only so
     // Field Day remains a real registry section (view/landing/profile semantics).
     id: 'fieldDay',
+    // The ARRL event's own name.
     label: 'Field Day',
     kind: 'section',
     category: 'Contesting',
@@ -244,11 +320,13 @@ export const FEATURES: FeatureDef[] = [
     intents: ['contest'],
     view: 'fieldDay',
     workspace: 'dx',
-    oneLine: 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
+    get oneLine() {
+      return t('features.fieldDay.oneLine')
+    },
   },
-  {
+  feature({
     id: 'connect',
-    label: 'Connect',
+    labelKey: 'features.connect.label',
     kind: 'section',
     category: 'Propagation',
     core: true, // global situational-awareness surface — present in both modes
@@ -256,11 +334,11 @@ export const FEATURES: FeatureDef[] = [
     intents: ['casual', 'dx', 'vhf', 'pota'],
     view: 'connect',
     // global (no workspace): Connect is shared across FT8/FT4 and Tempo.
-    oneLine: 'Situational awareness — the grayline map + live propagation in one view.',
-  },
-  {
+    oneLineKey: 'features.connect.oneLine',
+  }),
+  feature({
     id: 'needed',
-    label: 'Needed',
+    labelKey: 'features.needed.label',
     kind: 'section',
     category: 'DX & Awards',
     core: true, // flagship situational board — global, always available
@@ -268,11 +346,11 @@ export const FEATURES: FeatureDef[] = [
     intents: ['casual', 'dx', 'contest', 'pota', 'vhf'],
     view: 'needed',
     // global (no workspace): what you need, on the air now, in both modes.
-    oneLine: "What you still need that's on the air now — single-click to QSY.",
-  },
-  {
+    oneLineKey: 'features.needed.oneLine',
+  }),
+  feature({
     id: 'spots',
-    label: 'Spots',
+    labelKey: 'features.spots.label',
     kind: 'section',
     category: 'DX & Awards',
     core: false, // opt-in raw firehose view (the curated Needed board is the default)
@@ -280,11 +358,11 @@ export const FEATURES: FeatureDef[] = [
     intents: ['dx', 'contest'],
     view: 'spots',
     // global (no workspace): every spot on the air (all modes), filter client-side.
-    oneLine: 'Every cluster/RBN spot on the air — the raw firehose, filter by band/mode.',
-  },
-  {
+    oneLineKey: 'features.spots.oneLine',
+  }),
+  feature({
     id: 'dxped',
-    label: 'DXpeditions',
+    labelKey: 'features.dxped.label',
     kind: 'section',
     category: 'Propagation',
     core: false,
@@ -293,11 +371,11 @@ export const FEATURES: FeatureDef[] = [
     view: 'dxped',
     // global (no workspace — never touches the rig): the expedition board. The old
     // standalone Propagation section merged into Connect; its DXped pieces live here.
-    oneLine: 'DXpeditions — active now, the forward calendar, and your needed status.',
-  },
-  {
+    oneLineKey: 'features.dxped.oneLine',
+  }),
+  feature({
     id: 'sats',
-    label: 'Satellites',
+    labelKey: 'features.sats.label',
     kind: 'section',
     category: 'Propagation',
     core: false,
@@ -306,11 +384,11 @@ export const FEATURES: FeatureDef[] = [
     view: 'sats',
     // global (no workspace — read-only until the operator arms a rotor track):
     // pass schedule for the ★ favorites, per-bird polar plot + frequencies.
-    oneLine: 'Satellite passes over YOUR grid — when to try which bird, favorites first.',
-  },
-  {
+    oneLineKey: 'features.sats.oneLine',
+  }),
+  feature({
     id: 'memories',
-    label: 'Memories',
+    labelKey: 'features.memories.label',
     kind: 'section',
     category: 'Operate',
     core: false,
@@ -321,11 +399,11 @@ export const FEATURES: FeatureDef[] = [
     view: 'memories',
     // Global (no workspace): a manager view — never touches the rig on entry;
     // only an explicit Tune (recall) retunes.
-    oneLine: 'Saved channels — repeaters, HF nets, calling freqs: groups, ★ favorites, one-click tune, CHIRP CSV, starter packs + opt-in net reminders.',
-  },
-  {
+    oneLineKey: 'features.memories.oneLine',
+  }),
+  feature({
     id: 'program',
-    label: 'Program',
+    labelKey: 'features.program.label',
     kind: 'section',
     category: 'Operate',
     core: false,
@@ -336,11 +414,11 @@ export const FEATURES: FeatureDef[] = [
     // On by default: it works today on the open hearham.com repeater data (no key), so
     // it no longer waits on RepeaterBook approval — the RB proxy is a data-quality
     // upgrade that layers in transparently when activated, not a gate on shipping this.
-    oneLine: 'Program your radios — local repeaters to a channel list: CHIRP CSV, rig memories, or tune-now.',
-  },
-  {
+    oneLineKey: 'features.program.oneLine',
+  }),
+  feature({
     id: 'awards',
-    label: 'Awards',
+    labelKey: 'features.awards.label',
     kind: 'section',
     category: 'DX & Awards',
     core: false,
@@ -352,11 +430,11 @@ export const FEATURES: FeatureDef[] = [
     // tracker under one tabbed section. Reveal-nudged on the first QSO (not auto-on in
     // the lean starter surface) so a beginner is invited to the Journey tab early.
     revealOn: 'qso-1',
-    oneLine: 'Journey + official awards — firsts, sub-award ladders, DXCC/WAZ/WAS progress.',
-  },
-  {
+    oneLineKey: 'features.awards.oneLine',
+  }),
+  feature({
     id: 'stats',
-    label: 'Stats',
+    labelKey: 'features.stats.label',
     kind: 'section',
     category: 'DX & Awards',
     core: false,
@@ -367,10 +445,11 @@ export const FEATURES: FeatureDef[] = [
     // hour, top DXCC entities, WAS states, confirmation rate. Complements Awards (official credit)
     // + Journey (gamified goals) with a plain "here's my log, sliced" dashboard.
     revealOn: 'qso-1',
-    oneLine: 'Your logbook, sliced — QSOs by band, mode, year, hour, entity, and confirmations.',
-  },
+    oneLineKey: 'features.stats.oneLine',
+  }),
   {
     id: 'pota',
+    // The two programmes' own names.
     label: 'POTA / SOTA',
     kind: 'section',
     category: 'POTA/SOTA',
@@ -379,13 +458,15 @@ export const FEATURES: FeatureDef[] = [
     intents: ['pota'],
     view: 'pota',
     workspace: 'dx',
-    oneLine: 'Parks/Summits on the air — who\'s on now (hunt) + tag your activation.',
+    get oneLine() {
+      return t('features.pota.oneLine')
+    },
   },
 
   // ---- Optional capabilities ----
-  {
+  feature({
     id: 'gamification',
-    label: 'Achievements',
+    labelKey: 'features.gamification.label',
     kind: 'capability',
     category: 'DX & Awards',
     core: false,
@@ -394,8 +475,8 @@ export const FEATURES: FeatureDef[] = [
     dependsOn: [],
     intents: ['casual', 'dx'],
     revealOn: 'qso-1',
-    oneLine: 'Celebrate milestone unlocks (toasts + badges).',
-  },
+    oneLineKey: 'features.gamification.oneLine',
+  }),
 ]
 
 const BY_ID: Map<FeatureId, FeatureDef> = new Map(FEATURES.map((f) => [f.id, f]))

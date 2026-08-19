@@ -6,7 +6,14 @@
 // independent client of the one shared Rust engine (snapshot at 300 ms; the Waterfall
 // self-fetches its spectrum), and its action callbacks drive the same engine, so state
 // stays consistent across every window.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is a router: the
+// panels it mounts own their own prose. What is here is the three states the router itself
+// can be in — connecting, Field Day off, and a panel name it does not know — plus the
+// conversation-delete guard, which it deliberately raises in the SAME words as the main
+// window (the two mirrors drifting apart is what put the guard here).
 import { useEffect, useMemo, useState } from 'react'
+import { t } from './i18n'
 import { confirmDialog, ConfirmHost } from './confirm'
 import type {
   AppSnapshot,
@@ -233,9 +240,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   const onArchive = async (peer: string) => {
     if (
       !(await confirmDialog({
-        title: `Delete the conversation with ${peer}?`,
-        body: "Any messages still waiting to send will be cancelled. This can't be undone.",
-        confirmLabel: 'Delete conversation',
+        title: t('shell.conversation.delete.title', { peer }),
+        body: t('shell.conversation.delete.body'),
+        confirmLabel: t('shell.conversation.delete.action'),
         danger: true,
       }))
     )
@@ -502,7 +509,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           />
         ) : (
           <div className="app loading">
-            <span>Field Day isn’t active.</span>
+            <span>{t('detached.fieldDay.inactive')}</span>
           </div>
         )}
       </div>
@@ -514,7 +521,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       return (
         <div className="app detached">
           <div className="app loading">
-            <span>Connecting to the radio…</span>
+            <span>{t('detached.connecting')}</span>
           </div>
         </div>
       )
@@ -591,7 +598,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   return (
     <div className="app detached">
       <div className="app loading">
-        <span>Panel “{panel}” isn’t available as a standalone window yet.</span>
+        <span>{t('detached.unavailable', { panel })}</span>
       </div>
     </div>
   )

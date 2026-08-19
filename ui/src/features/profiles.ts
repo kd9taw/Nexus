@@ -4,7 +4,18 @@
 // by GOAL/intent, never by self-rated experience. See feature-modularity.md §4.2.
 //
 // Pure data + a pure resolver (no React / storage) — node-testable.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Each profile's
+// label and blurb reach the operator in Settings ▸ Features and in the setup wizard, and
+// they resolve THROUGH GETTERS: this is a module constant a dozen renders index directly, so
+// looking the words up at import time would freeze whichever locale loaded first and no
+// re-render could move it (the `features/needVisuals.ts` lesson). The record's SHAPE is
+// unchanged — every consumer still reads `.label` / `.blurb`.
+//
+// `POTA / SOTA` is the two programmes' own names and stays here; a translated one names
+// nothing. The rest is prose.
 
+import { t } from '../i18n'
 import { FEATURES, addWithDependencies, type FeatureId, type Intent, type View } from './registry'
 
 export type ProfileId = 'starter' | 'dx' | 'contest' | 'pota' | 'vhf' | 'everything'
@@ -30,24 +41,36 @@ export interface Profile {
 export const PROFILES: Record<ProfileId, Profile> = {
   starter: {
     id: 'starter',
-    label: 'Just getting started',
-    blurb: 'Make some FT8/FT4 contacts. A clean cockpit and a simple log — extras stay out of the way.',
+    get label() {
+      return t('profiles.starter.label')
+    },
+    get blurb() {
+      return t('profiles.starter.blurb')
+    },
     intents: ['casual'],
     landing: 'operate',
     nowBarEmphasis: 'qso',
   },
   dx: {
     id: 'dx',
-    label: 'DX chasing & awards',
-    blurb: 'Chase new ones: awards (DXCC/Challenge/Honor Roll/WAZ), propagation, the map, and the DXpedition board.',
+    get label() {
+      return t('profiles.dx.label')
+    },
+    get blurb() {
+      return t('profiles.dx.blurb')
+    },
     intents: ['dx'],
     landing: 'operate',
     nowBarEmphasis: 'needs',
   },
   contest: {
     id: 'contest',
-    label: 'Contesting',
-    blurb: 'Run rate: the contest workspace and field log, with awards and prop out of the way.',
+    get label() {
+      return t('profiles.contest.label')
+    },
+    get blurb() {
+      return t('profiles.contest.blurb')
+    },
     intents: ['contest'],
     // NOT 'fieldDay': that section's visibility is gated by the persisted master
     // switch (settings.fdActive), which no path may auto-enable — landing there
@@ -57,24 +80,35 @@ export const PROFILES: Record<ProfileId, Profile> = {
   },
   pota: {
     id: 'pota',
+    // The two programmes' own names — the same four letters in every language.
     label: 'POTA / SOTA',
-    blurb: 'Activate and hunt: the map and a field log for parks-and-peaks operating.',
+    get blurb() {
+      return t('profiles.pota.blurb')
+    },
     intents: ['pota'],
     landing: 'operate',
     nowBarEmphasis: 'activation',
   },
   vhf: {
     id: 'vhf',
-    label: '6m / VHF & openings',
-    blurb: 'Catch the band coming alive: Connect (map + openings), satellite passes, and the DXpedition board.',
+    get label() {
+      return t('profiles.vhf.label')
+    },
+    get blurb() {
+      return t('profiles.vhf.blurb')
+    },
     intents: ['vhf'],
     landing: 'connect',
     nowBarEmphasis: 'openings',
   },
   everything: {
     id: 'everything',
-    label: 'Everything (expert)',
-    blurb: 'Turn the whole console on. Every section and capability enabled.',
+    get label() {
+      return t('profiles.everything.label')
+    },
+    get blurb() {
+      return t('profiles.everything.blurb')
+    },
     intents: [],
     everything: true,
     landing: 'operate',
