@@ -82,7 +82,7 @@ import { pushToast, withErrorToast } from '../toast'
 // QSO-management surface, and they move in the transmit-path batch with the stop-line sweeps
 // re-run. The comment beside them says so at the call site.
 import { setLocale, t, type MessageKey } from '../i18n'
-import { LOCALE_CHOICES, LOCALE_NATIVE_NAME, useLocale } from '../i18n/useLocale'
+import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
 import { FD_EVENT_NAMES } from '../fdEvent'
 import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
@@ -842,6 +842,9 @@ export function SettingsPanel({
   // Re-render the panel when the language changes, so the picker's own labels switch with it
   // (the panel is the one screen guaranteed to be open at that moment).
   const locale = useLocale()
+  // Read LIVE, not at module load: the catalogs are installed during startup, after this
+  // module is imported (see localeChoices).
+  const languages = localeChoices()
   const [allTxtPath, setAllTxtPath] = useState('')
   const [diagLogPath, setDiagLogPath] = useState('')
   const [recordingsPath, setRecordingsPath] = useState('')
@@ -2565,7 +2568,7 @@ export function SettingsPanel({
                   day a translation ships and not before. The native name is what a picker shows
                   (an operator looking for German is looking for "Deutsch"), with the tag beside
                   it for the ones that share a word. */}
-              {LOCALE_CHOICES.length > 1 && (
+              {languages.length > 1 && (
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.workspace.language.label')}</span>
                   <select
@@ -2574,7 +2577,7 @@ export function SettingsPanel({
                     onChange={(e) => setLocale(e.target.value)}
                     aria-label={t('settings.workspace.language.label')}
                   >
-                    {LOCALE_CHOICES.map((l) => (
+                    {languages.map((l) => (
                       <option key={l} value={l}>
                         {LOCALE_NATIVE_NAME[l] ?? l}
                       </option>

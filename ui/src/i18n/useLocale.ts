@@ -35,11 +35,21 @@ export function useLocale(): string {
 /**
  * The languages this build can offer, English first.
  *
- * A build with one catalog has ONE entry, and the picker that reads this renders nothing —
- * deliberately. A control that cannot change anything is worse than a missing one: it invites
- * a click and answers with silence.
+ * ⚠️ A FUNCTION, NEVER A CONSTANT, and 1.7.1-test4 is why. As
+ * `const LOCALE_CHOICES = availableLocales()` this evaluated when the module was first
+ * IMPORTED — which happens through App → SettingsPanel, inside `import App from './App'`, long
+ * before main.tsx's callback installs the German catalog. The array froze at ['en'], the
+ * picker's `length > 1` never became true, and a finished and shipped translation could not be
+ * selected at all. A snapshot of a registry that is filled in later is always a bug; read it
+ * when the question is asked.
+ *
+ * A build with one catalog returns ONE entry, and the picker renders nothing — deliberately. A
+ * control that cannot change anything is worse than a missing one: it invites a click and
+ * answers with silence.
  */
-export const LOCALE_CHOICES: string[] = availableLocales()
+export function localeChoices(): string[] {
+  return availableLocales()
+}
 
 /**
  * What each language calls ITSELF. A picker that offers "German" to a German operator is

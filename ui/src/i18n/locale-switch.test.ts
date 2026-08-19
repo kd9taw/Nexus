@@ -11,6 +11,7 @@
 //                  the premise that a capability needing configuration is unfinished.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { localeChoices } from './useLocale'
 import {
   EN,
   getLocale,
@@ -106,5 +107,26 @@ describe('startup', () => {
     initLocale()
     expect(getLocale(), 'an explicit choice outranks the machine').toBe('zz')
     vi.restoreAllMocks()
+  })
+})
+
+// THE PICKER WAS INVISIBLE IN 1.7.1-test4, and this is the test that would have caught it.
+//
+// The choices were captured in a module-level `const LOCALE_CHOICES = availableLocales()`.
+// That runs when the module is first IMPORTED — which happens through App → SettingsPanel,
+// deep inside `import App from './App'`, long before main.tsx's callback installs the German
+// catalog. So the array froze at ['en'], the picker's `length > 1` was false forever, and a
+// finished, tested, shipped translation had no way to be selected. Every other test passed:
+// they all install a catalog and then read, which is the one order the real app never uses.
+//
+// The property, stated so it cannot regress: the choices are read LIVE, and a catalog
+// installed after this module was imported must appear in them.
+describe('the picker can see a catalog installed after import', () => {
+  it('lists a locale registered later — the real startup order', () => {
+    // 'zz' is installed in beforeEach, i.e. AFTER this module was imported at suite load.
+    expect(localeChoices()).toContain('zz')
+    expect(localeChoices()[0], 'English stays first').toBe('en')
+    // The control: a language nobody installed is not offered.
+    expect(localeChoices()).not.toContain('qq')
   })
 })
