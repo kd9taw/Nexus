@@ -50,6 +50,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { EN, type MessageKey } from './index'
+import { DE } from './de'
 import type { PluralForms } from './types'
 
 /** A `t()` / `<T>` call site with everything written literally enough to check. */
@@ -298,7 +299,7 @@ describe('translated catalogs agree with English', () => {
   // Every catalog the build ships, by locale. English is the source and is checked by the
   // suite above; this loop covers the rest, and is EMPTY until a translation lands — hence
   // the fixture control below, which proves the rules bite before there is anything to bite.
-  const OTHER: Array<[string, Record<string, unknown>]> = []
+  const OTHER: Array<[string, Record<string, unknown>]> = [['de', DE as Record<string, unknown>]]
 
   const holesOf = (v: unknown): Set<string> => {
     const texts = typeof v === 'string' ? [v] : Object.values(v as Record<string, string>)

@@ -58,6 +58,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deleted. Snapshots are taken when the log is **saved**, never when it is opened, so however
   large your log gets, launching Nexus does no extra disk work for this.
 
+- **Deutsch.** Nexus can now run in German — the first language it has ever offered. Pick it in
+  Settings ▸ Appearance ▸ Language, or just run it on a German Windows and it starts in German
+  by itself. Anything not yet translated appears in English rather than blank, so nothing can
+  break by being missing.
+
+  **Nothing technical is translated, and that is deliberate:** frequencies, signal reports,
+  callsigns, grid squares, band and mode names, Q-codes, RST, POTA/SOTA references and ADIF
+  field names read the same in every language. In particular a frequency never picks up a German
+  decimal comma — 14.074 is 14.074, and a test fails the build if a comma ever appears in a
+  translated number. Roughly 2,900 phrases are covered; the cockpits' last few screens land next.
+
 ### Fixed
 
 - **A logbook with accented or non-English text in it could load as EMPTY — and the next save

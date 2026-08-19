@@ -5,7 +5,8 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable } from './features/durableStore'
-import { initLocale } from './i18n'
+import { initLocale, installCatalog } from './i18n'
+import { DE } from './i18n/de'
 import { installExternalLinkInterceptor } from './externalLinks'
 import { isTauri, openExternalUrl } from './api'
 import { pushToast } from './toast'
@@ -99,6 +100,10 @@ void loadDurable().finally(() => {
   // module-level variable, so a locale applied after mount would leave the first paint in
   // English and switch it under the operator a frame later. Reads the stored choice, else the
   // OS language; unknown or uninstalled falls through to English, silently and safely.
+  // Register every shipped language BEFORE initLocale, which only accepts a locale that has a
+  // catalog. Static imports, never a fetch: a catalog that arrives over the network is a
+  // catalog that is absent in a field-day tent.
+  installCatalog('de', DE)
   initLocale()
   createRoot(document.getElementById('root')!).render(tree)
 })
