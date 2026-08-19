@@ -6854,6 +6854,206 @@ export const EN = {
   'cw.send.failed': 'CW send failed',
 
   // ══════════════════════════════════════════════════════════════════════════════════════
+  // PHONE — the voice cockpit and the voice keyer pane inside it.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️ THE DENSEST TRANSMIT FILE IN THE TREE, and what is NOT here says as much as what is:
+  // the PTT row in the pinned dock — the button's four labels, its three-armed tooltip, the
+  // Lock toggle beside it and the Field Day exchange chip that shares the row — stays written
+  // in `components/PhoneCockpit.tsx`, and so do the voice keyer's ■ Stop and ■ Stop & save.
+  // PTT is Phone's stop-line census (features/panelState.ts) and `stop-line.test.tsx` finds it
+  // by ACCESSIBLE NAME, matching all four labels; those move in the transmit-path batch with
+  // the sweeps re-run. What DID move is everything around them, the refusal TOASTS the
+  // deferred controls raise included — a toast is not a control and no sweep can see one
+  // (the batch-19 ruling).
+  //
+  // The units rule lands on the PASSBAND: every dial reading, split offset in kHz, filter and
+  // scope width in Hz, reference level in dB/dBm, mic/power/NR percentage, sideband and mode
+  // name, and the rig's own control-group names (DSP, NR, AGC, BW, REC, SPLIT) are invariant
+  // and stay in the code.
+
+  // ── Phone ▸ the ⊞ panel names and the pane frames ────────────────────────────────────
+  // Two spellings on purpose, as CW and RTTY have: the ⊞ menu names the pane in title case
+  // and the frame head above the pane prints the short word.
+  'phone.panel.scope': 'Scope',
+  'phone.panel.rigscope': 'Rig Scope Controls',
+  'phone.panel.txmeters': 'TX Meters',
+  'phone.panel.dsp': 'DSP Functions',
+  'phone.panel.dspLevels': 'RX DSP Levels',
+  'phone.panel.bandActivity': 'Band Activity',
+  'phone.panel.voiceKeyer': 'Voice Keyer',
+  'phone.pane.bandActivity.title': 'Band activity',
+  'phone.pane.voiceKeyer.title': 'Voice keyer',
+  'phone.pane.rigscope.title': 'Rig scope controls',
+  'phone.pane.dsp.title': 'DSP functions',
+  'phone.pane.dspLevels.title': 'RX DSP levels',
+  'phone.pane.log.title': 'Log',
+
+  // ── Phone ▸ the header: the mode picker, split, mic gain, filter and REC ─────────────
+  // `AUTO`, `USB`, `LSB` and `FM` are mode names — the buttons print them from the code and
+  // `{{mode}}`/`{{sideband}}` carry them into these sentences unchanged.
+  'phone.mode.aria': 'Phone mode',
+  'phone.mode.auto.title':
+    'AUTO — sideband by band (now {{sideband}}); a band change re-asserts this',
+  'phone.mode.force.title': 'Force {{mode}} until you change bands',
+  'phone.mode.failed': 'Could not set mode',
+  'phone.header.power.label': 'Power',
+  'phone.header.power.title': 'RF output power',
+  // The mic-is-dead warning: native Flex DAX transmit audio is a RADIO-WIDE setting, so this
+  // screen is the only one that can say the physical microphone is disconnected.
+  'phone.micDax.label': 'mic off (DAX)',
+  'phone.micDax.title':
+    'Flex native DAX audio is on, so the radio takes transmit audio from DAX and your microphone is disconnected — on every slice and in every program, SmartSDR included. Turn OFF Flex native DAX audio in Settings ▸ Radio ▸ Rig & CAT to use the mic.',
+  // `{{rigMode}}` is what the rig reports over CAT and `{{mode}}` what Phone commands.
+  'phone.rigMismatch.chip': 'rig: {{mode}}',
+  'phone.rigMismatch.title':
+    "Your rig is on {{rigMode}}, but Phone is set to {{mode}}. Logging and TX use {{mode}} — turn the rig's mode knob (or re-pick the band) to match.",
+  // `{{freq}}` is the split TX dial and `{{step}}` the nudge in kHz — both supplied by the
+  // call site, never written here.
+  'phone.split.on.title': 'Split ON — TX {{freq}} MHz. Click for simplex.',
+  'phone.split.off.title': 'Work split — TX off your RX frequency (e.g. up 5)',
+  'phone.split.lower.title': 'TX {{step}} kHz lower',
+  'phone.split.higher.title': 'TX {{step}} kHz higher',
+  'phone.split.offset.title': 'TX offset from your RX dial (kHz)',
+  'phone.split.setFailed': 'Could not set split',
+  'phone.split.clearFailed': 'Could not clear split',
+  'phone.noCat.label': '⚠ no rig control',
+  'phone.noCat.title':
+    'No CAT link — set a rigctld/CAT rig in Settings so the app can switch the mode and follow the dial. On VOX/RTS-DTR PTT the rig has no command channel.',
+  'phone.mic.label': 'Mic',
+  'phone.mic.aria': 'Mic gain',
+  'phone.mic.title': 'Microphone gain — raise it until SSB peaks tickle the ALC zone',
+  'phone.filter.title': 'RX filter / passband width (CAT)',
+  'phone.filter.narrower.title': 'Narrower (−{{step}} Hz)',
+  'phone.filter.wider.title': 'Wider (+{{step}} Hz)',
+  'phone.filter.failed': 'Could not set filter width',
+  'phone.record.start.aria': 'Record QSO audio',
+  'phone.record.stop.aria': 'Stop recording this QSO',
+  'phone.record.off.title': 'Record the received audio to a WAV in the recordings folder',
+  'phone.record.on.title': 'Recording — click to stop recording this QSO',
+  // Two whole sentences, not a verb spliced into a stem: the toast names the act that failed.
+  'phone.record.startFailed': 'Could not start recording',
+  'phone.record.stopFailed': 'Could not stop recording',
+  // One string, two places: the meter's own accessible name and the label wrapping it.
+  'phone.rxMeter.label': 'RX audio level',
+
+  // ── Phone ▸ what the PTT handler says when it refuses, or puts the switch back up ────
+  // The BUTTON stays written in the cockpit (it is the stop-line census); these are the
+  // toasts it raises, and a toast is neither a control nor anything a sweep can see.
+  'phone.tx.locked': 'TX locked — this frequency/mode is outside your license privileges',
+  'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
+
+  // ── Phone ▸ the scope strip, its span chips and its zoom ─────────────────────────────
+  // The strip is the rig's real RF panadapter when one streams and the receiver's audio
+  // passband otherwise, so each state names itself. `{{khz}}` and `{{hz}}` are the preset
+  // widths — figures, supplied by the call site rather than written into the sentence.
+  'phone.scope.tuneHint': 'Scroll here to tune the VFO',
+  'phone.scope.nativeRf.label': 'RF Panadapter',
+  'phone.scope.nativeRf.title':
+    'Native RF panadapter — the real RF spectrum around your dial, not the demodulated audio passband.',
+  'phone.scope.audio.label': 'Passband',
+  'phone.scope.audio.title':
+    'Receiver AUDIO spectrum on your rig’s axis: the centre line is your dial, and the passband sits on the side your sideband is on (USB above, LSB below) — the other half is quiet because an SSB receiver only hears one side. Not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.',
+  'phone.scope.audio.sub': 'RX audio',
+  'phone.scope.splitter.label': 'scope height',
+  'phone.scope.span.aria': 'Bandscope span',
+  'phone.span.auto.label': 'Auto',
+  'phone.span.auto.title': "Follows the radio's filter — the scope shows what the rig can pass",
+  'phone.span.full.label': 'Full',
+  'phone.span.full.title': 'The whole captured passband — {{khz}} kHz of sideband from your dial',
+  'phone.span.voice.label': 'Voice',
+  'phone.span.voice.title': 'Voice energy — {{khz}} kHz of sideband from your dial',
+  'phone.span.zoom.title': 'Zoomed — {{khz}} kHz of sideband from your dial',
+  'phone.span.tight.title': 'Tight — {{hz}} Hz of sideband from your dial, for fine tuning',
+  'phone.rfZoom.aria': 'Panadapter zoom',
+  'phone.rfZoom.full.label': 'Full',
+  'phone.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
+  'phone.rfZoom.span.title': '±{{khz}} kHz around your dial',
+
+  // ── Phone ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ───────
+  // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an escape
+  // so it cannot be lost to a careless edit: each is one chip label whose two words must not
+  // be split across a line, and a translation keeps it. `{{span}}` is a sweep width the call
+  // site prints.
+  'phone.rigScope.aria': 'Rig scope control',
+  'phone.rigScope.label': 'Rig\u00a0scope',
+  'phone.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
+  'phone.rigScope.span.title': "Set the radio's scope span to {{span}}",
+  'phone.rigScope.ref.title':
+    'Scope reference level — lower to lift weak signals out of the noise',
+  'phone.rigScope.ref.aria': 'Scope reference level (dB)',
+  'phone.flexPan.aria': 'Flex panadapter control',
+  'phone.flexPan.label': 'Flex\u00a0pan',
+  'phone.flexPan.title':
+    "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
+  'phone.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
+  'phone.flexPan.ref.title':
+    'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
+  'phone.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
+  // One word, one key: both reference sliders are labelled for the same thing.
+  'phone.scope.ref.label': 'Ref',
+  // The DSP function NAMES (NB, NR, Notch, COMP, VOX) are the rig's own and stay in the code;
+  // `{{func}}` is the one the toggle failed on.
+  'phone.dsp.aria': 'Rig DSP functions',
+  'phone.dsp.nb.title': 'Noise Blanker — kills impulse/ignition noise (RX)',
+  'phone.dsp.nr.title': 'Noise Reduction — pulls voice out of broadband hiss (RX, DSP)',
+  'phone.dsp.notch.title': 'Auto-Notch (ANF) — nulls carriers/heterodynes (RX, DSP)',
+  'phone.dsp.comp.title': 'Speech Compressor — more average talk power (TX)',
+  'phone.dsp.vox.title': 'Voice-Operated Transmit — hands-free keying (TX)',
+  'phone.dsp.toggleFailed': 'Could not toggle {{func}}',
+  'phone.rxDsp.aria': 'RX DSP levels',
+  'phone.rxDsp.nr.title':
+    'Noise-reduction depth — raise until the noise floor drops, back off if audio gets watery',
+  'phone.rxDsp.nr.aria': 'Noise-reduction level',
+  'phone.rxDsp.agc.aria': 'AGC speed',
+  'phone.rxDsp.agc.title': 'AGC time constant',
+  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  'phone.rxDsp.agc.fast': 'Fast',
+  'phone.rxDsp.agc.mid': 'Mid',
+  'phone.rxDsp.agc.slow': 'Slow',
+
+  // ── Phone ▸ the voice keyer pane ─────────────────────────────────────────────────────
+  // F1–F6 are key names and `{{slot}}` is the number one of them carries; `{{label}}` is the
+  // operator's own name for a slot and is never translated. `{{hint}}` is the Mac Fn-key note
+  // (platform.ts). The pane's two ■ Stop buttons are NOT here — see the banner above.
+  'phone.keyer.hint': 'click or press F1–F6 to send · Esc stops',
+  'phone.keyer.hint.mac': 'click or press Fn+F1–F6 to send · Esc stops',
+  // `{{exchange}}` is the Field Day class + section, a token; the element around it comes
+  // from the call site.
+  'phone.keyer.fd.hint':
+    'Field Day: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
+  'phone.keyer.slot.play.title': 'Play F{{slot}} ({{label}})',
+  // ONE sentence, not a stem plus a shared tail: recording the rig's RX audio into a slot puts
+  // the WRONG AUDIO on the air the moment the slot is played, so the warning rides both
+  // controls that start a recording — the ● tool and the empty slot button itself.
+  'phone.keyer.slot.record.title':
+    "Record F{{slot}}. Records from your INPUT DEVICE — often the rig's RX audio, not a mic. If it is, record the message elsewhere and use Import (⤓).",
+  'phone.keyer.slot.unnamed': 'Slot {{slot}}',
+  'phone.keyer.slot.state.record': 'record',
+  'phone.keyer.import.title': 'Import a .wav file',
+  'phone.keyer.clear.title': 'Clear this recording',
+  'phone.keyer.empty': 'F{{slot}} has no recording yet — record or import one',
+  'phone.keyer.busyRecording': 'Finish the recording first',
+  'phone.keyer.releasePtt': 'Release PTT before sending a voice message',
+  // NAME THE CONTROL THAT IS ON THIS SCREEN: Phone shows no Enable-Tx button, so PTT is the
+  // switch when TX is off.
+  'phone.keyer.txOff': 'TX is off — click PTT once to turn it back on, then play the message',
+  'phone.keyer.playFailed': 'Could not play F{{slot}}',
+  'phone.keyer.recordFailed': 'Could not start recording',
+  'phone.keyer.saveFailed': 'Could not save recording',
+  'phone.keyer.saved': 'Saved F{{slot}} ({{label}})',
+  'phone.keyer.importFailed': 'Could not import the WAV',
+  'phone.keyer.imported': 'Imported F{{slot}} ({{label}})',
+  'phone.keyer.clearFailed': 'Could not clear the slot',
+  // What the pane says AFTER its teardown acted, for the operator who walked off the Phone
+  // screen and never opened the ⊞ menu. Both are conditional on what actually happened.
+  'phone.keyer.hide.stoppedOver':
+    'F{{slot}} was on the air — the voice keyer closed and stopped it',
+  'phone.keyer.hide.discarded': 'Recording for F{{slot}} discarded — the voice keyer closed',
+  'phone.keyer.hide.recorderStuck':
+    'Could not stop the recorder for F{{slot}} — it may still be running. Reopen the voice keyer.',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
   // THE SHELL — chrome, navigation, and the ⊞ panel menu.
   // ══════════════════════════════════════════════════════════════════════════════════════
   //

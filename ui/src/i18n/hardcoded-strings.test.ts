@@ -443,6 +443,35 @@ const MIGRATED = [
  * did the refusal TOASTS those deferred controls raise: a toast is not a control and no
  * sweep can see one. All three graduate the moment the transmit-path batch lands.
  *
+ * `PhoneCockpit.tsx` and `VoiceKeyer.tsx` (batch 21, 2026-08-19) are here on that same narrow
+ * ruling — THE BATCH MOVES NO CONTROL THAT STOPS A TRANSMISSION, whether or not a sweep looks
+ * for it — and Phone is the densest transmit surface in the tree, so what stayed written is
+ * worth naming exactly:
+ *
+ *   · Phone — THE PTT ROW, whole. The button's four labels ARE the accessible name
+ *     `stop-line.test.tsx` matches (/push to talk|on air — release to stop|tx locked|tx off —
+ *     click to enable/i) and its three-armed tooltip is that control's description, naming
+ *     which switch is down and the mic the operator talks on. The LOCK toggle beside it stays
+ *     with them because it decides whether the window's Space keyup is a PTT release at all —
+ *     the census's fourth holder — and the Field Day exchange chip stays because it shares the
+ *     row. Stop TX and Tune, Phone's other two census holders, are drawn by `CockpitHeader`
+ *     and are deferred there with the RTTY/SSTV latch.
+ *   · The voice keyer — its ■ Stop, which really does end an over (stopVoice →
+ *     Engine::stop_voice flushes the output ring and unkeys) and is pane-resident, so it is
+ *     deliberately on no sweep's list; and the ■ Stop & save beside it, which ends the
+ *     RECORDER rather than a transmission but shares that vocabulary, so the pair is reworded
+ *     in one batch instead of drifting apart.
+ *
+ * What DID move includes everything those controls are surrounded by, the refusal TOASTS the
+ * PTT handler raises included (the batch-19 ruling: a toast is not a control and no sweep can
+ * see one), and the whole voice keyer besides its two buttons — a pane that STARTS a
+ * transmission is not a transmit control (batch 18). Both files graduate the moment the
+ * transmit-path batch lands. Deliberately NOT migrated and flagged in PhoneCockpit: the two ⊞
+ * menu notes for the voice keyer (VOICE_KEYER_STOPS_ON_HIDE / VOICE_KEYER_UNDO_ENDS), because
+ * the other four notes on that same menu live in `features/panelHost.ts`, `waterfall.ts` and
+ * `TxMeters.tsx`, which this batch does not own — moving two of five would leave one menu
+ * speaking two languages. They are named constants, so the guard cannot see them either way.
+ *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be
  * added to it to dodge a failing check.
@@ -455,6 +484,8 @@ const PARTIAL = [
   'components/RttyCockpit.tsx',
   'components/PskCockpit.tsx',
   'components/SstvView.tsx',
+  'components/PhoneCockpit.tsx',
+  'components/VoiceKeyer.tsx',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
