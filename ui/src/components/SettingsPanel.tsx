@@ -7075,6 +7075,7 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">
                   Loud alert on a new DXCC entity — a “new one”. Does NOT alert on every decode.
+                  The band choice also decides where the NEW ONE icon is shown.
                 </span>
               </div>
 
@@ -7096,6 +7097,8 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   Quiet toast on a grid you haven&apos;t worked. Default VHF+ only — grid awards
                   (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid.
+                  The band choice also decides where the GRID icon is shown, on the roster and
+                  the decode rows.
                 </span>
               </div>
 
@@ -7116,7 +7119,8 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">
                   The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) —
-                  separate from plain grids so silencing HF chatter keeps the gems.
+                  separate from plain grids so silencing HF chatter keeps the gems. Covers their
+                  GRID icon too.
                 </span>
               </div>
 

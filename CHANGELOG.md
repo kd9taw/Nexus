@@ -5,6 +5,23 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The alert band scope now governs the need ICONS, not just the sound.** Set
+  Settings ▸ Spots & Alerts ▸ **New grid** to *VHF+ (6 m and up)* and 20 m went quiet — but
+  every FT8 row on the Call Roster and in Band Activity still wore a GRID chip, in both
+  Roster and Classic layouts. The scope only ever reached the beep and the toast; the icons
+  were painted from a different path that never saw the setting. It does now, and the same
+  goes for **New DXCC** and **Rare grid 💎** — one choice per need type, covering both what
+  you hear and what you see, on the docked window and on a torn-off Operate panel alike.
+  Nothing else about the row changes: a station that is a new band-slot *and* a new grid
+  keeps its BAND chip on HF and loses only GRID, a call on your watch list still flags
+  everywhere you hear it, and a need is judged by the band it was heard on — so a 6 m grid
+  stays marked on a roster you are reading while parked on 20 m. Where the band cannot be
+  worked out at all, the icon is shown: a missing chip is worse than an extra one.
+
 ## [1.7.0] — 2026-08-18
 
 ### Added

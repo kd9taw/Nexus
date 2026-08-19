@@ -263,11 +263,22 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     surfaceSet('nexus.operate.layout', m)
   }
 
+  // The per-type alert band scopes, exactly as App builds them — a torn-off surface must
+  // not disagree with the docked one about which need icons this band earns.
+  const needScopes = useMemo(
+    () => ({
+      dxcc: settings?.alertDxccBands,
+      grid: settings?.alertGridBands,
+      rareGrid: settings?.alertRareGridBands,
+    }),
+    [settings?.alertDxccBands, settings?.alertGridBands, settings?.alertRareGridBands],
+  )
   // Connect's map colours stations by need the SAME way the docked map does — gated by the
-  // operator's enabled modes (the Needed board has its own per-mode toggles separately).
+  // operator's enabled modes (the Needed board has its own per-mode toggles separately) and
+  // by the band scopes, which govern the icons as well as the alerts.
   const gatedAlerts = useMemo(
-    () => visibleNeeds(needAlerts, readEnabledModes()),
-    [needAlerts],
+    () => visibleNeeds(needAlerts, readEnabledModes(), needScopes),
+    [needAlerts, needScopes],
   )
   // The SHARED chain, same as App.tsx — the hand-rolled loop this replaces was
   // the pre-fix last-tag-wins map (backend orders alerts priority-DESCENDING,
@@ -565,6 +576,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           roster={roster}
           needByCall={needByCall}
           needAlertsByCall={needAlertsByCall}
+          needScopes={needScopes}
           selectedCall={selected}
           onSelect={onSelect}
           layoutMode={operateLayout}
