@@ -5,6 +5,24 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Groundwork for other languages — nothing visible yet.** Nexus is English-only today and
+  still is after this change: no translation ships, and every screen reads exactly as it did
+  before. What landed is the machinery a translation would need — a string catalog, plural and
+  markup handling, and a test that stops a migrated screen from quietly going back to hardcoded
+  English. Four small pieces of the Settings ▸ Station screen were moved onto it to prove the
+  pattern end to end; the other ~250 files are untouched. There is no language setting to
+  change, because there is nothing yet to change it to.
+
+  The one decision worth stating plainly, because it is the part that could bite an operator:
+  **frequencies, signal reports, callsigns, grid squares, band and mode names, Q-codes and ADIF
+  fields will never be translated or reformatted.** 14.074 MHz is 14.074 MHz in every language.
+  A decimal comma in a frequency field is an operating hazard, not a matter of taste, and the
+  new code cannot produce one.
+
 ## [1.7.0] — 2026-08-18
 
 ### Added

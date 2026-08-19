@@ -1,0 +1,275 @@
+// THE GUARD — a migrated surface cannot drift back to hardcoded English.
+//
+// Migrating 250 files is a long job, and every long job in this tree has the same failure: the
+// migrated part decays while the rest is being done, because nothing stops the next feature
+// from adding a plain `title="…"` next to a translated one. So this exists before the second
+// batch, not after the last.
+//
+// IT COMPUTES. The detector PARSES each file with the TypeScript compiler (already a
+// devDependency — no new one) and asks the syntax tree which strings reach an operator: JSX
+// text, the handful of attributes that are read aloud or shown on hover, string literals used
+// as JSX children, and the first argument of the calls that put prose on screen. It never
+// greps for a phrase, and it never asserts a phrase is absent — the presence-matching CSS
+// tests that let dead fixes ship twice are the reason that rule exists in this project.
+//
+// IT IS PROVEN TO FIRE ON EVERY RUN, not once by hand: `the detector fires` below parses a
+// fixture written to break every rule and asserts it is caught, kind by kind. A guard that has
+// only ever been green is a guard nobody has tested. (It was also driven red by hand against
+// the real files while it was written — a `title="Stop"` added to SettingsStation.tsx produced
+// `components/SettingsStation.tsx:114 attr:title "Stop"`.)
+//
+// ---------------------------------------------------------------------------------------
+// ⚠️ SCOPE — WHAT THIS DOES NOT COVER, stated because a partial guard read as a total one is
+// worse than none.
+// ---------------------------------------------------------------------------------------
+//
+//   • It checks exactly the files in MIGRATED. On 2026-08-18 that is FOUR of ~251 non-test
+//     `.ts`/`.tsx` files in `ui/src`. Everything else — including the other 8,900 lines of
+//     SettingsPanel.tsx — is deliberately unchecked and still hardcoded English.
+//   • The list only ever GROWS. Removing a file from it is how a surface silently un-migrates,
+//     so removal needs the same scrutiny as the migration did.
+//   • It cannot see prose that reaches the operator from Rust (~440 `format!` sites), from a
+//     data registry (`features/registry.ts` labels, `settings/registry.ts` labels/keywords),
+//     or from a string built with `+`. Those are phase-2 and phase-3 decisions.
+//   • It cannot tell a WRONG translation from a right one, and it cannot tell that a key is
+//     used in the right place. It only proves the English is not baked into the JSX.
+//   • A prose string hidden behind a named constant (`const MSG = 'Saved'; <b>{MSG}</b>`)
+//     passes. That is the deliberate escape hatch invariant TOKENS use (see STATION_EXAMPLES),
+//     and it costs an author a conscious act.
+
+import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
+import { EN, type MessageKey } from './index'
+
+/**
+ * The migrated surfaces. ADD A FILE HERE THE MOMENT YOU MIGRATE IT — and not before, or CI
+ * goes red on strings nobody has moved yet.
+ *
+ * The pilot is "Settings ▸ Station": the fieldset itself, the search box that is the way into
+ * it, and the first-run banner that points at it — plus `RevealNudge.tsx`, which is here for
+ * one reason: the Station surface has no emphasised prose, and the rich-text path needs to be
+ * proven on a real shipped sentence rather than on a fixture.
+ */
+const MIGRATED = [
+  'components/SettingsStation.tsx',
+  'components/SettingsSearch.tsx',
+  'components/OnboardingBanner.tsx',
+  'components/RevealNudge.tsx',
+]
+
+/** Attributes whose value a human reads — on hover, or through a screen reader. */
+const VISIBLE_ATTRS = new Set([
+  'title',
+  'placeholder',
+  'alt',
+  'label',
+  'aria-label',
+  'aria-description',
+  'aria-placeholder',
+  'aria-roledescription',
+  'aria-valuetext',
+])
+
+/** Calls whose first argument becomes visible prose. */
+const PROSE_CALLS = new Set(['pushToast', 'withErrorToast', 'confirm', 'alert', 'confirmDialog'])
+
+interface Finding {
+  file: string
+  line: number
+  kind: string
+  text: string
+}
+
+/** Two or more letters in a row — the difference between prose and `✕`, `×`, `—`, `{' '}`. */
+const isProse = (s: string) => /\p{L}{2,}/u.test(s)
+
+/** The literal text an expression contributes, or null when it is computed at runtime. */
+function literalText(sf: ts.SourceFile, n: ts.Node | undefined): string | null {
+  if (!n) return null
+  if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return n.text
+  if (ts.isTemplateExpression(n)) {
+    return [n.head.text, ...n.templateSpans.map((s) => s.literal.text)].join(' ')
+  }
+  if (ts.isJsxExpression(n)) return literalText(sf, n.expression)
+  if (ts.isParenthesizedExpression(n)) return literalText(sf, n.expression)
+  if (ts.isConditionalExpression(n)) {
+    // `title={ok ? 'Receiving audio' : 'No RX audio'}` — both arms are prose.
+    const parts = [literalText(sf, n.whenTrue), literalText(sf, n.whenFalse)].filter(Boolean)
+    return parts.length ? parts.join(' ') : null
+  }
+  return null
+}
+
+/** Every user-visible string literal in one source file. */
+export function findHardcoded(file: string, src: string): Finding[] {
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.ES2020, true, ts.ScriptKind.TSX)
+  const out: Finding[] = []
+  const line = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1
+  const add = (n: ts.Node, kind: string, text: string) =>
+    out.push({ file, line: line(n), kind, text: text.trim().replace(/\s+/g, ' ').slice(0, 60) })
+
+  const visit = (n: ts.Node): void => {
+    if (ts.isJsxText(n)) {
+      if (isProse(n.text)) add(n, 'jsx-text', n.text)
+    } else if (ts.isJsxAttribute(n)) {
+      const name = n.name.getText(sf)
+      if (VISIBLE_ATTRS.has(name)) {
+        const text = literalText(sf, n.initializer)
+        if (text && isProse(text)) add(n, `attr:${name}`, text)
+      }
+    } else if (
+      ts.isJsxExpression(n) &&
+      n.parent &&
+      (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent))
+    ) {
+      // A literal used as a JSX child: `{'Save'}`, `{`Work ${call}`}`.
+      const text = literalText(sf, n.expression)
+      if (text && isProse(text)) add(n, 'jsx-child', text)
+    } else if (ts.isCallExpression(n)) {
+      const callee = ts.isPropertyAccessExpression(n.expression)
+        ? n.expression.name.text
+        : ts.isIdentifier(n.expression)
+          ? n.expression.text
+          : ''
+      if (PROSE_CALLS.has(callee)) {
+        const text = literalText(sf, n.arguments[0])
+        if (text && isProse(text)) add(n, `call:${callee}`, text)
+      }
+    }
+    n.forEachChild(visit)
+  }
+  visit(sf)
+  return out
+}
+
+/** Every catalog key a file names — `t('…')` and `<T k="…">`. */
+export function findKeys(file: string, src: string): string[] {
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.ES2020, true, ts.ScriptKind.TSX)
+  const out: string[] = []
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 't') {
+      const a = n.arguments[0]
+      if (a && ts.isStringLiteral(a)) out.push(a.text)
+    } else if (ts.isJsxAttribute(n) && n.name.getText(sf) === 'k') {
+      const v = n.initializer
+      if (v && ts.isStringLiteral(v)) out.push(v.text)
+    } else if (ts.isPropertyAssignment(n)) {
+      // Key tables: `{ labelKey: 'settings.station.callsign.label' }`.
+      const name = n.name.getText(sf)
+      if (/Key$/.test(name) && ts.isStringLiteral(n.initializer)) out.push(n.initializer.text)
+      if (name === 'prose' && ts.isStringLiteral(n.initializer)) out.push(n.initializer.text)
+    }
+    n.forEachChild(visit)
+  }
+  visit(sf)
+  return out
+}
+
+const read = (rel: string) => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), 'utf8')
+
+// ── the guard fires (positive control) ────────────────────────────────────────────────
+
+const VIOLATIONS = `
+import { pushToast } from '../toast'
+export function Bad({ ok, call }: { ok: boolean; call: string }) {
+  return (
+    <div title="Stop transmitting" aria-label="Dismiss alert">
+      Hardcoded prose here
+      {'Also hardcoded'}
+      <input placeholder={\`QSY to \${call}\`} />
+      <button title={ok ? 'Receiving audio' : 'No RX audio'} onClick={() => pushToast('Could not save')} />
+      <span aria-hidden>✕</span>
+      {' '}
+    </div>
+  )
+}
+`
+
+const CLEAN = `
+import { t } from '../i18n'
+import { T } from '../i18n/T'
+export function Good({ call }: { call: string }) {
+  return (
+    <div title={t('common.dismiss')} aria-label={t('settings.search.label')}>
+      <T k="reveal.prompt" tags={{ b: <strong /> }} vals={{ achievement: call, feature: call }} />
+      <input placeholder={t('settings.search.placeholder')} type="search" role="combobox" />
+      <span aria-hidden>✕</span>{' '}
+      <em>{t('reveal.enable')}</em>
+    </div>
+  )
+}
+`
+
+describe('the detector fires', () => {
+  const found = findHardcoded('fixture.tsx', VIOLATIONS)
+  const kinds = found.map((f) => f.kind).sort()
+
+  it('catches every kind of hardcoded operator-visible string', () => {
+    expect(kinds).toEqual([
+      'attr:aria-label',
+      'attr:placeholder',
+      'attr:title',
+      'attr:title',
+      'call:pushToast',
+      'jsx-child',
+      'jsx-text',
+    ])
+  })
+
+  it('reports where, so the failure is actionable', () => {
+    const text = found.find((f) => f.kind === 'jsx-text')
+    expect(text?.text).toBe('Hardcoded prose here')
+    expect(text?.line).toBeGreaterThan(0)
+  })
+
+  it('does NOT fire on glyphs, spacers or non-visible attributes — the other direction', () => {
+    expect(findHardcoded('fixture.tsx', CLEAN)).toEqual([])
+  })
+})
+
+// ── the migrated surfaces are clean (the guard proper) ────────────────────────────────
+
+describe('migrated surfaces carry no hardcoded operator-visible strings', () => {
+  it('has a non-empty scope — a guard over nothing proves nothing', () => {
+    expect(MIGRATED.length).toBeGreaterThan(0)
+    for (const rel of MIGRATED) expect(read(rel).length, `${rel} is readable`).toBeGreaterThan(0)
+  })
+
+  for (const rel of MIGRATED) {
+    it(`${rel}`, () => {
+      const found = findHardcoded(rel, read(rel))
+      expect(
+        found.map((f) => `${f.file}:${f.line} ${f.kind} "${f.text}"`),
+        'this file is on the migrated list — move the string into ui/src/i18n/en.ts and ' +
+          'call t() / <T>, or, if it is a technical token (callsign, grid, frequency, mode, ' +
+          'ADIF field), name it as a constant and say so',
+      ).toEqual([])
+    })
+  }
+})
+
+// ── keys and catalog agree ────────────────────────────────────────────────────────────
+
+describe('every key resolves, and every entry is used', () => {
+  const used = new Set(MIGRATED.flatMap((rel) => findKeys(rel, read(rel))))
+
+  it('finds keys at all — the extractor is not silently returning nothing', () => {
+    expect(used.size).toBeGreaterThan(10)
+  })
+
+  it('names no key the English catalog lacks', () => {
+    const missing = [...used].filter((k) => !(k in EN))
+    expect(missing, 'a t()/<T> key with no catalog entry renders the key itself').toEqual([])
+  })
+
+  it('leaves no orphan entry behind', () => {
+    const orphans = (Object.keys(EN) as MessageKey[]).filter((k) => !used.has(k))
+    expect(
+      orphans,
+      'catalog entries nothing references — every one of these would be handed to a ' +
+        'translator to translate for nobody',
+    ).toEqual([])
+  })
+})

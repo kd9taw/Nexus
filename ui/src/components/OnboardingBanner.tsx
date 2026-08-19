@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 interface Props {
   /** Navigate to the Settings view. */
   onOpenSettings: () => void
@@ -15,12 +17,12 @@ export function OnboardingBanner({ onOpenSettings, onDismiss }: Props) {
     <div className="onboarding-banner" role="note">
       <span className="onboarding-icon" aria-hidden>👋</span>
       <button type="button" className="onboarding-text" onClick={onOpenSettings}>
-        Set your callsign &amp; station in Settings →
+        {t('onboarding.setStation')}
       </button>
       <button
         type="button"
         className="onboarding-dismiss"
-        aria-label="Dismiss"
+        aria-label={t('common.dismiss')}
         onClick={onDismiss}
       >
         ×
