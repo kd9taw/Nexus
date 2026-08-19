@@ -2189,6 +2189,21 @@ export const EN = {
   // The stand-ins when the backend has not named a home channel or a partner yet.
   'roam.status.home': 'home',
   'roam.status.partner': 'partner',
+  // The two Roam chips in the Tempo conversation — the launchpad's (which spells the state
+  // out) and the header's (which is compact). `{{status}}` is the backend's short state:
+  // a band-plan channel label, or its own `paused`. The ⇄ and ⚙ glyphs stay in the
+  // component; a glyph is not prose.
+  'roam.chip.title':
+    'Roam — coordinated QSY: you and your partner move channels together, announced in the clear (never private). Click to enable/disable.',
+  'roam.chip.launch.on': 'Roam on',
+  'roam.chip.launch.on.status': 'Roam on · {{status}}',
+  'roam.chip.launch.off': 'Roam off',
+  'roam.chip.label': 'Roam',
+  'roam.chip.label.on': 'Roam · on',
+  'roam.chip.label.status': 'Roam · {{status}}',
+  'roam.chip.settings.label': '⚙ Roam settings',
+  'roam.chip.settings.title': 'Roam settings — channel set, hop cadence, move/pause/stop',
+  'roam.chip.settings.aria': 'Roam settings',
 
   // ── Decode alerts (the beeps' toasts and the spoken batch summary) ──────────────────
   // ⚠️ `{{call}}` is a callsign, `{{entity}}` a DXCC entity name, `{{grid}}` a Maidenhead
@@ -4956,6 +4971,480 @@ export const EN = {
   'settings.accessibility.decodeTick.label': 'Decode-batch tick',
   'settings.accessibility.decodeTick.hint':
     "A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.",
+
+  // ── Connect — the board, its pane grid, and the one-line pane projections ───────────
+  // ⚠️ THE UNITS RULE OWNS THIS SURFACE. Band and mode names, bearings (`~47°`), MUF and
+  // dial frequencies, distances, octants, SFI/Kp readings, beacon callsigns, the P.533
+  // engine name, and every word the BACKEND sends — the advisory headline, the workability
+  // (`Fair`), the dual-state word (`Open`), the insight text, the Kp impact sentence and the
+  // getting-out direction summary — arrive as values and are never translated here. Two
+  // intent chips are named for a programme and a band (`POTA/SOTA`, `6m/VHF`), so those two
+  // labels stay in `ConnectView.tsx` as tokens; the other two are prose and are below.
+  'connect.intent.aria': 'What are you doing?',
+  'connect.intent.dx.label': 'Chase DX',
+  'connect.intent.dx.title': 'Beam map, need-colored, live openings',
+  'connect.intent.pota.title': 'World view, park/summit activators',
+  'connect.intent.casual.label': 'Ragchew',
+  'connect.intent.casual.title': 'Who can I hear — signal-colored, calm',
+  'connect.intent.vhf.title': 'Openings front-and-center (Es / F2 / aurora)',
+  'connect.map3d.title.on':
+    'Using the 3D WebGL globe — click for the 2D map (works on any PC)',
+  'connect.map3d.title.off': 'Switch to the 3D WebGL globe (best on higher-end PCs)',
+  'connect.globe3d.loading': 'Loading 3D globe…',
+  'connect.popOut.label': '⧉ Pop out',
+  'connect.popOut.title': 'Open Connect in its own window (for a second monitor)',
+
+  // The pane frame: one grid slot's header. `{{slot}}` is the slot id (`left1`, `bottom3`),
+  // and the B2/B3 picker groups are named by their tier code — neither is prose.
+  'connect.slot.pick.aria': 'Choose what the {{slot}} slot shows',
+  'connect.slot.pick.title': 'Choose what this slot shows',
+  'connect.slot.group.core': 'Panels',
+
+  // Pane names, as they read in the picker and in each pane's header.
+  'connect.pane.advisory.title': 'Conditions',
+  'connect.pane.bandAdvisor.title': 'Band Advisor',
+  'connect.pane.selection.title': 'Selection',
+  'connect.pane.outlook.title': 'Band Outlook',
+  'connect.pane.openings.title': 'Openings',
+  'connect.pane.openingsLog.title': 'Openings Log',
+  'connect.pane.spacewx.title': 'Space Wx',
+  'connect.pane.getout.title': 'Getting Out',
+  'connect.pane.bestband.title': 'Best Band → Region',
+  'connect.pane.activity.title': 'Activity Matrix',
+  'connect.pane.beacons.title': 'NCDXF Beacons',
+  'connect.pane.insights.title': 'Insights',
+  'connect.pane.chase.title': 'Chase',
+  'connect.pane.greyline.title': 'Greyline',
+  'connect.pane.bandHours.title': '24h Band×Hour',
+  'connect.pane.esNowcast.title': 'Sporadic-E',
+  'connect.pane.measuredMuf.title': 'Measured MUF',
+  'connect.pane.chaseFeed.title': 'Chase Feed',
+  'connect.pane.satPasses.title': 'Satellite Passes',
+  'connect.pane.rotor.title': 'Rotor',
+  'connect.pane.scope.title': 'Band Scope',
+  'connect.pane.contests.title': 'Contests',
+
+  // The five self-fetching panes describe themselves: their data lives inside the
+  // component, so their one-line projection is a standing hint rather than a reading.
+  'connect.pane.openingsLog.basic':
+    'A historical record of every detected band opening (6m/2m tropo, Es, aurora) builds here.',
+  'connect.pane.satPasses.basic':
+    'Upcoming amateur-satellite passes over your QTH appear here once orbital elements load.',
+  'connect.pane.rotor.basic':
+    'Rotator control appears here once you pick a rotator model and port in Settings ▸ Radio ▸ Rotator.',
+  'connect.pane.scope.basic':
+    "A live spectrum of the active radio's passband — band noise and signals at a glance.",
+  'connect.pane.scope.idle': "Flat — the radio's audio isn't reaching Nexus right now.",
+  'connect.pane.contests.basic': 'Upcoming HF/VHF contests (WA7BNM) appear here once online.',
+
+  // Where a snapshot came from. The words are the chip; the freshness is a number.
+  'connect.prov.title': 'Data provenance',
+  'connect.prov.live': 'LIVE',
+  'connect.prov.partial': 'PARTIAL',
+  'connect.prov.cached': 'CACHED {{mins}}m',
+  'connect.prov.offline': 'NO LIVE DATA',
+
+  // The selection panel. Each ` · `-separated item is a datum of its own, not a clause of
+  // one sentence, so each has its own key and the separator stays in the component.
+  'connect.selection.clear.title': 'Clear selection',
+  'connect.selection.age.secs': '{{secs}}s ago',
+  'connect.selection.age.mins': '{{mins}}m ago',
+  'connect.selection.heardYou': 'heard YOU',
+  'connect.selection.approx': '~location',
+  'connect.selection.decoded': 'decoded here',
+  'connect.selection.workedBefore': 'worked before',
+  'connect.selection.bestShot': 'Best shot: {{window}}',
+  'connect.selection.work.title':
+    "Rig jumps to this spot's band/mode/frequency; the right cockpit opens",
+  'connect.selection.work.label': '▶ Work {{band}}',
+  // The engine behind a prediction. `P.533` is the ITU recommendation's number and stays in
+  // the component beside it.
+  'connect.engine.modelled': 'modelled',
+  'connect.engine.outlook': 'modelled · DX',
+
+  'connect.path.heading': 'Path to {{call}}',
+  'connect.path.muf.title':
+    "Maximum Usable Frequency — the path's ceiling right now. Bands below it are open; bands above it are closed.",
+  'connect.path.muf': 'Ceiling (MUF): <b>{{muf}} MHz</b>',
+  'connect.path.none': 'No HF band modelled workable on this path right now.',
+  'connect.path.greyline.title': 'Greyline (terminator) opening',
+  'connect.path.modeChip.title':
+    '{{mode}}: ~{{pct}}% of days this circuit works right now (P.533)',
+  'connect.outlook.heading': 'Band outlook',
+  'connect.outlook.muf.title':
+    'Maximum Usable Frequency — the modeled ceiling to long-haul DX right now. Bands below it are open; above it, closed.',
+  'connect.outlook.none': 'No HF band modelled workable to DX right now.',
+
+  'connect.getout.heading': 'Am I getting out?',
+  'connect.getout.none': 'No reception reports yet — call CQ, then watch who hears you.',
+  'connect.getout.summary': '<b>{{count}}</b> hearing you · furthest <b>{{km}} km</b>',
+  'connect.getout.select.title': 'Select {{call}} on the map',
+
+  // ── The Basic projections — one whole sentence per pane, per state ──────────────────
+  // Every one of these was assembled from fragments. They are whole sentences now, with
+  // the variable part interpolated, because a sentence glued from clauses cannot be
+  // translated into a language that orders them differently.
+  'connect.basic.loading': 'Reading the band…',
+  'connect.basic.offline': 'No live propagation data right now.',
+  'connect.basic.bandAdvisor.offline': 'No live band data yet.',
+  'connect.basic.bandAdvisor.none': 'No bands modelled open right now.',
+  'connect.basic.bandAdvisor.best': 'Best band now: {{band}} ({{word}}).',
+  'connect.basic.bandAdvisor.bestRegion': 'Best band now: {{band}} to {{region}} ({{word}}).',
+  'connect.basic.selection.none': 'Tap a station, spot, or DXpedition on the map.',
+  // Two whole sentences — "and is hearing you" changes what the line SAYS, so it is inside
+  // the message, not glued after it. The heading and the band are known only sometimes, so
+  // each is an optional clause carrying its own separator, exactly as the map's spot
+  // tooltip does above (`prop.spotTooltip.*`).
+  'connect.basic.selection': '{{call}} — {{who}}{{az}}{{band}}.',
+  'connect.basic.selection.hearing': '{{call}} — {{who}}{{az}}{{band}}, and is hearing you.',
+  'connect.basic.selection.az': ' {{az}}',
+  'connect.basic.selection.band': ' on {{band}}',
+  'connect.basic.outlook.none.call': 'No HF band modelled workable to {{call}} right now.',
+  'connect.basic.outlook.none.dx': 'No HF band modelled workable for DX right now.',
+  'connect.basic.outlook.path': '{{band}} is your best path to {{call}} now — {{window}}.',
+  'connect.basic.outlook.best': 'Best DX band now: {{band}} ({{workability}}).',
+  'connect.basic.openings.none': 'No band openings right now.',
+  // The station count reads `stns` at every count today; a locale that needs a singular
+  // supplies one as an overlay. English is left exactly as it shipped.
+  'connect.basic.openings': '{{band}} OPEN {{octant}} — ~{{km}} km, {{stations}} stns.',
+  'connect.basic.spaceWx.unavailable': 'Space weather unavailable.',
+  'connect.basic.spaceWx': 'SFI {{sfi}}, Kp {{kp}}: {{impact}}.',
+  'connect.basic.spaceWx.flare':
+    'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress.',
+  'connect.basic.spaceWx.blackout':
+    'SFI {{sfi}}, Kp {{kp}}: {{impact}}; R{{scale}} radio blackout.',
+  'connect.basic.spaceWx.flareBlackout':
+    'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress; R{{scale}} radio blackout.',
+  'connect.basic.getout.dir': '{{count}} hearing you — {{dir}}.',
+  'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{km}} km.',
+  'connect.basic.bestband.none': 'No region reachable on any band yet.',
+  'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
+  'connect.basic.activity.offline': 'No live activity data right now.',
+  'connect.basic.activity.none': 'Quiet on all bands — no activity around you yet.',
+  'connect.basic.activity.top': {
+    one: 'Hottest: {{band}} to {{region}} ({{count}} stn).',
+    other: 'Hottest: {{band}} to {{region}} ({{count}} stns).',
+  },
+  // `{{list}}` is the beacon callsigns with their bands — tokens, built in the component.
+  'connect.basic.beacons.heard': 'Beacons heard: {{list}}.',
+  'connect.basic.beacons.now': 'Beacons now: {{list}}.',
+  'connect.basic.insights.none': 'No notable changes right now.',
+  'connect.basic.greyline.noGrid': 'Set your grid in Settings to see your greyline windows.',
+  'connect.basic.greyline.sunrise':
+    'Your sunrise greyline in {{when}} — watch 160/80/40m long-path.',
+  'connect.basic.greyline.sunset':
+    'Your sunset greyline in {{when}} — watch 160/80/40m long-path.',
+  'connect.basic.greyline.in.hours': '{{hours}}h {{mins}}m',
+  'connect.basic.greyline.in.mins': '{{mins}}m',
+  'connect.basic.bandHours.none': 'No workable bands modelled in the next 24 h.',
+  'connect.basic.bandHours.peak': '{{band}} peaks {{hour}}Z ({{pct}}%).',
+  'connect.basic.muf.noData': 'No live ionosonde data right now.',
+  'connect.basic.muf.noneNearby': 'No ionosonde MUF reported nearby.',
+  'connect.basic.muf.nearby': 'Measured MUF nearby: {{mhz}} MHz ({{mins}} min old).',
+  'connect.basic.es.open': {
+    one: '{{band}} OPEN {{octant}} — ~{{km}} km {{mode}}, {{count}} stn.',
+    other: '{{band}} OPEN {{octant}} — ~{{km}} km {{mode}}, {{count}} stns.',
+  },
+  // ⚠️ `{{freq}}` is the 6 m Es calling frequency, interpolated rather than written into
+  // the sentence: a literal frequency in a catalog is one a translator can reformat.
+  'connect.basic.es.season': 'Es season: watch {{freq}} for sudden 6m DX.',
+  'connect.basic.es.quiet': '6m quiet — outside Es season.',
+
+  // ── Tempo — the conversation, its composer, the bubbles and the CQ launchpad ────────
+  // The CQ line itself (`CQ KD9TAW EN52`) and the YOURCALL / ---- stand-ins it uses before
+  // a callsign and grid are set, the quick-reply macros (RR73, 73 and whatever the operator
+  // typed), the Winter Field Day chip, and every SNR / audio-frequency / dT / tier reading
+  // under a bubble are tokens and stay in the components.
+  'tempo.empty.heading': 'No conversation selected',
+  'tempo.empty.body': 'Pick a station from the roster, or call CQ to be heard on the band.',
+  // `<chip>` is the Field Day chip; the call site supplies the element and the event name.
+  'tempo.empty.fdActive':
+    '<chip>{{event}}</chip> active — call CQ, then send your exchange from the chat box.',
+  'tempo.cq.button': '📣 Call CQ',
+  'tempo.cq.onAir': 'Transmits the standard <b>{{cq}}</b> and arms TX.',
+  'tempo.heartbeat.launch.on': '💓 Heartbeat on',
+  'tempo.heartbeat.launch.off': '🤍 Heartbeat off',
+  'tempo.heartbeat.launch.title':
+    'Periodically beacon your presence so other Tempo stations can hear you and deliver queued messages — turn off to stay silent',
+  'tempo.heartbeat.chip.on': '💓 Heartbeat',
+  'tempo.heartbeat.chip.off': '🤍 Heartbeat',
+  'tempo.heartbeat.chip.title':
+    'Presence heartbeat — periodically beacon so other Tempo stations can hear you and deliver queued messages',
+  'tempo.band.quickbar.aria': 'Band broadcasts',
+  'tempo.header.band': 'Band — open calls',
+  'tempo.header.broadcastAs': 'You broadcast as DE {{call}}',
+  // Reads `1 messages` at a count of one today, and this phase changes no visible text: the
+  // English stays one form. `{{count}}` still selects a form in any locale that supplies one.
+  'tempo.header.messages': '{{count}} messages',
+  'tempo.header.fd.title':
+    'Winter Field Day is active — Tempo is a first-class Field Day contact surface',
+  'tempo.header.fd.working': 'Working {{call}}',
+  'tempo.header.fd.running': 'Running (calling CQ)',
+  'tempo.header.fd.searchPounce': 'Search & pounce',
+  'tempo.messages.empty': 'No messages yet — say hello.',
+  'tempo.composer.quickReplies.aria': 'Quick replies',
+  'tempo.composer.fdExchange.title': 'Send your Winter Field Day exchange (class + section)',
+  'tempo.composer.placeholder.broadcast': 'Broadcast to all (DE {{call}}…)',
+  'tempo.composer.placeholder.direct': 'Message {{peer}}…',
+  'tempo.composer.aria.broadcast': 'Broadcast to all on frequency',
+  'tempo.composer.aria.direct': 'Message {{peer}}',
+  'tempo.composer.send': 'Send',
+  // The capacity meter. `{{frames}}/{{max}}` is a count of T/R overs and `{{payload}}` the
+  // per-over character budget — the numbers are invariant, the sentence is not.
+  'tempo.meter.title': {
+    one: '{{count}} character · {{frames}}/{{max}} overs. Each over carries up to {{payload}} characters; {{max}} overs max — longer text is trimmed before it sends.',
+    other:
+      '{{count}} characters · {{frames}}/{{max}} overs. Each over carries up to {{payload}} characters; {{max}} overs max — longer text is trimmed before it sends.',
+  },
+  'tempo.meter.unit': 'overs',
+  'tempo.meter.full': 'full',
+  // One bubble's delivery state. The ticks themselves (✓, ✓✓, ⚠, ⋯, ↻) are glyphs and stay
+  // in the component; this is what a screen reader hears and the hover says.
+  'tempo.bubble.abandoned': 'Not sent — abandoned on restart. Tap to send it again.',
+  'tempo.bubble.noAck': 'Sent {{attempts}}× — no acknowledgement. Tap to send it again.',
+  'tempo.bubble.held': 'Waiting to send',
+  'tempo.bubble.held.peer': 'Waiting to send — {{call}} not heard yet',
+  'tempo.bubble.sending': 'Sending — try {{attempt}}',
+  'tempo.bubble.sent': 'Sent',
+  'tempo.bubble.onAir': 'On air',
+  'tempo.bubble.delivered': 'Delivered',
+  'tempo.bubble.confirmed': 'Confirmed — they answered after this went out',
+  'tempo.bubble.resend.title': 'Tap to re-send this message',
+  'tempo.bubble.incomplete.title':
+    'Only {{got}} of {{total}} parts of this message were received — the rest never arrived',
+  'tempo.bubble.incomplete.badge': '{{got}} of {{total}} received',
+
+  // ── APRS — the cockpit, its two health chips, and the station card ──────────────────
+  // ⚠️ THE UNITS RULE OWNS THIS SURFACE. Callsign-SSIDs (`W9XYZ-9`), APRS symbol codes and
+  // their table, digipeater paths (`WIDE1-1`), every dial frequency and channel, dBFS
+  // levels, positions, grids, distances, bearings, speeds, altitudes, the packet kind and
+  // the weather readings are DATA — they arrive as values and are never translated. So is
+  // the rig-menu path in the level advice (`IC-9700: SET > Connectors > USB AF Output
+  // Level`): it is what the operator reads on the radio's own screen.
+  // ⚠️ THE CHANNEL IS INTERPOLATED, never written into a sentence — a literal `144.390`
+  // in this file is a frequency a translator could reformat, and `i18n.invariant.test.ts`
+  // refuses one.
+  // ⚠️ NOT HERE, deliberately: the TX On/Off arm latch. Its label, its two tooltips and its
+  // accessible name are a transmit-path control and move with that batch, not this one.
+  'aprs.head.hint': 'AFSK-1200 packet — decode positions/messages, send a beacon',
+  'aprs.head.packets': '{{count}} pkts',
+  'aprs.channel.title':
+    'APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)',
+  'aprs.retune.label': 'Re-tune',
+  'aprs.retune.title.loading': 'Reading your APRS channel…',
+  'aprs.retune.title':
+    'Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)',
+  'aprs.retune.title.noCoverage':
+    "This radio doesn't cover {{freq}} MHz — RF APRS needs a VHF radio.",
+  'aprs.dial.title': "The rig's current dial / band / mode (this view hides the top bar's readout)",
+  // Monitor arms the DECODER on the receive audio. Three states, because "decoding" and
+  // "may ack by itself" are different things — the ack still needs TX on.
+  'aprs.monitor.label.auto': '● Monitoring (auto)',
+  'aprs.monitor.label.explicit': '● Monitoring',
+  'aprs.monitor.label.off': 'Monitor',
+  'aprs.monitor.title.explicit':
+    'You armed the decoder, so automatic acks are allowed — an incoming message addressed to you is acked when TX is on. Click to stop.',
+  'aprs.monitor.title.auto':
+    'Armed automatically when you opened APRS: RECEIVE ONLY. It will never send an automatic ack. To allow those, stop it and arm it yourself, then turn TX on. Click to stop.',
+  'aprs.monitor.title.off':
+    'Arm the APRS decoder on the RX audio. Arming it yourself also allows automatic acks once TX is on.',
+  // The one-click fix beside the wrong-frequency chip: it moves the DIAL, and keys nothing.
+  'aprs.tuneFix.label': 'Tune to {{freq}}',
+  'aprs.tuneFix.title': 'Tune the radio to {{freq}} FM for APRS',
+  'aprs.showInet.label.shown': 'Internet {{count}}',
+  'aprs.showInet.label.hidden': 'Internet {{count}} hidden',
+  'aprs.showInet.title.hide': {
+    one: 'Hide the {{count}} station only the internet has reported, leaving what this radio actually hears',
+    other:
+      'Hide the {{count}} stations only the internet has reported, leaving what this radio actually hears',
+  },
+  'aprs.showInet.title.show': {
+    one: 'Show the {{count}} station the internet feed reports',
+    other: 'Show the {{count}} stations the internet feed reports',
+  },
+
+  // The internet feed's chip and its controls.
+  'aprs.inet.chip.title': '{{detail}}\n\nClick for internet feed controls.',
+  'aprs.inet.panel.aria': 'APRS-IS internet feed',
+  'aprs.inet.enabled.label': 'Internet feed',
+  'aprs.inet.radius.label': 'Radius (km)',
+  'aprs.inet.watch.label': 'Watched calls',
+  'aprs.inet.note':
+    'Changing the radius or watched calls reconnects the feed — the server does the filtering, so a new subscription has to be sent. Server, port, traffic types and the iGate live in Settings ▸ APRS.',
+  'aprs.inet.note.open': 'Open them',
+  // The feed's four states. `{{gate}}` is the iGate sentence below — a WHOLE sentence with
+  // its own leading space, empty when the iGate is off, interpolated so a translation can
+  // place it rather than having it glued on after the fact.
+  'aprs.inet.off.label': 'Internet off',
+  'aprs.inet.off.detail': 'The APRS-IS feed is switched off.',
+  'aprs.inet.connecting.label': 'Internet connecting',
+  'aprs.inet.connecting.detail':
+    'Not connected to APRS-IS yet — retrying with backoff.{{gate}}',
+  'aprs.inet.quiet.label': 'Internet quiet',
+  'aprs.inet.quiet.detail.recent':
+    'Connected, but no packets recently — nothing matches your filter. Widen the radius or add watched calls.{{gate}}',
+  'aprs.inet.quiet.detail.never':
+    'Connected, but no packets yet — nothing matches your filter. Widen the radius or add watched calls.{{gate}}',
+  'aprs.inet.live.label': 'Internet {{count}}',
+  'aprs.inet.live.detail.verified': 'Connected and verified — {{count}} packets received.{{gate}}',
+  'aprs.inet.live.detail.readOnly': 'Connected read-only — {{count}} packets received.{{gate}}',
+  // `{{reason}}` is the server's own rejection text, printed as it arrived.
+  'aprs.inet.gate': 'iGate on: {{uploaded}} contributed.',
+  'aprs.inet.gate.held': 'iGate on: {{uploaded}} contributed, {{held}} held back.',
+  'aprs.inet.gate.held.reason':
+    'iGate on: {{uploaded}} contributed, {{held}} held back (last: {{reason}}).',
+
+  // Which radio the decoder is listening to, named only when more than one could be.
+  'aprs.radioNote.label': 'on {{name}}',
+  'aprs.radioNote.detail':
+    '{{count}} of your radios cover this band, so APRS had a choice to make. It follows the active radio, currently {{name}} — if that is not the rig your packet audio is wired to, this is why nothing is decoding. Routing rules decide which radio a band goes to: Settings → Radios.',
+
+  // The decode health chip. `{{level}}` is the live input reading below, interpolated whole
+  // so a translation places it; `{{db}}` is a dBFS number and never formatted for a locale.
+  'aprs.health.level.silence': 'input over the most recent 0.1 s: digital silence (exactly zero)',
+  'aprs.health.level.peak': 'input peak over the most recent 0.1 s: {{db}} dBFS',
+  'aprs.health.dbfs.silence': 'silence',
+  'aprs.health.norf.label': 'No 2 m radio',
+  'aprs.health.norf.detail':
+    "This radio doesn't cover {{freq}} MHz, so it can't receive RF APRS. RF APRS needs a VHF radio. The internet feed works without one — turn it on to see APRS traffic reported by other stations.",
+  'aprs.health.off.label': 'Monitor off',
+  'aprs.health.off.detail':
+    'The APRS decoder is not running. Arm Monitor to decode the RX audio.',
+  // Three whole messages, because each names a DIFFERENT thing as wrong — the mode, the
+  // dial, or both — and the closing sentence belongs to all three.
+  'aprs.health.wrongFreq.label': 'Wrong frequency',
+  'aprs.health.wrongMode.label': 'Wrong mode',
+  'aprs.health.wrongMode.detail':
+    'The radio is on {{want}} but in {{mode}} — APRS needs FM. FM packet audio demodulated as SSB is garbled, so nothing will decode however strong the signal is. Tune to the APRS channel to start hearing it.',
+  'aprs.health.wrongFreqMode.detail':
+    'The radio is on {{dial}} {{mode}} — APRS needs {{want}} FM. Nothing on this channel can decode as APRS packet, whatever the audio level says. Tune to the APRS channel to start hearing it.',
+  'aprs.health.wrongFreq.detail':
+    'The radio is on {{dial}} — APRS needs {{want}}. Nothing on this channel can decode as APRS packet, whatever the audio level says. Tune to the APRS channel to start hearing it.',
+  'aprs.health.noCapture.label': 'No input',
+  'aprs.health.noCapture.detail':
+    'Armed, but no audio samples are arriving at all — the capture device is not delivering anything. Check that Input Device (RX) in Settings ▸ Radio ▸ Audio is the radio (not a microphone or a disconnected device); what you hear on the speaker does not tell you what the app is capturing.',
+  'aprs.health.decoding.label': '{{count}} decoded',
+  'aprs.health.decoding.detail': '{{count}} packets decoded since arming. Live {{level}}.',
+  'aprs.health.decoding.detail.aged':
+    '{{count}} packets decoded since arming, last one {{age}} ago. Live {{level}}.',
+  'aprs.health.unreadable.label': '{{count}} failed CRC',
+  // `{{advice}}` is the headroom sentence below — empty when the burst sits in the healthy
+  // band, and carrying its own leading space when it does not.
+  'aprs.health.unreadable.detail':
+    '{{count}} bursts heard since arming, last one {{age}} ago — none passed the checksum. Some of that is normal: when the squelch opens partway through a burst the start of the packet is lost, and a part-heard packet can never pass. It is only a fault if nothing ever decodes — in which case check the rig is on {{channel}} in FM.{{advice}} Last burst peaked {{burst}}; live {{level}}.',
+  // Headroom, never a cause: measurement says level does not decide whether a frame decodes.
+  // `sample(s)` reads the same at every count today, and this phase changes no visible text.
+  'aprs.health.advice.clipping':
+    "The burst is CLIPPING (peaked {{peak}}, {{samples}} sample(s) at the rails) — lower the rig's USB AF output level, or the Windows input level for that device. Packet survives a lot of clipping, so this costs headroom rather than decodes, but there is no reason to run into the rails.",
+  'aprs.health.advice.quiet':
+    "The burst peaked {{peak}}, well below the healthy {{min}} to {{max}} band — raise the rig's USB AF output level (IC-9700: SET > Connectors > USB AF Output Level) or the Windows input level for that device. That buys margin against noise; it is not by itself why a checksum fails.",
+  'aprs.health.silent.label': 'Silent',
+  'aprs.health.silent.detail':
+    'The input is alive and delivering audio, but it is silent — normally that just means the squelch is closed between packets, which is what an idle FM channel looks like. To confirm the routing, open the squelch: hiss should show up here as a level. If it still reads silent with the squelch open, the wrong input device is selected. Live {{level}}.',
+  'aprs.health.listening.label': 'Listening',
+  'aprs.health.listening.detail':
+    'Audio is reaching the decoder and no packets have been heard recently — a quiet channel. Live {{level}}. With the squelch open, hiss should sit around {{hiss}}; a packet burst should peak {{min}} to {{max}}.',
+
+  // How long ago, compactly. The unit letter rides inside the message with its number so a
+  // translation can never separate the two.
+  'aprs.age.secs': '{{secs}}s',
+  'aprs.age.mins': '{{mins}}m',
+  'aprs.age.hours': '{{hours}}h',
+
+  // The Via column: how this station reached us. The stored source kind (`rf` / `inet` /
+  // `both`) is the token; these are its words. A locale keeps `RF` — it is the ham
+  // abbreviation — and is free to shorten `net` its own way.
+  'aprs.source.rf.label': 'RF',
+  'aprs.source.inet.label': 'net',
+  'aprs.source.both.label': 'RF+net',
+  'aprs.source.rf.title': 'Your receiver decoded this station off the air',
+  'aprs.source.inet.title':
+    'Reported by APRS-IS — your receiver has not heard this station',
+  'aprs.source.both.title': 'Heard off the air by your receiver AND reported by APRS-IS',
+
+  // The beacon and message composers. The symbol names come from `aprsBeacon.ts` and the
+  // channel list from `APRS_FREQS`; both are read as values.
+  'aprs.beacon.title': 'Position beacon',
+  'aprs.beacon.lat.label': 'Lat',
+  'aprs.beacon.lon.label': 'Lon',
+  'aprs.beacon.symbol.label': 'Symbol',
+  'aprs.beacon.comment.label': 'Comment',
+  'aprs.beacon.path.label': 'Path',
+  'aprs.beacon.send': 'Send beacon',
+  'aprs.msg.title': 'Message',
+  'aprs.msg.to.label': 'To',
+  'aprs.msg.to.placeholder': 'callsign',
+  'aprs.msg.text.label': 'Text',
+  'aprs.msg.text.placeholder': 'up to 67 chars',
+  'aprs.msg.send': 'Send message',
+  'aprs.messages.title': 'Messages',
+  // What the board says back. `{{call}}` is a callsign and `{{freq}}` a dial reading.
+  'aprs.status.badPosition': 'Enter a valid latitude and longitude first.',
+  'aprs.status.beacon.sending': 'Sending beacon…',
+  'aprs.status.beacon.queued': 'Beacon queued — keying now.',
+  'aprs.status.msg.missing': 'Enter a callsign and a message first.',
+  'aprs.status.msg.sending': 'Sending message…',
+  'aprs.status.msg.queued': 'Message to {{call}} queued — keying now.',
+  'aprs.status.tune.deferred':
+    'Transmitting right now — the radio will move to {{freq}} when this over ends.',
+  'aprs.status.tune.now': 'Tuning to {{freq}} FM…',
+
+  'aprs.table.age': 'Age',
+  'aprs.table.symbol': 'Symbol',
+  'aprs.table.from': 'From',
+  'aprs.table.via': 'Via',
+  'aprs.table.type': 'Type',
+  'aprs.table.position': 'Position',
+  'aprs.table.dist': 'Dist',
+  'aprs.table.info': 'Info',
+  'aprs.row.title.highlight': 'Highlight {{call}} on the map',
+  'aprs.row.title.noPosition': '{{call}} reported no position — nothing to highlight',
+  'aprs.map.noPositions': 'No positions heard yet — status and message packets carry none.',
+
+  // ── The station card ────────────────────────────────────────────────────────────────
+  // ⭐ The per-source honesty line: "your receiver heard it" and "a server reported it" are
+  // different claims, and they stay different in every language.
+  'aprs.card.aria': 'Station {{call}}',
+  'aprs.card.symbol.unknown': 'Unrecognised symbol',
+  'aprs.card.close': 'Close',
+  'aprs.card.source.rf.label': 'Heard on RF',
+  'aprs.card.source.rf.detail': 'your receiver decoded this station {{age}} ago',
+  'aprs.card.source.inet.label': 'Via APRS-IS',
+  'aprs.card.source.inet.detail': 'the internet feed reported it {{age}} ago',
+  'aprs.card.source.unknown.label': 'Source unknown',
+  'aprs.card.source.unknown.detail': 'no reception recorded for this station',
+  'aprs.card.position.label': 'Position',
+  'aprs.card.position.none': 'none reported — heard, but nothing to plot',
+  'aprs.card.fromYou.label': 'From you',
+  'aprs.card.motion.label': 'Motion',
+  'aprs.card.motion.stationary': 'stationary',
+  'aprs.card.comment.label': 'Comment',
+  'aprs.card.path.label': 'Path',
+  // `{{path}}` is the digipeater list exactly as the packet carried it (`WIDE1-1,WIDE2-1`).
+  'aprs.card.path.direct': 'direct — no digipeaters in the path',
+  'aprs.card.path.requested': 'direct — requested {{path}}, none used',
+  'aprs.card.path.digipeated': 'digipeated via {{path}}',
+  'aprs.card.packets.label': 'Packets',
+  'aprs.card.packets.value': '{{count}} since {{age}} ago',
+  'aprs.card.wx.title': 'Weather',
+  'aprs.card.wx.temperature': 'Temperature',
+  'aprs.card.wx.wind': 'Wind',
+  'aprs.card.wx.wind.dirUnknown': 'unknown',
+  'aprs.card.wx.wind.atSpeed': '{{dir}} at {{speed}}',
+  'aprs.card.wx.gust': 'Gust',
+  'aprs.card.wx.humidity': 'Humidity',
+  'aprs.card.wx.pressure': 'Pressure',
+  'aprs.card.wx.rain1h': 'Rain, last hour',
+  'aprs.card.wx.rain24h': 'Rain, 24 h',
+  'aprs.card.raw.show': '▸ Raw packet',
+  'aprs.card.raw.hide': '▾ Raw packet',
+  'aprs.card.qrz.error': 'Could not open {{call}} on QRZ',
+  'aprs.card.aprsfi.title':
+    'Open this station on aprs.fi (third-party site) in your browser',
+  'aprs.card.age.secs': '{{secs}} s',
+  'aprs.card.age.mins': '{{mins}} min',
+  'aprs.card.age.hours': '{{hours}} h',
+  'aprs.card.age.days': '{{days}} d',
 
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared

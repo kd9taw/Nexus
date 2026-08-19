@@ -7,7 +7,12 @@
 // `def.basic()` is NOT the removed mode: it is the loading / no-data / offline hint for every
 // pane, reached whenever `def.expert()` returns null. Deleting it would blank a pane that is
 // simply waiting on a feed.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every pane's name
+// arrives already translated from the registry (`panes.tsx`, resolved through getters); the
+// picker's B2/B3 groups are named by their tier code, which is not prose.
 import type { CSSProperties } from 'react'
+import { t } from '../../i18n'
 import { PANES, paneById } from './panes'
 import type { PaneContext } from './paneContext'
 import type { PaneId, SlotId } from '../../features/connectConfig'
@@ -35,14 +40,17 @@ export function PaneFrame({
         <select
           className="pane-pick"
           value={paneId}
-          aria-label={`Choose what the ${slotId} slot shows`}
-          title="Choose what this slot shows"
+          aria-label={t('connect.slot.pick.aria', { slot: slotId })}
+          title={t('connect.slot.pick.title')}
           onChange={(e) => onAssign(slotId, e.target.value as PaneId)}
         >
           {(['core', 'b2', 'b3'] as const).map((cat) => {
             const items = PANES.filter((p) => p.category === cat)
             return items.length ? (
-              <optgroup key={cat} label={cat === 'core' ? 'Panels' : cat.toUpperCase()}>
+              <optgroup
+                key={cat}
+                label={cat === 'core' ? t('connect.slot.group.core') : cat.toUpperCase()}
+              >
                 {items.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.title}

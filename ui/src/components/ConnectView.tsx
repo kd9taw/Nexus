@@ -1,3 +1,7 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The intent chips'
+// words come from the catalog through getters; the two named for a programme or a band keep
+// their token label (INTENT_TOKENS below), and `3D`/`2D` are the two renderers' own names.
+//
 // Connect — the unified situational-awareness surface. The grayline map and the
 // live propagation nowcast are TWO VIEWS OF ONE STATE: both read the same prop
 // snapshot, operator grid, heard stations, need-state, and selection lifted in
@@ -34,13 +38,52 @@ import type { PaneContext } from './connect/paneContext'
 import { useConnectConfig, type SlotId } from '../features/connectConfig'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { useEntityCentroids } from '../features/entityCentroids'
+import { t } from '../i18n'
 
-/** Intent presets — beginner picks a goal once; map + prop configure themselves. */
+/** The two intents NAMED for a programme and a band. POTA and SOTA are the programmes' own
+ * names and `6m/VHF` is a band plus a band group — tokens, exactly as they are everywhere
+ * else in the app, so these two chips keep their label here while the other two read theirs
+ * from the catalog. */
+const INTENT_TOKENS = { pota: 'POTA/SOTA', vhf: '6m/VHF' }
+
+/** Intent presets — beginner picks a goal once; map + prop configure themselves.
+ *
+ * The words resolve LAZILY, through getters: this is a module constant read during render,
+ * so resolving at import time would freeze whichever locale loaded first (the treatment
+ * `features/needVisuals.ts` established). */
 const INTENTS: { id: MapIntent; label: string; title: string }[] = [
-  { id: 'dx', label: 'Chase DX', title: 'Beam map, need-colored, live openings' },
-  { id: 'pota', label: 'POTA/SOTA', title: 'World view, park/summit activators' },
-  { id: 'casual', label: 'Ragchew', title: 'Who can I hear — signal-colored, calm' },
-  { id: 'vhf', label: '6m/VHF', title: 'Openings front-and-center (Es / F2 / aurora)' },
+  {
+    id: 'dx',
+    get label() {
+      return t('connect.intent.dx.label')
+    },
+    get title() {
+      return t('connect.intent.dx.title')
+    },
+  },
+  {
+    id: 'pota',
+    label: INTENT_TOKENS.pota,
+    get title() {
+      return t('connect.intent.pota.title')
+    },
+  },
+  {
+    id: 'casual',
+    get label() {
+      return t('connect.intent.casual.label')
+    },
+    get title() {
+      return t('connect.intent.casual.title')
+    },
+  },
+  {
+    id: 'vhf',
+    label: INTENT_TOKENS.vhf,
+    get title() {
+      return t('connect.intent.vhf.title')
+    },
+  },
 ]
 
 /** Read a PER-SURFACE enum preference: a board's own preset/mode, not a station setting. */
@@ -320,7 +363,11 @@ export function ConnectView({
     <main className="layout single">
       <div className="connect-shell">
         <div className="connect-header">
-          <div className="map-proj connect-intent" role="group" aria-label="What are you doing?">
+          <div
+            className="map-proj connect-intent"
+            role="group"
+            aria-label={t('connect.intent.aria')}
+          >
             {INTENTS.map((it) => (
               <button
                 key={it.id}
@@ -336,11 +383,7 @@ export function ConnectView({
             type="button"
             className={`connect-3d-toggle${map3d ? ' active' : ''}`}
             onClick={toggleMap3d}
-            title={
-              map3d
-                ? 'Using the 3D WebGL globe — click for the 2D map (works on any PC)'
-                : 'Switch to the 3D WebGL globe (best on higher-end PCs)'
-            }
+            title={map3d ? t('connect.map3d.title.on') : t('connect.map3d.title.off')}
           >
             🌐 {map3d ? '3D' : '2D'}
           </button>
@@ -349,9 +392,9 @@ export function ConnectView({
               type="button"
               className="connect-popout"
               onClick={onPopOut}
-              title="Open Connect in its own window (for a second monitor)"
+              title={t('connect.popOut.title')}
             >
-              ⧉ Pop out
+              {t('connect.popOut.label')}
             </button>
           )}
         </div>
@@ -361,7 +404,7 @@ export function ConnectView({
           <div className="connect-map">
             {map3d ? (
               <Suspense
-                fallback={<div className="globe3d-loading">Loading 3D globe…</div>}
+                fallback={<div className="globe3d-loading">{t('connect.globe3d.loading')}</div>}
               >
                 <Globe3D
                   myGrid={myGrid}

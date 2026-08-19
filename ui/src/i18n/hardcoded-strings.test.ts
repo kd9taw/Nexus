@@ -232,6 +232,32 @@ const MIGRATED = [
   // 14 mid-sentence conditionals are each ONE entry with the variable clause interpolated
   // whole, including the "swap them" sentence, whose BUTTON is supplied by the call site.
   'components/SetupWizard.tsx',
+  // Batch 14 (2026-08-19) — the Connect board with its pane grid, the Tempo conversation,
+  // and APRS. The densest CONCATENATION surface in the tree: `paneFormat.ts`'s Basic lines
+  // and APRS's two health chips were sentences assembled from conditional fragments, and
+  // every one of them is ONE catalog sentence now with the data interpolated — the
+  // selection line's optional heading and band, the space-weather line's flare and blackout
+  // (four whole sentences, not a stem plus two tails), the wrong-frequency verdict's three
+  // wordings, the failed-checksum message with its headroom advice, and the APRS-IS feed's
+  // four states with their iGate clause. Two things this batch settles. A REGISTRY OF PANES
+  // migrates exactly as a registry of badges did (batch 3): `panes.tsx` resolves each pane's
+  // name through a getter, so PaneFrame and the picker read it unchanged. And a frequency
+  // inside a sentence is a bug the catalog guard already refuses: the 6 m Es calling
+  // frequency and the North American APRS channel are constants in their components now,
+  // interpolated into the message rather than written in it. The units rule lands on the
+  // PACKET here — callsign-SSIDs, symbol codes, digipeater paths (WIDE1-1), positions,
+  // grids, courses, speeds, altitudes, dBFS levels and every dial reading stay in the code,
+  // as do the CQ line Tempo puts on the air, the operator's own macros, the Winter Field Day
+  // chip, and the two intent chips named for a programme and a band (POTA/SOTA, 6m/VHF).
+  'components/ConnectView.tsx',
+  'components/connect/PaneFrame.tsx',
+  'components/connect/panes.tsx',
+  'components/connect/paneFormat.ts',
+  'components/Conversation.tsx',
+  'components/Composer.tsx',
+  'components/MessageBubble.tsx',
+  'components/FreetextMeter.tsx',
+  'components/AprsStationCard.tsx',
 ]
 
 /**
@@ -261,11 +287,21 @@ const MIGRATED = [
  * prompt in front of it stay as written and the file cannot be clean yet. It graduates to
  * MIGRATED the moment that batch lands; nothing else is deferred in it.
  *
+ * `AprsCockpit.tsx` (batch 14, 2026-08-19) is here for exactly that reason and no other:
+ * every string in it is migrated except the TX On/Off ARM LATCH — its label and its two
+ * tooltips. APRS renders no stop control at all (the latch only holds the queue, so it is on
+ * no cockpit's stop-line census), but the latch is still a transmit-path control, and those
+ * move with the sweeps. It graduates the moment that batch lands.
+ *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be
  * added to it to dodge a failing check.
  */
-const PARTIAL = ['components/SettingsPanel.tsx', 'components/SetupHealth.tsx']
+const PARTIAL = [
+  'components/SettingsPanel.tsx',
+  'components/SetupHealth.tsx',
+  'components/AprsCockpit.tsx',
+]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
 const VISIBLE_ATTRS = new Set([
