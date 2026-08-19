@@ -2145,9 +2145,18 @@ fn reconcile_gallery(dir: &std::path::Path, entries: Vec<tempo_app::dto::SstvGal
     if let Ok(rd) = std::fs::read_dir(dir) {
         for f in rd.flatten() {
             let path = f.path();
-            if path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase)
-                != Some("bmp".into())
-            {
+            // ⚠️ BOTH FORMATS. Received pictures became PNG on 2026-08-15 and this scan was
+            // never widened, so every picture taken since was invisible to the adopter: a
+            // gallery.json that lost an entry (a reset, a fresh profile, a hand-edit) could
+            // re-adopt only the OLD .bmp files — which is a gallery that fills up with last
+            // month's pictures and none of this week's. Reported as "received pictures are
+            // tagged 2026-08-01", which is exactly what a folder of re-adopted August BMPs
+            // looks like (2026-08-19).
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
+            if !matches!(ext.as_deref(), Some("bmp") | Some("png")) {
                 continue;
             }
             let p = path.to_string_lossy().into_owned();
@@ -18082,6 +18091,53 @@ mod tests {
     /// `gallery.json` lives inside the folder and every entry holds an absolute path, so pointing
     /// the decoder somewhere new without migrating reads a fresh empty index — to the operator
     /// their whole received-picture history has vanished, though every file is still on disk.
+    /// THE ADOPTER WENT BLIND WHEN PICTURES BECAME PNG.
+    ///
+    /// `reconcile_gallery` re-adopts image files sitting in the folder that gallery.json does
+    /// not know about — a record lost to a reset, a fresh profile, a hand-edit. It scanned for
+    /// `.bmp` only, and received pictures became PNG on 2026-08-15, so everything taken since
+    /// was invisible to it: the gallery could refill itself with last month's BMPs and none of
+    /// this week's pictures. Reported as "received pictures are tagged 2026-08-01", which is
+    /// what a folder of re-adopted August BMPs looks like from the operator's chair.
+    #[test]
+    fn the_gallery_adopts_png_files_as_well_as_bmp() {
+        let dir = scratch("sstv-adopt");
+        std::fs::create_dir_all(&dir).unwrap();
+        // One of each, named the way the decoder names them.
+        std::fs::write(dir.join("20260819T101500Z_s1.png"), b"x").unwrap();
+        std::fs::write(dir.join("20260801T090000Z_r36.bmp"), b"x").unwrap();
+        // …and something that is not a picture at all.
+        std::fs::write(dir.join("gallery.json"), b"[]").unwrap();
+
+        let got = reconcile_gallery(&dir, Vec::new());
+        let names: Vec<String> = got
+            .iter()
+            .map(|e| {
+                std::path::Path::new(&e.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with(".png")),
+            "a PNG in the folder must be adopted: {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.ends_with(".bmp")),
+            "control: the BMP that always worked still is: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.ends_with(".json")),
+            "and nothing that is not a picture: {names:?}"
+        );
+        // Each carries the date from its OWN filename, oldest first.
+        assert_eq!(got[0].finished_utc, "2026-08-01T09:00:00Z");
+        assert_eq!(got[1].finished_utc, "2026-08-19T10:15:00Z");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn migrating_the_sstv_gallery_moves_the_files_and_rewrites_their_paths() {
         let from = scratch("sstv-from");
