@@ -4086,6 +4086,388 @@ export const EN = {
   'settings.rigControl.testCat.testing': 'Testing…',
   'settings.rigControl.testCat.title': 'Save settings, connect to the rig, and read its frequency',
 
+  // ── Settings ▸ Radio ▸ Audio ────────────────────────────────────────────────────────
+  // ⚠️ THE DEVICE NAMES ARE NOT HERE AND NEVER WILL BE. Every entry in these pickers is
+  // whatever the OS enumerated ("USB Audio CODEC", "Speakers (Realtek)", a DAX channel) — the
+  // panel renders them straight, and `settings.audio.device.notInList` (with the sync toasts
+  // above) is the only prose that goes near one. Sample rates, dB readings, the × gain
+  // multiplier and the drive percentage are numbers the panel formats invariantly.
+  'settings.audio.legend': 'Audio',
+  // The multi-radio banner: ONE sentence with the radio's own name interpolated, never
+  // "for" + name + "." glued — that ordering does not survive translation. `{{radio}}` is a
+  // profile name the operator typed; the fallback below is prose because there is no name yet.
+  'settings.audio.multiRadio.note':
+    '🎚 Audio devices below are for <b>{{radio}}</b>. Each radio has its OWN input/output — click “Edit” on another radio (in Radios above) to set its audio. The live RX audio + waterfall follow whichever radio is active.',
+  'settings.audio.multiRadio.selectedRadio': 'the selected radio',
+  // The empty `value` of these pickers, whose label says "let the OS choose". The VALUE is ''
+  // in every language; only this label moves. Shared with the wizard's two audio pickers.
+  'settings.audio.device.systemDefault': 'System default',
+  'settings.audio.input.label': 'Input Device (RX)',
+  'settings.audio.input.hint': 'Sound card carrying receive audio.',
+  'settings.audio.refresh.action': 'Refresh',
+  'settings.audio.refresh.title': 'Re-scan audio devices',
+  'settings.audio.output.label': 'Output Device (TX)',
+  'settings.audio.output.hint': 'Sound card feeding the rig (transmit).',
+  'settings.audio.spectrum.label': 'Live input spectrum',
+  'settings.audio.spectrum.idle':
+    'Flat — no audio on the selected input. Check the device above (radio on? right codec?).',
+  'settings.audio.spectrum.hint':
+    'What the selected input hears, live — band noise should show as a moving floor. Confirms the RIGHT device before you leave Settings.',
+  // ⚠️ TX POWER IS THE DRIVE-LEVEL SLIDER, NOT A TRANSMIT CONTROL. It sets how hard the sound
+  // card feeds the rig; it cannot key, unkey or stop anything, and it is on no cockpit's
+  // stop-line census. Same reading as PTT Method above — the words moved, the path did not.
+  'settings.audio.txPower.label': 'Tx Power',
+  'settings.audio.txPower.aria': 'Transmit drive level',
+  'settings.audio.txPower.hint':
+    "The audio <b>drive</b> into the rig — the SAME control as the cockpit <b>Pwr</b> slider (they always match now). Trim down until your rig's ALC is just zero. This is <em>not</em> the rig's RF watts — set those on the radio.",
+  'settings.audio.rxLevel.label': 'RX Level',
+  'settings.audio.rxLevel.meter': 'RX audio level',
+  'settings.audio.rxLevel.hint':
+    "A dB scale like WSJT-X — aim for around 30 dB. Anything from ~15–60 dB decodes fine; red means too hot (back off RX Gain or the rig's audio).",
+  'settings.audio.rxGain.label': 'RX Gain',
+  'settings.audio.rxGain.aria': 'RX capture gain',
+  'settings.audio.rxGain.hint':
+    'Boost a quiet interface until RX Level reads around 30 dB — the meter responds as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much.',
+
+  // ── Settings ▸ Radio ▸ Headphone monitor ────────────────────────────────────────────
+  // "System default" inside these sentences names the picker entry above, so it reads the
+  // same word the operator just chose — translate them together.
+  'settings.headphoneMonitor.legend': 'Headphone monitor',
+  'settings.headphoneMonitor.enable.label': 'Enable monitor',
+  'settings.headphoneMonitor.enable.aria': 'Enable headphone monitor',
+  'settings.headphoneMonitor.enable.hint':
+    "Plays the exact audio the decoder hears — for level / RFI diagnosis and listening to the band. Off by default; UNVERIFIED on-air until the attended session. Guards against the rig's TX device by name (System default is resolved to its real device first) — if your devices go by multiple names, pick your headphones explicitly rather than System default.",
+  'settings.headphoneMonitor.device.label': 'Monitor Output Device',
+  'settings.headphoneMonitor.device.hint':
+    "Your headphones or speakers — must NOT be the rig's TX output device.",
+  'settings.headphoneMonitor.level.label': 'Monitor Level',
+  'settings.headphoneMonitor.level.aria': 'Headphone monitor level',
+  'settings.headphoneMonitor.level.hint':
+    'Headphone listening volume (does not affect TX).',
+
+  // ── Settings ▸ Radio ▸ Satellite Doppler ────────────────────────────────────────────
+  // ⚠️ The MAPPING LABELS are not here — they live in `features/satVfo.ts` beside the wire
+  // value each one stores, because the Satellites readiness rail shows the same list and two
+  // copies of a list that decides WHERE THE RADIO TRANSMITS would be a wrong-uplink generator.
+  // Hz and ms are unit symbols and the numbers in these hints (20 Hz, 1000 ms) are the facts
+  // themselves; VFO, AOS, LOS, SSB and CAT are the hobby's own vocabulary and stay verbatim.
+  'settings.satelliteDoppler.legend': 'Satellite Doppler',
+  'settings.satelliteDoppler.note':
+    'Corrects both legs of a pass: the downlink you listen on and the uplink you transmit on. Nexus tunes only while auto-track is following a pass and you have picked a transponder in the Satellites section. The downlink needs no setup here; the uplink is confirmed once per radio, on the pass itself.',
+  'settings.satelliteDoppler.enable.label': 'Doppler correction',
+  'settings.satelliteDoppler.enable.aria': 'Enable satellite Doppler correction',
+  'settings.satelliteDoppler.enable.hint':
+    'Retunes the radio through a pass so you stay on the station you are working. On: the downlink follows the bird as soon as you arm a pass and hold a transponder. Clearing this stops both legs.',
+  'settings.satelliteDoppler.vfoMap.label': 'VFO mapping',
+  'settings.satelliteDoppler.vfoMap.aria': 'Satellite VFO mapping',
+  'settings.satelliteDoppler.vfoMap.otherRadio':
+    'The uplink mapping is confirmed per radio, for the radio you are operating. Confirm it for this radio on the pass rail during a pass, or make it the active radio first.',
+  'settings.satelliteDoppler.vfoMap.hint':
+    "Which VFO carries your uplink. Match this to how your radio is wired. <b>A wrong mapping transmits on your own downlink</b> — into the satellite's output passband, on top of everyone else working the bird. Picking one applies immediately and confirms it for the radio you are operating; a second radio gets its own confirmation on the pass rail. Every mapping except Uplink only keeps the downlink corrected.",
+  'settings.satelliteDoppler.minShift.label': 'Minimum shift (Hz)',
+  'settings.satelliteDoppler.minShift.aria': 'Minimum Doppler shift before retuning (Hz)',
+  'settings.satelliteDoppler.minShift.hint':
+    'Corrections smaller than this are not sent. 20 Hz is inaudible on SSB and keeps the CAT link quiet. 0 sends every update.',
+  'settings.satelliteDoppler.interval.label': 'Update interval (ms)',
+  'settings.satelliteDoppler.interval.aria': 'Doppler update interval (milliseconds)',
+  'settings.satelliteDoppler.interval.hint':
+    'Shortest gap between corrections. 1000 ms is what a low-orbit pass needs. Shorter fights your own tuning knob and saturates a serial CAT link.',
+  'settings.satelliteDoppler.passSounds.label': 'Pass alert sounds',
+  'settings.satelliteDoppler.passSounds.aria': 'Audible tones at pass start and end',
+  'settings.satelliteDoppler.passSounds.hint':
+    'A rising tone the moment an armed pass starts and a falling one when it ends, alongside the popup — hear AOS with your hands on the rotor. On by default; clearing this silences only the tones, never the popups.',
+
+  // ── Settings ▸ Radio ▸ Orbital elements ─────────────────────────────────────────────
+  // ⚠️ TLE, Keplerian elements, SupGP, the epoch, CelesTrak, SatNOGS, AMSAT and the CC BY-SA
+  // 4.0 licence name are all invariant — they name a data format, its sources and the terms
+  // they ship under. So is `{{source}}`, which is the backend's own one-word provenance
+  // ("mirror", "celestrak", "import"), and `{{date}}`, an ISO date the panel slices out
+  // invariantly — a locale-formatted element date would name a different day in half the
+  // world. The status line is a LIST of independent chips joined with " · " (the shape
+  // `elementBandSummary` already uses), not a sentence, so each chip is its own entry.
+  'settings.orbitalElements.legend': 'Orbital elements',
+  'settings.orbitalElements.update.action': 'Update now',
+  'settings.orbitalElements.update.busy': 'Updating…',
+  'settings.orbitalElements.import.action': 'Import from file',
+  'settings.orbitalElements.import.busy': 'Importing…',
+  'settings.orbitalElements.import.title':
+    "Import a downloaded element file (Celestrak TLE, AMSAT keps, a new launch's SupGP set) — the offline-shack escape hatch. Imports persist across refreshes; the newest epoch per satellite wins.",
+  'settings.orbitalElements.import.ok':
+    'Elements imported — {{imported}} imported, {{total}} total',
+  // `{{error}}` is the raw failure, passed through as a value and translated in phase 3.
+  'settings.orbitalElements.import.failed': 'Element import failed: {{error}}',
+  // English says "birds" at every count; the param is named `count` so a locale that needs
+  // plural forms can supply them without the English wording changing.
+  'settings.orbitalElements.status.birds': '{{count}} birds',
+  'settings.orbitalElements.status.fetched': 'fetched {{date}}',
+  'settings.orbitalElements.status.neverFetched': 'never fetched',
+  'settings.orbitalElements.status.imported': '{{count}} imported',
+  'settings.orbitalElements.status.empty':
+    'Not loaded yet — fetched on first launch, then refreshed every 6 h.',
+  'settings.orbitalElements.hint':
+    'Keplerian elements (TLEs) for the amateur satellites — pass times, pointing and Doppler all come from them. Refreshed every 6 h from hamradiotools.io: the bird list comes from the SatNOGS database (CC BY-SA 4.0), the elements from CelesTrak and SatNOGS. Import a file for an offline shack or a just-launched bird.',
+  // `{{detail}}` is `tleRefreshMessage`'s operator-voiced sentence — already a catalog string
+  // (batch 7), composed there and interpolated whole here.
+  'settings.orbitalElements.lastRefresh': 'Last refresh: {{detail}}',
+
+  // ── Settings ▸ Radio ▸ Rotator ──────────────────────────────────────────────────────
+  // ⚠️ NOT HERE, and none of it may move: the ROTATOR MODEL NAMES and their Hamlib model
+  // numbers (`ROTATOR_MODELS` — checked against the generated caps fixture, so they cannot
+  // even be typed from a manual), the serial-port device examples, every baud rate, and the
+  // azimuth/elevation degrees an operator types. `rotctld`, `rotctl -l`, `Hamlib`, `az`, `el`,
+  // `LOS` and the `°` symbol are the vocabulary of the thing being configured and stay
+  // verbatim inside these sentences.
+  'settings.rotator.legend': 'Rotator',
+  'settings.rotator.note':
+    'The rotator itself, and its pointing manners. The manners apply to satellite auto-track.',
+  'settings.rotator.model.label': 'Rotator model',
+  'settings.rotator.model.none': 'None',
+  'settings.rotator.model.other': 'Other Hamlib model #…',
+  'settings.rotator.model.number.placeholder': 'Hamlib rotator model number (rotctl -l lists them)',
+  'settings.rotator.model.number.aria': 'Hamlib rotator model number',
+  'settings.rotator.model.hint':
+    'Nexus runs the control daemon (rotctld) for you, the same way it does CAT. Then use the Rotor pane in Connect, ↗ on Needed rows, or the compass anywhere.',
+  'settings.rotator.port.label': 'Rotator port & baud',
+  'settings.rotator.port.aria': 'Rotator serial port',
+  'settings.rotator.baud.aria': 'Rotator baud rate',
+  'settings.rotator.baud.title': 'Serial baud rate for the rotator controller',
+  // ⚠️ `{{rate}}` and `{{set}}` ARRIVE AS ALREADY-FORMATTED STRINGS, and that is a defect this
+  // batch deliberately did not fix: the panel still builds them with `toLocaleString()`, so a
+  // German install reads "9.600" for a baud rate — the same known hole the Rig & CAT baud
+  // picker has, named in `i18n.invariant.test.ts`'s "what this guard does NOT prove". Passing
+  // the numbers instead would render "9600" and change visible English, which this phase's
+  // contract forbids. It wants the same change that fixes the baud picker.
+  'settings.rotator.baud.hint.any':
+    'Match the rate your controller is set to — Hamlib does not offer one fixed rate for this model.',
+  'settings.rotator.baud.hint.fixed':
+    'This controller runs at {{rate}} baud — the rate its Hamlib backend declares. Leave it here.',
+  'settings.rotator.baud.hint.wrong':
+    '<b>This controller runs at {{rate}} baud, not {{set}}</b> — at the wrong rate it never answers and reads as broken hardware. Set {{rate}}, or re-pick the model above to fill it in.',
+  'settings.rotator.external.label': 'External rotctld (advanced)',
+  // `{{example}}` is a host:port the panel supplies as an invariant token.
+  'settings.rotator.external.placeholder': 'host:port — e.g. {{example}}',
+  'settings.rotator.external.aria': 'External rotctld address (advanced)',
+  'settings.rotator.external.hint':
+    'Point Nexus at a rotctld you run yourself (or one on another machine). It OVERRIDES the model and port above and stops the integrated daemon. Needs the port — a bare host name is not an address.',
+  'settings.rotator.park.label': 'Park position (° az / el)',
+  'settings.rotator.park.az.aria': 'Park azimuth (degrees)',
+  'settings.rotator.park.el.aria': 'Park elevation (degrees)',
+  'settings.rotator.park.hint':
+    'The stow position — wind-safe, or wherever your mast rests. Used only when After a pass is set to Park.',
+  'settings.rotator.ready.label': 'Ready position (° az / el)',
+  'settings.rotator.ready.az.aria': 'Ready azimuth (degrees)',
+  'settings.rotator.ready.el.aria': 'Ready elevation (degrees)',
+  'settings.rotator.ready.hint':
+    'Where the antenna waits for the next pass. Used only when After a pass is set to Ready.',
+  // The three choices below are a <select>: each stored `value` ('stop', 'park', 'ready') is
+  // the token, and only the label moved. The hint names all three, so they translate together.
+  'settings.rotator.postPass.label': 'After a pass',
+  'settings.rotator.postPass.aria': 'What the rotator does after a pass',
+  'settings.rotator.postPass.stop': 'Stop — leave the antenna where the pass ended',
+  'settings.rotator.postPass.park': 'Park — drive to the park position',
+  'settings.rotator.postPass.ready': 'Ready — drive to the ready position',
+  'settings.rotator.postPass.hint':
+    'Stop is the default and moves nothing: the antenna stays pointed where the bird set. Park and Ready drive the rotator on their own at LOS, so set those positions above first.',
+  'settings.rotator.tolerance.label': 'Tolerance (° az / el)',
+  'settings.rotator.tolerance.az.aria': 'Azimuth tolerance (degrees)',
+  'settings.rotator.tolerance.el.aria': 'Elevation tolerance (degrees)',
+  'settings.rotator.tolerance.hint':
+    "A new target closer than this is not commanded. Without a deadband the rotator hunts and the relays chatter for the whole pass. 2° is about a G-5500's own resolution.",
+  'settings.rotator.calibration.label': 'Calibration trim (° az / el)',
+  'settings.rotator.calibration.az.aria': 'Azimuth calibration trim (degrees)',
+  'settings.rotator.calibration.el.aria': 'Elevation calibration trim (degrees)',
+  'settings.rotator.calibration.hint':
+    'Added to every command. Use it when the controller reads one heading and the boom points at another.',
+  'settings.rotator.flip.label': 'Allow flip',
+  'settings.rotator.flip.aria': 'Allow the rotator to flip past 90 degrees elevation',
+  'settings.rotator.flip.hint':
+    'Takes a high pass by turning azimuth 180° and running elevation past 90°, instead of swinging the mast around at the top of the pass. Off by default: <b>many rotators cannot mechanically go past 90° elevation</b>. Check your controller before turning this on.',
+
+  // ── Setup health (the three-dot strip: Settings ▸ Radio and the wizard's verify stage) ──
+  // ⚠️ ONE STRING FROM THIS STRIP IS NOT HERE, and it is deliberate: Prove TX keys a tune
+  // carrier, so its label, tooltip and consent prompt move with the transmit-path batch. The
+  // dots themselves are STATUS, not controls. Each state is a whole phrase rather than a
+  // "Rig" + state glue — the word order is not universal and the state word is not always
+  // last. The dB reading and the forward watts are measurements the strip formats invariantly.
+  'setup.health.title': 'Setup health',
+  'setup.health.rig.title.link': 'CAT not tested yet — open Rig Control',
+  'setup.health.rig.title.plain': 'CAT not tested yet — use Test CAT below',
+  'setup.health.rig.responding': 'Rig responding',
+  'setup.health.rig.notAnswering': 'Rig not answering',
+  'setup.health.rig.untested': 'Rig untested',
+  'setup.health.rx.title.ok': 'Receiving audio',
+  'setup.health.rx.title.link': 'No RX audio — open the audio device settings',
+  'setup.health.rx.title.plain': 'No RX audio — check the audio device below',
+  'setup.health.rx.error': 'RX audio error',
+  'setup.health.rx.reading': 'RX audio {{db}} dB',
+  'setup.health.rx.none': 'RX audio —',
+  'setup.health.tx.title.keying':
+    'Keying a tune carrier — forward power confirms the CAT → PTT → RF path',
+  'setup.health.tx.title.on': 'Transmit is enabled',
+  'setup.health.tx.title.off': 'Transmit is off',
+  'setup.health.tx.keying.power': 'TX keying · {{watts}} W',
+  'setup.health.tx.keying.waiting': 'TX keying…',
+  'setup.health.tx.on': 'TX on',
+  'setup.health.tx.off': 'TX off',
+
+  // ── The setup wizard (first run, and the Settings ▸ re-open path) ───────────────────
+  // The wizard's steps ARE the Radio settings above, so the two were migrated together and
+  // must be reworded together — a wizard that says one thing and Settings another is how the
+  // pair drifted before. The same invariant-token line holds here as on that tab: device and
+  // port names, model names and numbers, baud rates, IPs and host:port addresses, callsign and
+  // grid examples, the ADIF file extensions and the program names inside these sentences
+  // (WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog, SmartSDR CAT, DAX) all stay in the
+  // component. So does every `value` this dialog writes — the license `id`, the connection
+  // kind, the pack id.
+  //
+  // ⚠️ A twin of the license block below lives at `gettingStarted.license.shot.*`: the guide
+  // shows a PICTURE of this step. They are separate keys on purpose (one is a depiction, one
+  // is the live control) — reword them together.
+  'setup.title': 'Set up Nexus',
+  'setup.steps.station': 'Your station',
+  'setup.steps.rig': 'Your rig',
+  'setup.steps.log': 'Your log',
+  'setup.steps.finish': 'Finish',
+  'setup.steps.aria': 'Step {{n}} of {{total}}: {{title}}',
+
+  // Step 1 — station identity. The callsign and grid EXAMPLES are tokens and stay in the
+  // component; `{{short}}` / `{{long}}` are two of them, quoted inside the error sentence.
+  'setup.station.title': 'Who’s on the air?',
+  'setup.station.sub':
+    'Your grid square is the anchor for everything location-based — satellite passes, propagation, the map, and DXpedition windows are all computed from it.',
+  'setup.station.callsign.label': 'Callsign',
+  'setup.station.grid.label': 'Grid square',
+  'setup.station.grid.invalid':
+    'Not a Maidenhead locator — 4 or 6 characters, like {{short}} or {{long}}.',
+  'setup.station.grid.hint':
+    'Maidenhead locator (qrz.com shows yours). Give all 6 — 4 characters pins you to the middle of a ~100-mile square, and every distance and bearing is measured from there.',
+
+  // Step 2 — rig & audio. `{{radio}}`, `{{port}}`, `{{ip}}`, `{{chip}}` and `{{device}}` are
+  // names the OS or the radio reported; `{{error}}` and the probe's own `detail` line are raw
+  // answers passed through as values. The "· …" clauses carry their own separator because
+  // each is appended to a line the caller built.
+  'setup.rig.title': 'How does the radio connect?',
+  'setup.rig.sub':
+    'One detect finds everything — USB rigs and FlexRadios on the network. Skippable; Settings ▸ Radio ▸ Rig & CAT has all of this later (including Test CAT).',
+  'setup.rig.detect.action': '🔍 Detect my radio',
+  'setup.rig.detect.busy': 'Detecting…',
+  'setup.rig.detect.failed':
+    'Detection hit an error: {{error}}. You can still pick your rig by hand below, or skip and set it up later.',
+  'setup.rig.detect.empty':
+    'Nothing found — USB: plug in + power on; Flex: must be on this network. Or skip and set it up later.',
+  // The two halves of one scan can fail independently; each is a whole sentence, and the
+  // panel joins whichever failed with " · " before the sentence above quotes the lot.
+  'setup.rig.detect.usbFailed': 'USB scan failed: {{error}}',
+  'setup.rig.detect.flexFailed': 'Flex network scan failed: {{error}}',
+  'setup.rig.detect.flex.row': '<b>{{radio}}</b> on the network ({{ip}})',
+  'setup.rig.detect.flex.via': ' · via SmartSDR CAT',
+  'setup.rig.detect.rig.row': '<b>{{radio}}</b> on {{port}}',
+  'setup.rig.flexNote.windows':
+    '{{radio}} at {{ip}} — CAT set via SmartSDR CAT (slice A, port 5002; a second slice uses 60001), radio address saved for the native panadapter/DAX. Test CAT below.',
+  'setup.rig.flexNote.other':
+    '{{radio}} at {{ip}} — model and radio address saved. SmartSDR CAT is Windows-only: put the address of a Windows PC running it (slice A = its port 5002) in Network Address below, then Test CAT.',
+  'setup.rig.selected': 'Selected: {{radio}} on {{port}}{{baud}}',
+  'setup.rig.selected.baud': ' @ {{baud}} baud',
+  'setup.rig.selected.unnamedRadio': 'radio',
+  'setup.rig.autoTest.action': '🔎 Auto-test my ports',
+  'setup.rig.autoTest.busy': 'Testing ports — {{seconds}}s (can take up to a minute)…',
+  'setup.rig.autoTest.title':
+    'Probes every USB port until a radio answers — read-only, never transmits',
+  'setup.rig.autoTest.failed': 'Auto-test failed: {{error}}',
+  'setup.rig.model.label': 'Which radio is this?',
+  'setup.rig.model.placeholder': 'Pick your rig model…',
+  // The bare model NUMBER an out-of-catalog rig is known by — the number stays a token.
+  'setup.rig.model.unnamed': 'Model {{model}}',
+  'setup.rig.model.unknownResponder': 'unknown',
+  'setup.rig.model.seeded':
+    'The port answered, but the exact model is a guess ({{radio}} responded). Pick your radio so its real command set is used.',
+  'setup.rig.model.confirm':
+    'Confirm the exact model — fixed-rate rigs get their baud set automatically.',
+  'setup.rig.conn.serial.label': 'USB / Serial',
+  'setup.rig.conn.serial.blurb': 'Most rigs — one cable',
+  'setup.rig.conn.network.label': 'Network',
+  'setup.rig.conn.network.blurb': 'FlexRadio / remote rigctld',
+  'setup.rig.address.label': 'Address',
+  'setup.rig.network.hint':
+    'A found Flex configures the WSJT-X-proven path: CAT through the SmartSDR CAT app on this PC — its default TCP port 5002 drives slice A (per-slice ports: B=60001, C=60002) — and audio through DAX. Other network rigs: pick their model later in Settings ▸ Radio ▸ Rig & CAT.',
+  'setup.rig.dax.title':
+    "SmartSDR's DAX virtual audio devices were detected — pairs them as Nexus's audio in/out",
+  'setup.rig.audioIn.label': 'Audio in',
+  'setup.rig.audioOut.label': 'Audio out',
+  'setup.rig.testCat.action': '⚡ Test CAT',
+  'setup.rig.testCat.busy': 'Testing…',
+  'setup.rig.testCat.title':
+    "Saves what you've entered so far, then asks the radio for its frequency",
+  'setup.rig.second.action': '＋ I have a second radio',
+  'setup.rig.second.title': 'Adds a radio profile and probes the remaining USB ports for it',
+  'setup.rig.second.probing':
+    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; this can take up to a minute)…',
+  'setup.rig.second.saved': 'Second radio: {{radio}} on {{port}} — saved to its own profile.',
+  'setup.rig.second.addFailed': "Couldn't add the radio: {{error}}",
+  'setup.rig.second.model.label': 'Which radio is the second one?',
+  'setup.rig.second.model.placeholder': 'Pick the model…',
+  'setup.rig.second.model.seeded':
+    'The port answered but the exact model is a guess — pick the radio so its real command set is used.',
+  // `<a>` is the "swap them" BUTTON, supplied by the call site — the catalog names the span,
+  // never the element. The non-breaking space keeps the link off a line of its own.
+  'setup.rig.second.swap':
+    'Both radios use identical USB sound cards, shared out one each. If you later see the <em>wrong</em> rig’s meters move when audio plays,\u00a0<a>swap them</a>.',
+  'setup.rig.second.twoWindows':
+    'To run both radios at the same time, open Nexus twice — each window drives one radio (the launcher asks which).',
+
+  // Step 3 — the ADIF import. `.adi` / `.adif` are file extensions and the logger names are
+  // products; both stay verbatim. The counts are plurals, so `Intl.PluralRules` picks the
+  // form instead of the hand-rolled `s` this step used to carry.
+  'setup.log.title': 'Bring in your existing log',
+  'setup.log.sub':
+    "Nexus works best when it knows your history. Importing your ADIF log is what powers <b>worked-before</b> flags, the <b>Needed</b> board (new DXCC / states / grids), and your <b>awards</b> progress — without it, the app starts blind and treats every station as new. This is optional and you can import anytime from the Logbook, but it's the single biggest thing that makes the app useful on day one.",
+  'setup.log.import.action': 'Import my ADIF log…',
+  'setup.log.import.again': 'Import another ADIF file',
+  'setup.log.import.busy': 'Importing…',
+  'setup.log.import.failed': 'Import failed: {{error}}',
+  'setup.log.result.imported': {
+    one: '✓ Imported <b>{{count}}</b> QSO{{dupes}}. Your worked-before and Needed board are now seeded.',
+    other:
+      '✓ Imported <b>{{count}}</b> QSOs{{dupes}}. Your worked-before and Needed board are now seeded.',
+  },
+  'setup.log.result.dupes': '{{count}} already present',
+  'setup.log.result.allDupes': "✓ All {{count}} QSOs were already in your log — you're seeded.",
+  'setup.log.result.none':
+    '⚠ No QSOs found in that file — is it a standard ADIF (.adi/.adif) export?',
+  'setup.log.sources':
+    'From WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog — any standard ADIF (.adi/.adif) export. Nothing leaves your computer; duplicates are detected and skipped.',
+
+  // Step 4 — license, starter packs, the walkthrough offer. The license CLASS NAMES are prose
+  // here exactly as they are in Settings ▸ Station (`settings.station.licenseClass.*`); the
+  // `id` beside each one is the token that turns the privilege lockout on.
+  'setup.finish.title': 'You get everything',
+  'setup.finish.sub':
+    'Every mode and every section starts ON — FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. Nexus is one program instead of six; there’s nothing to unlock. If you ever want a leaner app, trim sections in Settings.',
+  'setup.finish.license.title': 'What’s your license?',
+  'setup.finish.license.sub':
+    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Pick “Outside the US” for no limits.',
+  'setup.finish.license.technician': 'Technician',
+  'setup.finish.license.technician.blurb': 'US — limited HF + full VHF/UHF',
+  'setup.finish.license.general': 'General',
+  'setup.finish.license.general.blurb': 'US — most HF privileges',
+  'setup.finish.license.extra': 'Amateur Extra',
+  'setup.finish.license.extra.blurb': 'US — full privileges',
+  'setup.finish.license.open': 'Outside the US',
+  'setup.finish.license.open.blurb': 'No transmit limits',
+  'setup.finish.packs.title': 'Start with some channels?',
+  'setup.finish.packs.sub':
+    'Optional — a ready-made set of common frequencies and nets, added to your Memories. Change or remove any of them later in the Memories section.',
+  // `{{region}}` is the pack's own region name, carried as data by `features/packs.ts`.
+  'setup.finish.packs.meta': '{{count}} channels · {{region}}',
+  'setup.finish.guide.title': 'Want a walkthrough of what you just set up?',
+  'setup.finish.guide.label': 'Show me Getting started',
+  'setup.finish.guide.blurb': 'The four things, in order — opens when this closes',
+
+  'setup.nav.back': '← Back',
+  'setup.nav.skip': 'I’ll set it up myself',
+  'setup.nav.next': 'Next →',
+  'setup.nav.finish': 'Finish — everything on',
+
   // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
   // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
   // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,

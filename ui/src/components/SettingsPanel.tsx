@@ -447,11 +447,12 @@ const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; labelKey: Messag
 // SAT_VFO_MAPS moved to features/satVfo.ts — the Satellites readiness rail
 // mirrors this setting live, and the two surfaces must share ONE label list.
 
-/** What the rotator does when a pass ends. */
-const ROT_POST_PASS: { value: string; label: string }[] = [
-  { value: 'stop', label: 'Stop — leave the antenna where the pass ended' },
-  { value: 'park', label: 'Park — drive to the park position' },
-  { value: 'ready', label: 'Ready — drive to the ready position' },
+/** What the rotator does when a pass ends. The stored `value` is the token the backend reads;
+ * only the LABEL is prose, so it resolves from the catalog at the call site. */
+const ROT_POST_PASS: { value: string; labelKey: MessageKey }[] = [
+  { value: 'stop', labelKey: 'settings.rotator.postPass.stop' },
+  { value: 'park', labelKey: 'settings.rotator.postPass.park' },
+  { value: 'ready', labelKey: 'settings.rotator.postPass.ready' },
 ]
 
 /** One operator override of the working-frequency table. */
@@ -681,6 +682,18 @@ const CONFIRMATION_EXAMPLES = {
 const RIG_EXAMPLES = {
   macSerialPort: '/dev/cu.usbserial-1420',
   serialPort: 'COM16',
+} as const
+
+/**
+ * The rotator's own device and address examples — the same rule as `RIG_EXAMPLES` one section
+ * down the tab. A controller's serial device is whatever the OS enumerated and `127.0.0.1:4533`
+ * is rotctld's default address; a "localised" one reaches nothing. The prose around them
+ * ("host:port — e.g. …") is a catalog entry that interpolates one of these.
+ */
+const ROTATOR_EXAMPLES = {
+  macPort: '/dev/cu.usbserial-1420',
+  port: 'COM7 / /dev/ttyUSB1',
+  host: '127.0.0.1:4533',
 } as const
 
 /**
@@ -3948,26 +3961,29 @@ export function SettingsPanel({
               from one of them expects it. Keep them together. */}
           {(form.radios?.length ?? 1) > 1 && (
             <div className="radio-config-banner">
-              🎚 Audio devices below are for{' '}
-              <strong>
-                {form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'the selected radio'}
-              </strong>
-              . Each radio has its OWN input/output — click “Edit” on another radio (in Radios above)
-              to set its audio. The live RX audio + waterfall follow whichever radio is active.
+              <T
+                k="settings.audio.multiRadio.note"
+                tags={{ b: <strong /> }}
+                vals={{
+                  radio:
+                    form.radios?.find((r) => r.id === editingRadioId)?.name ??
+                    t('settings.audio.multiRadio.selectedRadio'),
+                }}
+              />
             </div>
           )}
           <fieldset className="settings-section" id="settings-audio">
-            <legend>Audio</legend>
+            <legend>{t('settings.audio.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Input Device (RX)</span>
+                <span className="settings-label">{t('settings.audio.input.label')}</span>
                 <div className="settings-input-row">
                   <select
                     className="settings-input"
                     value={form.audioIn}
                     onChange={(e) => update('audioIn', e.target.value)}
                   >
-                    <option value="">System default</option>
+                    <option value="">{t('settings.audio.device.systemDefault')}</option>
                     {audioInOptions.map((d) => (
                       <option key={d} value={d}>
                         {audioLabel(d, 'input')}
@@ -3979,46 +3995,41 @@ export function SettingsPanel({
                     className="settings-refresh"
                     onClick={refreshAudio}
                     disabled={audioLoading}
-                    title="Re-scan audio devices"
+                    title={t('settings.audio.refresh.title')}
                   >
-                    {audioLoading ? '…' : 'Refresh'}
+                    {audioLoading ? '…' : t('settings.audio.refresh.action')}
                   </button>
                 </div>
-                <span className="settings-hint">Sound card carrying receive audio.</span>
+                <span className="settings-hint">{t('settings.audio.input.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Output Device (TX)</span>
+                <span className="settings-label">{t('settings.audio.output.label')}</span>
                 <select
                   className="settings-input"
                   value={form.audioOut}
                   onChange={(e) => update('audioOut', e.target.value)}
                 >
-                  <option value="">System default</option>
+                  <option value="">{t('settings.audio.device.systemDefault')}</option>
                   {audioOutOptions.map((d) => (
                     <option key={d} value={d}>
                       {audioLabel(d, 'output')}
                     </option>
                   ))}
                 </select>
-                <span className="settings-hint">Sound card feeding the rig (transmit).</span>
+                <span className="settings-hint">{t('settings.audio.output.hint')}</span>
               </label>
 
               <div className="settings-field settings-audio-scope">
-                <span className="settings-label">Live input spectrum</span>
-                <MiniSpectrum
-                  height={84}
-                  idleHint="Flat — no audio on the selected input. Check the device above (radio on? right codec?)."
-                />
-                <span className="settings-hint">
-                  What the selected input hears, live — band noise should show as a moving
-                  floor. Confirms the RIGHT device before you leave Settings.
-                </span>
+                <span className="settings-label">{t('settings.audio.spectrum.label')}</span>
+                <MiniSpectrum height={84} idleHint={t('settings.audio.spectrum.idle')} />
+                <span className="settings-hint">{t('settings.audio.spectrum.hint')}</span>
               </div>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  Tx Power <span className="settings-value">{Math.round(form.txLevel * 100)}%</span>
+                  {t('settings.audio.txPower.label')}{' '}
+                  <span className="settings-value">{Math.round(form.txLevel * 100)}%</span>
                 </span>
                 <input
                   className="settings-slider"
@@ -4049,27 +4060,22 @@ export function SettingsPanel({
                   onKeyUp={(e) =>
                     applyTxLevelLive(Number((e.target as HTMLInputElement).value) ** 2, true)
                   }
-                  aria-label="Transmit drive level"
+                  aria-label={t('settings.audio.txPower.aria')}
                 />
                 <span className="settings-hint">
-                  The audio <strong>drive</strong> into the rig — the SAME control as the cockpit{' '}
-                  <strong>Pwr</strong> slider (they always match now). Trim down until your rig&apos;s
-                  ALC is just zero. This is <em>not</em> the rig&apos;s RF watts — set those on the radio.
+                  <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
                 </span>
               </label>
 
               <div className="settings-field">
                 <span className="settings-label">
-                  RX Level{' '}
+                  {t('settings.audio.rxLevel.label')}{' '}
                   {/* Live 100 ms poll (lock-free backend) — setting a gain against a needle
                       that answered 0.5–0.8 s late made level-setting guesswork. */}
                   <span className="settings-value"><LiveRxLevelDb /></span>
                 </span>
-                <LiveLevelMeter label="RX audio level" variant="full" />
-                <span className="settings-hint">
-                  A dB scale like WSJT-X — aim for around 30 dB. Anything from ~15–60 dB
-                  decodes fine; red means too hot (back off RX Gain or the rig's audio).
-                </span>
+                <LiveLevelMeter label={t('settings.audio.rxLevel.meter')} variant="full" />
+                <span className="settings-hint">{t('settings.audio.rxLevel.hint')}</span>
                 {radio?.audioError && (
                   <span className="cat-result fail" role="alert">✗ {radio.audioError}</span>
                 )}
@@ -4077,7 +4083,8 @@ export function SettingsPanel({
 
               <label className="settings-field">
                 <span className="settings-label">
-                  RX Gain <span className="settings-value">×{(form.rxGain ?? 1).toFixed(1)}</span>
+                  {t('settings.audio.rxGain.label')}{' '}
+                  <span className="settings-value">×{(form.rxGain ?? 1).toFixed(1)}</span>
                 </span>
                 <input
                   className="settings-slider"
@@ -4089,48 +4096,44 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('rxGain', Number(e.target.value))}
                   onPointerUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
                   onKeyUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  aria-label="RX capture gain"
+                  aria-label={t('settings.audio.rxGain.aria')}
                 />
-                <span className="settings-hint">
-                  Boost a quiet interface until RX Level reads around 30 dB — the meter responds
-                  as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB)
-                  — FT8 decodes on a small signal, so you rarely need much.
-                </span>
+                <span className="settings-hint">{t('settings.audio.rxGain.hint')}</span>
               </label>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-headphone-monitor">
-            <legend>Headphone monitor</legend>
+            <legend>{t('settings.headphoneMonitor.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Enable monitor</span>
+                <span className="settings-label">
+                  {t('settings.headphoneMonitor.enable.label')}
+                </span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
                     checked={!!form.monitorEnabled}
                     onChange={(e) => updateBool('monitorEnabled', e.target.checked)}
-                    aria-label="Enable headphone monitor"
+                    aria-label={t('settings.headphoneMonitor.enable.aria')}
                   />
                   <span className="settings-hint">
-                    Plays the exact audio the decoder hears — for level / RFI diagnosis and
-                    listening to the band. Off by default; UNVERIFIED on-air until the attended
-                    session. Guards against the rig's TX device by name (System default is
-                    resolved to its real device first) — if your devices go by multiple
-                    names, pick your headphones explicitly rather than System default.
+                    {t('settings.headphoneMonitor.enable.hint')}
                   </span>
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Monitor Output Device</span>
+                <span className="settings-label">
+                  {t('settings.headphoneMonitor.device.label')}
+                </span>
                 <select
                   className="settings-input"
                   value={form.monitorDevice ?? ''}
                   onChange={(e) => update('monitorDevice', e.target.value)}
                   disabled={!form.monitorEnabled}
                 >
-                  <option value="">System default</option>
+                  <option value="">{t('settings.audio.device.systemDefault')}</option>
                   {monitorOutOptions.map((d) => (
                     <option key={d} value={d}>
                       {audioLabel(d, 'output')}
@@ -4138,13 +4141,13 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  Your headphones or speakers — must NOT be the rig's TX output device.
+                  {t('settings.headphoneMonitor.device.hint')}
                 </span>
               </label>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  Monitor Level{' '}
+                  {t('settings.headphoneMonitor.level.label')}{' '}
                   <span className="settings-value">{Math.round((form.monitorLevel ?? 0.5) * 100)}%</span>
                 </span>
                 <input
@@ -4156,42 +4159,41 @@ export function SettingsPanel({
                   value={String(form.monitorLevel ?? 0.5)}
                   onChange={(e) => updateNum('monitorLevel', Number(e.target.value))}
                   disabled={!form.monitorEnabled}
-                  aria-label="Headphone monitor level"
+                  aria-label={t('settings.headphoneMonitor.level.aria')}
                 />
-                <span className="settings-hint">Headphone listening volume (does not affect TX).</span>
+                <span className="settings-hint">
+                  {t('settings.headphoneMonitor.level.hint')}
+                </span>
               </label>
             </div>
           </fieldset>
 
           {/* ---- Satellite Doppler + rotator manners (Phase 1 sat station) ---- */}
           <fieldset className="settings-section" id="settings-satellite-doppler">
-            <legend>Satellite Doppler</legend>
-            <p className="settings-note">
-              Corrects both legs of a pass: the downlink you listen on and the uplink you
-              transmit on. Nexus tunes only while auto-track is following a pass and you have
-              picked a transponder in the Satellites section. The downlink needs no setup here;
-              the uplink is confirmed once per radio, on the pass itself.
-            </p>
+            <legend>{t('settings.satelliteDoppler.legend')}</legend>
+            <p className="settings-note">{t('settings.satelliteDoppler.note')}</p>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Doppler correction</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.enable.label')}
+                </span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
                     checked={!form.satDopplerOff}
                     onChange={(e) => updateBool('satDopplerOff', !e.target.checked)}
-                    aria-label="Enable satellite Doppler correction"
+                    aria-label={t('settings.satelliteDoppler.enable.aria')}
                   />
                   <span className="settings-hint">
-                    Retunes the radio through a pass so you stay on the station you are working.
-                    On: the downlink follows the bird as soon as you arm a pass and hold a
-                    transponder. Clearing this stops both legs.
+                    {t('settings.satelliteDoppler.enable.hint')}
                   </span>
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">VFO mapping</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.vfoMap.label')}
+                </span>
                 {/* DISABLED while the panel is editing a radio that is not the
                     operating one: the mapping is a flat (station-level) field
                     whose pick is a LIVE write confirming the uplink for the
@@ -4214,11 +4216,11 @@ export function SettingsPanel({
                   }
                   title={
                     editingRadioId != null && editingRadioId !== (activeRadioId ?? form.activeRadio)
-                      ? 'The uplink mapping is confirmed per radio, for the radio you are operating. Confirm it for this radio on the pass rail during a pass, or make it the active radio first.'
+                      ? t('settings.satelliteDoppler.vfoMap.otherRadio')
                       : undefined
                   }
                   onChange={(e) => setSatVfoMap(e.target.value as NonNullable<Settings['satVfoMap']>)}
-                  aria-label="Satellite VFO mapping"
+                  aria-label={t('settings.satelliteDoppler.vfoMap.aria')}
                 >
                   {SAT_VFO_MAPS.map((m) => (
                     <option key={m.value} value={m.value}>
@@ -4227,17 +4229,14 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  Which VFO carries your uplink. Match this to how your radio is wired.{' '}
-                  <strong>A wrong mapping transmits on your own downlink</strong> — into the
-                  satellite&apos;s output passband, on top of everyone else working the bird.
-                  Picking one applies immediately and confirms it for the radio you are
-                  operating; a second radio gets its own confirmation on the pass rail. Every
-                  mapping except Uplink only keeps the downlink corrected.
+                  <T k="settings.satelliteDoppler.vfoMap.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Minimum shift (Hz)</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.minShift.label')}
+                </span>
                 <input
                   className="settings-input"
                   type="number"
@@ -4248,16 +4247,17 @@ export function SettingsPanel({
                     const n = Number(e.target.value)
                     if (!Number.isNaN(n)) updateNum('satMinShiftHz', n)
                   }}
-                  aria-label="Minimum Doppler shift before retuning (Hz)"
+                  aria-label={t('settings.satelliteDoppler.minShift.aria')}
                 />
                 <span className="settings-hint">
-                  Corrections smaller than this are not sent. 20 Hz is inaudible on SSB and keeps
-                  the CAT link quiet. 0 sends every update.
+                  {t('settings.satelliteDoppler.minShift.hint')}
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Update interval (ms)</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.interval.label')}
+                </span>
                 <input
                   className="settings-input"
                   type="number"
@@ -4268,27 +4268,26 @@ export function SettingsPanel({
                     const n = Number(e.target.value)
                     if (!Number.isNaN(n)) updateNum('satUpdateMs', n)
                   }}
-                  aria-label="Doppler update interval (milliseconds)"
+                  aria-label={t('settings.satelliteDoppler.interval.aria')}
                 />
                 <span className="settings-hint">
-                  Shortest gap between corrections. 1000 ms is what a low-orbit pass needs.
-                  Shorter fights your own tuning knob and saturates a serial CAT link.
+                  {t('settings.satelliteDoppler.interval.hint')}
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Pass alert sounds</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.passSounds.label')}
+                </span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
                     checked={!form.satPassAlertSoundOff}
                     onChange={(e) => updateBool('satPassAlertSoundOff', !e.target.checked)}
-                    aria-label="Audible tones at pass start and end"
+                    aria-label={t('settings.satelliteDoppler.passSounds.aria')}
                   />
                   <span className="settings-hint">
-                    A rising tone the moment an armed pass starts and a falling one when it
-                    ends, alongside the popup — hear AOS with your hands on the rotor. On by
-                    default; clearing this silences only the tones, never the popups.
+                    {t('settings.satelliteDoppler.passSounds.hint')}
                   </span>
                 </span>
               </label>
@@ -4298,7 +4297,7 @@ export function SettingsPanel({
           {/* ---- Orbital elements (the TLE currency pipeline's operator surface;
                   cloned from the FCC callsign→state fieldset) ---- */}
           <fieldset className="settings-section" id="settings-orbital-elements">
-            <legend>Orbital elements</legend>
+            <legend>{t('settings.orbitalElements.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
                 <button
@@ -4324,16 +4323,20 @@ export function SettingsPanel({
                       .finally(() => setTleFetching(false))
                   }}
                 >
-                  {tleFetching ? 'Updating…' : 'Update now'}
+                  {tleFetching
+                    ? t('settings.orbitalElements.update.busy')
+                    : t('settings.orbitalElements.update.action')}
                 </button>
                 <button
                   type="button"
                   className="settings-test-btn"
                   disabled={tleImporting}
                   onClick={() => tleFileRef.current?.click()}
-                  title="Import a downloaded element file (Celestrak TLE, AMSAT keps, a new launch's SupGP set) — the offline-shack escape hatch. Imports persist across refreshes; the newest epoch per satellite wins."
+                  title={t('settings.orbitalElements.import.title')}
                 >
-                  {tleImporting ? 'Importing…' : 'Import from file'}
+                  {tleImporting
+                    ? t('settings.orbitalElements.import.busy')
+                    : t('settings.orbitalElements.import.action')}
                 </button>
                 <input
                   ref={tleFileRef}
@@ -4350,14 +4353,19 @@ export function SettingsPanel({
                       .then((st) => {
                         setTleStatus(st)
                         pushToast(
-                          `Elements imported — ${st.importedCount} imported, ${st.count} total`,
+                          t('settings.orbitalElements.import.ok', {
+                            imported: st.importedCount,
+                            total: st.count,
+                          }),
                           'success',
                           5000,
                         )
                       })
                       .catch((err) =>
                         pushToast(
-                          `Element import failed: ${err instanceof Error ? err.message : err}`,
+                          t('settings.orbitalElements.import.failed', {
+                            error: `${err instanceof Error ? err.message : err}`,
+                          }),
                           'error',
                         ),
                       )
@@ -4371,39 +4379,48 @@ export function SettingsPanel({
                     during an error is not a count. */}
                 <span className="settings-hint">
                   {tleStatus && tleStatus.count > 0
-                    ? `${[`${tleStatus.count} birds`, ...elementBandParts(tleStatus)].join(' · ')} · ${
+                    ? // A LIST of independent chips, not a sentence — the shape
+                      // `elementBandSummary` already uses, so its parts drop straight in.
+                      // `source` is the backend's one-word provenance and stays a token.
+                      [
+                        t('settings.orbitalElements.status.birds', { count: tleStatus.count }),
+                        ...elementBandParts(tleStatus),
                         tleStatus.fetchedAt > 0
-                          ? `fetched ${new Date(tleStatus.fetchedAt * 1000).toISOString().slice(0, 10)}`
-                          : 'never fetched'
-                      } · ${tleStatus.source}${
-                        tleStatus.importedCount > 0 ? ` · ${tleStatus.importedCount} imported` : ''
-                      }`
-                    : 'Not loaded yet — fetched on first launch, then refreshed every 6 h.'}
+                          ? t('settings.orbitalElements.status.fetched', {
+                              date: new Date(tleStatus.fetchedAt * 1000)
+                                .toISOString()
+                                .slice(0, 10),
+                            })
+                          : t('settings.orbitalElements.status.neverFetched'),
+                        tleStatus.source,
+                        ...(tleStatus.importedCount > 0
+                          ? [
+                              t('settings.orbitalElements.status.imported', {
+                                count: tleStatus.importedCount,
+                              }),
+                            ]
+                          : []),
+                      ].join(' · ')
+                    : t('settings.orbitalElements.status.empty')}
                 </span>
               </div>
-              <span className="settings-hint">
-                Keplerian elements (TLEs) for the amateur satellites — pass times, pointing and
-                Doppler all come from them. Refreshed every 6 h from hamradiotools.io: the bird
-                list comes from the SatNOGS database (CC BY-SA 4.0), the elements from CelesTrak
-                and SatNOGS. Import a file for an offline shack or a just-launched bird.
-              </span>
+              <span className="settings-hint">{t('settings.orbitalElements.hint')}</span>
               {tleStatus?.lastError && (
                 // Operator words in the line, the raw error in the tooltip —
                 // during the pre-launch window the mirror 404s by design,
                 // and "HTTP 404" is not a thing to hand an operator.
                 <span className="settings-hint" title={tleRefreshMessage(tleStatus).raw}>
-                  Last refresh: {tleRefreshMessage(tleStatus).text}
+                  {t('settings.orbitalElements.lastRefresh', {
+                    detail: tleRefreshMessage(tleStatus).text,
+                  })}
                 </span>
               )}
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-rotator">
-            <legend>Rotator</legend>
-            <p className="settings-note">
-              The rotator itself, and its pointing manners. The manners apply to satellite
-              auto-track.
-            </p>
+            <legend>{t('settings.rotator.legend')}</legend>
+            <p className="settings-note">{t('settings.rotator.note')}</p>
             <div className="settings-grid">
               {/* THE MODEL AND ITS PORT LIVE HERE NOW. They were inside Rig &amp; CAT, which
                   meant the one affordance the app has for a silent rotator — the cockpit's
@@ -4413,7 +4430,7 @@ export function SettingsPanel({
                   26/32/42/50). The registry says where a setting lives; this is where the
                   registry always said the rotator lived. */}
               <div className="settings-field">
-                <span className="settings-label">Rotator model</span>
+                <span className="settings-label">{t('settings.rotator.model.label')}</span>
                 {(() => {
                   const model = form.rotatorModel ?? 0
                   const curated = new Set(['0', ...ROTATOR_MODELS.map((r) => String(r.model))])
@@ -4433,22 +4450,22 @@ export function SettingsPanel({
                             selectRotator(Number(v))
                           }
                         }}
-                        aria-label="Rotator model"
+                        aria-label={t('settings.rotator.model.label')}
                       >
-                        <option value="0">None</option>
+                        <option value="0">{t('settings.rotator.model.none')}</option>
                         {ROTATOR_MODELS.map((r) => (
                           <option key={r.model} value={r.model}>
                             {r.label}
                           </option>
                         ))}
-                        <option value="other">Other Hamlib model #…</option>
+                        <option value="other">{t('settings.rotator.model.other')}</option>
                       </select>
                       {isOther && (
                         <input
                           className="settings-input"
                           type="number"
                           min="1"
-                          placeholder="Hamlib rotator model number (rotctl -l lists them)"
+                          placeholder={t('settings.rotator.model.number.placeholder')}
                           // Falls back to the CONFIGURED model rather than staying blank: the
                           // box is local state seeded only when the operator picks "Other" by
                           // hand, so re-opening Settings — or switching radios — used to render
@@ -4461,31 +4478,28 @@ export function SettingsPanel({
                             // entry leaves the last valid value in the form.
                             if (Number.isInteger(n) && n > 0) selectRotator(n)
                           }}
-                          aria-label="Hamlib rotator model number"
+                          aria-label={t('settings.rotator.model.number.aria')}
                         />
                       )}
                     </>
                   )
                 })()}
-                <span className="settings-hint">
-                  Nexus runs the control daemon (rotctld) for you, the same way it does CAT.
-                  Then use the Rotor pane in Connect, ↗ on Needed rows, or the compass anywhere.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.model.hint')}</span>
               </div>
 
               {(form.rotatorModel ?? 0) > 1 && (
                 <div className="settings-field">
-                  <span className="settings-label">Rotator port &amp; baud</span>
+                  <span className="settings-label">{t('settings.rotator.port.label')}</span>
                   <div className="settings-inline-pair">
                     <input
                       className="settings-input"
                       type="text"
                       value={form.rotatorPort ?? ''}
-                      placeholder={IS_MAC ? '/dev/cu.usbserial-1420' : 'COM7 / /dev/ttyUSB1'}
+                      placeholder={IS_MAC ? ROTATOR_EXAMPLES.macPort : ROTATOR_EXAMPLES.port}
                       onChange={(e) => update('rotatorPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
-                      aria-label="Rotator serial port"
+                      aria-label={t('settings.rotator.port.aria')}
                     />
                     <input
                       className="settings-input"
@@ -4495,8 +4509,8 @@ export function SettingsPanel({
                         const n = Number(e.target.value)
                         if (!Number.isNaN(n)) updateNum('rotatorBaud', n)
                       }}
-                      aria-label="Rotator baud rate"
-                      title="Serial baud rate for the rotator controller"
+                      aria-label={t('settings.rotator.baud.aria')}
+                      title={t('settings.rotator.baud.title')}
                     />
                   </div>
                   {/* The old hint here said "GS-232 default 9600" to EVERY model, which is how
@@ -4508,28 +4522,28 @@ export function SettingsPanel({
                     const set = form.rotatorBaud ?? 9600
                     if (only === undefined) {
                       return (
-                        <span className="settings-hint">
-                          Match the rate your controller is set to — Hamlib does not offer one
-                          fixed rate for this model.
-                        </span>
+                        <span className="settings-hint">{t('settings.rotator.baud.hint.any')}</span>
                       )
                     }
+                    // ⚠️ THE RATES GO IN AS ALREADY-FORMATTED STRINGS. `toLocaleString()` on a
+                    // baud rate is the defect the Rig & CAT baud picker has (a German install
+                    // reads "9.600"), and it is NOT fixed here: passing the numbers would let
+                    // `invariantNumber` render "9600" and change visible English, which this
+                    // batch may not do. Both fix together, in their own change.
                     if (only === set) {
                       return (
                         <span className="settings-hint">
-                          This controller runs at {only.toLocaleString()} baud — the rate its
-                          Hamlib backend declares. Leave it here.
+                          {t('settings.rotator.baud.hint.fixed', { rate: only.toLocaleString() })}
                         </span>
                       )
                     }
                     return (
                       <span className="settings-hint settings-warn">
-                        <strong>
-                          This controller runs at {only.toLocaleString()} baud, not{' '}
-                          {set.toLocaleString()}
-                        </strong>{' '}
-                        — at the wrong rate it never answers and reads as broken hardware. Set{' '}
-                        {only.toLocaleString()}, or re-pick the model above to fill it in.
+                        <T
+                          k="settings.rotator.baud.hint.wrong"
+                          tags={{ b: <strong /> }}
+                          vals={{ rate: only.toLocaleString(), set: set.toLocaleString() }}
+                        />
                       </span>
                     )
                   })()}
@@ -4537,26 +4551,24 @@ export function SettingsPanel({
               )}
 
               <div className="settings-field">
-                <span className="settings-label">External rotctld (advanced)</span>
+                <span className="settings-label">{t('settings.rotator.external.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
                   value={form.rotatorHost}
-                  placeholder="host:port — e.g. 127.0.0.1:4533"
+                  placeholder={t('settings.rotator.external.placeholder', {
+                    example: ROTATOR_EXAMPLES.host,
+                  })}
                   onChange={(e) => update('rotatorHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
-                  aria-label="External rotctld address (advanced)"
+                  aria-label={t('settings.rotator.external.aria')}
                 />
-                <span className="settings-hint">
-                  Point Nexus at a rotctld you run yourself (or one on another machine). It
-                  OVERRIDES the model and port above and stops the integrated daemon. Needs the
-                  port — a bare host name is not an address.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.external.hint')}</span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Park position (° az / el)</span>
+                <span className="settings-label">{t('settings.rotator.park.label')}</span>
                 <div className="settings-inline-pair">
                   <input
                     className="settings-input"
@@ -4567,7 +4579,7 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotParkAz', n)
                     }}
-                    aria-label="Park azimuth (degrees)"
+                    aria-label={t('settings.rotator.park.az.aria')}
                   />
                   <input
                     className="settings-input"
@@ -4578,17 +4590,14 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotParkEl', n)
                     }}
-                    aria-label="Park elevation (degrees)"
+                    aria-label={t('settings.rotator.park.el.aria')}
                   />
                 </div>
-                <span className="settings-hint">
-                  The stow position — wind-safe, or wherever your mast rests. Used only when
-                  After a pass is set to Park.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.park.hint')}</span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Ready position (° az / el)</span>
+                <span className="settings-label">{t('settings.rotator.ready.label')}</span>
                 <div className="settings-inline-pair">
                   <input
                     className="settings-input"
@@ -4599,7 +4608,7 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotReadyAz', n)
                     }}
-                    aria-label="Ready azimuth (degrees)"
+                    aria-label={t('settings.rotator.ready.az.aria')}
                   />
                   <input
                     className="settings-input"
@@ -4610,38 +4619,31 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotReadyEl', n)
                     }}
-                    aria-label="Ready elevation (degrees)"
+                    aria-label={t('settings.rotator.ready.el.aria')}
                   />
                 </div>
-                <span className="settings-hint">
-                  Where the antenna waits for the next pass. Used only when After a pass is set
-                  to Ready.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.ready.hint')}</span>
               </div>
 
               <label className="settings-field">
-                <span className="settings-label">After a pass</span>
+                <span className="settings-label">{t('settings.rotator.postPass.label')}</span>
                 <select
                   className="settings-input"
                   value={form.rotPostPass ?? 'stop'}
                   onChange={(e) => update('rotPostPass', e.target.value)}
-                  aria-label="What the rotator does after a pass"
+                  aria-label={t('settings.rotator.postPass.aria')}
                 >
                   {ROT_POST_PASS.map((o) => (
                     <option key={o.value} value={o.value}>
-                      {o.label}
+                      {t(o.labelKey)}
                     </option>
                   ))}
                 </select>
-                <span className="settings-hint">
-                  Stop is the default and moves nothing: the antenna stays pointed where the bird
-                  set. Park and Ready drive the rotator on their own at LOS, so set those
-                  positions above first.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.postPass.hint')}</span>
               </label>
 
               <div className="settings-field">
-                <span className="settings-label">Tolerance (° az / el)</span>
+                <span className="settings-label">{t('settings.rotator.tolerance.label')}</span>
                 <div className="settings-inline-pair">
                   <input
                     className="settings-input"
@@ -4653,7 +4655,7 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotTolAzDeg', n)
                     }}
-                    aria-label="Azimuth tolerance (degrees)"
+                    aria-label={t('settings.rotator.tolerance.az.aria')}
                   />
                   <input
                     className="settings-input"
@@ -4665,18 +4667,14 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotTolElDeg', n)
                     }}
-                    aria-label="Elevation tolerance (degrees)"
+                    aria-label={t('settings.rotator.tolerance.el.aria')}
                   />
                 </div>
-                <span className="settings-hint">
-                  A new target closer than this is not commanded. Without a deadband the rotator
-                  hunts and the relays chatter for the whole pass. 2° is about a G-5500&apos;s own
-                  resolution.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.tolerance.hint')}</span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Calibration trim (° az / el)</span>
+                <span className="settings-label">{t('settings.rotator.calibration.label')}</span>
                 <div className="settings-inline-pair">
                   <input
                     className="settings-input"
@@ -4687,7 +4685,7 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotCalAzDeg', n)
                     }}
-                    aria-label="Azimuth calibration trim (degrees)"
+                    aria-label={t('settings.rotator.calibration.az.aria')}
                   />
                   <input
                     className="settings-input"
@@ -4698,29 +4696,23 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotCalElDeg', n)
                     }}
-                    aria-label="Elevation calibration trim (degrees)"
+                    aria-label={t('settings.rotator.calibration.el.aria')}
                   />
                 </div>
-                <span className="settings-hint">
-                  Added to every command. Use it when the controller reads one heading and the
-                  boom points at another.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.calibration.hint')}</span>
               </div>
 
               <label className="settings-field">
-                <span className="settings-label">Allow flip</span>
+                <span className="settings-label">{t('settings.rotator.flip.label')}</span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
                     checked={!!form.rotAllowFlip}
                     onChange={(e) => updateBool('rotAllowFlip', e.target.checked)}
-                    aria-label="Allow the rotator to flip past 90 degrees elevation"
+                    aria-label={t('settings.rotator.flip.aria')}
                   />
                   <span className="settings-hint">
-                    Takes a high pass by turning azimuth 180° and running elevation past 90°,
-                    instead of swinging the mast around at the top of the pass. Off by default:{' '}
-                    <strong>many rotators cannot mechanically go past 90° elevation</strong>.
-                    Check your controller before turning this on.
+                    <T k="settings.rotator.flip.hint" tags={{ b: <strong /> }} />
                   </span>
                 </span>
               </label>

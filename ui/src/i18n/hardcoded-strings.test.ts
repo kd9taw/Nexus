@@ -218,6 +218,20 @@ const MIGRATED = [
   'components/RadioPicker.tsx',
   'components/RadioSwitcher.tsx',
   'rigFormChecks.ts',
+  // Batch 13 (2026-08-19) — Settings ▸ Radio's audio half (Audio, Headphone monitor,
+  // Satellite Doppler, Orbital elements, Rotator) and the SETUP WIZARD, migrated together
+  // because the wizard's steps ARE those settings: two surfaces asking the same question in
+  // two wordings is how the pair drifted before, and one catalog now holds both. The units
+  // rule lands on the HARDWARE here — sound-card device names, sample rates, the dB and ×
+  // gain readings, every baud rate, rotator model names and Hamlib model numbers, azimuth and
+  // elevation degrees, Keplerian element sources and epochs, and the callsign/grid/address
+  // EXAMPLES (WIZARD_EXAMPLES, ROTATOR_EXAMPLES) all stay in the code. Two things this batch
+  // settles: a CONFIGURATION control on the transmit path is not a transmit control — Tx
+  // Power's drive slider moved exactly as PTT Method did in batch 12, while `SetupHealth`'s
+  // Prove TX, which really does key a carrier, did not (see PARTIAL below); and the wizard's
+  // 14 mid-sentence conditionals are each ONE entry with the variable clause interpolated
+  // whole, including the "swap them" sentence, whose BUTTON is supplied by the call site.
+  'components/SetupWizard.tsx',
 ]
 
 /**
@@ -235,15 +249,23 @@ const MIGRATED = [
  * Confirmations itself — LoTW, eQSL, QRZ, HamQTH, ClubLog, HRDLog, RepeaterBook and
  * Cloudlog/Wavelog. Batch 12 (2026-08-19) took the first three sections of the Radio tab —
  * the dual-radio roster with its band coverage and band+mode routing table, Profiles, and Rig
- * & CAT down to Test CAT, Advanced included. Putting the file on MIGRATED would report the
- * tabs still to come; leaving it off entirely would make every key those sections use look
- * like an orphan.
+ * & CAT down to Test CAT, Advanced included — and batch 13 the rest of that tab's audio half:
+ * Audio, Headphone monitor, Satellite Doppler, Orbital elements and Rotator. Putting the file
+ * on MIGRATED would report the tabs still to come; leaving it off entirely would make every
+ * key those sections use look like an orphan.
+ *
+ * `SetupHealth.tsx` is here for a DIFFERENT and much narrower reason, and it is the only kind
+ * that may be added: every string in it is migrated except one CONTROL — Prove TX, which keys
+ * a bounded tune carrier. Transmit-path controls and their accessible names move in their own
+ * batch, with the stop-line sweeps re-run, so the button's label, its tooltip and the consent
+ * prompt in front of it stay as written and the file cannot be clean yet. It graduates to
+ * MIGRATED the moment that batch lands; nothing else is deferred in it.
  *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be
  * added to it to dodge a failing check.
  */
-const PARTIAL = ['components/SettingsPanel.tsx']
+const PARTIAL = ['components/SettingsPanel.tsx', 'components/SetupHealth.tsx']
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
 const VISIBLE_ATTRS = new Set([
