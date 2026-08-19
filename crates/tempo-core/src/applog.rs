@@ -250,7 +250,7 @@ impl Sink {
         let line = format!(
             "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}Z  {}  {}\n",
             level.tag(),
-            redact(text)
+            redact(&trim_build_paths(text))
         );
         let Some(f) = self.file.as_mut() else {
             return;
@@ -374,6 +374,38 @@ const SENSITIVE_SUFFIXES: [&str; 13] = [
 ///
 /// It is deliberately over-eager. Masking a harmless value (`lowpass=3000`) costs one
 /// diagnostic detail; leaking a credential costs the operator their account.
+/// Cut the BUILD MACHINE's absolute paths down to repo-relative ones.
+///
+/// ⚠️ THIS IS A LEAK FIX, not tidiness. `#[track_caller]` and `panic::Location` both render the
+/// path as it was handed to the compiler, which for a locally built binary is an absolute path
+/// under the developer's home directory — and this file is the one an operator is asked to
+/// EMAIL to a stranger or attach to a public issue. A panic line reading
+/// `/home/<someone>/work/.../engine.rs:8864` publishes a username with it, from a file whose
+/// whole design goal (see the module header's redaction rule) is that it can be handed over
+/// without being read first. Found in a real operator log, 2026-08-19.
+///
+/// Everything up to and including the last `crates/`, `src-tauri/`, `libtempo/` or `ui/`
+/// segment is dropped, leaving `crates/tempo-app/src/engine.rs:8864` — which is what a reader
+/// actually wants anyway, and what a CI build (whose paths are already relative) prints.
+/// Anything unrecognised is left alone: a path shape we do not know is not one to guess at.
+fn trim_build_paths(text: &str) -> String {
+    const ROOTS: [&str; 4] = ["/crates/", "/src-tauri/", "/libtempo/", "/ui/"];
+    let mut out = text.to_string();
+    for root in ROOTS {
+        // Repeatedly, because one line can carry two paths (a panic renders location + payload).
+        while let Some(i) = out.find(root) {
+            // Walk back to the start of this path token so the whole absolute prefix goes, not
+            // just the part before `/crates/`.
+            let start = out[..i]
+                .rfind(|c: char| c.is_whitespace() || c == '(' || c == '\'' || c == '"')
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            out.replace_range(start..=i, "");
+        }
+    }
+    out
+}
+
 fn redact(line: &str) -> String {
     let c: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
@@ -526,6 +558,45 @@ fn is_sensitive(lower_ident: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A LOG WE ASK STRANGERS TO READ MUST NOT CARRY THE BUILD MACHINE'S PATHS.
+    ///
+    /// `#[track_caller]` and `panic::Location` print the path the compiler was given. On a
+    /// locally built binary that is absolute and sits under someone's home directory, so a
+    /// single panic publishes a username into the file whose entire purpose is to be handed
+    /// over unread. Seen in a real operator log, 2026-08-19.
+    #[test]
+    fn build_paths_are_cut_to_repo_relative() {
+        let leaky = "at /home/someone/work/proj/crates/tempo-app/src/engine.rs:8864: panicked";
+        let cut = trim_build_paths(leaky);
+        assert_eq!(cut, "at crates/tempo-app/src/engine.rs:8864: panicked");
+        assert!(
+            !cut.contains("/home/"),
+            "control: the home directory is gone"
+        );
+
+        // Two paths on one line — a panic renders location AND payload.
+        let two = "at /a/b/crates/x/src/f.rs:1: panicked at /a/b/crates/x/src/f.rs:1:9: boom";
+        assert!(!trim_build_paths(two).contains("/a/b/"));
+
+        // Every root the tree builds from.
+        for root in [
+            "/src-tauri/src/lib.rs:17",
+            "/libtempo/x.f90:3",
+            "/ui/src/main.tsx:9",
+        ] {
+            let s = format!("x /home/u/work/proj{root}");
+            assert!(
+                !trim_build_paths(&s).contains("/home/u"),
+                "{root} still leaked"
+            );
+        }
+
+        // A path shape we do not recognise is LEFT ALONE rather than mangled — an operator's
+        // own settings path is diagnostic and is not ours to guess at.
+        let keep = r"settings loaded from C:\Users\op\AppData\Roaming\tempo\settings.json";
+        assert_eq!(trim_build_paths(keep), keep);
+    }
     use super::*;
 
     /// A unique scratch directory (OS temp dir — nothing here touches the checkout).
