@@ -7,19 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **A logbook with accented or non-English text in it could load as EMPTY — and the next save
-  wrote that empty log to disk.** If your `log.adi` held a single byte that wasn't plain
-  English — a Greek name, a German umlaut, a French accent in NAME, QTH or COMMENT, which is
-  exactly what a Greek, German or French Windows writes — Nexus failed to read the file,
-  treated it as an empty logbook, skipped its own safety copy *because* it looked empty, and
-  the next save rewrote `log.adi` from zero records. Every QSO, gone, silently, with no
-  backup. Nexus now reads the log as raw bytes and never fails a load over an encoding: the
-  contacts all load, and the one-time safety copy is taken from the original bytes. Found
-  while investigating a Greek-Windows launch report. If this bit you, `log.adi.bak` beside
-  your log holds the original.
-
 ### Added
 
 - **A diagnostic log you can send us.** Nexus now keeps a plain-text record of what it did:
@@ -41,6 +28,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule. Oldest go first. The original `log.adi.bak` anchor is separate and is never rotated or
   deleted. Snapshots are taken when the log is **saved**, never when it is opened, so however
   large your log gets, launching Nexus does no extra disk work for this.
+
+### Fixed
+
+- **A logbook with accented or non-English text in it could load as EMPTY — and the next save
+  wrote that empty log to disk.** If your `log.adi` held a single byte that wasn't plain
+  English — a Greek name, a German umlaut, a French accent in NAME, QTH or COMMENT, which is
+  exactly what a Greek, German or French Windows writes — Nexus failed to read the file,
+  treated it as an empty logbook, skipped its own safety copy *because* it looked empty, and
+  the next save rewrote `log.adi` from zero records. Every QSO, gone, silently, with no
+  backup. Nexus now reads the log as raw bytes and never fails a load over an encoding: the
+  contacts all load, and the one-time safety copy is taken from the original bytes. Found
+  while investigating a Greek-Windows launch report. If this bit you, `log.adi.bak` beside
+  your log holds the original.
+
+- **Nexus could fail to start with no window, no error and nothing to send.** If the Microsoft
+  Edge WebView2 runtime — the component Nexus uses to draw its window — was missing, damaged or
+  had a corrupt cache, the app exited without a trace: no window, no message, no crash file.
+  That is the Greek-Windows report, and it is why reinstalling did not help. Nexus now says so
+  in a dialog that names WebView2 and gives the repair steps, writes the reason to the new
+  diagnostic log, and repairs the commonest case itself: the WebView2 cache folder is set aside
+  and startup is retried once before giving up.
+
+- **Frequencies and coordinates typed with a comma decimal separator were read wrong.** On a
+  Greek, German, French or any other comma-decimal Windows, typing `14,074` into the cluster
+  spot box, a memory channel or the APRS beacon latitude produced a wrong number — the APRS
+  case put bad position data on the air. Every place Nexus takes a typed number now accepts
+  both `14,074` and `14.074`, and rejects what is not a number instead of storing it.
+
+## [1.7.0] — 2026-08-18
 
 ### Added
 
