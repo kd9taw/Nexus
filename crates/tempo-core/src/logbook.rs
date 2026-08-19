@@ -973,7 +973,9 @@ impl Logbook {
         let mut live: Vec<(String, u64)> = snaps
             .into_iter()
             .map(|n| {
-                let len = std::fs::metadata(dir.join(&n)).map(|m| m.len()).unwrap_or(0);
+                let len = std::fs::metadata(dir.join(&n))
+                    .map(|m| m.len())
+                    .unwrap_or(0);
                 (n, len)
             })
             .collect();
@@ -3540,8 +3542,17 @@ mod tests {
         // Committed fixture, not a string literal: a `&str` in this file cannot hold the
         // invalid bytes that ARE the bug.
         const CP1253: &[u8] = include_bytes!("../tests/fixtures/logbook-cp1253.adi");
+        // clippy's `invalid_from_utf8` fires because it can evaluate the fixture at compile
+        // time and sees the call can only ever return Err. That is EXACTLY the assertion: this
+        // is the positive control proving the fixture really is non-UTF-8, without which the
+        // rest of the test would pass just as happily against a plain-ASCII file and prove
+        // nothing. The lint is right in general and wrong here, so it is allowed at the one
+        // call site with the reason, never crate-wide. (It is a rustc lint, not a clippy one —
+        // `clippy::invalid_from_utf8` is not a real lint name and `-D warnings` rejects it.)
+        #[allow(invalid_from_utf8)]
+        let fixture_is_not_utf8 = std::str::from_utf8(CP1253).is_err();
         assert!(
-            std::str::from_utf8(CP1253).is_err(),
+            fixture_is_not_utf8,
             "positive control: the fixture must actually be non-UTF-8, or this test proves nothing"
         );
 
@@ -3600,7 +3611,11 @@ mod tests {
         let path = dir.join("log.adi");
         let mut raw = adif_header();
         for i in 0..n {
-            raw.push_str(&adif_record(&rec(&format!("W{i}AAA"), "20m", 1_700_000_000 + i as u64)));
+            raw.push_str(&adif_record(&rec(
+                &format!("W{i}AAA"),
+                "20m",
+                1_700_000_000 + i as u64,
+            )));
         }
         std::fs::write(&path, &raw).unwrap();
         let lb = Logbook::load(&path);
@@ -3670,11 +3685,17 @@ mod tests {
         }
 
         let kept = snaps(&dir);
-        assert_eq!(kept.len(), BACKUP_KEEP, "the ring is capped at {BACKUP_KEEP}");
+        assert_eq!(
+            kept.len(),
+            BACKUP_KEEP,
+            "the ring is capped at {BACKUP_KEEP}"
+        );
         // Days 0 and 1 snapshotted the file as it stood BEFORE those saves; they are the two
         // that must have been dropped, and every survivor is newer.
         assert!(
-            !kept.iter().any(|n| n.contains("20260101") || n.contains("20260102")),
+            !kept
+                .iter()
+                .any(|n| n.contains("20260101") || n.contains("20260102")),
             "the two oldest were dropped, not two arbitrary ones: {kept:?}"
         );
         assert!(
@@ -3707,10 +3728,17 @@ mod tests {
         let kept = snaps(&dir);
         let total: u64 = kept
             .iter()
-            .map(|n| std::fs::metadata(dir.join("backups").join(n)).unwrap().len())
+            .map(|n| {
+                std::fs::metadata(dir.join("backups").join(n))
+                    .unwrap()
+                    .len()
+            })
             .sum();
         assert!(!kept.is_empty(), "the ceiling never empties the ring");
-        assert!(total <= cap, "ring is {total} bytes, over the {cap}-byte cap: {kept:?}");
+        assert!(
+            total <= cap,
+            "ring is {total} bytes, over the {cap}-byte cap: {kept:?}"
+        );
         assert!(kept.len() < 8, "the ceiling actually bit: {kept:?}");
         assert!(
             kept.last().unwrap().contains("20260108"),
@@ -3726,13 +3754,18 @@ mod tests {
         let dir = scratch_log_dir();
         let (mut lb, path) = seeded(&dir, 2);
 
-        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES).unwrap();
+        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
         assert_eq!(snaps(&dir).len(), 1, "the day's first save snapshots");
 
         lb.add(rec("W9ZZZ", "20m", 1_700_500_000));
         lb.save_at(&path, D0 + 3 * 3600, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
             .unwrap();
-        assert_eq!(snaps(&dir).len(), 1, "a later save the same day adds nothing");
+        assert_eq!(
+            snaps(&dir).len(),
+            1,
+            "a later save the same day adds nothing"
+        );
 
         // Positive control: the NEXT day does snapshot, so the rule is a day gate and not a
         // "one snapshot ever" bug.
@@ -3750,7 +3783,8 @@ mod tests {
         let dir = scratch_log_dir();
         let (mut lb, path) = seeded(&dir, 2);
 
-        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES).unwrap();
+        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
         assert_eq!(snaps(&dir).len(), 1);
 
         // Three more days of saves with nothing changed.
@@ -3792,7 +3826,8 @@ mod tests {
         let dir = scratch_log_dir();
         let (mut lb, path) = seeded(&dir, 5);
 
-        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES).unwrap();
+        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
         assert_eq!(snaps(&dir).len(), 1, "the day's ordinary snapshot");
         let before = std::fs::read(&path).unwrap();
 
@@ -3803,7 +3838,11 @@ mod tests {
             .unwrap();
 
         let kept = snaps(&dir);
-        assert_eq!(kept.len(), 2, "the shrink is snapshotted regardless: {kept:?}");
+        assert_eq!(
+            kept.len(),
+            2,
+            "the shrink is snapshotted regardless: {kept:?}"
+        );
         let shrink = kept.iter().find(|n| n.contains("-shrink")).expect(
             "the shrink snapshot is named so the operator can see which copy is the interesting one",
         );

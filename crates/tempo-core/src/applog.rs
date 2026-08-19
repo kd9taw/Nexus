@@ -95,7 +95,10 @@ impl Level {
 }
 
 enum Msg {
-    Line { level: Level, text: String },
+    Line {
+        level: Level,
+        text: String,
+    },
     /// Flush and acknowledge — the only synchronous operation, used at quit and by tests.
     Flush(SyncSender<()>),
 }
@@ -278,8 +281,8 @@ impl Sink {
         if let Some(mut f) = self.file.take() {
             let _ = f.flush();
         } // handle dropped here — Windows will not rename an open file
-        // Windows `rename` fails when the destination exists; POSIX replaces it. Removing
-        // first makes both platforms do the same thing.
+          // Windows `rename` fails when the destination exists; POSIX replaces it. Removing
+          // first makes both platforms do the same thing.
         let _ = std::fs::remove_file(&self.prev);
         if std::fs::rename(&self.path, &self.prev).is_err() {
             // Could not rotate (a virus scanner holding the file, say). Reopen and keep
@@ -514,7 +517,10 @@ fn is_ident(ch: char) -> bool {
 /// Whether an identifier names a credential. Normalised first (`api_key`, `api-key` and
 /// `apiKey` are one name), then matched on the ENDING so any product prefix is covered.
 fn is_sensitive(lower_ident: &str) -> bool {
-    let flat: String = lower_ident.chars().filter(|c| *c != '_' && *c != '-').collect();
+    let flat: String = lower_ident
+        .chars()
+        .filter(|c| *c != '_' && *c != '-')
+        .collect();
     SENSITIVE_SUFFIXES.iter().any(|s| flat.ends_with(s))
 }
 
@@ -552,9 +558,18 @@ mod tests {
             ("clublog: clublog_api_key=abcd1234efgh", "abcd1234efgh"),
             ("cloudlog: cloudlogKey = XYZTOKEN99", "XYZTOKEN99"),
             ("qrz: session_token=\"tok-abc-999\"", "tok-abc-999"),
-            ("http: Authorization: Bearer eyJhbGciOiJIUzI1", "eyJhbGciOiJIUzI1"),
-            ("cluster: telnet://w1aw:clusterpw@dxc.example.net:7300", "clusterpw"),
-            ("fetch https://api.example.com/v1?key=SEKRIT99&call=W1AW", "SEKRIT99"),
+            (
+                "http: Authorization: Bearer eyJhbGciOiJIUzI1",
+                "eyJhbGciOiJIUzI1",
+            ),
+            (
+                "cluster: telnet://w1aw:clusterpw@dxc.example.net:7300",
+                "clusterpw",
+            ),
+            (
+                "fetch https://api.example.com/v1?key=SEKRIT99&call=W1AW",
+                "SEKRIT99",
+            ),
         ];
         for (line, _) in secrets {
             sink.write(Level::Info, line);
@@ -567,10 +582,16 @@ mod tests {
                 "{secret:?} leaked into the diagnostic log from {line:?}\n--- file ---\n{body}"
             );
         }
-        assert!(body.contains(REDACTED), "…and it says so, rather than dropping the line");
+        assert!(
+            body.contains(REDACTED),
+            "…and it says so, rather than dropping the line"
+        );
         // Positive control — the redactor must not be a shredder. An ordinary CAT failure,
         // which is the whole reason this file exists, has to survive intact.
-        sink.write(Level::Error, "cat: open /dev/ttyUSB0 failed: permission denied");
+        sink.write(
+            Level::Error,
+            "cat: open /dev/ttyUSB0 failed: permission denied",
+        );
         sink.flush();
         let body = read(&path);
         assert!(
@@ -578,7 +599,10 @@ mod tests {
             "ordinary diagnostics pass through untouched:\n{body}"
         );
         // …and the non-secret half of a credential line is still readable.
-        assert!(body.contains("user=W1AW"), "only the value is masked, not the line");
+        assert!(
+            body.contains("user=W1AW"),
+            "only the value is masked, not the line"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -594,7 +618,10 @@ mod tests {
         let mut sink = Sink::open(&path, 400).unwrap();
 
         for i in 0..4 {
-            sink.write(Level::Info, &format!("startup: milestone {i} of the first generation"));
+            sink.write(
+                Level::Info,
+                &format!("startup: milestone {i} of the first generation"),
+            );
         }
         sink.flush();
         let before = read(&path);
@@ -602,17 +629,26 @@ mod tests {
 
         // Push it over the cap.
         for i in 0..4 {
-            sink.write(Level::Info, &format!("startup: milestone {i} of the second generation"));
+            sink.write(
+                Level::Info,
+                &format!("startup: milestone {i} of the second generation"),
+            );
         }
         sink.flush();
 
-        assert!(prev.exists(), "the previous generation exists after rotation");
+        assert!(
+            prev.exists(),
+            "the previous generation exists after rotation"
+        );
         let rolled = read(&prev);
         assert!(
             rolled.starts_with(&before),
             "the rolled file is the ORIGINAL bytes — a rename, not a rewrite\n{rolled}"
         );
-        assert!(rolled.contains("first generation"), "the old lines went with it");
+        assert!(
+            rolled.contains("first generation"),
+            "the old lines went with it"
+        );
         assert!(
             read(&path).len() < rolled.len(),
             "the active file started fresh instead of being trimmed in place"
@@ -650,16 +686,42 @@ mod tests {
     #[test]
     fn the_sensitive_identifier_rule_fires_and_holds_off() {
         for yes in [
-            "password", "passwd", "pwd", "lotwpassword", "clublog_api_key", "cloudlogKey",
-            "key", "apiKey", "session_token", "Authorization", "clientSecret", "cookie",
+            "password",
+            "passwd",
+            "pwd",
+            "lotwpassword",
+            "clublog_api_key",
+            "cloudlogKey",
+            "key",
+            "apiKey",
+            "session_token",
+            "Authorization",
+            "clientSecret",
+            "cookie",
         ] {
-            assert!(is_sensitive(&yes.to_ascii_lowercase()), "{yes} must be masked");
+            assert!(
+                is_sensitive(&yes.to_ascii_lowercase()),
+                "{yes} must be masked"
+            );
         }
         for no in [
-            "cw_key_port", "cw_key_line", "winkeyer_port", "callsign", "band", "mode",
-            "device", "port", "baud", "grid", "keyer", "frequency",
+            "cw_key_port",
+            "cw_key_line",
+            "winkeyer_port",
+            "callsign",
+            "band",
+            "mode",
+            "device",
+            "port",
+            "baud",
+            "grid",
+            "keyer",
+            "frequency",
         ] {
-            assert!(!is_sensitive(&no.to_ascii_lowercase()), "{no} must NOT be masked");
+            assert!(
+                !is_sensitive(&no.to_ascii_lowercase()),
+                "{no} must NOT be masked"
+            );
         }
     }
 
@@ -675,7 +737,10 @@ mod tests {
         flush();
         let body = read(&path);
         assert!(body.contains("startup: settings loaded"), "{body}");
-        assert!(body.contains("ERROR  cat: rigctld refused the port"), "{body}");
+        assert!(
+            body.contains("ERROR  cat: rigctld refused the port"),
+            "{body}"
+        );
         assert!(body.contains('Z'), "lines carry a UTC timestamp: {body}");
         assert_eq!(super::path(), Some(path.as_path()));
         // NOT removed: the writer thread owns this file for the rest of the process.
