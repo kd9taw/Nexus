@@ -5,6 +5,20 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A Config tab: Backup, Restore and — at last — Reset.** Backup and Restore existed but sat under
+  **Radio ▸ Transmit limits & sharing**, which is why operators did not find them: backing up a
+  whole station has nothing to do with transmit limits. They now have their own **Config** tab,
+  alongside a **Reset to defaults** that Nexus never had — the thing you want when a setting has
+  gone wrong and you cannot tell which one. Reset asks first, and the confirmation says what
+  SURVIVES rather than only what goes: your logbook and your saved passwords are untouched, because
+  the fear that stops someone resetting is not knowing whether they are about to lose their log.
+  The search keywords are deliberately wide ("backup", "restore", "factory", "defaults", "start
+  over"), since this is what an operator types in a panic.
+
 ## [1.7.0] — 2026-08-18
 
 ### Added

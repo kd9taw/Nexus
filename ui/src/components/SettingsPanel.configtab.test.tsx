@@ -38,9 +38,15 @@ const api = vi.hoisted(() => {
   return { spies, get, VERBS }
 })
 
-vi.mock('../api', () => {
+// Derive the mock from the REAL module rather than a hand-kept verb list (upstream #79): a list
+// goes stale the moment the panel calls a verb nobody added to it, and the failure is a crash
+// inside an effect, not a missing-mock message. `getPortlessRigModels` was exactly that.
+vi.mock('../api', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
   const mod: Record<string, unknown> = {}
-  for (const v of api.VERBS) mod[v] = api.get(v)
+  for (const name of Object.keys(actual)) {
+    mod[name] = typeof actual[name] === 'function' ? api.get(name) : actual[name]
+  }
   return mod
 })
 vi.mock('../toast', () => ({
