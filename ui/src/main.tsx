@@ -8,6 +8,7 @@ import { loadDurable } from './features/durableStore'
 import { installExternalLinkInterceptor } from './externalLinks'
 import { isTauri, openExternalUrl } from './api'
 import { pushToast } from './toast'
+import { t } from './i18n'
 import './styles.css'
 // AFTER styles.css, deliberately: the cockpit pane grid's structural rules are all flat
 // single-class selectors, so an equal-specificity tie with anything in styles.css must
@@ -51,7 +52,7 @@ if (isTauri()) {
   installExternalLinkInterceptor((url) => {
     openExternalUrl(url).catch((e) => {
       // A dead link failing SILENTLY is the exact bug class this fixes — say so instead.
-      pushToast(`Could not open the link: ${e instanceof Error ? e.message : e}`, 'error')
+      pushToast(t('externalLink.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error')
     })
   })
 }
@@ -62,16 +63,20 @@ if (isTauri()) {
 // which is exactly the 0.24.6 field report. A pop-out is a separate React root and gets
 // nothing from the main window's boundary, so it needs its own. Recovery here is a
 // window reload: at this level there is no navigation left to fall back to.
-const reload = { label: 'Reload window', onClick: () => window.location.reload() }
+const reload = { label: t('crash.reload'), onClick: () => window.location.reload() }
+
+// The product name, not prose: it is the same six characters in every language, and a catalog
+// entry for it is an invitation to "localise" a brand. Same escape hatch as STATION_EXAMPLES.
+const APP_NAME = 'Nexus'
 
 const tree = (
   <StrictMode>
     {panel ? (
-      <ErrorBoundary label={`The ${panel} window`} action={reload}>
+      <ErrorBoundary label={t('crash.panelWindow', { panel })} action={reload}>
         <DetachedPanel panel={panel} />
       </ErrorBoundary>
     ) : (
-      <ErrorBoundary label="Nexus" action={reload}>
+      <ErrorBoundary label={APP_NAME} action={reload}>
         <App />
       </ErrorBoundary>
     )}

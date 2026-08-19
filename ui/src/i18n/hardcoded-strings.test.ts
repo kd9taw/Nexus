@@ -23,7 +23,7 @@
 // worse than none.
 // ---------------------------------------------------------------------------------------
 //
-//   • It checks exactly the files in MIGRATED. On 2026-08-18 that is FOUR of ~251 non-test
+//   • It checks exactly the files in MIGRATED. On 2026-08-18 that is TEN of ~251 non-test
 //     `.ts`/`.tsx` files in `ui/src`. Everything else — including the other 8,900 lines of
 //     SettingsPanel.tsx — is deliberately unchecked and still hardcoded English.
 //   • The list only ever GROWS. Removing a file from it is how a surface silently un-migrates,
@@ -57,6 +57,17 @@ const MIGRATED = [
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
   'components/RevealNudge.tsx',
+  // Batch 1 (2026-08-18) — the getting-started guide and the app's own notices. Pure prose,
+  // no radio state: the guide is documentation, the update banner and crash fallback are the
+  // app talking about itself. Chosen as the first batch because GettingStartedGuide.tsx is
+  // the densest markup surface in the tree, which is what proves the `<T>` marker path at
+  // volume rather than on one shipped sentence.
+  'components/GettingStartedGuide.tsx',
+  'components/AssistanceNote.tsx',
+  'components/UpdateBanner.tsx',
+  'features/updateCheck.ts',
+  'components/ErrorBoundary.tsx',
+  'main.tsx',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
