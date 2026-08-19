@@ -91,6 +91,10 @@ fn err_recorder(
         eprintln!("tempo-audio: cpal {which} stream error: {e}");
         let mut held = slot.lock().unwrap_or_else(|p| p.into_inner());
         if held.is_none() {
+            // Only the FIRST one reaches the diagnostic log too — the callback can fire
+            // repeatedly between loop ticks, and a device that vanishes must not be able to
+            // spend the file's size bound on repeats of one fact.
+            tempo_core::applog::error("audio", &format!("{which} stream died: {e}"));
             *held = Some(format!("{which} stream: {e}"));
         }
     }
@@ -175,6 +179,10 @@ fn enumerate_devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
             // No cpal fallback on purpose: cpal's ALSA host reads the SAME hint list, so
             // if this failed cpal's enumeration has nothing left to offer either.
             eprintln!("nexus: ALSA device enumeration failed ({e}); device lists are empty");
+            tempo_core::applog::warn(
+                "audio",
+                &format!("ALSA device enumeration failed ({e}); device lists are empty"),
+            );
             (Vec::new(), Vec::new())
         }
     }

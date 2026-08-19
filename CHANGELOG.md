@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A diagnostic log you can send us.** Nexus now keeps a plain-text record of what it did:
+  `nexus-diag.log`, in the same folder as `ALL.TXT` and the crash report
+  (`%LOCALAPPDATA%\Nexus` on Windows) — the Reveal button beside the ALL.TXT path in Settings
+  opens it. Timestamped, human-readable lines covering the startup steps, the CAT and audio
+  device open and any failure, updater checks, and crashes. Until now Nexus wrote nothing at
+  all about its own health, so "it won't start" reports arrived with nothing to look at. It
+  bounds itself: two files, about 8 MB in total worst case, and the older one is simply
+  renamed aside rather than rewritten, so a big log never slows a launch down. Passwords, API
+  keys and tokens are masked before anything is written — the file is meant to be attachable
+  to a public bug report.
+
 - **Periodic logbook backups, in a `backups/` folder beside your log.** Nexus now keeps dated
   snapshots of `log.adi`: at most one a day, only when the log has actually changed, **plus**
   an immediate copy any time a save is about to make the log *smaller* — the one shape of

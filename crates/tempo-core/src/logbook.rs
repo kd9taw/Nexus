@@ -977,7 +977,7 @@ impl Logbook {
                 (n, len)
             })
             .collect();
-        let mut drop_oldest = |live: &mut Vec<(String, u64)>| {
+        let drop_oldest = |live: &mut Vec<(String, u64)>| {
             let (name, _) = live.remove(0);
             let _ = std::fs::remove_file(dir.join(name));
         };

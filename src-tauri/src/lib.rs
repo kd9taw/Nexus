@@ -1944,14 +1944,20 @@ fn parks_cache_path() -> PathBuf {
         .join("parks.csv")
 }
 
-/// The WSJT-X-format decode log (`ALL.TXT`), in the app's LOCAL data dir
-/// (`%LOCALAPPDATA%\Nexus` on Windows — the same class of location WSJT-X uses for
-/// its own ALL.TXT; `$XDG_DATA_HOME`/`~/.local/share/Nexus` on Unix). Deliberately a
-/// findable, app-named folder rather than the Roaming `tempo` config dir, and NOT the
-/// install dir (Program Files isn't writable without elevation — a write there would
-/// fail silently). Written only when `settings.write_all_txt` is on; the Settings
-/// panel surfaces this path + a "Reveal" button (`all_txt_location`/`reveal_all_txt`).
-fn all_txt_path() -> PathBuf {
+/// The app's LOCAL data dir — `%LOCALAPPDATA%\Nexus` on Windows, `$XDG_DATA_HOME`/
+/// `~/.local/share/Nexus` on Unix. Deliberately a findable, app-named folder rather than the
+/// Roaming `tempo` config dir: everything here is something we may have to ask an operator to
+/// go and look at.
+///
+/// **On Windows this IS the install dir**, and the earlier comment here claiming otherwise
+/// ("NOT the install dir — Program Files isn't writable") was simply false: the NSIS bundle is
+/// `installMode: "currentUser"` (`tauri.conf.json`), so Nexus installs to
+/// `%LOCALAPPDATA%\Nexus` and the executable — and `nexus-crash.txt`, which the native crash
+/// handler writes beside it — live in this same folder. That coincidence is why the
+/// diagnostic log below can be "beside the crash log" and "in the app data dir" at once, and
+/// it is worth knowing before anyone moves either of them. (Splitting install from data is
+/// real work with a migration behind it; it is not this change.)
+fn local_data_dir() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     } else {
@@ -1959,9 +1965,25 @@ fn all_txt_path() -> PathBuf {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
     };
-    base.unwrap_or_else(|| PathBuf::from("."))
-        .join("Nexus")
-        .join("ALL.TXT")
+    base.unwrap_or_else(|| PathBuf::from(".")).join("Nexus")
+}
+
+/// The WSJT-X-format decode log (`ALL.TXT`), in the app's LOCAL data dir — the same class of
+/// location WSJT-X uses for its own ALL.TXT. Written only when `settings.write_all_txt` is on;
+/// the Settings panel surfaces this path + a "Reveal" button
+/// (`all_txt_location`/`reveal_all_txt`).
+fn all_txt_path() -> PathBuf {
+    local_data_dir().join("ALL.TXT")
+}
+
+/// The application diagnostic log ([`tempo_core::applog`]) — the file an operator attaches to
+/// a bug report. Beside `ALL.TXT` and, on Windows, beside `nexus-crash.txt` too, so there is
+/// exactly ONE folder to send someone to. Rotates in place (two generations, ~8 MB worst
+/// case); see the module header for why that rotation is a rename and never a rewrite. No
+/// separate "reveal" command: it shares a folder with `ALL.TXT`, whose existing Settings
+/// Reveal button already opens exactly this directory.
+fn diag_log_path() -> PathBuf {
+    local_data_dir().join("nexus-diag.log")
 }
 
 /// Append the engine's buffered WSJT-X-format decode lines to `ALL.TXT` (best-effort:
@@ -15620,6 +15642,7 @@ fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>
 /// thread would skip those events entirely — its own docs say so.)
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) {
+    tempo_core::applog::info("updater", "install finished — restarting through quit_cleanup");
     app.request_restart();
 }
 
@@ -15694,6 +15717,16 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
     let update_available = latest
         .as_deref()
         .is_some_and(|l| tempo_app::update::version_is_newer(l, &current));
+    // One line per check. An operator stuck on an old build, or one whose update handoff went
+    // wrong, otherwise leaves no trace of what the app believed was available.
+    tempo_core::applog::info(
+        "updater",
+        &format!(
+            "checked: running {current}, feed says {}, update {}",
+            latest.as_deref().unwrap_or("<unknown>"),
+            if update_available { "available" } else { "not needed" }
+        ),
+    );
     Ok(UpdateInfo {
         current,
         latest,
@@ -15937,6 +15970,32 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
         record_opening_episodes(tr.close_all(now_unix()));
     }
+    // LAST: a clean exit is itself diagnostic — its absence in the file says the process
+    // died rather than quit. Bounded wait; a wedged writer can never hold up an exit.
+    tempo_core::applog::info("startup", "clean shutdown");
+    tempo_core::applog::flush();
+}
+
+/// Route Rust panics into the diagnostic log, keeping whatever hook was already installed.
+///
+/// Without this a panic in a release build goes to a stderr that `windows_subsystem =
+/// "windows"` has detached — the process dies leaving no trace whatsoever, since the native
+/// crash handler in `main.rs` only fires on ACCESS VIOLATIONS and a Rust panic is not one.
+/// The payload and location are exactly what turns "it just closed" into a bug report.
+fn install_panic_logger() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let where_ = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown location>".into());
+        // `info` renders payload + location; the applog redactor scrubs it either way.
+        tempo_core::applog::error("panic", &format!("at {where_}: {info}"));
+        // Error level flushes, but a panic can be followed immediately by an abort, so make
+        // the wait explicit rather than relying on the writer getting a slice first.
+        tempo_core::applog::flush();
+        previous(info);
+    }));
 }
 
 /// Build and run the Tauri application.
@@ -15953,6 +16012,25 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    // ── Diagnostic log ───────────────────────────────────────────────────────────────────
+    // Opened before anything else can fail, because the failures worth diagnosing are the
+    // EARLY ones: the binary is `windows_subsystem = "windows"`, so a startup death produces
+    // no window, no console and (unless it is an access violation) no file — which is exactly
+    // why the 2026-08 Greek-Windows "it will not launch" report arrived with nothing
+    // attachable. The milestones below are deliberately coarse: a truncated log whose last
+    // line is "settings loaded" says which step never finished, and that alone would have
+    // answered that report. See `tempo_core::applog`.
+    tempo_core::applog::init(diag_log_path());
+    tempo_core::applog::info(
+        "startup",
+        &format!(
+            "Nexus {} starting on {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    );
+    install_panic_logger();
 
     // Take this profile's advisory lock (named profiles only — the default single-instance is a
     // no-op). Lets the launch picker grey out a radio already open in another window, and marks
@@ -15981,6 +16059,16 @@ pub fn run() {
     }
 
     let mut settings = Settings::load(&settings_path());
+    // A milestone, not the settings themselves — this file is designed to be emailed to a
+    // stranger, and `Settings` is where the operator's callsign and connector accounts live.
+    tempo_core::applog::info(
+        "startup",
+        &format!(
+            "settings loaded from {} ({} radio(s) configured)",
+            settings_path().display(),
+            settings.radios.len()
+        ),
+    );
 
     let bound_radio = bound_radio_id();
 
@@ -16803,6 +16891,7 @@ pub fn run() {
                 }
             };
             eprintln!("tempo: {msg}");
+            tempo_core::applog::error("radio", &msg);
             // `unwrap_or_else(into_inner)`, NOT `.map` on the Result: the one case
             // this banner exists for — the loop died from a panic under the engine
             // guard — is exactly the case where the lock is POISONED, and the old
@@ -17263,6 +17352,12 @@ pub fn run() {
             // an unreferenced module: bug #10, the 4K operator who re-dragged the same corner
             // every session.
             window_state::install(app.handle());
+            // ★ THE MILESTONE THAT MATTERS MOST. Everything that can leave an operator with a
+            // window-less process — the WebView2 runtime, a corrupt user-data folder, a
+            // quarantined DLL — happens BEFORE this line, inside Tauri's own window creation.
+            // A diagnostic log that stops short of it says "the webview never came up", which
+            // is the answer the Greek-Windows report needed and could not get.
+            tempo_core::applog::info("startup", "main window created; app setup running");
             // Pounce detector. Emits `pounce` to every window when a rare one appears — the
             // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
             // panel windows get it too without tracking listener lifetimes.
