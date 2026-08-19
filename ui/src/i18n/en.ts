@@ -3120,6 +3120,496 @@ export const EN = {
   'sat.armConfirm.armAnyway': 'Arm anyway',
   'sat.armConfirm.cancel': 'Cancel',
 
+  // ── Memories (the saved-channel manager and the cockpit MEM strip) ──────────────────
+  // ⚠️ Almost everything an operator READS on this screen is a unit, and none of it is here:
+  // the dial and TX frequencies, offsets, CTCSS tones and DTCS codes, the mode names and the
+  // mode/CTCSS datalists, callsigns, the group names the operator typed, the HF and VHF/UHF
+  // section labels, and the POTA/SOTA programme name (a constant in the component, as it is
+  // in `needVisuals.ts`). Weekday abbreviations are date formatting rather than prose and stay
+  // in the component too. The `value` of every <select> is the STORED token; only its label is
+  // here — and the export file name is built from a slug, never from the words below.
+  'memories.aria': 'Memories',
+
+  // The channel kinds. Each entry's key is the value the memory stores.
+  'memories.kind.repeater': 'Repeater',
+  'memories.kind.simplex': 'Simplex',
+  'memories.kind.hfnet': 'HF net',
+  'memories.kind.calling': 'Calling',
+  'memories.kind.digital': 'Digital',
+  'memories.kind.satellite': 'Satellite',
+  'memories.kind.emcomm': 'EmComm',
+  'memories.kind.reference': 'Reference',
+  'memories.kind.other': 'Other',
+
+  // The sidebar: the three built-in views, then the operator's own groups.
+  'memories.side.all': 'All memories',
+  'memories.side.fav': '★ Favorites',
+  'memories.side.nets': 'Nets',
+  'memories.side.group.rename.title': 'Rename group',
+  'memories.side.group.delete.title': 'Delete group (memories stay)',
+  'memories.side.newGroup.placeholder': 'New group…',
+
+  // One WHOLE placeholder per view rather than "Search " plus a name: a name spliced into a
+  // sentence cannot be reordered, and lower-casing a translated noun is wrong in every
+  // language that capitalises them. The group's own name is the operator's text.
+  'memories.search.placeholder.all': 'Search all…',
+  'memories.search.placeholder.fav': 'Search favorites…',
+  'memories.search.placeholder.nets': 'Search nets…',
+  'memories.search.placeholder.group': 'Search {{group}}…',
+  'memories.search.placeholder.groupless': 'Search group…',
+
+  // The toolbar. `{{freq}}` and `{{mode}}` are the live dial — tokens, never formatted.
+  'memories.toolbar.list.label': 'List',
+  'memories.toolbar.list.title': 'List view — clean rows with an inline editor',
+  'memories.toolbar.grid.label': 'Grid',
+  'memories.toolbar.grid.title': 'Grid view — the CHIRP-style spreadsheet',
+  'memories.toolbar.save.label': '＋ Save {{freq}} {{mode}}',
+  'memories.toolbar.save.title': 'Save the current dial frequency + mode as a memory',
+  'memories.toolbar.new.label': '＋ New',
+  'memories.toolbar.new.title': 'Add a memory by hand',
+  'memories.toolbar.import.label': 'Import CSV',
+  'memories.toolbar.import.title': 'Import a CHIRP CSV (duplicates are skipped)',
+  'memories.toolbar.export.label': 'Export CSV ({{count}})',
+  'memories.toolbar.export.title': {
+    one: 'Export the {{count}} shown channel as a CHIRP CSV (imports into ~1,000 radio models)',
+    other: 'Export the {{count}} shown channels as a CHIRP CSV (imports into ~1,000 radio models)',
+  },
+  'memories.toolbar.popOut.label': '↗ Pop out',
+  'memories.toolbar.popOut.title': 'Pop Memories out into its own window (multi-monitor)',
+  'memories.toolbar.packs.label': 'Packs',
+  'memories.toolbar.packs.title':
+    'Install curated channel sets — nets, calling frequencies, POTA, digital',
+
+  // The empty state. The hint names two buttons that are entries of their own; a translation
+  // has to keep the three consistent, which is why they read as the same words here.
+  'memories.empty.none': 'No memories yet.',
+  'memories.empty.hint':
+    'Start with a <b>starter pack</b> — nets, calling frequencies, POTA, and digital watering holes, ready to go. Or save the current frequency with <b>＋ Save</b>, import a CHIRP CSV, or send repeaters here from the Program section. Star a memory (★) and it shows on the MEM strip in every cockpit.',
+  'memories.empty.browsePacks': 'Browse starter packs',
+  'memories.empty.noMatch': 'Nothing matches this view.',
+
+  // The CHIRP-style grid. The column headers name technical quantities and the UNIT inside
+  // one (MHz) is a token — reword the header around it, never the unit.
+  'memories.grid.column.favorite': 'Favorite',
+  'memories.grid.column.name': 'Name',
+  'memories.grid.column.rx': 'RX MHz',
+  'memories.grid.column.mode': 'Mode',
+  'memories.grid.column.offset': 'Offset',
+  'memories.grid.column.tone': 'Tone',
+  'memories.grid.column.kind': 'Kind',
+  'memories.grid.column.actions': 'Actions',
+  'memories.grid.tune.label': 'Tune',
+  'memories.grid.tune.title': 'Tune to this memory',
+
+  // A row in either view. Recall is a RETUNE — it moves the dial, it never transmits.
+  'memories.row.star.title': 'Star (show on cockpit strips)',
+  'memories.row.unstar.title': 'Unstar (remove from cockpit strips)',
+  'memories.row.main.title': 'Tune to {{freq}} MHz {{mode}}',
+  'memories.row.moveUp.aria': 'Move {{name}} up',
+  'memories.row.moveDown.aria': 'Move {{name}} down',
+  'memories.row.moveUp.title': 'Move up',
+  'memories.row.moveDown.title': 'Move down',
+  'memories.row.moveUp.rank.title': 'Move up one rank (1–{{limit}} are the strip)',
+  'memories.row.moveDown.rank.title': 'Move down one rank (1–{{limit}} are the strip)',
+  'memories.row.tune.label': 'Tune',
+  'memories.row.tune.title':
+    'Tune — sets frequency, mode, offset, and tone, and opens the right cockpit',
+  'memories.row.edit.title': 'Edit',
+  'memories.row.delete.title': 'Delete this memory',
+  // The ★ view's rank badge. `{{hotkey}}` is the keyboard chord, printed by `modChord`.
+  'memories.rank.on.title': 'Chip {{rank}} on the cockpit MEM strip{{hotkey}}',
+  'memories.rank.off.title':
+    'Rank {{rank}} — past the {{limit}} chips the cockpit MEM strip shows. Move it up with ▲.',
+
+  // The inline editor. TSQL, DTCS, CTCSS and the +/− signs are the radio's own vocabulary;
+  // only the words around them are prose.
+  'memories.editor.name.label': 'Name',
+  'memories.editor.kind.label': 'Kind',
+  'memories.editor.rx.label': 'RX MHz',
+  'memories.editor.mode.label': 'Mode',
+  'memories.editor.offset.label': 'Offset',
+  'memories.editor.offset.simplex': 'Simplex',
+  'memories.editor.offset.plus': '+ up',
+  'memories.editor.offset.minus': '− down',
+  'memories.editor.offset.split': 'Odd split',
+  'memories.editor.offsetMhz.label': 'Offset MHz',
+  'memories.editor.txMhz.label': 'TX MHz',
+  'memories.editor.tone.label': 'Tone',
+  'memories.editor.tone.none': 'None',
+  'memories.editor.tone.tone': 'Tone (encode)',
+  'memories.editor.tone.tsql': 'TSQL (enc+dec)',
+  'memories.editor.tone.dtcs': 'DTCS',
+  'memories.editor.ctcss.label': 'CTCSS Hz',
+  'memories.editor.dtcs.label': 'DTCS code',
+  'memories.editor.callsign.label': 'Callsign',
+  'memories.editor.days.label': 'Days',
+  'memories.editor.days.aria': 'Net days (UTC)',
+  'memories.editor.start.label': 'Start (UTC)',
+  'memories.editor.remind.label': 'Remind me',
+  'memories.editor.remind.aria': 'Enable a reminder for this net',
+  'memories.editor.lead.aria': 'Reminder lead time in minutes',
+  'memories.editor.lead.unit': 'min before (UTC schedule)',
+  'memories.editor.notes.label': 'Notes',
+  'memories.editor.groups.label': 'Groups',
+  'memories.editor.groups.aria': 'Group membership',
+  'memories.editor.done': 'Done',
+
+  // Starter packs. The pack's name, description and region are the pack's own data.
+  'memories.packs.title': 'Starter packs',
+  'memories.packs.close.aria': 'Close',
+  'memories.packs.sub':
+    'One-click channel sets. Duplicates are skipped, so installing again is safe. Net schedules are UTC and approximate — enable a reminder per net.',
+  'memories.packs.meta': '{{count}} channels · {{region}}',
+  'memories.packs.install': 'Install',
+  'memories.packs.update': 'Update',
+  // Two counts in one report, so each clause is its own entry with its own plural — one
+  // message cannot select a form for both (the `logbook.import.dupes` ruling).
+  'memories.packs.toast': '{{pack}} — {{parts}}',
+  'memories.packs.toast.added': {
+    one: 'added {{count}} channel',
+    other: 'added {{count}} channels',
+  },
+  'memories.packs.toast.refreshed': {
+    one: 'refreshed {{count}} channel',
+    other: 'refreshed {{count}} channels',
+  },
+  'memories.packs.toast.upToDate': '{{pack}} — already up to date',
+
+  // What the section says after it acts.
+  'memories.toast.saved': 'Saved {{freq}} {{mode}}',
+  'memories.toast.alreadySaved': '{{freq}} {{mode}} is already saved',
+  'memories.export.empty': 'Nothing to export in this view',
+  'memories.export.done': {
+    one: 'Exported {{count}} channel → {{path}}',
+    other: 'Exported {{count}} channels → {{path}}',
+  },
+  'memories.import.notChirp': 'No channels found — is this a CHIRP CSV?',
+  'memories.import.done': {
+    one: 'Imported {{count}} channel',
+    other: 'Imported {{count}} channels',
+  },
+  // Its own statement, with its own count and its own leading separator.
+  'memories.import.dupes': {
+    one: ' ({{count}} duplicate skipped)',
+    other: ' ({{count}} duplicates skipped)',
+  },
+
+  // The cockpit MEM strip. `{{hotkey}}` is a keyboard chord and `{{tone}}` the clause below.
+  'memories.strip.aria': 'Memory quick recall',
+  'memories.strip.label': 'MEM',
+  'memories.strip.label.title': 'Memory quick recall — your ★-starred memories',
+  'memories.strip.save.title': 'Save {{freq}} {{mode}} as a favorite memory',
+  'memories.strip.chip.title': '{{name}} — {{freq}} MHz {{mode}}{{tone}} (click to tune{{hotkey}})',
+  'memories.strip.chip.tone': ' · tone {{hz}}',
+  'memories.strip.manage.title':
+    'Open Memories — manage channels, groups, nets, and CHIRP import/export',
+  'memories.strip.manage.title.overflow': {
+    one: 'Open Memories — {{count}} more favorite past the {{limit}} this strip shows. Re-rank them with ▲▼ under ★ Favorites.',
+    other:
+      'Open Memories — {{count}} more favorites past the {{limit}} this strip shows. Re-rank them with ▲▼ under ★ Favorites.',
+  },
+
+  // ── Program (the radio-programming workbench) ───────────────────────────────────────
+  // ⚠️ The machines' own data is not here: callsigns, output frequencies, offsets, tones,
+  // band chips, the DMR/D-STAR/Fusion badges, distances and octants, cities and states, and
+  // the channel names as the radio will show them. Nor are four things the component keeps as
+  // constants: the two directories' names, the ATTRIBUTION each requires (also written into
+  // the exported CSV, so it cannot vary by locale), the example grid and frequency, and the
+  // persisted project name. The rig models in the "Max name" list are tokens in
+  // `features/radioprog.ts`.
+  'program.title': 'Program',
+  'program.sub':
+    'Build channel lists for your radios — repeaters near a location, exported for CHIRP or tuned on your rig',
+
+  // Where to search from.
+  'program.origin.aria': 'Search origin',
+  'program.origin.label': 'Near',
+  // `{{grid}}` is the station locator with its separator, or nothing at all.
+  'program.origin.station.label': 'My station {{grid}}',
+  'program.origin.station.title': 'Your station grid from Settings',
+  'program.origin.grid.label': 'Grid',
+  'program.origin.grid.aria': 'Grid square',
+  'program.origin.city.label': 'City',
+  'program.origin.city.aria': 'City',
+  // A HUMAN example, not a technical one: a locale should offer a place its operators know.
+  'program.origin.city.placeholder': 'Gatlinburg, TN',
+  'program.city.search': 'Search',
+  'program.city.searching': 'Searching…',
+  'program.city.noMatch': 'No places matched — try "City, State"',
+  'program.city.matches.aria': 'Matching places',
+  'program.recent.aria': 'Recent searches',
+  'program.recent.label': 'Recent',
+  'program.recent.chip.title': 'Reuse this search origin',
+
+  // How far. Every radius is formatted by `units.ts` at the display edge.
+  'program.radius.aria': 'Search radius',
+  'program.radius.label': 'Radius',
+  'program.radius.auto.label': 'Auto',
+  'program.radius.auto.title': "Radius from the selected bands' realistic repeater reach",
+  'program.radius.auto.hint': '= {{radius}} ({{bands}})',
+  'program.radius.auto.allBands': 'all bands',
+
+  // The fetch, and what the directory answered with.
+  'program.fetch.label': '⟳ Fetch repeaters',
+  'program.fetch.busy': '⟳ Fetching…',
+  'program.fetch.title': 'Fetch repeaters within {{radius}}',
+  'program.fetch.title.noOrigin': 'Pick a valid origin first (grid or city)',
+  'program.fetch.retry': 'Retry',
+  'program.stamp.title': 'Directory data age (cached per source, weekly)',
+  'program.stamp.stale': ' · stale (fetch failed, cached data shown)',
+  'program.age.mins': '{{mins}}m ago',
+  'program.age.hours': '{{hours}}h ago',
+  'program.age.days': '{{days}}d ago',
+  // `{{source}}` is the directory's own name and `{{band}}` a band name — both tokens.
+  'program.coverageGap':
+    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <b>Settings ▸ Integrations</b> fills the gap.',
+
+  // Narrowing the results. The band chips and the FM chip are mode/band names, not prose.
+  'program.filters.aria': 'Result filters',
+  'program.filters.allBands': 'All',
+  'program.filters.fm.title': 'FM repeaters only — what v1 programs',
+  'program.filters.digital.label': '+Digital',
+  'program.filters.digital.title':
+    'Also list DMR / D-STAR / Fusion machines (badged; programming them comes later)',
+  'program.filters.onAir.label': 'On-air only',
+  'program.filters.onAir.title': 'Hide machines the directory marks off-air',
+  'program.filters.search.placeholder': 'Filter call / city…',
+  'program.filters.search.aria': 'Filter results',
+  'program.count': '{{shown}} of {{total}} shown · nearest first',
+  'program.addAll.label': '＋ Add all shown',
+  'program.addAll.confirm.title': 'Add {{count}} channels?',
+  'program.addAll.confirm.ok': 'Add channels',
+
+  // The results list, and what it says when it has nothing. Two whole sentences for the
+  // empty case: where the mode word sits belongs to the translator.
+  'program.results.aria': 'Repeaters',
+  'program.results.prompt':
+    'Pick a location and press <b>Fetch repeaters</b> — results land here; ADD the machines you want on your radio.',
+  'program.results.none': 'No repeaters within {{radius}}.',
+  'program.results.none.fm': 'No FM repeaters within {{radius}}.',
+  'program.results.tryWider': 'Try {{radius}}',
+  'program.results.showDigital': 'Show digital',
+  'program.row.offAir': 'OFF-AIR',
+  'program.row.star.title':
+    'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning',
+  'program.row.unstar.title':
+    'Unstar — keeps the channel in Memories, drops it off the cockpit strip',
+  // Tune is a RETUNE of the CAT rig — frequency, shift, offset and tone. It never transmits.
+  'program.row.tune.label': 'Tune',
+  'program.row.tune.title': 'Tune your CAT rig to this repeater now (FM + shift + offset + tone)',
+  'program.row.add.label': '＋ Add',
+  'program.row.added.label': '✓ Added',
+  'program.row.add.title': 'Add to the channel list',
+  'program.row.remove.title': 'Remove from the channel list',
+  'program.row.add.digital.title':
+    'Digital repeater — programming DMR/D-STAR/Fusion comes in a later version',
+
+  // The channel list being built — the artifact this section exists to produce.
+  'program.builder.title': 'Channel list',
+  'program.builder.nameCap.label': 'Max name',
+  'program.builder.nameCap.title':
+    "Your radio's channel-name length — auto names re-derive to fit (hand-edited names are kept)",
+  'program.builder.startAt.label': 'Start at',
+  'program.builder.startAt.title': 'First memory slot number (keep your existing channels)',
+  'program.builder.empty':
+    'No channels yet — fetch repeaters on the left and ADD the ones you want on your radio.',
+  'program.chan.name.aria': 'Channel {{n}} name',
+  'program.chan.dup.title': 'Duplicate name — the radio will show two identical channels',
+  // `{{cap}}` is a character count and `{{name}}` the name as the radio will display it.
+  'program.chan.over.title': 'Longer than {{cap}} — exports as "{{name}}"',
+  'program.chan.moveUp.aria': 'Move up',
+  'program.chan.moveDown.aria': 'Move down',
+  'program.chan.remove.aria': 'Remove',
+
+  // Getting the list out — by hand, by CSV, or into Nexus's own memory bank.
+  'program.deliver.byHand.label': 'Add by hand…',
+  'program.deliver.byHand.title':
+    "Type in a repeater or simplex channel the directory doesn't have (or has wrong)",
+  'program.deliver.import.label': 'Import CHIRP CSV…',
+  'program.deliver.import.title':
+    'Import a CHIRP CSV — the same format Export for CHIRP writes, and what CHIRP itself saves',
+  'program.deliver.exportChirp.label': 'Export for CHIRP…',
+  'program.deliver.exportChirp.title':
+    'Save a CHIRP-ready CSV — CHIRP (free) flashes nearly every radio from it',
+  'program.deliver.exportCsv.label': 'Export CSV',
+  'program.deliver.exportCsv.title': 'Plain CSV — spreadsheets, Anytone CPS, RT Systems',
+  'program.deliver.saveBank.label': 'Save to Memory Bank',
+  'program.deliver.saveBank.title':
+    "Save these channels into Nexus's own memory bank (the Phone cockpit's MEMORY recall list) — recall retunes the rig with shift + tone",
+  'program.deliver.clear.label': 'Clear',
+  'program.clear.confirm.title': 'Clear the whole channel list?',
+  'program.clear.confirm.ok': 'Clear list',
+
+  // Entering a machine the directory has wrong or missing. `{{example}}` is a dial frequency
+  // the component supplies; the +/− and the tone unit are the radio's vocabulary.
+  'program.manual.freq': 'Frequency (MHz), e.g. {{example}}',
+  'program.manual.name': 'Name (blank = frequency)',
+  'program.manual.offset': 'Offset: + / - / blank for simplex',
+  'program.manual.tone': 'CTCSS tone Hz (blank = none)',
+  // ⚠️ `Frequency` and `Mode` here are CHIRP's own CSV column names — wire identifiers.
+  'program.import.notChirp': 'Not a CHIRP CSV — need a header row with Frequency and Mode',
+  'program.import.done': 'Imported {{count}} channels from CHIRP CSV',
+  'program.export.noFm': 'No FM channels in the list — digital channels export in a later version',
+  'program.export.saved': 'Saved {{path}}',
+  // ⚠️ `CHIRP ▸ File ▸ Import` is another program's menu path — keep it as CHIRP prints it.
+  'program.export.saved.chirp':
+    'Saved {{path}} — open CHIRP ▸ File ▸ Import, then upload to your radio',
+
+  // What the workbench says after it acts. The shift is a sign and a number of MHz.
+  'program.tune.done': 'Tuned {{freq}} {{mode}} — {{shift}}{{tone}}',
+  'program.tune.simplex': 'simplex',
+  'program.tune.tone': ' · tone {{hz}}',
+  'program.star.unstarred': '{{name}} unstarred — still in Memories',
+  'program.star.starred': '{{name}} starred — already in Memories',
+  'program.star.saved': '{{name}} ★ — on the cockpit MEM strip and in Memories',
+  // The already-there clause is INTERPOLATED into the sentence, not glued after it: it
+  // carries the second count, which one message cannot pluralise beside the first.
+  'program.saveBank.done': {
+    one: '{{count}} channel saved to Memories{{dupes}} — star ★ the ones you want on the cockpit MEM strip',
+    other:
+      '{{count}} channels saved to Memories{{dupes}} — star ★ the ones you want on the cockpit MEM strip',
+  },
+  'program.saveBank.dupes': ' ({{count}} already there)',
+  'program.saveBank.allDupes': 'All of these are already in Memories',
+  'program.saveBank.noFm': 'No FM channels to save',
+
+  // The how-to before the first CHIRP export. The menu paths are CHIRP's own.
+  'program.chirp.title': 'Flash with CHIRP',
+  'program.chirp.description':
+    'Nexus builds the list; CHIRP drives the cable. One list, every radio you own.',
+  'program.chirp.step.save': 'Nexus saves a CHIRP-ready CSV to your Downloads.',
+  'program.chirp.step.import':
+    'Open CHIRP (free, ~1,000 radios) → <b>File ▸ Import</b> and pick the file.',
+  'program.chirp.step.upload':
+    'Connect your programming cable → <b>Radio ▸ Upload To Radio</b>.',
+  'program.chirp.link': 'Get CHIRP ↗',
+  'program.chirp.dontShow': "Don't show this again — just save the file",
+  'program.chirp.save': 'Save the CSV',
+
+  // ── The mid-QSO recall card ─────────────────────────────────────────────────────────
+  // ⚠️ The callsign, the grid squares, the band and mode of each prior contact, the RST pair,
+  // the operator's own comments and the distance/bearing line are all data and stay in the
+  // component — as do the month abbreviations, which are date formatting.
+  'recall.qrz.title': 'Open {{call}} on QRZ (browser)',
+  'recall.qrz.error': 'Could not open {{call}} on QRZ',
+  // Names the button the operator can see: the log strip's callbook button reads "Lookup".
+  'recall.where.empty': 'Tab or press Lookup for name / QTH',
+  // Two whole statements, and the conjunction between the two squares is inside a message of
+  // its own — a language that pairs them differently can only do it if it can translate the
+  // joining word.
+  'recall.geo.title': 'Great-circle distance · true bearing from your QTH',
+  'recall.geo.title.approx':
+    'Great-circle distance · true bearing from your QTH — approximate: computed from the center of {{squares}}',
+  'recall.geo.approx.mine':
+    'your {{grid}} square (set a 6-character grid in Settings to sharpen it)',
+  'recall.geo.approx.theirs': 'their {{grid}} square',
+  'recall.geo.approx.both': '{{mine}} and {{theirs}}',
+  'recall.dupe.label': 'Dupe {{band}}',
+  'recall.dupe.title':
+    'Already worked on {{band}} — logging now would be a dupe. Counts any mode on the band unless Settings’ “match mode too” is on.',
+  'recall.confirmed.title': '{{confirmed}} of {{count}} prior QSOs confirmed',
+  // ⚠️ DXCC is the award programme's own name — a token inside the sentence.
+  'recall.need.entity': 'New DXCC!',
+  'recall.need.band': 'New band-slot',
+  'recall.need.mode': 'New mode-slot',
+  'recall.need.title': 'Worth working — a new one for your log',
+  'recall.note.title': 'Your most recent note on this station',
+  'recall.log.head': 'Previous contacts',
+  'recall.log.aria': 'Previous contacts with {{call}}',
+
+  // ── The band controls (the licensed-band picker, the frequency control) ─────────────
+  // ⚠️ Band names are both the LABEL and the VALUE of the pickers' options — `pickBand` sends
+  // the value to the engine — so neither is here. Nor are the channel presets, their dial
+  // frequencies, the HF/VHF/UHF group names or the USB/FM mode buttons. The 🔒 chip is a
+  // readout of `txAllowed`: it reports that the engine is already blocking transmit, and is
+  // not a transmit control.
+  'bandPicker.select.title':
+    'Band — your last frequency on this band in this mode this session, else the start of your licensed segment',
+  'bandPicker.txLock.label': '🔒 TX locked',
+  'bandPicker.txLock.title':
+    'This frequency/mode is outside your license privileges — transmit is blocked. Pick a band above, or change your license class in Settings.',
+
+  'freq.control.aria': 'Frequency control',
+  'freq.channel.label': 'Band / Channel',
+  'freq.channel.aria': 'Band channel preset',
+  'freq.channel.title': 'Pick a band-plan channel',
+  'freq.channel.presets': '— Presets —',
+  'freq.channel.custom': '{{band}} (custom)',
+  'freq.dial.label': 'Dial (MHz)',
+  'freq.band.title': 'Current band',
+  'freq.mode.aria': 'Phone mode',
+
+  // ── The band-activity strip (the cockpits' "Band activity" pane) ────────────────────
+  // ⚠️ Band and mode names, the scale's edge frequencies, the dial reading and every value in
+  // a spot's tooltip are tokens and stay in the component. `{{mode}}` below is CW or SSB.
+  // Deliberately NOT shared with the band map's entries, which read the same in English
+  // today: the two surfaces word their own tooltips, and a shared key could not be split
+  // later without orphaning both translations.
+  'bandStrip.offPlan': '{{band}} — off the band plan',
+  'bandStrip.empty.noPlan': 'no band-plan data for {{band}}',
+  'bandStrip.empty.thisFrequency': 'this frequency',
+  'bandStrip.count': {
+    one: '{{count}} {{mode}} spot · {{band}}',
+    other: '{{count}} {{mode}} spots · {{band}}',
+  },
+  'bandStrip.empty.none': 'no {{mode}} spots on {{band}} yet',
+  'bandStrip.legend.label': 'Legend',
+  'bandStrip.legend.title': 'Show/hide the colour + type key',
+  'bandStrip.popout.label': '⧉ Band map',
+  'bandStrip.popout.title': 'Open the vertical band map in its own window',
+  'bandStrip.track.title': '{{band}}: {{lo}}–{{hi}} MHz',
+  'bandStrip.track.title.tunable': '{{band}}: {{lo}}–{{hi}} MHz — scroll to tune',
+  'bandStrip.shade.title': 'Your licensed phone segment on this band',
+  // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment.
+  'bandStrip.spot.title': '{{detail}} — click to work',
+  'bandStrip.age.secs': '{{secs}}s ago',
+  'bandStrip.age.mins': '{{mins}}m ago',
+  'bandStrip.age.hours': '{{hours}}h ago',
+  // The "you are here" marker: two whole tooltips, because the blocked one is a different
+  // statement rather than a tail. It is a readout, not a transmit control.
+  'bandStrip.dial.title': 'You: {{freq}} MHz',
+  'bandStrip.dial.title.blocked':
+    'You: {{freq}} MHz — transmit blocked (outside your privileges)',
+
+  // ── Multi-radio (the launch picker and the switcher pills) ──────────────────────────
+  // ⚠️ Each radio's profile name, its band and its dial frequency are interpolated as tokens.
+  // The peg lock pins which radio a band change may move; it is not a transmit control.
+  'radios.picker.aria': 'Choose radio',
+  'radios.picker.title': 'Which radio?',
+  'radios.picker.sub':
+    'You have two radios running at once. Pick the radio this window will operate — you can open a second window for the other. They share one logbook.',
+  'radios.picker.inUse.title': '{{name}} is already open in another window',
+  'radios.picker.inUse.tag': 'in use',
+  'radios.picker.choose.title': 'Operate {{name}}',
+  'radios.picker.single': 'Use one radio (follow bands on a single window)',
+
+  'radios.switcher.aria': 'Active radio',
+  'radios.switcher.active.title': '{{name}} — active radio ({{band}} · {{freq}} MHz)',
+  'radios.switcher.switch.title': 'Switch to {{name}} (last on {{band}} · {{freq}} MHz)',
+  // ⚠️ CAT is the rig-control protocol's own name, here and in the two entries below it.
+  'radios.switcher.catDead.title':
+    'Switch to {{name}} — ⚠ CAT not responding (check its rig, cable, and COM port)',
+  'radios.switcher.catDead.aria': 'CAT not responding',
+  'radios.switcher.catDead.band': 'no CAT',
+  'radios.peg.on.label': '🔒 Pegged',
+  'radios.peg.off.label': '🔓 Peg',
+  'radios.peg.on.title':
+    'Peg-lock ON — the active radio stays put; selecting a band won’t auto-switch radios. Click to unlock.',
+  'radios.peg.off.title':
+    'Peg-lock OFF — selecting a band may auto-switch to the radio that covers it. Click to pin the active radio.',
+
+  // ── Settings ▸ Radio — the pre-save rig checks (`rigFormChecks.ts`) ─────────────────
+  // ⚠️ `{{port}}` is the device name exactly as the OS enumerated it (`COM5`,
+  // `/dev/cu.usbserial-A`), and `/dev/cu.…`, CAT, PTT and None/VOX are the settings' own
+  // vocabulary — every one of them names a thing the operator has to pick by that name.
+  'settings.radio.check.noPort': 'No serial port chosen — a rig model is set, so CAT needs a port.',
+  'settings.radio.check.portMissing':
+    '{{port}} is not connected right now — check the rig is powered on, or pick another port.',
+  'settings.radio.check.dialIn':
+    '{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.',
+  'settings.radio.check.catNoModel':
+    'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning

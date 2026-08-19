@@ -193,6 +193,31 @@ const MIGRATED = [
   'features/elementBands.ts',
   'features/satPassAlert.ts',
   'components/prop/SatPassesPane.tsx',
+  // Batch 8 (2026-08-18) — memories, recall and radio programming. The densest UNITS surface
+  // of the low-risk half: every string on these screens sits beside a dial frequency, a step,
+  // a CTCSS tone, an offset or a band name, and all of those stay in the code — as do the
+  // rig-model names in the Program section's "Max name" list (FT-60, Baofeng, Yaesu, Anytone
+  // are tokens exactly as a callsign is), the mode and CTCSS datalists, and the `value` of
+  // every <select>, whose LABEL moved while the stored token did not. Three things this batch
+  // settles that the earlier seven did not. A string can be operator-visible AND legally
+  // fixed: the two repeater directories' attribution lines are written verbatim into the
+  // exported CSV as well as shown in the footer, so they are constants, not entries. A
+  // FILE NAME must not be built from a translated word — the export slug is invariant now,
+  // because the old ASCII squeeze would have reduced a non-Latin view name to
+  // `nexus-memories-.csv`. And a name spliced into "Search …" was replaced by one whole
+  // placeholder per view: lower-casing a translated noun is wrong wherever nouns capitalise.
+  // The five hand-rolled plurals in MemoriesView became `{{count}}` entries; the two-count
+  // reports (imported/skipped, added/refreshed, saved/already-there) are one entry per count.
+  'components/MemoriesView.tsx',
+  'components/RadioProgView.tsx',
+  'components/MemoryStrip.tsx',
+  'components/RecallPanel.tsx',
+  'components/BandPicker.tsx',
+  'components/BandStrip.tsx',
+  'components/FrequencyControl.tsx',
+  'components/RadioPicker.tsx',
+  'components/RadioSwitcher.tsx',
+  'rigFormChecks.ts',
 ]
 
 /**

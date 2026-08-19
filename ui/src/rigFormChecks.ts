@@ -13,6 +13,10 @@
  * an operator with an unusual-but-correct setup must never be locked out of their own
  * configuration by a heuristic, so only things that CANNOT be right block.
  *
+ * ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every message comes
+ * from the catalog. What does NOT: the port name itself, which is interpolated as the operator's
+ * own `COM5` / `/dev/cu.usbserial-A` — a device name, never translated and never reformatted.
+ *
  * WHAT IS DELIBERATELY NOT HERE — two ports collide (two profiles on one serial port). The
  * backend already decides that, in `settings::serial_port_conflicts`, and App.tsx already puts
  * its verdict in the status lane as `radioConfigWarning`. That rule carries four qualifiers a
@@ -23,6 +27,8 @@
  * port on purpose and must still be able to save. One rule, one place; this file does not get a
  * second opinion on it.
  */
+import { t } from './i18n'
+
 export type RigCheck = { level: 'error' | 'warning'; message: string }
 
 /** The subset of the settings form these checks read. */
@@ -70,10 +76,7 @@ export function checkRigForm(
     // of this file exists to prevent.
     const ruleKnown = Array.isArray(portlessModels) && portlessModels.length > 0
     if (ruleKnown && !portlessModels.includes(form.rigModel)) {
-      out.push({
-        level: 'error',
-        message: 'No serial port chosen — a rig model is set, so CAT needs a port.',
-      })
+      out.push({ level: 'error', message: t('settings.radio.check.noPort') })
     }
     return out
   }
@@ -83,30 +86,20 @@ export function checkRigForm(
   // Present at all. A saved port can legitimately be absent (rig switched off), so this is a
   // warning — but the operator should know now rather than wonder later why CAT never connects.
   if (!present) {
-    out.push({
-      level: 'warning',
-      message: `${port} is not connected right now — check the rig is powered on, or pick another port.`,
-    })
+    out.push({ level: 'warning', message: t('settings.radio.check.portMissing', { port }) })
   }
 
   // Callout vs dial-in. `/dev/tty.*` blocks on carrier detect and simply hangs; `/dev/cu.*` is the
   // one to open. They are offered as a pair, differ by four characters, and look interchangeable —
   // and the failure is a hang, not an error, so nothing ever says which one was wrong.
   if (port.startsWith('/dev/tty.')) {
-    out.push({
-      level: 'error',
-      message: `${port} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.`,
-    })
+    out.push({ level: 'error', message: t('settings.radio.check.dialIn', { port }) })
   }
 
   // CAT keying with no rig model. `pttMethod: 'cat'` and model 0 (None/VOX) cannot both be true —
   // there is nothing to send the keying command to, so the rig never keys and nothing reports why.
   if (form.pttMethod === 'cat' && form.rigModel === 0) {
-    out.push({
-      level: 'error',
-      message:
-        'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
-    })
+    out.push({ level: 'error', message: t('settings.radio.check.catNoModel') })
   }
 
   return out
