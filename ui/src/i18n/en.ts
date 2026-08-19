@@ -2189,6 +2189,21 @@ export const EN = {
   // The stand-ins when the backend has not named a home channel or a partner yet.
   'roam.status.home': 'home',
   'roam.status.partner': 'partner',
+  // The two Roam chips in the Tempo conversation — the launchpad's (which spells the state
+  // out) and the header's (which is compact). `{{status}}` is the backend's short state:
+  // a band-plan channel label, or its own `paused`. The ⇄ and ⚙ glyphs stay in the
+  // component; a glyph is not prose.
+  'roam.chip.title':
+    'Roam — coordinated QSY: you and your partner move channels together, announced in the clear (never private). Click to enable/disable.',
+  'roam.chip.launch.on': 'Roam on',
+  'roam.chip.launch.on.status': 'Roam on · {{status}}',
+  'roam.chip.launch.off': 'Roam off',
+  'roam.chip.label': 'Roam',
+  'roam.chip.label.on': 'Roam · on',
+  'roam.chip.label.status': 'Roam · {{status}}',
+  'roam.chip.settings.label': '⚙ Roam settings',
+  'roam.chip.settings.title': 'Roam settings — channel set, hop cadence, move/pause/stop',
+  'roam.chip.settings.aria': 'Roam settings',
 
   // ── Decode alerts (the beeps' toasts and the spoken batch summary) ──────────────────
   // ⚠️ `{{call}}` is a callsign, `{{entity}}` a DXCC entity name, `{{grid}}` a Maidenhead
@@ -3539,6 +3554,18 @@ export const EN = {
   'freq.band.title': 'Current band',
   'freq.mode.aria': 'Phone mode',
 
+  // The shared dial readout (`FrequencyReadout`), used by every cockpit header, the top bar,
+  // Settings and the memory rows.
+  // ⚠️ The number itself, the `MHz` unit and the per-digit step labels (`100 Hz` … `10 MHz`) are
+  // measurements built in the component and never here. `megahertz` IS spelled out below: it is
+  // what a screen reader must say, and `MHz` is read as three letters.
+  'freq.readout.dial.label': 'Dial frequency (MHz)',
+  'freq.readout.title.editable': 'Click to enter a frequency (MHz)',
+  'freq.readout.title.digitTune':
+    'Scroll a digit to tune it (100 Hz … 10 MHz) · ←/→ pick a digit, ↑/↓ spin it · click to type a frequency (MHz)',
+  'freq.readout.announce.dial': '{{dial}} megahertz',
+  'freq.readout.announce.digit': '{{step}} digit',
+
   // ── The band-activity strip (the cockpits' "Band activity" pane) ────────────────────
   // ⚠️ Band and mode names, the scale's edge frequencies, the dial reading and every value in
   // a spot's tooltip are tokens and stay in the component. `{{mode}}` below is CW or SSB.
@@ -4468,6 +4495,556 @@ export const EN = {
   'setup.nav.next': 'Next →',
   'setup.nav.finish': 'Finish — everything on',
 
+  // ── Settings ▸ Radio ▸ Transmit limits & sharing ────────────────────────────────────
+  // Transmit POLICY and station plumbing: what the licence lets the operator do, a per-mode
+  // power ceiling, the setup backup, and sharing the radio with another program. These are
+  // CONFIGURATION on the transmit path — the batch-13 ruling — and none of them is a control
+  // that keys, gates or stops an over, so they move here while the cockpit's TX controls wait.
+  //
+  // ⚠️ NOT HERE, and none of it may move: the three MODE names on the power caps, the `%` they
+  // are set in, the loopback ADDRESS and its port, and the PROGRAM names in the sharing hints
+  // (VarAC, FreeDV, WSJT-X, JS8Call, fldigi, Hamlib, rigctld) — other people's software, named
+  // as they name themselves. The backup FILE NAME is built invariantly in the panel for the
+  // batch-8 reason: a translated word in it would leave a non-Latin locale with
+  // `nexus-settings-.json`.
+  'settings.transmit.legend': 'Transmit limits & sharing',
+
+  'settings.transmit.bandEdgeTones.label': 'Band-edge tones',
+  'settings.transmit.bandEdgeTones.hint':
+    'A short audio cue when the dial crosses your license privileges — a rising "ding" back in band, a falling "dong" past an edge. Applies on every mode.',
+
+  'settings.transmit.powerCaps.label': 'Max power by mode (safety)',
+  'settings.transmit.powerCaps.hint':
+    'A ceiling on RF output per mode — leave blank for full power. FT8/FT4/RTTY run ~100% duty cycle, so capping the Digital modes (e.g. 30%) protects your finals and any amplifier. The rig is brought down to the cap the moment you enter a capped mode, not only when you touch the power slider.',
+
+  // `Test CAT`, `Rig Model` and `Serial Port` are the names of controls in Rig & CAT, and
+  // `rigctld` is the daemon's own; the call site supplies the emphasis for each.
+  'settings.transmit.note':
+    "Saving applies your rig settings live (no restart). <b>Test CAT</b> saves, launches the bundled <code>rigctld</code> (Hamlib ships with Nexus on Windows — no separate install), and reads your rig's frequency to confirm CAT. For CAT, pick your <em>Rig Model</em> and <em>Serial Port</em>; serial RTS/DTR and VOX need no model.",
+
+  'settings.transmit.backup.label': 'Back up your setup',
+  'settings.transmit.backup.action': 'Back up',
+  'settings.transmit.backup.title':
+    'Save your radios, preferences, memory channels and watchlist to a file',
+  'settings.transmit.backup.hint':
+    "Your radios, operating preferences, memory channels, watchlist and chase sets in one file — for a new computer, or before a rebuild. <b>It holds no passwords or API keys</b>: those stay in your operating system's keychain, so a restore asks for them again, and the file is safe to keep on a USB stick. Your contact log is separate — export that from the Logbook. Restoring replaces your current setup.",
+  // `{{path}}` is where the file landed — a path, printed verbatim.
+  'settings.transmit.backup.done': 'Settings backed up → {{path}}',
+  'settings.transmit.backup.failed': 'Backup failed',
+  'settings.transmit.restore.action': 'Restore…',
+  'settings.transmit.restore.title': 'Replace your current setup with a saved backup',
+
+  'settings.transmit.share.label': 'Share this radio with other programs',
+  'settings.transmit.share.copy.action': 'Copy',
+  'settings.transmit.share.copy.title': 'Copy the address to paste into the other program',
+  'settings.transmit.share.hint.on':
+    'Nexus itself answers at this address, so <b>VarAC</b>, <b>FreeDV</b>, <b>WSJT-X</b>, <b>JS8Call</b> and <b>fldigi</b> can use the radio while Nexus runs — pick the rig <em>Hamlib NET rigctl</em> (VarAC and FreeDV call it a network or rigctld connection), give it the address above, and leave their serial port blank. They stay connected even while Nexus tests or reconfigures the radio link, and they follow whichever radio is active. Only for this computer — the address is not reachable from the network. Takes effect right away. Both programs can command the rig, so expect them to argue if you tune in both at once.',
+  'settings.transmit.share.hint.off':
+    'Off — other programs cannot use the radio while Nexus runs. Turn it on and point them at the address that appears here (<em>Hamlib NET rigctl</em>).',
+  // `{{address}}` is the per-radio loopback address the panel builds — a wire value.
+  'settings.transmit.share.hint.direct':
+    'Driving a specific radio that is <em>not</em> the active one: use its direct address <code>{{address}}</code> (per-radio; this link drops briefly whenever Nexus reconfigures that radio).',
+
+  'settings.transmit.foreignPtt.label': 'Other programs may key transmit',
+  'settings.transmit.foreignPtt.hint':
+    'On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when it owned the CAT cable — every Nexus transmit safeguard still applies. Off: shared programs tune and read but never transmit.',
+
+  // ── Settings ▸ Digital (FT8/FT4) ────────────────────────────────────────────────────
+  //
+  // ⚠️ TWO SUB-GROUPS OF THIS SECTION ARE MISSING FROM THIS FILE ON PURPOSE. "Transmit &
+  // Sequencing" and "Auto-CQ & Caller Selection" are the FT-mode TX / timing / QSO-management
+  // surface — the T/R period, the TX watchdog, disable-after-73, double-click-arms-TX, the
+  // tune timeout, the CQ budget, the blocked-caller list and the best-caller pick. Every label
+  // and accessible name in them stays written in `SettingsPanel.tsx` until the transmit-path
+  // batch moves them with the stop-line sweeps re-run. What follows is the REST of the
+  // section (Logging Behavior, Decoder, Station Housekeeping) and the six weak-signal mode
+  // sections under it.
+  //
+  // ⚠️ EVERY NUMBER BELOW IS AN INVARIANT TECHNICAL QUANTITY and must survive translation
+  // exactly as written — the decoder's 200–2900 Hz passband and its 4000 Hz ceiling, the
+  // ±25 Hz single-decode window, Hound's 1000 Hz split, ~0.5 s of clock error, every T/R
+  // period in seconds, the tone-spacing multipliers (2x … 16x), the WSPR dBm ladder and
+  // MSK144's 72 ms frame. So is every NAME an operator matches against another program or
+  // puts on the air: the mode names (FT8, FT4, JT65, MSK144, WSPR, FST4, FST4W, Q65,
+  // TempoFast/TempoDeep), the A…E submode letters, the Q-codes (QSO, CQ, QRM), the message
+  // tokens (RRR, RR73, 73), the redundancy versions RV0/RV1/RV2, and WSJT-X's own option
+  // names quoted from its interface. None of them is ever produced by a formatter — they are
+  // written here as the prose around them is, and re-pointing or grouping one (a decimal
+  // comma, a thousands separator) would be an operating fault, not a cosmetic one.
+  'settings.digital.legend': 'Digital (FT8/FT4)',
+
+  // Logging Behavior. "Prompt me to log QSO" is the WSJT-X checkbox this one mirrors, quoted
+  // from that program's interface; RRR / RR73 / 73 are the messages themselves.
+  'settings.digital.logging.title': 'Logging Behavior',
+  'settings.digital.autoLog.label': 'Auto-log QSOs',
+  'settings.digital.autoLog.hint': 'Automatically log completed contacts to the ADIF logbook.',
+  'settings.digital.promptToLog.label': 'Prompt before logging',
+  'settings.digital.promptToLog.hint':
+    'Show a confirm-and-edit popup when a QSO completes instead of logging silently (WSJT-X “Prompt me to log QSO”). No effect unless Auto-log is on.',
+  'settings.digital.preferRrr.label': 'Roger with RRR (not RR73)',
+  'settings.digital.preferRrr.hint':
+    'Acknowledge the final report with a bare RRR (partner still owes a 73) instead of the combined RR73. Off = RR73 (modern FT8 practice).',
+  'settings.digital.clearDxAfterLog.label': 'Clear DX call after logging',
+  'settings.digital.clearDxAfterLog.hint':
+    'Wipe the DX Call / DX Grid fields once a contact is logged (WSJT-X option, off by default).',
+
+  // Decoder. The depth chips and the DXpedition chips are a radio group whose accessible name
+  // is the field's own label, so each pair reads from ONE entry rather than two identical ones.
+  // ⚠️ "Hound" is not here: it is WSJT-X's name for the calling side of a DXpedition QSO, a
+  // role token exactly as Fox is, and it stays in the component beside its <option> value.
+  'settings.digital.decoder.title': 'Decoder',
+  'settings.digital.decodeDepth.label': 'Decode depth',
+  'settings.digital.decodeDepth.fast': 'Fast',
+  'settings.digital.decodeDepth.normal': 'Normal',
+  'settings.digital.decodeDepth.deep': 'Deep',
+  'settings.digital.decodeDepth.hint':
+    'Deep finds the most signals (WSJT-X default); Fast saves CPU on old hardware. All Decoder settings drive the native decoder — on a WSJT-X UDP source (companion mode) decodes arrive already made and none of them apply.',
+  // F low / F high name the two edges of the search range. `F` is the frequency symbol and the
+  // Hz beside it is a unit; the word next to each is what moves.
+  'settings.digital.passband.label': 'Decoder passband (Hz)',
+  'settings.digital.passband.low': 'F low',
+  'settings.digital.passband.low.aria': 'Decoder F low (Hz)',
+  'settings.digital.passband.high': 'F high',
+  'settings.digital.passband.high.aria': 'Decoder F high (Hz)',
+  'settings.digital.passband.hint':
+    "The decoder's search range. Default 200–2900 Hz. Raise F high toward 4000 Hz to decode stations calling above ~2.9 kHz (common on crowded FT8 bands); lower the range to focus on a narrow filter or dodge strong close-in QRM.",
+  'settings.digital.apDecode.label': 'A-priori (AP) decoding — FT8',
+  'settings.digital.apDecode.hint':
+    'Retry marginal signals against hypotheses built from your call, the DX call and the QSO state (WSJT-X "Enable AP", on by default) — including the cross-cycle replay of last cycle\'s QSOs. FT8 only: FT4\'s AP is part of its Normal/Deep depth and has no separate switch.',
+  'settings.digital.apCqOnly.label': 'AP: CQ hypothesis only',
+  'settings.digital.apCqOnly.hint':
+    'Limit AP to the "CQ" guess — no MyCall/DxCall hypotheses (FT8 and FT4). WSJT-X switches to this by itself after 5 minutes without transmitting, as a guard against stale-context false decodes; here it is your explicit choice. Off = full AP, the stock behavior.',
+  'settings.digital.singleDecode.label': 'Single decode',
+  'settings.digital.singleDecode.hint':
+    'Decode only within ±25 Hz of your green RX marker (the same one-station window WSJT-X uses for a double-click re-decode) instead of the whole passband — isolates one weak station and saves CPU. FT8 and FT4 only: 50 Hz is narrower than a single JT65, Q65 or MSK144 signal, so those modes keep the full passband. Applies while the RX marker sits inside the passband above; off = full passband, the stock behavior.',
+  'settings.digital.dxpedition.label': 'DXpedition mode',
+  'settings.digital.dxpedition.off': 'Off',
+  'settings.digital.dxpedition.hint':
+    "Off = normal FT8/FT4 operation. Hound = DXpedition pile-up discipline (calls above 1000 Hz; your report auto-moves to the Fox's frequency).",
+
+  // Station Housekeeping. ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit
+  // control — it chooses whether the station announces itself, and it can neither key nor
+  // unkey anything. Same reading as Tx Power's drive slider in batch 13; nothing here is on
+  // any cockpit's stop-line census. The watts placeholder ("e.g. 100") is a power value and
+  // stays in the component, as the example addresses in Rig & CAT do.
+  'settings.digital.housekeeping.title': 'Station Housekeeping',
+  'settings.digital.journeyStreak.label': 'Journey — track a weekly streak',
+  'settings.digital.journeyStreak.hint':
+    'Off by default. A gentle “weeks on the air” counter on the Journey board — never a daily streak, never a penalty for a break.',
+  'settings.digital.beacon.label': 'Beacon — announce presence (CQ)',
+  'settings.digital.beacon.hint':
+    "Off = passive (hunt & pounce): Nexus listens and only transmits when you act. On = periodically calls CQ to announce you're on frequency.",
+  'settings.digital.harq.label': 'IR-HARQ — combine retransmissions',
+  'settings.digital.harq.hint':
+    'On (default) = a weak frame that fails is recovered by joint-combining its retransmissions (RV0+RV1+RV2), and unacknowledged QSO overs escalate redundancy. Off = RV0-only (each frame decoded on its own).',
+  'settings.digital.clockCheck.label': 'Clock check (NTP)',
+  'settings.digital.clockCheck.hint':
+    'Periodically check your PC clock against an NTP server and show the offset in the top bar. TempoFast/TempoDeep are slot-timed to UTC — keep it within ~0.5 s (NTP / time.is; off-grid: GPS). Turn off for fully-offline operation (no network calls).',
+  'settings.digital.stationPower.label': 'Station power (W)',
+  'settings.digital.stationPower.hint':
+    'Your transmit power in watts — unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
+  // The units preference. The <option> VALUES ('auto', 'metric', 'imperial') are persisted
+  // tokens and stay in the component; km, °C, mi and °F are unit symbols inside these labels.
+  'settings.digital.units.label': 'Units',
+  'settings.digital.units.auto': 'Automatic (from your system)',
+  'settings.digital.units.metric': 'Metric (km, °C)',
+  'settings.digital.units.imperial': 'Imperial (mi, °F)',
+  'settings.digital.units.hint':
+    "Distances, temperature and wind speed. Automatic follows your operating system's region. Applies everywhere in the app immediately.",
+
+  // ── Settings ▸ JT65 ─────────────────────────────────────────────────────────────────
+  // ⚠️ `60\u00a0s` is a NON-BREAKING SPACE, written as an escape so it cannot be lost to a
+  // careless edit: the period and its unit must not be split across a line. A translation
+  // keeps it. A, B and C are the submode names both stations have to agree on.
+  'settings.jt65.legend': 'JT65 — classic EME',
+  'settings.jt65.submode.label': 'Submode (tone spacing)',
+  'settings.jt65.submode.a': 'A — HF standard, narrowest',
+  'settings.jt65.submode.b': 'B — 2x spacing',
+  'settings.jt65.submode.c': 'C — 4x spacing, most Doppler-tolerant',
+  'settings.jt65.submode.hint':
+    'JT65 always uses a 60\u00a0s T/R period, so spacing is the only choice. A is what you want on HF; EME operators move up to B or C as Doppler spread on the higher bands smears the tones. Both stations must use the same submode.',
+  'settings.jt65.hint':
+    'The classic weak-signal and moonbounce mode, decoded and transmitted. Messages are the older 22-character format, not the 37-character one FT8 and friends use.',
+
+  // ── Settings ▸ MSK144 ───────────────────────────────────────────────────────────────
+  // The two periods with no prose beside them (10 s, and the plain rows in FST4 below) are
+  // pure tokens and stay in the component — there is nothing in them to translate.
+  'settings.msk144.legend': 'MSK144 — meteor scatter',
+  'settings.msk144.period.label': 'T/R period',
+  'settings.msk144.period.fast': '5 s — fast turnaround, big showers',
+  'settings.msk144.period.standard': '15 s — the 6 m standard',
+  'settings.msk144.period.sparse': '30 s — sparse pings, more to stack',
+  'settings.msk144.period.hint':
+    'MSK144 sends a 72\u00a0ms message over and over, so a single meteor trail lasting a tenth of a second can carry the whole thing. Shorter periods turn the exchange around faster during a shower; longer ones give the decoder more frames to stack when pings are sparse. Both stations must use the same period.',
+  'settings.msk144.hint':
+    'MSK144 transmits for nearly the whole period, sending the same 72 ms frame hundreds of times — that is how meteor scatter works, and a contact can take many minutes of apparent silence. The audio frequency is fixed at a 1500 Hz centre; the signal is 1 kHz wide, so there is nowhere to tune it. Shorthand (MSK40) messages are off, matching WSJT-X’s default.',
+
+  // ── Settings ▸ Beacons — WSPR & FST4W ───────────────────────────────────────────────
+  // ⚠️ The dBm ladder (23 = 200 mW … 43 = 20 W) is what gets PUBLISHED to a propagation
+  // database and read back by other operators, so those numbers are as invariant as a dial
+  // reading. Two fields answer in two whole sentences rather than a stem plus a tail: when the
+  // rotation is scheduling, "ignored" and "how many stations are in it" are different
+  // statements, and which clause leads is the translator's decision.
+  'settings.beacons.legend': 'Beacons — WSPR & FST4W',
+  'settings.beacons.txPercent.label': 'Transmit %',
+  'settings.beacons.txPercent.title':
+    'Round Robin is scheduling — this percentage is not used. Set the slot to 0 to schedule by percentage.',
+  'settings.beacons.txPercent.hint.roundRobin':
+    '<b>Ignored while Round Robin is active</b> — the rotation decides which intervals transmit. Set the slot to 0 to schedule by percentage again.',
+  'settings.beacons.txPercent.hint':
+    'Fraction of intervals to transmit on. 0 = listen only. A beacon that transmits every interval hears nothing, so a minority is the convention — 20–30% is typical. Below 40% Nexus also avoids back-to-back transmissions while still hitting the rate you asked for.',
+  'settings.beacons.power.label': 'Transmit power (dBm)',
+  'settings.beacons.power.hint':
+    '<b>Required, and it has to be real.</b> WSPR reports are published to a public propagation database that other operators draw conclusions from, so a wrong figure corrupts their data as well as yours. The beacon stays silent until this is set. 23 = 200 mW, 30 = 1 W, 37 = 5 W, 43 = 20 W.',
+  'settings.beacons.rrSlot.label': 'FST4W Round Robin slot',
+  'settings.beacons.rrSlot.hint':
+    '0 = use the transmit-% schedule. Otherwise your slot in a coordinated rotation: stations agreeing on the same slot count and each taking a different slot never transmit at the same time, because the assignment is fixed by UTC. A rotation needs at least 2 slots.',
+  'settings.beacons.rrSlots.label': 'Round Robin slots',
+  'settings.beacons.rrSlots.hint.degenerate':
+    '<b>A one-station rotation is no rotation</b> — Round Robin needs at least 2 slots, so it is off and the transmit-% schedule applies.',
+  'settings.beacons.rrSlots.hint': 'How many stations are in the rotation. Ignored when the slot is 0.',
+  'settings.beacons.hint':
+    'Beacons transmit your callsign, grid and power — there is no QSO sequence, so Call CQ and S&P are inactive on these tiers. Transmit still has to be armed as usual; the schedule never keys a radio whose transmit you have not enabled.',
+
+  // ── Settings ▸ FST4 (QSO) / FST4W (beacon) ──────────────────────────────────────────
+  // ⚠️ `<...>` inside the hint is what a HASHED CALLSIGN actually looks like on screen — the
+  // literal characters, wrapped by a <code> element the call site supplies. It is not a marker
+  // and the renderer cannot read it as one, so it survives translation as the text it is.
+  'settings.fst4.legend': 'FST4 (QSO) / FST4W (beacon)',
+  'settings.fst4.period.label': 'T/R period',
+  'settings.fst4.period.shortestBeacon': '120 s — shortest FST4W beacon interval',
+  'settings.fst4.period.deepest': '1800 s — deepest',
+  'settings.fst4.period.hint':
+    'Shared by both tiers. Longer periods hear weaker signals at fewer exchanges per hour. FST4W beacons run at 120/300/900/1800 s; FST4 QSO work is usually 15–60 s. Both stations (or the beacon you are listening for) must be on the same period.',
+  'settings.fst4.hint':
+    '<b>FST4</b> is the QSO mode; <b>FST4W</b> is the WSPR-like beacon mode — pick which one on the tier selector. Nexus decodes both and transmits neither. Note that FST4W hashed callsigns show as <code><...></code>: the lookup table upstream fills from a file this build does not carry.',
+
+  // ── Settings ▸ Q65 ──────────────────────────────────────────────────────────────────
+  // A…E are the submode names, and the multiplier beside each one is the tone spacing it
+  // buys; both stations have to be on the same pair, so both are tokens inside these labels.
+  'settings.q65.legend': 'Q65 — EME / VHF+ scatter',
+  'settings.q65.period.label': 'T/R period',
+  'settings.q65.period.tropo': '15 s — troposcatter',
+  'settings.q65.period.meteor': '30 s — 6 m meteor / ionoscatter',
+  'settings.q65.period.eme': '60 s — EME (most common)',
+  'settings.q65.period.deepEme': '120 s — deep EME',
+  'settings.q65.period.microwaveEme': '300 s — deepest, microwave EME',
+  'settings.q65.period.hint':
+    'Longer periods integrate longer and hear weaker signals, at one exchange per period. Both stations must use the <b>same</b> period. Changing this changes the decode frame length, so it takes effect on the next slot.',
+  'settings.q65.submode.label': 'Submode (tone spacing)',
+  'settings.q65.submode.a': 'A — narrowest, most sensitive',
+  'settings.q65.submode.b': 'B — 2x spacing',
+  'settings.q65.submode.c': 'C — 4x spacing',
+  'settings.q65.submode.d': 'D — 8x spacing',
+  'settings.q65.submode.e': 'E — 16x spacing, most Doppler-tolerant',
+  'settings.q65.submode.hint':
+    'Wider spacing survives more Doppler spread and frequency drift but costs sensitivity. Move up the letters as the path degrades — EME on the higher bands usually needs B or C.',
+  'settings.q65.hint':
+    'Q65 transmits and receives. The period and submode set both what you hear and what you send, and BOTH STATIONS MUST MATCH — a correspondent on a different period or submode will not decode you.',
+
+  // ── Settings ▸ Quick-reply macros ───────────────────────────────────────────────────
+  // ⚠️ The QSO set's label is NOT here: QSO is a Q-code, the same three letters in every
+  // language, so it is a token in the component — exactly as CQ inside "Band / CQ" is a token
+  // inside a label whose other word is prose. The macro TEXT itself is the operator's own and
+  // was never translatable.
+  'settings.quickReply.legend': 'Quick-reply macros',
+  'settings.quickReply.chat.label': 'Chat',
+  'settings.quickReply.chat.hint': 'Comma-separated chips for Chat.',
+  'settings.quickReply.qso.hint': 'Chips for sequenced QSOs.',
+  'settings.quickReply.band.label': 'Band / CQ',
+  'settings.quickReply.band.hint': 'Open broadcasts — the Call CQ launchpad + band feed.',
+
+  // ════════════════════════════════════════════════════════════════════════════════════
+  // Settings ▸ Phone · CW · RTTY · PSK · SSTV · APRS · Working Frequencies
+  //
+  // ⚠️ SEVEN LEGENDS BELOW ARE MODE NAMES — Phone, CW, RTTY, PSK, SSTV, APRS. A locale keeps
+  // every one of them exactly as written; they are entries at all only because the settings
+  // registry guard reads a `<legend>` either literally or through this catalog and accepts
+  // nothing else (`settings/registry.test.ts`). Same concession `aprs.source.rf.label` makes,
+  // and for the same mechanical reason.
+  //
+  // ⚠️ EVERY NUMBER AND EVERY DEVICE NAME BELOW IS AN INVARIANT TECHNICAL QUANTITY, written
+  // inside the entry and listed here so a translator can see the whole set at once: the CW
+  // sidetone's 300–1200 Hz range, WinKey's 1200 baud, RTTY's 45.45 / 75 baud and its 170 Hz
+  // shift, APRS-IS's port 14580 and 150 km radius, its 43-character comment cap and its
+  // 2000-station ceiling, SSTV's 290 seconds of key-down, and the repeater offsets (2 m
+  // 600 k, 70 cm 5 M). So is every NAME an operator matches against hardware or another
+  // program: the modes and sidebands (SSB, USB, LSB, FM, FT8, PSK31, AFSK, FSK, Baudot), the
+  // SSTV mode names (Scottie 1, Martin 1, PD-120), the rig and interface models (IC-756PRO
+  // III, FTDX10, K1EL, WinKeyer, Timewave Navigator, microHAM, Buxcomm), the serial control
+  // lines (DTR, RTS), ARISS, NWS, and the Tier 2 rotate hostnames. None of them is ever
+  // produced by a formatter.
+  //
+  // ⚠️ WHAT IS NOT WRITTEN HERE, because a decimal comma in one would be an operating fault:
+  // the ISS SSTV downlink, the North American APRS channel and every stock working frequency
+  // reach these sentences as INTERPOLATED VALUES from the panel, formatted invariantly. So do
+  // the COM-port examples, the callsign/SSID and watched-call examples, the default digipeater
+  // path, the APRS-IS host and the §97.119 citation — each a named constant in the component.
+  // ════════════════════════════════════════════════════════════════════════════════════
+
+  // ── Settings ▸ Phone (SSB / FM) ─────────────────────────────────────────────────────
+  // The CTCSS picker's tones are rendered from `CTCSS_TONES`, never from a string here; only
+  // its "Off" row is prose.
+  'settings.phone.legend': 'Phone (SSB / FM)',
+  'settings.phone.mode.title': 'Mode',
+  'settings.phone.mode.label': 'Phone mode',
+  'settings.phone.mode.ssb': 'SSB (USB/LSB by band)',
+  'settings.phone.mode.fm': 'FM (VHF/UHF + repeaters)',
+  'settings.phone.mode.hint': 'FM drives the rig to FM + the shift/tone below.',
+  'settings.phone.shift.label': 'Repeater shift',
+  'settings.phone.shift.simplex': 'Simplex (no shift)',
+  'settings.phone.shift.plus': 'Plus (+)',
+  'settings.phone.shift.minus': 'Minus (−)',
+  'settings.phone.shift.hint': 'Offset is the band standard (2 m 600 k, 70 cm 5 M…).',
+  'settings.phone.ctcss.label': 'CTCSS (PL) tone',
+  'settings.phone.ctcss.off': 'Off',
+  'settings.phone.ctcss.hint': 'Repeater access tone (PL).',
+  'settings.phone.mic.title': 'Microphone',
+  'settings.phone.mic.hint':
+    'Mic gain and voice-keyer message recording are in the Phone cockpit (live CAT + one-touch record).',
+  'settings.phone.voiceMic.label': 'Voice mic (recording)',
+  'settings.phone.voiceMic.default': 'Same as audio input (default)',
+  'settings.phone.voiceMic.hint':
+    "Mic used when RECORDING a voice-keyer message. Default records from the audio input device — but on a digital setup that's the rig's RX audio, so you'd record the band, not your voice. Pick your actual mic here. If it can't open, recording falls back to the input device (never silent).",
+
+  // ── Settings ▸ CW ───────────────────────────────────────────────────────────────────
+  // ⚠️ `keyer.hint` HAS NO SPACE between "K1EL." and `<b>Soundcard</b>`. That is what the
+  // panel has always rendered — the JSX it came from lost the space at a line break — and
+  // this phase changes no visible text. Putting it back is a wording change and belongs in
+  // its own commit, not smuggled in behind a migration.
+  //
+  // ⚠️ The macro TOKENS in the two hints below — {MYCALL}, {NAME}, {MYGRID}, {MYSTATE},
+  // {RST}, {HISNAME}, {HISSTATE} and the bare `!` — are what the expander matches LITERALLY.
+  // They must survive translation character for character, which is the whole reason this
+  // catalog interpolates on `{{double}}` braces: single braces would eat every one of them.
+  // The F1…F8 key names and the F1→F2→F3→F4 order are tokens too.
+  'settings.cw.legend': 'CW',
+  'settings.cw.keyer.title': 'Keyer',
+  'settings.cw.keyer.label': 'Keyer backend',
+  'settings.cw.keyer.cat': 'CAT — the rig keys CW (Hamlib send_morse; newer rigs only)',
+  'settings.cw.keyer.serial': "Serial keyline (DTR/RTS) — key the rig's KEY jack",
+  'settings.cw.keyer.winkeyer': 'WinKeyer — K1EL hardware keyer',
+  'settings.cw.keyer.soundcard': 'Soundcard — audio tone through SSB (workaround)',
+  'settings.cw.keyer.hint':
+    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — the clean N1MM/fldigi method, needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone through SSB — a workaround; set drive so ALC reads zero. Also switchable live from the CW cockpit.",
+  'settings.cw.pitch.label': 'Sidetone pitch (Hz)',
+  'settings.cw.pitch.hint':
+    'CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope zero-beat marker.',
+  'settings.cw.winkeyerPort.label': 'WinKeyer port',
+  'settings.cw.winkeyerPort.placeholder': '{{example}} — K1EL WinKeyer serial port',
+  'settings.cw.winkeyerPort.hint':
+    "The serial port your WinKey presents. 1200 baud. A WinKey micro inside a multi-function interface (Timewave Navigator, microHAM) counts — use that device's CW/WinKey port, not its CAT port.",
+  'settings.cw.keyPort.label': 'Keyline serial port',
+  'settings.cw.keyPort.placeholder': '{{example}} — the keying interface (separate from CAT)',
+  'settings.cw.keyPort.hint':
+    "The USB-to-serial into your keying interface (Buxcomm, a homebrew DTR cable, …) that plugs into the rig's KEY jack. Must be a SEPARATE port from CAT. Set the rig to CW and its key-jack to straight-key / bug. An interface with a WinKey chip in it — Timewave Navigator, microHAM, a K1EL WinKeyer — does <b>not</b> key on DTR: pick the WinKeyer backend above instead and give it that device's CW port.",
+  'settings.cw.keyLine.label': 'Keying line',
+  'settings.cw.keyLine.dtr': 'DTR (the CW convention)',
+  'settings.cw.keyLine.hint':
+    'Which control line keys the rig. DTR is standard (RTS = PTT); flip to RTS if your interface is wired the other way.',
+  'settings.cw.idAfter73.label': 'CW ID after 73',
+  'settings.cw.idAfter73.hint':
+    'Keys your callsign in CW once the final 73 has fully left the air (stock WSJT-X option, default off). Uses the normal CW keying path — PTT + tone — after the FT8 over, never on top of it.',
+
+  // The F-key macro editor. Each key's ROLE is prose (what the key is FOR); F1's role is the
+  // Q-code it sends and stays a token in the panel, exactly as the QSO macro set does.
+  'settings.cw.macros.title': 'Macros (F-key profiles)',
+  'settings.cw.macros.label': 'CW cockpit F-keys',
+  'settings.cw.macros.profiles.aria': 'Active CW macro profile',
+  'settings.cw.macros.profiles.unnamed': 'Profile {{n}}',
+  'settings.cw.macros.profiles.add': 'New',
+  'settings.cw.macros.profiles.addPrompt': 'New CW macro profile name:',
+  'settings.cw.macros.profiles.rename': 'Rename',
+  'settings.cw.macros.profiles.renamePrompt': 'Rename CW macro profile:',
+  'settings.cw.macros.profiles.delete': 'Delete',
+  'settings.cw.macros.profiles.deleteTitle': 'Delete this profile',
+  'settings.cw.macros.profiles.keepOne': 'Keep at least one profile',
+  'settings.cw.macros.builtin.hint':
+    'Using the built-in F1–F8 set. Customize to make them your own (labels + templates; tokens: {MYCALL} {RST} {NAME} and ! = the worked call).',
+  'settings.cw.macros.customize': 'Customize',
+  'settings.cw.macros.row.label.aria': '{{key}} label',
+  'settings.cw.macros.row.text.aria': '{{key}} text',
+  'settings.cw.macros.tokens.hint':
+    "Tokens: {MYCALL} {NAME} {MYGRID} {MYSTATE} {RST} · ! = the worked call · {HISNAME} {HISSTATE} = the worked station's QRZ name/state (fill in Settings ▸ Station for {MYSTATE}; the rest auto-fill from the copilot / roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's next-step highlight follows the role, so customized text still rolls through F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other station's call inserted. Save to apply.",
+  'settings.cw.macros.reset': 'Reset to defaults',
+  'settings.cw.macros.role.answer': 'Answer a station',
+  'settings.cw.macros.role.report': 'Send report',
+  'settings.cw.macros.role.signOff': 'Sign off (73)',
+  'settings.cw.macros.role.myCall': 'My call',
+  'settings.cw.macros.role.hisCall': 'His call',
+  'settings.cw.macros.role.askRepeat': 'Ask repeat',
+  'settings.cw.macros.role.query': 'Query',
+
+  // ── Settings ▸ RTTY ─────────────────────────────────────────────────────────────────
+  // The 425 and 850 Hz shifts are rows with nothing in them but a number, so they stay in
+  // the panel; only the 170 Hz row and the two baud rows carry prose beside the figure.
+  'settings.rtty.legend': 'RTTY',
+  'settings.rtty.keying.title': 'Keying',
+  'settings.rtty.backend.label': 'Keying backend',
+  'settings.rtty.backend.afsk': 'AFSK — soundcard tones through the rig in LSB (default)',
+  'settings.rtty.backend.fsk': 'True FSK — serial keyline (DTR/RTS), rig in RTTY mode',
+  'settings.rtty.backend.hint':
+    "How Nexus transmits RTTY. <b>AFSK</b> plays the two-tone waveform through the same TX audio path as FT8 (soundcard-clocked = jitter-free; set drive so ALC reads just zero). <b>True FSK</b> bit-bangs the rig's FSK input over a serial control line with the rig in RTTY mode — unlocking its narrow RTTY filters (e.g. the FTDX10's) — with PTT on CAT or its own line. Software FSK timing is casual/Field-Day grade; AFSK is the timing-cleanest path.",
+  'settings.rtty.fskPort.label': 'FSK serial port',
+  'settings.rtty.fskPort.placeholder': "{{example}} — e.g. the FTDX10's USB Enhanced COM",
+  'settings.rtty.fskPort.hint':
+    "The port whose control line feeds the rig's FSK input. Empty = the CAT serial port.",
+  'settings.rtty.fskLine.label': 'FSK data line',
+  'settings.rtty.fskLine.dtr': 'DTR (the common wiring — RTS stays free for PTT)',
+  'settings.rtty.fskLine.hint':
+    'Which control line carries the data bits. PTT must ride its OWN path — CAT PTT or the separate PTT line, never this one; Nexus refuses a send if they collide.',
+  'settings.rtty.signal.title': 'Signal',
+  'settings.rtty.baud.label': 'Baud rate',
+  'settings.rtty.baud.hf': '45.45 — the HF standard',
+  'settings.rtty.baud.vhf': '75 — VHF / some nets',
+  'settings.rtty.baud.hint':
+    'Drives the TX bit clock and the RX demodulator (true 45.45, never rounded to 45).',
+  'settings.rtty.shift.label': 'Shift (Hz)',
+  'settings.rtty.shift.hf': '170 — the HF standard',
+  'settings.rtty.shift.hint': 'Mark/space spacing — the TX tone pair and the RX demodulator both.',
+  'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
+  'settings.rtty.reverse.hint':
+    'The convention is LSB with mark on the lower audio tone. Turn this on when deliberately running the opposite sideband (e.g. AFSK in USB/DATA-U) so the on-air sense stays correct — applies to TX and the RX decoder.',
+
+  // ── Settings ▸ PSK ──────────────────────────────────────────────────────────────────
+  'settings.psk.legend': 'PSK',
+  'settings.psk.rxAutoArm.label': 'Start receiving when PSK opens',
+  'settings.psk.rxAutoArm.hint':
+    'The PSK screen starts the decoder as soon as you open it — click a trace on the waterfall and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). Stopping the receiver yourself is already remembered for the rest of the session. PSK31 is receive-only for now; transmit is on the keyboard-modes roadmap.',
+
+  // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
+  // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its
+  // duration and its raster — and are data, not prose. `{{freq}}` is the ISS downlink and
+  // `{{rule}}` the FCC citation; both arrive as constants from the panel. The quoted
+  // "My picture already shows my callsign" is the SSTV screen's own tick-box, quoted here so
+  // the two surfaces read as one.
+  'settings.sstv.legend': 'SSTV',
+  'settings.sstv.receiving.title': 'Receiving',
+  'settings.sstv.rxAutoArm.label': 'Start receiving when SSTV opens',
+  'settings.sstv.rxAutoArm.hint':
+    'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
+  'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
+  'settings.sstv.issAutoArm.hint':
+    'Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead, restores your dial at LOS. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.',
+  'settings.sstv.transmitting.title': 'Transmitting',
+  'settings.sstv.txMode.label': 'Transmit mode',
+  'settings.sstv.txMode.auto': 'Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)',
+  'settings.sstv.txMode.hint':
+    'This is the mode the SSTV screen starts on; you can still change it there for one picture. <b>Automatic</b> follows the band: HF gets Scottie 1 (the NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is what ARISS transmits.',
+  'settings.sstv.txPower.label': 'Transmit power',
+  'settings.sstv.txPower.aria': 'SSTV transmit power percent',
+  'settings.sstv.txPower.hint':
+    'The drive the SSTV screen starts on, and the level an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB drive. Your Phone power cap still applies on top of this.',
+  'settings.sstv.callsignNote':
+    'Your callsign is burned into the top-left of every picture you transmit, and there is no switch for it: an SSTV over is one long carrier of picture-only audio, so the picture is the identification ({{rule}}). Send is refused until you have set a callsign in Settings ▸ Station. If a picture already shows your call — a pre-made QSO card — tick “My picture already shows my callsign” in the SSTV screen: that is per-picture on purpose and resets with every new image.',
+
+  // ── Settings ▸ APRS ─────────────────────────────────────────────────────────────────
+  // The channel picker's rows and the beacon symbols come from `aprsBeacon.ts` — a dial
+  // reading and a symbol name, both values. The SSID CONVENTIONS below are prose: they are
+  // what the community reads each suffix to mean, and the number beside every one of them is
+  // the stored value, printed by the panel.
+  'settings.aprs.legend': 'APRS',
+  'settings.aprs.rf.title': 'Over the air',
+  'settings.aprs.channel.label': 'Channel (RF)',
+  'settings.aprs.channel.derived': 'Automatic — {{freq}} from your grid',
+  'settings.aprs.channel.default': 'Automatic — {{freq}} (set your grid on the Station tab)',
+  'settings.aprs.channel.custom': '{{freq}} · custom',
+  'settings.aprs.channel.hint':
+    'The 2 m FM channel APRS runs on, which is regional. <b>Automatic</b> follows your grid square, so moving to another region lands you on the right channel with nothing to configure — the number it picked is shown above. The boundaries are approximate; pick a channel here to pin it for good.',
+  'settings.aprs.symbol.label': 'Beacon symbol',
+  'settings.aprs.symbol.hint':
+    'The icon other stations see on the map for your beacon. Digipeater and iGate come from the alternate symbol table and are what a fixed station running as infrastructure should show.',
+  'settings.aprs.comment.label': 'Beacon comment',
+  'settings.aprs.comment.hint':
+    'Free text carried with your position — a name, a net, a URL. This goes on the air, and APRS caps it at 43 characters.',
+  'settings.aprs.path.label': 'Digipeater path',
+  'settings.aprs.path.hint':
+    'Which digipeaters may repeat your beacon. <code>{{path}}</code> is the near-universal default — one hop through a local fill-in digi, then one wide hop. Leave it empty to transmit direct, with no digipeaters at all.',
+  'settings.aprs.ssid.label': 'Beacon SSID',
+  'settings.aprs.ssid.fromCallsign': 'From my callsign',
+  'settings.aprs.ssid.hint':
+    'The suffix on your callsign in every APRS frame you send, which is how other operators tell your mobile from your home station. <b>From my callsign</b> uses whatever your callsign already spells out — so if you have set it to <code>{{example}}</code> on the Station tab, that is what goes out.',
+  'settings.aprs.ssid.fixed': 'fixed station',
+  'settings.aprs.ssid.genericSecondary': 'generic / secondary',
+  'settings.aprs.ssid.generic': 'generic',
+  'settings.aprs.ssid.phone': 'phone / tablet',
+  'settings.aprs.ssid.satellite': 'satellite / special',
+  'settings.aprs.ssid.handheld': 'handheld',
+  'settings.aprs.ssid.boat': 'boat / marine mobile',
+  'settings.aprs.ssid.mobile': 'mobile (car)',
+  'settings.aprs.ssid.igate': 'iGate / internet',
+  'settings.aprs.ssid.balloon': 'balloon / aircraft',
+  'settings.aprs.ssid.tracker': 'tracker',
+  'settings.aprs.ssid.weather': 'weather station',
+  'settings.aprs.ssid.truck': 'truck / freight',
+
+  // The internet feed. ⚠️ `uplink.hint.call` and `uplink.hint.noCall` are TWO WHOLE
+  // SENTENCES, not a stem and two tails: "Publishes under KD9TAW" and "Publishes under your
+  // callsign" are different statements, and a language that orders them differently cannot
+  // be served by gluing a fragment on.
+  'settings.aprs.is.title': 'APRS-IS (internet feed)',
+  'settings.aprs.is.enabled.label': 'APRS-IS feed',
+  'settings.aprs.is.enabled.hint':
+    'Plot stations the internet reports alongside the ones your own antenna hears — each one tagged so you can always tell which is which. Runs whether or not the APRS decoder is armed: it uses no radio and never transmits. If internet stations appear while your receiver stays silent, the fault is in the RF chain.',
+  'settings.aprs.is.host.label': 'Server',
+  'settings.aprs.is.host.hint':
+    'Your regional Tier 2 rotate is best — noam / soam / euro / asia / aunz .aprs2.net. <code>{{host}}</code> works anywhere.',
+  'settings.aprs.is.port.label': 'Port',
+  'settings.aprs.is.port.hint':
+    '14580 is the filtered port clients and iGates should use. The full-feed ports would send you the entire planet.',
+  'settings.aprs.is.radius.label': 'Radius (km)',
+  'settings.aprs.is.radius.hint':
+    'How far around your grid square to subscribe. APRS is a local mode; 150 km is a generous 2 m-plus-digipeater horizon. 0 = no distance limit (busy).',
+  'settings.aprs.is.watchCalls.label': 'Watched calls',
+  'settings.aprs.is.watchCalls.hint':
+    'Comma separated. These come through from anywhere on earth, however far outside your radius they are — the club tracker on a road trip, a friend chasing a summit.',
+  'settings.aprs.is.weather.label': 'Weather stations',
+  'settings.aprs.is.weather.hint': 'Include weather reports in the feed.',
+  'settings.aprs.is.objects.label': 'Objects & items',
+  'settings.aprs.is.objects.hint':
+    'Repeaters, NWS alerts and event markers other stations have placed on the map.',
+  'settings.aprs.is.messages.label': 'Messages',
+  'settings.aprs.is.messages.hint':
+    'Show APRS text messages from the feed. Display only — replying to an internet message is not wired up.',
+  'settings.aprs.stationTtl.label': 'Keep stations for (min)',
+  'settings.aprs.stationTtl.hint':
+    'How long a station stays on the map after its last packet. Stations start to fade at a third of this. An hour by default: fixed stations often beacon only every ten to thirty minutes, and a shorter window makes the slow ones blink off between their own beacons. 0 keeps every station forever (no fade, no removal — the 2000-station ceiling still applies).',
+  'settings.aprs.is.uplink.label': 'Receive-only iGate',
+  'settings.aprs.is.uplink.hint.call':
+    'Contribute packets <b>your own antenna hears</b> to APRS-IS, so stations in your area reach the global map through you. Publishes under <b>{{call}}</b>, so it is a separate choice from watching the feed, and it needs the APRS decoder running to have anything to send. Nexus never sends the other way: gating the internet back onto the air means transmitting unattended.',
+  'settings.aprs.is.uplink.hint.noCall':
+    'Contribute packets <b>your own antenna hears</b> to APRS-IS, so stations in your area reach the global map through you. Publishes under your callsign, so it is a separate choice from watching the feed, and it needs the APRS decoder running to have anything to send. Nexus never sends the other way: gating the internet back onto the air means transmitting unattended.',
+
+  // ── Settings ▸ Working Frequencies ──────────────────────────────────────────────────
+  // ⚠️ NOT ONE FREQUENCY IS WRITTEN HERE. The stock table, the overrides and the "stock is …"
+  // tooltip all interpolate a dial reading the panel formats with `toFixed(6)`, and the band
+  // and mode pickers offer `FREQ_BANDS` / `FREQ_MODES` verbatim. The three column headings
+  // are the WORDS "band" and "mode", which is why they are entries while the values under
+  // them are not.
+  'settings.workingFrequencies.legend': 'Working Frequencies',
+  'settings.workingFrequencies.note':
+    'The dial frequency used when a band/mode is selected. These are <b>overrides</b> of the stock WSJT-X working-frequency table — leave the list empty to use stock everywhere. An override replaces the stock row for its band + mode (e.g. to move FT8 to an alternate sub-band).',
+  'settings.workingFrequencies.stock.label': 'Standard table (read-only)',
+  'settings.workingFrequencies.stock.band': 'Band',
+  'settings.workingFrequencies.stock.mode': 'Mode',
+  'settings.workingFrequencies.stock.dial': 'Dial (MHz)',
+  'settings.workingFrequencies.stock.overrideTitle': 'Your override — stock is {{mhz}} MHz',
+  'settings.workingFrequencies.stock.overrideTag': 'override',
+  'settings.workingFrequencies.stock.hint':
+    'WSJT-X stock dial frequencies. A row with an active override shows your value (highlighted) instead of the stock one.',
+  'settings.workingFrequencies.overrides.label': 'Your overrides',
+  'settings.workingFrequencies.overrides.none': 'None — the stock table is in effect.',
+  'settings.workingFrequencies.overrides.band.aria': 'Override {{n}} band',
+  'settings.workingFrequencies.overrides.mode.aria': 'Override {{n}} mode',
+  'settings.workingFrequencies.overrides.mhz.aria': 'Override {{n}} dial frequency in MHz',
+  'settings.workingFrequencies.overrides.remove.aria': 'Remove the {{band}} {{mode}} override',
+  'settings.workingFrequencies.overrides.remove.title': 'Remove this override',
+  'settings.workingFrequencies.overrides.duplicate': 'duplicate band + mode — the last row wins',
+  'settings.workingFrequencies.overrides.add': 'Add override',
+  'settings.workingFrequencies.overrides.reset': 'Reset to standard',
+  'settings.workingFrequencies.overrides.hint':
+    'MHz is the dial (suppressed-carrier) frequency. Save to apply — band switches then use your value for that band + mode.',
+
   // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
   // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
   // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,
@@ -4959,6 +5536,2335 @@ export const EN = {
   'settings.accessibility.decodeTick.label': 'Decode-batch tick',
   'settings.accessibility.decodeTick.hint':
     "A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.",
+
+  // ── Connect — the board, its pane grid, and the one-line pane projections ───────────
+  // ⚠️ THE UNITS RULE OWNS THIS SURFACE. Band and mode names, bearings (`~47°`), MUF and
+  // dial frequencies, distances, octants, SFI/Kp readings, beacon callsigns, the P.533
+  // engine name, and every word the BACKEND sends — the advisory headline, the workability
+  // (`Fair`), the dual-state word (`Open`), the insight text, the Kp impact sentence and the
+  // getting-out direction summary — arrive as values and are never translated here. Two
+  // intent chips are named for a programme and a band (`POTA/SOTA`, `6m/VHF`), so those two
+  // labels stay in `ConnectView.tsx` as tokens; the other two are prose and are below.
+  'connect.intent.aria': 'What are you doing?',
+  'connect.intent.dx.label': 'Chase DX',
+  'connect.intent.dx.title': 'Beam map, need-colored, live openings',
+  'connect.intent.pota.title': 'World view, park/summit activators',
+  'connect.intent.casual.label': 'Ragchew',
+  'connect.intent.casual.title': 'Who can I hear — signal-colored, calm',
+  'connect.intent.vhf.title': 'Openings front-and-center (Es / F2 / aurora)',
+  'connect.map3d.title.on':
+    'Using the 3D WebGL globe — click for the 2D map (works on any PC)',
+  'connect.map3d.title.off': 'Switch to the 3D WebGL globe (best on higher-end PCs)',
+  'connect.globe3d.loading': 'Loading 3D globe…',
+  'connect.popOut.label': '⧉ Pop out',
+  'connect.popOut.title': 'Open Connect in its own window (for a second monitor)',
+
+  // The pane frame: one grid slot's header. `{{slot}}` is the slot id (`left1`, `bottom3`),
+  // and the B2/B3 picker groups are named by their tier code — neither is prose.
+  'connect.slot.pick.aria': 'Choose what the {{slot}} slot shows',
+  'connect.slot.pick.title': 'Choose what this slot shows',
+  'connect.slot.group.core': 'Panels',
+
+  // Pane names, as they read in the picker and in each pane's header.
+  'connect.pane.advisory.title': 'Conditions',
+  'connect.pane.bandAdvisor.title': 'Band Advisor',
+  'connect.pane.selection.title': 'Selection',
+  'connect.pane.outlook.title': 'Band Outlook',
+  'connect.pane.openings.title': 'Openings',
+  'connect.pane.openingsLog.title': 'Openings Log',
+  'connect.pane.spacewx.title': 'Space Wx',
+  'connect.pane.getout.title': 'Getting Out',
+  'connect.pane.bestband.title': 'Best Band → Region',
+  'connect.pane.activity.title': 'Activity Matrix',
+  'connect.pane.beacons.title': 'NCDXF Beacons',
+  'connect.pane.insights.title': 'Insights',
+  'connect.pane.chase.title': 'Chase',
+  'connect.pane.greyline.title': 'Greyline',
+  'connect.pane.bandHours.title': '24h Band×Hour',
+  'connect.pane.esNowcast.title': 'Sporadic-E',
+  'connect.pane.measuredMuf.title': 'Measured MUF',
+  'connect.pane.chaseFeed.title': 'Chase Feed',
+  'connect.pane.satPasses.title': 'Satellite Passes',
+  'connect.pane.rotor.title': 'Rotor',
+  'connect.pane.scope.title': 'Band Scope',
+  'connect.pane.contests.title': 'Contests',
+
+  // The five self-fetching panes describe themselves: their data lives inside the
+  // component, so their one-line projection is a standing hint rather than a reading.
+  'connect.pane.openingsLog.basic':
+    'A historical record of every detected band opening (6m/2m tropo, Es, aurora) builds here.',
+  'connect.pane.satPasses.basic':
+    'Upcoming amateur-satellite passes over your QTH appear here once orbital elements load.',
+  'connect.pane.rotor.basic':
+    'Rotator control appears here once you pick a rotator model and port in Settings ▸ Radio ▸ Rotator.',
+  'connect.pane.scope.basic':
+    "A live spectrum of the active radio's passband — band noise and signals at a glance.",
+  'connect.pane.scope.idle': "Flat — the radio's audio isn't reaching Nexus right now.",
+  'connect.pane.contests.basic': 'Upcoming HF/VHF contests (WA7BNM) appear here once online.',
+
+  // Where a snapshot came from. The words are the chip; the freshness is a number.
+  'connect.prov.title': 'Data provenance',
+  'connect.prov.live': 'LIVE',
+  'connect.prov.partial': 'PARTIAL',
+  'connect.prov.cached': 'CACHED {{mins}}m',
+  'connect.prov.offline': 'NO LIVE DATA',
+
+  // The selection panel. Each ` · `-separated item is a datum of its own, not a clause of
+  // one sentence, so each has its own key and the separator stays in the component.
+  'connect.selection.clear.title': 'Clear selection',
+  'connect.selection.age.secs': '{{secs}}s ago',
+  'connect.selection.age.mins': '{{mins}}m ago',
+  'connect.selection.heardYou': 'heard YOU',
+  'connect.selection.approx': '~location',
+  'connect.selection.decoded': 'decoded here',
+  'connect.selection.workedBefore': 'worked before',
+  'connect.selection.bestShot': 'Best shot: {{window}}',
+  'connect.selection.work.title':
+    "Rig jumps to this spot's band/mode/frequency; the right cockpit opens",
+  'connect.selection.work.label': '▶ Work {{band}}',
+  // The engine behind a prediction. `P.533` is the ITU recommendation's number and stays in
+  // the component beside it.
+  'connect.engine.modelled': 'modelled',
+  'connect.engine.outlook': 'modelled · DX',
+
+  'connect.path.heading': 'Path to {{call}}',
+  'connect.path.muf.title':
+    "Maximum Usable Frequency — the path's ceiling right now. Bands below it are open; bands above it are closed.",
+  'connect.path.muf': 'Ceiling (MUF): <b>{{muf}} MHz</b>',
+  'connect.path.none': 'No HF band modelled workable on this path right now.',
+  'connect.path.greyline.title': 'Greyline (terminator) opening',
+  'connect.path.modeChip.title':
+    '{{mode}}: ~{{pct}}% of days this circuit works right now (P.533)',
+  'connect.outlook.heading': 'Band outlook',
+  'connect.outlook.muf.title':
+    'Maximum Usable Frequency — the modeled ceiling to long-haul DX right now. Bands below it are open; above it, closed.',
+  'connect.outlook.none': 'No HF band modelled workable to DX right now.',
+
+  'connect.getout.heading': 'Am I getting out?',
+  'connect.getout.none': 'No reception reports yet — call CQ, then watch who hears you.',
+  'connect.getout.summary': '<b>{{count}}</b> hearing you · furthest <b>{{km}} km</b>',
+  'connect.getout.select.title': 'Select {{call}} on the map',
+
+  // ── The Basic projections — one whole sentence per pane, per state ──────────────────
+  // Every one of these was assembled from fragments. They are whole sentences now, with
+  // the variable part interpolated, because a sentence glued from clauses cannot be
+  // translated into a language that orders them differently.
+  'connect.basic.loading': 'Reading the band…',
+  'connect.basic.offline': 'No live propagation data right now.',
+  'connect.basic.bandAdvisor.offline': 'No live band data yet.',
+  'connect.basic.bandAdvisor.none': 'No bands modelled open right now.',
+  'connect.basic.bandAdvisor.best': 'Best band now: {{band}} ({{word}}).',
+  'connect.basic.bandAdvisor.bestRegion': 'Best band now: {{band}} to {{region}} ({{word}}).',
+  'connect.basic.selection.none': 'Tap a station, spot, or DXpedition on the map.',
+  // Two whole sentences — "and is hearing you" changes what the line SAYS, so it is inside
+  // the message, not glued after it. The heading and the band are known only sometimes, so
+  // each is an optional clause carrying its own separator, exactly as the map's spot
+  // tooltip does above (`prop.spotTooltip.*`).
+  'connect.basic.selection': '{{call}} — {{who}}{{az}}{{band}}.',
+  'connect.basic.selection.hearing': '{{call}} — {{who}}{{az}}{{band}}, and is hearing you.',
+  'connect.basic.selection.az': ' {{az}}',
+  'connect.basic.selection.band': ' on {{band}}',
+  'connect.basic.outlook.none.call': 'No HF band modelled workable to {{call}} right now.',
+  'connect.basic.outlook.none.dx': 'No HF band modelled workable for DX right now.',
+  'connect.basic.outlook.path': '{{band}} is your best path to {{call}} now — {{window}}.',
+  'connect.basic.outlook.best': 'Best DX band now: {{band}} ({{workability}}).',
+  'connect.basic.openings.none': 'No band openings right now.',
+  // The station count reads `stns` at every count today; a locale that needs a singular
+  // supplies one as an overlay. English is left exactly as it shipped.
+  'connect.basic.openings': '{{band}} OPEN {{octant}} — ~{{km}} km, {{stations}} stns.',
+  'connect.basic.spaceWx.unavailable': 'Space weather unavailable.',
+  'connect.basic.spaceWx': 'SFI {{sfi}}, Kp {{kp}}: {{impact}}.',
+  'connect.basic.spaceWx.flare':
+    'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress.',
+  'connect.basic.spaceWx.blackout':
+    'SFI {{sfi}}, Kp {{kp}}: {{impact}}; R{{scale}} radio blackout.',
+  'connect.basic.spaceWx.flareBlackout':
+    'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress; R{{scale}} radio blackout.',
+  'connect.basic.getout.dir': '{{count}} hearing you — {{dir}}.',
+  'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{km}} km.',
+  'connect.basic.bestband.none': 'No region reachable on any band yet.',
+  'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
+  'connect.basic.activity.offline': 'No live activity data right now.',
+  'connect.basic.activity.none': 'Quiet on all bands — no activity around you yet.',
+  'connect.basic.activity.top': {
+    one: 'Hottest: {{band}} to {{region}} ({{count}} stn).',
+    other: 'Hottest: {{band}} to {{region}} ({{count}} stns).',
+  },
+  // `{{list}}` is the beacon callsigns with their bands — tokens, built in the component.
+  'connect.basic.beacons.heard': 'Beacons heard: {{list}}.',
+  'connect.basic.beacons.now': 'Beacons now: {{list}}.',
+  'connect.basic.insights.none': 'No notable changes right now.',
+  'connect.basic.greyline.noGrid': 'Set your grid in Settings to see your greyline windows.',
+  'connect.basic.greyline.sunrise':
+    'Your sunrise greyline in {{when}} — watch 160/80/40m long-path.',
+  'connect.basic.greyline.sunset':
+    'Your sunset greyline in {{when}} — watch 160/80/40m long-path.',
+  'connect.basic.greyline.in.hours': '{{hours}}h {{mins}}m',
+  'connect.basic.greyline.in.mins': '{{mins}}m',
+  'connect.basic.bandHours.none': 'No workable bands modelled in the next 24 h.',
+  'connect.basic.bandHours.peak': '{{band}} peaks {{hour}}Z ({{pct}}%).',
+  'connect.basic.muf.noData': 'No live ionosonde data right now.',
+  'connect.basic.muf.noneNearby': 'No ionosonde MUF reported nearby.',
+  'connect.basic.muf.nearby': 'Measured MUF nearby: {{mhz}} MHz ({{mins}} min old).',
+  'connect.basic.es.open': {
+    one: '{{band}} OPEN {{octant}} — ~{{km}} km {{mode}}, {{count}} stn.',
+    other: '{{band}} OPEN {{octant}} — ~{{km}} km {{mode}}, {{count}} stns.',
+  },
+  // ⚠️ `{{freq}}` is the 6 m Es calling frequency, interpolated rather than written into
+  // the sentence: a literal frequency in a catalog is one a translator can reformat.
+  'connect.basic.es.season': 'Es season: watch {{freq}} for sudden 6m DX.',
+  'connect.basic.es.quiet': '6m quiet — outside Es season.',
+
+  // ── Tempo — the conversation, its composer, the bubbles and the CQ launchpad ────────
+  // The CQ line itself (`CQ KD9TAW EN52`) and the YOURCALL / ---- stand-ins it uses before
+  // a callsign and grid are set, the quick-reply macros (RR73, 73 and whatever the operator
+  // typed), the Winter Field Day chip, and every SNR / audio-frequency / dT / tier reading
+  // under a bubble are tokens and stay in the components.
+  'tempo.empty.heading': 'No conversation selected',
+  'tempo.empty.body': 'Pick a station from the roster, or call CQ to be heard on the band.',
+  // `<chip>` is the Field Day chip; the call site supplies the element and the event name.
+  'tempo.empty.fdActive':
+    '<chip>{{event}}</chip> active — call CQ, then send your exchange from the chat box.',
+  'tempo.cq.button': '📣 Call CQ',
+  'tempo.cq.onAir': 'Transmits the standard <b>{{cq}}</b> and arms TX.',
+  'tempo.heartbeat.launch.on': '💓 Heartbeat on',
+  'tempo.heartbeat.launch.off': '🤍 Heartbeat off',
+  'tempo.heartbeat.launch.title':
+    'Periodically beacon your presence so other Tempo stations can hear you and deliver queued messages — turn off to stay silent',
+  'tempo.heartbeat.chip.on': '💓 Heartbeat',
+  'tempo.heartbeat.chip.off': '🤍 Heartbeat',
+  'tempo.heartbeat.chip.title':
+    'Presence heartbeat — periodically beacon so other Tempo stations can hear you and deliver queued messages',
+  'tempo.band.quickbar.aria': 'Band broadcasts',
+  'tempo.header.band': 'Band — open calls',
+  'tempo.header.broadcastAs': 'You broadcast as DE {{call}}',
+  // Reads `1 messages` at a count of one today, and this phase changes no visible text: the
+  // English stays one form. `{{count}}` still selects a form in any locale that supplies one.
+  'tempo.header.messages': '{{count}} messages',
+  'tempo.header.fd.title':
+    'Winter Field Day is active — Tempo is a first-class Field Day contact surface',
+  'tempo.header.fd.working': 'Working {{call}}',
+  'tempo.header.fd.running': 'Running (calling CQ)',
+  'tempo.header.fd.searchPounce': 'Search & pounce',
+  'tempo.messages.empty': 'No messages yet — say hello.',
+  'tempo.composer.quickReplies.aria': 'Quick replies',
+  'tempo.composer.fdExchange.title': 'Send your Winter Field Day exchange (class + section)',
+  'tempo.composer.placeholder.broadcast': 'Broadcast to all (DE {{call}}…)',
+  'tempo.composer.placeholder.direct': 'Message {{peer}}…',
+  'tempo.composer.aria.broadcast': 'Broadcast to all on frequency',
+  'tempo.composer.aria.direct': 'Message {{peer}}',
+  'tempo.composer.send': 'Send',
+  // The capacity meter. `{{frames}}/{{max}}` is a count of T/R overs and `{{payload}}` the
+  // per-over character budget — the numbers are invariant, the sentence is not.
+  'tempo.meter.title': {
+    one: '{{count}} character · {{frames}}/{{max}} overs. Each over carries up to {{payload}} characters; {{max}} overs max — longer text is trimmed before it sends.',
+    other:
+      '{{count}} characters · {{frames}}/{{max}} overs. Each over carries up to {{payload}} characters; {{max}} overs max — longer text is trimmed before it sends.',
+  },
+  'tempo.meter.unit': 'overs',
+  'tempo.meter.full': 'full',
+  // One bubble's delivery state. The ticks themselves (✓, ✓✓, ⚠, ⋯, ↻) are glyphs and stay
+  // in the component; this is what a screen reader hears and the hover says.
+  'tempo.bubble.abandoned': 'Not sent — abandoned on restart. Tap to send it again.',
+  'tempo.bubble.noAck': 'Sent {{attempts}}× — no acknowledgement. Tap to send it again.',
+  'tempo.bubble.held': 'Waiting to send',
+  'tempo.bubble.held.peer': 'Waiting to send — {{call}} not heard yet',
+  'tempo.bubble.sending': 'Sending — try {{attempt}}',
+  'tempo.bubble.sent': 'Sent',
+  'tempo.bubble.onAir': 'On air',
+  'tempo.bubble.delivered': 'Delivered',
+  'tempo.bubble.confirmed': 'Confirmed — they answered after this went out',
+  'tempo.bubble.resend.title': 'Tap to re-send this message',
+  'tempo.bubble.incomplete.title':
+    'Only {{got}} of {{total}} parts of this message were received — the rest never arrived',
+  'tempo.bubble.incomplete.badge': '{{got}} of {{total}} received',
+
+  // ── APRS — the cockpit, its two health chips, and the station card ──────────────────
+  // ⚠️ THE UNITS RULE OWNS THIS SURFACE. Callsign-SSIDs (`W9XYZ-9`), APRS symbol codes and
+  // their table, digipeater paths (`WIDE1-1`), every dial frequency and channel, dBFS
+  // levels, positions, grids, distances, bearings, speeds, altitudes, the packet kind and
+  // the weather readings are DATA — they arrive as values and are never translated. So is
+  // the rig-menu path in the level advice (`IC-9700: SET > Connectors > USB AF Output
+  // Level`): it is what the operator reads on the radio's own screen.
+  // ⚠️ THE CHANNEL IS INTERPOLATED, never written into a sentence — a literal `144.390`
+  // in this file is a frequency a translator could reformat, and `i18n.invariant.test.ts`
+  // refuses one.
+  // ⚠️ NOT HERE, deliberately: the TX On/Off arm latch. Its label, its two tooltips and its
+  // accessible name are a transmit-path control and move with that batch, not this one.
+  'aprs.head.hint': 'AFSK-1200 packet — decode positions/messages, send a beacon',
+  'aprs.head.packets': '{{count}} pkts',
+  'aprs.channel.title':
+    'APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)',
+  'aprs.retune.label': 'Re-tune',
+  'aprs.retune.title.loading': 'Reading your APRS channel…',
+  'aprs.retune.title':
+    'Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)',
+  'aprs.retune.title.noCoverage':
+    "This radio doesn't cover {{freq}} MHz — RF APRS needs a VHF radio.",
+  'aprs.dial.title': "The rig's current dial / band / mode (this view hides the top bar's readout)",
+  // Monitor arms the DECODER on the receive audio. Three states, because "decoding" and
+  // "may ack by itself" are different things — the ack still needs TX on.
+  'aprs.monitor.label.auto': '● Monitoring (auto)',
+  'aprs.monitor.label.explicit': '● Monitoring',
+  'aprs.monitor.label.off': 'Monitor',
+  'aprs.monitor.title.explicit':
+    'You armed the decoder, so automatic acks are allowed — an incoming message addressed to you is acked when TX is on. Click to stop.',
+  'aprs.monitor.title.auto':
+    'Armed automatically when you opened APRS: RECEIVE ONLY. It will never send an automatic ack. To allow those, stop it and arm it yourself, then turn TX on. Click to stop.',
+  'aprs.monitor.title.off':
+    'Arm the APRS decoder on the RX audio. Arming it yourself also allows automatic acks once TX is on.',
+  // The one-click fix beside the wrong-frequency chip: it moves the DIAL, and keys nothing.
+  'aprs.tuneFix.label': 'Tune to {{freq}}',
+  'aprs.tuneFix.title': 'Tune the radio to {{freq}} FM for APRS',
+  'aprs.showInet.label.shown': 'Internet {{count}}',
+  'aprs.showInet.label.hidden': 'Internet {{count}} hidden',
+  'aprs.showInet.title.hide': {
+    one: 'Hide the {{count}} station only the internet has reported, leaving what this radio actually hears',
+    other:
+      'Hide the {{count}} stations only the internet has reported, leaving what this radio actually hears',
+  },
+  'aprs.showInet.title.show': {
+    one: 'Show the {{count}} station the internet feed reports',
+    other: 'Show the {{count}} stations the internet feed reports',
+  },
+
+  // The internet feed's chip and its controls.
+  'aprs.inet.chip.title': '{{detail}}\n\nClick for internet feed controls.',
+  'aprs.inet.panel.aria': 'APRS-IS internet feed',
+  'aprs.inet.enabled.label': 'Internet feed',
+  'aprs.inet.radius.label': 'Radius (km)',
+  'aprs.inet.watch.label': 'Watched calls',
+  'aprs.inet.note':
+    'Changing the radius or watched calls reconnects the feed — the server does the filtering, so a new subscription has to be sent. Server, port, traffic types and the iGate live in Settings ▸ APRS.',
+  'aprs.inet.note.open': 'Open them',
+  // The feed's four states. `{{gate}}` is the iGate sentence below — a WHOLE sentence with
+  // its own leading space, empty when the iGate is off, interpolated so a translation can
+  // place it rather than having it glued on after the fact.
+  'aprs.inet.off.label': 'Internet off',
+  'aprs.inet.off.detail': 'The APRS-IS feed is switched off.',
+  'aprs.inet.connecting.label': 'Internet connecting',
+  'aprs.inet.connecting.detail':
+    'Not connected to APRS-IS yet — retrying with backoff.{{gate}}',
+  'aprs.inet.quiet.label': 'Internet quiet',
+  'aprs.inet.quiet.detail.recent':
+    'Connected, but no packets recently — nothing matches your filter. Widen the radius or add watched calls.{{gate}}',
+  'aprs.inet.quiet.detail.never':
+    'Connected, but no packets yet — nothing matches your filter. Widen the radius or add watched calls.{{gate}}',
+  'aprs.inet.live.label': 'Internet {{count}}',
+  'aprs.inet.live.detail.verified': 'Connected and verified — {{count}} packets received.{{gate}}',
+  'aprs.inet.live.detail.readOnly': 'Connected read-only — {{count}} packets received.{{gate}}',
+  // `{{reason}}` is the server's own rejection text, printed as it arrived.
+  'aprs.inet.gate': 'iGate on: {{uploaded}} contributed.',
+  'aprs.inet.gate.held': 'iGate on: {{uploaded}} contributed, {{held}} held back.',
+  'aprs.inet.gate.held.reason':
+    'iGate on: {{uploaded}} contributed, {{held}} held back (last: {{reason}}).',
+
+  // Which radio the decoder is listening to, named only when more than one could be.
+  'aprs.radioNote.label': 'on {{name}}',
+  'aprs.radioNote.detail':
+    '{{count}} of your radios cover this band, so APRS had a choice to make. It follows the active radio, currently {{name}} — if that is not the rig your packet audio is wired to, this is why nothing is decoding. Routing rules decide which radio a band goes to: Settings → Radios.',
+
+  // The decode health chip. `{{level}}` is the live input reading below, interpolated whole
+  // so a translation places it; `{{db}}` is a dBFS number and never formatted for a locale.
+  'aprs.health.level.silence': 'input over the most recent 0.1 s: digital silence (exactly zero)',
+  'aprs.health.level.peak': 'input peak over the most recent 0.1 s: {{db}} dBFS',
+  'aprs.health.dbfs.silence': 'silence',
+  'aprs.health.norf.label': 'No 2 m radio',
+  'aprs.health.norf.detail':
+    "This radio doesn't cover {{freq}} MHz, so it can't receive RF APRS. RF APRS needs a VHF radio. The internet feed works without one — turn it on to see APRS traffic reported by other stations.",
+  'aprs.health.off.label': 'Monitor off',
+  'aprs.health.off.detail':
+    'The APRS decoder is not running. Arm Monitor to decode the RX audio.',
+  // Three whole messages, because each names a DIFFERENT thing as wrong — the mode, the
+  // dial, or both — and the closing sentence belongs to all three.
+  'aprs.health.wrongFreq.label': 'Wrong frequency',
+  'aprs.health.wrongMode.label': 'Wrong mode',
+  'aprs.health.wrongMode.detail':
+    'The radio is on {{want}} but in {{mode}} — APRS needs FM. FM packet audio demodulated as SSB is garbled, so nothing will decode however strong the signal is. Tune to the APRS channel to start hearing it.',
+  'aprs.health.wrongFreqMode.detail':
+    'The radio is on {{dial}} {{mode}} — APRS needs {{want}} FM. Nothing on this channel can decode as APRS packet, whatever the audio level says. Tune to the APRS channel to start hearing it.',
+  'aprs.health.wrongFreq.detail':
+    'The radio is on {{dial}} — APRS needs {{want}}. Nothing on this channel can decode as APRS packet, whatever the audio level says. Tune to the APRS channel to start hearing it.',
+  'aprs.health.noCapture.label': 'No input',
+  'aprs.health.noCapture.detail':
+    'Armed, but no audio samples are arriving at all — the capture device is not delivering anything. Check that Input Device (RX) in Settings ▸ Radio ▸ Audio is the radio (not a microphone or a disconnected device); what you hear on the speaker does not tell you what the app is capturing.',
+  'aprs.health.decoding.label': '{{count}} decoded',
+  'aprs.health.decoding.detail': '{{count}} packets decoded since arming. Live {{level}}.',
+  'aprs.health.decoding.detail.aged':
+    '{{count}} packets decoded since arming, last one {{age}} ago. Live {{level}}.',
+  'aprs.health.unreadable.label': '{{count}} failed CRC',
+  // `{{advice}}` is the headroom sentence below — empty when the burst sits in the healthy
+  // band, and carrying its own leading space when it does not.
+  'aprs.health.unreadable.detail':
+    '{{count}} bursts heard since arming, last one {{age}} ago — none passed the checksum. Some of that is normal: when the squelch opens partway through a burst the start of the packet is lost, and a part-heard packet can never pass. It is only a fault if nothing ever decodes — in which case check the rig is on {{channel}} in FM.{{advice}} Last burst peaked {{burst}}; live {{level}}.',
+  // Headroom, never a cause: measurement says level does not decide whether a frame decodes.
+  // `sample(s)` reads the same at every count today, and this phase changes no visible text.
+  'aprs.health.advice.clipping':
+    "The burst is CLIPPING (peaked {{peak}}, {{samples}} sample(s) at the rails) — lower the rig's USB AF output level, or the Windows input level for that device. Packet survives a lot of clipping, so this costs headroom rather than decodes, but there is no reason to run into the rails.",
+  'aprs.health.advice.quiet':
+    "The burst peaked {{peak}}, well below the healthy {{min}} to {{max}} band — raise the rig's USB AF output level (IC-9700: SET > Connectors > USB AF Output Level) or the Windows input level for that device. That buys margin against noise; it is not by itself why a checksum fails.",
+  'aprs.health.silent.label': 'Silent',
+  'aprs.health.silent.detail':
+    'The input is alive and delivering audio, but it is silent — normally that just means the squelch is closed between packets, which is what an idle FM channel looks like. To confirm the routing, open the squelch: hiss should show up here as a level. If it still reads silent with the squelch open, the wrong input device is selected. Live {{level}}.',
+  'aprs.health.listening.label': 'Listening',
+  'aprs.health.listening.detail':
+    'Audio is reaching the decoder and no packets have been heard recently — a quiet channel. Live {{level}}. With the squelch open, hiss should sit around {{hiss}}; a packet burst should peak {{min}} to {{max}}.',
+
+  // How long ago, compactly. The unit letter rides inside the message with its number so a
+  // translation can never separate the two.
+  'aprs.age.secs': '{{secs}}s',
+  'aprs.age.mins': '{{mins}}m',
+  'aprs.age.hours': '{{hours}}h',
+
+  // The Via column: how this station reached us. The stored source kind (`rf` / `inet` /
+  // `both`) is the token; these are its words. A locale keeps `RF` — it is the ham
+  // abbreviation — and is free to shorten `net` its own way.
+  'aprs.source.rf.label': 'RF',
+  'aprs.source.inet.label': 'net',
+  'aprs.source.both.label': 'RF+net',
+  'aprs.source.rf.title': 'Your receiver decoded this station off the air',
+  'aprs.source.inet.title':
+    'Reported by APRS-IS — your receiver has not heard this station',
+  'aprs.source.both.title': 'Heard off the air by your receiver AND reported by APRS-IS',
+
+  // The beacon and message composers. The symbol names come from `aprsBeacon.ts` and the
+  // channel list from `APRS_FREQS`; both are read as values.
+  'aprs.beacon.title': 'Position beacon',
+  'aprs.beacon.lat.label': 'Lat',
+  'aprs.beacon.lon.label': 'Lon',
+  'aprs.beacon.symbol.label': 'Symbol',
+  'aprs.beacon.comment.label': 'Comment',
+  'aprs.beacon.path.label': 'Path',
+  'aprs.beacon.send': 'Send beacon',
+  'aprs.msg.title': 'Message',
+  'aprs.msg.to.label': 'To',
+  'aprs.msg.to.placeholder': 'callsign',
+  'aprs.msg.text.label': 'Text',
+  'aprs.msg.text.placeholder': 'up to 67 chars',
+  'aprs.msg.send': 'Send message',
+  'aprs.messages.title': 'Messages',
+  // What the board says back. `{{call}}` is a callsign and `{{freq}}` a dial reading.
+  'aprs.status.badPosition': 'Enter a valid latitude and longitude first.',
+  'aprs.status.beacon.sending': 'Sending beacon…',
+  'aprs.status.beacon.queued': 'Beacon queued — keying now.',
+  'aprs.status.msg.missing': 'Enter a callsign and a message first.',
+  'aprs.status.msg.sending': 'Sending message…',
+  'aprs.status.msg.queued': 'Message to {{call}} queued — keying now.',
+  'aprs.status.tune.deferred':
+    'Transmitting right now — the radio will move to {{freq}} when this over ends.',
+  'aprs.status.tune.now': 'Tuning to {{freq}} FM…',
+
+  'aprs.table.age': 'Age',
+  'aprs.table.symbol': 'Symbol',
+  'aprs.table.from': 'From',
+  'aprs.table.via': 'Via',
+  'aprs.table.type': 'Type',
+  'aprs.table.position': 'Position',
+  'aprs.table.dist': 'Dist',
+  'aprs.table.info': 'Info',
+  'aprs.row.title.highlight': 'Highlight {{call}} on the map',
+  'aprs.row.title.noPosition': '{{call}} reported no position — nothing to highlight',
+  'aprs.map.noPositions': 'No positions heard yet — status and message packets carry none.',
+
+  // ── The station card ────────────────────────────────────────────────────────────────
+  // ⭐ The per-source honesty line: "your receiver heard it" and "a server reported it" are
+  // different claims, and they stay different in every language.
+  'aprs.card.aria': 'Station {{call}}',
+  'aprs.card.symbol.unknown': 'Unrecognised symbol',
+  'aprs.card.close': 'Close',
+  'aprs.card.source.rf.label': 'Heard on RF',
+  'aprs.card.source.rf.detail': 'your receiver decoded this station {{age}} ago',
+  'aprs.card.source.inet.label': 'Via APRS-IS',
+  'aprs.card.source.inet.detail': 'the internet feed reported it {{age}} ago',
+  'aprs.card.source.unknown.label': 'Source unknown',
+  'aprs.card.source.unknown.detail': 'no reception recorded for this station',
+  'aprs.card.position.label': 'Position',
+  'aprs.card.position.none': 'none reported — heard, but nothing to plot',
+  'aprs.card.fromYou.label': 'From you',
+  'aprs.card.motion.label': 'Motion',
+  'aprs.card.motion.stationary': 'stationary',
+  'aprs.card.comment.label': 'Comment',
+  'aprs.card.path.label': 'Path',
+  // `{{path}}` is the digipeater list exactly as the packet carried it (`WIDE1-1,WIDE2-1`).
+  'aprs.card.path.direct': 'direct — no digipeaters in the path',
+  'aprs.card.path.requested': 'direct — requested {{path}}, none used',
+  'aprs.card.path.digipeated': 'digipeated via {{path}}',
+  'aprs.card.packets.label': 'Packets',
+  'aprs.card.packets.value': '{{count}} since {{age}} ago',
+  'aprs.card.wx.title': 'Weather',
+  'aprs.card.wx.temperature': 'Temperature',
+  'aprs.card.wx.wind': 'Wind',
+  'aprs.card.wx.wind.dirUnknown': 'unknown',
+  'aprs.card.wx.wind.atSpeed': '{{dir}} at {{speed}}',
+  'aprs.card.wx.gust': 'Gust',
+  'aprs.card.wx.humidity': 'Humidity',
+  'aprs.card.wx.pressure': 'Pressure',
+  'aprs.card.wx.rain1h': 'Rain, last hour',
+  'aprs.card.wx.rain24h': 'Rain, 24 h',
+  'aprs.card.raw.show': '▸ Raw packet',
+  'aprs.card.raw.hide': '▾ Raw packet',
+  'aprs.card.qrz.error': 'Could not open {{call}} on QRZ',
+  'aprs.card.aprsfi.title':
+    'Open this station on aprs.fi (third-party site) in your browser',
+  'aprs.card.age.secs': '{{secs}} s',
+  'aprs.card.age.mins': '{{mins}} min',
+  'aprs.card.age.hours': '{{hours}} h',
+  'aprs.card.age.days': '{{days}} d',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  // THE OPERATE COCKPIT — the FT8/FT4 operating surface.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // The cockpit header, the merged operating strip, the two decode panes (Band Activity and
+  // Rx Frequency), the Call Roster and the WSJT-X Tx1–Tx6 message machine.
+  //
+  // ⚠️ THIS IS THE FIRST SURFACE OF THE TRANSMIT HALF, AND PART OF IT IS DELIBERATELY ABSENT.
+  // The strip's Stop TX button, its Tune button, the ATU button (all three key or cut a
+  // carrier) and the TX On/Off tooltip that states the abort semantics are NOT here: they
+  // stay written in `OperateQsoStrip.tsx` until the transmit-path batch moves them with the
+  // stop-line sweeps re-run. Operate's third stop, Esc, is keyboard-only and has no string.
+  //
+  // ⚠️ THE UNITS RULE OWNS EVERY READING ON THESE SCREENS, and none of them is here: every
+  // callsign, grid, DXCC entity, US state, band and mode name, SNR and dB report, audio
+  // offset in Hz, DT in seconds, dial frequency, bearing, distance and slot count arrives
+  // from the snapshot and is interpolated as data. So do the TOKENS this cockpit is built
+  // out of, which stay in the components as named constants: the mode chips' own names
+  // (FT8/FT4/FT2 and their T/R slot lengths), `Native` and `Companion` (the backend's own
+  // words for the signal source — `radio.sourceLabel` is interpolated beside them), `Rx`/`Tx`
+  // on the two audio-offset spinners, `SPLIT ▲`, `AUTO-CQ`, `HOUND`, `CQ`, `B4`, `HARQ`,
+  // `SNR`, `DT`, `Hz`, `QRZ`, and the `Tx` of the six message rows. The QRZ button reuses
+  // `callbook.qrzPage.*` — looking a callsign up is one act with one wording, and five other
+  // surfaces already share it.
+
+  // ── Operate ▸ the cockpit header ────────────────────────────────────────────────────
+  // The mode chips carry the tier name in the code and their EXPLANATION here; the T/R
+  // period, the Hz threshold and the band names inside these sentences are written where
+  // they are read, exactly as every other explanatory number in this file is.
+  'operate.header.modes.aria': 'Operating mode',
+  'operate.mode.ft8.title': 'Standard WSJT-X FT8 — 15 s T/R',
+  'operate.mode.ft4.title': 'Standard WSJT-X FT4 — 7.5 s T/R',
+  'operate.mode.ft2.title': 'FT2 (Decodium) — 3.75 s T/R, FT4 with a halved symbol time',
+  'operate.header.msk144Period.aria': 'MSK144 T/R period (seconds)',
+  'operate.header.msk144Period.title':
+    'T/R period — 15 s is the 6 m workhorse; 30 s eases deep-search on 2 m',
+
+  'operate.header.decodeDepth.aria': 'Decode depth',
+  'operate.header.decodeDepth.title':
+    'FT8/FT4 decode depth — Deep catches weaker signals but uses more CPU/battery (a field/POTA lever)',
+  'operate.header.decodeDepth.fast': 'Fast',
+  'operate.header.decodeDepth.norm': 'Norm',
+  'operate.header.decodeDepth.deep': 'Deep',
+
+  // A CONFIGURATION control on the transmit path is not a transmit control — the batch-13
+  // ruling, where the drive slider moved and Prove TX did not.
+  'operate.header.power.label': 'Pwr',
+  'operate.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+
+  // The DXpedition selector. `Hound` is WSJT-X's role name and stays in the code; only its
+  // explanation and the Off row are words.
+  'operate.header.dxped.label': 'DXped:',
+  'operate.header.dxped.aria': 'DXpedition mode',
+  'operate.dxped.off.label': 'Off',
+  'operate.dxped.off.title': 'No DXpedition special mode',
+  'operate.dxped.hound.title':
+    "DXpedition hound: calls go out above 1000 Hz; your R+report auto-moves to the Fox's frequency",
+
+  // The signal source. `{{active}}` is the backend's own `sourceLabel` and `{{addr}}` the
+  // configured companion UDP address — both data. Two whole sentences, because the
+  // "listening …" clause is a statement about where we are listening, not a tail.
+  'operate.header.source.aria': 'Signal source',
+  'operate.header.source.title':
+    'Where decodes come from — active: {{active}}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP {{addr}}.',
+  'operate.header.source.title.listening':
+    'Where decodes come from — active: {{active}} · listening {{addr}}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP {{addr}}.',
+  'operate.header.source.native.title': 'Native engine — Nexus decodes local audio',
+  'operate.header.source.companion.title':
+    'Companion — ride an existing WSJT-X / JTDX / MSHV decode stream over UDP {{addr}}',
+
+  // The two DF spinners. `{{label}}` is `Rx` or `Tx` — a direction token supplied by the
+  // cockpit, so the sentence reads the same for both without being written twice.
+  'operate.header.offsets.aria': 'Audio offsets (Hz)',
+  'operate.header.df.title':
+    '{{label}} audio offset (Hz) — Enter/blur commits, clamped 200–4000',
+  'operate.header.df.aria': '{{label}} offset in Hz',
+
+  // `{{hint}}` is FN_KEY_HINT (platform.ts) — appended on the Mac only, and migrated with
+  // that module rather than here.
+  'operate.header.decode.label': 'Decode',
+  'operate.header.decode.title': 'Re-decode the last period (F6)',
+  'operate.header.decode.title.mac': 'Re-decode the last period (F6)\n{{hint}}',
+
+  'operate.header.record.start.aria': 'Record QSO audio',
+  'operate.header.record.stop.aria': 'Stop recording this QSO',
+  'operate.header.record.start.title':
+    'Record the received audio to a WAV in the recordings folder',
+  'operate.header.record.stop.title': 'Recording — click to stop recording this QSO',
+  // One whole sentence per outcome, never "Could not " plus a verb.
+  'operate.header.record.startFailed': 'Could not start recording',
+  'operate.header.record.stopFailed': 'Could not stop recording',
+
+  // `{{freq}}` is the split TX frequency, already formatted invariantly by the cockpit.
+  'operate.header.split.title':
+    'Rig split active — TX {{freq}} MHz (pile-up). Any QSY returns to simplex.',
+
+  'operate.header.layout.aria': 'Operate layout',
+  'operate.header.layout.classic.label': 'Classic',
+  'operate.header.layout.classic.title':
+    'Classic — WSJT-X layout (Band Activity + Rx Frequency pair, roster aside)',
+  'operate.header.layout.roster.label': 'Roster',
+  'operate.header.layout.roster.title': 'Roster — GridTracker layout (Call Roster dominant)',
+
+  'operate.header.spot.aria': 'Spot a callsign to the DX cluster',
+  'operate.header.spot.title':
+    'Spot a callsign to the DX cluster (opens a popup — call, frequency, comment)',
+  'operate.header.popOut.aria': 'Open Operate in its own window',
+  'operate.header.popOut.title': 'Open Operate in its own window (for a second monitor)',
+
+  // ── Operate ▸ the waterfall strip, the seams and the ⊞ panel names ──────────────────
+  'operate.waterfall.redock.label': '⧉ Waterfall popped out — click to re-dock',
+  'operate.waterfall.redock.title':
+    'The waterfall is in its own window — click to bring it back here',
+  'operate.waterfall.splitter.label': 'waterfall height',
+  'operate.seam.bandActivityRxFreq.label': 'Band Activity / Rx Frequency',
+  'operate.seam.qsocolStations.label': 'Rx Frequency column / Stations roster',
+
+  // The ⊞ menu's entries — the panes' operator-facing names, resolved when the menu is
+  // built rather than at import (the registry-by-getter rule, batch 3).
+  'operate.panel.waterfall': 'Waterfall',
+  'operate.panel.bandActivity': 'Band Activity',
+  'operate.panel.callRoster': 'Call Roster',
+  'operate.panel.rxfreq': 'Rx Frequency',
+  'operate.panel.txmsgs': 'Tx Messages',
+  'operate.panel.stations': 'Stations',
+  'operate.panel.txmeters': 'TX Meters',
+
+  // The rotor's two answers. `{{call}}` is a callsign, `{{deg}}` a bearing and `{{error}}`
+  // the backend's own refusal — all three pass through verbatim.
+  'operate.rotor.pointed': 'Rotator → {{call}}: {{deg}}°',
+  'operate.rotor.failed': 'Rotator: {{error}}',
+
+  // ── Operate ▸ the merged operating strip ────────────────────────────────────────────
+  // ⚠️ Stop TX, Tune, ATU and the TX On/Off tooltip are ABSENT by design — see the block
+  // header. What is here is the sequencer, the readouts and the QSO controls around them.
+  //
+  // Why a mode cannot run a QSO: one sentence each, shown on every control it disables.
+  'operate.strip.rxOnly.why':
+    'This mode is receive-only in Nexus — it decodes but does not transmit',
+  'operate.strip.beacon.why':
+    'This is a beacon mode — it transmits your callsign, grid and power on a schedule. There is no QSO sequence. Set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W).',
+
+  'operate.strip.roles.aria': 'Sequencer role',
+  'operate.strip.callCq.label': 'Call CQ',
+  'operate.strip.callCq.title':
+    'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically',
+  'operate.strip.sandp.label': 'S&P',
+  'operate.strip.sandp.title': 'Monitor — search & pounce',
+  'operate.strip.txControls.aria': 'Transmit controls',
+  'operate.strip.holdTx.label': 'Hold Tx',
+  'operate.strip.holdTx.title':
+    'Hold Tx Freq: keep your TX offset where you put it when you double-click a station to work them. Off, your TX moves onto theirs (WSJT-X\'s behaviour). A plain waterfall click never moves TX either way.',
+
+  // The state cap — a readout, not a control.
+  'operate.strip.state.transmitting': '▲ TRANSMITTING',
+  'operate.strip.state.receiving': '▼ Receiving',
+  'operate.strip.state.txOff': '■ TX off',
+
+  // The rig moved under us. `{{rigMode}}` is what the radio reports and `{{mode}}` what
+  // Nexus commanded — both mode names, and both data.
+  'operate.strip.rigDiverge.label': 'rig: {{mode}}',
+  'operate.strip.rigDiverge.title':
+    'Your rig is on {{rigMode}}, but Nexus has {{mode}}. Something moved it at the radio (SmartSDR, another program, or the mode knob). Transmit and logging use {{mode}} — set the radio to match, or re-pick the band here.',
+  'operate.strip.narrowFilter.label': 'filter {{hz}} Hz',
+  'operate.strip.narrowFilter.title':
+    "The radio's receive filter is {{hz}} Hz — far narrower than an FT8/FT4 window. Signals outside it are not reaching the decoder at all. Widen the filter at the radio (2.4-3 kHz is normal).",
+
+  'operate.strip.autoCq.title':
+    'Auto CQ is running — calling CQ continuously, working each station that answers, then returning to CQ for the next one. Click S&P to stop.',
+  'operate.strip.report.title': 'Report received about your signal',
+
+  // "Now sending". The three non-message states are whole answers; `txNow` itself is the
+  // message on the air and is never translated.
+  'operate.strip.now.stalled': 'Stalled',
+  'operate.strip.now.rxOnly': '— receive-only, not transmitting',
+  'operate.strip.now.beacon': '— beacon: transmits on schedule',
+  'operate.strip.now.listening': '— listening',
+  // Only ever rendered above one, so English needs a single wording; `{{count}}` is passed
+  // so a locale that inflects can answer with plural forms.
+  'operate.strip.attempts.title': 'Sent {{count}} times — calling repeatedly',
+  'operate.strip.resend.title': 'Re-arm and re-send this message',
+
+  'operate.strip.freetext.placeholder': 'Free text (Tx5)',
+  'operate.strip.freetext.aria': 'In-QSO free text',
+  'operate.strip.send.label': 'Send',
+  'operate.strip.send.title': 'Send on the next over',
+  'operate.strip.log.label': 'Log',
+  'operate.strip.log.title': 'Log this QSO now',
+
+  // The transmit-cycle button: four WHOLE labels, never a stem plus a period token.
+  'operate.strip.period.title':
+    'Transmit cycle — click to cycle Auto → Tx 1st → Tx 2nd. Auto picks the opposite cycle of the station you answer; the station you work must be on the OPPOSITE period.',
+  'operate.strip.period.auto.first': 'TX AUTO / 1st',
+  'operate.strip.period.auto.second': 'TX AUTO / 2nd',
+  'operate.strip.period.first': 'TX 1st / even',
+  'operate.strip.period.second': 'TX 2nd / odd',
+  'operate.strip.skipTx1.label': 'Skip Tx1',
+  'operate.strip.skipTx1.title':
+    'Skip Tx1 — when you answer a CQ, open with your signal report (Tx2) instead of your grid (Tx1), saving a cycle. Standard callsigns only (a compound call still sends its grid). Resets each launch, like WSJT-X.',
+  'operate.strip.nextSlot.label': 'next {{secs}}s',
+  'operate.strip.nextSlot.title': 'Time to the next slot',
+
+  // ── Operate ▸ the decode panes (Band Activity / Rx Frequency) ───────────────────────
+  'operate.decodes.title': 'Band Activity',
+  // `{{hz}}` is the live RX audio offset, rounded by the cockpit and never formatted here.
+  'operate.decodes.rxFreq.title': 'Rx Frequency · {{hz}} Hz',
+  'operate.decodes.erase.label': 'Erase',
+  'operate.decodes.erase.title': 'Erase this pane (WSJT-X Erase)',
+
+  // The filter chips. `CQ`, `CQ+73` and `B4` are Q-code/log tokens and stay in the code;
+  // these four are words. Every chip's EXPLANATION is a word.
+  'operate.decodes.filters.aria': 'Filter decodes',
+  'operate.decodes.filter.all': 'All',
+  'operate.decodes.filter.me': 'To me',
+  'operate.decodes.filter.rx': 'On RX',
+  'operate.decodes.filter.new': 'New',
+  'operate.decodes.filter.title.all': 'All decodes',
+  'operate.decodes.filter.title.cq': 'CQ calls only',
+  'operate.decodes.filter.title.cq73':
+    '73 and RR73 signoffs included — a free frequency is about to appear',
+  'operate.decodes.filter.title.me': 'Directed to my callsign',
+  'operate.decodes.filter.title.rx':
+    'On my RX frequency (±50 Hz), plus anything addressed to me — follow a QSO without clutter',
+  'operate.decodes.filter.title.b4': 'Worked before',
+  'operate.decodes.filter.title.new': 'New DXCC / new grid — the "new one" chase',
+
+  'operate.decodes.hideBlocked.label': '−Blk',
+  'operate.decodes.hideBlocked.title':
+    'Hide blocked callsigns from this pane (they render dimmed when off). The auto-responder never answers blocked calls regardless — Alt-double-click a row to block or unblock.',
+  'operate.decodes.hideConfirmed.label': '−Conf',
+  'operate.decodes.hideConfirmed.title':
+    "Hide stations whose ENTITY is already confirmed (LoTW/card) on this band — chase what you still need. It is the country that is confirmed, not necessarily this callsign. A station that's new on the band always shows.",
+  'operate.decodes.hideB4.title':
+    'Hide stations you have already worked (B4) from whichever filter is active — CQ-only minus B4, and friends',
+  'operate.decodes.hideB4.title.idle':
+    'The B4 chip shows worked stations — the hide switch is idle there',
+
+  // The sort picker. Its `value`s are stored tokens; `SNR` and `DT` are column tokens and
+  // stay in the code, so only these two labels are words.
+  'operate.decodes.sort.label': 'sort',
+  'operate.decodes.sort.time': 'Time',
+  'operate.decodes.sort.freq': 'Freq',
+
+  // `{{count}}` is how many rows the pane is showing.
+  'operate.decodes.heard': '{{count}} heard',
+  'operate.decodes.reviewing': '▲ reviewing — scroll to bottom to follow',
+  // `decode(s)` is the shipped English and stays as written; a locale may answer with
+  // plural forms, which is what `{{count}}` is for.
+  'operate.decodes.harq.title': 'IR-HARQ recovered {{count}} decode(s) this session',
+
+  'operate.decodes.list.aria':
+    'Decoded stations — arrow to move, Enter to select, Shift+Enter to work',
+  // TWO empty states, deliberately different: nothing decoded at all, versus a filter
+  // hiding what the history holds.
+  'operate.decodes.empty.title': 'No decodes yet',
+  'operate.decodes.empty.detail':
+    'Waiting for the next slot — decoded signals will appear here as they arrive.',
+  'operate.decodes.emptyFiltered.title': 'Nothing matches “{{filter}}”',
+  'operate.decodes.emptyFiltered.detail':
+    '{{count}} decodes in history are hidden by the current filter — pick another chip to see them.',
+  // `{{time}}` is the period's UTC start, formatted invariantly by decodeHistory.
+  'operate.decodes.period.aria': 'Period {{time}} UTC',
+
+  // A row, read aloud. Everything in it is data; the two optional clauses are interpolated
+  // whole, each carrying its own separator, so no language is served four fragments.
+  'operate.decodes.row.aria': '{{call}}, {{snr}} dB, {{hz}} hertz, {{message}}{{country}}{{azimuth}}',
+  'operate.decodes.row.aria.country': ', {{country}}',
+  'operate.decodes.row.aria.azimuth': ', {{deg}} degrees',
+  'operate.decodes.row.aria.azimuth.approx': ', about {{deg}} degrees',
+  'operate.decodes.row.title': 'Click to select {{call}} · double-click to work{{highlight}}',
+  'operate.decodes.row.highlighted': ' · highlighted by your logger (UDP)',
+
+  'operate.decodes.tier.title': 'Decoded by {{tier}}',
+  'operate.decodes.utc.title': 'UTC heard',
+  'operate.decodes.dt.title': 'DT — time offset (s); large = clock/sync skew',
+  'operate.decodes.dt.title.msk144': 'T — when in the period the ping landed (s)',
+  'operate.decodes.marker.lowConf.title': 'Low-confidence decode',
+  'operate.decodes.marker.ap.title': 'AP-assisted decode',
+  'operate.decodes.needs.aria': 'needs',
+  'operate.decodes.harqRv.title': 'Recovered by IR-HARQ (RV0–RV{{rv}})',
+  'operate.decodes.tag.you': 'YOU',
+  'operate.decodes.lotw.title':
+    'Uploads to LoTW — a QSO with {{call}} should confirm (ARRL activity list)',
+  'operate.decodes.lotw.thisStation': 'this station',
+
+  // ── Operate ▸ the Call Roster ───────────────────────────────────────────────────────
+  'operate.roster.title': 'Call Roster',
+  'operate.roster.filter.neededOnly': 'Needed only',
+  'operate.roster.filter.hideWorked': 'Hide worked',
+  'operate.roster.filter.hideBlocked': 'Hide blocked',
+  'operate.roster.filter.hideBlocked.title':
+    'Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.',
+  // Two whole labels: the button names the station when there is one to name.
+  'operate.roster.spot.label': 'Spot',
+  'operate.roster.spot.label.call': 'Spot {{call}}',
+  'operate.roster.spot.title': 'Spot {{call}} to the DX cluster at the current dial',
+  'operate.roster.spot.title.none': 'Select a station to spot it to the DX cluster',
+
+  'operate.roster.grid.aria': 'Call roster — arrow to move, Enter to select, Shift+Enter to work',
+  // `{{column}}` is the header's own word, so the sort hint is written once.
+  'operate.roster.sort.title': 'Sort by {{column}}',
+  'operate.roster.col.call': 'Call',
+  'operate.roster.col.calling': 'Calling',
+  'operate.roster.col.calling.title':
+    'Sort by who each station is calling (CQ = calling nobody)',
+  'operate.roster.col.need': 'Need',
+  'operate.roster.col.country': 'Country',
+  'operate.roster.col.state': 'State',
+  'operate.roster.col.state.title':
+    'Sort by state or province (from the callsign, or the heard grid)',
+  'operate.roster.col.grid': 'Grid',
+  'operate.roster.col.dist': 'Dist',
+  'operate.roster.col.bearing': 'Brg',
+  'operate.roster.col.age': 'Age',
+
+  'operate.roster.empty': 'No stations heard yet — decoded stations appear here as they arrive.',
+  // The row, read aloud — four optional clauses, each interpolated whole with its own
+  // separator. `{{need}}` is a need TAG (NewMode, Confirm…), a token like a band name.
+  'operate.roster.row.aria': '{{call}}{{grid}}{{need}}{{worked}}{{working}}',
+  'operate.roster.row.aria.grid': ', grid {{grid}}',
+  'operate.roster.row.aria.need': ', needed {{need}}',
+  'operate.roster.row.aria.worked': ', worked',
+  'operate.roster.row.aria.working': ', working now',
+  'operate.roster.row.work.title': 'Double-click to work {{call}}',
+  'operate.roster.lotw.title': 'Uploads to LoTW — this contact should confirm',
+  'operate.roster.calling.title': 'Working {{call}}',
+  'operate.roster.calling.cq.title': 'Calling CQ — not in a QSO',
+  'operate.roster.state.title': '{{call}} is in {{state}}',
+  // The Age column. The unit letter rides inside the message with its number, so a
+  // translation can never separate the two (the Now-Bar's rule, batch 15).
+  'operate.roster.age.now': 'now',
+  'operate.roster.age.slots': '{{count}} sl',
+  'operate.roster.age.minutes': '{{minutes}}m',
+
+  // ── Operate ▸ shared by both panes ──────────────────────────────────────────────────
+  // One wording each, because a decode row and a roster row say the same thing about the
+  // same station and reading two is how the pair drifts.
+  'operate.row.ignored.title': 'Ignored this session (Alt-double-click to restore)',
+  'operate.b4.sameBand': 'Worked before on this band',
+  'operate.b4.otherBand': 'Worked before (another band)',
+
+  // ── Operate ▸ the WSJT-X Tx1–Tx6 message machine ────────────────────────────────────
+  // The six rows are named `Tx 1`…`Tx 6` in the code — WSJT-X's own slot names, and the
+  // tokens the Alt+N hints and this panel's own label point at.
+  'operate.tx.aria': 'Standard messages (Tx1–Tx6)',
+  'operate.tx.dxCall.label': 'DX Call',
+  'operate.tx.dxCall.aria': 'DX callsign',
+  'operate.tx.dxGrid.label': 'DX Grid',
+  'operate.tx.dxGrid.aria': 'DX grid locator',
+  'operate.tx.generate.label': 'Generate Std Msgs',
+  'operate.tx.generate.title':
+    'Generate the six standard messages from DX Call / Grid / report (WSJT-X Generate Std Msgs)',
+  'operate.tx.clear.label': 'Clear',
+  'operate.tx.clear.title': 'Clear DX Call + Grid (F4)',
+  'operate.tx.rows.aria': 'Tx message rows',
+  'operate.tx.next.title': 'Queued as the next transmission',
+  'operate.tx.tx5.placeholder': 'Free text',
+  'operate.tx.tx5.aria': 'Tx5 free text',
+  'operate.tx.tx6.placeholder': 'CQ call',
+  'operate.tx.tx6.aria': 'Tx6 Call CQ (edit for a directed CQ)',
+  // The directed-CQ tokens are what goes on the air; they stay as written.
+  'operate.tx.tx6.hint': 'Edit for a directed CQ — CQ DX / CQ NA / CQ POTA / CQ TEST',
+  'operate.tx.callCq.title': 'Call CQ (Alt+6)',
+  'operate.tx.send.title': 'Send this as the next transmission (Alt+{{n}})',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  // THE KEYBOARD AND PICTURE COCKPITS — RTTY, PSK and SSTV.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // Three cockpits with one shape: a header, a band waterfall, one content pane and a TX
+  // dock. RTTY and PSK are the two KEYBOARD modes and their surfaces are deliberately the
+  // same surface (PSK was built from RTTY's, verbatim) — but each keeps its OWN keys, per
+  // the rule at the foot of this file: a shared key that two surfaces later want to word
+  // differently cannot be split without orphaning both translations, and "Arm RX" already
+  // explains a different demodulator in each.
+  //
+  // ⚠️ THE UNITS RULE LANDS ON THE TONES AND THE RASTER here. Every baud rate, shift, mark
+  // and space tone, AFC offset in Hz, sub-mode name (PSK31, QPSK31), SSTV mode name and its
+  // raster and key-down seconds, VIS code, dial reading, callsign, FSK ID and megapixel
+  // count on these screens is data and stays in the code — as do the vocabularies each file
+  // gathers as named constants (RTTY's RTTY/RX ▼/TX ▲/CQ, PSK's Bd and its Rev/RX ▼/TX ▲,
+  // SSTV's own name and its 'MYCALL'/'TEXT' placeholders), the F-key macro TEXTS (they go on
+  // the air), the `value` of every <select>, and the sniffed image formats the picker
+  // offers. What moved is the prose around them.
+  //
+  // ⚠️ AND WHAT IS ABSENT, DELIBERATELY: every control that STOPS a transmission, and the
+  // continuous-TX latch beside it. See the PARTIAL block in `hardcoded-strings.test.ts` for
+  // the per-file list — those move in the transmit-path batch, with the stop-line sweeps
+  // re-run. A refusal TOAST is not a control, so the toasts those controls raise are here.
+
+  // ── RTTY ▸ the cockpit header, its pills and the ⊞ panel names ──────────────────────
+  'rtty.panel.waterfall': 'Waterfall',
+  'rtty.panel.stream': 'Decoded Text',
+  'rtty.header.mode.title':
+    'RTTY — Baudot/ITA2 at the configured baud + shift (45.45 / 170 Hz is the HF standard; change it in Settings → RTTY)',
+  'rtty.header.backend.fsk.title':
+    'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
+  'rtty.header.backend.afsk.title':
+    'AFSK — soundcard tones through the rig in LSB (soundcard-clocked, the robust default). Change the backend in Settings → RTTY.',
+  'rtty.header.band.title': "Showing the rig's current band",
+  'rtty.waterfall.hint': 'click nets the decoder',
+
+  // ── RTTY ▸ the decoded-text pane ────────────────────────────────────────────────────
+  // The pane's own name is lower-case where the frame prints it and title-case in the ⊞
+  // menu, because that is what each surface shipped; two keys rather than one re-cased.
+  'rtty.pane.stream.title': 'Decoded text',
+  'rtty.stream.title':
+    "Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)",
+  'rtty.arm.on.label': 'RX armed',
+  'rtty.arm.off.label': 'Arm RX',
+  'rtty.arm.on.title':
+    'RX armed — decoding the receive audio (RX only, never keys the rig). Click to disarm.',
+  'rtty.arm.off.title':
+    'Arm RX — start decoding RTTY from the receive audio (RX only, never keys the rig)',
+  'rtty.arm.failed': 'Could not switch the RTTY decoder',
+  // The auto-sequencer's own toggle is a stop control (its off-click aborts the QSO and
+  // unkeys), so its label and tooltips are NOT here — only what it says when it refuses.
+  'rtty.auto.failed': 'Could not switch the RTTY auto-sequencer',
+  'rtty.afc.locked.title':
+    'AFC locked — acquired the mark/space pair and frozen on it (offset from the nominal tones)',
+  'rtty.afc.title':
+    'AFC offset from the nominal mark/space tone pair — locks once a signal is acquired',
+  'rtty.afcReset.label': 'Re-tune',
+  'rtty.afcReset.title':
+    'Re-acquire AFC — drop and rebuild the demodulator (use when it froze on the wrong signal)',
+  'rtty.clear.label': 'Clear',
+  'rtty.clear.title': 'Clear the decoded transcript',
+  'rtty.stream.listening': 'listening…',
+  'rtty.stream.idle': 'Arm RX to decode RTTY from the receive audio',
+
+  // ── RTTY ▸ the auto-sequencer row ───────────────────────────────────────────────────
+  // Its six states are words; `{{call}}` is the callsign the decoder surfaced.
+  'rtty.seq.aria': 'RTTY auto-sequencer',
+  'rtty.seq.callingCq': 'Calling CQ',
+  'rtty.seq.answering': 'Answering',
+  'rtty.seq.exchangeSent': 'Exchange sent',
+  'rtty.seq.confirmed': 'Confirmed',
+  'rtty.seq.done': 'Done',
+  'rtty.seq.idle': 'Idle',
+  'rtty.autoCq.label': 'Auto call',
+  'rtty.autoCq.title':
+    'Call CQ and auto-run the QSO — the engine keys only after you click, never on its own',
+  'rtty.autoCq.failed': 'Auto CQ refused',
+  'rtty.autoAnswer.label': 'Answer',
+  'rtty.autoAnswer.title': 'Answer {{call}} and auto-run the exchange (search & pounce)',
+  'rtty.autoAnswer.none.title':
+    'No CQ heard yet — Answer lights up when the decoder surfaces one',
+  'rtty.autoAnswer.failed': 'Auto answer refused',
+
+  // ── RTTY ▸ the macro row and the compose bar ────────────────────────────────────────
+  // `CQ` and `73` name themselves and stay in the code; these two are words. The macro
+  // TEXTS are what goes on the air and are invariant, tooltip included.
+  'rtty.macros.aria': 'RTTY macros',
+  'rtty.macro.answer.label': 'Answer',
+  'rtty.macro.exchange.label': 'Exchange',
+  // ⚠️ `{CALL}` is a macro token the expander matches literally — safe here only because
+  // interpolation is `{{double}}`.
+  'rtty.hisCall.placeholder': 'Their call…',
+  'rtty.hisCall.aria': 'Worked station callsign (the {CALL} macro token)',
+  'rtty.compose.aria': 'RTTY compose',
+  'rtty.compose.placeholder': 'Type RTTY to send… (Enter)',
+  'rtty.compose.placeholder.latched': 'Typing on the air…',
+  'rtty.compose.send.label': 'Send',
+  'rtty.send.noCallsign': 'Set your callsign in Settings before transmitting',
+  'rtty.send.noTheirCall': 'Enter their call first (the {CALL} field)',
+  'rtty.send.txLocked': 'TX locked — this frequency is outside your license privileges',
+  'rtty.send.failed': 'RTTY send failed',
+  'rtty.latch.failed': 'Continuous TX refused',
+  'rtty.type.failed': 'RTTY typing refused',
+
+  // ── PSK ▸ the cockpit header, its pills and the ⊞ panel names ───────────────────────
+  // The sub-mode NAMES and their one-line hints live in `pskModes.ts` and move with that
+  // module; the cockpit interpolates them. `Rev` is the polarity control's own token, so
+  // each of its two faces is one whole label rather than a stem plus on/off.
+  'psk.panel.waterfall': 'Waterfall',
+  'psk.panel.stream': 'Decoded Text',
+  'psk.header.mode.aria': 'PSK sub-mode',
+  'psk.mode.failed': 'PSK mode switch refused',
+  'psk.rev.on.label': 'Rev on',
+  'psk.rev.off.label': 'Rev off',
+  'psk.rev.on.title':
+    'Reversed polarity (LSB) — decoding and transmitting with the ±90° phase shifts mirrored. Click for normal (USB, the standard).',
+  'psk.rev.off.title':
+    'Normal polarity (USB, the standard). Click if a QPSK31 station warbles but prints garbage — an LSB station’s phase shifts are mirrored.',
+  'psk.header.band.title': "Showing the rig's current band",
+  'psk.waterfall.hint': 'click nets the decoder',
+
+  // ── PSK ▸ the decoded-text pane ─────────────────────────────────────────────────────
+  'psk.pane.stream.title': 'Decoded text',
+  'psk.stream.title':
+    "Decoded PSK31 text — faint characters are low-confidence copy (the demodulator's phase-margin metric)",
+  'psk.arm.on.label': 'RX armed',
+  'psk.arm.off.label': 'Arm RX',
+  'psk.arm.on.title':
+    'RX armed — decoding the receive audio (RX only, never keys the rig). Click to stop; stopping is remembered for this session.',
+  'psk.arm.off.title':
+    'Arm RX — start decoding PSK31 from the receive audio (RX only, never keys the rig)',
+  'psk.arm.failed': 'Could not switch the PSK decoder',
+  'psk.carrier.on.title':
+    'Carrier — the decoder reads a PSK signal at its cursor; the AFC offset from the netted frequency is shown (slew-limited, never more than ±25 Hz)',
+  'psk.carrier.off.title':
+    'No carrier at the cursor yet — click a trace on the waterfall to net the decoder onto it',
+  'psk.afcReset.label': 'Re-acquire',
+  'psk.afcReset.title':
+    'Re-acquire — drop and rebuild the demodulator for a fresh AFC pull from the netted frequency (use when it pulled onto a neighbor)',
+  'psk.clear.label': 'Clear',
+  'psk.clear.title': 'Clear the decoded transcript',
+  'psk.stream.listening': 'listening… click a PSK trace on the waterfall to net the decoder',
+  'psk.stream.idle': 'Arm RX to decode PSK31 from the receive audio',
+
+  // ── PSK ▸ the macro row, the compose bar and the drive hint ─────────────────────────
+  'psk.macros.aria': 'PSK macros',
+  'psk.macro.answer.label': 'Answer',
+  'psk.macro.exchange.label': 'Exchange',
+  'psk.hisCall.placeholder': 'Their call…',
+  'psk.hisCall.aria': 'Worked station callsign (the {CALL} macro token)',
+  'psk.compose.aria': 'PSK compose',
+  'psk.compose.placeholder': 'Type PSK31 to send… (Enter)',
+  'psk.compose.placeholder.latched': 'Typing on the air…',
+  'psk.compose.send.label': 'Send',
+  'psk.send.noCallsign': 'Set your callsign in Settings before transmitting',
+  'psk.send.noTheirCall': 'Enter their call first (the {CALL} field)',
+  'psk.send.txLocked': 'TX locked — this frequency is outside your license privileges',
+  'psk.send.failed': 'PSK send failed',
+  'psk.latch.failed': 'Continuous TX refused',
+  'psk.type.failed': 'PSK typing refused',
+  'psk.drive.text':
+    "Keep the rig's ALC near zero — an overdriven PSK31 signal splatters (IMD). Lower TX audio until the ALC meter barely moves.",
+  'psk.drive.title':
+    "PSK31 is an amplitude-shaped mode: if the rig's ALC is compressing, the signal splatters into the neighbors (IMD). Nexus keys at a modest drive by default — set TX audio / power so the rig's ALC meter barely moves.",
+
+  // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
+  // Positive identification only: an unrecognised header falls through to the decoder, so
+  // there is no "unknown format" entry here. The iPhone path names Apple's own menu items —
+  // a locale should use the ones that OS actually shows.
+  'sstv.refuse.heic':
+    "iPhone HEIC photos can't be read here — Nexus has no HEVC decoder. On the iPhone: Settings → Camera → Formats → Most Compatible (new photos are JPEG), or Settings → Photos → Transfer to Mac or PC → Automatic (converts on send). Then re-send this picture.",
+  'sstv.refuse.avif':
+    'That is an AVIF file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.',
+  'sstv.refuse.tiff':
+    'That is a TIFF file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.',
+  'sstv.refuse.raw':
+    'That is a camera RAW file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export a JPEG from it first.',
+  'sstv.refuse.psd':
+    'That is a Photoshop file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.',
+  'sstv.refuse.svg':
+    'That is an SVG drawing, not a photo. SSTV sends JPEG, PNG, WebP, BMP or GIF — export it as one of those.',
+
+  // ── SSTV ▸ what the receiver is hearing (the sstvDecodeStatus ladder) ───────────────
+  // ⚠️ ONE WHOLE SENTENCE PER STATE, with the "where to tune" clause interpolated WHOLE and
+  // carrying its own leading space — it is an appositive the caller either has or has not,
+  // not a tail glued onto a stem. `{{freq}}` is a dial reading and `{{mode}}` a mode name,
+  // both formatted invariantly by the view; `{{age}}` is a stamped age and `{{vis}}` the VIS
+  // code clause, which is a technical token and is built in the view.
+  'sstv.rx.where': ' Images on this band appear at {{freq}} {{mode}}.',
+  'sstv.rx.off':
+    'The receiver is stopped — nothing is being decoded. Press Arm to start it.{{where}}',
+  'sstv.rx.nocapture':
+    'Listening, but no audio is reaching the decoder at all — the capture device is not delivering anything. Check that Input Device (RX) is the radio; hearing the signal on the speaker does not mean the app is capturing it.',
+  'sstv.rx.starting': 'Receiver started — no audio has reached the decoder yet.{{where}}',
+  'sstv.rx.unsupported':
+    'Heard an SSTV header {{age}} ago in a mode this build cannot decode{{vis}}. The signal and the audio path are fine — Scottie, Martin, Robot and PD images all decode.',
+  'sstv.rx.decoded': {
+    one: '{{count}} image decoded since arming, last one {{age}} ago. Listening for the next header.',
+    other:
+      '{{count}} images decoded since arming, last one {{age}} ago. Listening for the next header.',
+  },
+  'sstv.rx.silent':
+    'Audio is arriving but it is silent. If you can hear the signal on the speaker, the app is on a different input — check Input Device (RX), and RX Gain if the level is just low.{{where}}',
+  'sstv.rx.listening':
+    'Hearing audio, no SSTV header yet — a picture decodes automatically when one starts.{{where}}',
+  'sstv.rx.unreachable':
+    'Cannot read the receiver state — the app is not answering. The decoder may still be running.',
+  'sstv.rx.openAudio': 'Open audio settings',
+
+  // ── SSTV ▸ the header and the RX stage ──────────────────────────────────────────────
+  'sstv.panel.waterfall': 'Waterfall',
+  // One key each for the two lower panes: the ⊞ menu entry and the frame's own title are
+  // the same word for the same pane.
+  'sstv.panel.txcompose': 'Transmit',
+  'sstv.panel.gallery': 'Gallery',
+  'sstv.arm.on.label': 'Armed',
+  'sstv.arm.off.label': 'Arm',
+  'sstv.arm.on.title':
+    'Armed — any VIS header heard auto-decodes and auto-saves to the gallery (RX only). Click to disarm.',
+  'sstv.arm.off.title':
+    'Arm — auto-decode any VIS header heard on the receive audio (RX only, never transmits)',
+  'sstv.arm.failed': 'Could not switch the SSTV receiver',
+  // A CONFIGURATION control on the transmit path is not a transmit control (the batch-13
+  // ruling): the drive slider moved, Stop did not.
+  'sstv.header.power.label': 'Power',
+  'sstv.header.power.title': 'RF output power — set it against a Tune carrier, below ALC',
+  'sstv.header.mode.title':
+    'Detected SSTV mode — fills in (Martin / Scottie / Robot / PD) when the receiver hears a VIS header',
+  'sstv.header.band.title': "Showing the rig's current band — SSTV decodes wherever you're tuned",
+  'sstv.header.slant.label': 'Slant',
+  'sstv.header.slant.title':
+    'Slant trim — fine sample-clock correction. Auto-corrected by the decoder; the manual trim comes in a later build.',
+  'sstv.header.slant.aria': 'SSTV slant trim (disabled — decoder not wired yet)',
+  'sstv.stage.aria': 'SSTV image',
+  'sstv.waterfall.hint': 'the band — a picture takes this space when one arrives',
+  'sstv.caption.lines': '{{mode}} — {{done}}/{{total}} lines',
+  'sstv.caption.decoding': 'decoding {{mode}}…',
+  'sstv.caption.decoding.airtime':
+    'decoding {{mode}}… the picture lands when the transmission ends (≈{{clock}})',
+  // Appended to the caption when the arriving header says the dial is off frequency;
+  // `{{hz}}` is the signed offset, already stringified invariantly.
+  'sstv.caption.tuneOff': ' · tuning {{hz}} Hz',
+
+  // ── SSTV ▸ the composer ─────────────────────────────────────────────────────────────
+  // The preview's accessible name is ONE whole sentence per framing state, with the overlay
+  // clause interpolated whole — never a stem plus three tails. `{{w}}`/`{{h}}` are the
+  // raster the picture is sent at.
+  'sstv.tx.preview.aria.empty': 'No image chosen',
+  'sstv.tx.preview.aria.fits':
+    'Transmit preview, {{w}}×{{h}} — the picture already fits, no crop needed{{overlays}}',
+  'sstv.tx.preview.aria.cropX':
+    'Transmit preview, {{w}}×{{h}}. Drag or use the arrow keys to choose which part of the picture is sent (left and right); Home re-centres.{{overlays}}',
+  'sstv.tx.preview.aria.cropY':
+    'Transmit preview, {{w}}×{{h}}. Drag or use the arrow keys to choose which part of the picture is sent (up and down); Home re-centres.{{overlays}}',
+  'sstv.tx.preview.aria.overlays':
+    ' Click a text overlay to select it; arrows move it, Delete removes it.',
+  'sstv.tx.drop.hint':
+    'Drop an image here, or choose one below — any size, resized to the mode for you.',
+  'sstv.tx.file.choose': 'Choose image…',
+  'sstv.tx.file.change': 'Change image…',
+  // The overlay presets. `CQ`, `73` and the `MYCALL` stand-in are what gets PAINTED INTO the
+  // picture and stay in the view; only the Reply button and the free-text one are words.
+  'sstv.tx.overlay.presets.label': 'Text:',
+  'sstv.tx.overlay.reply.label': 'Reply',
+  'sstv.tx.overlay.reply.title': 'Reply to {{call}} (the newest FSK ID in the gallery)',
+  'sstv.tx.overlay.reply.none.title':
+    'Enabled once a station has been received with an FSK ID',
+  'sstv.tx.overlay.add.label': '+ Text',
+  'sstv.tx.overlay.text.aria': 'Overlay text',
+  'sstv.tx.overlay.style.aria': 'Text style',
+  'sstv.tx.overlay.style.title':
+    "Crisp: the ident's pixel font, proven through the decoder. Banner: big display text with an outline, MMSSTV-style.",
+  'sstv.tx.overlay.style.crisp': 'Crisp',
+  'sstv.tx.overlay.style.banner': 'Banner',
+  'sstv.tx.overlay.size.aria': 'Text size',
+  // The swatches: the palette id in `sstvOverlay.ts` is the STORED VALUE, and these are the
+  // words a screen reader reads off it.
+  'sstv.tx.overlay.color.aria': 'Text colour',
+  'sstv.tx.overlay.color.white': 'white',
+  'sstv.tx.overlay.color.black': 'black',
+  'sstv.tx.overlay.color.yellow': 'yellow',
+  'sstv.tx.overlay.color.orange': 'orange',
+  'sstv.tx.overlay.color.red': 'red',
+  'sstv.tx.overlay.color.green': 'green',
+  'sstv.tx.overlay.color.cyan': 'cyan',
+  'sstv.tx.overlay.color.blue': 'blue',
+  'sstv.tx.overlay.treatment.aria': 'Contrast treatment',
+  'sstv.tx.overlay.treatment.title':
+    'What keeps the text readable on the far end: a solid plate behind it, or a thick outline around it',
+  'sstv.tx.overlay.treatment.plate': 'Plate',
+  'sstv.tx.overlay.treatment.outline': 'Outline',
+  'sstv.tx.overlay.remove.aria': 'Remove overlay {{text}}',
+  'sstv.tx.overlay.remove.title': 'Remove this text',
+  // What actually goes out — one line, every figure interpolated: the file name, the source
+  // size in its own parentheses, the mode's raster, its name and its key-down time.
+  'sstv.tx.name': '{{name}}{{size}} → {{w}}×{{h}} · {{mode}} · {{clock}} key-down',
+  // Where the identification is. `{{call}}` is the operator's own callsign.
+  'sstv.tx.id.inPicture': "{{call}} — you've said it's already in the picture",
+  'sstv.tx.id.inText': '{{call}} in your text · no plate burned in',
+  'sstv.tx.id.plate': '{{call}} burned in · top left',
+  'sstv.tx.id.missing':
+    'No callsign set — SSTV identifies by burning your call into the picture, so it will not transmit without one.',
+  'sstv.tx.id.missing.action': 'Set your callsign',
+  'sstv.tx.id.missing.where': 'Set one in Settings ▸ Station.',
+  'sstv.tx.idopt.label': 'My picture already shows my callsign',
+  'sstv.tx.idopt.title':
+    'Skip the burned-in callsign for this picture only — use when the image already shows your call, e.g. a pre-made QSO card',
+  'sstv.tx.notice.upscale':
+    "That picture is {{w}}×{{h}}, smaller than {{mode}}'s {{mw}}×{{mh}} — it will be enlarged and look soft.",
+  'sstv.tx.notice.exactFit': 'Already {{w}}×{{h}} — sent pixel for pixel, no crop needed.',
+  'sstv.tx.notice.gif': 'Sending the first frame — SSTV transmits one still picture.',
+  // `{{magic}}` is the file's first four bytes as hex — naming what it really starts with.
+  'sstv.tx.notice.notImage': "That file isn't an image Nexus can read (it starts with {{magic}}).",
+  'sstv.tx.notice.damaged':
+    "That image is damaged and only decoded partly — Nexus won't transmit half a picture. Try re-exporting it.",
+  'sstv.tx.notice.tooLarge':
+    "That's a {{w}}×{{h}} image ({{mp}} megapixels) — too large to work with. Export a smaller copy; anything over about 4000 px wide is already far more than SSTV can send.",
+  'sstv.tx.pixels.failed': 'Could not read the image pixels',
+
+  // ── SSTV ▸ the transmit dock and what it says ───────────────────────────────────────
+  // ⚠️ Stop and the bar's own accessible name are ABSENT by design — see the block header.
+  // `{{freq}}` in the ISS prompt is the downlink frequency, a constant in the view.
+  'sstv.tx.mode.label': 'Mode',
+  'sstv.tx.mode.aria': 'SSTV transmit mode',
+  'sstv.tx.mode.title':
+    'Transmit mode. VHF/2 m images use PD-120 (ARISS); HF uses Scottie 1 (NA) or Martin 1 (EU).',
+  'sstv.tx.send.label': 'Send',
+  'sstv.tx.send.noImage.title': 'Choose an image to transmit first',
+  'sstv.tx.send.noCallsign.title':
+    'Set your callsign in Settings → Station — SSTV identifies by burning it into the picture, and will not transmit without one',
+  'sstv.tx.send.title':
+    'Transmit this image with {{call}} burned in — switches to Phone (USB/LSB) and keys the rig',
+  'sstv.tx.send.noCallsign': 'Set your callsign — SSTV identifies by burning it into the picture',
+  'sstv.tx.send.noCallsign.action': 'Set callsign',
+  'sstv.tx.iss.confirm':
+    '{{freq}} MHz is the ISS SSTV downlink. Transmit only during a sanctioned ARISS uplink event. Send anyway?',
+  'sstv.tx.send.failed': 'SSTV send refused',
+  'sstv.tx.announce.sending': 'Transmitting SSTV {{mode}}',
+  'sstv.tx.announce.finished': 'SSTV transmit finished',
+  'sstv.tx.progress': 'TX — {{mode}} · {{clock}} remaining',
+
+  // ── SSTV ▸ the gallery ──────────────────────────────────────────────────────────────
+  // `{{mode}}` is an SSTV mode name and `{{when}}` a UTC stamp; both arrive formatted.
+  'sstv.gallery.empty':
+    'Received images collect here — auto-saved with callsign (FSK ID), mode, frequency, and time.',
+  'sstv.gallery.thumb.alt': '{{mode}} image received {{when}}',
+  'sstv.gallery.delete.aria': 'Delete the {{mode}} image received {{when}}',
+  'sstv.gallery.delete.title': 'Delete this image',
+  'sstv.gallery.delete.confirm.title': 'Delete the {{mode}} received {{when}}?',
+  'sstv.gallery.delete.confirm.body': 'The image file is removed and cannot be recovered.',
+  'sstv.gallery.delete.confirm.label': 'Delete image',
+  'sstv.gallery.delete.failed': 'Could not delete the image',
+  'sstv.gallery.edit.aria': 'Edit and resend the {{mode}} image received {{when}}',
+  'sstv.gallery.edit.title': 'Load this image into the composer',
+  'sstv.gallery.edit.loaded': 'Loaded {{mode}} image into the composer',
+  'sstv.gallery.edit.failed': 'Could not load that image into the composer',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  // THE CW COCKPIT — the keyer, the zero-beat scope, the decode and the F-key dock.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // One cockpit, four surfaces: a header that carries the keyer (back-end, speed, pitch,
+  // macro profile, filter width), a scope strip that is either the rig's own panadapter or
+  // the CW-narrow audio view, a pane region (decode, sent echo, rig controls, band activity,
+  // copilot, log) and a TX dock of F-key macros with a type-ahead send bar.
+  //
+  // ⚠️ THE UNITS RULE LANDS ON THE KEY AND THE DIAL. Every WPM figure, sidetone pitch in Hz,
+  // filter width in Hz, scope span and reference level in dB/dBm, dial reading, callsign,
+  // RST and bearing on this screen is data and stays in the code — as do the vocabulary the
+  // file gathers as named constants (the CW mode badge, the WPM/dB/dBm units, the rig's own
+  // DSP/NR/AGC/BW group names, the CAT and WinKeyer back-end names, the SPLIT ▲ and REC
+  // plates), the F-key macro TEXTS with their {MYCALL}/{RST}/{NAME}/{EXCH} tokens, the ± zoom
+  // presets, and the `value` of every <select>. What moved is the prose around them.
+  //
+  // Nothing that STOPS a transmission is here, and nothing was deferred either: CW's stop
+  // line is Stop TX (→ stopCw + haltTx) and Tune, both drawn by `CockpitHeader`, plus Esc,
+  // which is a window keydown with no string at all. The F-key macros and the send bar are
+  // SENDERS, which move normally (the batch-18 ruling), and the keyer back-end, speed and
+  // pitch controls are CONFIGURATION on the transmit path, which moves exactly as PTT Method
+  // and the drive slider did (the batch-13 ruling).
+
+  // ── CW ▸ the ⊞ panel names and the pane frames ──────────────────────────────────────
+  // Two spellings on purpose, as RTTY has: the ⊞ menu names the pane in title case and says
+  // which cockpit's Decode it is, while the frame head above the pane prints the short word.
+  'cw.panel.scope': 'Scope',
+  'cw.panel.scopeCtl': 'Scope Controls',
+  'cw.panel.dsp': 'DSP Toggles',
+  'cw.panel.txmeters': 'TX Meters',
+  'cw.panel.rxdsp': 'RX DSP Levels',
+  'cw.panel.bandActivity': 'Band Activity',
+  'cw.panel.copilot': 'CW Copilot',
+  'cw.panel.decode': 'CW Decode',
+  'cw.panel.sent': 'Sent Echo',
+  'cw.pane.decode.title': 'Decode',
+  'cw.pane.sent.title': 'Sent',
+  'cw.pane.rigctl.title': 'Rig controls',
+  'cw.pane.bandActivity.title': 'Band activity',
+  'cw.pane.copilot.title': 'Copilot',
+  'cw.pane.log.title': 'Log',
+
+  // ── CW ▸ the header: the mode badge, speed, keyer, pitch, macro profile, filter ──────
+  'cw.header.mode.title': "The rig is set to CW while you're in this section",
+  'cw.wpm.label': 'Speed',
+  'cw.wpm.aria': 'CW keyer speed (WPM)',
+  // Two whole sentences, not a stem plus a Mac tail: compact Mac keyboards have no
+  // PgUp/PgDn and Fn+↑/Fn+↓ is what sends them, which is a second statement.
+  'cw.wpm.title': 'Keyer speed — PgUp/PgDn to nudge (Shift = ±4)',
+  'cw.wpm.title.mac': 'Keyer speed — PgUp/PgDn to nudge (Shift = ±4) · on a Mac: Fn+↑/Fn+↓',
+  'cw.keyer.label': 'Keyer',
+  'cw.keyer.aria': 'CW keyer back-end',
+  // The four back-end LABELS: `CAT` is a protocol and `WinKeyer` a product, so both stay in
+  // the code; these two are words. Every `value` is the stored token and never moves.
+  'cw.keyer.serial.label': 'Serial',
+  'cw.keyer.soundcard.label': 'Soundcard',
+  // What each back-end IS and what it needs — carried on the select AND on each option. The
+  // soundcard entry is the one that stops an operator keying a tone through SSB with nothing
+  // routed and the drive over ALC, so it is operating information, not chrome.
+  'cw.keyer.cat.title': 'CAT keyer — the rig generates CW (rig in CW). Zero extra hardware.',
+  'cw.keyer.serial.title':
+    "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean N1MM/fldigi method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
+  'cw.keyer.winkeyer.title':
+    'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings ▸ CW.',
+  'cw.keyer.soundcard.title':
+    "Soundcard keyer — a keyed audio tone through SSB (rig in USB). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
+  'cw.pitch.label': 'Pitch',
+  'cw.pitch.aria': 'CW pitch (Hz)',
+  'cw.pitch.title': "Sidetone / zero-beat pitch (Hz) — the scope's dashed marker",
+  'cw.macroProfile.label': 'Macros',
+  'cw.macroProfile.aria': 'CW macro profile',
+  'cw.macroProfile.title':
+    'CW macro profile — your active F-key set (edit sets in Settings ▸ CW)',
+  // What an unnamed profile is called in the picker. `{{n}}` is its position, invariant.
+  'cw.macroProfile.unnamed': 'Profile {{n}}',
+  'cw.macroProfile.failed': 'Could not switch macro profile',
+  'cw.filter.title': 'RX filter / passband width (CAT) — narrow to dig CW out of QRM',
+  // `{{step}}` is the nudge in Hz — supplied by the call site, never written here.
+  'cw.filter.narrower.title': 'Narrower (−{{step}} Hz)',
+  'cw.filter.wider.title': 'Wider (+{{step}} Hz)',
+  'cw.filter.failed': 'Could not set filter width',
+  // `{{call}}` is a callsign, `{{bearing}}` a heading in degrees and `{{error}}` the engine's
+  // own words — all three arrive invariant.
+  'cw.rotator.pointed': 'Rotator → {{call}}: {{bearing}}°',
+  'cw.rotator.failed': 'Rotator: {{error}}',
+  // `{{freq}}` is the split TX frequency, already formatted invariantly.
+  'cw.split.title': 'Split — TX {{freq}} MHz',
+  'cw.record.start.aria': 'Record QSO audio',
+  'cw.record.stop.aria': 'Stop recording this QSO',
+  'cw.record.off.title': 'Record the received audio to a WAV in the recordings folder',
+  'cw.record.on.title': 'Recording — click to stop recording this QSO',
+  'cw.record.startFailed': 'Could not start recording',
+  'cw.record.stopFailed': 'Could not stop recording',
+
+  // ── CW ▸ the scope strip and its zoom ───────────────────────────────────────────────
+  // The strip is the rig's real RF panadapter when one streams and the CW-narrow audio view
+  // otherwise, so each state names itself. `{{lo}}` and `{{hi}}` are the audio window's edges
+  // in Hz and `{{khz}}` a zoom preset — all three are supplied by the call site.
+  'cw.scope.tuneHint': 'Scroll here to tune the VFO',
+  'cw.scope.nativeRf.label': 'RF Panadapter',
+  'cw.scope.nativeRf.title': 'Native RF panadapter — the real RF spectrum around your dial.',
+  'cw.scope.audio.label': 'CW audio',
+  'cw.scope.audio.title':
+    'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
+  'cw.scope.audio.sub': 'zero-beat',
+  'cw.scope.colors.label': 'Colors',
+  'cw.scope.splitter.label': 'scope height',
+  'cw.rfZoom.aria': 'Panadapter zoom',
+  'cw.rfZoom.full.label': 'Full',
+  'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
+  'cw.rfZoom.span.title': '±{{khz}} kHz around your dial',
+
+  // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
+  // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
+  // escape so it cannot be lost to a careless edit: each is one chip label whose two words
+  // must not be split across a line, and a translation keeps it. `{{span}}` is a sweep width
+  // the call site prints.
+  'cw.rigScope.aria': 'Rig scope control',
+  'cw.rigScope.label': 'Rig\u00a0scope',
+  'cw.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
+  'cw.rigScope.span.title': "Set the radio's scope span to {{span}}",
+  'cw.rigScope.ref.title': 'Scope reference level — lower to lift weak signals out of the noise',
+  'cw.rigScope.ref.aria': 'Scope reference level (dB)',
+  'cw.flexPan.aria': 'Flex panadapter control',
+  'cw.flexPan.label': 'Flex\u00a0pan',
+  'cw.flexPan.title':
+    "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
+  'cw.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
+  'cw.flexPan.ref.title':
+    'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
+  'cw.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
+  // One word, one key: both reference sliders are labelled for the same thing.
+  'cw.scope.ref.label': 'Ref',
+  // The DSP function NAMES (NB, NR, Notch, AGC) are the rig's own and stay in the code;
+  // `{{func}}` is the one the toggle failed on.
+  'cw.dsp.aria': 'Rig DSP functions',
+  'cw.dsp.nb.title': 'Noise Blanker — kills impulse/ignition noise (RX)',
+  'cw.dsp.nr.title': 'Noise Reduction — pulls a tone out of broadband hiss (RX, DSP)',
+  'cw.dsp.notch.title': 'Auto-Notch (ANF) — nulls a competing carrier (RX, DSP)',
+  'cw.dsp.toggleFailed': 'Could not toggle {{func}}',
+  'cw.rxDsp.aria': 'RX DSP levels',
+  'cw.rxDsp.nr.title':
+    'Noise-reduction depth — raise until the noise floor drops, back off if the tone gets watery',
+  'cw.rxDsp.nr.aria': 'Noise-reduction level',
+  'cw.rxDsp.agc.aria': 'AGC speed',
+  'cw.rxDsp.agc.title': 'AGC time constant — Fast for CW/pileups, Slow for steady copy',
+  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  'cw.rxDsp.agc.fast': 'Fast',
+  'cw.rxDsp.agc.mid': 'Mid',
+  'cw.rxDsp.agc.slow': 'Slow',
+
+  // ── CW ▸ the decode pane and the sent echo ──────────────────────────────────────────
+  // `{{window}}` is the AI decoder's audio window in Hz, supplied by the call site.
+  'cw.decode.ai.badge': 'AI',
+  'cw.decode.ai.on.title': 'AI decoder on — click for the classic pitch decoder',
+  'cw.decode.ai.off.title': 'AI decoder off (classic pitch decoder) — click to turn AI on',
+  'cw.decode.clear.label': 'Clear',
+  'cw.decode.clear.title': 'Clear the decoded + sent transcript',
+  'cw.decode.title':
+    'Live CW decode — the AI (neural-net) decoder reads the whole {{window}} Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder.',
+  'cw.decode.log.aria': 'Decoded CW',
+  'cw.decode.listening': 'listening…',
+  'cw.sent.title': "What you've transmitted (F-key macros expanded to the real text)",
+
+  // ── CW ▸ the copilot chips ──────────────────────────────────────────────────────────
+  'cw.copilot.working.label': 'Working',
+  'cw.copilot.heard.label': 'Heard',
+  'cw.copilot.empty': 'Decoded calls appear here…',
+  'cw.copilot.worked.title': "The station you're working — the F-keys + log use this",
+  'cw.copilot.work.title': 'Work {{call}} — set it for the F-keys + log',
+
+  // ── CW ▸ the TX dock: the F-key macros and the send bar ─────────────────────────────
+  // The macro TEXTS are what goes on the air and are invariant, every character of them; so
+  // are the labels that are on-air shorthand (CQ, 73, AGN, TU, CQ FD, ?). These five are
+  // words, and each names a MEANING both macro sets share — the casual and the Field Day set
+  // both have a "Call".
+  'cw.macros.aria': 'CW macros',
+  'cw.macro.call.label': 'Call',
+  'cw.macro.reply.label': 'Reply',
+  'cw.macro.exch.label': 'Exch',
+  'cw.macro.myCall.label': 'My Call',
+  'cw.macro.hisCall.label': 'His Call',
+  'cw.compose.placeholder': 'Type CW to send… (Enter)',
+  'cw.compose.send.label': 'Send',
+  'cw.send.txLocked': 'TX locked — this frequency is outside your license privileges',
+  'cw.send.failed': 'CW send failed',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  // PHONE — the voice cockpit and the voice keyer pane inside it.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // ⚠️ THE DENSEST TRANSMIT FILE IN THE TREE, and what is NOT here says as much as what is:
+  // the PTT row in the pinned dock — the button's four labels, its three-armed tooltip, the
+  // Lock toggle beside it and the Field Day exchange chip that shares the row — stays written
+  // in `components/PhoneCockpit.tsx`, and so do the voice keyer's ■ Stop and ■ Stop & save.
+  // PTT is Phone's stop-line census (features/panelState.ts) and `stop-line.test.tsx` finds it
+  // by ACCESSIBLE NAME, matching all four labels; those move in the transmit-path batch with
+  // the sweeps re-run. What DID move is everything around them, the refusal TOASTS the
+  // deferred controls raise included — a toast is not a control and no sweep can see one
+  // (the batch-19 ruling).
+  //
+  // The units rule lands on the PASSBAND: every dial reading, split offset in kHz, filter and
+  // scope width in Hz, reference level in dB/dBm, mic/power/NR percentage, sideband and mode
+  // name, and the rig's own control-group names (DSP, NR, AGC, BW, REC, SPLIT) are invariant
+  // and stay in the code.
+
+  // ── Phone ▸ the ⊞ panel names and the pane frames ────────────────────────────────────
+  // Two spellings on purpose, as CW and RTTY have: the ⊞ menu names the pane in title case
+  // and the frame head above the pane prints the short word.
+  'phone.panel.scope': 'Scope',
+  'phone.panel.rigscope': 'Rig Scope Controls',
+  'phone.panel.txmeters': 'TX Meters',
+  'phone.panel.dsp': 'DSP Functions',
+  'phone.panel.dspLevels': 'RX DSP Levels',
+  'phone.panel.bandActivity': 'Band Activity',
+  'phone.panel.voiceKeyer': 'Voice Keyer',
+  'phone.pane.bandActivity.title': 'Band activity',
+  'phone.pane.voiceKeyer.title': 'Voice keyer',
+  'phone.pane.rigscope.title': 'Rig scope controls',
+  'phone.pane.dsp.title': 'DSP functions',
+  'phone.pane.dspLevels.title': 'RX DSP levels',
+  'phone.pane.log.title': 'Log',
+
+  // ── Phone ▸ the header: the mode picker, split, mic gain, filter and REC ─────────────
+  // `AUTO`, `USB`, `LSB` and `FM` are mode names — the buttons print them from the code and
+  // `{{mode}}`/`{{sideband}}` carry them into these sentences unchanged.
+  'phone.mode.aria': 'Phone mode',
+  'phone.mode.auto.title':
+    'AUTO — sideband by band (now {{sideband}}); a band change re-asserts this',
+  'phone.mode.force.title': 'Force {{mode}} until you change bands',
+  'phone.mode.failed': 'Could not set mode',
+  'phone.header.power.label': 'Power',
+  'phone.header.power.title': 'RF output power',
+  // The mic-is-dead warning: native Flex DAX transmit audio is a RADIO-WIDE setting, so this
+  // screen is the only one that can say the physical microphone is disconnected.
+  'phone.micDax.label': 'mic off (DAX)',
+  'phone.micDax.title':
+    'Flex native DAX audio is on, so the radio takes transmit audio from DAX and your microphone is disconnected — on every slice and in every program, SmartSDR included. Turn OFF Flex native DAX audio in Settings ▸ Radio ▸ Rig & CAT to use the mic.',
+  // `{{rigMode}}` is what the rig reports over CAT and `{{mode}}` what Phone commands.
+  'phone.rigMismatch.chip': 'rig: {{mode}}',
+  'phone.rigMismatch.title':
+    "Your rig is on {{rigMode}}, but Phone is set to {{mode}}. Logging and TX use {{mode}} — turn the rig's mode knob (or re-pick the band) to match.",
+  // `{{freq}}` is the split TX dial and `{{step}}` the nudge in kHz — both supplied by the
+  // call site, never written here.
+  'phone.split.on.title': 'Split ON — TX {{freq}} MHz. Click for simplex.',
+  'phone.split.off.title': 'Work split — TX off your RX frequency (e.g. up 5)',
+  'phone.split.lower.title': 'TX {{step}} kHz lower',
+  'phone.split.higher.title': 'TX {{step}} kHz higher',
+  'phone.split.offset.title': 'TX offset from your RX dial (kHz)',
+  'phone.split.setFailed': 'Could not set split',
+  'phone.split.clearFailed': 'Could not clear split',
+  'phone.noCat.label': '⚠ no rig control',
+  'phone.noCat.title':
+    'No CAT link — set a rigctld/CAT rig in Settings so the app can switch the mode and follow the dial. On VOX/RTS-DTR PTT the rig has no command channel.',
+  'phone.mic.label': 'Mic',
+  'phone.mic.aria': 'Mic gain',
+  'phone.mic.title': 'Microphone gain — raise it until SSB peaks tickle the ALC zone',
+  'phone.filter.title': 'RX filter / passband width (CAT)',
+  'phone.filter.narrower.title': 'Narrower (−{{step}} Hz)',
+  'phone.filter.wider.title': 'Wider (+{{step}} Hz)',
+  'phone.filter.failed': 'Could not set filter width',
+  'phone.record.start.aria': 'Record QSO audio',
+  'phone.record.stop.aria': 'Stop recording this QSO',
+  'phone.record.off.title': 'Record the received audio to a WAV in the recordings folder',
+  'phone.record.on.title': 'Recording — click to stop recording this QSO',
+  // Two whole sentences, not a verb spliced into a stem: the toast names the act that failed.
+  'phone.record.startFailed': 'Could not start recording',
+  'phone.record.stopFailed': 'Could not stop recording',
+  // One string, two places: the meter's own accessible name and the label wrapping it.
+  'phone.rxMeter.label': 'RX audio level',
+
+  // ── Phone ▸ what the PTT handler says when it refuses, or puts the switch back up ────
+  // The BUTTON stays written in the cockpit (it is the stop-line census); these are the
+  // toasts it raises, and a toast is neither a control nor anything a sweep can see.
+  'phone.tx.locked': 'TX locked — this frequency/mode is outside your license privileges',
+  'phone.tx.turnedBackOn': 'TX was off — turned it back on. Press PTT again to talk.',
+
+  // ── Phone ▸ the scope strip, its span chips and its zoom ─────────────────────────────
+  // The strip is the rig's real RF panadapter when one streams and the receiver's audio
+  // passband otherwise, so each state names itself. `{{khz}}` and `{{hz}}` are the preset
+  // widths — figures, supplied by the call site rather than written into the sentence.
+  'phone.scope.tuneHint': 'Scroll here to tune the VFO',
+  'phone.scope.nativeRf.label': 'RF Panadapter',
+  'phone.scope.nativeRf.title':
+    'Native RF panadapter — the real RF spectrum around your dial, not the demodulated audio passband.',
+  'phone.scope.audio.label': 'Passband',
+  'phone.scope.audio.title':
+    'Receiver AUDIO spectrum on your rig’s axis: the centre line is your dial, and the passband sits on the side your sideband is on (USB above, LSB below) — the other half is quiet because an SSB receiver only hears one side. Not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.',
+  'phone.scope.audio.sub': 'RX audio',
+  'phone.scope.splitter.label': 'scope height',
+  'phone.scope.span.aria': 'Bandscope span',
+  'phone.span.auto.label': 'Auto',
+  'phone.span.auto.title': "Follows the radio's filter — the scope shows what the rig can pass",
+  'phone.span.full.label': 'Full',
+  'phone.span.full.title': 'The whole captured passband — {{khz}} kHz of sideband from your dial',
+  'phone.span.voice.label': 'Voice',
+  'phone.span.voice.title': 'Voice energy — {{khz}} kHz of sideband from your dial',
+  'phone.span.zoom.title': 'Zoomed — {{khz}} kHz of sideband from your dial',
+  'phone.span.tight.title': 'Tight — {{hz}} Hz of sideband from your dial, for fine tuning',
+  'phone.rfZoom.aria': 'Panadapter zoom',
+  'phone.rfZoom.full.label': 'Full',
+  'phone.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
+  'phone.rfZoom.span.title': '±{{khz}} kHz around your dial',
+
+  // ── Phone ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ───────
+  // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an escape
+  // so it cannot be lost to a careless edit: each is one chip label whose two words must not
+  // be split across a line, and a translation keeps it. `{{span}}` is a sweep width the call
+  // site prints.
+  'phone.rigScope.aria': 'Rig scope control',
+  'phone.rigScope.label': 'Rig\u00a0scope',
+  'phone.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
+  'phone.rigScope.span.title': "Set the radio's scope span to {{span}}",
+  'phone.rigScope.ref.title':
+    'Scope reference level — lower to lift weak signals out of the noise',
+  'phone.rigScope.ref.aria': 'Scope reference level (dB)',
+  'phone.flexPan.aria': 'Flex panadapter control',
+  'phone.flexPan.label': 'Flex\u00a0pan',
+  'phone.flexPan.title':
+    "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
+  'phone.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
+  'phone.flexPan.ref.title':
+    'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
+  'phone.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
+  // One word, one key: both reference sliders are labelled for the same thing.
+  'phone.scope.ref.label': 'Ref',
+  // The DSP function NAMES (NB, NR, Notch, COMP, VOX) are the rig's own and stay in the code;
+  // `{{func}}` is the one the toggle failed on.
+  'phone.dsp.aria': 'Rig DSP functions',
+  'phone.dsp.nb.title': 'Noise Blanker — kills impulse/ignition noise (RX)',
+  'phone.dsp.nr.title': 'Noise Reduction — pulls voice out of broadband hiss (RX, DSP)',
+  'phone.dsp.notch.title': 'Auto-Notch (ANF) — nulls carriers/heterodynes (RX, DSP)',
+  'phone.dsp.comp.title': 'Speech Compressor — more average talk power (TX)',
+  'phone.dsp.vox.title': 'Voice-Operated Transmit — hands-free keying (TX)',
+  'phone.dsp.toggleFailed': 'Could not toggle {{func}}',
+  'phone.rxDsp.aria': 'RX DSP levels',
+  'phone.rxDsp.nr.title':
+    'Noise-reduction depth — raise until the noise floor drops, back off if audio gets watery',
+  'phone.rxDsp.nr.aria': 'Noise-reduction level',
+  'phone.rxDsp.agc.aria': 'AGC speed',
+  'phone.rxDsp.agc.title': 'AGC time constant',
+  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  'phone.rxDsp.agc.fast': 'Fast',
+  'phone.rxDsp.agc.mid': 'Mid',
+  'phone.rxDsp.agc.slow': 'Slow',
+
+  // ── Phone ▸ the voice keyer pane ─────────────────────────────────────────────────────
+  // F1–F6 are key names and `{{slot}}` is the number one of them carries; `{{label}}` is the
+  // operator's own name for a slot and is never translated. `{{hint}}` is the Mac Fn-key note
+  // (platform.ts). The pane's two ■ Stop buttons are NOT here — see the banner above.
+  'phone.keyer.hint': 'click or press F1–F6 to send · Esc stops',
+  'phone.keyer.hint.mac': 'click or press Fn+F1–F6 to send · Esc stops',
+  // `{{exchange}}` is the Field Day class + section, a token; the element around it comes
+  // from the call site.
+  'phone.keyer.fd.hint':
+    'Field Day: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
+  'phone.keyer.slot.play.title': 'Play F{{slot}} ({{label}})',
+  // ONE sentence, not a stem plus a shared tail: recording the rig's RX audio into a slot puts
+  // the WRONG AUDIO on the air the moment the slot is played, so the warning rides both
+  // controls that start a recording — the ● tool and the empty slot button itself.
+  'phone.keyer.slot.record.title':
+    "Record F{{slot}}. Records from your INPUT DEVICE — often the rig's RX audio, not a mic. If it is, record the message elsewhere and use Import (⤓).",
+  'phone.keyer.slot.unnamed': 'Slot {{slot}}',
+  'phone.keyer.slot.state.record': 'record',
+  'phone.keyer.import.title': 'Import a .wav file',
+  'phone.keyer.clear.title': 'Clear this recording',
+  'phone.keyer.empty': 'F{{slot}} has no recording yet — record or import one',
+  'phone.keyer.busyRecording': 'Finish the recording first',
+  'phone.keyer.releasePtt': 'Release PTT before sending a voice message',
+  // NAME THE CONTROL THAT IS ON THIS SCREEN: Phone shows no Enable-Tx button, so PTT is the
+  // switch when TX is off.
+  'phone.keyer.txOff': 'TX is off — click PTT once to turn it back on, then play the message',
+  'phone.keyer.playFailed': 'Could not play F{{slot}}',
+  'phone.keyer.recordFailed': 'Could not start recording',
+  'phone.keyer.saveFailed': 'Could not save recording',
+  'phone.keyer.saved': 'Saved F{{slot}} ({{label}})',
+  'phone.keyer.importFailed': 'Could not import the WAV',
+  'phone.keyer.imported': 'Imported F{{slot}} ({{label}})',
+  'phone.keyer.clearFailed': 'Could not clear the slot',
+  // What the pane says AFTER its teardown acted, for the operator who walked off the Phone
+  // screen and never opened the ⊞ menu. Both are conditional on what actually happened.
+  'phone.keyer.hide.stoppedOver':
+    'F{{slot}} was on the air — the voice keyer closed and stopped it',
+  'phone.keyer.hide.discarded': 'Recording for F{{slot}} discarded — the voice keyer closed',
+  'phone.keyer.hide.recorderStuck':
+    'Could not stop the recorder for F{{slot}} — it may still be running. Reopen the voice keyer.',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  // THE SHELL — chrome, navigation, and the ⊞ panel menu.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // Everything an operator sees BETWEEN the cockpits: the rail he navigates with, the
+  // Now-Bar above it, the app's own toasts and status lane, the ⊞ menu that removes a pane,
+  // the frame every pane wears, and the two registries (features, goal profiles) whose words
+  // reach Settings and the wizard.
+  //
+  // ⚠️ THE VOCABULARY HERE IS HALF TOKENS. A section named for a MODE keeps its name in the
+  // code, never here: CW, Phone, RTTY, PSK, SSTV, APRS, FT, Tempo, TempoFast/TempoDeep. So do
+  // the programme and event names (POTA, SOTA, Field Day) and the link report's field names
+  // (RV, dT) and unit symbols (MHz, Hz, dB). What moved is the prose AROUND them — and mode,
+  // band and programme names written INSIDE a sentence stay written there, exactly as they
+  // are everywhere else in this file: they are this application's technical vocabulary, not
+  // words a translator replaces.
+
+  // ── The shell: loading, window title, the rails, the crash escape ───────────────────
+  'shell.loading': 'Connecting to Nexus…',
+  // `Nexus` is the program's name — the same word in every language.
+  'shell.windowTitle': '{{section}} — Nexus',
+  // Screen-reader announcement of the radio's transmit state. Not a control: the TX controls
+  // themselves live in the cockpits and move with them.
+  'shell.tx.announce.on': 'Transmitting',
+  'shell.tx.announce.off': 'Receiving',
+  'shell.rail.stations.aria': 'Resize stations panel (double-click to reset)',
+  'shell.rail.waterfall.aria': 'Resize waterfall pane (double-click to reset)',
+  'shell.bandActivity.title': 'Band Activity — heard on the band',
+  'shell.roam.aria': 'Roam settings',
+  'shell.roam.close.aria': 'Close Roam settings',
+  // The crash panel's escape. `{{section}}` is a section name from the feature registry.
+  'shell.crash.section': 'This section',
+  'shell.crash.retry': 'Try again',
+  'shell.crash.back': 'Back to {{section}}',
+
+  // ── The status lane (status.ts → the Now-Bar) ───────────────────────────────────────
+  // A lane item PERSISTS while its condition holds, so its wording is what the operator
+  // stares at. `detail` is the backend's own message where one exists and is interpolated as
+  // data, never translated.
+  'shell.lane.audio.message': 'RADIO STOPPED',
+  'shell.lane.radioConfig.message': 'RADIO CONFIG',
+  'shell.lane.recording.message': 'RECORDING',
+  'shell.lane.prop.offline.message': 'Prop: no live data',
+  'shell.lane.prop.offline.detail':
+    'No live propagation data yet — set your callsign in Settings and check your internet connection.',
+  'shell.lane.prop.cached.message': 'Prop: cached {{minutes}}m',
+  'shell.lane.prop.cached.detail':
+    'Live propagation refetch failed — showing the last-good snapshot.',
+
+  // ── Deleting a conversation ─────────────────────────────────────────────────────────
+  // Raised by BOTH hosts — the main window and a torn-off panel — deliberately in the same
+  // words: it is one act, and the two mirrors drifting apart is what put the guard here.
+  'shell.conversation.delete.title': 'Delete the conversation with {{peer}}?',
+  'shell.conversation.delete.body':
+    "Any messages still waiting to send will be cancelled. This can't be undone.",
+  'shell.conversation.delete.action': 'Delete conversation',
+  'shell.conversation.delete.failed': 'Could not delete conversation',
+
+  // ── What the shell says when an action fails, and when it lands ─────────────────────
+  // Every `{{call}}`, `{{band}}`, `{{mode}}`, `{{freq}}` and `{{source}}` below is a token
+  // interpolated as data — a callsign, a band or mode name, a dial reading, the source label
+  // the engine reports. None of them is translated, and none is locale-formatted.
+  'shell.error.switchMode': 'Could not switch mode',
+  'shell.error.selectStation': 'Could not select station',
+  'shell.ownCall': '{{call}} is your own call',
+  'shell.tempo.open.failed': 'Could not open {{call}}',
+  'shell.tempo.opened': '▶ {{call}} — open in Tempo',
+  'shell.work.failed': 'Could not work {{call}}',
+  'shell.work.started': '▶ Working {{call}} — transmitting your call',
+  'shell.work.failed.cat': 'Could not work {{call}} — check CAT',
+  'shell.work.ready': '▶ {{call}} — {{mode}} {{band}}, ready to log',
+  'shell.work.here': '▶ {{call}} — {{band}} {{freq}} MHz',
+  'shell.pounce.qsy.failed': 'Could not QSY to {{call}}',
+  'shell.log.failed': 'Could not log QSO',
+  'shell.log.discard.failed': 'Could not discard QSO',
+  'shell.toast.logged': 'Logged QSO',
+  'shell.toast.nothingToLog':
+    'Nothing to log — the QSO already closed or no report was exchanged',
+  'shell.message.failed': 'Message could not be sent',
+  'shell.bandFeed.failed': 'Could not open the band feed',
+  'shell.resend.failed': 'Could not re-send to {{peer}}',
+  'shell.resend.sending': '↻ Re-sending to {{peer}}',
+  'shell.resend.qso.failed': 'Could not resend',
+  'shell.freetext.failed': 'Could not send free text',
+  'shell.broadcast.failed': 'Could not broadcast',
+  'shell.cq.failed': 'Could not call CQ',
+  'shell.cqRun.toggle.failed': 'Could not toggle the CQ run',
+  'shell.cqRun.resume.failed': 'Could not resume the CQ run',
+  'shell.beacon.failed': 'Could not toggle the heartbeat',
+  'shell.frequency.failed': 'Could not set frequency',
+  'shell.blocklist.failed': 'Could not update the blocklist',
+  'shell.aprs.tune.failed': 'Could not tune to APRS',
+  'shell.tx.enable.failed': 'Could not enable transmit',
+  'shell.tx.mute.failed': 'Could not mute transmit',
+  'shell.tx.level.failed': 'Could not set TX level',
+  'shell.tune.failed': 'Could not toggle tune',
+  'shell.proveTx.failed': 'Could not key the transmitter',
+  'shell.halt.failed': 'Could not stop transmit',
+  'shell.radio.switch.failed': 'Could not switch radios',
+  'shell.pegLock.failed': 'Could not set peg-lock',
+  'shell.overrideTx.failed': 'Could not queue TX to {{call}}',
+  'shell.txPeriod.failed': 'Could not set transmit period',
+  'shell.cycleMode.failed': 'Could not set the cycle mode',
+  'shell.holdTx.failed': 'Could not toggle Hold Tx',
+  'shell.offset.failed': 'Could not set offset',
+  'shell.tier.failed': 'Could not change tier',
+  'shell.digital.failed': 'Could not switch to Digital',
+  'shell.source.switchFailed': 'Could not switch signal source',
+  'shell.roam.toggle.failed': 'Could not toggle Roam',
+  'shell.qsy.failed': 'Could not QSY to {{band}}',
+  'shell.qsy.noChannel': 'No channel for {{band}} in the band plan',
+  'shell.qsy.done': 'QSY {{dial}} MHz — listening',
+  // `{{section}}` is CW or Phone — a mode name, so it is a token the sentence carries.
+  'shell.recall.sectionOff': 'Enable the {{section}} section in Settings to recall this memory',
+  'shell.recall.failed': 'Recall failed — check CAT',
+  'shell.recall.error': 'Recall failed: {{error}}',
+  'shell.recall.done': '{{name}} — {{freq}} MHz {{mode}}',
+  // The phone policy commands SSB and FM only; anything else is tuned but not commanded, and
+  // the operator is told to set it himself rather than sold a mode the app never sent.
+  'shell.recall.done.setMode': '{{name}} — {{freq}} MHz · set {{mode}} on the rig',
+  'shell.net.reminder': 'Net {{until}}: {{name}} — {{freq}} {{mode}}',
+  'shell.net.tune': 'Tune',
+  'shell.rotator.pointed': '↗ Pointing antenna to {{bearing}}° ({{call}})',
+  'shell.rotator.failed': "Couldn't point the antenna at {{call}}",
+  // `WSJT-X`, `JTDX` and `MSHV` are program names and `:2237` their agreed UDP port.
+  'shell.source.companion': 'Source: {{source}} — listening for WSJT-X/JTDX/MSHV on :2237',
+  'shell.source.set': 'Source: {{source}}',
+  'shell.wizard.saveFailed': "Setup didn't fully save: {{error}} — check Settings",
+
+  // ── A torn-off panel window ─────────────────────────────────────────────────────────
+  'detached.connecting': 'Connecting to the radio…',
+  'detached.fieldDay.inactive': 'Field Day isn’t active.',
+  'detached.unavailable': 'Panel “{{panel}}” isn’t available as a standalone window yet.',
+
+  // ── The navigation rail ─────────────────────────────────────────────────────────────
+  // Every `label` a MODE names — FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS — and the two
+  // programme/event names (Field Day, POTA/SOTA) stay in `components/ModeNav.tsx`. Their
+  // TOOLTIPS are prose and live here.
+  'nav.aria': 'Operating mode',
+  'nav.digital.group.label': 'Digital',
+  'nav.digital.group.aria': 'Digital modes',
+  'nav.digital.ft.title': 'FT weak-signal cockpit — FT8 / FT4 (pick the tier in the top bar)',
+  'nav.digital.tempo.title':
+    'Tempo — two-way free-text calling (TempoFast / TempoDeep), with Roam (coordinated QSY) inside',
+  'nav.digital.rtty.title': 'RTTY — Baudot teletype (45.45 baud): streaming decode + F-key macros',
+  'nav.digital.psk.title':
+    'PSK31 — narrow-band keyboard mode: click a trace on the waterfall, read the ragchew (receive)',
+  'nav.digital.sstv.title': 'SSTV — slow-scan TV: received images decode into the gallery',
+  'nav.digital.aprs.title':
+    'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon',
+  'nav.phone.title': 'Phone (SSB) operating — PTT, sideband, RF power, panadapter (casual)',
+  'nav.cw.title': 'CW operating — keyboard + F-key macros, WPM, spectrum (casual)',
+  'nav.connect.label': 'Connect',
+  'nav.connect.title':
+    'Connect — THE map: grayline globe + live spots + openings + propagation, with click-to-work',
+  'nav.needed.label': 'Needed',
+  'nav.needed.title': "Needed — what you still need that's on the air now; single-click to QSY",
+  'nav.spots.label': 'Spots',
+  'nav.spots.title':
+    'Spots — every cluster/RBN spot on the air (the raw firehose); filter by band/mode',
+  'nav.dxped.label': 'DXped',
+  'nav.dxped.title': 'DXpeditions — active now, the forward calendar, and what you need from each',
+  'nav.sats.label': 'Satellites',
+  'nav.sats.title':
+    'Satellites — pass times over your grid, favorites, polar plots, and rotor tracking',
+  'nav.logbook.label': 'Logbook',
+  'nav.logbook.title': 'Logbook — your ADIF contacts',
+  'nav.awards.label': 'Awards',
+  'nav.awards.title':
+    'Awards — your Journey (firsts, ladders, milestones) + official DXCC/WAS/WAZ progress',
+  'nav.stats.label': 'Stats',
+  'nav.stats.title':
+    'Statistics — your logbook sliced: QSOs by band/mode/year/hour, top DXCC entities, states, confirmations',
+  'nav.fieldDay.title': 'Field Day — contest rate workspace',
+  'nav.pota.title': "POTA / SOTA — parks & summits: who's on now (hunt) + tag your activation",
+  'nav.memories.label': 'Memories',
+  'nav.memories.title':
+    'Memories — saved channels: repeaters, nets, calling freqs; groups + ★ favorites; one click to tune',
+  'nav.program.label': 'Program',
+  'nav.program.title':
+    'Program — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now',
+  'nav.order.reset.label': 'Reset order',
+  'nav.order.reset.title': 'Reset the section order to default',
+  'nav.mode.title': 'Active operating mode',
+  // The operating-mode badge. `QSO` is a Q-code and `FIELD DAY` the event's name, so only the
+  // conversational mode's word is prose.
+  'nav.mode.chat': 'CHAT',
+  // One word for the gear: its tooltip, its accessible name and its visible label are the
+  // same claim about the same button.
+  'nav.settings.label': 'Settings',
+
+  // ── The Now-Bar ─────────────────────────────────────────────────────────────────────
+  // Three chips answering the three questions an operator actually asks, plus the connector
+  // pills. The feed NAMES (Cluster, Phone, PSKR) are the services' own and stay in the code.
+  'nowbar.aria': 'Now: band, getting out, and top need',
+  'nowbar.label': 'NOW',
+  // Compact ages. The unit letter rides inside the message with its number so a translation
+  // can never separate the two.
+  'nowbar.age.secs': '{{secs}}s',
+  'nowbar.age.mins': '{{mins}}m',
+  'nowbar.age.hours': '{{hours}}h',
+  'nowbar.band.label': 'Band',
+  'nowbar.band.open': 'open',
+  'nowbar.band.fair': 'fair',
+  'nowbar.band.quiet': 'quiet',
+  'nowbar.band.closed': 'closed',
+  // The chip's own tooltip, used only when the advisory carries no reason of its own (that
+  // reason is backend prose, interpolated as data — it moves in phase 3).
+  'nowbar.band.title.connect': 'Open Connect — the map + nowcast',
+  'nowbar.band.title.plain': 'Band activity',
+  'nowbar.out.label': 'Out',
+  // Reads the same at every value in English ("1 hear you" as much as "3 hear you"), so it is
+  // one string: giving it plural forms would enshrine the English wording, and rewording it
+  // is a text change this phase does not make.
+  'nowbar.out.hearYou': '{{count}} hear you',
+  'nowbar.out.none': 'no spots of you yet',
+  // `PSK Reporter` is the service's name; `{{band}}` a band name.
+  'nowbar.out.title': '{{hear}} station(s) hear you · you hear {{ihear}} (PSK Reporter, {{band}})',
+  'nowbar.out.title.none': 'No propagation data yet',
+  'nowbar.need.label': 'Need',
+  'nowbar.need.value': '{{entity}} {{band}} · {{likelihood}}',
+  'nowbar.need.none': 'nothing workable now',
+  // Two WHOLE sentences rather than one with a tail: "live-confirmed" is a claim about the
+  // expedition, and a language that puts it elsewhere in the sentence must be able to.
+  // `{{where}}` is the entity with its bearing, both data.
+  'nowbar.need.where': '{{entity}} {{azimuth}}',
+  'nowbar.need.title': '{{call}} ({{where}}) — {{need}} on {{band}}, likelihood {{likelihood}}',
+  'nowbar.need.title.confirmed':
+    '{{call}} ({{where}}) — {{need}} on {{band}}, likelihood {{likelihood}} (live-confirmed)',
+  'nowbar.need.title.none': 'No DXpedition needs workable right now',
+  'nowbar.prop.live': 'PROP LIVE',
+  'nowbar.prop.partial': 'PROP PARTIAL',
+  'nowbar.prop.cached': 'PROP CACHED',
+  'nowbar.prop.offline': 'NO LIVE DATA',
+  'nowbar.prop.title':
+    'Propagation nowcast data is {{source}} — separate from the Cluster/PSKR connection pills',
+  // The connector pills. Each state is a WHOLE sentence: "connected but quiet" and "cannot
+  // reach the server" are different claims, and they were one broken-looking "waiting" once.
+  'nowbar.feed.live.value': 'live {{age}}',
+  'nowbar.feed.live.value.noAge': 'live',
+  'nowbar.feed.live.title': '{{name}}: receiving (last {{age}} ago)',
+  'nowbar.feed.connected.value': 'connected',
+  'nowbar.feed.connected.title':
+    '{{name}}: connected — no reports yet (normal until you transmit or the band stirs)',
+  'nowbar.feed.connecting.value': 'connecting…',
+  'nowbar.feed.connecting.title': '{{name}}: trying to reach the server',
+  'nowbar.feed.reconnecting.value': 'reconnecting…',
+  'nowbar.feed.reconnecting.title': '{{name}}: connection dropped — retrying',
+  'nowbar.feed.reconnecting.title.age':
+    '{{name}}: connection dropped — retrying (last event {{age}} ago)',
+  'nowbar.feed.idle.value': 'idle {{age}}',
+  'nowbar.feed.idle.title': '{{name}}: connected, no data for {{age}} (a quiet band is normal)',
+  // Defensive: an unknown future backend state renders visibly rather than as a fake idle.
+  'nowbar.feed.unknown.title': '{{name}}: {{state}}',
+  // The optional host/detail a pill carries. One entry owns the parenthesis and the space, so
+  // no caller ever glues them on.
+  'nowbar.feed.title.detail': '{{title}} ({{detail}})',
+
+  // ── The Tempo cockpit header ────────────────────────────────────────────────────────
+  // The tier NAMES (TempoFast/TempoDeep and their Fast/Deep slots) are the modes' own.
+  'tempo.header.tier.aria': 'Tempo tier',
+  'tempo.header.tier.fast.title': 'TempoFast — fast conversational tier',
+  'tempo.header.tier.deep.title': 'TempoDeep — robust weak-signal tier (15 s)',
+  // TX drive: a CONFIGURATION control on the transmit path, not a transmit control (the
+  // batch-13 ruling — Tx Power moved, Prove TX did not).
+  'tempo.header.power.label': 'Pwr',
+  'tempo.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+  'tempo.header.cqRun.aria': 'CQ run',
+  'tempo.header.cqRun.off': '📢 Call CQ',
+  'tempo.header.cqRun.off.title':
+    'Start a CQ run — keep calling CQ every idle TX slot until someone answers',
+  'tempo.header.cqRun.paused': 'CQ paused ✕',
+  'tempo.header.cqRun.paused.title':
+    'CQ run paused (you are in a conversation) — click to stop the run',
+  'tempo.header.cqRun.on': '📢 Calling CQ… ✕',
+  'tempo.header.cqRun.on.title': 'Calling CQ every idle TX slot — click to stop',
+  'tempo.header.cqRun.resume': '▶ Resume',
+  'tempo.header.cqRun.resume.title':
+    'Resume calling CQ now (it auto-resumes after the conversation goes quiet)',
+
+  // ── The ⊞ Panels menu ───────────────────────────────────────────────────────────────
+  // The ENTRIES are not here: each cockpit names its own panels, and those words move with
+  // the cockpit. What lives here is the menu itself — the button, the popover, and the two
+  // controls that put a mis-tick right.
+  'panels.button': '⊞ Panels',
+  'panels.button.hidden': '⊞ Panels · {{count}} hidden',
+  'panels.button.title':
+    'Show or hide the panels on this screen — untick one and its neighbours expand into the space it leaves',
+  'panels.popover.aria': 'Panels on this screen',
+  'panels.tag.popped': 'popped out',
+  'panels.undo': 'Undo last change',
+  'panels.undo.title': 'Put the layout back the way it was before the last change',
+  'panels.reset': 'Reset layout',
+  'panels.reset.title': 'Show every panel again (the stock layout)',
+
+  // ── The cockpit pane frame ──────────────────────────────────────────────────────────
+  // `{{title}}` is the pane's own name, supplied by the cockpit.
+  'pane.popOut.aria': 'Open {{title}} in its own window',
+  'pane.popOut.title': 'Open this pane in its own window (for a second monitor)',
+  'pane.hide.aria': 'Hide {{title}}',
+  'pane.hide.title': 'Hide this pane (restore it from the ⊞ Panels menu)',
+
+  // ── Drag handles ────────────────────────────────────────────────────────────────────
+  // One entry for both handles (`Splitter` sizes a panel, `SplitterSeam` splits two): the
+  // tooltip makes the same statement about the same gesture, and `{{label}}` — the
+  // separator's accessible name — is what says which handle it is.
+  'splitter.title': 'Drag to resize ({{label}})',
+
+  // ── The theme chips ─────────────────────────────────────────────────────────────────
+  'theme.aria': 'Theme',
+  'theme.light.label': 'Light',
+  'theme.light.title': 'Light (sunlight)',
+  'theme.dark.label': 'Dark',
+  'theme.dark.title': 'Dark (shack)',
+
+  // ── The waterfall palette picker ────────────────────────────────────────────────────
+  // Two wordings, and the difference is load-bearing: an UNSCOPED picker drives the master
+  // value four cockpits share, a SCOPED one drives that mode's key alone. Naming the modes it
+  // actually reaches is why this control stopped lying. (The palette NAMES come from
+  // `waterfall.ts`, which this batch does not own.)
+  'waterfall.palette.aria.scoped': 'Waterfall color palette (this mode)',
+  'waterfall.palette.aria.shared':
+    'Waterfall color palette (Phone, CW, RTTY and SSTV — FT has its own)',
+  'waterfall.palette.title.scoped': 'Waterfall color palette — applies to this mode',
+  'waterfall.palette.title.shared':
+    'Waterfall color palette — shared by Phone, CW, RTTY and SSTV. The FT waterfall keeps its own.',
+
+  // ── The FT wide graph (`Waterfall.tsx`) ─────────────────────────────────────────────
+  // ⚠️ Every span in kHz, the `dBr` legend with its ticks, the frequency axis and scrollback
+  // time tape drawn into the bitmap, the RX/TX marker plates and the zoom LABELS (they live in
+  // `waterfall.ts`) are measurements and tokens, and stay in the code. `{{mod}}` is the
+  // platform's own modifier key — `Ctrl`, or `⌘` on a Mac.
+  'waterfall.title': 'Waterfall',
+  'waterfall.hint': 'left = RX · right / Shift = TX · {{mod}} = both',
+  'waterfall.zoom.aria': 'Waterfall zoom span',
+  'waterfall.zoom.title':
+    'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–4 kHz), or zoom in around the RX marker',
+  'waterfall.gain.title': 'Gain — contrast (how punchy strong signals look). Center = auto.',
+  'waterfall.gain.aria': 'Waterfall gain (contrast)',
+  'waterfall.zero.title':
+    'Zero — where the black point sits relative to the noise floor. Center = the default (background black); left shows more of the noise, right buries it deeper.',
+  'waterfall.zero.aria': 'Waterfall zero (baseline)',
+  // The scroll direction: the button says the CURRENT state, the tooltip says which end is
+  // newest and which way history travels. Four WHOLE tooltips — what the 3D view does with the
+  // direction is part of the statement, not a sentence glued to the end of it.
+  'waterfall.flow.down.label': 'Scrolls down',
+  'waterfall.flow.up.label': 'Scrolls up',
+  'waterfall.flow.down.title':
+    'Scrolls down — the newest row appears at the TOP and history travels downward. Click for the other way: newest at the bottom, history travelling up (the default).',
+  'waterfall.flow.down.title.dss':
+    'Scrolls down — the newest row appears at the TOP and history travels downward. Click for the other way: newest at the bottom, history travelling up (the default). The 3D view keeps its own front-to-back perspective either way.',
+  'waterfall.flow.up.title':
+    'Scrolls up — the newest row appears at the BOTTOM and history travels upward (the default). Click for the other way: newest at the top, history travelling down.',
+  'waterfall.flow.up.title.dss':
+    'Scrolls up — the newest row appears at the BOTTOM and history travels upward (the default). Click for the other way: newest at the top, history travelling down. The 3D view keeps its own front-to-back perspective either way.',
+  'waterfall.dss.on.title': 'Switch to the flat 2D waterfall',
+  'waterfall.dss.off.title':
+    'Switch to the 3D stacked-spectrum view (a rolling perspective of the last ~96 rows)',
+  'waterfall.pause.title':
+    'Pause the waterfall — then scroll back through history with the mouse wheel',
+  'waterfall.pause.resume.title':
+    'Resume the live waterfall (history kept accumulating while paused)',
+  'waterfall.popOut.title':
+    'Pop the waterfall out into its own window (frees this space; drag to another monitor)',
+  'waterfall.canvas.title':
+    'Click sets RX (WSJT-X) · Shift+click sets TX · {{mod}}+click sets both',
+  'waterfall.legend.title':
+    'Color = signal strength (dB relative to the current strongest signal)',
+  // Drawn on the canvas, but a STATE MESSAGE rather than a tick label. `{{age}}` is how far
+  // back the scrollback stands, formatted by `ageLabel`.
+  'waterfall.paused': '⏸ PAUSED',
+  'waterfall.paused.back': '⏸ PAUSED · −{{age}}',
+  'waterfall.paused.now': 'now',
+
+  // ── The rig scope (`PhoneScope.tsx`, shared by the Phone and CW cockpits) ────────────
+  // ⚠️ The three window WIDTHS (23/12/47 Hz), every S-unit and dB reading, the audio and RF
+  // spans, the `FLEX RF` / `CI-V RF` feed names and the `DIAL` plate drawn into the bitmap are
+  // measurements and product names, and stay in the component.
+  'scope.window.balanced.title':
+    'Resolution: Balanced — 2048-point window, 171 ms. The default. A 25 WPM dit is shorter than this window, so CW keying reads as a solid bar. Click for sharper.',
+  'scope.window.sharp.title':
+    'Resolution: Sharp — 4096-point window, 341 ms. Half the carrier width, at double the time smear. Best for picking a weak carrier out of a crowded passband. Click for faster.',
+  'scope.window.fast.title':
+    'Resolution: Fast — 1024-point window, 85 ms. Carriers read twice as wide, but keying and speech onsets actually resolve. Click to return to the default.',
+  'scope.resolution.aria': 'Scope resolution {{width}} — click to change',
+  // `{{reading}}` is the S-unit plate (S7, S9+20) and `{{db}}` the CAT reading it came from.
+  'scope.smeter.title': 'S-meter {{reading}} ({{db}} dB rel S9, via CAT)',
+  'scope.smeter.title.tx': 'S-meter paused during transmit',
+  'scope.smeter.title.none': 'No CAT S-meter reported by this rig',
+  'scope.source.flex.title':
+    'Native FlexRadio panadapter (SmartSDR) — real RF spectrum, not the soundcard FFT',
+  'scope.source.civ.title':
+    'Native Icom CI-V scope — real RF spectrum, not the soundcard FFT',
+  'scope.dynamic.title':
+    "How far the strongest signal in this view stands above the noise floor. The scope's vertical scale is FIXED at 50 dB above the noise, so a louder signal really does draw a taller spike — use G to widen or tighten that window.",
+  'scope.gain.title': 'Visual gain — stretch (right) or flatten (left) the color contrast',
+  'scope.gain.aria': 'Scope visual gain',
+  'scope.zero.title':
+    'Visual zero — raise (right) to darken the noise floor, lower (left) to reveal weak texture',
+  'scope.zero.aria': 'Scope visual zero (floor)',
+  'scope.dss.on.title': 'Back to the flat trace + waterfall',
+  'scope.dss.off.title':
+    'Switch to the 3D stacked-spectrum view (fills the panel; hides the trace)',
+  'scope.pause.title': 'Pause the waterfall — then scroll back through it with the mouse wheel',
+  'scope.pause.resume.title': 'Resume the live scope (history kept filling while paused)',
+  'scope.flow.down.label': 'Scrolls down',
+  'scope.flow.up.label': 'Scrolls up',
+  'scope.flow.down.title':
+    'Scrolls down — the newest row appears at the TOP and history travels downward. Click for newest at the bottom.',
+  'scope.flow.up.title':
+    'Scrolls up — the newest row appears at the BOTTOM and history travels upward. Click for newest at the top.',
+  'scope.canvas.title': 'Click a signal to tune it · press and drag to slide the passband',
+  'scope.paused.badge': '⏸ paused · wheel to rewind',
+
+  // ── The MSK144 Fast Graph ───────────────────────────────────────────────────────────
+  // The callsigns and the second ticks drawn on it are data and a scale.
+  'fastGraph.aria': 'Fast Graph — signal power across the T/R period; pings draw as spikes',
+
+  // ── The meters ──────────────────────────────────────────────────────────────────────
+  // ⚠️ Every reading is a measurement built in the component — the RX level in dB on WSJT-X's
+  // scale, the SWR ratio, ALC and power percentages, watts and compression dB — and the four TX
+  // meter names (SWR, ALC, PO, COMP) are the rig's own front-panel vocabulary. These are
+  // READOUTS: nothing here keys, gates or stops a transmission.
+  'meters.rx.label': 'RX level',
+  // `{{label}}` is the meter's own name (the host may pass one) and `{{level}}` its reading.
+  'meters.rx.title': '{{label}}: {{level}} (aim ~30 dB, like WSJT-X)',
+  'meters.tx.aria': 'Transmit meters',
+  // `{{when}}` is `TX_METERS_WHEN`, the one string the ⊞ Panels menu shows for this panel —
+  // interpolated rather than repeated so the panel and the menu cannot drift. It is still
+  // written in `TxMeters.tsx`; see the note there for why it has not moved yet.
+  'meters.tx.idle': 'TX meters — {{when}}',
+  'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
+  'meters.tx.alc.title': 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
+  'meters.tx.po.title': 'Actual output power',
+  'meters.tx.comp.title': 'Speech compression',
+
+  // ── The rotator strip and the Rotor pane ────────────────────────────────────────────
+  // Both surfaces drive the same mast, so they share the words for the one act they share (the
+  // stop) and keep their own for everything else.
+  //
+  // ⚠️ NOT HERE: bird names, the track's own state word (both arrive from the backend and are
+  // interpolated verbatim), every azimuth and elevation in degrees, the `°T`/`°M` true and
+  // magnetic marks, `WMM`, `AOS`/`LOS`, `az`, `rotctld` and the SAT/ROTOR plates. The ■ buttons
+  // on both surfaces stop ROTATION and the satellite track — never a transmission.
+  'rotor.stop.failed': 'Rotator stop: {{error}}',
+
+  'rotor.strip.aria': 'Rotator',
+  'rotor.strip.az.title': 'Rotator at {{deg}}° true',
+  'rotor.strip.az.title.magnetic': 'Rotator at {{deg}}° true · {{mag}}° magnetic (WMM)',
+  'rotor.strip.pointAt.title': 'Point the antenna at {{call}}',
+  'rotor.strip.stop.title': 'Stop rotation NOW (mid-pass: stops the satellite track too)',
+
+  // A transponder HELD with no armed track — the QO-100/park case.
+  'rotor.strip.held.aria': 'A satellite transponder holds the dial',
+  'rotor.strip.held.title':
+    '{{bird}} holds the dial — picked in Satellites; the dial stays on the bird through section changes. ■ releases the hold and hands the dial back',
+  'rotor.strip.held.title.here':
+    "{{bird}} holds the dial — picked in Satellites; the dial stays on the bird through section changes. Release it there or with the strip's ■",
+  'rotor.strip.held.chip': '⟳ {{bird}} · bird holds the dial',
+  'rotor.strip.held.chip.dial': '⟳ {{bird}} +dial',
+  'rotor.strip.release.aria': 'Release the transponder hold',
+  'rotor.strip.release.title': 'Release the transponder NOW — the dial is yours again',
+  'rotor.strip.release.failed': 'Release: {{error}}',
+
+  // Doppler ownership. `{{what}}` is the clause below that says what it is doing — one
+  // sentence per surface with the variable clause interpolated whole, the shape
+  // `sat.badge.dopplerOnly` already uses.
+  'rotor.strip.doppler.dial.aria': 'Satellite Doppler owns the dial',
+  'rotor.strip.doppler.tx.aria': 'Satellite Doppler owns the TX VFO',
+  'rotor.strip.doppler.dial.title':
+    'Satellite Doppler is {{what}} for {{bird}} ({{state}}) — ■ stops the track and hands the dial back',
+  'rotor.strip.doppler.tx.title':
+    'Satellite Doppler is {{what}} for {{bird}} ({{state}}) — ■ stops the track and releases the split',
+  'rotor.strip.doppler.dial.steering': 'steering the radio dial',
+  'rotor.strip.doppler.dial.atAos': 'armed to take the radio dial at AOS',
+  'rotor.strip.doppler.tx.steering': 'steering the TX (split) VFO — the dial stays yours',
+  'rotor.strip.doppler.tx.atAos':
+    'armed to take the TX (split) VFO at AOS — the dial stays yours',
+  'rotor.strip.doppler.chip.dial': '⟳ {{bird}} · Doppler holds the dial',
+  'rotor.strip.doppler.chip.dialAtAos': '⟳ {{bird}} · dial at AOS',
+  'rotor.strip.doppler.chip.tx': '⟳ {{bird}} · Doppler holds the TX VFO',
+  'rotor.strip.doppler.chip.txAtAos': '⟳ {{bird}} · TX VFO at AOS',
+  'rotor.strip.trackStop.aria': 'Stop the satellite track',
+  'rotor.strip.trackStop.title': 'Stop the satellite track NOW — Doppler releases the dial',
+  'rotor.strip.trackStop.failed': 'Track stop: {{error}}',
+
+  // The auto-track chip. `{{doppler}}` is the optional clause naming what ELSE the track drives,
+  // carrying its own separator.
+  'rotor.strip.track.title':
+    'Auto-tracking {{bird}} ({{state}}) — the Satellites section owns the rotor until LOS{{doppler}}',
+  'rotor.strip.track.title.dial': '; Doppler owns the radio dial too',
+  'rotor.strip.track.title.tx': '; Doppler drives the TX (split) VFO too — the dial stays yours',
+  'rotor.strip.track.chip': '⟳ {{bird}}',
+  'rotor.strip.track.chip.dial': '⟳ {{bird}} +dial',
+  'rotor.strip.track.chip.uplink': '⟳ {{bird}} +uplink',
+
+  // Configured but silent — the chip that is the trip to the model/port/baud fields. `{{state}}`
+  // and `{{detail}}` are the two sentences above, interpolated whole.
+  'rotor.strip.lost.silent': 'Rotator not answering',
+  'rotor.strip.lost.stopped': 'Rotator stopped answering',
+  'rotor.strip.lost.silent.title':
+    'A rotator is configured but not answering — check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
+  'rotor.strip.lost.stopped.title':
+    'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
+  'rotor.strip.lost.open.aria': '{{state}} — open the rotator settings',
+  'rotor.strip.lost.open.title': '{{detail}}. Click to open it',
+
+  'rotor.pane.rose.aria': 'Rotator at {{deg}} degrees — click to slew',
+  'rotor.pane.rose.aria.unknown': 'Rotator — position not reported; click to slew',
+  'rotor.pane.az.title': 'True bearing',
+  'rotor.pane.az.title.magnetic': '{{deg}}° true · {{mag}}° magnetic (WMM)',
+  'rotor.pane.az.title.unknown':
+    'This rotator does not report its position — pointing still works',
+  'rotor.pane.track.title':
+    'Auto-tracking {{bird}} ({{state}}) — the Satellites section owns the rotor until LOS; a manual slew or STOP halts it',
+  'rotor.pane.commanded.title': 'Commanded heading — the needle is on its way',
+  'rotor.pane.entry.aria': 'Azimuth to slew to (degrees true)',
+  'rotor.pane.stop.label': '■ STOP',
+  'rotor.pane.stop.title': 'Stop rotation NOW',
+  'rotor.pane.hint': 'click the rose or type a bearing · headings are TRUE',
+  'rotor.pane.hint.noPosition': 'no position from this rotator — pointing and STOP still work',
+  'rotor.pane.slew.failed': 'Rotator: {{error}}',
+
+  // ── The shared cockpit header ───────────────────────────────────────────────────────
+  // ⚠️ THE FOUR TRANSMIT CONTROLS THIS HEADER DRAWS ARE ABSENT BY DESIGN: the TX-enable latch,
+  // Tune, ATU and Stop TX stay written in `CockpitHeader.tsx` until the transmit-path batch
+  // moves them with the stop-line sweeps re-run — one header, six cockpits, and three of those
+  // labels are what `stop-line.test.tsx` matches by accessible name. So are the TX/RX pill's
+  // three plates, which are the passive rendering of that same latch.
+  //
+  // What is here is the rest: the wheel-tune tooltips, the runaway-guard toast, the power
+  // slider (a CONFIGURATION control on the transmit path — batch 13) and the CAT pill.
+  'cockpit.header.readout.wheelTune.title': 'Scroll to tune',
+  'cockpit.header.readout.digitTune.title': 'Scroll a digit to tune it',
+  // Two WHOLE sentences, one per direction — the band name and the edge frequency are invariant
+  // tokens formatted by the header, never by a locale-aware formatter.
+  'cockpit.header.bandEdge.up':
+    'Stopped at the {{band}} band edge, {{edge}} MHz — scroll again to keep tuning up',
+  'cockpit.header.bandEdge.down':
+    'Stopped at the {{band}} band edge, {{edge}} MHz — scroll again to keep tuning down',
+  // `{{label}}` is the slider's own name — `Power` below, or the cockpit's word for it.
+  'cockpit.header.power.label': 'Power',
+  'cockpit.header.power.title': "{{label}} — trim so your rig's ALC is just zero",
+  'cockpit.header.cat.ok.title': 'CAT link OK',
+  'cockpit.header.cat.bad.title': 'No CAT link',
+
+  // ── The cockpit tuning strip ────────────────────────────────────────────────────────
+  // ⚠️ Every step in Hz, the RIT/XIT offsets and the two VFO letters are invariant: `{{hz}}` and
+  // `{{vfo}}` arrive as tokens the strip formats itself. `RIT`, `XIT` and `Shift` are the rig's
+  // and the keyboard's own names and are written into the sentences.
+  'cockpit.tuning.aria': 'Tuning',
+  'cockpit.tuning.down.title': 'Down {{hz}} Hz',
+  'cockpit.tuning.down.aria': 'Tune down {{hz}} Hz',
+  'cockpit.tuning.up.title': 'Up {{hz}} Hz',
+  'cockpit.tuning.up.aria': 'Tune up {{hz}} Hz',
+  'cockpit.tuning.wheel.title': 'Scroll to tune ±{{hz}} Hz (Shift = ×10)',
+  'cockpit.tuning.step.label': 'Tuning step',
+  'cockpit.tuning.vfo.aria': 'Active VFO',
+  'cockpit.tuning.vfo.title': 'Use VFO {{vfo}}',
+  'cockpit.tuning.rit.title': 'RIT clarifier — click to clear',
+  'cockpit.tuning.rit.down.aria': 'RIT down',
+  'cockpit.tuning.rit.up.aria': 'RIT up',
+  'cockpit.tuning.xit.title': 'XIT clarifier — click to clear',
+  'cockpit.tuning.xit.down.aria': 'XIT down',
+  'cockpit.tuning.xit.up.aria': 'XIT up',
+
+  // ── The top bar ─────────────────────────────────────────────────────────────────────
+  // ⚠️ THE TX CLUSTER IS ABSENT BY DESIGN — TX On/Off with the tooltip that states the abort
+  // semantics, Tune, Stop TX and the watchdog chip stay written in `TopBar.tsx` until the
+  // transmit-path batch. So do the bar's plates: the product name, the TX/RX indicator, the OP
+  // prefix, the REC badge and the UTC label.
+  //
+  // ⚠️ ALSO NOT HERE: every tier and mode NAME on the pills (they are the modes' own), the DT
+  // and clock readings, the slot countdown, and the callsign and grid.
+  'topbar.tier.aria': 'Link tier',
+  'topbar.tier.tempoFast.title': 'Fast conversational tier',
+  'topbar.tier.tempoDeep.title': 'Robust non-coherent tier — fading-resilient (15 s)',
+  'topbar.tier.ft4.title': 'Standard WSJT-X FT4 (7.5 s)',
+  'topbar.tier.ft8.title': 'Standard WSJT-X FT8 (15 s)',
+  'topbar.tier.ft2.title':
+    'FT2 — Decodium’s fast slotted mode (3.75 s), FT4 with a halved symbol time. Transmit and receive. No settings: the period is fixed',
+  'topbar.tier.wspr.title':
+    'WSPR propagation beacons — 2 min intervals. Transmits on a schedule; set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W)',
+  'topbar.tier.q65.title':
+    'Q65 — EME / VHF+ scatter. Transmit and receive. Period + submode in Settings ▸ Q65',
+  'topbar.tier.msk144.title':
+    'MSK144 — meteor scatter. Transmits for nearly the whole period (that is how the mode works). Period in Settings ▸ MSK144',
+  'topbar.tier.jt65.title':
+    'JT65 — classic EME, 60 s. Receive only in this build (transmit is disabled pending a fix). Submode in Settings ▸ JT65',
+  'topbar.tier.fst4.title': 'FST4 — slow weak-signal QSO mode (LF/MF). Transmit and receive',
+  'topbar.tier.fst4w.title':
+    'FST4W — LF/MF beacons. Transmits on a schedule; set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W). Hashed calls show as <...>',
+  // The same statement the Operate strip makes about a receive-only tier — deliberately its own
+  // entry, because neither surface owns the other's wording.
+  'topbar.rxOnly.why': 'This mode is receive-only in Nexus — it decodes but does not transmit',
+
+  'topbar.help.label': 'Help',
+  'topbar.field.label': 'Field',
+  'topbar.field.on.title': 'Field mode is on: larger type, maximum contrast. Click to turn off.',
+  'topbar.field.off.title':
+    'Field mode for operating outdoors: larger type, maximum contrast',
+  'topbar.operator.title': 'Operating as {{call}} — click to change who is at the key',
+  'topbar.operator.switch': 'Switch to {{call}}',
+  'topbar.operator.single': 'Single operator (clear)',
+  // `{{rig}}` and `{{believed}}` are mode names, straight through.
+  'topbar.rigMode.chip': 'rig: {{mode}}',
+  'topbar.rigMode.title':
+    "Your rig is on {{rig}}, but Nexus has {{believed}}. Turn the rig's mode knob (or pick the band in an operating cockpit) to match.",
+  'topbar.rxLevel.label': 'RX audio level',
+  'topbar.rxLevel.title': 'RX audio level (aim ~30 dB, like WSJT-X)',
+  'topbar.recording.title': 'Recording this QSO to a WAV — click to stop',
+  'topbar.txControls.aria': 'Transmit controls',
+  'topbar.holdTx.label': 'Hold Tx',
+  'topbar.holdTx.title':
+    'Hold Tx Freq: keep your TX offset where you put it when you double-click a station to work them. Off, your TX moves onto theirs (WSJT-X\'s behaviour). A plain waterfall click never moves TX either way.',
+  'topbar.slotClock.title': 'Time to next slot',
+  'topbar.slotClock.label': 'next slot',
+  'topbar.utc.title': 'UTC time',
+  // `{{offset}}` is the signed clock error, formatted invariantly by the bar.
+  'topbar.clock.label': 'clock {{offset}}',
+  'topbar.clock.title':
+    'PC clock is {{offset}} vs UTC (NTP). TempoFast/TempoDeep need it within ~0.5 s — sync via NTP / time.is (off-grid: GPS).',
+  'topbar.sync.ok.label': 'Sync',
+  'topbar.sync.bad.label': 'No Sync',
+  'topbar.sync.ok.title': 'Time sync OK (from decode timing)',
+  'topbar.sync.bad.title':
+    'Decodes land far off the slot boundary — sync your PC clock (NTP / time.is; off-grid: GPS).',
+  'topbar.dt.title': 'Decode time offset (how far heard signals land from the slot boundary)',
+  // The transmit-cycle group: three WHOLE labels for the Auto button and one each for the two
+  // locks, never a stem plus a period token. `<s>` is the small type, supplied by the call site.
+  'topbar.txCycle.aria': 'Transmit cycle',
+  'topbar.txCycle.auto.title':
+    'Auto-cycle (FT8-style): when you answer a station, transmit on the opposite T/R cycle to theirs',
+  'topbar.txCycle.auto.idle': 'Auto <s>cycle</s>',
+  'topbar.txCycle.auto.first': 'Auto <s>1st</s>',
+  'topbar.txCycle.auto.second': 'Auto <s>2nd</s>',
+  'topbar.txCycle.first.label': 'Tx 1st <s>even</s>',
+  'topbar.txCycle.first.title':
+    'Lock transmit to the even (1st) T/R slots — the station you work must be Tx 2nd',
+  'topbar.txCycle.second.label': 'Tx 2nd <s>odd</s>',
+  'topbar.txCycle.second.title':
+    'Lock transmit to the odd (2nd) T/R slots — the station you work must be Tx 1st',
+
+  // ── Toasts ──────────────────────────────────────────────────────────────────────────
+  // The default action word, used when a toast offers an action but names none. Toast BODIES
+  // arrive already translated from whoever raised them.
+  'toast.action.default': 'Work',
+  'toast.dismiss': 'Dismiss notification',
+
+  // ── The link pill ───────────────────────────────────────────────────────────────────
+  // `dB` is a unit and `RV` the report's own field name; the verdict words are prose.
+  'link.quality.solid': 'Solid {{snr}} dB',
+  'link.quality.marginal': 'Marginal RV{{rv}}',
+  'link.quality.weak': 'Weak {{snr}} dB',
+  'link.dial.label': 'Dial',
+  'link.band.label': 'Band',
+  'link.tier.label': 'Tier',
+  'link.audioFreq.label': 'Audio f',
+
+  // ── The feature registry (features/registry.ts) ─────────────────────────────────────
+  // A feature is a SECTION or a CAPABILITY, and its label + one-liner reach the operator in
+  // Settings ▸ Features and in the setup wizard. The six sections named for a MODE keep their
+  // names in the registry; so do Field Day and POTA / SOTA, which name an event and two
+  // programmes. Everything else is prose.
+  'features.category.operate': 'Operate',
+  'features.category.dxAwards': 'DX & Awards',
+  'features.category.contesting': 'Contesting',
+  'features.category.propagation': 'Propagation',
+  'features.category.logging': 'Logging',
+  'features.category.system': 'System',
+  'features.operate.label': 'Operate',
+  'features.operate.oneLine': 'The waterfall-first cockpit — decode, tune, and work stations.',
+  'features.cw.oneLine': 'CW operating — keyboard + F-key macros, WPM, spectrum, casual ragchew.',
+  'features.phone.oneLine':
+    'Phone (SSB) operating — PTT, band-aware sideband, RF power, panadapter.',
+  'features.rtty.oneLine':
+    'RTTY operating — 45.45 baud Baudot: streaming decode, F-key macros, FSK/AFSK keying.',
+  'features.psk.oneLine':
+    'PSK31 — narrow-band keyboard mode: click a trace, read the ragchew (receive).',
+  'features.sstv.oneLine':
+    'SSTV — slow-scan images auto-decode into a gallery (Martin/Scottie/Robot/PD).',
+  'features.aprs.oneLine':
+    'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon.',
+  'features.logbook.label': 'Logbook',
+  'features.logbook.oneLine': 'Your ADIF contacts — the system of record.',
+  'features.settings.label': 'Settings',
+  'features.settings.oneLine': 'Operator, rig, network, and feature configuration.',
+  'features.nowBar.label': 'Now Bar',
+  'features.nowBar.oneLine': 'The persistent at-a-glance status strip (UTC, band, state, alerts).',
+  'features.chat.label': 'Chat',
+  'features.chat.oneLine': 'Free-form QSO text (TempoFast/TempoDeep).',
+  'features.fieldDay.oneLine': 'Contest rate workspace (exchange, dupes, scoring, Cabrillo).',
+  'features.connect.label': 'Connect',
+  'features.connect.oneLine':
+    'Situational awareness — the grayline map + live propagation in one view.',
+  'features.needed.label': 'Needed',
+  'features.needed.oneLine': "What you still need that's on the air now — single-click to QSY.",
+  'features.spots.label': 'Spots',
+  'features.spots.oneLine':
+    'Every cluster/RBN spot on the air — the raw firehose, filter by band/mode.',
+  'features.dxped.label': 'DXpeditions',
+  'features.dxped.oneLine':
+    'DXpeditions — active now, the forward calendar, and your needed status.',
+  'features.sats.label': 'Satellites',
+  'features.sats.oneLine':
+    'Satellite passes over YOUR grid — when to try which bird, favorites first.',
+  'features.memories.label': 'Memories',
+  'features.memories.oneLine':
+    'Saved channels — repeaters, HF nets, calling freqs: groups, ★ favorites, one-click tune, CHIRP CSV, starter packs + opt-in net reminders.',
+  'features.program.label': 'Program',
+  'features.program.oneLine':
+    'Program your radios — local repeaters to a channel list: CHIRP CSV, rig memories, or tune-now.',
+  'features.awards.label': 'Awards',
+  'features.awards.oneLine':
+    'Journey + official awards — firsts, sub-award ladders, DXCC/WAZ/WAS progress.',
+  'features.stats.label': 'Stats',
+  'features.stats.oneLine':
+    'Your logbook, sliced — QSOs by band, mode, year, hour, entity, and confirmations.',
+  'features.pota.oneLine': "Parks/Summits on the air — who's on now (hunt) + tag your activation.",
+  'features.gamification.label': 'Achievements',
+  'features.gamification.oneLine': 'Celebrate milestone unlocks (toasts + badges).',
+
+  // ── Goal profiles (features/profiles.ts) ────────────────────────────────────────────
+  // A profile is a named bundle of features, chosen by GOAL. `POTA / SOTA` is the two
+  // programmes' own names; `6m` and `VHF` are a band and a band group, written into the
+  // label with the prose around them.
+  'profiles.starter.label': 'Just getting started',
+  'profiles.starter.blurb':
+    'Make some FT8/FT4 contacts. A clean cockpit and a simple log — extras stay out of the way.',
+  'profiles.dx.label': 'DX chasing & awards',
+  'profiles.dx.blurb':
+    'Chase new ones: awards (DXCC/Challenge/Honor Roll/WAZ), propagation, the map, and the DXpedition board.',
+  'profiles.contest.label': 'Contesting',
+  'profiles.contest.blurb':
+    'Run rate: the contest workspace and field log, with awards and prop out of the way.',
+  'profiles.pota.blurb':
+    'Activate and hunt: the map and a field log for parks-and-peaks operating.',
+  'profiles.vhf.label': '6m / VHF & openings',
+  'profiles.vhf.blurb':
+    'Catch the band coming alive: Connect (map + openings), satellite passes, and the DXpedition board.',
+  'profiles.everything.label': 'Everything (expert)',
+  'profiles.everything.blurb':
+    'Turn the whole console on. Every section and capability enabled.',
 
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared

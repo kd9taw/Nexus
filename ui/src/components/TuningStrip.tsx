@@ -1,11 +1,26 @@
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the prose is in
+// the catalog under `cockpit.tuning.*`. Nothing here transmits — every control moves the RX
+// dial or a clarifier — so nothing is deferred.
+//
+// The units rule lands on the STEP: every step in Hz, the RIT/XIT offsets, the dial and the
+// VFO letters are invariant and stay in the code, as do the four button names below.
 import { useRef, useState } from 'react'
 import type { AppSnapshot } from '../types'
 import { setFrequency, setRit, setXit, setVfo } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
+import { t } from '../i18n'
 
-/** Tuning steps (Hz). The `×10` buttons jump ten of the selected step. */
+/** The rig's own vocabulary on these buttons: the two clarifiers and the two VFOs. Named so
+ *  the catalog guard reads them as the deliberate tokens they are. */
+const RIT = 'RIT'
+const XIT = 'XIT'
+const VFO_A = 'A'
+const VFO_B = 'B'
+
+/** Tuning steps (Hz). The `×10` buttons jump ten of the selected step. The labels are
+ *  measurements, so they stay written here. */
 const STEPS = [
   { hz: 10, label: '10 Hz' },
   { hz: 100, label: '100 Hz' },
@@ -79,14 +94,14 @@ export function TuningStrip({
   })
 
   return (
-    <div className="tuning-strip" role="group" aria-label="Tuning">
+    <div className="tuning-strip" role="group" aria-label={t('cockpit.tuning.aria')}>
       <button
         type="button"
         className="tuning-nudge"
         disabled={!catOk}
         onClick={() => nudge(-step * 10)}
-        title={`Down ${step * 10} Hz`}
-        aria-label={`Tune down ${step * 10} Hz`}
+        title={t('cockpit.tuning.down.title', { hz: step * 10 })}
+        aria-label={t('cockpit.tuning.down.aria', { hz: step * 10 })}
       >
         ◄◄
       </button>
@@ -95,8 +110,8 @@ export function TuningStrip({
         className="tuning-nudge"
         disabled={!catOk}
         onClick={() => nudge(-step)}
-        title={`Down ${step} Hz`}
-        aria-label={`Tune down ${step} Hz`}
+        title={t('cockpit.tuning.down.title', { hz: step })}
+        aria-label={t('cockpit.tuning.down.aria', { hz: step })}
       >
         ◄
       </button>
@@ -104,7 +119,7 @@ export function TuningStrip({
         <span
           ref={readoutRef}
           className="tuning-readout-wheel"
-          title={catOk ? `Scroll to tune ±${step} Hz (Shift = ×10)` : undefined}
+          title={catOk ? t('cockpit.tuning.wheel.title', { hz: step }) : undefined}
         >
           <FrequencyReadout
             dialMhz={dial}
@@ -124,8 +139,8 @@ export function TuningStrip({
         className="tuning-nudge"
         disabled={!catOk}
         onClick={() => nudge(step)}
-        title={`Up ${step} Hz`}
-        aria-label={`Tune up ${step} Hz`}
+        title={t('cockpit.tuning.up.title', { hz: step })}
+        aria-label={t('cockpit.tuning.up.aria', { hz: step })}
       >
         ►
       </button>
@@ -134,8 +149,8 @@ export function TuningStrip({
         className="tuning-nudge"
         disabled={!catOk}
         onClick={() => nudge(step * 10)}
-        title={`Up ${step * 10} Hz`}
-        aria-label={`Tune up ${step * 10} Hz`}
+        title={t('cockpit.tuning.up.title', { hz: step * 10 })}
+        aria-label={t('cockpit.tuning.up.aria', { hz: step * 10 })}
       >
         ►►
       </button>
@@ -143,8 +158,8 @@ export function TuningStrip({
         className="tuning-step"
         value={step}
         onChange={(e) => setStep(Number(e.target.value))}
-        title="Tuning step"
-        aria-label="Tuning step"
+        title={t('cockpit.tuning.step.label')}
+        aria-label={t('cockpit.tuning.step.label')}
       >
         {STEPS.map((s) => (
           <option key={s.hz} value={s.hz}>
@@ -152,47 +167,47 @@ export function TuningStrip({
           </option>
         ))}
       </select>
-      <span className="tuning-vfo" role="group" aria-label="Active VFO">
+      <span className="tuning-vfo" role="group" aria-label={t('cockpit.tuning.vfo.aria')}>
         <button
           type="button"
-          className={vfo === 'A' ? 'active' : ''}
+          className={vfo === VFO_A ? 'active' : ''}
           disabled={!catOk}
-          onClick={() => apply(setVfo('A'))}
-          title="Use VFO A"
+          onClick={() => apply(setVfo(VFO_A))}
+          title={t('cockpit.tuning.vfo.title', { vfo: VFO_A })}
         >
-          A
+          {VFO_A}
         </button>
         <button
           type="button"
-          className={vfo === 'B' ? 'active' : ''}
+          className={vfo === VFO_B ? 'active' : ''}
           disabled={!catOk}
-          onClick={() => apply(setVfo('B'))}
-          title="Use VFO B"
+          onClick={() => apply(setVfo(VFO_B))}
+          title={t('cockpit.tuning.vfo.title', { vfo: VFO_B })}
         >
-          B
+          {VFO_B}
         </button>
       </span>
       <span className={`tuning-clar${rit !== 0 ? ' on' : ''}`}>
-        <button type="button" disabled={!catOk} onClick={() => apply(setRit(0))} title="RIT clarifier — click to clear">
-          RIT
+        <button type="button" disabled={!catOk} onClick={() => apply(setRit(0))} title={t('cockpit.tuning.rit.title')}>
+          {RIT}
         </button>
-        <button type="button" disabled={!catOk} onClick={() => apply(setRit(rit - 10))} aria-label="RIT down">
+        <button type="button" disabled={!catOk} onClick={() => apply(setRit(rit - 10))} aria-label={t('cockpit.tuning.rit.down.aria')}>
           −
         </button>
         <span className="tuning-clar-val mono">{fmtOffset(rit)}</span>
-        <button type="button" disabled={!catOk} onClick={() => apply(setRit(rit + 10))} aria-label="RIT up">
+        <button type="button" disabled={!catOk} onClick={() => apply(setRit(rit + 10))} aria-label={t('cockpit.tuning.rit.up.aria')}>
           +
         </button>
       </span>
       <span className={`tuning-clar${xit !== 0 ? ' on' : ''}`}>
-        <button type="button" disabled={!catOk} onClick={() => apply(setXit(0))} title="XIT clarifier — click to clear">
-          XIT
+        <button type="button" disabled={!catOk} onClick={() => apply(setXit(0))} title={t('cockpit.tuning.xit.title')}>
+          {XIT}
         </button>
-        <button type="button" disabled={!catOk} onClick={() => apply(setXit(xit - 10))} aria-label="XIT down">
+        <button type="button" disabled={!catOk} onClick={() => apply(setXit(xit - 10))} aria-label={t('cockpit.tuning.xit.down.aria')}>
           −
         </button>
         <span className="tuning-clar-val mono">{fmtOffset(xit)}</span>
-        <button type="button" disabled={!catOk} onClick={() => apply(setXit(xit + 10))} aria-label="XIT up">
+        <button type="button" disabled={!catOk} onClick={() => apply(setXit(xit + 10))} aria-label={t('cockpit.tuning.xit.up.aria')}>
           +
         </button>
       </span>

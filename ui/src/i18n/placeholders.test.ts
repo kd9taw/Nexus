@@ -211,11 +211,14 @@ describe('call sites agree with their catalog entries', () => {
   })
 
   it('leaves few call sites unreadable — a refactor cannot quietly empty this guard', () => {
-    // 29 today against 1,402 checkable ones. Dynamic keys are legitimate — the settings
-    // registry resolves `labelKey` at runtime — but they are unchecked, so their number is
-    // pinned rather than ignored. Raise this only with a reason: every increment is a call
-    // site nothing verifies.
-    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(40)
+    // 67 today. Every one of them is the same deliberate shape — a REGISTRY resolving its own
+    // key at runtime (`t(v.labelKey)` in needVisuals, statusMeta, satVfo, features/registry,
+    // the settings registry, the wizard's step tables) — which is how a label table gets
+    // migrated without its dozen consumers changing. They are unchecked all the same, so the
+    // number is pinned rather than ignored, and it was raised from 40 only after listing what
+    // the new ones were: 24 files, all key tables, no call site hidden behind a variable by
+    // accident. Raise it again the same way — by looking first.
+    expect(allSkipped, 'call sites with a computed key or spread params').toBeLessThan(90)
   })
 
   it('supplies every value its entry asks for', () => {

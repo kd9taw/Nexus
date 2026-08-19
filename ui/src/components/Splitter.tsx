@@ -12,7 +12,11 @@
 //   meant 646 CSS px at zoom 65. Every measurement is divided by the current zoom
 //   before clamping, and the stored % is re-clamped against the CURRENT box at mount
 //   (it may come from another window size, another zoom, or an inherited surface).
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The only prose it
+// owns is the handle's tooltip; the separator's accessible name is the caller's `label`.
 import { useEffect } from 'react'
+import { t } from '../i18n'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 
 interface Props {
@@ -169,7 +173,7 @@ export function Splitter({ axis, varName, target, storageKey, min, max, defaultP
       role="separator"
       aria-orientation={axis === 'y' ? 'horizontal' : 'vertical'}
       aria-label={label}
-      title={`Drag to resize (${label})`}
+      title={t('splitter.title', { label })}
       onPointerDown={start}
     />
   )

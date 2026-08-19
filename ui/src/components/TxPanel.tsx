@@ -1,4 +1,13 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The six rows are
+// WSJT-X's Tx1–Tx6 slots: the row NAME (`Tx 3`), the generated message text, the DX call and
+// grid, and the 73/RR73 macro suggestions are tokens and stay in the code. What moved is the
+// prose around them.
+import { t } from '../i18n'
 import type { StdMessages } from '../txMessages'
+
+/** WSJT-X's own name for a message slot — `Tx 1`…`Tx 6`, the token the Alt+N hints and the
+ *  panel's own accessible name point at. */
+const TX_ROW = 'Tx'
 
 interface Props {
   dxCall: string
@@ -70,11 +79,11 @@ export function TxPanel({
   return (
     <section
       className={`tx-panel panel${compact ? ' tx-panel-compact' : ''}`}
-      aria-label="Standard messages (Tx1–Tx6)"
+      aria-label={t('operate.tx.aria')}
     >
       <div className="txp-dx">
         <label className="txp-field">
-          <span>DX Call</span>
+          <span>{t('operate.tx.dxCall.label')}</span>
           <input
             type="text"
             value={dxCall}
@@ -82,12 +91,12 @@ export function TxPanel({
             spellCheck={false}
             autoCapitalize="characters"
             placeholder="—"
-            aria-label="DX callsign"
+            aria-label={t('operate.tx.dxCall.aria')}
             onChange={(e) => onDxCall(e.target.value.toUpperCase())}
           />
         </label>
         <label className="txp-field">
-          <span>DX Grid</span>
+          <span>{t('operate.tx.dxGrid.label')}</span>
           <input
             type="text"
             value={dxGrid}
@@ -95,7 +104,7 @@ export function TxPanel({
             spellCheck={false}
             autoCapitalize="characters"
             placeholder="—"
-            aria-label="DX grid locator"
+            aria-label={t('operate.tx.dxGrid.aria')}
             onChange={(e) => onDxGrid(e.target.value.toUpperCase())}
           />
         </label>
@@ -104,17 +113,17 @@ export function TxPanel({
             type="button"
             className="txp-gen"
             onClick={onGenerate}
-            title="Generate the six standard messages from DX Call / Grid / report (WSJT-X Generate Std Msgs)"
+            title={t('operate.tx.generate.title')}
           >
-            Generate Std Msgs
+            {t('operate.tx.generate.label')}
           </button>
-          <button type="button" className="txp-clear" onClick={onClear} title="Clear DX Call + Grid (F4)">
-            Clear
+          <button type="button" className="txp-clear" onClick={onClear} title={t('operate.tx.clear.title')}>
+            {t('operate.tx.clear.label')}
           </button>
         </div>
       </div>
 
-      <div className="txp-rows" role="group" aria-label="Tx message rows">
+      <div className="txp-rows" role="group" aria-label={t('operate.tx.rows.aria')}>
         {rows.map(({ n, text }) => {
           const isNext = nextIndex === n - 1
           const disabled = n !== 6 && (!canTx || !text.trim())
@@ -122,7 +131,7 @@ export function TxPanel({
             <div key={n} className={`txp-row${isNext ? ' next' : ''}`}>
               <span
                 className={`txp-dot${isNext ? ' on' : ''}`}
-                title={isNext ? 'Queued as the next transmission' : undefined}
+                title={isNext ? t('operate.tx.next.title') : undefined}
                 aria-hidden="true"
               />
               {n === 5 ? (
@@ -134,8 +143,8 @@ export function TxPanel({
                     maxLength={13}
                     spellCheck={false}
                     list="txp-tx5-macros"
-                    placeholder="Free text"
-                    aria-label="Tx5 free text"
+                    placeholder={t('operate.tx.tx5.placeholder')}
+                    aria-label={t('operate.tx.tx5.aria')}
                     onChange={(e) => onTx5(e.target.value.toUpperCase())}
                   />
                   <datalist id="txp-tx5-macros">
@@ -152,13 +161,11 @@ export function TxPanel({
                     value={tx6}
                     maxLength={22}
                     spellCheck={false}
-                    placeholder="CQ call"
-                    aria-label="Tx6 Call CQ (edit for a directed CQ)"
+                    placeholder={t('operate.tx.tx6.placeholder')}
+                    aria-label={t('operate.tx.tx6.aria')}
                     onChange={(e) => onTx6(e.target.value.toUpperCase())}
                   />
-                  <div className="txp-cq-hint">
-                    Edit for a directed CQ — CQ DX / CQ NA / CQ POTA / CQ TEST
-                  </div>
+                  <div className="txp-cq-hint">{t('operate.tx.tx6.hint')}</div>
                 </div>
               ) : (
                 <span className="txp-msg mono">{text || '—'}</span>
@@ -170,11 +177,11 @@ export function TxPanel({
                 onClick={() => onTx(n)}
                 title={
                   n === 6
-                    ? 'Call CQ (Alt+6)'
-                    : `Send this as the next transmission (Alt+${n})`
+                    ? t('operate.tx.callCq.title')
+                    : t('operate.tx.send.title', { n })
                 }
               >
-                Tx {n}
+                {TX_ROW} {n}
               </button>
             </div>
           )

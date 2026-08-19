@@ -1,6 +1,24 @@
+// ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and the part
+// that is deferred is deliberate: STOP TX, TUNE, ATU and the TX On/Off tooltip stay written
+// here. The first three cut or key a carrier — Stop TX and Tune are on this cockpit's
+// stop-line census (features/panelState.ts), ATU keys the rig's own tuning carrier exactly as
+// SetupHealth's Prove TX does — and the fourth is the control whose wording states the abort
+// semantics ("an FT over already in flight finishes"). Transmit-path controls and their
+// accessible names move in their own batch, with the stop-line sweeps re-run. Everything else
+// in this strip is migrated.
+//
+// The readings are all data: the sequencer state, the DX call, the report, the message on the
+// air, the rig's mode and filter width, and every count.
 import { useState, type ReactNode } from 'react'
+import { t } from '../i18n'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { modeMismatch } from './TopBar'
+
+/** `TX` on the now-sending label and `AUTO-CQ` on the run pill are annunciator tokens, not
+ *  words — `CQ` is a Q-code, and the word joiners keep the pill from breaking mid-token in a
+ *  narrow strip. Named so the catalog guard can see they were a decision. */
+const TX_LABEL = 'TX'
+const AUTO_CQ_BADGE = 'AUTO⁠-⁠CQ'
 
 /** Below this the rig's RX filter is too narrow for an FT8/FT4 window and decodes are being
  * thrown away wholesale — a CW or RTTY filter left in, or a SmartSDR slice narrowed at the
@@ -126,10 +144,11 @@ export function OperateQsoStrip({
   const txCount = qso?.txCount ?? 0
   const rpt = reportLabel(qso?.rxReport)
   const noTx = rxOnly ?? false
-  const noTxWhy = 'This mode is receive-only in Nexus — it decodes but does not transmit'
+  // WHY a mode cannot transmit / cannot run a QSO — prose about the MODE, shown on every
+  // control it disables, so it moves with the strip rather than with the TX controls.
+  const noTxWhy = t('operate.strip.rxOnly.why')
   const isBeacon = beacon ?? false
-  const beaconWhy =
-    'This is a beacon mode — it transmits your callsign, grid and power on a schedule. There is no QSO sequence. Set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W).'
+  const beaconWhy = t('operate.strip.beacon.why')
   // No QSO to run on a beacon, and nothing to send on a receive-only tier.
   const noQso = noTx || isBeacon
   const noQsoWhy = isBeacon ? beaconWhy : noTxWhy
@@ -163,20 +182,16 @@ export function OperateQsoStrip({
           AUTO-CQ pill, sequencer state, DX call, report) renders AFTER them —
           before the fix, Stop TX drifted ~270 px as a QSO populated and again on
           every 15 s TX transition. */}
-      <div className="cq-roles" role="group" aria-label="Sequencer role">
+      <div className="cq-roles" role="group" aria-label={t('operate.strip.roles.aria')}>
         <button
           type="button"
           className={`cq-role cq-call${running ? ' active' : ''}`}
           aria-pressed={running}
           onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
           disabled={noQso}
-          title={
-            noQso
-              ? noQsoWhy
-              : 'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically'
-          }
+          title={noQso ? noQsoWhy : t('operate.strip.callCq.title')}
         >
-          Call CQ
+          {t('operate.strip.callCq.label')}
         </button>
         <button
           type="button"
@@ -184,13 +199,17 @@ export function OperateQsoStrip({
           aria-pressed={!running}
           onClick={() => onSetMode('qso-monitor')}
           disabled={noQso}
-          title={noQso ? noQsoWhy : 'Monitor — search & pounce'}
+          title={noQso ? noQsoWhy : t('operate.strip.sandp.title')}
         >
-          S&amp;P
+          {t('operate.strip.sandp.label')}
         </button>
       </div>
       {radio && (
-        <div className="op-controls cq-txctl" role="group" aria-label="Transmit controls">
+        <div className="op-controls cq-txctl" role="group" aria-label={t('operate.strip.txControls.aria')}>
+          {/* ⚠️ DEFERRED, all four of the controls below: TX On/Off's tooltip states the abort
+              semantics, Tune and ATU key a carrier, and Stop TX is the one control in this
+              cockpit that cuts an over in flight. They move in the transmit-path batch with
+              the stop-line sweeps re-run — see this file's header. */}
           <button
             type="button"
             className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
@@ -247,15 +266,19 @@ export function OperateQsoStrip({
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
             aria-pressed={radio.holdTxFreq}
             onClick={() => onSetHoldTxFreq?.(!radio.holdTxFreq)}
-            title="Hold Tx Freq: keep your TX offset where you put it when you double-click a station to work them. Off, your TX moves onto theirs (WSJT-X's behaviour). A plain waterfall click never moves TX either way."
+            title={t('operate.strip.holdTx.title')}
           >
-            Hold Tx
+            {t('operate.strip.holdTx.label')}
           </button>
         </div>
       )}
       {radio && (
         <span className="cq-statecap">
-          {radio.transmitting ? '▲ TRANSMITTING' : radio.txEnabled ? '▼ Receiving' : '■ TX off'}
+          {radio.transmitting
+            ? t('operate.strip.state.transmitting')
+            : radio.txEnabled
+              ? t('operate.strip.state.receiving')
+              : t('operate.strip.state.txOff')}
         </span>
       )}
       {/* The rig has been moved out from under us — stated in the strip that is already always
@@ -264,26 +287,26 @@ export function OperateQsoStrip({
       {rigDiverged && (
         <span
           className="cq-rigdiverge"
-          title={`Your rig is on ${rigDiverged}, but Nexus has ${radio?.sideband}. Something moved it at the radio (SmartSDR, another program, or the mode knob). Transmit and logging use ${radio?.sideband} — set the radio to match, or re-pick the band here.`}
+          title={t('operate.strip.rigDiverge.title', {
+            rigMode: rigDiverged,
+            mode: radio?.sideband ?? '',
+          })}
         >
-          rig: {rigDiverged}
+          {t('operate.strip.rigDiverge.label', { mode: rigDiverged })}
         </span>
       )}
       {narrowFilter && (
         <span
           className="cq-rigdiverge"
-          title={`The radio's receive filter is ${filterHz} Hz — far narrower than an FT8/FT4 window. Signals outside it are not reaching the decoder at all. Widen the filter at the radio (2.4-3 kHz is normal).`}
+          title={t('operate.strip.narrowFilter.title', { hz: filterHz })}
         >
-          filter {filterHz} Hz
+          {t('operate.strip.narrowFilter.label', { hz: filterHz })}
         </span>
       )}
       {running && (
-        <span
-          className="cq-autocq"
-          title="Auto CQ is running — calling CQ continuously, working each station that answers, then returning to CQ for the next one. Click S&P to stop."
-        >
+        <span className="cq-autocq" title={t('operate.strip.autoCq.title')}>
           <span className="cq-autocq-dot" aria-hidden="true" />
-          AUTO&#8288;-&#8288;CQ
+          {AUTO_CQ_BADGE}
         </span>
       )}
       {/* role=status: the sequencer state is THE QSO progress signal — a
@@ -292,7 +315,7 @@ export function OperateQsoStrip({
         {state}
       </span>
       {dxcall && <span className="cq-dx mono">{dxcall}</span>}
-      {rpt && <span className="cq-rpt" title="Report received about your signal">{rpt}</span>}
+      {rpt && <span className="cq-rpt" title={t('operate.strip.report.title')}>{rpt}</span>}
 
       {/* Deliberate wrap point: below xl the strip breaks into a stable second row
           HERE (buttons + state readout above; sending/free-text/period/telemetry
@@ -301,16 +324,16 @@ export function OperateQsoStrip({
       <span className="cq-break" aria-hidden="true" />
 
       <div className={`cq-now${stalled ? ' stalled' : ''}`} role="status">
-        <span className="cq-now-label">{stalled ? 'Stalled' : 'TX'}</span>
+        <span className="cq-now-label">{stalled ? t('operate.strip.now.stalled') : TX_LABEL}</span>
         <span className="cq-now-msg mono">
           {noTx
-            ? '— receive-only, not transmitting'
+            ? t('operate.strip.now.rxOnly')
             : isBeacon
-              ? '— beacon: transmits on schedule'
-              : (txNow ?? '— listening')}
+              ? t('operate.strip.now.beacon')
+              : (txNow ?? t('operate.strip.now.listening'))}
         </span>
         {txCount > 1 && (
-          <span className="cq-attempts" title={`Sent ${txCount} times — calling repeatedly`}>
+          <span className="cq-attempts" title={t('operate.strip.attempts.title', { count: txCount })}>
             ×{txCount}
           </span>
         )}
@@ -319,7 +342,7 @@ export function OperateQsoStrip({
           className="cq-resend"
           onClick={onResend}
           disabled={!txNow}
-          title="Re-arm and re-send this message"
+          title={t('operate.strip.resend.title')}
         >
           ↻
         </button>
@@ -336,25 +359,25 @@ export function OperateQsoStrip({
           type="text"
           value={free}
           maxLength={13}
-          placeholder="Free text (Tx5)"
-          aria-label="In-QSO free text"
+          placeholder={t('operate.strip.freetext.placeholder')}
+          aria-label={t('operate.strip.freetext.aria')}
           onChange={(e) => setFree(e.target.value.toUpperCase())}
         />
         <button
           type="submit"
           disabled={!free.trim() || noQso}
-          title={noQso ? noQsoWhy : 'Send on the next over'}
+          title={noQso ? noQsoWhy : t('operate.strip.send.title')}
         >
-          Send
+          {t('operate.strip.send.label')}
         </button>
         <button
           type="button"
           className="cq-log"
           onClick={onLog}
           disabled={!dxcall}
-          title="Log this QSO now"
+          title={t('operate.strip.log.title')}
         >
-          Log
+          {t('operate.strip.log.label')}
         </button>
       </form>
 
@@ -372,13 +395,15 @@ export function OperateQsoStrip({
             else if (radio.txEven) onSetTxEven(false)
             else onSetTxCycleAuto(true)
           }}
-          title="Transmit cycle — click to cycle Auto → Tx 1st → Tx 2nd. Auto picks the opposite cycle of the station you answer; the station you work must be on the OPPOSITE period."
+          title={t('operate.strip.period.title')}
         >
           {radio.txCycleAuto
-            ? `TX AUTO / ${radio.txEven ? '1st' : '2nd'}`
+            ? radio.txEven
+              ? t('operate.strip.period.auto.first')
+              : t('operate.strip.period.auto.second')
             : radio.txEven
-              ? 'TX 1st / even'
-              : 'TX 2nd / odd'}
+              ? t('operate.strip.period.first')
+              : t('operate.strip.period.second')}
         </button>
       )}
       {onSkipTx1 && (
@@ -387,14 +412,14 @@ export function OperateQsoStrip({
           className={`cq-skiptx1${skipTx1 ? ' on' : ''}`}
           aria-pressed={skipTx1 ?? false}
           onClick={() => onSkipTx1(!skipTx1)}
-          title="Skip Tx1 — when you answer a CQ, open with your signal report (Tx2) instead of your grid (Tx1), saving a cycle. Standard callsigns only (a compound call still sends its grid). Resets each launch, like WSJT-X."
+          title={t('operate.strip.skipTx1.title')}
         >
-          Skip Tx1
+          {t('operate.strip.skipTx1.label')}
         </button>
       )}
       {nextSlotSec != null && (
-        <span className="cq-next" title="Time to the next slot">
-          next {nextSlotSec}s
+        <span className="cq-next" title={t('operate.strip.nextSlot.title')}>
+          {t('operate.strip.nextSlot.label', { secs: nextSlotSec })}
         </span>
       )}
       {telemetry != null && <div className="cq-telemetry">{telemetry}</div>}

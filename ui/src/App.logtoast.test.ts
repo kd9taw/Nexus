@@ -32,19 +32,22 @@ describe('the Log QSO toast tells the truth (#100)', () => {
       'handleLogCurrent must consult the logged flag — toasting on mere return is the bug',
     ).toBe(true)
     // …and the success toast must be inside a branch on it, not unconditional.
-    const successAt = body.indexOf("'Logged QSO'")
+    // The WORDS moved into the English catalog (i18n phase 2, `i18n/en.ts`), so the key is
+    // what the handler names now and the key is what this guard follows. What is asserted is
+    // unchanged: a success toast exists, and it sits behind the verdict.
+    const successAt = body.indexOf("'shell.toast.logged'")
     expect(successAt, 'the success toast exists').toBeGreaterThan(-1)
     const beforeSuccess = body.slice(0, successAt)
     expect(
       /if\s*\([^)]*\.logged\b/.test(beforeSuccess),
-      "'Logged QSO' must sit behind an if on the verdict",
+      "the 'Logged QSO' toast must sit behind an if on the verdict",
     ).toBe(true)
   })
 
   it('says something honest on a refusal instead of nothing (or worse, success)', () => {
     const body = handlerBody()
     expect(
-      /Nothing to log/i.test(body),
+      /'shell\.toast\.nothingToLog'/.test(body),
       'a refused log must toast an honest explanation, not silence',
     ).toBe(true)
   })

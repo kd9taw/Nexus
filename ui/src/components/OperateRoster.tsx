@@ -3,7 +3,14 @@
 // roster filters (Needed-only, Hide-worked) and double-click-to-work. This is the
 // "Roster" cockpit layout's primary surface — distinct from the waterfall-first
 // "Classic" layout, not just a reshaped pane.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every cell in this
+// grid is DATA and stays in the code: the callsign, who it is calling, the need TAGS, the
+// entity, the state/province, the grid square, the distance, the bearing and the SNR. So do
+// the tokens the roster is built out of (ROSTER_TOKENS below). What moved is the prose around
+// them — the column headings, the filters, and everything a row says out loud.
 import { useEffect, useMemo, useState } from 'react'
+import { t } from '../i18n'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { useRovingList } from '../useRovingList'
@@ -89,6 +96,15 @@ type SortKey =
 // and store-and-forward paths keep their longer retention.)
 const ACTIVE_ROSTER_CYCLES = 3
 
+/**
+ * The roster's invariant vocabulary — never translated, never locale-formatted.
+ *
+ * `SNR` is a measurement's name and the column an operator reads a report off; `CQ` is a
+ * Q-code and is what the station is literally sending; `B4` is the log shorthand for "worked
+ * before". The QRZ link reuses `callbook.qrzPage.*` — one act, one wording, five surfaces.
+ */
+const ROSTER_TOKENS = { snr: 'SNR', cq: 'CQ', b4: 'B4' } as const
+
 /** Row freshness → opacity: full-strength when just heard, dimming as a station
  * ages toward the drop-off, so live stations visually pop over lingering ones.
  * Pure + exported for test. Floor 0.5 keeps an aging row readable. */
@@ -107,10 +123,12 @@ const byText = (a: string | null | undefined, b: string | null | undefined) =>
   a ? (b ? a.localeCompare(b) : -1) : b ? 1 : 0
 /** Shared empty set so the ignore checks stay allocation-free per render. */
 const EMPTY_IGNORES: ReadonlySet<string> = new Set()
+/** The Age cell. The unit letter rides inside the message with its number, so a translation
+ *  can never separate the two (the Now-Bar's rule). */
 function ageLabel(slots: number): string {
-  if (slots <= 0) return 'now'
-  if (slots < 60) return `${slots} sl`
-  return `${Math.round(slots / 4)}m`
+  if (slots <= 0) return t('operate.roster.age.now')
+  if (slots < 60) return t('operate.roster.age.slots', { count: slots })
+  return t('operate.roster.age.minutes', { minutes: Math.round(slots / 4) })
 }
 
 export function OperateRoster({
@@ -324,7 +342,7 @@ export function OperateRoster({
     <button
       type="button"
       className={`or-th${sort.key === key ? ' active' : ''}`}
-      title={title ?? `Sort by ${label}`}
+      title={title ?? t('operate.roster.sort.title', { column: label })}
       onClick={() =>
         setSort((p) =>
           p.key === key
@@ -352,28 +370,28 @@ export function OperateRoster({
   return (
     <div className="operate-roster">
       <div className="or-filters">
-        <strong>Call Roster</strong>
+        <strong>{t('operate.roster.title')}</strong>
         <span className="or-count">{rows.length}</span>
         <label className="or-filter">
           <input
             type="checkbox"
             checked={neededOnly}
             onChange={(e) => setFilter({ neededOnly: e.target.checked })}
-          /> Needed only
+          /> {t('operate.roster.filter.neededOnly')}
         </label>
         <label className="or-filter">
           <input
             type="checkbox"
             checked={hideWorked}
             onChange={(e) => setFilter({ hideWorked: e.target.checked })}
-          /> Hide worked
+          /> {t('operate.roster.filter.hideWorked')}
         </label>
-          <label className="or-filter" title="Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.">
+          <label className="or-filter" title={t('operate.roster.filter.hideBlocked.title')}>
             <input
               type="checkbox"
               checked={filters.hideBlocked === true}
               onChange={(e) => setFilter({ hideBlocked: e.target.checked })}
-            /> Hide blocked
+            /> {t('operate.roster.filter.hideBlocked')}
           </label>
         {/* Beside the row count, so a thinned roster always says why. The picker itself
             lives in the Band Activity chip bar — one control for one shared list. */}
@@ -390,41 +408,45 @@ export function OperateRoster({
             onClick={() => selectedCall && onSpot(selectedCall)}
             title={
               selectedCall
-                ? `Spot ${selectedCall} to the DX cluster at the current dial`
-                : 'Select a station to spot it to the DX cluster'
+                ? t('operate.roster.spot.title', { call: selectedCall })
+                : t('operate.roster.spot.title.none')
             }
           >
-            Spot{selectedCall ? ` ${selectedCall}` : ''}
+            {/* Two WHOLE labels — the button names the station when there is one to name,
+                never a stem with the callsign glued after it. */}
+            {selectedCall
+              ? t('operate.roster.spot.label.call', { call: selectedCall })
+              : t('operate.roster.spot.label')}
           </button>
         )}
       </div>
       <div
         className="or-grid"
         role="grid"
-        aria-label="Call roster — arrow to move, Enter to select, Shift+Enter to work"
+        aria-label={t('operate.roster.grid.aria')}
         aria-rowcount={rows.length + 1}
         onKeyDown={roving.containerProps.onKeyDown}
       >
         <div className="or-row or-header" role="row">
-          {th('call', 'Call')}
-          {th('calling', 'Calling', 'Sort by who each station is calling (CQ = calling nobody)')}
-          {th('need', 'Need')}
-          {th('country', 'Country')}
+          {th('call', t('operate.roster.col.call'))}
+          {th(
+            'calling',
+            t('operate.roster.col.calling'),
+            t('operate.roster.col.calling.title'),
+          )}
+          {th('need', t('operate.roster.col.need'))}
+          {th('country', t('operate.roster.col.country'))}
           {/* Header stays "State" — the column is two letters wide and GridTracker/WSJT-X call
               it that — with the full meaning in the tooltip. */}
-          {th(
-            'state',
-            'State',
-            'Sort by state or province (from the callsign, or the heard grid)',
-          )}
-          {th('grid', 'Grid')}
-          {th('dist', 'Dist')}
-          {th('bearing', 'Brg')}
-          {th('snr', 'SNR')}
-          {th('age', 'Age')}
+          {th('state', t('operate.roster.col.state'), t('operate.roster.col.state.title'))}
+          {th('grid', t('operate.roster.col.grid'))}
+          {th('dist', t('operate.roster.col.dist'))}
+          {th('bearing', t('operate.roster.col.bearing'))}
+          {th('snr', ROSTER_TOKENS.snr)}
+          {th('age', t('operate.roster.col.age'))}
         </div>
         {rows.length === 0 ? (
-          <div className="or-empty">No stations heard yet — decoded stations appear here as they arrive.</div>
+          <div className="or-empty">{t('operate.roster.empty')}</div>
         ) : (
           rows.map(({ s, need, needAll, age }, i) => {
             const chip = need ? NEED_CHIP[need] : null
@@ -435,7 +457,15 @@ export function OperateRoster({
                 key={s.call}
                 role="row"
                 aria-selected={s.call === selectedCall}
-                aria-label={`${s.call}${s.grid ? `, grid ${s.grid}` : ''}${need ? `, needed ${need}` : ''}${s.worked ? ', worked' : ''}${s.call === workingCall ? ', working now' : ''}`}
+                // Four optional clauses, each interpolated WHOLE with its own separator —
+                // never a sentence glued from fragments. `{{need}}` is a need TAG, a token.
+                aria-label={t('operate.roster.row.aria', {
+                  call: s.call,
+                  grid: s.grid ? t('operate.roster.row.aria.grid', { grid: s.grid }) : '',
+                  need: need ? t('operate.roster.row.aria.need', { need }) : '',
+                  worked: s.worked ? t('operate.roster.row.aria.worked') : '',
+                  working: s.call === workingCall ? t('operate.roster.row.aria.working') : '',
+                })}
                 tabIndex={rp.tabIndex}
                 ref={rp.ref as (el: HTMLDivElement | null) => void}
                 onFocus={rp.onFocus}
@@ -459,8 +489,8 @@ export function OperateRoster({
                 }
                 title={
                   ignoredRow
-                    ? 'Ignored this session (Alt-double-click to restore)'
-                    : `Double-click to work ${s.call}`
+                    ? t('operate.row.ignored.title')
+                    : t('operate.roster.row.work.title', { call: s.call })
                 }
               >
                 <span className="or-call">
@@ -472,13 +502,13 @@ export function OperateRoster({
                   {s.worked && (
                     <span
                       className={`b4-chip${s.workedBand ? ' b4-band' : ''}`}
-                      title={s.workedBand ? 'Worked before on this band' : 'Worked before (another band)'}
+                      title={s.workedBand ? t('operate.b4.sameBand') : t('operate.b4.otherBand')}
                     >
-                      B4
+                      {ROSTER_TOKENS.b4}
                     </span>
                   )}
                   {s.lotwUser && (
-                    <span className="lotw-mark" title="Uploads to LoTW — this contact should confirm">
+                    <span className="lotw-mark" title={t('operate.roster.lotw.title')}>
                       L
                     </span>
                   )}
@@ -487,10 +517,13 @@ export function OperateRoster({
                     className="qrz-link"
                     onClick={(e) => {
                       e.stopPropagation()
-                      void withErrorToast(() => openQrzPage(s.call), `Could not open ${s.call} on QRZ`)
+                      void withErrorToast(
+                        () => openQrzPage(s.call),
+                        t('callbook.qrzPage.failed', { call: s.call }),
+                      )
                     }}
                     onDoubleClick={(e) => e.stopPropagation()}
-                    title={`${s.call} on QRZ.com (opens your browser)`}
+                    title={t('callbook.qrzPage.title', { call: s.call })}
                   >
                     ↗
                   </button>
@@ -499,9 +532,13 @@ export function OperateRoster({
                     call, and "CQ" (addressing nobody) is the row to double-click. */}
                 <span
                   className={`or-calling${s.calling ? '' : ' cq'}`}
-                  title={s.calling ? `Working ${s.calling}` : 'Calling CQ — not in a QSO'}
+                  title={
+                    s.calling
+                      ? t('operate.roster.calling.title', { call: s.calling })
+                      : t('operate.roster.calling.cq.title')
+                  }
                 >
-                  {s.calling ?? 'CQ'}
+                  {s.calling ?? ROSTER_TOKENS.cq}
                 </span>
                 <span
                   className="or-need"
@@ -531,7 +568,10 @@ export function OperateRoster({
                     a glance. Nothing to say → the plain em dash, no chrome around an absence. */}
                 <span className="or-state">
                   {s.state ? (
-                    <span className="or-subdiv" title={`${s.call} is in ${s.state}`}>
+                    <span
+                      className="or-subdiv"
+                      title={t('operate.roster.state.title', { call: s.call, state: s.state })}
+                    >
                       {s.state}
                     </span>
                   ) : (

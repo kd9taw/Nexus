@@ -1,3 +1,13 @@
+// ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
+// deferred is the TX CLUSTER: TX On/Off (its two tooltip arms state the abort semantics — "an
+// FT over already in flight finishes" — and its labels name the latch), TUNE and STOP TX, which
+// key and cut a carrier, and the TX WATCHDOG chip, which is what the watchdog says when it has
+// halted a transmission. Transmit-path controls and their accessible names move in their own
+// batch, with the stop-line sweeps re-run. Everything else here is migrated under `topbar.*`.
+//
+// The units rule lands on the BAR: every tier and mode name, the DT and clock readouts, the
+// slot countdown, the callsign and grid, and the four plates below are tokens and measurements
+// and stay in the code.
 import { useEffect, useState } from 'react'
 import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '../types'
 import { isRxOnly } from '../types'
@@ -7,6 +17,19 @@ import { StatusLane } from './StatusLane'
 import { LiveLevelMeter } from './LiveMeters'
 import { RadioSwitcher } from './RadioSwitcher'
 import { appVersion } from '../api'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
+import { T } from '../i18n/T'
+
+/** The bar's own plates: the product name, the two directions of the TX/RX indicator, the
+ *  operator prefix, the recording badge and the UTC label. Tokens, named so the catalog guard
+ *  reads them as the deliberate constants they are. */
+const NEXUS = 'Nexus'
+const TX = 'TX'
+const RX = 'RX'
+const OP = 'OP'
+const REC = 'REC'
+const UTC = 'UTC'
 
 /** The tier pills in the top bar. FT8/FT4 transmit; the six WSJT-X modes below
  *  them are DECODE-ONLY (modes::tx_mode refuses them in the engine) and carry a
@@ -16,67 +39,29 @@ import { appVersion } from '../api'
  *
  *  Where a title points into Settings it names the SECTION, never the tab: a pill is a tier
  *  selector, so these five cannot become deep links, and a tab name in a sentence nobody can
- *  click goes stale the next time the rail is rearranged (this said "Settings ▸ Modes"). */
+ *  click goes stale the next time the rail is rearranged (this said "Settings ▸ Modes").
+ *
+ *  The NAMES are the modes' and tiers' own — tokens, and they stay written here. The titles are
+ *  prose and resolve through the catalog when the pill renders (a resolved constant would
+ *  freeze the first locale loaded). */
 const TIER_PILLS: {
   tier: Tier
   small?: string
   name: string
-  title: string
+  titleKey: MessageKey
   rxOnly?: boolean
 }[] = [
-  { tier: 'TempoFast', small: 'Tempo', name: 'Fast', title: 'Fast conversational tier' },
-  {
-    tier: 'TempoDeep',
-    small: 'Tempo',
-    name: 'Deep',
-    title: 'Robust non-coherent tier — fading-resilient (15 s)',
-  },
-  { tier: 'FT4', name: 'FT4', title: 'Standard WSJT-X FT4 (7.5 s)' },
-  { tier: 'FT8', name: 'FT8', title: 'Standard WSJT-X FT8 (15 s)' },
-  {
-    tier: 'FT2',
-    name: 'FT2',
-    title:
-      'FT2 — Decodium’s fast slotted mode (3.75 s), FT4 with a halved symbol time. Transmit and receive. No settings: the period is fixed',
-  },
-  {
-    tier: 'WSPR',
-    name: 'WSPR',
-    small: 'BCN',
-    title:
-      'WSPR propagation beacons — 2 min intervals. Transmits on a schedule; set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W)',
-  },
-  {
-    tier: 'Q65',
-    name: 'Q65',
-    title: 'Q65 — EME / VHF+ scatter. Transmit and receive. Period + submode in Settings ▸ Q65',
-  },
-  {
-    tier: 'MSK144',
-    name: 'MSK144',
-    title:
-      'MSK144 — meteor scatter. Transmits for nearly the whole period (that is how the mode works). Period in Settings ▸ MSK144',
-  },
-  {
-    tier: 'JT65',
-    name: 'JT65',
-    small: 'RX',
-    rxOnly: true,
-    title:
-      'JT65 — classic EME, 60 s. Receive only in this build (transmit is disabled pending a fix). Submode in Settings ▸ JT65',
-  },
-  {
-    tier: 'FST4',
-    name: 'FST4',
-    title: 'FST4 — slow weak-signal QSO mode (LF/MF). Transmit and receive',
-  },
-  {
-    tier: 'FST4W',
-    name: 'FST4W',
-    small: 'BCN',
-    title:
-      'FST4W — LF/MF beacons. Transmits on a schedule; set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W). Hashed calls show as <...>',
-  },
+  { tier: 'TempoFast', small: 'Tempo', name: 'Fast', titleKey: 'topbar.tier.tempoFast.title' },
+  { tier: 'TempoDeep', small: 'Tempo', name: 'Deep', titleKey: 'topbar.tier.tempoDeep.title' },
+  { tier: 'FT4', name: 'FT4', titleKey: 'topbar.tier.ft4.title' },
+  { tier: 'FT8', name: 'FT8', titleKey: 'topbar.tier.ft8.title' },
+  { tier: 'FT2', name: 'FT2', titleKey: 'topbar.tier.ft2.title' },
+  { tier: 'WSPR', name: 'WSPR', small: 'BCN', titleKey: 'topbar.tier.wspr.title' },
+  { tier: 'Q65', name: 'Q65', titleKey: 'topbar.tier.q65.title' },
+  { tier: 'MSK144', name: 'MSK144', titleKey: 'topbar.tier.msk144.title' },
+  { tier: 'JT65', name: 'JT65', small: 'RX', rxOnly: true, titleKey: 'topbar.tier.jt65.title' },
+  { tier: 'FST4', name: 'FST4', titleKey: 'topbar.tier.fst4.title' },
+  { tier: 'FST4W', name: 'FST4W', small: 'BCN', titleKey: 'topbar.tier.fst4w.title' },
 ]
 
 interface Props {
@@ -196,9 +181,9 @@ function UtcClock() {
   const p = (n: number) => String(n).padStart(2, '0')
   const hhmmss = `${p(now.getUTCHours())}:${p(now.getUTCMinutes())}:${p(now.getUTCSeconds())}`
   return (
-    <div className="utc-clock" title="UTC time">
+    <div className="utc-clock" title={t('topbar.utc.title')}>
       <span className="utc-time">{hhmmss}</span>
-      <span className="utc-label">UTC</span>
+      <span className="utc-label">{UTC}</span>
     </div>
   )
 }
@@ -247,7 +232,10 @@ export function TopBar({
   // Stop TX stays live — disarming is always allowed, and it is the operator's way
   // out if they switched tiers mid-over.
   const noTx = isRxOnly(tier)
-  const NO_TX_WHY = 'This mode is receive-only in Nexus — it decodes but does not transmit'
+  // WHY a mode cannot transmit — prose about the MODE, shown on every control it disables, so
+  // it moves with the bar rather than with the deferred TX controls it happens to sit on (the
+  // batch-18 ruling; the Operate strip states the same fact under `operate.strip.rxOnly.why`).
+  const NO_TX_WHY = t('topbar.rxOnly.why')
   const chipCluster = (
     <div className="topbar-group topbar-chips">
         {/* Help lives in the one group that renders in every section — the
@@ -265,9 +253,9 @@ export function TopBar({
               <button
                 type="button"
                 className="theme-chip op-chip"
-                title={`Operating as ${operator} — click to change who is at the key`}
+                title={t('topbar.operator.title', { call: operator })}
               >
-                OP {operator}
+                {OP} {operator}
               </button>
             }
             items={[
@@ -276,11 +264,11 @@ export function TopBar({
               ...(operatorRoster ?? [])
                 .filter((o) => o.toUpperCase() !== operator.toUpperCase())
                 .map((o) => ({
-                  label: `Switch to ${o}`,
+                  label: t('topbar.operator.switch', { call: o }),
                   onSelect: () => onSetOperator?.(o),
                 })),
               {
-                label: 'Single operator (clear)',
+                label: t('topbar.operator.single'),
                 onSelect: () => onSetOperator?.(''),
               },
             ]}
@@ -288,11 +276,11 @@ export function TopBar({
         )}
         <Menu
           trigger={
-            <button type="button" className="theme-chip" title="Help">
-              Help
+            <button type="button" className="theme-chip" title={t('topbar.help.label')}>
+              {t('topbar.help.label')}
             </button>
           }
-          items={[{ label: 'Getting started', onSelect: onOpenGuide }]}
+          items={[{ label: t('gettingStarted.title'), onSelect: onOpenGuide }]}
         />
         {/* Light/Dark moved to Settings ▸ Appearance (operator, 2026-08-10) — the bar
             keeps only the outdoor quick toggle: Field must stay one tap away, because
@@ -300,16 +288,12 @@ export function TopBar({
         {onFieldChange && (
           <button
             type="button"
-            title={
-              field
-                ? 'Field mode is on: larger type, maximum contrast. Click to turn off.'
-                : 'Field mode for operating outdoors: larger type, maximum contrast'
-            }
+            title={field ? t('topbar.field.on.title') : t('topbar.field.off.title')}
             aria-pressed={field === true}
             className={`theme-chip field-chip${field ? ' active' : ''}`}
             onClick={() => onFieldChange(!field)}
           >
-            Field
+            {t('topbar.field.label')}
           </button>
         )}
       </div>
@@ -319,7 +303,7 @@ export function TopBar({
     <header className={`topbar${hideFrequencyControl ? ' topbar--no-readout' : ''}`}>
       <div className="topbar-group brand">
         <span className="logo-wrap">
-          <span className="logo">Nexus</span>
+          <span className="logo">{NEXUS}</span>
           {version && <span className="app-version">v{version}</span>}
         </span>
         <span className="mycall">
@@ -350,9 +334,12 @@ export function TopBar({
           {rigModeMismatch && (
             <span
               className="topbar-rig-mode"
-              title={`Your rig is on ${rigModeMismatch}, but Nexus has ${radio.sideband}. Turn the rig's mode knob (or pick the band in an operating cockpit) to match.`}
+              title={t('topbar.rigMode.title', {
+                rig: rigModeMismatch,
+                believed: radio.sideband,
+              })}
             >
-              rig: {rigModeMismatch}
+              {t('topbar.rigMode.chip', { mode: rigModeMismatch })}
             </span>
           )}
         </div>
@@ -360,14 +347,14 @@ export function TopBar({
 
       <div className="topbar-group txrx">
         <span className={`txrx-indicator ${radio.transmitting ? 'tx' : 'rx'}`}>
-          {radio.transmitting ? 'TX' : 'RX'}
+          {radio.transmitting ? TX : RX}
         </span>
 
         {/* Live-polled meter (100 ms, lock-free backend) — the meter's own title carries the
             live dB readout, so the wrapper title stays static. */}
-        <div className="rx-level" title="RX audio level (aim ~30 dB, like WSJT-X)">
-          <span className="rx-level-label">RX</span>
-          <LiveLevelMeter label="RX audio level" variant="compact" />
+        <div className="rx-level" title={t('topbar.rxLevel.title')}>
+          <span className="rx-level-label">{RX}</span>
+          <LiveLevelMeter label={t('topbar.rxLevel.label')} variant="compact" />
         </div>
 
         {radio.qsoRecording && (
@@ -375,14 +362,17 @@ export function TopBar({
             type="button"
             className="topbar-rec"
             onClick={() => onStopRecording?.()}
-            title="Recording this QSO to a WAV — click to stop"
+            title={t('topbar.recording.title')}
           >
-            ● REC
+            ● {REC}
           </button>
         )}
 
         {!hideTxControls && !hideDigitalChrome && (
-        <div className="op-controls" role="group" aria-label="Transmit controls">
+        <div className="op-controls" role="group" aria-label={t('topbar.txControls.aria')}>
+          {/* ⚠️ DEFERRED, the three controls below and the watchdog chip after them: TX On/Off's
+              tooltip states the abort semantics, Tune keys a carrier and Stop TX cuts an over in
+              flight. They move in the transmit-path batch — see this file's header. */}
           <button
             type="button"
             className={`op-btn monitor${radio.txEnabled ? ' on' : ''}`}
@@ -422,9 +412,9 @@ export function TopBar({
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
             aria-pressed={radio.holdTxFreq}
             onClick={() => onSetHoldTxFreq(!radio.holdTxFreq)}
-            title="Hold Tx Freq: keep your TX offset where you put it when you double-click a station to work them. Off, your TX moves onto theirs (WSJT-X's behaviour). A plain waterfall click never moves TX either way."
+            title={t('topbar.holdTx.title')}
           >
-            Hold Tx
+            {t('topbar.holdTx.label')}
           </button>
         </div>
         )}
@@ -437,9 +427,9 @@ export function TopBar({
 
         <StatusLane />
         {!hideDigitalChrome && (
-          <div className="slot-clock" title="Time to next slot">
+          <div className="slot-clock" title={t('topbar.slotClock.title')}>
             <span className="slot-count">{countdown}s</span>
-            <span className="slot-label">next slot</span>
+            <span className="slot-label">{t('topbar.slotClock.label')}</span>
           </div>
         )}
         <UtcClock />
@@ -448,27 +438,25 @@ export function TopBar({
             {radio.clockOffsetMs != null ? (
               <span
                 className={`timesync ${clockClass(radio.clockOffsetMs)}`}
-                title={`PC clock is ${clockLabel(radio.clockOffsetMs)} vs UTC (NTP). TempoFast/TempoDeep need it within ~0.5 s — sync via NTP / time.is (off-grid: GPS).`}
+                title={t('topbar.clock.title', { offset: clockLabel(radio.clockOffsetMs) })}
               >
                 <span className="dot" />
-                clock {clockLabel(radio.clockOffsetMs)}
+                {t('topbar.clock.label', { offset: clockLabel(radio.clockOffsetMs) })}
               </span>
             ) : (
               <span
                 className={`timesync ${radio.timeSyncOk ? 'ok' : 'bad'}`}
                 title={
-                  radio.timeSyncOk
-                    ? 'Time sync OK (from decode timing)'
-                    : 'Decodes land far off the slot boundary — sync your PC clock (NTP / time.is; off-grid: GPS).'
+                  radio.timeSyncOk ? t('topbar.sync.ok.title') : t('topbar.sync.bad.title')
                 }
               >
                 <span className="dot" />
-                {radio.timeSyncOk ? 'Sync' : 'No Sync'}
+                {radio.timeSyncOk ? t('topbar.sync.ok.label') : t('topbar.sync.bad.label')}
               </span>
             )}
             <span
               className={`dt-readout${Math.abs(link.dtSec) > 0.5 ? ' bad' : ''}`}
-              title="Decode time offset (how far heard signals land from the slot boundary)"
+              title={t('topbar.dt.title')}
             >
               {dtLabel(link.dtSec)}
             </span>
@@ -478,7 +466,7 @@ export function TopBar({
 
       {!hideDigitalChrome && (
       <>
-      <div className="topbar-group tier-toggle" role="group" aria-label="Link tier">
+      <div className="topbar-group tier-toggle" role="group" aria-label={t('topbar.tier.aria')}>
         {TIER_PILLS.map((p) => (
           <button
             key={p.tier}
@@ -488,7 +476,7 @@ export function TopBar({
             }`}
             aria-pressed={tier === p.tier}
             onClick={() => onTierChange(p.tier)}
-            title={p.title}
+            title={t(p.titleKey)}
           >
             {p.small ? <small>{p.small}</small> : null}
             {p.name}
@@ -501,16 +489,29 @@ export function TopBar({
           — the release-format flow. */}
       {chipCluster}
 
-      <div className="topbar-group tier-toggle tx-period" role="group" aria-label="Transmit cycle">
+      <div
+        className="topbar-group tier-toggle tx-period"
+        role="group"
+        aria-label={t('topbar.txCycle.aria')}
+      >
+        {/* THREE WHOLE labels, never a stem plus a period token: the <small> is supplied by
+            this call site as a marker, so the catalog carries one label per state. */}
         <button
           type="button"
           className={`tier-btn${radio.txCycleAuto ? ' active' : ''}`}
           aria-pressed={radio.txCycleAuto ?? false}
           onClick={() => onSetTxCycleAuto(true)}
-          title="Auto-cycle (FT8-style): when you answer a station, transmit on the opposite T/R cycle to theirs"
+          title={t('topbar.txCycle.auto.title')}
         >
-          Auto{' '}
-          <small>{radio.txCycleAuto ? (radio.txEven ? '1st' : '2nd') : 'cycle'}</small>
+          {radio.txCycleAuto ? (
+            radio.txEven ? (
+              <T k="topbar.txCycle.auto.first" tags={{ s: <small /> }} />
+            ) : (
+              <T k="topbar.txCycle.auto.second" tags={{ s: <small /> }} />
+            )
+          ) : (
+            <T k="topbar.txCycle.auto.idle" tags={{ s: <small /> }} />
+          )}
         </button>
         {/* `derived`: the cycle auto-pick landed on this side (POTA field report — the
             flip on answering a station showed only in the Auto button's small text, so a
@@ -522,18 +523,18 @@ export function TopBar({
           className={`tier-btn${!radio.txCycleAuto && radio.txEven ? ' active' : ''}${radio.txCycleAuto && radio.txEven ? ' derived' : ''}`}
           aria-pressed={!radio.txCycleAuto && radio.txEven}
           onClick={() => onSetTxEven(true)}
-          title="Lock transmit to the even (1st) T/R slots — the station you work must be Tx 2nd"
+          title={t('topbar.txCycle.first.title')}
         >
-          Tx 1st <small>even</small>
+          <T k="topbar.txCycle.first.label" tags={{ s: <small /> }} />
         </button>
         <button
           type="button"
           className={`tier-btn${!radio.txCycleAuto && !radio.txEven ? ' active' : ''}${radio.txCycleAuto && !radio.txEven ? ' derived' : ''}`}
           aria-pressed={!radio.txCycleAuto && !radio.txEven}
           onClick={() => onSetTxEven(false)}
-          title="Lock transmit to the odd (2nd) T/R slots — the station you work must be Tx 1st"
+          title={t('topbar.txCycle.second.title')}
         >
-          Tx 2nd <small>odd</small>
+          <T k="topbar.txCycle.second.label" tags={{ s: <small /> }} />
         </button>
       </div>
       </>

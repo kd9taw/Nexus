@@ -1,4 +1,16 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
+// cockpit is DATA and stays in the code — the dial, the audio offsets in Hz, the band, the
+// tier, the decode depth, the split TX frequency, the next-slot seconds — and so does the
+// technical vocabulary the header is built out of: the mode chips' own names and T/R slot
+// lengths, `Native`/`Companion` (the backend's own words for the signal source, which the
+// group tooltip interpolates beside them), the `Rx`/`Tx` of the two DF spinners, the `Hz`
+// unit and the `SPLIT ▲` and `HOUND` annunciators. What moved is the prose around them.
+//
+// Nothing that stops or keys a transmission is in this file: Operate's stop line is Stop TX
+// and Tune in `OperateQsoStrip.tsx` (both deferred, see that file's header) plus the Esc
+// binding below, which is a keyboard handler with no string of its own.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { t } from '../i18n'
 import type {
   AppSnapshot,
   BandChannel,
@@ -148,9 +160,27 @@ interface Props {
  *  which is where the operator already picks a tier; duplicating ten tiles into
  *  the cockpit header made the same choice appear in two places, one of which
  *  was easy to miss. */
+//
+// THE TIER NAMES AND THEIR T/R SLOT LENGTHS ARE TOKENS and stay written here; only the
+// explanation is a word, and it resolves through a getter so the record is not frozen to
+// whichever locale loaded this module first (the registry rule, batch 3).
 const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
-  { tier: 'FT8', label: 'FT8', slot: '15s', title: 'Standard WSJT-X FT8 — 15 s T/R' },
-  { tier: 'FT4', label: 'FT4', slot: '7.5s', title: 'Standard WSJT-X FT4 — 7.5 s T/R' },
+  {
+    tier: 'FT8',
+    label: 'FT8',
+    slot: '15s',
+    get title() {
+      return t('operate.mode.ft8.title')
+    },
+  },
+  {
+    tier: 'FT4',
+    label: 'FT4',
+    slot: '7.5s',
+    get title() {
+      return t('operate.mode.ft4.title')
+    },
+  },
   // FT2 sits beside its siblings here because it IS one: a slotted digital QSO
   // tier running the same FT8/FT4 sequencer, just faster. Decodium's mode, not
   // WSJT-X's — hence the attribution in the tooltip, where the operator can see
@@ -159,9 +189,35 @@ const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
     tier: 'FT2',
     label: 'FT2',
     slot: '3.75s',
-    title: 'FT2 (Decodium) — 3.75 s T/R, FT4 with a halved symbol time',
+    get title() {
+      return t('operate.mode.ft2.title')
+    },
   },
 ]
+
+/** WSJT-X's DXpedition ROLE name and the annunciator that reports it — protocol tokens (an
+ *  expedition announces itself as running "Fox/Hound"), not words a translator replaces. */
+const HOUND_LABEL = 'Hound'
+const HOUND_BADGE = 'HOUND'
+
+/** The rig's own SPLIT annunciator — the word on every radio's front panel. */
+const SPLIT_BADGE = 'SPLIT ▲'
+
+/** The two RX signal sources, named exactly as the BACKEND names them: `radio.sourceLabel`
+ *  is interpolated into the group tooltip beside these buttons, so a translated button would
+ *  disagree with the live readout next to it. Tokens, like a mode name. */
+const SOURCE_NATIVE = 'Native'
+const SOURCE_COMPANION = 'Companion'
+
+/** WSJT-X's stock UDP endpoint, shown when Settings names no other. A HOST AND PORT never
+ *  belongs inside a translatable sentence — it is interpolated in, like a frequency. */
+const DEFAULT_COMPANION_ADDR = '127.0.0.1:2237'
+
+/** The two audio-offset spinners: WSJT-X's Rx/Tx Hz fields. `Rx`/`Tx` are direction tokens
+ *  that also read out in each field's accessible name, and `Hz` is a unit symbol. */
+const DF_RX = 'Rx'
+const DF_TX = 'Tx'
+const HZ_UNIT = 'Hz'
 
 /** DXpedition special-op chip definitions. */
 const SPECIAL_OPS: {
@@ -169,12 +225,21 @@ const SPECIAL_OPS: {
   label: string
   title: string
 }[] = [
-  { value: 'none', label: 'Off', title: 'No DXpedition special mode' },
+  {
+    value: 'none',
+    get label() {
+      return t('operate.dxped.off.label')
+    },
+    get title() {
+      return t('operate.dxped.off.title')
+    },
+  },
   {
     value: 'hound',
-    label: 'Hound',
-    title:
-      'DXpedition hound: calls go out above 1000 Hz; your R+report auto-moves to the Fox\'s frequency',
+    label: HOUND_LABEL,
+    get title() {
+      return t('operate.dxped.hound.title')
+    },
   },
   // SuperFox (superhound) retired by operator decision — the QPC table file's
   // license bars vendoring the native decoder outside WSJT-X. A settings file
@@ -183,16 +248,17 @@ const SPECIAL_OPS: {
 
 const NO_MACROS: string[] = []
 
-/** Operator-facing names for the removable panels (the ⊞ Panels menu). */
-const PANEL_LABELS: Record<OperatePanelId, string> = {
-  waterfall: 'Waterfall',
-  bandActivity: 'Band Activity',
-  callRoster: 'Call Roster',
-  rxfreq: 'Rx Frequency',
-  txmsgs: 'Tx Messages',
-  stations: 'Stations',
-  txmeters: 'TX Meters',
-}
+/** Operator-facing names for the removable panels (the ⊞ Panels menu). Resolved when the
+ *  menu is BUILT — a module constant would freeze the first locale loaded. */
+const panelLabels = (): Record<OperatePanelId, string> => ({
+  waterfall: t('operate.panel.waterfall'),
+  bandActivity: t('operate.panel.bandActivity'),
+  callRoster: t('operate.panel.callRoster'),
+  rxfreq: t('operate.panel.rxfreq'),
+  txmsgs: t('operate.panel.txmsgs'),
+  stations: t('operate.panel.stations'),
+  txmeters: t('operate.panel.txmeters'),
+})
 
 /** What each layout actually renders — the menu lists only these, so a panel the
  *  current layout has no place for can't be ticked into nowhere. */
@@ -372,7 +438,15 @@ export function OperateCockpit({
     const fn = recording ? stopQsoRecording : startQsoRecording
     fn()
       .then((s) => onSnap?.(s))
-      .catch(() => pushToast(`Could not ${recording ? 'stop' : 'start'} recording`, 'error'))
+      // ONE whole sentence per outcome, never "Could not " plus a verb.
+      .catch(() =>
+        pushToast(
+          recording
+            ? t('operate.header.record.stopFailed')
+            : t('operate.header.record.startFailed'),
+          'error',
+        ),
+      )
       .finally(() => setRecBusy(false))
   }
 
@@ -452,7 +526,7 @@ export function OperateCockpit({
     menu: LAYOUT_PANELS[layoutMode],
     side: SIDE_PANELS[layoutMode],
     main: layoutMode === 'roster' ? 'callRoster' : 'bandActivity',
-    labels: PANEL_LABELS,
+    labels: panelLabels(),
     // The meters read on transmit — here as the pinned strip, which holds the last
     // readings dimmed between overs, so the entry says WHEN it is populated rather than
     // leaving an operator to guess mid-menu (the same words the strip shows when idle).
@@ -674,19 +748,13 @@ export function OperateCockpit({
   // Active special-op badge shown next to the TX indicator.
   const specialOpBadge =
     specialOp === 'hound' ? (
-      <span
-        className="cockpit-specialop-badge hound"
-        title="DXpedition hound: calls go out above 1000 Hz; your R+report auto-moves to the Fox's frequency"
-      >
-        HOUND
+      <span className="cockpit-specialop-badge hound" title={t('operate.dxped.hound.title')}>
+        {HOUND_BADGE}
       </span>
     ) : specialOp === 'superhound' ? (
       // Retired option still present in an old settings file: same discipline.
-      <span
-        className="cockpit-specialop-badge hound"
-        title="DXpedition hound: calls go out above 1000 Hz; your R+report auto-moves to the Fox's frequency"
-      >
-        HOUND
+      <span className="cockpit-specialop-badge hound" title={t('operate.dxped.hound.title')}>
+        {HOUND_BADGE}
       </span>
     ) : null
 
@@ -706,7 +774,7 @@ export function OperateCockpit({
         snap={snap}
         onSnap={onSnap}
         modeIndicator={
-          <div className="cockpit-modes" role="group" aria-label="Operating mode">
+          <div className="cockpit-modes" role="group" aria-label={t('operate.header.modes.aria')}>
             {MODES.map((m) => (
               <button
                 key={m.tier}
@@ -727,8 +795,8 @@ export function OperateCockpit({
                  Settings. Narrow write: a full settings apply is the #54 mid-QSO reset. */
               <select
                 className="cockpit-mode cm-trperiod"
-                aria-label="MSK144 T/R period (seconds)"
-                title="T/R period — 15 s is the 6 m workhorse; 30 s eases deep-search on 2 m"
+                aria-label={t('operate.header.msk144Period.aria')}
+                title={t('operate.header.msk144Period.title')}
                 value={String(snap.link.periodSecs || 15)}
                 onChange={(e) => void setMsk144Period(Number(e.target.value)).then((s2) => onSnap?.(s2))}
               >
@@ -759,13 +827,13 @@ export function OperateCockpit({
             <div
               className="cockpit-decode-depth"
               role="group"
-              aria-label="Decode depth"
-              title="FT8/FT4 decode depth — Deep catches weaker signals but uses more CPU/battery (a field/POTA lever)"
+              aria-label={t('operate.header.decodeDepth.aria')}
+              title={t('operate.header.decodeDepth.title')}
             >
               {([
-                [1, 'Fast'],
-                [2, 'Norm'],
-                [3, 'Deep'],
+                [1, t('operate.header.decodeDepth.fast')],
+                [2, t('operate.header.decodeDepth.norm')],
+                [3, t('operate.header.decodeDepth.deep')],
               ] as [number, string][]).map(([d, label]) => (
                 <button
                   key={d}
@@ -804,8 +872,10 @@ export function OperateCockpit({
           value: snap.radio.txLevel,
           unit: 'drive',
           onChange: onSetTxLevel,
-          label: 'Pwr',
-          title: "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+          // A CONFIGURATION control on the transmit path is not a transmit control — the
+          // batch-13 ruling, where the drive slider moved and Prove TX did not.
+          label: t('operate.header.power.label'),
+          title: t('operate.header.power.title'),
         }}
         txState={false}
       >
@@ -813,10 +883,10 @@ export function OperateCockpit({
             header-density pass 2026-08), always visible in both layouts. Edits
             settings.specialOp. */}
         <div className="cockpit-specialop">
-          <span className="cockpit-specialop-label">DXped:</span>
+          <span className="cockpit-specialop-label">{t('operate.header.dxped.label')}</span>
           <select
             className="cockpit-specialop-select"
-            aria-label="DXpedition mode"
+            aria-label={t('operate.header.dxped.aria')}
             value={specialOp === 'superhound' ? 'hound' : specialOp}
             onChange={(e) => handleSpecialOp(e.target.value as NonNullable<Settings['specialOp']>)}
             title={SPECIAL_OPS.find((op) => op.value === (specialOp === 'superhound' ? 'hound' : specialOp))?.title}
@@ -833,56 +903,79 @@ export function OperateCockpit({
           <div
             className="cockpit-source"
             role="group"
-            aria-label="Signal source"
-            title={`Where decodes come from — active: ${snap.radio.sourceLabel || 'Native'}${source === 'companion' ? ` · listening ${companionAddr || '127.0.0.1:2237'}` : ''}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP ${companionAddr || '127.0.0.1:2237'}.`}
+            aria-label={t('operate.header.source.aria')}
+            // TWO whole sentences: "listening …" is a statement about where we are
+            // listening, not a tail glued onto the one before it.
+            title={
+              source === 'companion'
+                ? t('operate.header.source.title.listening', {
+                    active: snap.radio.sourceLabel || SOURCE_NATIVE,
+                    addr: companionAddr || DEFAULT_COMPANION_ADDR,
+                  })
+                : t('operate.header.source.title', {
+                    active: snap.radio.sourceLabel || SOURCE_NATIVE,
+                    addr: companionAddr || DEFAULT_COMPANION_ADDR,
+                  })
+            }
           >
             <button
               type="button"
               className={`cs-opt${source === 'native' ? ' active' : ''}`}
               aria-pressed={source === 'native'}
               onClick={() => onSourceChange('native')}
-              title="Native engine — Nexus decodes local audio"
+              title={t('operate.header.source.native.title')}
             >
-              ◉ Native
+              ◉ {SOURCE_NATIVE}
             </button>
             <button
               type="button"
               className={`cs-opt${source === 'companion' ? ' active' : ''}`}
               aria-pressed={source === 'companion'}
               onClick={() => onSourceChange('companion')}
-              title={`Companion — ride an existing WSJT-X / JTDX / MSHV decode stream over UDP ${companionAddr || '127.0.0.1:2237'}`}
+              title={t('operate.header.source.companion.title', {
+                addr: companionAddr || DEFAULT_COMPANION_ADDR,
+              })}
             >
-              ⇄ Companion
+              ⇄ {SOURCE_COMPANION}
             </button>
           </div>
           {/* The active-source label folded into the source group's tooltip
               (header-density pass 2026-08 — the label alone was ~220px). */}
           {/* DF readouts: type an exact audio offset and commit on Enter/blur
               (clamped to the 200–4000 Hz passband) — WSJT-X's Rx/Tx Hz spinners. */}
-          <div className="cockpit-offsets" role="group" aria-label="Audio offsets (Hz)">
-            <DfField label="Rx" hz={snap.radio.rxOffsetHz} onCommit={(hz) => onTune(hz, 'rx')} />
-            <DfField label="Tx" hz={snap.radio.txOffsetHz} onCommit={(hz) => onTune(hz, 'tx')} />
+          <div className="cockpit-offsets" role="group" aria-label={t('operate.header.offsets.aria')}>
+            <DfField label={DF_RX} hz={snap.radio.rxOffsetHz} onCommit={(hz) => onTune(hz, 'rx')} />
+            <DfField label={DF_TX} hz={snap.radio.txOffsetHz} onCommit={(hz) => onTune(hz, 'tx')} />
           </div>
           {/* Decode button — re-run the decoder over the last period's audio (F6). */}
           <button
             type="button"
             className="cockpit-decode-btn"
             onClick={handleRedecode}
-            // The F6 the button advertises is a media key on default Mac keyboards.
-            title={`Re-decode the last period (F6)${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
+            // The F6 the button advertises is a media key on default Mac keyboards. The hint
+            // itself is FN_KEY_HINT (platform.ts) and migrates with that module.
+            title={
+              IS_MAC
+                ? t('operate.header.decode.title.mac', { hint: FN_KEY_HINT })
+                : t('operate.header.decode.title')
+            }
           >
-            Decode
+            {t('operate.header.decode.label')}
           </button>
           <button
             type="button"
             className={`ph-rec${recording ? ' on' : ''}`}
             onClick={toggleRecord}
             disabled={recBusy}
-            aria-label={recording ? 'Stop recording this QSO' : 'Record QSO audio'}
+            aria-label={
+              recording
+                ? t('operate.header.record.stop.aria')
+                : t('operate.header.record.start.aria')
+            }
             title={
               recording
-                ? 'Recording — click to stop recording this QSO'
-                : 'Record the received audio to a WAV in the recordings folder'
+                ? t('operate.header.record.stop.title')
+                : t('operate.header.record.start.title')
             }
           >
             {recording ? '■' : '●'}
@@ -890,29 +983,31 @@ export function OperateCockpit({
           {snap.radio.splitTxMhz != null && (
             <span
               className="cockpit-cat ok"
-              title={`Rig split active — TX ${snap.radio.splitTxMhz.toFixed(4)} MHz (pile-up). Any QSY returns to simplex.`}
+              title={t('operate.header.split.title', {
+                freq: snap.radio.splitTxMhz.toFixed(4),
+              })}
             >
-              SPLIT ▲
+              {SPLIT_BADGE}
             </span>
           )}
-          <div className="cockpit-layout-toggle" role="group" aria-label="Operate layout">
+          <div className="cockpit-layout-toggle" role="group" aria-label={t('operate.header.layout.aria')}>
             <button
               type="button"
               className={`clt-opt${layoutMode === 'classic' ? ' active' : ''}`}
               aria-pressed={layoutMode === 'classic'}
               onClick={() => onLayoutMode('classic')}
-              title="Classic — WSJT-X layout (Band Activity + Rx Frequency pair, roster aside)"
+              title={t('operate.header.layout.classic.title')}
             >
-              Classic
+              {t('operate.header.layout.classic.label')}
             </button>
             <button
               type="button"
               className={`clt-opt${layoutMode === 'roster' ? ' active' : ''}`}
               aria-pressed={layoutMode === 'roster'}
               onClick={() => onLayoutMode('roster')}
-              title="Roster — GridTracker layout (Call Roster dominant)"
+              title={t('operate.header.layout.roster.title')}
             >
-              Roster
+              {t('operate.header.layout.roster.label')}
             </button>
           </div>
           {/* No MemoryStrip here, deliberately (operator ruling, 2026-08-16). Memories are
@@ -924,8 +1019,8 @@ export function OperateCockpit({
             type="button"
             className="cockpit-popout icon"
             onClick={() => openSpot(dxCall || selectedCall || '')}
-            aria-label="Spot a callsign to the DX cluster"
-            title="Spot a callsign to the DX cluster (opens a popup — call, frequency, comment)"
+            aria-label={t('operate.header.spot.aria')}
+            title={t('operate.header.spot.title')}
           >
             📢
           </button>
@@ -934,8 +1029,8 @@ export function OperateCockpit({
               type="button"
               className="cockpit-popout icon"
               onClick={onPopOut}
-              aria-label="Open Operate in its own window"
-              title="Open Operate in its own window (for a second monitor)"
+              aria-label={t('operate.header.popOut.aria')}
+              title={t('operate.header.popOut.title')}
             >
               ⧉
             </button>
@@ -955,9 +1050,9 @@ export function OperateCockpit({
             type="button"
             className="wf-redock"
             onClick={redockWaterfall}
-            title="The waterfall is in its own window — click to bring it back here"
+            title={t('operate.waterfall.redock.title')}
           >
-            ⧉ Waterfall popped out — click to re-dock
+            {t('operate.waterfall.redock.label')}
           </button>
         )}
         {wfState === 'docked' && (
@@ -1000,7 +1095,7 @@ export function OperateCockpit({
               min={88}
               max={420}
               defaultPct={22}
-              label="waterfall height"
+              label={t('operate.waterfall.splitter.label')}
             />
           </>
         )}
@@ -1047,8 +1142,18 @@ export function OperateCockpit({
               targetCall={selectedCall}
               onPointAt={(call) =>
                 pointRotatorAtCall(call)
-                  .then((bearing) => pushToast(`Rotator → ${call}: ${Math.round(bearing)}°`, 'info'))
-                  .catch((e) => pushToast(`Rotator: ${e instanceof Error ? e.message : e}`, 'error'))
+                  .then((bearing) =>
+                    pushToast(t('operate.rotor.pointed', { call, deg: Math.round(bearing) }), 'info'),
+                  )
+                  // `{{error}}` is the backend's own refusal, passed through as a value.
+                  .catch((e) =>
+                    pushToast(
+                      t('operate.rotor.failed', {
+                        error: e instanceof Error ? e.message : String(e),
+                      }),
+                      'error',
+                    ),
+                  )
               }
             />
           }
@@ -1124,7 +1229,7 @@ export function OperateCockpit({
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
                         onErase={() => notifyErase(0)}
-                        title="Band Activity"
+                        title={t('operate.decodes.title')}
                       />
                     </div>
                   )}
@@ -1134,7 +1239,7 @@ export function OperateCockpit({
                       below={rxfreqRef}
                       varName="--pane-share"
                       onCommit={(av, bv) => panels.setShares({ bandActivity: av, rxfreq: bv })}
-                      label="Band Activity / Rx Frequency"
+                      label={t('operate.seam.bandActivityRxFreq.label')}
                     />
                   )}
                   {shown('rxfreq') && (
@@ -1159,7 +1264,9 @@ export function OperateCockpit({
                         // we need to see, so the exclusion stops at Band Activity.
                         hideExcludedCountries={false}
                         compact
-                        title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
+                        title={t('operate.decodes.rxFreq.title', {
+                          hz: Math.round(snap.radio.rxOffsetHz),
+                        })}
                       />
                     </div>
                   )}
@@ -1222,7 +1329,9 @@ export function OperateCockpit({
                         // we need to see, so the exclusion stops at Band Activity.
                         hideExcludedCountries={false}
                         compact
-                        title={`Rx Frequency · ${Math.round(snap.radio.rxOffsetHz)} Hz`}
+                        title={t('operate.decodes.rxFreq.title', {
+                          hz: Math.round(snap.radio.rxOffsetHz),
+                        })}
                       />
                     </div>
                   )}
@@ -1261,7 +1370,7 @@ export function OperateCockpit({
                       columnsOn={lowerClassicRef}
                       varName="--op-col"
                       onCommit={(av, bv) => panels.setShares({ txmsgs: av, stations: bv })}
-                      label="Rx Frequency column / Stations roster"
+                      label={t('operate.seam.qsocolStations.label')}
                     />
                   )}
                 </div>
@@ -1322,7 +1431,7 @@ function DfField({
     }
   }
   return (
-    <label className="df-field" title={`${label} audio offset (Hz) — Enter/blur commits, clamped 200–4000`}>
+    <label className="df-field" title={t('operate.header.df.title', { label })}>
       <span className="df-label">{label}</span>
       <input
         type="number"
@@ -1331,7 +1440,7 @@ function DfField({
         max={4000}
         step={1}
         value={text}
-        aria-label={`${label} offset in Hz`}
+        aria-label={t('operate.header.df.aria', { label })}
         onFocus={() => setEditing(true)}
         onChange={(e) => setText(e.target.value)}
         onBlur={commit}
@@ -1342,7 +1451,7 @@ function DfField({
           }
         }}
       />
-      <span className="df-unit">Hz</span>
+      <span className="df-unit">{HZ_UNIT}</span>
     </label>
   )
 }
