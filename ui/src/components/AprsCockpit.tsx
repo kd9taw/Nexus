@@ -27,6 +27,7 @@ import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 // The channel list, the grid→channel derivation and the beaconable symbols — shared with the
 // Settings panel so the two surfaces cannot offer different channels or derive different ones.
 import { APRS_FREQS, BEACON_SYMBOLS, resolveAprsChannel } from '../aprsBeacon'
+import { parseOperatorNumber } from '../numInput'
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 function compass(deg: number): string {
@@ -820,8 +821,14 @@ export function AprsCockpit({
   }
 
   const sendBeacon = () => {
-    const la = Number.parseFloat(lat)
-    const lo = Number.parseFloat(lon)
+    // ⚠️ THIS GOES ON THE AIR, so the parse is the one that matters most in the app.
+    // `parseFloat('37,98')` is 37 — it stops at the comma and reports success. On a Greek,
+    // German or French Windows (Greek-Windows report, 2026-08) that beaconed a position a
+    // hundred kilometres from the operator, with nothing on screen but "Beacon queued".
+    // `parseOperatorNumber` takes either separator and refuses anything it cannot read whole,
+    // so a typo is a refusal here rather than bad data radiated to everyone listening.
+    const la = parseOperatorNumber(lat)
+    const lo = parseOperatorNumber(lon)
     if (!Number.isFinite(la) || !Number.isFinite(lo)) {
       setStatus('Enter a valid latitude and longitude first.')
       return

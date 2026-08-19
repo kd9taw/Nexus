@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { announce } from '../announce'
+import { parseOperatorNumber } from '../numInput'
 
 /** Format a dial frequency (MHz) for DISPLAY — 4 decimals (100 Hz resolution). */
 export function formatDialMhz(mhz: number): string {
@@ -122,7 +123,12 @@ export function FrequencyReadout({
     setEditing(true)
   }
   const commit = () => {
-    const v = parseFloat(draft.trim().replace(',', '.'))
+    // The comma-decimal handling used to live HERE and only here, as a bare
+    // `.replace(',', '.')` — correct, undocumented, and unshared, so the three other numeric
+    // input sites in the tree each got it wrong (see `numInput.ts`). Same behaviour, one
+    // implementation, and now stricter: a valid PREFIX like `14.0.74` is refused instead of
+    // silently tuning the rig to 14 MHz.
+    const v = parseOperatorNumber(draft)
     setEditing(false)
     // Skip a no-op commit (opened + Enter/blur without changing) so it never fires a spurious QSY.
     if (Number.isFinite(v) && v > 0 && Math.abs(v - dialMhz) >= UNCHANGED_EPS) onCommit?.(v)
