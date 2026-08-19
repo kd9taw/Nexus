@@ -1,3 +1,10 @@
+// ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
+// reason only: the dock's Esc/Stop macro (PSK's stop-line census) and the continuous-TX
+// latch beside it are still written in English here, as is the TX pill's tooltip, which is
+// the wording that states what Stop TX does to an over in flight. Those move in the
+// transmit-path batch, with the stop-line sweeps re-run. Everything else is in the catalog
+// under `psk.*`; the sub-mode names and their hints live in `pskModes.ts` and move with that
+// module, and the baud, AFC and cursor figures are invariant tokens that stay in the code.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, PskState } from '../types'
 import { CockpitHeader } from './CockpitHeader'
@@ -28,6 +35,7 @@ import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { confidenceRuns } from '../transcript'
 import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
+import { t } from '../i18n'
 
 interface Props {
   /** Live snapshot — may be absent while the app is still connecting; the stream
@@ -55,22 +63,40 @@ interface Props {
   panels?: PanelLayoutApi<PskPanelId>
 }
 
-/** Display labels for the PSK removable panels (the ⊞ Panels menu). */
-const PSK_PANEL_LABELS: Record<PskPanelId, string> = {
+/** This cockpit's INVARIANT vocabulary — the mode's own technical tokens, gathered as
+ *  constants so the i18n guard reads them as the deliberate tokens they are: the baud
+ *  symbol beside the sub-mode name, the RX/TX direction plates, the polarity control's own
+ *  name, and the Q-code the CQ macro is named for. */
+const BAUD_SYMBOL = 'Bd'
+const RX_PLATE = 'RX ▼'
+const TX_PLATE = 'TX ▲'
+const CQ = 'CQ'
+const SEVENTY_THREE = '73'
+
+/** Display labels for the PSK removable panels (the ⊞ Panels menu). Resolved when the menu
+ *  is BUILT — a module constant would freeze the first locale loaded. */
+const pskPanelLabels = (): Record<PskPanelId, string> => ({
   // Same id, cockpit-local label — the RTTY/SSTV convention (see SCOPE_PANEL_ID).
-  scope: 'Waterfall',
-  stream: 'Decoded Text',
-}
+  scope: t('psk.panel.waterfall'),
+  stream: t('psk.panel.stream'),
+})
 
 /** Standard casual PSK31 F-key set — mixed case on purpose (full-ASCII
  * varicode is the point over Baudot; lowercase-heavy text also runs SHORTER
  * on the wire, the frequency-ordered code table). The engine re-validates
- * every gate (TX-enable, privileges, the Keyboard section) on each send. */
-const MACROS: { key: string; label: string; text: string }[] = [
-  { key: 'F1', label: 'CQ', text: 'CQ CQ CQ de {MYCALL} {MYCALL} pse k' },
-  { key: 'F2', label: 'Answer', text: '{CALL} de {MYCALL} {MYCALL} k' },
-  { key: 'F3', label: 'Exchange', text: '{CALL} de {MYCALL} ur 599 599 btu k' },
-  { key: 'F4', label: '73', text: '{CALL} de {MYCALL} tnx qso 73 sk' },
+ * every gate (TX-enable, privileges, the Keyboard section) on each send.
+ *
+ * `text` is what goes ON THE AIR and is invariant. The LABELS are mixed, exactly as RTTY's
+ * are: `CQ` is a Q-code and `73` a number, both invariant; the other two are words. */
+const MACROS: { key: string; label: () => string; text: string }[] = [
+  { key: 'F1', label: () => CQ, text: 'CQ CQ CQ de {MYCALL} {MYCALL} pse k' },
+  { key: 'F2', label: () => t('psk.macro.answer.label'), text: '{CALL} de {MYCALL} {MYCALL} k' },
+  {
+    key: 'F3',
+    label: () => t('psk.macro.exchange.label'),
+    text: '{CALL} de {MYCALL} ur 599 599 btu k',
+  },
+  { key: 'F4', label: () => SEVENTY_THREE, text: '{CALL} de {MYCALL} tnx qso 73 sk' },
 ]
 
 /** "+12 Hz" (signed) AFC readout. */
@@ -103,7 +129,7 @@ function fmtAfc(hz: number): string {
  */
 export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, panels }: Props) {
   const host = panels
-    ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: PSK_PANEL_LABELS })
+    ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels() })
     : null
   const shown = (id: PskPanelId) => (host ? host.shown(id) : true)
 
@@ -155,7 +181,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const toggleArm = () => {
     void pskArm(!armed)
       .then(setPsk)
-      .catch(() => pushToast('Could not switch the PSK decoder', 'error'))
+      .catch(() => pushToast(t('psk.arm.failed'), 'error'))
   }
 
   // Sub-mode selector — COCKPIT STATE held by the ENGINE (the sstvModes
@@ -167,7 +193,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const reverse = psk?.reverse === true
   const mode = PSK_MODE_BY_SLUG[modeSlug] ?? PSK_MODES[0]
   const setMode = (slug: string, rev: boolean) => {
-    void withErrorToast(() => pskSetMode(slug, rev), 'PSK mode switch refused').then((s) => {
+    void withErrorToast(() => pskSetMode(slug, rev), t('psk.mode.failed')).then((s) => {
       if (s) setPsk(s)
     })
   }
@@ -193,25 +219,27 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const [hisCall, setHisCall] = useState('')
   const snapRef = useRef(snap)
   snapRef.current = snap
-  const send = (t: string) => {
-    if (!t.trim()) return
+  // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
+  // that name would shadow it here and nowhere else (the RTTY cockpit reads the same).
+  const send = (line: string) => {
+    if (!line.trim()) return
     const mycall = snapRef.current?.mycall?.trim() ?? ''
-    if (t.includes('{MYCALL}') && !mycall) {
-      pushToast('Set your callsign in Settings before transmitting', 'info', 3500)
+    if (line.includes('{MYCALL}') && !mycall) {
+      pushToast(t('psk.send.noCallsign'), 'info', 3500)
       return
     }
-    if (t.includes('{CALL}') && !hisCall.trim()) {
-      pushToast('Enter their call first (the {CALL} field)', 'info', 3000)
+    if (line.includes('{CALL}') && !hisCall.trim()) {
+      pushToast(t('psk.send.noTheirCall'), 'info', 3000)
       return
     }
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
-      pushToast('TX locked — this frequency is outside your license privileges', 'info', 3500)
+      pushToast(t('psk.send.txLocked'), 'info', 3500)
       return
     }
-    const expanded = t
+    const expanded = line
       .replace(/\{MYCALL\}/g, mycall)
       .replace(/\{CALL\}/g, hisCall.trim().toUpperCase())
-    void withErrorToast(() => pskSend(expanded), 'PSK send failed').then((s) => {
+    void withErrorToast(() => pskSend(expanded), t('psk.send.failed')).then((s) => {
       if (s) setPsk(s)
     })
   }
@@ -239,7 +267,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   const latchedRef = useRef(latched)
   latchedRef.current = latched
   const toggleLatch = () => {
-    void withErrorToast(() => pskSetLatched(!latched), 'Continuous TX refused').then((s) => {
+    void withErrorToast(() => pskSetLatched(!latched), t('psk.latch.failed')).then((s) => {
       if (s) setPsk(s)
     })
     // Latching off leaves the compose field holding text that has already
@@ -258,9 +286,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       if (!latchedRef.current) return
       if (ev.inputType === 'insertText' && ev.data) {
         ev.preventDefault()
-        const t = ev.data
-        setText((prev) => prev + t)
-        void withErrorToast(() => pskType(t), 'PSK typing refused').then((s) => {
+        const ch = ev.data
+        setText((prev) => prev + ch)
+        void withErrorToast(() => pskType(ch), t('psk.type.failed')).then((s) => {
           if (s) setPsk(s)
         })
       } else {
@@ -306,18 +334,20 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           onSetTxEnabled={onSetTxEnabled}
           modeIndicator={
             <>
+              {/* The sub-mode NAME and its one-line hint come from `pskModes.ts` and move
+                  with that module; here they are values. */}
               <span
                 className="cw-mode-badge"
                 title={`${mode.name} — ${mode.hint}`}
               >
-                {mode.name} · {mode.baud} Bd
+                {mode.name} · {mode.baud} {BAUD_SYMBOL}
               </span>
               {PSK_MODES.length > 1 ? (
                 <select
                   className="settings-input psk-mode-select"
                   value={modeSlug}
                   onChange={(e) => setMode(e.target.value, reverse)}
-                  aria-label="PSK sub-mode"
+                  aria-label={t('psk.header.mode.aria')}
                 >
                   {PSK_MODES.map((m) => (
                     <option key={m.slug} value={m.slug} title={m.hint}>
@@ -336,18 +366,17 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                   className={`rtty-arm psk-rev${reverse ? ' on' : ''}`}
                   aria-pressed={reverse}
                   onClick={() => setMode(modeSlug, !reverse)}
-                  title={
-                    reverse
-                      ? 'Reversed polarity (LSB) — decoding and transmitting with the ±90° phase shifts mirrored. Click for normal (USB, the standard).'
-                      : 'Normal polarity (USB, the standard). Click if a QPSK31 station warbles but prints garbage — an LSB station’s phase shifts are mirrored.'
-                  }
+                  title={reverse ? t('psk.rev.on.title') : t('psk.rev.off.title')}
                 >
-                  Rev {reverse ? 'on' : 'off'}
+                  {reverse ? t('psk.rev.on.label') : t('psk.rev.off.label')}
                 </button>
               )}
               {sending && (
+                // ⚠️ NOT MIGRATED, and it is the transmit-path deferral, not an oversight:
+                // this tooltip states what Stop TX does to an over in flight. It moves with
+                // the stop controls, in the transmit-path batch, with the sweeps re-run.
                 <span className="rtty-tx-pill" title="PSK transmission on the air (Stop TX aborts)">
-                  TX ▲
+                  {TX_PLATE}
                 </span>
               )}
             </>
@@ -365,7 +394,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 onSet={onSetFrequency}
               />
             ) : (
-              <span className="cockpit-ph-pill" title="Showing the rig's current band">
+              <span className="cockpit-ph-pill" title={t('psk.header.band.title')}>
                 {bandLabelForMhz(snap.radio.dialMhz) || '— band —'}
               </span>
             )
@@ -403,7 +432,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           rxOffsetHz={centerHz}
           txOffsetHz={0}
           cursors={[{ hz: centerHz, color: '#3ddc8c', label: 'RX' }]}
-          hint="click nets the decoder"
+          hint={t('psk.waterfall.hint')}
           onTune={(hz) => void pskNet(hz).then(setPsk).catch(() => {})}
         />
       )}
@@ -418,34 +447,23 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           the shell's grower, transcript scrolling inside. Every control in the head is a
           DECODER control (arm / re-acquire / clear) — none touches PTT. */}
       {shown('stream') && (
-        <CockpitPaneFrame title="Decoded text" paneId="stream">
-          <div
-            className="cw-decode psk-stream"
-            title="Decoded PSK31 text — faint characters are low-confidence copy (the demodulator's phase-margin metric)"
-          >
+        <CockpitPaneFrame title={t('psk.pane.stream.title')} paneId="stream">
+          <div className="cw-decode psk-stream" title={t('psk.stream.title')}>
             <div className="cw-decode-head">
-              <span className="cw-decode-label">RX ▼</span>
+              <span className="cw-decode-label">{RX_PLATE}</span>
               <button
                 type="button"
                 className={`rtty-arm${armed ? ' on' : ''}`}
                 aria-pressed={armed}
                 onClick={toggleArm}
-                title={
-                  armed
-                    ? 'RX armed — decoding the receive audio (RX only, never keys the rig). Click to stop; stopping is remembered for this session.'
-                    : 'Arm RX — start decoding PSK31 from the receive audio (RX only, never keys the rig)'
-                }
+                title={armed ? t('psk.arm.on.title') : t('psk.arm.off.title')}
               >
-                {armed ? 'RX armed' : 'Arm RX'}
+                {armed ? t('psk.arm.on.label') : t('psk.arm.off.label')}
               </button>
               {armed && psk && (
                 <span
                   className={`rtty-afc-pill${psk.signal ? ' locked' : ''}`}
-                  title={
-                    psk.signal
-                      ? 'Carrier — the decoder reads a PSK signal at its cursor; the AFC offset from the netted frequency is shown (slew-limited, never more than ±25 Hz)'
-                      : 'No carrier at the cursor yet — click a trace on the waterfall to net the decoder onto it'
-                  }
+                  title={psk.signal ? t('psk.carrier.on.title') : t('psk.carrier.off.title')}
                 >
                   {psk.signal ? '● ' : '○ '}
                   {fmtAfc(psk.afcHz)}
@@ -460,9 +478,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                       .then(setPsk)
                       .catch(() => {})
                   }}
-                  title="Re-acquire — drop and rebuild the demodulator for a fresh AFC pull from the netted frequency (use when it pulled onto a neighbor)"
+                  title={t('psk.afcReset.title')}
                 >
-                  Re-acquire
+                  {t('psk.afcReset.label')}
                 </button>
               )}
               <button
@@ -475,9 +493,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                   // follow the next copy even if the operator had scrolled up.
                   streamPin.repin()
                 }}
-                title="Clear the decoded transcript"
+                title={t('psk.clear.title')}
               >
-                Clear
+                {t('psk.clear.label')}
               </button>
             </div>
             <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
@@ -489,9 +507,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 ))
               ) : (
                 <span className="cw-decode-idle">
-                  {armed
-                    ? 'listening… click a PSK trace on the waterfall to net the decoder'
-                    : 'Arm RX to decode PSK31 from the receive audio'}
+                  {armed ? t('psk.stream.listening') : t('psk.stream.idle')}
                 </span>
               )}
             </div>
@@ -514,13 +530,13 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           control pressed: the engine's per-tick gate re-check, which unkeys within one
           tick on a section change, a QSY out of privileges, a tune, or a radio handoff. */}
       <div className="cockpit-txdock">
-      <div className="cw-macros psk-macros" role="group" aria-label="PSK macros">
+      <div className="cw-macros psk-macros" role="group" aria-label={t('psk.macros.aria')}>
         <input
           className="settings-input rtty-hiscall"
           value={hisCall}
           onChange={(e) => setHisCall(e.target.value.toUpperCase())}
-          placeholder="Their call…"
-          aria-label="Worked station callsign (the {CALL} macro token)"
+          placeholder={t('psk.hisCall.placeholder')}
+          aria-label={t('psk.hisCall.aria')}
           autoComplete="off"
           spellCheck={false}
         />
@@ -537,9 +553,12 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             }`}
           >
             <span className="cw-macro-key">{m.key}</span>
-            <span className="cw-macro-label">{m.label}</span>
+            <span className="cw-macro-label">{m.label()}</span>
           </button>
         ))}
+        {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
+            tooltip is the wording that states what clicking it off does NOT do (it lets
+            what was typed finish keying). Label and tooltips move with the stop line. */}
         <button
           type="button"
           className={`cw-macro rtty-tx-latch psk-tx-latch${latched ? ' on' : ''}`}
@@ -554,6 +573,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           <span className="cw-macro-key">TX</span>
           <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
         </button>
+        {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on PSK's stop-line census and is found by
+            ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans and
+            the tooltip move in the transmit-path batch, with that sweep re-run. */}
         <button
           type="button"
           className="cw-macro rtty-stop psk-stop"
@@ -584,17 +606,19 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               // Latched, Enter is a NEW LINE on the air (CR LF — both are in
               // the varicode table), not a send: the transmitter is already up.
               setText('')
-              void withErrorToast(() => pskType('\r\n'), 'PSK typing refused').then((s) => {
+              void withErrorToast(() => pskType('\r\n'), t('psk.type.failed')).then((s) => {
                 if (s) setPsk(s)
               })
             } else {
               sendTyped()
             }
           }}
-          placeholder={latched ? 'Typing on the air…' : 'Type PSK31 to send… (Enter)'}
+          placeholder={
+            latched ? t('psk.compose.placeholder.latched') : t('psk.compose.placeholder')
+          }
           autoComplete="off"
           spellCheck={false}
-          aria-label="PSK compose"
+          aria-label={t('psk.compose.aria')}
         />
         <button
           type="button"
@@ -602,7 +626,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           onClick={sendTyped}
           disabled={latched || !text.trim()}
         >
-          Send
+          {t('psk.compose.send.label')}
         </button>
       </div>
 
@@ -610,12 +634,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           signal — a rig's ALC flattening it back to constant amplitude regenerates
           the splatter (IMD) the shaping removed. Nexus already transmits at a modest
           default drive; this line is the operator's half. No auto-ALC, on purpose. */}
-      <div
-        className="psk-drive-hint"
-        title="PSK31 is an amplitude-shaped mode: if the rig's ALC is compressing, the signal splatters into the neighbors (IMD). Nexus keys at a modest drive by default — set TX audio / power so the rig's ALC meter barely moves."
-      >
-        Keep the rig's ALC near zero — an overdriven PSK31 signal splatters (IMD). Lower TX
-        audio until the ALC meter barely moves.
+      <div className="psk-drive-hint" title={t('psk.drive.title')}>
+        {t('psk.drive.text')}
       </div>
       </div>
     </main>

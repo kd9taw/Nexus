@@ -6308,6 +6308,364 @@ export const EN = {
   'operate.tx.send.title': 'Send this as the next transmission (Alt+{{n}})',
 
   // ══════════════════════════════════════════════════════════════════════════════════════
+  // THE KEYBOARD AND PICTURE COCKPITS — RTTY, PSK and SSTV.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // Three cockpits with one shape: a header, a band waterfall, one content pane and a TX
+  // dock. RTTY and PSK are the two KEYBOARD modes and their surfaces are deliberately the
+  // same surface (PSK was built from RTTY's, verbatim) — but each keeps its OWN keys, per
+  // the rule at the foot of this file: a shared key that two surfaces later want to word
+  // differently cannot be split without orphaning both translations, and "Arm RX" already
+  // explains a different demodulator in each.
+  //
+  // ⚠️ THE UNITS RULE LANDS ON THE TONES AND THE RASTER here. Every baud rate, shift, mark
+  // and space tone, AFC offset in Hz, sub-mode name (PSK31, QPSK31), SSTV mode name and its
+  // raster and key-down seconds, VIS code, dial reading, callsign, FSK ID and megapixel
+  // count on these screens is data and stays in the code — as do the vocabularies each file
+  // gathers as named constants (RTTY's RTTY/RX ▼/TX ▲/CQ, PSK's Bd and its Rev/RX ▼/TX ▲,
+  // SSTV's own name and its 'MYCALL'/'TEXT' placeholders), the F-key macro TEXTS (they go on
+  // the air), the `value` of every <select>, and the sniffed image formats the picker
+  // offers. What moved is the prose around them.
+  //
+  // ⚠️ AND WHAT IS ABSENT, DELIBERATELY: every control that STOPS a transmission, and the
+  // continuous-TX latch beside it. See the PARTIAL block in `hardcoded-strings.test.ts` for
+  // the per-file list — those move in the transmit-path batch, with the stop-line sweeps
+  // re-run. A refusal TOAST is not a control, so the toasts those controls raise are here.
+
+  // ── RTTY ▸ the cockpit header, its pills and the ⊞ panel names ──────────────────────
+  'rtty.panel.waterfall': 'Waterfall',
+  'rtty.panel.stream': 'Decoded Text',
+  'rtty.header.mode.title':
+    'RTTY — Baudot/ITA2 at the configured baud + shift (45.45 / 170 Hz is the HF standard; change it in Settings → RTTY)',
+  'rtty.header.backend.fsk.title':
+    'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
+  'rtty.header.backend.afsk.title':
+    'AFSK — soundcard tones through the rig in LSB (soundcard-clocked, the robust default). Change the backend in Settings → RTTY.',
+  'rtty.header.band.title': "Showing the rig's current band",
+  'rtty.waterfall.hint': 'click nets the decoder',
+
+  // ── RTTY ▸ the decoded-text pane ────────────────────────────────────────────────────
+  // The pane's own name is lower-case where the frame prints it and title-case in the ⊞
+  // menu, because that is what each surface shipped; two keys rather than one re-cased.
+  'rtty.pane.stream.title': 'Decoded text',
+  'rtty.stream.title':
+    "Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)",
+  'rtty.arm.on.label': 'RX armed',
+  'rtty.arm.off.label': 'Arm RX',
+  'rtty.arm.on.title':
+    'RX armed — decoding the receive audio (RX only, never keys the rig). Click to disarm.',
+  'rtty.arm.off.title':
+    'Arm RX — start decoding RTTY from the receive audio (RX only, never keys the rig)',
+  'rtty.arm.failed': 'Could not switch the RTTY decoder',
+  // The auto-sequencer's own toggle is a stop control (its off-click aborts the QSO and
+  // unkeys), so its label and tooltips are NOT here — only what it says when it refuses.
+  'rtty.auto.failed': 'Could not switch the RTTY auto-sequencer',
+  'rtty.afc.locked.title':
+    'AFC locked — acquired the mark/space pair and frozen on it (offset from the nominal tones)',
+  'rtty.afc.title':
+    'AFC offset from the nominal mark/space tone pair — locks once a signal is acquired',
+  'rtty.afcReset.label': 'Re-tune',
+  'rtty.afcReset.title':
+    'Re-acquire AFC — drop and rebuild the demodulator (use when it froze on the wrong signal)',
+  'rtty.clear.label': 'Clear',
+  'rtty.clear.title': 'Clear the decoded transcript',
+  'rtty.stream.listening': 'listening…',
+  'rtty.stream.idle': 'Arm RX to decode RTTY from the receive audio',
+
+  // ── RTTY ▸ the auto-sequencer row ───────────────────────────────────────────────────
+  // Its six states are words; `{{call}}` is the callsign the decoder surfaced.
+  'rtty.seq.aria': 'RTTY auto-sequencer',
+  'rtty.seq.callingCq': 'Calling CQ',
+  'rtty.seq.answering': 'Answering',
+  'rtty.seq.exchangeSent': 'Exchange sent',
+  'rtty.seq.confirmed': 'Confirmed',
+  'rtty.seq.done': 'Done',
+  'rtty.seq.idle': 'Idle',
+  'rtty.autoCq.label': 'Auto call',
+  'rtty.autoCq.title':
+    'Call CQ and auto-run the QSO — the engine keys only after you click, never on its own',
+  'rtty.autoCq.failed': 'Auto CQ refused',
+  'rtty.autoAnswer.label': 'Answer',
+  'rtty.autoAnswer.title': 'Answer {{call}} and auto-run the exchange (search & pounce)',
+  'rtty.autoAnswer.none.title':
+    'No CQ heard yet — Answer lights up when the decoder surfaces one',
+  'rtty.autoAnswer.failed': 'Auto answer refused',
+
+  // ── RTTY ▸ the macro row and the compose bar ────────────────────────────────────────
+  // `CQ` and `73` name themselves and stay in the code; these two are words. The macro
+  // TEXTS are what goes on the air and are invariant, tooltip included.
+  'rtty.macros.aria': 'RTTY macros',
+  'rtty.macro.answer.label': 'Answer',
+  'rtty.macro.exchange.label': 'Exchange',
+  // ⚠️ `{CALL}` is a macro token the expander matches literally — safe here only because
+  // interpolation is `{{double}}`.
+  'rtty.hisCall.placeholder': 'Their call…',
+  'rtty.hisCall.aria': 'Worked station callsign (the {CALL} macro token)',
+  'rtty.compose.aria': 'RTTY compose',
+  'rtty.compose.placeholder': 'Type RTTY to send… (Enter)',
+  'rtty.compose.placeholder.latched': 'Typing on the air…',
+  'rtty.compose.send.label': 'Send',
+  'rtty.send.noCallsign': 'Set your callsign in Settings before transmitting',
+  'rtty.send.noTheirCall': 'Enter their call first (the {CALL} field)',
+  'rtty.send.txLocked': 'TX locked — this frequency is outside your license privileges',
+  'rtty.send.failed': 'RTTY send failed',
+  'rtty.latch.failed': 'Continuous TX refused',
+  'rtty.type.failed': 'RTTY typing refused',
+
+  // ── PSK ▸ the cockpit header, its pills and the ⊞ panel names ───────────────────────
+  // The sub-mode NAMES and their one-line hints live in `pskModes.ts` and move with that
+  // module; the cockpit interpolates them. `Rev` is the polarity control's own token, so
+  // each of its two faces is one whole label rather than a stem plus on/off.
+  'psk.panel.waterfall': 'Waterfall',
+  'psk.panel.stream': 'Decoded Text',
+  'psk.header.mode.aria': 'PSK sub-mode',
+  'psk.mode.failed': 'PSK mode switch refused',
+  'psk.rev.on.label': 'Rev on',
+  'psk.rev.off.label': 'Rev off',
+  'psk.rev.on.title':
+    'Reversed polarity (LSB) — decoding and transmitting with the ±90° phase shifts mirrored. Click for normal (USB, the standard).',
+  'psk.rev.off.title':
+    'Normal polarity (USB, the standard). Click if a QPSK31 station warbles but prints garbage — an LSB station’s phase shifts are mirrored.',
+  'psk.header.band.title': "Showing the rig's current band",
+  'psk.waterfall.hint': 'click nets the decoder',
+
+  // ── PSK ▸ the decoded-text pane ─────────────────────────────────────────────────────
+  'psk.pane.stream.title': 'Decoded text',
+  'psk.stream.title':
+    "Decoded PSK31 text — faint characters are low-confidence copy (the demodulator's phase-margin metric)",
+  'psk.arm.on.label': 'RX armed',
+  'psk.arm.off.label': 'Arm RX',
+  'psk.arm.on.title':
+    'RX armed — decoding the receive audio (RX only, never keys the rig). Click to stop; stopping is remembered for this session.',
+  'psk.arm.off.title':
+    'Arm RX — start decoding PSK31 from the receive audio (RX only, never keys the rig)',
+  'psk.arm.failed': 'Could not switch the PSK decoder',
+  'psk.carrier.on.title':
+    'Carrier — the decoder reads a PSK signal at its cursor; the AFC offset from the netted frequency is shown (slew-limited, never more than ±25 Hz)',
+  'psk.carrier.off.title':
+    'No carrier at the cursor yet — click a trace on the waterfall to net the decoder onto it',
+  'psk.afcReset.label': 'Re-acquire',
+  'psk.afcReset.title':
+    'Re-acquire — drop and rebuild the demodulator for a fresh AFC pull from the netted frequency (use when it pulled onto a neighbor)',
+  'psk.clear.label': 'Clear',
+  'psk.clear.title': 'Clear the decoded transcript',
+  'psk.stream.listening': 'listening… click a PSK trace on the waterfall to net the decoder',
+  'psk.stream.idle': 'Arm RX to decode PSK31 from the receive audio',
+
+  // ── PSK ▸ the macro row, the compose bar and the drive hint ─────────────────────────
+  'psk.macros.aria': 'PSK macros',
+  'psk.macro.answer.label': 'Answer',
+  'psk.macro.exchange.label': 'Exchange',
+  'psk.hisCall.placeholder': 'Their call…',
+  'psk.hisCall.aria': 'Worked station callsign (the {CALL} macro token)',
+  'psk.compose.aria': 'PSK compose',
+  'psk.compose.placeholder': 'Type PSK31 to send… (Enter)',
+  'psk.compose.placeholder.latched': 'Typing on the air…',
+  'psk.compose.send.label': 'Send',
+  'psk.send.noCallsign': 'Set your callsign in Settings before transmitting',
+  'psk.send.noTheirCall': 'Enter their call first (the {CALL} field)',
+  'psk.send.txLocked': 'TX locked — this frequency is outside your license privileges',
+  'psk.send.failed': 'PSK send failed',
+  'psk.latch.failed': 'Continuous TX refused',
+  'psk.type.failed': 'PSK typing refused',
+  'psk.drive.text':
+    "Keep the rig's ALC near zero — an overdriven PSK31 signal splatters (IMD). Lower TX audio until the ALC meter barely moves.",
+  'psk.drive.title':
+    "PSK31 is an amplitude-shaped mode: if the rig's ALC is compressing, the signal splatters into the neighbors (IMD). Nexus keys at a modest drive by default — set TX audio / power so the rig's ALC meter barely moves.",
+
+  // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
+  // Positive identification only: an unrecognised header falls through to the decoder, so
+  // there is no "unknown format" entry here. The iPhone path names Apple's own menu items —
+  // a locale should use the ones that OS actually shows.
+  'sstv.refuse.heic':
+    "iPhone HEIC photos can't be read here — Nexus has no HEVC decoder. On the iPhone: Settings → Camera → Formats → Most Compatible (new photos are JPEG), or Settings → Photos → Transfer to Mac or PC → Automatic (converts on send). Then re-send this picture.",
+  'sstv.refuse.avif':
+    'That is an AVIF file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.',
+  'sstv.refuse.tiff':
+    'That is a TIFF file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.',
+  'sstv.refuse.raw':
+    'That is a camera RAW file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export a JPEG from it first.',
+  'sstv.refuse.psd':
+    'That is a Photoshop file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.',
+  'sstv.refuse.svg':
+    'That is an SVG drawing, not a photo. SSTV sends JPEG, PNG, WebP, BMP or GIF — export it as one of those.',
+
+  // ── SSTV ▸ what the receiver is hearing (the sstvDecodeStatus ladder) ───────────────
+  // ⚠️ ONE WHOLE SENTENCE PER STATE, with the "where to tune" clause interpolated WHOLE and
+  // carrying its own leading space — it is an appositive the caller either has or has not,
+  // not a tail glued onto a stem. `{{freq}}` is a dial reading and `{{mode}}` a mode name,
+  // both formatted invariantly by the view; `{{age}}` is a stamped age and `{{vis}}` the VIS
+  // code clause, which is a technical token and is built in the view.
+  'sstv.rx.where': ' Images on this band appear at {{freq}} {{mode}}.',
+  'sstv.rx.off':
+    'The receiver is stopped — nothing is being decoded. Press Arm to start it.{{where}}',
+  'sstv.rx.nocapture':
+    'Listening, but no audio is reaching the decoder at all — the capture device is not delivering anything. Check that Input Device (RX) is the radio; hearing the signal on the speaker does not mean the app is capturing it.',
+  'sstv.rx.starting': 'Receiver started — no audio has reached the decoder yet.{{where}}',
+  'sstv.rx.unsupported':
+    'Heard an SSTV header {{age}} ago in a mode this build cannot decode{{vis}}. The signal and the audio path are fine — Scottie, Martin, Robot and PD images all decode.',
+  'sstv.rx.decoded': {
+    one: '{{count}} image decoded since arming, last one {{age}} ago. Listening for the next header.',
+    other:
+      '{{count}} images decoded since arming, last one {{age}} ago. Listening for the next header.',
+  },
+  'sstv.rx.silent':
+    'Audio is arriving but it is silent. If you can hear the signal on the speaker, the app is on a different input — check Input Device (RX), and RX Gain if the level is just low.{{where}}',
+  'sstv.rx.listening':
+    'Hearing audio, no SSTV header yet — a picture decodes automatically when one starts.{{where}}',
+  'sstv.rx.unreachable':
+    'Cannot read the receiver state — the app is not answering. The decoder may still be running.',
+  'sstv.rx.openAudio': 'Open audio settings',
+
+  // ── SSTV ▸ the header and the RX stage ──────────────────────────────────────────────
+  'sstv.panel.waterfall': 'Waterfall',
+  // One key each for the two lower panes: the ⊞ menu entry and the frame's own title are
+  // the same word for the same pane.
+  'sstv.panel.txcompose': 'Transmit',
+  'sstv.panel.gallery': 'Gallery',
+  'sstv.arm.on.label': 'Armed',
+  'sstv.arm.off.label': 'Arm',
+  'sstv.arm.on.title':
+    'Armed — any VIS header heard auto-decodes and auto-saves to the gallery (RX only). Click to disarm.',
+  'sstv.arm.off.title':
+    'Arm — auto-decode any VIS header heard on the receive audio (RX only, never transmits)',
+  'sstv.arm.failed': 'Could not switch the SSTV receiver',
+  // A CONFIGURATION control on the transmit path is not a transmit control (the batch-13
+  // ruling): the drive slider moved, Stop did not.
+  'sstv.header.power.label': 'Power',
+  'sstv.header.power.title': 'RF output power — set it against a Tune carrier, below ALC',
+  'sstv.header.mode.title':
+    'Detected SSTV mode — fills in (Martin / Scottie / Robot / PD) when the receiver hears a VIS header',
+  'sstv.header.band.title': "Showing the rig's current band — SSTV decodes wherever you're tuned",
+  'sstv.header.slant.label': 'Slant',
+  'sstv.header.slant.title':
+    'Slant trim — fine sample-clock correction. Auto-corrected by the decoder; the manual trim comes in a later build.',
+  'sstv.header.slant.aria': 'SSTV slant trim (disabled — decoder not wired yet)',
+  'sstv.stage.aria': 'SSTV image',
+  'sstv.waterfall.hint': 'the band — a picture takes this space when one arrives',
+  'sstv.caption.lines': '{{mode}} — {{done}}/{{total}} lines',
+  'sstv.caption.decoding': 'decoding {{mode}}…',
+  'sstv.caption.decoding.airtime':
+    'decoding {{mode}}… the picture lands when the transmission ends (≈{{clock}})',
+  // Appended to the caption when the arriving header says the dial is off frequency;
+  // `{{hz}}` is the signed offset, already stringified invariantly.
+  'sstv.caption.tuneOff': ' · tuning {{hz}} Hz',
+
+  // ── SSTV ▸ the composer ─────────────────────────────────────────────────────────────
+  // The preview's accessible name is ONE whole sentence per framing state, with the overlay
+  // clause interpolated whole — never a stem plus three tails. `{{w}}`/`{{h}}` are the
+  // raster the picture is sent at.
+  'sstv.tx.preview.aria.empty': 'No image chosen',
+  'sstv.tx.preview.aria.fits':
+    'Transmit preview, {{w}}×{{h}} — the picture already fits, no crop needed{{overlays}}',
+  'sstv.tx.preview.aria.cropX':
+    'Transmit preview, {{w}}×{{h}}. Drag or use the arrow keys to choose which part of the picture is sent (left and right); Home re-centres.{{overlays}}',
+  'sstv.tx.preview.aria.cropY':
+    'Transmit preview, {{w}}×{{h}}. Drag or use the arrow keys to choose which part of the picture is sent (up and down); Home re-centres.{{overlays}}',
+  'sstv.tx.preview.aria.overlays':
+    ' Click a text overlay to select it; arrows move it, Delete removes it.',
+  'sstv.tx.drop.hint':
+    'Drop an image here, or choose one below — any size, resized to the mode for you.',
+  'sstv.tx.file.choose': 'Choose image…',
+  'sstv.tx.file.change': 'Change image…',
+  // The overlay presets. `CQ`, `73` and the `MYCALL` stand-in are what gets PAINTED INTO the
+  // picture and stay in the view; only the Reply button and the free-text one are words.
+  'sstv.tx.overlay.presets.label': 'Text:',
+  'sstv.tx.overlay.reply.label': 'Reply',
+  'sstv.tx.overlay.reply.title': 'Reply to {{call}} (the newest FSK ID in the gallery)',
+  'sstv.tx.overlay.reply.none.title':
+    'Enabled once a station has been received with an FSK ID',
+  'sstv.tx.overlay.add.label': '+ Text',
+  'sstv.tx.overlay.text.aria': 'Overlay text',
+  'sstv.tx.overlay.style.aria': 'Text style',
+  'sstv.tx.overlay.style.title':
+    "Crisp: the ident's pixel font, proven through the decoder. Banner: big display text with an outline, MMSSTV-style.",
+  'sstv.tx.overlay.style.crisp': 'Crisp',
+  'sstv.tx.overlay.style.banner': 'Banner',
+  'sstv.tx.overlay.size.aria': 'Text size',
+  // The swatches: the palette id in `sstvOverlay.ts` is the STORED VALUE, and these are the
+  // words a screen reader reads off it.
+  'sstv.tx.overlay.color.aria': 'Text colour',
+  'sstv.tx.overlay.color.white': 'white',
+  'sstv.tx.overlay.color.black': 'black',
+  'sstv.tx.overlay.color.yellow': 'yellow',
+  'sstv.tx.overlay.color.orange': 'orange',
+  'sstv.tx.overlay.color.red': 'red',
+  'sstv.tx.overlay.color.green': 'green',
+  'sstv.tx.overlay.color.cyan': 'cyan',
+  'sstv.tx.overlay.color.blue': 'blue',
+  'sstv.tx.overlay.treatment.aria': 'Contrast treatment',
+  'sstv.tx.overlay.treatment.title':
+    'What keeps the text readable on the far end: a solid plate behind it, or a thick outline around it',
+  'sstv.tx.overlay.treatment.plate': 'Plate',
+  'sstv.tx.overlay.treatment.outline': 'Outline',
+  'sstv.tx.overlay.remove.aria': 'Remove overlay {{text}}',
+  'sstv.tx.overlay.remove.title': 'Remove this text',
+  // What actually goes out — one line, every figure interpolated: the file name, the source
+  // size in its own parentheses, the mode's raster, its name and its key-down time.
+  'sstv.tx.name': '{{name}}{{size}} → {{w}}×{{h}} · {{mode}} · {{clock}} key-down',
+  // Where the identification is. `{{call}}` is the operator's own callsign.
+  'sstv.tx.id.inPicture': "{{call}} — you've said it's already in the picture",
+  'sstv.tx.id.inText': '{{call}} in your text · no plate burned in',
+  'sstv.tx.id.plate': '{{call}} burned in · top left',
+  'sstv.tx.id.missing':
+    'No callsign set — SSTV identifies by burning your call into the picture, so it will not transmit without one.',
+  'sstv.tx.id.missing.action': 'Set your callsign',
+  'sstv.tx.id.missing.where': 'Set one in Settings ▸ Station.',
+  'sstv.tx.idopt.label': 'My picture already shows my callsign',
+  'sstv.tx.idopt.title':
+    'Skip the burned-in callsign for this picture only — use when the image already shows your call, e.g. a pre-made QSO card',
+  'sstv.tx.notice.upscale':
+    "That picture is {{w}}×{{h}}, smaller than {{mode}}'s {{mw}}×{{mh}} — it will be enlarged and look soft.",
+  'sstv.tx.notice.exactFit': 'Already {{w}}×{{h}} — sent pixel for pixel, no crop needed.',
+  'sstv.tx.notice.gif': 'Sending the first frame — SSTV transmits one still picture.',
+  // `{{magic}}` is the file's first four bytes as hex — naming what it really starts with.
+  'sstv.tx.notice.notImage': "That file isn't an image Nexus can read (it starts with {{magic}}).",
+  'sstv.tx.notice.damaged':
+    "That image is damaged and only decoded partly — Nexus won't transmit half a picture. Try re-exporting it.",
+  'sstv.tx.notice.tooLarge':
+    "That's a {{w}}×{{h}} image ({{mp}} megapixels) — too large to work with. Export a smaller copy; anything over about 4000 px wide is already far more than SSTV can send.",
+  'sstv.tx.pixels.failed': 'Could not read the image pixels',
+
+  // ── SSTV ▸ the transmit dock and what it says ───────────────────────────────────────
+  // ⚠️ Stop and the bar's own accessible name are ABSENT by design — see the block header.
+  // `{{freq}}` in the ISS prompt is the downlink frequency, a constant in the view.
+  'sstv.tx.mode.label': 'Mode',
+  'sstv.tx.mode.aria': 'SSTV transmit mode',
+  'sstv.tx.mode.title':
+    'Transmit mode. VHF/2 m images use PD-120 (ARISS); HF uses Scottie 1 (NA) or Martin 1 (EU).',
+  'sstv.tx.send.label': 'Send',
+  'sstv.tx.send.noImage.title': 'Choose an image to transmit first',
+  'sstv.tx.send.noCallsign.title':
+    'Set your callsign in Settings → Station — SSTV identifies by burning it into the picture, and will not transmit without one',
+  'sstv.tx.send.title':
+    'Transmit this image with {{call}} burned in — switches to Phone (USB/LSB) and keys the rig',
+  'sstv.tx.send.noCallsign': 'Set your callsign — SSTV identifies by burning it into the picture',
+  'sstv.tx.send.noCallsign.action': 'Set callsign',
+  'sstv.tx.iss.confirm':
+    '{{freq}} MHz is the ISS SSTV downlink. Transmit only during a sanctioned ARISS uplink event. Send anyway?',
+  'sstv.tx.send.failed': 'SSTV send refused',
+  'sstv.tx.announce.sending': 'Transmitting SSTV {{mode}}',
+  'sstv.tx.announce.finished': 'SSTV transmit finished',
+  'sstv.tx.progress': 'TX — {{mode}} · {{clock}} remaining',
+
+  // ── SSTV ▸ the gallery ──────────────────────────────────────────────────────────────
+  // `{{mode}}` is an SSTV mode name and `{{when}}` a UTC stamp; both arrive formatted.
+  'sstv.gallery.empty':
+    'Received images collect here — auto-saved with callsign (FSK ID), mode, frequency, and time.',
+  'sstv.gallery.thumb.alt': '{{mode}} image received {{when}}',
+  'sstv.gallery.delete.aria': 'Delete the {{mode}} image received {{when}}',
+  'sstv.gallery.delete.title': 'Delete this image',
+  'sstv.gallery.delete.confirm.title': 'Delete the {{mode}} received {{when}}?',
+  'sstv.gallery.delete.confirm.body': 'The image file is removed and cannot be recovered.',
+  'sstv.gallery.delete.confirm.label': 'Delete image',
+  'sstv.gallery.delete.failed': 'Could not delete the image',
+  'sstv.gallery.edit.aria': 'Edit and resend the {{mode}} image received {{when}}',
+  'sstv.gallery.edit.title': 'Load this image into the composer',
+  'sstv.gallery.edit.loaded': 'Loaded {{mode}} image into the composer',
+  'sstv.gallery.edit.failed': 'Could not load that image into the composer',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
   // THE SHELL — chrome, navigation, and the ⊞ panel menu.
   // ══════════════════════════════════════════════════════════════════════════════════════
   //

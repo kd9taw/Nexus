@@ -387,6 +387,33 @@ const MIGRATED = [
  * moved with them: it describes the MODE, not the control it is hung on. Operate's third
  * census holder, Esc, is a window keydown with no string at all.
  *
+ * `RttyCockpit.tsx`, `PskCockpit.tsx` and `SstvView.tsx` (batch 19, 2026-08-19) are here on
+ * the same narrow ruling, and this batch is where it is stated in full: THE BATCH MOVES NO
+ * CONTROL THAT STOPS A TRANSMISSION, whether or not a sweep looks for it. These three share
+ * one stop-line shape, which is why they were migrated together — one reviewer, one mental
+ * model. What stayed written, per file:
+ *
+ *   · RTTY — the dock's Esc/Stop macro (both spans and its tooltip; `stop-line.test.tsx`
+ *     finds it by accessible name, /^esc\s*stop$/i), the auto-sequencer's Abort (census,
+ *     conditionally rendered so no sweep sees it), the `stream` pane's "Auto on" toggle
+ *     (its off-click is seq.abort() + Engine::rtty_stop() — a REAL stop, pane-resident,
+ *     which is exactly why it is on no sweep's list), and the continuous-TX latch.
+ *   · PSK — the same Esc/Stop macro and the same continuous-TX latch. No sequencer.
+ *   · SSTV — the transmit dock's Stop (census; found by accessible name, /^stop$/i), the
+ *     bar's own aria-label, which names the controls it holds, and the sentence Stop
+ *     announces when it fires.
+ *   · RTTY and PSK both — the TX-on-air pill's tooltip, which is the wording that states
+ *     what Stop TX does to an over in flight (the batch-18 ruling on Operate's TX On/Off
+ *     tooltip, verbatim).
+ *
+ * The TX-ENABLE LATCH is on all three cockpits' censuses and is drawn by `CockpitHeader`,
+ * so it is deferred there rather than in any of these files. What DID move is everything
+ * around them, senders included — the F-key macros, both compose bars and their Send, the
+ * auto-sequencer's CQ/Answer, SSTV's Send and its whole composer — on the batch-18 ruling
+ * that a control which STARTS a transmission is not what "transmit control" means here. So
+ * did the refusal TOASTS those deferred controls raise: a toast is not a control and no
+ * sweep can see one. All three graduate the moment the transmit-path batch lands.
+ *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be
  * added to it to dodge a failing check.
@@ -396,6 +423,9 @@ const PARTIAL = [
   'components/SetupHealth.tsx',
   'components/AprsCockpit.tsx',
   'components/OperateQsoStrip.tsx',
+  'components/RttyCockpit.tsx',
+  'components/PskCockpit.tsx',
+  'components/SstvView.tsx',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
