@@ -1,6 +1,6 @@
 # Settings reference
 
-Settings is organized into nine tabs. Only the active tab renders, so typing in
+Settings is organized into ten tabs. Only the active tab renders, so typing in
 one field doesn't lag the whole panel. **Save** at the bottom applies your
 changes; most take effect live (a few say "takes effect on restart", and a few
 apply the instant you touch them — those say so too).
@@ -1157,6 +1157,23 @@ undiscoverable.
   outside the settings), and **stored passwords stay in your keychain** — clear
   those individually under *Logging & Connectors*. Confirms first, and cannot be
   undone, so back up if you have not.
+
+### Backup & reset
+
+**Back up your setup** writes every setting to a single file you choose — radios, routing,
+frequencies, macros, cluster and logging preferences. **Restore** reads one back and applies it
+immediately.
+
+⚠️ A backup carries **no passwords and no API keys**. Those live in the operating system's keychain,
+never in a settings file, so a backup can be copied to another machine or attached to a support
+thread without leaking a credential — and after restoring on a new machine you re-enter them once.
+
+**Reset to defaults** puts every setting back as it shipped. It asks first, and the confirmation
+says what SURVIVES as well as what goes: **your logbook and your saved passwords are untouched** —
+only settings are cleared. That is the question people actually have before they press it.
+
+These three used to sit under Radio ▸ Transmit limits & sharing, which is why they were hard to
+find: backing up a whole station has nothing to do with transmit limits.
 
 ---
 
