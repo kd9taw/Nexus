@@ -848,6 +848,10 @@ pub struct RadioConfig {
     /// PTT method: `"cat"` (launch + use rigctld), `"rts"`, `"dtr"`, or `"vox"`.
     pub ptt_method: String,
     /// Hamlib rig model number for `rigctld -m` (0 = none / VOX).
+    /// The operator's own name for this radio (and its model name), for the diagnostic log.
+    /// Display only — see `Transport::radio_label`. Empty is fine: the label falls back to the
+    /// model number, which is what the startup line showed before this existed.
+    pub radio_label: String,
     pub rig_model: u32,
     /// The operator's "my interface keys PTT on the CAT port's RTS line" declaration
     /// (`Settings::cat_rts_keys_ptt`). Carried in the STARTUP SEED, not left to the first
@@ -902,6 +906,7 @@ impl Default for RadioConfig {
             rx_tap: Arc::new(crate::rxtap::RxTap::new()),
             meter_feed: tempo_app::engine::MeterFeed::default(),
             ptt_method: "vox".to_string(),
+            radio_label: String::new(),
             rig_model: 0,
             cat_rts_keys_ptt: false,
             serial_port: String::new(),
@@ -1086,16 +1091,14 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // and must not read as one in the file.
     let who = applied.log_subject();
     match init_probe.ok {
-        Some(true) => {
-            tempo_core::applog::info("cat", &format!("{who}: connected — {}", init_probe.detail))
-        }
+        Some(true) => tempo_core::applog::info("cat", &format!("{who}: {}", init_probe.detail)),
         Some(false) => tempo_core::applog::error(
             "cat",
-            &format!("{who}: NOT connected — {}", init_probe.detail),
+            &format!("{who}: NOT connected: {}", init_probe.detail),
         ),
         None => tempo_core::applog::info(
             "cat",
-            &format!("{who}: no CAT channel — {}", init_probe.detail),
+            &format!("{who}: no CAT channel: {}", init_probe.detail),
         ),
     }
     let init_freq = init_probe.freq_hz;
@@ -8595,7 +8598,11 @@ struct Transport {
 impl Transport {
     fn from_cfg(c: &RadioConfig) -> Self {
         Self {
-            radio_label: LogLabel(radio_label("", c.rig_model)),
+            radio_label: LogLabel(if c.radio_label.is_empty() {
+                radio_label("", c.rig_model)
+            } else {
+                c.radio_label.clone()
+            }),
             ptt_method: c.ptt_method.clone(),
             rig_model: c.rig_model,
             // The upgrade heal for a stored mac /dev/tty.* twin (hangs CAT on carrier

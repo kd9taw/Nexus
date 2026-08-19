@@ -16479,6 +16479,23 @@ pub fn run() {
         meter_feed: meter_feed.clone(),
         ptt_method: settings.ptt_method.clone(),
         rig_model: settings.rig_model,
+        // The operator's name for the active radio, so the STARTUP CAT line names it. Without
+        // this the first line of every log said "model 1042" while every later line said
+        // "Yeasu" — the same radio under two names, in the file we hand to a stranger.
+        radio_label: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| {
+                if r.name.trim().is_empty() {
+                    r.rig_model_name.clone()
+                } else if r.rig_model_name.trim().is_empty() {
+                    r.name.clone()
+                } else {
+                    format!("{} — {} (model {})", r.name, r.rig_model_name, r.rig_model)
+                }
+            })
+            .unwrap_or_default(),
         // Seeded here rather than waiting for the first settings tick: the launch of rigctld is
         // itself what keys an undeclared RTS-wired cable, so a tick later is too late (#44).
         cat_rts_keys_ptt: settings.cat_rts_keys_ptt,

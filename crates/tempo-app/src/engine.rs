@@ -8783,9 +8783,13 @@ impl Engine {
                     | OperatingMode::Keyboard
             );
         let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
+        // ⚠️ QUIET THROUGH THE RESTORE TOO, not just the halt. The first version cleared this
+        // before the `if restore` below, so a context change still printed TWO lines — the
+        // collapsed one and then `transmit ARMED by …:8798` from the restore's own
+        // `set_tx_enabled`. Visible in an operator's DEBUG-mode log, 2026-08-19, which is the
+        // second time this same pair has been logged as its steps.
         self.quiet_tx_log = true;
         self.halt_tx();
-        self.quiet_tx_log = false;
         tempo_core::applog::info(
             "tx",
             &match (was, restore) {
@@ -8802,6 +8806,7 @@ impl Engine {
             // the arm above, which clears it.
             self.broker_context_hold = true;
         }
+        self.quiet_tx_log = false;
     }
 
     /// Enable/disable normal slot TX. `false` = Monitor-off (transmit muted):
@@ -15202,14 +15207,14 @@ impl Engine {
             tempo_core::applog::debug(
                 "decode",
                 &format!(
-                    "slot {slot}: {} decode(s) on {} {:?}",
+                    "slot {slot}: {} decode(s) on {} {}",
                     decodes.len(),
                     if self.settings.band.is_empty() {
                         "off-band"
                     } else {
                         &self.settings.band
                     },
-                    self.app.tier()
+                    self.app.tier().label()
                 ),
             );
         }
@@ -15219,14 +15224,14 @@ impl Engine {
                 tempo_core::applog::warn(
                     "decode",
                     &format!(
-                        "no decodes for {} periods on {} {:?} at {:.6} MHz",
+                        "no decodes for {} periods on {} {} at {:.6} MHz",
                         Self::DECODE_DROUGHT_PERIODS,
                         if self.settings.band.is_empty() {
                             "off-band"
                         } else {
                             &self.settings.band
                         },
-                        self.app.tier(),
+                        self.app.tier().label(),
                         self.settings.dial_mhz
                     ),
                 );
@@ -16622,6 +16627,41 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// A CONTEXT CHANGE IS ONE EVENT AND MUST LOG AS ONE LINE.
+    ///
+    /// It halts and then puts the operator's arm switch back, and both steps used to write
+    /// their own line: "transmit disarmed by halt" and "transmit ARMED by …:8798", in the same
+    /// second, with nothing saying what changed. Collapsed once — and the first collapse still
+    /// leaked the restore's line, which showed up in an operator's DEBUG log. Pinned here
+    /// because the file is read by people deciding whether their radio misbehaved.
+    #[test]
+    fn a_context_change_leaves_the_arm_state_it_found() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        // In a MANUAL mode an armed operator keeps their key across a QSY.
+        e.set_operating_mode("cw", false);
+        assert!(e.tx_enabled(), "control: entering CW arms");
+        e.halt_tx_for_context_change("band change");
+        assert!(
+            e.tx_enabled(),
+            "a QSY must not take the operator's key away"
+        );
+
+        // Disarmed stays disarmed — a context change never turns TX ON.
+        e.set_tx_enabled(false);
+        e.halt_tx_for_context_change("band change");
+        assert!(!e.tx_enabled(), "a context change must never arm");
+
+        // In DIGITAL there is nothing to restore: FT8 is armed only by its own three gates.
+        let mut d = Engine::new("W9XYZ", "EN37", 0);
+        d.set_operating_mode("digital", false);
+        d.set_tx_enabled(true);
+        d.halt_tx_for_context_change("radio handoff");
+        assert!(
+            !d.tx_enabled(),
+            "digital is left disarmed after a context change"
+        );
+    }
 
     /// Adding a radio must NOT move the station onto it. It used to call set_active_radio one line
     /// after add_radio_profile, whose own doc comment says it does not change the active radio.

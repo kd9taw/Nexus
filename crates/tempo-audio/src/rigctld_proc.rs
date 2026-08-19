@@ -1350,7 +1350,8 @@ pub fn spawn_rotctld(
     tempo_core::applog::info(
         "proc",
         &format!(
-            "rotctld for model {model} on {port} @ {baud} baud (tcp {tcp_port}) — {}",
+            "rotctld for model {model} on {} @ {baud} baud (tcp {tcp_port}) — {}",
+            if port.is_empty() { "(NO PORT)" } else { port },
             rot_bin.to_string_lossy()
         ),
     );
