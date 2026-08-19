@@ -226,11 +226,14 @@ const MIGRATED = [
  * They are scanned for KEYS (so the catalog checks below see the entries they use) but NOT
  * for hardcoded strings, because the un-migrated remainder of the file is still English by
  * design. `SettingsPanel.tsx` is 9,000 lines: its Spots & Alerts and Contesting sections were
- * migrated with the panels they configure, and batch 9 (2026-08-19) took the SHELL — the panel
+ * migrated with the panels they configure, batch 9 (2026-08-19) took the SHELL — the panel
  * chrome, the tab rail, Save, the toasts/confirms its handlers raise — plus the whole
- * Appearance tab (Workspace + Features + Accessibility). Putting the file on MIGRATED would
- * report the six tabs still to come; leaving it off entirely would make every key those
- * sections use look like an orphan.
+ * Appearance tab (Workspace + Features + Accessibility), and batch 10 (2026-08-19) took the
+ * Logging & Connectors sections down to the Confirmations fieldset: Connections, Worked-before
+ * (B4) & dupes, Integrations & Feeds with its Antenna gain disclosure, DXKeeper, N3FJP, N1MM+,
+ * the LoTW users list and the callsign→state database. Putting the file on MIGRATED would
+ * report the tabs still to come; leaving it off entirely would make every key those sections
+ * use look like an orphan.
  *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be

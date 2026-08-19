@@ -69,9 +69,12 @@ import {
 import { pushToast, withErrorToast } from '../toast'
 // What reads the catalog today: the panel SHELL (its chrome, the tab rail, Save, and the
 // toasts/confirms its handlers raise), the whole Appearance tab (Workspace + Features +
-// Accessibility), the Spots & Alerts sections (Pounce + Alerts) and the two Contesting
-// sections (Contest Category + Field Day Setup). Every remaining tab's fieldsets are still
-// hardcoded English and are deliberately outside the i18n guard's scope; see its header.
+// Accessibility), the Logging & Connectors sections above Confirmations (Connections,
+// Worked-before (B4) & dupes, Integrations & Feeds, DXKeeper, N3FJP, N1MM+, the LoTW users
+// list and the callsign→state database), the Spots & Alerts sections (Pounce + Alerts) and the
+// two Contesting sections (Contest Category + Field Day Setup). Every remaining tab's
+// fieldsets are still hardcoded English and are deliberately outside the i18n guard's scope;
+// see its header.
 import { t, type MessageKey } from '../i18n'
 import { T } from '../i18n/T'
 import { FD_EVENT_NAMES } from '../fdEvent'
@@ -632,6 +635,21 @@ const CLUSTER_PRESETS: { label: string; host: string }[] = [
   { label: 'W1NR — DXSpider, phone-rich', host: 'dx.w1nr.net:23' },
   { label: 'W3LPL — firehose (skimmer-heavy)', host: 'w3lpl.net:7373' },
 ]
+
+/**
+ * The example network addresses the Logging & Connectors fields show INSIDE a placeholder.
+ *
+ * Invariant tokens, gathered rather than inlined for the reason `STATION_EXAMPLES` states: a
+ * bare address in a `placeholder=` is the moment someone has to decide which category the
+ * value is in, and an address a translator "localises" connects to nothing. The prose beside
+ * them — "(empty = off)" — is a catalog entry that interpolates one of these.
+ */
+const LOGGER_EXAMPLES = {
+  dxkeeperHost: '127.0.0.1',
+  n3fjpHost: '192.168.1.10',
+  n1mmAddr: '127.0.0.1:12060',
+  clusterNode: 've7cc.net:23',
+} as const
 
 export function SettingsPanel({
   onSaved,
@@ -7169,11 +7187,13 @@ export function SettingsPanel({
           {/* ---- Connections (connector status + log) — moved from Logbook & QSL ---- */}
           {tab === 'logging' && (
           <fieldset className="settings-section" id="settings-connections">
-            <legend>Connections</legend>
+            <legend>{t('settings.connections.legend')}</legend>
             <div className="conn-status-grid">
               {creds.map((c) => {
                 // The dot comes from the last ROUND TRIP, not from `stored` — see
                 // settings/connHealth.ts. A stored secret proves only that a save took.
+                // ⚠️ The state word and the "failed 10m ago …" line are that module's prose
+                // and move with it; the connector name and identity are data.
                 const state = connState(c)
                 const dot = dotClass(state)
                 const when = whenText(c, state)
@@ -7196,9 +7216,11 @@ export function SettingsPanel({
                       className="settings-test-btn"
                       onClick={runQrzTest}
                       disabled={qrzTest.state === 'testing'}
-                      title="Round-trips the QRZ Logbook API (ACTION=STATUS) — proves the key works without logging anything"
+                      title={t('settings.connections.qrz.test.title')}
                     >
-                      {qrzTest.state === 'testing' ? 'Testing…' : 'Test'}
+                      {qrzTest.state === 'testing'
+                        ? t('settings.connections.test.busy')
+                        : t('settings.connections.qrz.test.action')}
                     </button>
                   )}
                 </div>
@@ -7207,26 +7229,24 @@ export function SettingsPanel({
             </div>
             {qrzTest.state !== 'idle' && qrzTest.state !== 'testing' && (
               <p className={`conn-test-result ${qrzTest.state}`}>
-                {qrzTest.state === 'ok' ? '✓ QRZ Logbook reachable: ' : '✗ QRZ test failed: '}
-                {qrzTest.msg}
-                {qrzTest.state === 'fail' && (
-                  <>
-                    {' '}
-                    (Uploads need the per-logbook <strong>API key</strong> from
-                    logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)
-                  </>
+                {qrzTest.state === 'ok' ? (
+                  t('settings.connections.qrz.test.ok', { detail: qrzTest.msg })
+                ) : (
+                  <T
+                    k="settings.connections.qrz.test.fail"
+                    tags={{ b: <strong /> }}
+                    vals={{ detail: qrzTest.msg }}
+                  />
                 )}
               </p>
             )}
             <div className="conn-log">
               <div className="conn-log-head">
-                <span>Connection log</span>
-                <span className="settings-hint">every save, sync, push, and failure lands here</span>
+                <span>{t('settings.connections.log.title')}</span>
+                <span className="settings-hint">{t('settings.connections.log.hint')}</span>
               </div>
               {connLog.length === 0 ? (
-                <p className="conn-log-empty">
-                  No events yet this session — save a credential or run a sync and it shows here.
-                </p>
+                <p className="conn-log-empty">{t('settings.connections.log.empty')}</p>
               ) : (
                 <ul className="conn-log-list">
                   {connLog.slice(0, 40).map((e, i) => (
@@ -7246,10 +7266,10 @@ export function SettingsPanel({
 
           {tab === 'logging' && (
             <fieldset className="settings-section" id="settings-connections-b4">
-              <legend>Worked-before (B4) &amp; dupes</legend>
+              <legend>{t('settings.b4.legend')}</legend>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">Match mode too</span>
+                  <span className="settings-label">{t('settings.b4.matchMode.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7259,13 +7279,7 @@ export function SettingsPanel({
                   >
                     <span className="toggle-knob" />
                   </button>
-                  <span className="settings-hint">
-                    Off (the default, and WSJT-X&rsquo;s): working a station on 40m marks them
-                    B4-on-band for 40m in every mode, and the log strip&rsquo;s Dupe badge counts
-                    any mode on the band. On: 40m FT8 and 40m phone are separate contacts — the
-                    solid B4 chip and the Dupe badge require the mode to match as well. The
-                    hollow B4 chip (worked anywhere) is unaffected either way.
-                  </span>
+                  <span className="settings-hint">{t('settings.b4.matchMode.hint')}</span>
                 </label>
               </div>
             </fieldset>
@@ -7274,12 +7288,17 @@ export function SettingsPanel({
           {/* ---- Network integrations ---- */}
           {tab === 'logging' && (
           <fieldset className="settings-section" id="settings-integrations-feeds">
-            <legend>Integrations &amp; Feeds</legend>
+            <legend>{t('settings.integrations.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Local APIs &amp; Loggers</span>
+              <span className="settings-featgroup-title">
+                {t('settings.integrations.local.title')}
+              </span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
+                    {/* ⚠️ A label that is nothing but names — the program, the protocol and
+                        the interface — so it is invariant and stays here, exactly as the
+                        Phone/CW/Digital tab labels do. */}
                     <span className="settings-label">WSJT-X UDP API</span>
                     <button
                       type="button"
@@ -7291,11 +7310,11 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">for JTAlert / GridTracker / loggers</span>
+                  <span className="settings-hint">{t('settings.integrations.wsjtxUdp.hint')}</span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">UDP Address</span>
+                  <span className="settings-label">{t('settings.integrations.udpAddr.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -7306,12 +7325,14 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">host:port for the UDP feed</span>
+                  <span className="settings-hint">{t('settings.integrations.udpAddr.hint')}</span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Ham Radio Deluxe logging</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.hrdLogging.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7322,14 +7343,11 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    push each QSO to HRD Logbook over its QSO-Forwarding UDP port (HRD must be running;
-                    don't also run JTAlert/QSO Relay into HRD or you'll double-log)
-                  </span>
+                  <span className="settings-hint">{t('settings.integrations.hrdLogging.hint')}</span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">HRD UDP Address</span>
+                  <span className="settings-label">{t('settings.integrations.hrdAddr.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -7340,21 +7358,25 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">HRD QSO-Forwarding host:port (default 127.0.0.1:2333)</span>
+                  <span className="settings-hint">{t('settings.integrations.hrdAddr.hint')}</span>
                   {form.hrdLogging && radio?.hrdLinkUp != null && (
                     <span
                       className={`settings-hint ${radio.hrdLinkUp ? 'ok' : 'warn'}`}
                       style={{ color: radio.hrdLinkUp ? 'var(--ok)' : 'var(--state-weak)' }}
                     >
                       {radio.hrdLinkUp
-                        ? '● HRD reachable — contacts are forwarding'
-                        : `○ HRD not reachable — ${radio.hrdQueued ?? 0} contact(s) queued, will send when HRD is back`}
+                        ? t('settings.integrations.hrd.linkUp')
+                        : t('settings.integrations.hrd.linkDown', {
+                            count: radio.hrdQueued ?? 0,
+                          })}
                     </span>
                   )}
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Companion UDP address</span>
+                  <span className="settings-label">
+                    {t('settings.integrations.companionAddr.label')}
+                  </span>
                   <input
                     className="settings-input"
                     value={form.companionAddr ?? ''}
@@ -7363,13 +7385,15 @@ export function SettingsPanel({
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Where Nexus listens for WSJT-X/JTDX in Companion source mode.
+                    {t('settings.integrations.companionAddr.hint')}
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Write ALL.TXT decode log</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.allTxt.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7381,11 +7405,15 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    WSJT-X-format decode log for GridTracker / loggers to tail. Written only while
-                    this is on, and it first appears after the next decode.
+                    {t('settings.integrations.allTxt.hint')}
                     {allTxtPath && (
                       <>
-                        {' '}Saved at <code>{allTxtPath}</code>.
+                        {' '}
+                        <T
+                          k="settings.integrations.allTxt.path"
+                          tags={{ code: <code /> }}
+                          vals={{ path: allTxtPath }}
+                        />
                       </>
                     )}
                   </span>
@@ -7396,13 +7424,15 @@ export function SettingsPanel({
                       revealAllTxt().catch(() => {})
                     }}
                   >
-                    Reveal in folder
+                    {t('settings.integrations.allTxt.reveal')}
                   </button>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Save a WAV per logged QSO</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.qsoWav.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7414,11 +7444,15 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Auto-records the last ~60 s of RX audio on log.
+                    {t('settings.integrations.qsoWav.hint')}
                     {recordingsPath && (
                       <>
-                        {' '}Saved in <code>{recordingsPath}</code>, created the first time
-                        you record.
+                        {' '}
+                        <T
+                          k="settings.integrations.qsoWav.path"
+                          tags={{ code: <code /> }}
+                          vals={{ path: recordingsPath }}
+                        />
                       </>
                     )}
                   </span>
@@ -7429,33 +7463,35 @@ export function SettingsPanel({
                       revealRecordings().catch(() => {})
                     }}
                   >
-                    Open recordings folder
+                    {t('settings.integrations.qsoWav.reveal')}
                   </button>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">Save received audio (.wav per period)</span>
+                  <span className="settings-label">
+                    {t('settings.integrations.saveWav.label')}
+                  </span>
                   <select
                     value={form.saveWav || 'none'}
                     onChange={(e) => update('saveWav', e.target.value)}
                   >
-                    <option value="none">None (default)</option>
-                    <option value="decodes">Save periods with decodes</option>
-                    <option value="all">Save all periods</option>
+                    <option value="none">{t('settings.integrations.saveWav.none')}</option>
+                    <option value="decodes">{t('settings.integrations.saveWav.decodes')}</option>
+                    <option value="all">{t('settings.integrations.saveWav.all')}</option>
                   </select>
-                  <span className="settings-hint">
-                    WAVs land in recordings/periods (12 kHz mono, ~360 KB each). "All" writes
-                    ~2 GB/day of continuous monitoring — use for decoder debugging, not always-on.
-                  </span>
+                  <span className="settings-hint">{t('settings.integrations.saveWav.hint')}</span>
                 </label>
               </div>
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Spot Sources</span>
+              <span className="settings-featgroup-title">
+                {t('settings.integrations.spotSources.title')}
+              </span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
+                    {/* ⚠️ The reporting service's own name — invariant, like a callsign. */}
                     <span className="settings-label">PSK Reporter</span>
                     <button
                       type="button"
@@ -7467,12 +7503,16 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">upload spots to the global map</span>
+                  <span className="settings-hint">
+                    {t('settings.integrations.pskreporter.hint')}
+                  </span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">DX Cluster / RBN spots</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.clusterSpots.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7484,16 +7524,17 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Surface "new ones" from the Reverse Beacon Network on the Needed board + Connect.
-                    Takes effect on restart.
+                    {t('settings.integrations.clusterSpots.hint')}
                   </span>
                 </div>
 
                 <div className="settings-field">
-                  <span className="settings-label">Phone/SSB cluster nodes</span>
+                  <span className="settings-label">
+                    {t('settings.integrations.clusterNodes.label')}
+                  </span>
                   {(form.clusterHosts ?? []).length === 0 ? (
                     <span className="settings-hint cluster-node-empty">
-                      No nodes — add one below to get SSB/phone needs (RBN only carries CW + digital).
+                      {t('settings.integrations.clusterNodes.empty')}
                     </span>
                   ) : (
                     (form.clusterHosts ?? []).map((host, i) => (
@@ -7504,14 +7545,18 @@ export function SettingsPanel({
                           onChange={(e) =>
                             mutateClusterHosts((hs) => hs.map((h, j) => (j === i ? e.target.value : h)))
                           }
-                          placeholder="ve7cc.net:23"
+                          placeholder={LOGGER_EXAMPLES.clusterNode}
                           spellCheck={false}
                         />
                         <button
                           type="button"
                           className="cluster-node-remove"
-                          title="Remove this cluster node"
-                          aria-label={`Remove ${host || 'node'}`}
+                          title={t('settings.integrations.clusterNodes.remove.title')}
+                          aria-label={
+                            host
+                              ? t('settings.integrations.clusterNodes.remove.aria', { host })
+                              : t('settings.integrations.clusterNodes.remove.ariaBlank')
+                          }
                           onClick={() => mutateClusterHosts((hs) => hs.filter((_, j) => j !== i))}
                         >
                           ✕
@@ -7533,7 +7578,12 @@ export function SettingsPanel({
                         )
                       }}
                     >
-                      <option value="">+ Add a known node…</option>
+                      <option value="">
+                        {t('settings.integrations.clusterNodes.add.option')}
+                      </option>
+                      {/* Each preset LABEL names a real node (its callsign, its port and why
+                          you would pick it) — data about the cluster mesh, invariant, and it
+                          lives in CLUSTER_PRESETS above. */}
                       {CLUSTER_PRESETS.map((p) => (
                         <option key={p.host} value={p.host}>
                           {p.label}
@@ -7543,28 +7593,29 @@ export function SettingsPanel({
                     <button
                       type="button"
                       className="cluster-node-add-blank"
-                      title="Add a custom node row"
+                      title={t('settings.integrations.clusterNodes.addCustom.title')}
                       onClick={() => mutateClusterHosts((hs) => [...hs, ''])}
                     >
-                      + Custom
+                      {t('settings.integrations.clusterNodes.addCustom.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    We connect to ALL listed nodes and union their human SSB/phone spots — more
-                    nodes = wider phone coverage (RBN CW + digital connect automatically; RBN
-                    endpoints are ignored here). An added node connects on the next Save; removing
-                    one takes effect on restart.
+                    {t('settings.integrations.clusterNodes.hint')}
                   </span>
                 </div>
               </div>
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Propagation</span>
+              <span className="settings-featgroup-title">
+                {t('settings.integrations.propagation.title')}
+              </span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Near-region opening watch</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.openingWatch.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7576,30 +7627,35 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Watch VHF/10 m activity near your QTH (not just your own contacts) so openings flag "open
-                    around you" before you've worked anyone. Takes effect on restart.
+                    {t('settings.integrations.openingWatch.hint')}
                   </span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">Prediction engine</span>
+                  <span className="settings-label">
+                    {t('settings.integrations.propEngine.label')}
+                  </span>
                   <select
                     value={form.propEngine || 'heuristic'}
                     onChange={(e) => update('propEngine', e.target.value)}
                   >
-                    <option value="heuristic">Modelled (fast heuristic)</option>
-                    <option value="p533">ITU-R P.533 (full physics)</option>
+                    <option value="heuristic">
+                      {t('settings.integrations.propEngine.heuristic')}
+                    </option>
+                    <option value="p533">{t('settings.integrations.propEngine.p533')}</option>
                   </select>
                   <span className="settings-hint">
-                    Drives the per-station path outlook + 24h band×hour grid. P.533 is the real
-                    circuit-reliability method (validated against the ITU reference; ~0.1 s per
-                    prediction, uses your station power). Live spots always win over any model.
+                    {t('settings.integrations.propEngine.hint')}
                   </span>
                 </label>
               </div>
-              <SettingsGroup id="antenna-gain" title="Antenna gain (advanced)" defaultOpen={false}>
+              <SettingsGroup
+                id="antenna-gain"
+                title={t('settings.antennaGain.title')}
+                defaultOpen={false}
+              >
                 <div className="settings-field">
-                  <span className="settings-label">Antenna gain (dBi) — TX / RX</span>
+                  <span className="settings-label">{t('settings.antennaGain.label')}</span>
                   <div className="settings-inline-pair">
                     {(['antTxGainDbi', 'antRxGainDbi'] as const).map((k) => (
                       <input
@@ -7610,7 +7666,11 @@ export function SettingsPanel({
                         min="-10"
                         max="30"
                         inputMode="decimal"
-                        aria-label={k === 'antTxGainDbi' ? 'TX antenna gain (dBi)' : 'RX antenna gain (dBi)'}
+                        aria-label={
+                          k === 'antTxGainDbi'
+                            ? t('settings.antennaGain.tx.aria')
+                            : t('settings.antennaGain.rx.aria')
+                        }
                         value={form[k] ?? 0}
                         onChange={(e) => {
                           const num = Number(e.target.value)
@@ -7619,11 +7679,7 @@ export function SettingsPanel({
                       />
                     ))}
                   </div>
-                  <span className="settings-hint">
-                    Used by the P.533 link budget only. 0 = a simple wire/vertical (isotropic);
-                    a 3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or
-                    takeoff-angle modelling, and the fast heuristic ignores it.
-                  </span>
+                  <span className="settings-hint">{t('settings.antennaGain.hint')}</span>
                 </div>
               </SettingsGroup>
             </div>
@@ -7634,30 +7690,33 @@ export function SettingsPanel({
           {tab === 'logging' && (
           <>
           <fieldset className="settings-section" id="settings-dxkeeper">
+            {/* ⚠️ The legend is two product names and nothing else — invariant, and it stays
+                here for the same reason the mode-name tab labels do. */}
             <legend>DXKeeper (DXLab Suite)</legend>
             <p className="settings-note">
-              Pushes each logged QSO into <strong>DXKeeper</strong> over its TCP Network
-              Service. Enable it in DXKeeper under <em>Configuration ▸ Defaults ▸ Network
-              Service</em> first.
+              <T k="settings.dxkeeper.note" tags={{ b: <strong />, em: <em /> }} />
             </p>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">DXKeeper host</span>
+                <span className="settings-label">{t('settings.dxkeeper.host.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
                   value={form.dxkeeperHost ?? ''}
-                  placeholder="127.0.0.1 (empty = off)"
+                  placeholder={t('settings.dxkeeper.host.placeholder', {
+                    example: LOGGER_EXAMPLES.dxkeeperHost,
+                  })}
                   onChange={(e) => update('dxkeeperHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">
-                  Usually 127.0.0.1 — same PC. Leave blank to disable.
-                </span>
+                <span className="settings-hint">{t('settings.dxkeeper.host.hint')}</span>
               </label>
 
               <label className="settings-field">
+                {/* ⚠️ NOT a catalog entry: this label names a control in DXKeeper's OWN
+                    English interface — see the note below the input — and a translated one
+                    sends the operator looking for a field that is not there. */}
                 <span className="settings-label">DXLab Base Port</span>
                 <input
                   className="settings-input"
@@ -7676,16 +7735,17 @@ export function SettingsPanel({
                     shows them. Asking for the base and adding 1 ourselves means the value
                     they read off DXKeeper is the value that works. */}
                 <span className="settings-hint">
-                  The <em>Base Port</em> from DXKeeper&apos;s Network Service panel (default
-                  52000). DXKeeper itself listens on{' '}
-                  <strong>{(form.dxkeeperBasePort ?? 52000) + 1}</strong> — Nexus adds the 1 for
-                  you.
+                  <T
+                    k="settings.dxkeeper.basePort.hint"
+                    tags={{ em: <em />, b: <strong /> }}
+                    vals={{ port: (form.dxkeeperBasePort ?? 52000) + 1 }}
+                  />
                 </span>
               </label>
 
               <label className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Let DXKeeper do the uploads</span>
+                  <span className="settings-label">{t('settings.dxkeeper.uploads.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7697,40 +7757,36 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Off by default: Nexus already uploads to LoTW / eQSL / ClubLog / QRZ, so
-                  turning this on would upload every QSO twice. Note DXKeeper ignores this for
-                  Club Log and QRZ if <em>Auto upload</em> is ticked on its own QSL
-                  Configuration tab — untick it there.
+                  <T k="settings.dxkeeper.uploads.hint" tags={{ em: <em /> }} />
                 </span>
               </label>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-n3fjp">
-            <legend>N3FJP Integration (club master log)</legend>
+            <legend>{t('settings.n3fjp.legend')}</legend>
             <p className="settings-note">
-              Each FD contact lands in the club's{' '}
-              <strong>N3FJP Field Day Contest Log</strong> the moment you log it — so the whole
-              club's score updates in real time. Run N3FJP on the master computer; point Nexus at
-              its IP + port (default 1100).
+              <T k="settings.n3fjp.note" tags={{ b: <strong /> }} />
             </p>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">N3FJP host</span>
+                <span className="settings-label">{t('settings.n3fjp.host.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
                   value={form.n3fjpHost ?? ''}
-                  placeholder="192.168.1.10 (empty = off)"
+                  placeholder={t('settings.n3fjp.host.placeholder', {
+                    example: LOGGER_EXAMPLES.n3fjpHost,
+                  })}
                   onChange={(e) => update('n3fjpHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">IP or hostname of the master log computer. Leave blank to disable.</span>
+                <span className="settings-hint">{t('settings.n3fjp.host.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">N3FJP port</span>
+                <span className="settings-label">{t('settings.n3fjp.port.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -7743,12 +7799,12 @@ export function SettingsPanel({
                   }}
                   autoComplete="off"
                 />
-                <span className="settings-hint">N3FJP's API TCP port (default 1100).</span>
+                <span className="settings-hint">{t('settings.n3fjp.port.hint')}</span>
               </label>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Use ENTER for Field Day scoring</span>
+                  <span className="settings-label">{t('settings.n3fjp.useEnter.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7760,15 +7816,13 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Log each FD contact with N3FJP's <strong>ENTER</strong> sequence, which scores the
-                  contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code>{' '}
-                  insert (may not score). On by default.
+                  <T k="settings.n3fjp.useEnter.hint" tags={{ b: <strong />, code: <code /> }} />
                 </span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Report my band to N3FJP</span>
+                  <span className="settings-label">{t('settings.n3fjp.reportBand.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7779,15 +7833,12 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">
-                  Tell N3FJP which band you're on (no CAT needed), so the club's Network Status
-                  Display band board shows this position. Off by default.
-                </span>
+                <span className="settings-hint">{t('settings.n3fjp.reportBand.hint')}</span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Forward every QSO</span>
+                  <span className="settings-label">{t('settings.n3fjp.forwardAll.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7799,67 +7850,66 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Also push <strong>every</strong> logged QSO (not just Field Day) to N3FJP ACLog on
-                  the host above — everyday general logging. N3FJP dedupes, so it's safe to run
-                  alongside the Field-Day push.
+                  <T k="settings.n3fjp.forwardAll.hint" tags={{ b: <strong /> }} />
                 </span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Connection test</span>
+                <span className="settings-label">{t('settings.n3fjp.test.label')}</span>
                 <div className="settings-input-row">
                   <button
                     type="button"
                     className="settings-refresh"
                     onClick={runN3fjpTest}
                     disabled={n3fjpTest.state === 'testing' || !form.n3fjpHost?.trim()}
-                    title="Save settings, then test the N3FJP TCP connection"
+                    title={t('settings.n3fjp.test.title')}
                   >
-                    {n3fjpTest.state === 'testing' ? 'Testing…' : 'Test N3FJP'}
+                    {n3fjpTest.state === 'testing'
+                      ? t('settings.connections.test.busy')
+                      : t('settings.n3fjp.test.action')}
                   </button>
                 </div>
                 {n3fjpTest.state !== 'idle' && n3fjpTest.state !== 'testing' && (
+                  // A pass/fail glyph and the answer the connection itself gave — neither is
+                  // this panel's prose, so neither is in the catalog.
                   <span className={`cat-result ${n3fjpTest.state}`} role="status">
                     {n3fjpTest.state === 'ok' ? '✓ ' : '✗ '}{n3fjpTest.msg}
                   </span>
                 )}
-                <span className="settings-hint">Run this at the club site before the event starts to confirm the API link works.</span>
+                <span className="settings-hint">{t('settings.n3fjp.test.hint')}</span>
               </div>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-n1mm">
-            <legend>N1MM+ Integration</legend>
+            <legend>{t('settings.n1mm.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">N1MM contact broadcast address</span>
+                <span className="settings-label">{t('settings.n1mm.addr.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
                   value={form.n1mmAddr ?? ''}
-                  placeholder="127.0.0.1:12060 (empty = off)"
+                  placeholder={t('settings.n1mm.addr.placeholder', {
+                    example: LOGGER_EXAMPLES.n1mmAddr,
+                  })}
                   onChange={(e) => update('n1mmAddr', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
                 />
                 <span className="settings-hint">
-                  Where the N1MM contact packets go (host:port, UDP). Name the port — consumers
-                  stack on one host, and 12060 is often already taken by another logger. Leave
-                  blank to disable.{' '}
+                  {t('settings.n1mm.addr.hint')}{' '}
                   {form.n1mmUpload ? (
-                    <strong>Sending for every logged QSO.</strong>
+                    <strong>{t('settings.n1mm.addr.sending')}</strong>
                   ) : (
-                    <strong>
-                      An address alone sends nothing outside a Field Day event — turn on Broadcast
-                      every QSO below for everyday logging.
-                    </strong>
+                    <strong>{t('settings.n1mm.addr.idle')}</strong>
                   )}
                 </span>
               </label>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Broadcast every QSO</span>
+                  <span className="settings-label">{t('settings.n1mm.broadcastAll.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7879,11 +7929,10 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Send the contact packet for <strong>every</strong> logged QSO, not just Field Day
-                  — point OpenHamClock or GridTracker at the address above and each contact plots on
-                  its map as you log it. One packet per QSO: this never doubles up with the Field Day
-                  broadcast, so it is safe to leave on through an event. Off by default; with it off,
-                  packets go out <em>only</em> while a Field Day event is running.
+                  <T
+                    k="settings.n1mm.broadcastAll.hint"
+                    tags={{ b: <strong />, em: <em /> }}
+                  />
                 </span>
               </div>
             </div>
@@ -7895,7 +7944,7 @@ export function SettingsPanel({
           {tab === 'logging' && (
           <>
           <fieldset className="settings-section" id="settings-lotw-users">
-            <legend>LoTW users list</legend>
+            <legend>{t('settings.lotwUsers.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
                 <button
@@ -7907,31 +7956,42 @@ export function SettingsPanel({
                     fetchLotwUsers()
                       .then((st) => {
                         setLotwUsers(st)
+                        // The grouping is this call site's, not the catalog's — `t()` has no
+                        // locale-aware number path (see the invariant-token rule).
                         pushToast(
-                          `LoTW list loaded — ${st.count.toLocaleString()} calls`,
+                          t('settings.lotwUsers.fetch.done', {
+                            count: st.count.toLocaleString(),
+                          }),
                           'success',
                           5000,
                         )
                       })
                       .catch((e) =>
                         pushToast(
-                          `LoTW list fetch failed: ${e instanceof Error ? e.message : e}`,
+                          t('settings.lotwUsers.fetch.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
                           'error',
                         ),
                       )
                       .finally(() => setLotwFetching(false))
                   }}
                 >
-                  {lotwFetching ? 'Fetching…' : 'Fetch now'}
+                  {lotwFetching
+                    ? t('settings.lotwUsers.fetch.busy')
+                    : t('settings.lotwUsers.fetch.action')}
                 </button>
                 <span className="settings-hint">
                   {lotwUsers && lotwUsers.count > 0
-                    ? `${lotwUsers.count.toLocaleString()} calls · fetched ${new Date(lotwUsers.fetchedAt * 1000).toISOString().slice(0, 10)}`
-                    : 'Not fetched yet — decode lists gain an L mark on calls that upload to LoTW.'}
+                    ? t('settings.lotwUsers.status', {
+                        count: lotwUsers.count.toLocaleString(),
+                        date: new Date(lotwUsers.fetchedAt * 1000).toISOString().slice(0, 10),
+                      })
+                    : t('settings.lotwUsers.empty')}
                 </span>
               </div>
               <label className="settings-label" htmlFor="lotw-max-age" style={{ marginTop: 8 }}>
-                Count as a LoTW user if uploaded within (days)
+                {t('settings.lotwUsers.maxAge.label')}
               </label>
               <input
                 id="lotw-max-age"
@@ -7947,15 +8007,12 @@ export function SettingsPanel({
                   if (!Number.isNaN(n)) updateNum('lotwMaxAgeDays', n)
                 }}
               />
-              <span className="settings-hint">
-                ARRL's activity list updates weekly — refetching more often just returns
-                "unchanged". Manual fetch by design (WSJT-X convention).
-              </span>
+              <span className="settings-hint">{t('settings.lotwUsers.maxAge.hint')}</span>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-callsign-state">
-            <legend>Callsign → state database</legend>
+            <legend>{t('settings.callsignState.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
                 <button
@@ -7968,33 +8025,38 @@ export function SettingsPanel({
                       .then((st) => {
                         setFccStates(st)
                         pushToast(
-                          `Callsign→state database updated — ${st.count.toLocaleString()} US calls`,
+                          t('settings.callsignState.update.done', {
+                            count: st.count.toLocaleString(),
+                          }),
                           'success',
                           5000,
                         )
                       })
                       .catch((e) =>
                         pushToast(
-                          `Callsign→state update failed: ${e instanceof Error ? e.message : e}`,
+                          t('settings.callsignState.update.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
                           'error',
                         ),
                       )
                       .finally(() => setFccFetching(false))
                   }}
                 >
-                  {fccFetching ? 'Updating…' : 'Update now'}
+                  {fccFetching
+                    ? t('settings.callsignState.update.busy')
+                    : t('settings.callsignState.update.action')}
                 </button>
                 <span className="settings-hint">
                   {fccStates && fccStates.count > 0
-                    ? `${fccStates.count.toLocaleString()} US calls · fetched ${new Date(fccStates.fetchedAt * 1000).toISOString().slice(0, 10)}`
-                    : 'Not loaded yet — downloads on first launch, then auto-refreshes weekly.'}
+                    ? t('settings.callsignState.status', {
+                        count: fccStates.count.toLocaleString(),
+                        date: new Date(fccStates.fetchedAt * 1000).toISOString().slice(0, 10),
+                      })
+                    : t('settings.callsignState.empty')}
                 </span>
               </div>
-              <span className="settings-hint">
-                A callsign→state index (from the FCC license file) so a New State lights up on
-                cluster / CW / SSB spots that carry no grid. Refreshed weekly from
-                hamradiotools.io; a live decode grid refines it for rovers.
-              </span>
+              <span className="settings-hint">{t('settings.callsignState.hint')}</span>
             </div>
           </fieldset>
           <fieldset className="settings-section" id="settings-confirmations">

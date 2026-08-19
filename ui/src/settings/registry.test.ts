@@ -76,10 +76,19 @@ function panelLegends(): string[] {
 }
 
 /** Every collapsible `SettingsGroup` title in the panel. Attribute order is not fixed — the
- * anchor `id` may precede `title` — so match the tag and pull `title` out of it. */
+ * anchor `id` may precede `title` — so match the tag and pull `title` out of it.
+ *
+ * A MIGRATED group writes `title={t('key')}` instead of a literal, exactly as a migrated
+ * section writes its legend; `decode` resolves either form through the English catalog, so the
+ * doc headings and deep-link anchors stay checked against the text that really renders. */
 function panelGroups(): string[] {
   return [...panelSrc.matchAll(/<SettingsGroup\s+([^>]*?)>/g)]
-    .map((m) => m[1].match(/title="([^"]+)"/)?.[1])
+    .map((m) =>
+      m[1]
+        .match(/title=(?:"([^"]+)"|(\{t\('[^']+'\)\}))/)
+        ?.slice(1)
+        .find(Boolean),
+    )
     .filter((t): t is string => Boolean(t))
     .map(decode)
 }

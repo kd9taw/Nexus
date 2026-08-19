@@ -3792,6 +3792,229 @@ export const EN = {
   'settings.connections.cloudlog.key.clearFailed': 'Could not clear the Cloudlog API key',
   'settings.connections.cloudlog.key.cleared': 'Cloudlog API key cleared from the keychain',
 
+  // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
+  // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
+  // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,
+  // the connector NAME and identity are data, and every event message in the log is written
+  // by the connector that raised it. They are values this surface renders, not its prose.
+  // `ACTION=STATUS` is the QRZ API's own parameter and `logbook.qrz.com ▸ Settings ▸ API` is
+  // a path through QRZ's website — both stay exactly as written in every language.
+  'settings.connections.legend': 'Connections',
+  'settings.connections.test.busy': 'Testing…',
+  'settings.connections.qrz.test.action': 'Test',
+  'settings.connections.qrz.test.title':
+    'Round-trips the QRZ Logbook API (ACTION=STATUS) — proves the key works without logging anything',
+  // ⚠️ `{{detail}}` is the round trip's own answer — inserted verbatim, never translated. Two
+  // whole messages rather than a shared "✓/✗" stem plus a tail: the failure carries a second
+  // sentence the success has no use for, and where it belongs is the translator's decision.
+  'settings.connections.qrz.test.ok': '✓ QRZ Logbook reachable: {{detail}}',
+  'settings.connections.qrz.test.fail':
+    '✗ QRZ test failed: {{detail}} (Uploads need the per-logbook <b>API key</b> from logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)',
+  'settings.connections.log.title': 'Connection log',
+  'settings.connections.log.hint': 'every save, sync, push, and failure lands here',
+  'settings.connections.log.empty':
+    'No events yet this session — save a credential or run a sync and it shows here.',
+
+  // ── Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes ────────────────────
+  // ⚠️ B4 is the hobby's own shorthand for "worked before" and Dupe is what the badge is
+  // called; band names (40m), mode names (FT8, phone) and the program name WSJT-X are
+  // invariant. The legend holds a real `&` — the JSX wrote `&amp;`, but React escapes a text
+  // child itself, so an entity here would render as the literal characters.
+  'settings.b4.legend': 'Worked-before (B4) & dupes',
+  'settings.b4.matchMode.label': 'Match mode too',
+  'settings.b4.matchMode.hint':
+    'Off (the default, and WSJT-X’s): working a station on 40m marks them B4-on-band for 40m in every mode, and the log strip’s Dupe badge counts any mode on the band. On: 40m FT8 and 40m phone are separate contacts — the solid B4 chip and the Dupe badge require the mode to match as well. The hollow B4 chip (worked anywhere) is unaffected either way.',
+
+  // ── Settings ▸ Logging & Connectors ▸ Integrations & Feeds ─────────────────────────
+  // ⚠️ Everything this section names on the wire is invariant and stays in the panel: the
+  // UDP addresses and ports it offers as field examples, the file names (ALL.TXT, .wav) and
+  // the program names (WSJT-X, JTDX, JTAlert, GridTracker, HRD, OpenHamClock) inside these
+  // sentences. Two labels are invariant as WHOLE strings and are still in the panel because
+  // they are nothing but names — `WSJT-X UDP API` and `PSK Reporter`, the same rule that
+  // leaves the Phone/CW/Digital tab labels literal. So are the cluster presets, which name
+  // real nodes.
+  'settings.integrations.legend': 'Integrations & Feeds',
+  'settings.integrations.local.title': 'Local APIs & Loggers',
+  'settings.integrations.wsjtxUdp.hint': 'for JTAlert / GridTracker / loggers',
+  'settings.integrations.udpAddr.label': 'UDP Address',
+  'settings.integrations.udpAddr.hint': 'host:port for the UDP feed',
+  'settings.integrations.hrdLogging.label': 'Ham Radio Deluxe logging',
+  'settings.integrations.hrdLogging.hint':
+    "push each QSO to HRD Logbook over its QSO-Forwarding UDP port (HRD must be running; don't also run JTAlert/QSO Relay into HRD or you'll double-log)",
+  'settings.integrations.hrdAddr.label': 'HRD UDP Address',
+  'settings.integrations.hrdAddr.hint':
+    'HRD QSO-Forwarding host:port (default 127.0.0.1:2333)',
+  'settings.integrations.hrd.linkUp': '● HRD reachable — contacts are forwarding',
+  // ⚠️ `contact(s)` is left exactly as it shipped. The plural path would render "1 contact"
+  // where this renders "1 contact(s)", and changing the English is a wording decision, not a
+  // migration. `{{count}}` is a queue depth the panel formats invariantly.
+  'settings.integrations.hrd.linkDown':
+    '○ HRD not reachable — {{count}} contact(s) queued, will send when HRD is back',
+  'settings.integrations.companionAddr.label': 'Companion UDP address',
+  'settings.integrations.companionAddr.hint':
+    'Where Nexus listens for WSJT-X/JTDX in Companion source mode.',
+  'settings.integrations.allTxt.label': 'Write ALL.TXT decode log',
+  'settings.integrations.allTxt.hint':
+    'WSJT-X-format decode log for GridTracker / loggers to tail. Written only while this is on, and it first appears after the next decode.',
+  // A whole extra sentence, not a tail glued onto the hint above — it appears only once the
+  // file exists, and a translator may place it wherever their language wants it. `{{path}}`
+  // is a file system path: verbatim, always.
+  'settings.integrations.allTxt.path': 'Saved at <code>{{path}}</code>.',
+  'settings.integrations.allTxt.reveal': 'Reveal in folder',
+  'settings.integrations.qsoWav.label': 'Save a WAV per logged QSO',
+  'settings.integrations.qsoWav.hint': 'Auto-records the last ~60 s of RX audio on log.',
+  'settings.integrations.qsoWav.path':
+    'Saved in <code>{{path}}</code>, created the first time you record.',
+  'settings.integrations.qsoWav.reveal': 'Open recordings folder',
+  // The <option> VALUES ('none', 'decodes', 'all') are persisted tokens and stay in the panel.
+  'settings.integrations.saveWav.label': 'Save received audio (.wav per period)',
+  'settings.integrations.saveWav.none': 'None (default)',
+  'settings.integrations.saveWav.decodes': 'Save periods with decodes',
+  'settings.integrations.saveWav.all': 'Save all periods',
+  'settings.integrations.saveWav.hint':
+    'WAVs land in recordings/periods (12 kHz mono, ~360 KB each). "All" writes ~2 GB/day of continuous monitoring — use for decoder debugging, not always-on.',
+  'settings.integrations.spotSources.title': 'Spot Sources',
+  'settings.integrations.pskreporter.hint': 'upload spots to the global map',
+  'settings.integrations.clusterSpots.label': 'DX Cluster / RBN spots',
+  'settings.integrations.clusterSpots.hint':
+    'Surface "new ones" from the Reverse Beacon Network on the Needed board + Connect. Takes effect on restart.',
+  'settings.integrations.clusterNodes.label': 'Phone/SSB cluster nodes',
+  'settings.integrations.clusterNodes.empty':
+    'No nodes — add one below to get SSB/phone needs (RBN only carries CW + digital).',
+  'settings.integrations.clusterNodes.remove.title': 'Remove this cluster node',
+  // ⚠️ `{{host}}` is a node address. Two whole accessible names rather than one with a
+  // "node" fragment substituted in: a fragment cannot be declined, and half the languages
+  // this will be read in decline it.
+  'settings.integrations.clusterNodes.remove.aria': 'Remove {{host}}',
+  'settings.integrations.clusterNodes.remove.ariaBlank': 'Remove node',
+  'settings.integrations.clusterNodes.add.option': '+ Add a known node…',
+  'settings.integrations.clusterNodes.addCustom.title': 'Add a custom node row',
+  'settings.integrations.clusterNodes.addCustom.action': '+ Custom',
+  'settings.integrations.clusterNodes.hint':
+    'We connect to ALL listed nodes and union their human SSB/phone spots — more nodes = wider phone coverage (RBN CW + digital connect automatically; RBN endpoints are ignored here). An added node connects on the next Save; removing one takes effect on restart.',
+  'settings.integrations.propagation.title': 'Propagation',
+  'settings.integrations.openingWatch.label': 'Near-region opening watch',
+  'settings.integrations.openingWatch.hint':
+    'Watch VHF/10 m activity near your QTH (not just your own contacts) so openings flag "open around you" before you\'ve worked anyone. Takes effect on restart.',
+  // ⚠️ `ITU-R P.533` is the recommendation's number — the same token the propagation panes
+  // keep as a constant (ENGINE_P533). The <option> values ('heuristic', 'p533') are persisted
+  // and stay in the panel.
+  'settings.integrations.propEngine.label': 'Prediction engine',
+  'settings.integrations.propEngine.heuristic': 'Modelled (fast heuristic)',
+  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics)',
+  'settings.integrations.propEngine.hint':
+    'Drives the per-station path outlook + 24h band×hour grid. P.533 is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
+  // The collapsed disclosure inside Integrations & Feeds. ⚠️ dBi, TX and RX are units and the
+  // radio's own two states.
+  'settings.antennaGain.title': 'Antenna gain (advanced)',
+  'settings.antennaGain.label': 'Antenna gain (dBi) — TX / RX',
+  'settings.antennaGain.tx.aria': 'TX antenna gain (dBi)',
+  'settings.antennaGain.rx.aria': 'RX antenna gain (dBi)',
+  'settings.antennaGain.hint':
+    'Used by the P.533 link budget only. 0 = a simple wire/vertical (isotropic); a 3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or takeoff-angle modelling, and the fast heuristic ignores it.',
+
+  // ── Settings ▸ Logging & Connectors ▸ DXKeeper ─────────────────────────────────────
+  // ⚠️ The legend (`DXKeeper (DXLab Suite)`) and the `DXLab Base Port` label are still in the
+  // panel, and for two different reasons. The legend is nothing but product names. The label
+  // NAMES A CONTROL IN ANOTHER APPLICATION'S ENGLISH INTERFACE — the hint below it sends the
+  // operator to DXKeeper's own Network Service panel to read the number off a field called
+  // "Base Port", and a translated label sends them looking for a field that is not there.
+  // The quoted `Base Port`, `Auto upload` and `QSL Configuration` inside these sentences are
+  // the same thing and stay verbatim.
+  'settings.dxkeeper.note':
+    'Pushes each logged QSO into <b>DXKeeper</b> over its TCP Network Service. Enable it in DXKeeper under <em>Configuration ▸ Defaults ▸ Network Service</em> first.',
+  'settings.dxkeeper.host.label': 'DXKeeper host',
+  // `{{example}}` is an IP address the panel supplies as an invariant token (LOGGER_EXAMPLES).
+  'settings.dxkeeper.host.placeholder': '{{example}} (empty = off)',
+  'settings.dxkeeper.host.hint': 'Usually 127.0.0.1 — same PC. Leave blank to disable.',
+  // `{{port}}` is base + 1, computed and interpolated invariantly.
+  'settings.dxkeeper.basePort.hint':
+    "The <em>Base Port</em> from DXKeeper's Network Service panel (default 52000). DXKeeper itself listens on <b>{{port}}</b> — Nexus adds the 1 for you.",
+  'settings.dxkeeper.uploads.label': 'Let DXKeeper do the uploads',
+  'settings.dxkeeper.uploads.hint':
+    'Off by default: Nexus already uploads to LoTW / eQSL / ClubLog / QRZ, so turning this on would upload every QSO twice. Note DXKeeper ignores this for Club Log and QRZ if <em>Auto upload</em> is ticked on its own QSL Configuration tab — untick it there.',
+
+  // ── Settings ▸ Logging & Connectors ▸ N3FJP ────────────────────────────────────────
+  // ⚠️ `N3FJP`, `ACLog`, `Field Day Contest Log` and `Network Status Display` are the club
+  // logger's own names; `ENTER` is the key its scoring path is named after and `ADDDIRECT` is
+  // the API command that replaces it. All of them are wire-level or product names and stay as
+  // written. The host/port EXAMPLES are invariant tokens in the panel.
+  'settings.n3fjp.legend': 'N3FJP Integration (club master log)',
+  'settings.n3fjp.note':
+    "Each FD contact lands in the club's <b>N3FJP Field Day Contest Log</b> the moment you log it — so the whole club's score updates in real time. Run N3FJP on the master computer; point Nexus at its IP + port (default 1100).",
+  'settings.n3fjp.host.label': 'N3FJP host',
+  'settings.n3fjp.host.placeholder': '{{example}} (empty = off)',
+  'settings.n3fjp.host.hint':
+    'IP or hostname of the master log computer. Leave blank to disable.',
+  'settings.n3fjp.port.label': 'N3FJP port',
+  'settings.n3fjp.port.hint': "N3FJP's API TCP port (default 1100).",
+  'settings.n3fjp.useEnter.label': 'Use ENTER for Field Day scoring',
+  'settings.n3fjp.useEnter.hint':
+    "Log each FD contact with N3FJP's <b>ENTER</b> sequence, which scores the contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code> insert (may not score). On by default.",
+  'settings.n3fjp.reportBand.label': 'Report my band to N3FJP',
+  'settings.n3fjp.reportBand.hint':
+    "Tell N3FJP which band you're on (no CAT needed), so the club's Network Status Display band board shows this position. Off by default.",
+  'settings.n3fjp.forwardAll.label': 'Forward every QSO',
+  'settings.n3fjp.forwardAll.hint':
+    "Also push <b>every</b> logged QSO (not just Field Day) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the Field-Day push.",
+  'settings.n3fjp.test.label': 'Connection test',
+  'settings.n3fjp.test.title': 'Save settings, then test the N3FJP TCP connection',
+  'settings.n3fjp.test.action': 'Test N3FJP',
+  'settings.n3fjp.test.hint':
+    'Run this at the club site before the event starts to confirm the API link works.',
+
+  // ── Settings ▸ Logging & Connectors ▸ N1MM+ ────────────────────────────────────────
+  // ⚠️ The port number 12060 is the contest logger's own broadcast port and stays in the
+  // sentence that names it. The address the toggle fills in for a blank field is a VALUE that
+  // is written to settings, not an example, and never came near this file.
+  'settings.n1mm.legend': 'N1MM+ Integration',
+  'settings.n1mm.addr.label': 'N1MM contact broadcast address',
+  'settings.n1mm.addr.placeholder': '{{example}} (empty = off)',
+  'settings.n1mm.addr.hint':
+    'Where the N1MM contact packets go (host:port, UDP). Name the port — consumers stack on one host, and 12060 is often already taken by another logger. Leave blank to disable.',
+  // The state sentence that follows the hint — one whole sentence per state, because what it
+  // says is a different answer, not a different ending. The second one names the toggle below
+  // it: reword the toggle's label and this sentence moves with it.
+  'settings.n1mm.addr.sending': 'Sending for every logged QSO.',
+  'settings.n1mm.addr.idle':
+    'An address alone sends nothing outside a Field Day event — turn on Broadcast every QSO below for everyday logging.',
+  'settings.n1mm.broadcastAll.label': 'Broadcast every QSO',
+  'settings.n1mm.broadcastAll.hint':
+    'Send the contact packet for <b>every</b> logged QSO, not just Field Day — point OpenHamClock or GridTracker at the address above and each contact plots on its map as you log it. One packet per QSO: this never doubles up with the Field Day broadcast, so it is safe to leave on through an event. Off by default; with it off, packets go out <em>only</em> while a Field Day event is running.',
+
+  // ── Settings ▸ Logging & Connectors ▸ LoTW users list ──────────────────────────────
+  // ⚠️ `{{count}}` arrives ALREADY FORMATTED by the panel (the grouping is that call site's,
+  // not this file's — `t()` has no locale-aware formatter and never will), `{{date}}` is an
+  // ISO day stamp, `{{detail}}` is a fetch error, and `L` is the mark a decode line carries.
+  // LoTW, ARRL and WSJT-X are names.
+  'settings.lotwUsers.legend': 'LoTW users list',
+  'settings.lotwUsers.fetch.action': 'Fetch now',
+  'settings.lotwUsers.fetch.busy': 'Fetching…',
+  'settings.lotwUsers.fetch.done': 'LoTW list loaded — {{count}} calls',
+  'settings.lotwUsers.fetch.failed': 'LoTW list fetch failed: {{detail}}',
+  'settings.lotwUsers.status': '{{count}} calls · fetched {{date}}',
+  'settings.lotwUsers.empty':
+    'Not fetched yet — decode lists gain an L mark on calls that upload to LoTW.',
+  'settings.lotwUsers.maxAge.label': 'Count as a LoTW user if uploaded within (days)',
+  'settings.lotwUsers.maxAge.hint':
+    'ARRL\'s activity list updates weekly — refetching more often just returns "unchanged". Manual fetch by design (WSJT-X convention).',
+
+  // ── Settings ▸ Logging & Connectors ▸ Callsign → state database ────────────────────
+  // ⚠️ `Callsign→state` names the index itself and keeps its arrow; `New State` is the need
+  // category the Needed board lights up; FCC is the licensing authority and hamradiotools.io
+  // is where the file comes from. `{{count}}` is formatted by the panel, as above.
+  'settings.callsignState.legend': 'Callsign → state database',
+  'settings.callsignState.update.action': 'Update now',
+  'settings.callsignState.update.busy': 'Updating…',
+  'settings.callsignState.update.done':
+    'Callsign→state database updated — {{count}} US calls',
+  'settings.callsignState.update.failed': 'Callsign→state update failed: {{detail}}',
+  'settings.callsignState.status': '{{count}} US calls · fetched {{date}}',
+  'settings.callsignState.empty':
+    'Not loaded yet — downloads on first launch, then auto-refreshes weekly.',
+  'settings.callsignState.hint':
+    'A callsign→state index (from the FCC license file) so a New State lights up on cluster / CW / SSB spots that carry no grid. Refreshed weekly from hamradiotools.io; a live decode grid refines it for rovers.',
+
   // ── Settings ▸ Appearance ▸ Workspace ───────────────────────────────────────────────
   // ⚠️ Every scale here is a PERCENT of a technical quantity, so it is interpolated as an
   // invariant number and the `%` stays glued to it. The chips themselves (`100%`, `175%`)
