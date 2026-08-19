@@ -67,11 +67,13 @@ import {
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-// Only the Spots & Alerts sections (Pounce + Alerts) read the catalog today — they were
-// migrated with the panels they configure. The rest of this file is still hardcoded English
-// and is deliberately outside the i18n guard's scope; see its header.
+// Only the Spots & Alerts sections (Pounce + Alerts) and the two Contesting sections (Contest
+// Category + Field Day Setup) read the catalog today — each was migrated with the panels it
+// configures. The rest of this file is still hardcoded English and is deliberately outside the
+// i18n guard's scope; see its header.
 import { t } from '../i18n'
 import { T } from '../i18n/T'
+import { FD_EVENT_NAMES } from '../fdEvent'
 import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
 import {
   getAssistanceJournal,
@@ -8658,14 +8660,20 @@ export function SettingsPanel({
           )}
           {/* ---- Field Day ---- */}
           {tab === 'contesting' && (
+            /* Migrated to the catalog (i18n phase 2) with the Field Day section below, and
+               paired with the POTA/SOTA + Field Day surfaces so the wording matches on both
+               sides. Invariant and staying here: the class/category and section placeholders
+               (1D, 2O, WI), the section list itself, and the event names, which are the
+               events' own (FD_EVENT_NAMES). The rest of this file is NOT migrated — see the
+               guard's scope note. */
             <fieldset className="settings-section" id="settings-contest-category">
-              <legend>Contest Category</legend>
+              <legend>{t('settings.contestCategory.legend')}</legend>
               {/* ONE switch for every QSO-finding assistance source. It takes effect IMMEDIATELY
                   (its own command, not Save) because an operator flips it as an event starts, and
                   a switch that needed a restart mid-contest would be useless. The form field is
                   synced so a later Save cannot write the stale value back. */}
               <label className="settings-field">
-                <span className="settings-label">Unassisted entry</span>
+                <span className="settings-label">{t('settings.contestCategory.unassisted.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -8678,15 +8686,16 @@ export function SettingsPanel({
                       .then(() => getAssistanceJournal().then(setAssistLog))
                       .catch(() => {})
                   }}
-                  aria-label={`${form.unassistedMode ? 'End' : 'Declare'} an unassisted contest entry`}
+                  aria-label={
+                    form.unassistedMode
+                      ? t('settings.contestCategory.unassisted.aria.end')
+                      : t('settings.contestCategory.unassisted.aria.declare')
+                  }
                 >
                   <span className="toggle-knob" />
                 </button>
                 <span className="settings-hint">
-                  Turns off the AI CW decoder, DX cluster / RBN spots and the PSK Reporter needs
-                  feed together, and records the change with a timestamp. Takes effect at once.
-                  Your own settings for each of those are left alone and come back when you switch
-                  this off.
+                  {t('settings.contestCategory.unassisted.hint')}
                 </span>
               </label>
               <AssistanceNote
@@ -8695,7 +8704,7 @@ export function SettingsPanel({
               />
               {assistLog.length > 0 && (
                 <div className="assist-journal">
-                  <span className="settings-label">Assistance record</span>
+                  <span className="settings-label">{t('settings.contestCategory.journal.label')}</span>
                   <ul className="assist-journal-list mono">
                     {assistLog.slice(0, 8).map((e) => (
                       <li key={`${e.tsUnix}-${e.note}`}>
@@ -8703,19 +8712,22 @@ export function SettingsPanel({
                           {new Date(e.tsUnix * 1000).toISOString().slice(0, 16).replace('T', ' ')}Z
                         </span>
                         <span className={`assist-journal-state${e.unassisted ? ' unassisted' : ''}`}>
-                          {e.unassisted ? 'UNASSISTED' : 'assisted'}
+                          {e.unassisted
+                            ? t('settings.contestCategory.journal.unassisted')
+                            : t('settings.contestCategory.journal.assisted')}
                         </span>
+                        {/* The note and the source names are the engine's own words. */}
                         <span className="assist-journal-note">
                           {e.note}
                           {': '}
-                          {e.sources.filter((x) => x.active).map((x) => x.name).join(', ') || 'nothing active'}
+                          {e.sources.filter((x) => x.active).map((x) => x.name).join(', ') ||
+                            t('settings.contestCategory.journal.noSources')}
                         </span>
                       </li>
                     ))}
                   </ul>
                   <span className="settings-hint">
-                    Kept in <code>assistance_journal.json</code> beside your settings, so it
-                    survives restarts. Newest first.
+                    <T k="settings.contestCategory.journal.hint" tags={{ code: <code /> }} />
                   </span>
                 </div>
               )}
@@ -8724,40 +8736,40 @@ export function SettingsPanel({
 
           {tab === 'contesting' && (
           <fieldset className="settings-section" id="settings-field-day">
-            <legend>Field Day Setup</legend>
+            <legend>{t('settings.fieldDay.legend')}</legend>
             {/* The Field Day MASTER lives here now (Contesting is always visible) — turning it on
                 reveals the FD workspace + Class/Section exchange across all modes. */}
             <label className="settings-field">
-              <span className="settings-label">Field Day mode</span>
+              <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
               <button
                 type="button"
                 role="switch"
                 aria-checked={!!form.fdActive}
                 className={`toggle${form.fdActive ? ' on' : ''}`}
                 onClick={() => updateBool('fdActive', !form.fdActive)}
-                aria-label={`${form.fdActive ? 'Disable' : 'Enable'} Field Day mode`}
+                aria-label={
+                  form.fdActive
+                    ? t('settings.fieldDay.mode.aria.disable')
+                    : t('settings.fieldDay.mode.aria.enable')
+                }
               >
                 <span className="toggle-knob" />
               </button>
-              <span className="settings-hint">
-                Turn on for Field Day weekend — reveals the Field Day workspace and the
-                Class/Section exchange across all modes. Off the rest of the year. Fill in Class +
-                Section below to start operating. Save to apply.
-              </span>
+              <span className="settings-hint">{t('settings.fieldDay.mode.hint')}</span>
             </label>
             {form.fdActive && (!form.fdClass.trim() || !form.fdSection.trim()) && (
               <p className="settings-note">
-                <strong>Set your Class + Section to start operating.</strong> Field Day mode is on,
-                but the station won&apos;t enter Field Day until both are filled in below.
+                <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} />
               </p>
             )}
             <div className="settings-grid">
               <div className="settings-field">
-                <span className="settings-label">Event</span>
-                <div className="theme-switcher" role="group" aria-label="Field Day event">
+                <span className="settings-label">{t('settings.fieldDay.event.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.fieldDay.event.aria')}>
+                  {/* The event NAMES are the events' own — invariant, shared with the header. */}
                   {([
-                    { value: 'arrlfd', label: 'ARRL Field Day' },
-                    { value: 'wfd',    label: 'Winter Field Day' },
+                    { value: 'arrlfd', label: FD_EVENT_NAMES.arrlfd },
+                    { value: 'wfd',    label: FD_EVENT_NAMES.wfd },
                   ] as { value: string; label: string }[]).map((ev) => (
                     <button
                       key={ev.value}
@@ -8773,12 +8785,14 @@ export function SettingsPanel({
                     </button>
                   ))}
                 </div>
-                <span className="settings-hint">Which event you're operating in — affects scoring labels and export headers.</span>
+                <span className="settings-hint">{t('settings.fieldDay.event.hint')}</span>
               </div>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  {(form.fdEvent ?? 'arrlfd') === 'wfd' ? 'WFD Category' : 'FD Class'}
+                  {(form.fdEvent ?? 'arrlfd') === 'wfd'
+                    ? t('settings.fieldDay.category.label')
+                    : t('settings.fieldDay.class.label')}
                 </span>
                 <input
                   className="settings-input mono"
@@ -8791,13 +8805,13 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">
                   {(form.fdEvent ?? 'arrlfd') === 'wfd'
-                    ? 'Transmitters + location: H=Home, I=Indoor, M=Mobile, O=Outdoor (e.g. 2O = 2 transmitters, outdoor).'
-                    : 'Number of transmitters + class letter: A=club/group portable, B=1–2 person portable, C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A = 3 transmitters, club portable.'}
+                    ? t('settings.fieldDay.category.hint')
+                    : t('settings.fieldDay.class.hint')}
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">ARRL Section</span>
+                <span className="settings-label">{t('settings.fieldDay.section.label')}</span>
                 <input
                   className={`settings-input mono${fdSectionInvalid ? ' invalid' : ''}`}
                   type="text"
@@ -8816,41 +8830,38 @@ export function SettingsPanel({
                 </datalist>
                 {fdSectionInvalid && (
                   <span className="fd-section-warn" role="alert">
-                    &ldquo;{form.fdSection}&rdquo; isn&apos;t a known ARRL/RAC section — pick one from the list.
+                    {t('settings.fieldDay.section.invalid', { section: form.fdSection })}
                   </span>
                 )}
                 <span className="settings-hint">
-                  Your ARRL / RAC section (e.g. WI, ENY, ONN). Start typing the code or a state name and pick from
-                  the list — validated against all {FD_SECTION_OPTIONS.length} sections. Required for the Cabrillo log.
+                  {t('settings.fieldDay.section.hint', { count: FD_SECTION_OPTIONS.length })}
                 </span>
               </label>
 
               <div className="settings-field">
-                <span className="settings-label">Power multiplier</span>
-                <div className="theme-switcher" role="group" aria-label="Field Day power multiplier">
+                <span className="settings-label">{t('settings.fieldDay.power.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.fieldDay.power.aria')}>
                   {([
-                    { value: 5, label: '×5 QRP / battery', hint: 'Runs entirely on battery or other natural power, ≤5W output' },
-                    { value: 2, label: '×2 ≤100W',         hint: '100W or less from any power source' },
-                    { value: 1, label: '×1 >100W',         hint: 'Over 100W — commercial/generator power' },
-                  ] as { value: number; label: string; hint: string }[]).map((p) => (
+                    { value: 5, labelKey: 'settings.fieldDay.power.qrp.label',     hintKey: 'settings.fieldDay.power.qrp.hint' },
+                    { value: 2, labelKey: 'settings.fieldDay.power.hundred.label', hintKey: 'settings.fieldDay.power.hundred.hint' },
+                    { value: 1, labelKey: 'settings.fieldDay.power.high.label',    hintKey: 'settings.fieldDay.power.high.hint' },
+                  ] as const).map((p) => (
                     <button
                       key={p.value}
                       type="button"
                       className={`theme-chip${(form.fdPowerMult ?? 1) === p.value ? ' active' : ''}`}
                       aria-pressed={(form.fdPowerMult ?? 1) === p.value}
-                      title={p.hint}
+                      title={t(p.hintKey)}
                       onClick={() => {
                         markDirty()
                         setForm((prev) => prev ? { ...prev, fdPowerMult: p.value } : prev)
                       }}
                     >
-                      {p.label}
+                      {t(p.labelKey)}
                     </button>
                   ))}
                 </div>
-                <span className="settings-hint">
-                  Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.
-                </span>
+                <span className="settings-hint">{t('settings.fieldDay.power.hint')}</span>
               </div>
             </div>
           </fieldset>

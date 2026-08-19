@@ -2257,6 +2257,285 @@ export const EN = {
     'The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing HF chatter keeps the gems. Covers their GRID icon too.',
   'settings.alerts.watchlist.label': 'Watch list',
 
+  // ── POTA / SOTA (the hunter board and your own activation) ──────────────────────────
+  // ⚠️ THE PROGRAMMES AND THEIR REFERENCES ARE TOKENS, so they are absent from this file and
+  // live in `components/PotaSotaView.tsx` as named constants: the programme names (POTA,
+  // SOTA) wherever they stand alone, the view's own POTA / SOTA title, the reference EXAMPLES
+  // the activation box offers (K-1234, W7A/MN-001) and the feed names (pota.app, SOTAwatch).
+  // Everything a spot carries — activator callsign, park/summit reference, park name, dial
+  // frequency, band and mode — is data and never passes through here either. Where a
+  // programme name appears INSIDE a sentence below, a translator leaves it exactly as it is.
+  'ota.subtitle': 'Hunt activators on the air now',
+  // The programme picker. POTA and SOTA are names the operator reads on the programmes' own
+  // sites; "Both" is an English word and this is the only part of that row a translator sees.
+  'ota.program.aria': 'Program',
+  'ota.program.both': 'Both',
+  // Which programmes the empty state below is speaking about, as a CLAUSE — the sentence it
+  // sits in is one message, so the two names and the conjunction between them arrive whole.
+  'ota.programs.both': 'POTA or SOTA',
+
+  // The hunt target — the next QSO with this call gets the park stamped on it.
+  'ota.hunt.banner':
+    'Hunting <b>{{reference}}</b> · <b>{{call}}</b><note> — next logged QSO with this call gets the park tagged</note>',
+  'ota.hunt.clear': 'Clear hunt target',
+  'ota.hunt.cleared': 'Hunt cleared',
+  'ota.hunt.clearFailed': 'Could not clear hunt target',
+  'ota.hunt.setFailed': 'Could not set hunt target for {{call}}',
+  'ota.hunt.label': 'HUNT',
+  // `{{freq}}` arrives already formatted and invariant ("14.0740 MHz").
+  'ota.hunt.button.title':
+    'Hunt {{call}} on {{reference}} — QSY to {{freq}} and tag next QSO',
+  'ota.hunt.button.aria': 'Hunt {{call}}',
+
+  // Your own activation. "Stop" ends the ACTIVATION — the park stamp on the QSOs you log —
+  // and never a transmission; it is not a stop-line control.
+  'ota.activation.label': "I'm activating:",
+  'ota.activation.start': 'Start',
+  'ota.activation.started': 'Activating {{program}} {{reference}} — QSOs will be park-tagged',
+  'ota.activation.startFailed': 'Could not start activation',
+  'ota.activation.active':
+    '📻 Activating <b>{{program}} {{reference}}</b><note> · {{count}} logged — QSOs get your park tagged</note>',
+  'ota.activation.stop.label': 'Stop',
+  'ota.activation.stop.title': 'End activation',
+  'ota.activation.ended': 'Activation ended',
+  'ota.activation.stopFailed': 'Could not stop activation',
+
+  // The offline park directory. `{{formatted}}` is a park COUNT the call site has already
+  // grouped for display — it never passes through a formatter here (see `logbook.markLotw`).
+  'ota.parks.have': '📖 {{formatted}} parks — searchable in the log',
+  'ota.parks.none': '📖 No local park list yet',
+  'ota.parks.download': 'Download',
+  'ota.parks.update': 'Update',
+  'ota.parks.downloaded': 'Downloaded {{formatted}} parks — searchable in the log',
+  'ota.parks.downloadFailed': 'Park-list download failed',
+  'ota.parks.import': 'Import CSV',
+  'ota.parks.imported': 'Imported {{formatted}} parks',
+  'ota.parks.importFailed': 'Import failed: {{detail}}',
+  // "Hunted Parks.CSV" is the file POTA's own stats page hands you — a filename, kept verbatim.
+  'ota.hunted.title':
+    "Import your POTA 'Hunted Parks.CSV' (from your POTA stats page) so worked parks show correctly — the park number isn't in a CW exchange, so your log alone can't know it",
+  'ota.hunted.import': 'Import Hunted Parks',
+  'ota.hunted.have': 'Hunted ✓ ({{formatted}})',
+  'ota.hunted.imported': 'Imported {{formatted}} hunted parks — new-park flags updated',
+  'ota.hunted.importFailed': 'Hunted-parks import failed: {{detail}}',
+
+  // The board's controls. `{{program}}` is POTA or SOTA; `{{time}}` a clock reading the call
+  // site formatted itself.
+  'ota.spots.failed': '{{program}} spots failed',
+  'ota.refresh.label': 'Refresh',
+  'ota.refresh.title': 'Refresh spots',
+  'ota.lastUpdated': 'Updated {{time}}',
+  'ota.filter.band.aria': 'Band filter',
+  'ota.filter.band.label': 'Band',
+  'ota.filter.mode.aria': 'Mode filter',
+  'ota.filter.mode.label': 'Mode',
+  'ota.filter.all': 'All',
+  // The sort picker. The <option> VALUES ('value', 'activator' …) are persisted tokens and
+  // stay in the code; these are the words beside them.
+  'ota.sort.aria': 'Sort spots',
+  'ota.sort.label': 'Sort',
+  'ota.sort.title': 'How the spot list is ordered',
+  'ota.sort.value': 'Workable now',
+  'ota.sort.activator': 'Activator',
+  'ota.sort.reference': 'Reference',
+  'ota.sort.band': 'Band / freq',
+  'ota.sort.mode': 'Mode',
+  'ota.sort.asc.title': 'Ascending — click for descending',
+  'ota.sort.desc.title': 'Descending — click for ascending',
+  'ota.sort.asc.aria': 'Sort ascending',
+  'ota.sort.desc.aria': 'Sort descending',
+
+  // The spot list. The first two lines of a row's tooltip are programme, reference, park
+  // name, frequency, mode and band — all data, assembled in the component and never here.
+  'ota.loading': 'Loading…',
+  'ota.empty.filtered': 'No activators match the current filters.',
+  'ota.empty': 'No {{program}} activators spotted right now.',
+  'ota.spot.spottedBy': 'Spotted by {{spotter}}',
+  'ota.spot.bandOpen.tooltip':
+    'BAND OPEN — your signal is being received on this band right now (workable)',
+  'ota.badge.newPark': 'NEW PARK',
+  'ota.badge.newPark.title': 'You have never logged this park/summit — a new one',
+  'ota.badge.bandOpen': 'BAND OPEN',
+  'ota.badge.bandOpen.title':
+    'Your signal is being received on this band right now — workable',
+  // `{{source}}` is the feed's own name (pota.app, SOTAwatch); HUNT is the button above.
+  'ota.source.hint':
+    'Live from {{source}}. Auto-refreshes every 60 s. Click HUNT to QSY and tag the next logged QSO.',
+
+  // ── Field Day (the workspace, the scoreboard and the event countdown) ───────────────
+  // ⚠️ INVARIANT AND THEREFORE ABSENT: the event names (ARRL Field Day, Winter Field Day,
+  // WFD) which are the programmes' own — `FD_EVENT_NAMES` in `fdEvent.ts`; the class and
+  // category codes (3A, 2O) and the H/I/M/O letters; ARRL section codes and the section and
+  // division NAMES the board reads out of `features/arrlSections.ts`; the FD mode codes
+  // (DIG, CW, PH); every score, count and multiplier; and the BONUS NAMES in `FD_BONUSES`,
+  // which mirror the Rust table an entry is submitted against. Weekday and month
+  // abbreviations are date formatting and stay in `fdEvent.ts` with the rest of it.
+  'fieldDay.operator.label': 'Operator',
+  'fieldDay.operator.placeholder': 'operator (call/initials)',
+  'fieldDay.operator.aria': 'Field Day operator (call or initials)',
+  'fieldDay.popOut.label': '⧉ Pop out',
+  'fieldDay.popOut.title': 'Pop the scoreboard out to its own window (second monitor)',
+
+  'fieldDay.score.qsos': 'QSOs',
+  'fieldDay.score.sections': 'Sections',
+  // Winter Field Day scores by objectives at submission, so its line states the raw count
+  // instead of the ARRL power×+bonus arithmetic — a different statement, not a shortened one.
+  'fieldDay.score.wfd':
+    'QSO pts {{points}} · WFD objective multipliers apply at submission (not tracked here)',
+  // The whole sum as ONE message: an equation assembled from eight fragments cannot be
+  // reordered, and every language puts "power" and "bonuses" somewhere of its own.
+  'fieldDay.score.math':
+    'QSO pts <b>{{qsoPts}}</b> × power ×<b>{{powerMult}}</b> = <b>{{poweredPoints}}</b> + bonuses <b>{{bonusPoints}}</b> = <total>{{totalScore}}</total>',
+  'fieldDay.state.title': 'Sequencer state',
+  // The stand-in when the engine has not named a sequencer state yet; the states themselves
+  // are the backend's own words, printed as they arrive.
+  'fieldDay.state.idle': 'Idle',
+
+  // The worked-sections board. `{{code}}`, `{{name}}` and `{{division}}` are the section's
+  // own identifiers; two whole tooltips, because "worked" and "not worked yet" are the point
+  // of the sentence rather than a tail on it.
+  'fieldDay.sections.aria': 'Worked sections board',
+  'fieldDay.sections.head': 'Sections',
+  'fieldDay.sections.count': '{{worked}}/{{total}} sections',
+  'fieldDay.sections.cell.worked.title': '{{code}} — {{name}} ({{division}}) — worked',
+  'fieldDay.sections.cell.notWorked.title': '{{code}} — {{name}} ({{division}}) — not worked yet',
+  'fieldDay.sections.cell.worked.aria': '{{name}}, worked',
+  'fieldDay.sections.cell.notWorked.aria': '{{name}}, not worked',
+
+  // Run vs search-and-pounce. Stored as plain text with a real `&` — React escapes text
+  // children itself, so an entity here would render as the literal characters.
+  'fieldDay.role.aria': 'Field Day role',
+  'fieldDay.role.running': 'Running',
+  'fieldDay.role.sp': 'S&P',
+
+  // The exports. Cabrillo and ADIF are the file formats' own names and stay in the sentence.
+  'fieldDay.export.busy': 'Exporting…',
+  'fieldDay.export.cabrillo.label': 'Export Cabrillo',
+  'fieldDay.export.cabrillo.title': 'Export Field Day log as Cabrillo (.cbr) for ARRL submission',
+  'fieldDay.export.adif.label': 'Export ADIF',
+  'fieldDay.export.adif.title': 'Export Field Day log as ADIF (.adi)',
+  'fieldDay.export.summary.label': 'Summary',
+  'fieldDay.export.summary.title':
+    'Download a one-page score summary (QSOs by band/mode, sections, power, bonuses, total)',
+  'fieldDay.export.dupeSheet.label': 'Dupe sheet',
+  'fieldDay.export.dupeSheet.title':
+    'Download a dupe / multiplier check sheet (sections + callsigns worked)',
+  'fieldDay.export.done': 'Exported → {{path}}',
+
+  // The bonus checklist. The bonus NAMES come from `FD_BONUSES`; these are the words around
+  // them, and `{{points}}` is a score.
+  'fieldDay.bonuses.head': 'Bonuses',
+  'fieldDay.bonuses.count': '{{claimed}}/{{total}} claimed · {{points}} pts',
+  'fieldDay.bonuses.aria': 'Claimed FD bonuses',
+  'fieldDay.bonus.aria': '{{label}} — {{points}} pts',
+  'fieldDay.bonus.pts': '{{points}} pts',
+
+  // The log. Column headings name a CONCEPT; every value under them is a token. ARRL calls
+  // the exchange field Class and WFD calls it Category — two words for two events, not one
+  // word with a variant.
+  'fieldDay.log.column.time': 'Time',
+  'fieldDay.log.column.call': 'Call',
+  'fieldDay.log.column.class': 'Class',
+  'fieldDay.log.column.category': 'Category',
+  'fieldDay.log.column.section': 'Section',
+  'fieldDay.log.column.band': 'Band',
+  'fieldDay.log.column.mode': 'Mode',
+  'fieldDay.log.empty': 'No contacts logged yet.',
+  'fieldDay.log.dupe.title': 'Duplicate callsign',
+  'fieldDay.log.mult.title': 'New section — multiplier',
+  'fieldDay.log.mult': 'Mult!',
+
+  // The event header. One sentence with three slots rather than a label plus a suffix: the
+  // date range is invariant, the status is one of the four below, and where each belongs is
+  // the translator's decision.
+  'fieldDay.subtitle': '{{event}}: {{dates}} · {{status}}',
+  'fieldDay.status.active': 'active',
+  // Only reached at two days or more, so English never needs the singular; a locale with more
+  // forms supplies them as an overlay (the `roam.cadence.option` pattern).
+  'fieldDay.countdown.days': 'starts in {{count}} days',
+  'fieldDay.countdown.tomorrow': 'starts tomorrow',
+  'fieldDay.countdown.hours': 'starts in {{count}}h',
+  'fieldDay.countdown.soon': 'starting soon',
+
+  // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
+  // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time
+  // stamps are date formatting and stay in the component. `WA7BNM` is the calendar keeper's
+  // callsign.
+  'contests.group.now': 'On the air now',
+  'contests.group.soon': 'Starting soon',
+  'contests.group.week': 'This week',
+  'contests.group.later': 'Later',
+  'contests.rules.title': 'Rules & details (WA7BNM)',
+  // The one-line summary, as four whole sentences. The "in 8 h" / "in 3 d" part was a
+  // fragment glued into the middle of the third one, which is exactly what cannot be
+  // translated — a language that puts the time first has nowhere to put it.
+  'contests.line.offline': 'Contest schedule loads once online.',
+  'contests.line.none': 'No contests coming up.',
+  'contests.line.onNow': 'On now: {{name}} (until {{until}}).',
+  'contests.line.next.now': 'Next: {{name}} now ({{date}}).',
+  'contests.line.next.hours': 'Next: {{name}} in {{count}} h ({{date}}).',
+  'contests.line.next.days': 'Next: {{name}} in {{count}} d ({{date}}).',
+
+  // ── Settings ▸ Contesting ───────────────────────────────────────────────────────────
+  // Paired with the surfaces above so the wording matches on both sides of the setting.
+  // ⚠️ Invariant and staying in the panel: the class/category placeholders (1D, 2O), the
+  // section placeholder (WI) and the section list itself, which is data.
+  'settings.contestCategory.legend': 'Contest Category',
+  'settings.contestCategory.unassisted.label': 'Unassisted entry',
+  // Two whole accessible names — the switch does one of two different things, and neither is
+  // the other with a word swapped.
+  'settings.contestCategory.unassisted.aria.declare': 'Declare an unassisted contest entry',
+  'settings.contestCategory.unassisted.aria.end': 'End an unassisted contest entry',
+  'settings.contestCategory.unassisted.hint':
+    'Turns off the AI CW decoder, DX cluster / RBN spots and the PSK Reporter needs feed together, and records the change with a timestamp. Takes effect at once. Your own settings for each of those are left alone and come back when you switch this off.',
+  // The journal. Each entry's own note and the source names in it are the engine's words,
+  // printed as they arrive; the UNASSISTED / assisted state and the empty stand-in are ours.
+  'settings.contestCategory.journal.label': 'Assistance record',
+  'settings.contestCategory.journal.unassisted': 'UNASSISTED',
+  'settings.contestCategory.journal.assisted': 'assisted',
+  'settings.contestCategory.journal.noSources': 'nothing active',
+  'settings.contestCategory.journal.hint':
+    'Kept in <code>assistance_journal.json</code> beside your settings, so it survives restarts. Newest first.',
+
+  'settings.fieldDay.legend': 'Field Day Setup',
+  'settings.fieldDay.mode.label': 'Field Day mode',
+  'settings.fieldDay.mode.aria.enable': 'Enable Field Day mode',
+  'settings.fieldDay.mode.aria.disable': 'Disable Field Day mode',
+  'settings.fieldDay.mode.hint':
+    'Turn on for Field Day weekend — reveals the Field Day workspace and the Class/Section exchange across all modes. Off the rest of the year. Fill in Class + Section below to start operating. Save to apply.',
+  'settings.fieldDay.needExchange':
+    "<b>Set your Class + Section to start operating.</b> Field Day mode is on, but the station won't enter Field Day until both are filled in below.",
+  'settings.fieldDay.event.label': 'Event',
+  'settings.fieldDay.event.aria': 'Field Day event',
+  'settings.fieldDay.event.hint':
+    "Which event you're operating in — affects scoring labels and export headers.",
+  // The exchange field, named as its own event names it. The letters quoted in the hints are
+  // the codes an operator sends — a translator leaves every one of them.
+  'settings.fieldDay.class.label': 'FD Class',
+  'settings.fieldDay.class.hint':
+    'Number of transmitters + class letter: A=club/group portable, B=1–2 person portable, C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A = 3 transmitters, club portable.',
+  'settings.fieldDay.category.label': 'WFD Category',
+  'settings.fieldDay.category.hint':
+    'Transmitters + location: H=Home, I=Indoor, M=Mobile, O=Outdoor (e.g. 2O = 2 transmitters, outdoor).',
+  'settings.fieldDay.section.label': 'ARRL Section',
+  // `{{section}}` is what the operator typed and `{{count}}` the size of the section list.
+  'settings.fieldDay.section.invalid':
+    '“{{section}}” isn\'t a known ARRL/RAC section — pick one from the list.',
+  'settings.fieldDay.section.hint':
+    'Your ARRL / RAC section (e.g. WI, ENY, ONN). Start typing the code or a state name and pick from the list — validated against all {{count}} sections. Required for the Cabrillo log.',
+  // The power multiplier. The ×5/×2/×1 factors and the watt figures are technical quantities
+  // that stay exactly as they are inside these labels; only the words around them move.
+  'settings.fieldDay.power.label': 'Power multiplier',
+  'settings.fieldDay.power.aria': 'Field Day power multiplier',
+  'settings.fieldDay.power.qrp.label': '×5 QRP / battery',
+  'settings.fieldDay.power.qrp.hint': 'Runs entirely on battery or other natural power, ≤5W output',
+  'settings.fieldDay.power.hundred.label': '×2 ≤100W',
+  'settings.fieldDay.power.hundred.hint': '100W or less from any power source',
+  'settings.fieldDay.power.high.label': '×1 >100W',
+  'settings.fieldDay.power.high.hint': 'Over 100W — commercial/generator power',
+  'settings.fieldDay.power.hint':
+    'Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.',
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning

@@ -153,6 +153,21 @@ const MIGRATED = [
   'components/CountryExclude.tsx',
   'components/RoamPanel.tsx',
   'alerts.ts',
+  // Batch 6 (2026-08-18) — POTA/SOTA, Field Day and the Settings ▸ Contesting sections that
+  // set them up. The whole review here is the units rule, and it lands on the EXCHANGE: park
+  // and summit references (K-1234, W7A/MN-001), ARRL/RAC section codes and their division
+  // names, Field Day class and category strings (3A, 2O) with the H/I/M/O letters, the FD
+  // mode codes (DIG/CW/PH), every score and multiplier, and the FD_BONUSES names — all of
+  // them values an entry is submitted with, so all of them stay in the code. So do the
+  // programme and event names themselves (POTA, SOTA, ARRL Field Day, Winter Field Day,
+  // WFD): they name a thing an operator enters, exactly as an award name does, and a
+  // translated one names nothing. What moved is the prose around them. Deliberately NOT
+  // migrated and flagged in the file: the Summary and Dupe-sheet EXPORTS, which build a
+  // fixed-width document rather than interface prose.
+  'components/PotaSotaView.tsx',
+  'components/FieldDayView.tsx',
+  'components/ContestCalendarPane.tsx',
+  'fdEvent.ts',
 ]
 
 /**

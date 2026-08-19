@@ -2,12 +2,27 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
 import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads } from '../api'
 import { pushToast } from '../toast'
-import { fdNextEvent, fdHeaderSubtitle, type FdKind } from '../fdEvent'
+import { fdNextEvent, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
+
+/**
+ * ⚠️ INVARIANT — the FD mode codes an entry is scored by, printed as they are logged and
+ * exported. Never translated, and never a catalog entry.
+ */
+const FD_MODE_CODES = { dig: 'DIG', cw: 'CW', ph: 'PH' } as const
+
+/** The short name in the header — WFD is the event's own abbreviation. */
+const FD_SHORT_NAMES: Record<FdKind, string> = { arrlfd: 'Field Day', wfd: 'WFD' }
 
 // ---------------------------------------------------------------------------
 // FD bonus table — mirrored from the Rust FD_BONUSES table.
+//
+// ⚠️ The LABELS are invariant and deliberately not catalog entries: each names a bonus the
+// ARRL scores by that name on a submitted entry, exactly as an award name does. They mirror
+// the Rust FD_BONUSES table one for one — change neither side alone.
 // ---------------------------------------------------------------------------
 export interface FdBonus {
   id: string
@@ -135,7 +150,16 @@ interface SummaryArgs {
   claimedBonuses: FdBonus[]
 }
 
-/** One-page score summary (QSOs by band/mode, sections, power, bonuses, total). */
+/**
+ * One-page score summary (QSOs by band/mode, sections, power, bonuses, total).
+ *
+ * ⚠️ NOT MIGRATED, deliberately (i18n phase 2). This and `buildDupeSheetText` below build a
+ * DOCUMENT the operator downloads and hands to a club or checks an entry against — not
+ * interface prose. Its lines are hand-aligned fixed-width columns, so a translation would have
+ * to preserve the column widths to stay readable, and its vocabulary is the one an ARRL entry
+ * is submitted in. Localising the exports is a design decision of its own, not a mechanical
+ * migration; it is recorded here rather than left looking like an omission.
+ */
 function buildSummaryText(a: SummaryArgs): string {
   const L: string[] = []
   L.push(`${a.eventName.toUpperCase()} — SCORE SUMMARY`)
@@ -311,11 +335,13 @@ function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
     [workedSet],
   )
   return (
-    <div style={SECTIONS_BOARD_WRAP} aria-label="Worked sections board">
+    <div style={SECTIONS_BOARD_WRAP} aria-label={t('fieldDay.sections.aria')}>
       <div style={SECTIONS_HEADER}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>Sections</span>
+        <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
+          {t('fieldDay.sections.head')}
+        </span>
         <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
-          {workedCount}/{ARRL_SECTION_TOTAL} sections
+          {t('fieldDay.sections.count', { worked: workedCount, total: ARRL_SECTION_TOTAL })}
         </span>
       </div>
       <div style={SECTIONS_GRID}>
@@ -329,8 +355,24 @@ function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
                   <span
                     key={s.code}
                     style={worked ? CELL_WORKED : CELL_UNWORKED}
-                    title={`${s.code} — ${s.name} (${div.division}) — ${worked ? 'worked' : 'not worked yet'}`}
-                    aria-label={`${s.name}, ${worked ? 'worked' : 'not worked'}`}
+                    title={
+                      worked
+                        ? t('fieldDay.sections.cell.worked.title', {
+                            code: s.code,
+                            name: s.name,
+                            division: div.division,
+                          })
+                        : t('fieldDay.sections.cell.notWorked.title', {
+                            code: s.code,
+                            name: s.name,
+                            division: div.division,
+                          })
+                    }
+                    aria-label={
+                      worked
+                        ? t('fieldDay.sections.cell.worked.aria', { name: s.name })
+                        : t('fieldDay.sections.cell.notWorked.aria', { name: s.name })
+                    }
                   >
                     {worked && <span aria-hidden="true">✓</span>}
                     {s.code}
@@ -481,7 +523,7 @@ export function FieldDayScoreboard({
       {/* OPERATOR + POP-OUT */}
       <div style={SCOREBOARD_HEADER}>
         <label style={OP_FIELD}>
-          <span style={OP_LABEL}>Operator</span>
+          <span style={OP_LABEL}>{t('fieldDay.operator.label')}</span>
           <input
             style={OP_INPUT}
             value={opDraft}
@@ -491,8 +533,8 @@ export function FieldDayScoreboard({
             onKeyDown={(e) => {
               if (e.key === 'Enter') e.currentTarget.blur()
             }}
-            placeholder="operator (call/initials)"
-            aria-label="Field Day operator (call or initials)"
+            placeholder={t('fieldDay.operator.placeholder')}
+            aria-label={t('fieldDay.operator.aria')}
             spellCheck={false}
             autoCapitalize="characters"
           />
@@ -502,9 +544,9 @@ export function FieldDayScoreboard({
             type="button"
             style={POPOUT_BTN}
             onClick={() => void openPanelWindow('fieldday')}
-            title="Pop the scoreboard out to its own window (second monitor)"
+            title={t('fieldDay.popOut.title')}
           >
-            ⧉ Pop out
+            {t('fieldDay.popOut.label')}
           </button>
         )}
       </div>
@@ -513,43 +555,45 @@ export function FieldDayScoreboard({
       <div className="fd-scoreboard">
         <div className="fd-score">
           <span className="fd-score-val">{fieldDay?.qsoCount ?? 0}</span>
-          <span className="fd-score-label">QSOs</span>
+          <span className="fd-score-label">{t('fieldDay.score.qsos')}</span>
         </div>
         <div className="fd-score">
           <span className="fd-score-val">{fieldDay?.sections ?? 0}</span>
-          <span className="fd-score-label">Sections</span>
+          <span className="fd-score-label">{t('fieldDay.score.sections')}</span>
         </div>
-        {/* Per-mode chips */}
+        {/* Per-mode chips — a count and a mode code, both invariant. */}
         <div className="fd-mode-chips">
-          {modes.dig > 0 && <span className="fd-mode-chip dig">{modes.dig} DIG</span>}
-          {modes.cw > 0 && <span className="fd-mode-chip cw">{modes.cw} CW</span>}
-          {modes.ph > 0 && <span className="fd-mode-chip ph">{modes.ph} PH</span>}
+          {modes.dig > 0 && <span className="fd-mode-chip dig">{modes.dig} {FD_MODE_CODES.dig}</span>}
+          {modes.cw > 0 && <span className="fd-mode-chip cw">{modes.cw} {FD_MODE_CODES.cw}</span>}
+          {modes.ph > 0 && <span className="fd-mode-chip ph">{modes.ph} {FD_MODE_CODES.ph}</span>}
         </div>
         {/* Score math */}
         {isWfd ? (
           /* WFD scores by OBJECTIVES (QSOs × (multipliers+1)) — we don't track
              operator counts/objectives, so showing ARRL power×+bonus math would
              claim a number WFD rules never produce. Show the honest raw counts. */
-          <div className="fd-score-math">
-            QSO pts {qsoPts} · WFD objective multipliers apply at submission (not tracked here)
-          </div>
+          <div className="fd-score-math">{t('fieldDay.score.wfd', { points: qsoPts })}</div>
         ) : (
           <div className="fd-score-math">
             <span className="fd-score-math-line">
-              QSO pts <strong>{qsoPts}</strong>
-              {' × power ×'}
-              <strong>{fdPowerMult}</strong>
-              {' = '}
-              <strong>{poweredPoints}</strong>
-              {' + bonuses '}
-              <strong>{bonusPoints}</strong>
-              {' = '}
-              <strong className="fd-score-total">{totalScore}</strong>
+              {/* The whole sum as ONE message — the eight fragments it used to be could not be
+                  reordered by a language that words the arithmetic differently. */}
+              <T
+                k="fieldDay.score.math"
+                tags={{ b: <strong />, total: <strong className="fd-score-total" /> }}
+                vals={{
+                  qsoPts,
+                  powerMult: fdPowerMult,
+                  poweredPoints,
+                  bonusPoints,
+                  totalScore,
+                }}
+              />
             </span>
           </div>
         )}
-        <div className="fd-state-chip" title="Sequencer state">
-          {fieldDay?.state ?? 'Idle'}
+        <div className="fd-state-chip" title={t('fieldDay.state.title')}>
+          {fieldDay?.state ?? t('fieldDay.state.idle')}
         </div>
       </div>
 
@@ -626,7 +670,9 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
   const { fdPowerMult, qsoPts, poweredPoints, claimedBonusIds: claimedBonuses, bonusPoints, totalScore } =
     computeFdScore(fieldDay, settings)
 
-  const classLabel = isWfd ? 'Category' : 'Class'
+  // Two words for two events, not one word with a variant: ARRL calls the exchange field
+  // Class and WFD calls it Category.
+  const classLabel = isWfd ? t('fieldDay.log.column.category') : t('fieldDay.log.column.class')
 
   // Cabrillo/ADIF come from the backend; Summary/Dupe sheet are derived client-side
   // from the same log the board renders (no backend command). Defined here so it can
@@ -638,7 +684,7 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
       let text: string
       if (format === 'summary') {
         text = buildSummaryText({
-          eventName: isWfd ? 'Winter Field Day' : 'ARRL Field Day',
+          eventName: isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd,
           isWfd,
           myClass: fieldDay?.myClass ?? '',
           mySection: fieldDay?.mySection ?? '',
@@ -664,7 +710,7 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
       // export buttons produced no file there while looking successful. The toast fires only
       // after the write actually happened, and names the path it landed at.
       const path = await saveTextToDownloads(`${base}-${stamp}.${EXT[format]}`, text)
-      pushToast(`Exported → ${path}`, 'success')
+      pushToast(t('fieldDay.export.done', { path }), 'success')
     } catch (err) {
       setExportError(typeof err === 'string' ? err : err instanceof Error ? err.message : String(err))
     } finally {
@@ -676,26 +722,26 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
     <section className="conversation panel fieldday">
       {/* EVENT BANNER */}
       <div className="fd-event-banner">
-        <span className="fd-event-name">{isWfd ? 'Winter Field Day' : 'ARRL Field Day'}</span>
+        <span className="fd-event-name">{isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd}</span>
         <span className="fd-event-subtitle">{subtitle}</span>
       </div>
 
       <div className="panel-header fd-header">
         <div className="fd-ident">
-          <h2 className="conv-peer">{isWfd ? 'WFD' : 'Field Day'}</h2>
+          <h2 className="conv-peer">{isWfd ? FD_SHORT_NAMES.wfd : FD_SHORT_NAMES.arrlfd}</h2>
           <span className="fd-class">
             {fieldDay?.myClass ?? '—'}
             <span className="fd-section"> {fieldDay?.mySection ?? '—'}</span>
           </span>
         </div>
-        <div className="fd-role-toggle" role="group" aria-label="Field Day role">
+        <div className="fd-role-toggle" role="group" aria-label={t('fieldDay.role.aria')}>
           <button
             type="button"
             className={`fd-role-btn${running ? ' active' : ''}`}
             aria-pressed={running}
             onClick={() => onSetMode('fieldday-run')}
           >
-            Running
+            {t('fieldDay.role.running')}
           </button>
           <button
             type="button"
@@ -703,7 +749,7 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
             aria-pressed={!running}
             onClick={() => onSetMode('fieldday-sp')}
           >
-            S&amp;P
+            {t('fieldDay.role.sp')}
           </button>
         </div>
         {/* Export buttons */}
@@ -716,36 +762,36 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('cabrillo')}
-            title="Export Field Day log as Cabrillo (.cbr) for ARRL submission"
+            title={t('fieldDay.export.cabrillo.title')}
           >
-            {busy === 'cabrillo' ? 'Exporting…' : 'Export Cabrillo'}
+            {busy === 'cabrillo' ? t('fieldDay.export.busy') : t('fieldDay.export.cabrillo.label')}
           </button>
           <button
             type="button"
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('adif')}
-            title="Export Field Day log as ADIF (.adi)"
+            title={t('fieldDay.export.adif.title')}
           >
-            {busy === 'adif' ? 'Exporting…' : 'Export ADIF'}
+            {busy === 'adif' ? t('fieldDay.export.busy') : t('fieldDay.export.adif.label')}
           </button>
           <button
             type="button"
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('summary')}
-            title="Download a one-page score summary (QSOs by band/mode, sections, power, bonuses, total)"
+            title={t('fieldDay.export.summary.title')}
           >
-            {busy === 'summary' ? 'Exporting…' : 'Summary'}
+            {busy === 'summary' ? t('fieldDay.export.busy') : t('fieldDay.export.summary.label')}
           </button>
           <button
             type="button"
             className="export-btn"
             disabled={busy !== null}
             onClick={() => handleExport('dupesheet')}
-            title="Download a dupe / multiplier check sheet (sections + callsigns worked)"
+            title={t('fieldDay.export.dupeSheet.title')}
           >
-            {busy === 'dupesheet' ? 'Exporting…' : 'Dupe sheet'}
+            {busy === 'dupesheet' ? t('fieldDay.export.busy') : t('fieldDay.export.dupeSheet.label')}
           </button>
         </div>
       </div>
@@ -761,12 +807,18 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
           onClick={() => setBonusOpen((v) => !v)}
           aria-expanded={bonusOpen}
         >
-          <span>Bonuses</span>
-          <span className="fd-bonuses-count">{claimedBonuses.length}/{FD_BONUSES.length} claimed · {bonusPoints} pts</span>
+          <span>{t('fieldDay.bonuses.head')}</span>
+          <span className="fd-bonuses-count">
+            {t('fieldDay.bonuses.count', {
+              claimed: claimedBonuses.length,
+              total: FD_BONUSES.length,
+              points: bonusPoints,
+            })}
+          </span>
           <span className="fd-bonuses-chevron">{bonusOpen ? '▲' : '▼'}</span>
         </button>
         {bonusOpen && (
-          <div className="fd-bonuses-list" role="group" aria-label="Claimed FD bonuses">
+          <div className="fd-bonuses-list" role="group" aria-label={t('fieldDay.bonuses.aria')}>
             {FD_BONUSES.map((b) => {
               const checked = claimedBonuses.includes(b.id)
               return (
@@ -775,10 +827,10 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
                     type="checkbox"
                     checked={checked}
                     onChange={() => void toggleBonus(b.id)}
-                    aria-label={`${b.label} — ${b.points} pts`}
+                    aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
                   />
                   <span className="fd-bonus-label">{b.label}</span>
-                  <span className="fd-bonus-pts">{b.points} pts</span>
+                  <span className="fd-bonus-pts">{t('fieldDay.bonus.pts', { points: b.points })}</span>
                 </label>
               )
             })}
@@ -789,27 +841,34 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
       {/* LOG TABLE */}
       <div className="fd-log">
         <div className="fd-log-head">
-          <span className="fd-col time">Time</span>
-          <span className="fd-col call">Call</span>
+          <span className="fd-col time">{t('fieldDay.log.column.time')}</span>
+          <span className="fd-col call">{t('fieldDay.log.column.call')}</span>
           <span className="fd-col cls">{classLabel}</span>
-          <span className="fd-col sec">Section{isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}</span>
-          <span className="fd-col band">Band</span>
-          <span className="fd-col mode">Mode</span>
+          {/* H/I/M/O are the WFD location letters — exchange codes, never translated. */}
+          <span className="fd-col sec">{t('fieldDay.log.column.section')}{isWfd && <span className="fd-wfd-hint"> (H/I/M/O)</span>}</span>
+          <span className="fd-col band">{t('fieldDay.log.column.band')}</span>
+          <span className="fd-col mode">{t('fieldDay.log.column.mode')}</span>
         </div>
         <div className="fd-log-scroll" ref={logPin.ref} onScroll={logPin.onScroll}>
-          {rows.length === 0 && <p className="empty">No contacts logged yet.</p>}
+          {rows.length === 0 && <p className="empty">{t('fieldDay.log.empty')}</p>}
           {rows.map((r, i) => (
             <div
               className={`fd-log-row${r.isNewSection ? ' mult' : ''}${r.isDupe ? ' dupe' : ''}`}
               key={`${r.qso.call}-${i}`}
-              title={r.isDupe ? 'Duplicate callsign' : r.isNewSection ? 'New section — multiplier' : undefined}
+              title={
+                r.isDupe
+                  ? t('fieldDay.log.dupe.title')
+                  : r.isNewSection
+                    ? t('fieldDay.log.mult.title')
+                    : undefined
+              }
             >
               <span className="fd-col time mono">{qsoTimeUtc(r.qso)}</span>
               <span className="fd-col call mono">{r.qso.call}</span>
               <span className="fd-col cls mono">{r.qso.class}</span>
               <span className="fd-col sec mono">
                 {r.qso.section}
-                {r.isNewSection && <span className="fd-mult-tag">Mult!</span>}
+                {r.isNewSection && <span className="fd-mult-tag">{t('fieldDay.log.mult')}</span>}
               </span>
               <span className="fd-col band">{r.qso.band}</span>
               <span className="fd-col mode">
