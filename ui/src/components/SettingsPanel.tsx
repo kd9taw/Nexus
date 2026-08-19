@@ -117,7 +117,7 @@ import { resolveTarget } from '../settings/registry'
 import { SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
 // The APRS channel list and the grid→channel derivation, shared with the APRS cockpit so the
 // picker's options and the derived default can never name different numbers.
-import { APRS_FREQS, BEACON_SYMBOLS, aprsChannelForGrid } from '../aprsBeacon'
+import { APRS_FREQS, BEACON_SYMBOLS, NORTH_AMERICA, aprsChannelForGrid } from '../aprsBeacon'
 import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
@@ -225,24 +225,27 @@ const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 
 
 /** The APRS SSID conventions (APRS spec appendix / the de-facto community list). Not enforced
  *  anywhere — an SSID is free-form 0..15 — but naming them is the difference between a number
- *  picker and a choice an operator can make. */
-const APRS_SSIDS: [number, string][] = [
-  [0, 'fixed station'],
-  [1, 'generic / secondary'],
-  [2, 'generic'],
-  [3, 'generic'],
-  [4, 'generic'],
-  [5, 'phone / tablet'],
-  [6, 'satellite / special'],
-  [7, 'handheld'],
-  [8, 'boat / marine mobile'],
-  [9, 'mobile (car)'],
-  [10, 'iGate / internet'],
-  [11, 'balloon / aircraft'],
-  [12, 'tracker'],
-  [13, 'weather station'],
-  [14, 'truck / freight'],
-  [15, 'generic'],
+ *  picker and a choice an operator can make.
+ *
+ *  The SSID is the stored value and is printed as it stands; what each one CONVENTIONALLY
+ *  means is prose, so it is held as a catalog key and resolved when the row is rendered. */
+const APRS_SSIDS: { ssid: number; labelKey: MessageKey }[] = [
+  { ssid: 0, labelKey: 'settings.aprs.ssid.fixed' },
+  { ssid: 1, labelKey: 'settings.aprs.ssid.genericSecondary' },
+  { ssid: 2, labelKey: 'settings.aprs.ssid.generic' },
+  { ssid: 3, labelKey: 'settings.aprs.ssid.generic' },
+  { ssid: 4, labelKey: 'settings.aprs.ssid.generic' },
+  { ssid: 5, labelKey: 'settings.aprs.ssid.phone' },
+  { ssid: 6, labelKey: 'settings.aprs.ssid.satellite' },
+  { ssid: 7, labelKey: 'settings.aprs.ssid.handheld' },
+  { ssid: 8, labelKey: 'settings.aprs.ssid.boat' },
+  { ssid: 9, labelKey: 'settings.aprs.ssid.mobile' },
+  { ssid: 10, labelKey: 'settings.aprs.ssid.igate' },
+  { ssid: 11, labelKey: 'settings.aprs.ssid.balloon' },
+  { ssid: 12, labelKey: 'settings.aprs.ssid.tracker' },
+  { ssid: 13, labelKey: 'settings.aprs.ssid.weather' },
+  { ssid: 14, labelKey: 'settings.aprs.ssid.truck' },
+  { ssid: 15, labelKey: 'settings.aprs.ssid.generic' },
 ]
 
 // Standard serial CAT baud rates offered in the Rig baud picker. A rig's manual lists its
@@ -722,6 +725,55 @@ const OMNIRIG_SLOTS: Record<1 | 2, string> = { 1: 'RIG 1', 2: 'RIG 2' }
  * un-migrated English (i18n/hardcoded-strings.test.ts).
  */
 const MACRO_SET_QSO = 'QSO'
+
+/** The CW F1 macro's role, which is the Q-code that key sends — same category as
+ *  `MACRO_SET_QSO`, and the reason it sits beside it rather than in the catalog. */
+const MACRO_SET_CQ = 'CQ'
+
+/**
+ * The keying-interface port examples the CW and RTTY placeholders show — same rule as
+ * `RIG_EXAMPLES` above. A COM number is whatever the OS enumerated, so a "localised" one names
+ * no port; the prose around it ("… — the keying interface") is a catalog entry that
+ * interpolates one of these.
+ */
+const KEYING_EXAMPLES = {
+  winkeyerPort: 'COM6',
+  cwKeyPort: 'COM7',
+  rttyFskPort: 'COM8',
+} as const
+
+/**
+ * APRS's own wire formats, shown as examples or written into a frame.
+ *
+ * `ssid` and `watchCalls` are callsigns, `path` is a digipeater path the packet carries
+ * verbatim, and `isHost` is a hostname — all four are matched literally by something outside
+ * this program, so all four stay here and are interpolated into the prose beside them.
+ */
+const APRS_EXAMPLES = {
+  ssid: 'KD9TAW-9',
+  watchCalls: 'W9XYZ-9, KD9ABC',
+  path: 'WIDE1-1, WIDE2-1',
+  isHost: 'rotate.aprs2.net',
+} as const
+
+/**
+ * The FCC rule the SSTV callsign burn-in satisfies. A citation is an address into a legal
+ * text — the same in every language, and a decimal comma in it would name a different rule.
+ */
+const SSTV_ID_RULE = '§97.119(b)(4)'
+
+/** The ISS SSTV downlink, in MHz. A dial reading: formatted invariantly, never written into
+ *  a sentence (`i18n/index.ts`, the invariant-token rule). */
+const ISS_SSTV_MHZ = 145.8
+
+/**
+ * Tokens the panel prints beside a number or stores as a `<select>` value, where the row has
+ * no prose in it at all. Named rather than written inline for the `MACRO_SET_QSO` reason: a
+ * bare word in JSX text is what the i18n guard reads as un-migrated English. `RTS` is a serial
+ * control line and `Hz` a unit symbol — the same category as `LINK_TOKENS` in the Now-Bar.
+ */
+const SERIAL_LINE_RTS = 'RTS'
+const UNIT_HZ = 'Hz'
 
 export function SettingsPanel({
   onSaved,
@@ -1243,22 +1295,23 @@ export function SettingsPanel({
   // The Guided copilot recommends the next F-key by ROLE (CQ → answer → report → 73):
   // customization changes the TEXT each key sends, never the key's job — so the
   // recommended-key highlight and the auto call fill (!) keep working for everyone.
-  // ⚠️ NOT MIGRATED, on purpose — these two tables and the two prompts below them are the CW
-  // macro editor's own, and they move as one piece with the CW tab (its editor JSX is not in
-  // this batch). Two of the four could not move alone anyway: the role table is read by index
-  // at the editor's rows, and `CW_MACRO_DEFAULTS` is SEED DATA — its labels are written into
-  // `settings.json` as the operator's own macro set the moment "Customize" is pressed, so a
-  // translated label would be a translated persisted value. The macro TEXT is macro tokens
-  // ({MYCALL}, {RST}) and is invariant in every language.
+  // The ROLE table moved to the catalog with the CW tab's editor (batch 17), as the comment
+  // that stood here said it would. A role says what the key is FOR, which is prose — except
+  // F1's, which is the Q-code the key sends and stays a token beside `MACRO_SET_QSO`.
+  //
+  // ⚠️ `CW_MACRO_DEFAULTS` DID NOT MOVE AND MUST NOT. It is SEED DATA: the moment "Customize"
+  // is pressed these labels are written into `settings.json` as the operator's own macro set,
+  // so a translated label is a translated PERSISTED value, stale the day the locale changes.
+  // Its `text` is macro tokens ({MYCALL}, {RST}) and was never translatable in any language.
   const CW_MACRO_ROLES: Record<string, string> = {
-    F1: 'CQ',
-    F2: 'Answer a station',
-    F3: 'Send report',
-    F4: 'Sign off (73)',
-    F5: 'My call',
-    F6: 'His call',
-    F7: 'Ask repeat',
-    F8: 'Query',
+    F1: MACRO_SET_CQ,
+    F2: t('settings.cw.macros.role.answer'),
+    F3: t('settings.cw.macros.role.report'),
+    F4: t('settings.cw.macros.role.signOff'),
+    F5: t('settings.cw.macros.role.myCall'),
+    F6: t('settings.cw.macros.role.hisCall'),
+    F7: t('settings.cw.macros.role.askRepeat'),
+    F8: t('settings.cw.macros.role.query'),
   }
   const CW_MACRO_DEFAULTS: { key: string; label: string; text: string }[] = [
     { key: 'F1', label: 'CQ', text: 'CQ CQ DE {MYCALL} {MYCALL} K' },
@@ -1283,7 +1336,15 @@ export function SettingsPanel({
     setForm((prev) => (prev ? { ...prev, macros: { ...prev.macros, activeCwProfile: i } } : prev))
   }
   const addCwProfile = () => {
-    const name = window.prompt('New CW macro profile name:', `Profile ${cwProfiles.length + 1}`)?.trim()
+    // The suggested name is a DISPLAY label, not seed data in the `CW_MACRO_DEFAULTS` sense:
+    // profiles are keyed by index everywhere, nothing reads the name back, and the same entry
+    // is what the picker falls back to for a profile with no name at all.
+    const name = window
+      .prompt(
+        t('settings.cw.macros.profiles.addPrompt'),
+        t('settings.cw.macros.profiles.unnamed', { n: cwProfiles.length + 1 }),
+      )
+      ?.trim()
     if (!name) return
     markDirty()
     setForm((prev) => {
@@ -1300,7 +1361,7 @@ export function SettingsPanel({
   const renameCwProfile = () => {
     const cur = cwProfiles[activeCwIdx]
     if (!cur) return
-    const name = window.prompt('Rename CW macro profile:', cur.name)?.trim()
+    const name = window.prompt(t('settings.cw.macros.profiles.renamePrompt'), cur.name)?.trim()
     if (!name) return
     markDirty()
     setForm((prev) => {
@@ -5857,43 +5918,46 @@ export function SettingsPanel({
           </fieldset>
           )}
 
-          {/* ---- Phone (SSB / FM) ---- */}
+          {/* ---- Phone (SSB / FM) ----
+               MIGRATED to the string catalog (i18n/hardcoded-strings.test.ts) with the CW tab
+               and the rest of the per-mode sections. The <select> VALUES are persisted tokens
+               and stay here, as do the CTCSS tones and their unit. */}
           {tab === 'phone' && (
           <fieldset className="settings-section" id="settings-phone">
-            <legend>Phone (SSB / FM)</legend>
+            <legend>{t('settings.phone.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Mode</span>
+              <span className="settings-featgroup-title">{t('settings.phone.mode.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Phone mode</span>
+                <span className="settings-label">{t('settings.phone.mode.label')}</span>
                 <select
                   className="settings-input"
                   value={form.phoneMode}
                   onChange={(e) => update('phoneMode', e.target.value)}
                 >
-                  <option value="ssb">SSB (USB/LSB by band)</option>
-                  <option value="fm">FM (VHF/UHF + repeaters)</option>
+                  <option value="ssb">{t('settings.phone.mode.ssb')}</option>
+                  <option value="fm">{t('settings.phone.mode.fm')}</option>
                 </select>
-                <span className="settings-hint">FM drives the rig to FM + the shift/tone below.</span>
+                <span className="settings-hint">{t('settings.phone.mode.hint')}</span>
               </label>
 
               {form.phoneMode === 'fm' && (
                 <>
                   <label className="settings-field">
-                    <span className="settings-label">Repeater shift</span>
+                    <span className="settings-label">{t('settings.phone.shift.label')}</span>
                     <select
                       className="settings-input"
                       value={form.rptrShift}
                       onChange={(e) => update('rptrShift', e.target.value)}
                     >
-                      <option value="simplex">Simplex (no shift)</option>
-                      <option value="plus">Plus (+)</option>
-                      <option value="minus">Minus (−)</option>
+                      <option value="simplex">{t('settings.phone.shift.simplex')}</option>
+                      <option value="plus">{t('settings.phone.shift.plus')}</option>
+                      <option value="minus">{t('settings.phone.shift.minus')}</option>
                     </select>
-                    <span className="settings-hint">Offset is the band standard (2 m 600 k, 70 cm 5 M…).</span>
+                    <span className="settings-hint">{t('settings.phone.shift.hint')}</span>
                   </label>
 
                   <label className="settings-field">
-                    <span className="settings-label">CTCSS (PL) tone</span>
+                    <span className="settings-label">{t('settings.phone.ctcss.label')}</span>
                     <select
                       className="settings-input"
                       value={String(form.ctcssToneHz)}
@@ -5901,45 +5965,37 @@ export function SettingsPanel({
                         setForm((p) => (p ? { ...p, ctcssToneHz: Number(e.target.value) } : p))
                       }
                     >
-                      <option value="0">Off</option>
-                      {CTCSS_TONES.map((t) => (
-                        <option key={t} value={String(t)}>
-                          {t.toFixed(1)} Hz
+                      <option value="0">{t('settings.phone.ctcss.off')}</option>
+                      {CTCSS_TONES.map((tone) => (
+                        <option key={tone} value={String(tone)}>
+                          {tone.toFixed(1)} {UNIT_HZ}
                         </option>
                       ))}
                     </select>
-                    <span className="settings-hint">Repeater access tone (PL).</span>
+                    <span className="settings-hint">{t('settings.phone.ctcss.hint')}</span>
                   </label>
                 </>
               )}
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Microphone</span>
+              <span className="settings-featgroup-title">{t('settings.phone.mic.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Voice mic (recording)</span>
+                <span className="settings-label">{t('settings.phone.voiceMic.label')}</span>
                 <select
                   className="settings-input"
                   value={form.voiceMicDevice ?? ''}
                   onChange={(e) => update('voiceMicDevice', e.target.value)}
                 >
-                  <option value="">Same as audio input (default)</option>
+                  <option value="">{t('settings.phone.voiceMic.default')}</option>
                   {voiceMicOptions.map((d) => (
                     <option key={d} value={d}>
                       {audioLabel(d, 'input')}
                     </option>
                   ))}
                 </select>
-                <span className="settings-hint">
-                  Mic used when RECORDING a voice-keyer message. Default records from the audio
-                  input device — but on a digital setup that's the rig's RX audio, so you'd record
-                  the band, not your voice. Pick your actual mic here. If it can't open, recording
-                  falls back to the input device (never silent).
-                </span>
+                <span className="settings-hint">{t('settings.phone.voiceMic.hint')}</span>
               </label>
-              <span className="settings-hint">
-                Mic gain and voice-keyer message recording are in the Phone cockpit (live CAT +
-                one-touch record).
-              </span>
+              <span className="settings-hint">{t('settings.phone.mic.hint')}</span>
             </div>
           </fieldset>
           )}
@@ -5947,32 +6003,27 @@ export function SettingsPanel({
           {/* ---- CW — the standalone CW home (keyer + F-key macros) ---- */}
           {tab === 'cw' && (
           <fieldset className="settings-section" id="settings-cw">
-            <legend>CW</legend>
+            <legend>{t('settings.cw.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Keyer</span>
+              <span className="settings-featgroup-title">{t('settings.cw.keyer.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Keyer backend</span>
+                <span className="settings-label">{t('settings.cw.keyer.label')}</span>
                 <select
                   className="settings-input"
                   value={form.cwKeyer ?? 'cat'}
                   onChange={(e) => update('cwKeyer', e.target.value)}
                 >
-                  <option value="cat">CAT — the rig keys CW (Hamlib send_morse; newer rigs only)</option>
-                  <option value="serial">Serial keyline (DTR/RTS) — key the rig&apos;s KEY jack</option>
-                  <option value="winkeyer">WinKeyer — K1EL hardware keyer</option>
-                  <option value="soundcard">Soundcard — audio tone through SSB (workaround)</option>
+                  <option value="cat">{t('settings.cw.keyer.cat')}</option>
+                  <option value="serial">{t('settings.cw.keyer.serial')}</option>
+                  <option value="winkeyer">{t('settings.cw.keyer.winkeyer')}</option>
+                  <option value="soundcard">{t('settings.cw.keyer.soundcard')}</option>
                 </select>
                 <span className="settings-hint">
-                  How Nexus sends CW. <strong>CAT</strong> uses the rig&apos;s internal keyer, but older
-                  rigs (e.g. IC-756PRO III) don&apos;t support it. <strong>Serial keyline</strong> toggles
-                  DTR/RTS into the rig&apos;s KEY jack (rig in CW, rig shapes the signal — the clean
-                  N1MM/fldigi method, needs only a keying cable). <strong>WinKeyer</strong> drives a K1EL.
-                  <strong>Soundcard</strong> keys an audio tone through SSB — a workaround; set drive so
-                  ALC reads zero. Also switchable live from the CW cockpit.
+                  <T k="settings.cw.keyer.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Sidetone pitch (Hz)</span>
+                <span className="settings-label">{t('settings.cw.pitch.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -5983,10 +6034,7 @@ export function SettingsPanel({
                   value={form.cwPitchHz}
                   onChange={(e) => updateNum('cwPitchHz', Number(e.target.value))}
                 />
-                <span className="settings-hint">
-                  CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope
-                  zero-beat marker.
-                </span>
+                <span className="settings-hint">{t('settings.cw.pitch.hint')}</span>
               </label>
               {/* Gated on its own backend, exactly like the keyline port/line below. Shipped
                   unconditionally through 0.27, which made it the ONLY visible port box under
@@ -5994,32 +6042,32 @@ export function SettingsPanel({
                   nothing keyed — the box he could see belonged to a keyer he had not chosen. */}
               {form.cwKeyer === 'winkeyer' && (
                 <label className="settings-field">
-                  <span className="settings-label">WinKeyer port</span>
+                  <span className="settings-label">{t('settings.cw.winkeyerPort.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.winkeyerPort}
-                    placeholder="COM6 — K1EL WinKeyer serial port"
+                    placeholder={t('settings.cw.winkeyerPort.placeholder', {
+                      example: KEYING_EXAMPLES.winkeyerPort,
+                    })}
                     onChange={(e) => update('winkeyerPort', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">
-                    The serial port your WinKey presents. 1200 baud. A WinKey micro inside a
-                    multi-function interface (Timewave Navigator, microHAM) counts — use that
-                    device&apos;s CW/WinKey port, not its CAT port.
-                  </span>
+                  <span className="settings-hint">{t('settings.cw.winkeyerPort.hint')}</span>
                 </label>
               )}
               {form.cwKeyer === 'serial' && (
                 <>
                   <label className="settings-field">
-                    <span className="settings-label">Keyline serial port</span>
+                    <span className="settings-label">{t('settings.cw.keyPort.label')}</span>
                     <input
                       className="settings-input"
                       type="text"
                       value={form.cwKeyPort ?? ''}
-                      placeholder="COM7 — the keying interface (separate from CAT)"
+                      placeholder={t('settings.cw.keyPort.placeholder', {
+                        example: KEYING_EXAMPLES.cwKeyPort,
+                      })}
                       onChange={(e) => update('cwKeyPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -6029,34 +6077,26 @@ export function SettingsPanel({
                         entirely — so this hint pointed a Navigator owner at the one backend
                         that cannot drive his hardware, and CW just never keyed. */}
                     <span className="settings-hint">
-                      The USB-to-serial into your keying interface (Buxcomm, a homebrew
-                      DTR cable, …) that plugs into the rig&apos;s KEY jack. Must be a SEPARATE port
-                      from CAT. Set the rig to CW and its key-jack to straight-key / bug.
-                      An interface with a WinKey chip in it — Timewave Navigator, microHAM, a K1EL
-                      WinKeyer — does <strong>not</strong> key on DTR: pick the WinKeyer backend above
-                      instead and give it that device&apos;s CW port.
+                      <T k="settings.cw.keyPort.hint" tags={{ b: <strong /> }} />
                     </span>
                   </label>
                   <label className="settings-field">
-                    <span className="settings-label">Keying line</span>
+                    <span className="settings-label">{t('settings.cw.keyLine.label')}</span>
                     <select
                       className="settings-input"
                       value={form.cwKeyLine ?? 'dtr'}
                       onChange={(e) => update('cwKeyLine', e.target.value)}
                     >
-                      <option value="dtr">DTR (the CW convention)</option>
-                      <option value="rts">RTS</option>
+                      <option value="dtr">{t('settings.cw.keyLine.dtr')}</option>
+                      <option value="rts">{SERIAL_LINE_RTS}</option>
                     </select>
-                    <span className="settings-hint">
-                      Which control line keys the rig. DTR is standard (RTS = PTT); flip to RTS if your
-                      interface is wired the other way.
-                    </span>
+                    <span className="settings-hint">{t('settings.cw.keyLine.hint')}</span>
                   </label>
                 </>
               )}
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">CW ID after 73</span>
+                  <span className="settings-label">{t('settings.cw.idAfter73.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6067,17 +6107,13 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">
-                  Keys your callsign in CW once the final 73 has fully left the air (stock WSJT-X
-                  option, default off). Uses the normal CW keying path — PTT + tone — after the FT8
-                  over, never on top of it.
-                </span>
+                <span className="settings-hint">{t('settings.cw.idAfter73.hint')}</span>
               </div>
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Macros (F-key profiles)</span>
+              <span className="settings-featgroup-title">{t('settings.cw.macros.title')}</span>
               <div className="settings-field cw-macro-editor">
-                <span className="settings-label">CW cockpit F-keys</span>
+                <span className="settings-label">{t('settings.cw.macros.label')}</span>
                 {/* Named macro profiles — a rotating operator switches sets here (or in one
                     click from the CW cockpit bar). The grid below edits the ACTIVE profile. */}
                 <div className="cw-macro-row">
@@ -6085,42 +6121,46 @@ export function SettingsPanel({
                     className="settings-input"
                     value={activeCwIdx}
                     onChange={(e) => selectCwProfile(Number(e.target.value))}
-                    aria-label="Active CW macro profile"
+                    aria-label={t('settings.cw.macros.profiles.aria')}
                   >
                     {cwProfiles.map((p, i) => (
                       <option key={i} value={i}>
-                        {p.name || `Profile ${i + 1}`}
+                        {p.name || t('settings.cw.macros.profiles.unnamed', { n: i + 1 })}
                       </option>
                     ))}
                   </select>
                   <button type="button" className="settings-refresh" onClick={addCwProfile}>
-                    New
+                    {t('settings.cw.macros.profiles.add')}
                   </button>
                   <button type="button" className="settings-refresh" onClick={renameCwProfile}>
-                    Rename
+                    {t('settings.cw.macros.profiles.rename')}
                   </button>
                   <button
                     type="button"
                     className="settings-refresh danger"
                     onClick={deleteCwProfile}
                     disabled={cwProfiles.length <= 1}
-                    title={cwProfiles.length <= 1 ? 'Keep at least one profile' : 'Delete this profile'}
+                    title={
+                      cwProfiles.length <= 1
+                        ? t('settings.cw.macros.profiles.keepOne')
+                        : t('settings.cw.macros.profiles.deleteTitle')
+                    }
                   >
-                    Delete
+                    {t('settings.cw.macros.profiles.delete')}
                   </button>
                 </div>
                 {!activeCwMacros.length ? (
                   <div className="cw-macro-row">
-                    <span className="settings-hint">
-                      Using the built-in F1–F8 set. Customize to make them your own (labels +
-                      templates; tokens: {'{MYCALL} {RST} {NAME}'} and ! = the worked call).
-                    </span>
+                    {/* The macro tokens live INSIDE the entry — `{MYCALL}` and friends are
+                        matched literally by the expander, and the catalog interpolates on
+                        `{{double}}` braces precisely so they pass through untouched. */}
+                    <span className="settings-hint">{t('settings.cw.macros.builtin.hint')}</span>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={() => setCwMacros(CW_MACRO_DEFAULTS.map((m) => ({ ...m })))}
                     >
-                      Customize
+                      {t('settings.cw.macros.customize')}
                     </button>
                   </div>
                 ) : (
@@ -6136,7 +6176,7 @@ export function SettingsPanel({
                           type="text"
                           value={m.label}
                           onChange={(e) => updateCwMacro(i, 'label', e.target.value)}
-                          aria-label={`${m.key} label`}
+                          aria-label={t('settings.cw.macros.row.label.aria', { key: m.key })}
                           autoComplete="off"
                           spellCheck={false}
                         />
@@ -6145,28 +6185,20 @@ export function SettingsPanel({
                           type="text"
                           value={m.text}
                           onChange={(e) => updateCwMacro(i, 'text', e.target.value)}
-                          aria-label={`${m.key} text`}
+                          aria-label={t('settings.cw.macros.row.text.aria', { key: m.key })}
                           autoComplete="off"
                           spellCheck={false}
                         />
                       </div>
                     ))}
                     <div className="cw-macro-row">
-                      <span className="settings-hint">
-                        Tokens: {'{MYCALL} {NAME} {MYGRID} {MYSTATE} {RST}'} · ! = the worked call ·{' '}
-                        {'{HISNAME} {HISSTATE}'} = the worked station's QRZ name/state (fill in
-                        Settings ▸ Station for {'{MYSTATE}'}; the rest auto-fill from the copilot /
-                        roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's
-                        next-step highlight follows the role, so customized text still rolls through
-                        F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other
-                        station's call inserted. Save to apply.
-                      </span>
+                      <span className="settings-hint">{t('settings.cw.macros.tokens.hint')}</span>
                       <button
                         type="button"
                         className="settings-refresh"
                         onClick={() => setCwMacros([])}
                       >
-                        Reset to defaults
+                        {t('settings.cw.macros.reset')}
                       </button>
                     </div>
                   </>
@@ -6179,99 +6211,87 @@ export function SettingsPanel({
           {/* ---- RTTY — keying backend + signal parameters (TX + RX demod both) ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-rtty">
-            <legend>RTTY</legend>
+            <legend>{t('settings.rtty.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Keying</span>
+              <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Keying backend</span>
+                <span className="settings-label">{t('settings.rtty.backend.label')}</span>
                 <select
                   className="settings-input"
                   value={form.rttyBackend ?? 'afsk'}
                   onChange={(e) => update('rttyBackend', e.target.value)}
                 >
-                  <option value="afsk">AFSK — soundcard tones through the rig in LSB (default)</option>
-                  <option value="fsk">True FSK — serial keyline (DTR/RTS), rig in RTTY mode</option>
+                  <option value="afsk">{t('settings.rtty.backend.afsk')}</option>
+                  <option value="fsk">{t('settings.rtty.backend.fsk')}</option>
                 </select>
                 <span className="settings-hint">
-                  How Nexus transmits RTTY. <strong>AFSK</strong> plays the two-tone waveform through
-                  the same TX audio path as FT8 (soundcard-clocked = jitter-free; set drive so ALC
-                  reads just zero). <strong>True FSK</strong> bit-bangs the rig&apos;s FSK input over a
-                  serial control line with the rig in RTTY mode — unlocking its narrow RTTY filters
-                  (e.g. the FTDX10&apos;s) — with PTT on CAT or its own line. Software FSK timing is
-                  casual/Field-Day grade; AFSK is the timing-cleanest path.
+                  <T k="settings.rtty.backend.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               {form.rttyBackend === 'fsk' && (
                 <>
                   <label className="settings-field">
-                    <span className="settings-label">FSK serial port</span>
+                    <span className="settings-label">{t('settings.rtty.fskPort.label')}</span>
                     <input
                       className="settings-input"
                       type="text"
                       value={form.rttyFskPort ?? ''}
-                      placeholder="COM8 — e.g. the FTDX10's USB Enhanced COM"
+                      placeholder={t('settings.rtty.fskPort.placeholder', {
+                        example: KEYING_EXAMPLES.rttyFskPort,
+                      })}
                       onChange={(e) => update('rttyFskPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
                     />
-                    <span className="settings-hint">
-                      The port whose control line feeds the rig&apos;s FSK input. Empty = the CAT
-                      serial port.
-                    </span>
+                    <span className="settings-hint">{t('settings.rtty.fskPort.hint')}</span>
                   </label>
                   <label className="settings-field">
-                    <span className="settings-label">FSK data line</span>
+                    <span className="settings-label">{t('settings.rtty.fskLine.label')}</span>
                     <select
                       className="settings-input"
                       value={form.rttyFskLine ?? 'dtr'}
                       onChange={(e) => update('rttyFskLine', e.target.value)}
                     >
-                      <option value="dtr">DTR (the common wiring — RTS stays free for PTT)</option>
-                      <option value="rts">RTS</option>
+                      <option value="dtr">{t('settings.rtty.fskLine.dtr')}</option>
+                      <option value="rts">{SERIAL_LINE_RTS}</option>
                     </select>
-                    <span className="settings-hint">
-                      Which control line carries the data bits. PTT must ride its OWN path — CAT
-                      PTT or the separate PTT line, never this one; Nexus refuses a send if they
-                      collide.
-                    </span>
+                    <span className="settings-hint">{t('settings.rtty.fskLine.hint')}</span>
                   </label>
                 </>
               )}
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Signal</span>
+              <span className="settings-featgroup-title">{t('settings.rtty.signal.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Baud rate</span>
+                <span className="settings-label">{t('settings.rtty.baud.label')}</span>
                 <select
                   className="settings-input"
                   value={String(form.rttyBaud ?? 45.45)}
                   onChange={(e) => updateNum('rttyBaud', Number(e.target.value))}
                 >
-                  <option value="45.45">45.45 — the HF standard</option>
-                  <option value="75">75 — VHF / some nets</option>
+                  <option value="45.45">{t('settings.rtty.baud.hf')}</option>
+                  <option value="75">{t('settings.rtty.baud.vhf')}</option>
                 </select>
-                <span className="settings-hint">
-                  Drives the TX bit clock and the RX demodulator (true 45.45, never rounded to 45).
-                </span>
+                <span className="settings-hint">{t('settings.rtty.baud.hint')}</span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Shift (Hz)</span>
+                <span className="settings-label">{t('settings.rtty.shift.label')}</span>
+                {/* 425 and 850 are rows with nothing in them but the shift itself — no prose
+                    to translate, so they stay written here. */}
                 <select
                   className="settings-input"
                   value={String(form.rttyShiftHz ?? 170)}
                   onChange={(e) => updateNum('rttyShiftHz', Number(e.target.value))}
                 >
-                  <option value="170">170 — the HF standard</option>
+                  <option value="170">{t('settings.rtty.shift.hf')}</option>
                   <option value="425">425</option>
                   <option value="850">850</option>
                 </select>
-                <span className="settings-hint">
-                  Mark/space spacing — the TX tone pair and the RX demodulator both.
-                </span>
+                <span className="settings-hint">{t('settings.rtty.shift.hint')}</span>
               </label>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Reverse (swap mark/space)</span>
+                  <span className="settings-label">{t('settings.rtty.reverse.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6282,11 +6302,7 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">
-                  The convention is LSB with mark on the lower audio tone. Turn this on when
-                  deliberately running the opposite sideband (e.g. AFSK in USB/DATA-U) so the
-                  on-air sense stays correct — applies to TX and the RX decoder.
-                </span>
+                <span className="settings-hint">{t('settings.rtty.reverse.hint')}</span>
               </div>
             </div>
           </fieldset>
@@ -6298,10 +6314,10 @@ export function SettingsPanel({
                (netted frequency, AFC, squelch) is cockpit/decoder state, not schema. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-psk">
-            <legend>PSK</legend>
+            <legend>{t('settings.psk.legend')}</legend>
             <div className="settings-field">
               <label className="settings-toggle">
-                <span className="settings-label">Start receiving when PSK opens</span>
+                <span className="settings-label">{t('settings.psk.rxAutoArm.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -6313,13 +6329,7 @@ export function SettingsPanel({
                   <span className="toggle-knob" />
                 </button>
               </label>
-              <span className="settings-hint">
-                The PSK screen starts the decoder as soon as you open it — click a trace on
-                the waterfall and the text prints, no setup. Turn this off to arm the
-                receiver by hand (the Arm RX button in the decoded-text pane). Stopping the
-                receiver yourself is already remembered for the rest of the session. PSK31
-                is receive-only for now; transmit is on the keyboard-modes roadmap.
-              </span>
+              <span className="settings-hint">{t('settings.psk.rxAutoArm.hint')}</span>
             </div>
           </fieldset>
           )}
@@ -6329,12 +6339,12 @@ export function SettingsPanel({
                baud, framing or keying; it is here now, beside the rest of SSTV. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-sstv">
-            <legend>SSTV</legend>
+            <legend>{t('settings.sstv.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Receiving</span>
+              <span className="settings-featgroup-title">{t('settings.sstv.receiving.title')}</span>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Start receiving when SSTV opens</span>
+                  <span className="settings-label">{t('settings.sstv.rxAutoArm.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6346,16 +6356,11 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">
-                  The SSTV screen starts the decoder as soon as you open it, so a picture on the
-                  band decodes without arming anything. Turn this off to arm the receiver by hand
-                  (the Arm button in the SSTV header). Stopping the receiver yourself is already
-                  remembered for the rest of the session.
-                </span>
+                <span className="settings-hint">{t('settings.sstv.rxAutoArm.hint')}</span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">ISS SSTV auto-arm</span>
+                  <span className="settings-label">{t('settings.sstv.issAutoArm.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6366,23 +6371,25 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
+                {/* The ISS downlink is a dial reading, so it is interpolated as a value and
+                    never written inside the sentence (the invariant-token rule). */}
                 <span className="settings-hint">
-                  Auto-arm SSTV for ISS passes — tunes 145.800 FM and arms the decoder when the
-                  ISS is overhead, restores your dial at LOS. Off by default. A pass arm is an
-                  explicit act, so it works whether or not the switch above is on.
+                  {t('settings.sstv.issAutoArm.hint', { freq: ISS_SSTV_MHZ.toFixed(3) })}
                 </span>
               </div>
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Transmitting</span>
+              <span className="settings-featgroup-title">
+                {t('settings.sstv.transmitting.title')}
+              </span>
               <label className="settings-field">
-                <span className="settings-label">Transmit mode</span>
+                <span className="settings-label">{t('settings.sstv.txMode.label')}</span>
                 <select
                   className="settings-input"
                   value={form.sstvDefaultTxMode ?? 'auto'}
                   onChange={(e) => update('sstvDefaultTxMode', e.target.value)}
                 >
-                  <option value="auto">Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)</option>
+                  <option value="auto">{t('settings.sstv.txMode.auto')}</option>
                   {TX_MODE_GROUPS.map((g) => (
                     <optgroup key={g} label={g}>
                       {SSTV_TX_MODES.filter((m) => m.group === g).map((m) => (
@@ -6394,14 +6401,11 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  This is the mode the SSTV screen starts on; you can still change it there for one
-                  picture. <strong>Automatic</strong> follows the band: HF gets Scottie 1 (the NA
-                  calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is
-                  what ARISS transmits.
+                  <T k="settings.sstv.txMode.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Transmit power</span>
+                <span className="settings-label">{t('settings.sstv.txPower.label')}</span>
                 <span className="settings-input-row">
                   <input
                     type="number"
@@ -6411,28 +6415,18 @@ export function SettingsPanel({
                     placeholder="—"
                     value={form.sstvTxPowerPct == null ? '' : String(form.sstvTxPowerPct)}
                     onChange={(e) => updateSstvTxPower(e.target.value)}
-                    aria-label="SSTV transmit power percent"
+                    aria-label={t('settings.sstv.txPower.aria')}
                   />
                   <span>%</span>
                 </span>
-                <span className="settings-hint">
-                  The drive the SSTV screen starts on, and the level an image is sent at. Leave it
-                  blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous
-                  key-down at full duty, so most operators run it well below their SSB drive. Your
-                  Phone power cap still applies on top of this.
-                </span>
+                <span className="settings-hint">{t('settings.sstv.txPower.hint')}</span>
               </label>
             </div>
             {/* Not a control — the answer to the question this section otherwise invites. The
                 plate is drawn in Rust before encoding so no webview path can bypass it, and its
                 geometry is derived from the demodulator's own window lengths, not chosen. */}
             <p className="settings-note">
-              Your callsign is burned into the top-left of every picture you transmit, and there is
-              no switch for it: an SSTV over is one long carrier of picture-only audio, so the
-              picture is the identification (§97.119(b)(4)). Send is refused until you have set a
-              callsign in Settings ▸ Station. If a picture already shows your call — a pre-made QSO
-              card — tick &ldquo;My picture already shows my callsign&rdquo; in the SSTV screen:
-              that is per-picture on purpose and resets with every new image.
+              {t('settings.sstv.callsignNote', { rule: SSTV_ID_RULE })}
             </p>
           </fieldset>
           )}
@@ -6442,26 +6436,32 @@ export function SettingsPanel({
                person to go hunting for these went to APRS, not to Integrations & Feeds. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-aprs">
-            <legend>APRS</legend>
+            <legend>{t('settings.aprs.legend')}</legend>
             {/* The RF side. ⚠️ NOTHING HERE MAY CARRY `disabled={!form.aprsIsEnabled}` — that is
                 the internet feed's gate, and copying it down would put RF APRS behind an
                 internet connection it does not need. */}
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Over the air</span>
+              <span className="settings-featgroup-title">{t('settings.aprs.rf.title')}</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">Channel (RF)</span>
+                  <span className="settings-label">{t('settings.aprs.channel.label')}</span>
                   <select
                     className="settings-input"
                     value={form.aprsChannelMhz == null ? '' : String(form.aprsChannelMhz)}
                     onChange={(e) => updateNullableNum('aprsChannelMhz', e.target.value, 0)}
                   >
                     {/* Naming the derived number is the whole mitigation for a table of
-                        approximate bounding boxes: a wrong guess is visible, not silent. */}
+                        approximate bounding boxes: a wrong guess is visible, not silent. Both
+                        readings are interpolated — a channel is a dial frequency and never
+                        belongs inside a translatable sentence. */}
                     <option value="">
                       {form.mygrid
-                        ? `Automatic — ${aprsChannelForGrid(form.mygrid).toFixed(3)} from your grid`
-                        : 'Automatic — 144.390 (set your grid on the Station tab)'}
+                        ? t('settings.aprs.channel.derived', {
+                            freq: aprsChannelForGrid(form.mygrid).toFixed(3),
+                          })
+                        : t('settings.aprs.channel.default', {
+                            freq: NORTH_AMERICA.toFixed(3),
+                          })}
                     </option>
                     {APRS_FREQS.map(([f, region]) => (
                       <option key={f} value={String(f)}>
@@ -6473,21 +6473,19 @@ export function SettingsPanel({
                     {form.aprsChannelMhz != null &&
                       !APRS_FREQS.some(([f]) => f === form.aprsChannelMhz) && (
                         <option value={String(form.aprsChannelMhz)}>
-                          {form.aprsChannelMhz.toFixed(3)} · custom
+                          {t('settings.aprs.channel.custom', {
+                            freq: form.aprsChannelMhz.toFixed(3),
+                          })}
                         </option>
                       )}
                   </select>
                   <span className="settings-hint">
-                    The 2 m FM channel APRS runs on, which is regional.{' '}
-                    <strong>Automatic</strong> follows your grid square, so moving to another
-                    region lands you on the right channel with nothing to configure — the number
-                    it picked is shown above. The boundaries are approximate; pick a channel here
-                    to pin it for good.
+                    <T k="settings.aprs.channel.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Beacon symbol</span>
+                  <span className="settings-label">{t('settings.aprs.symbol.label')}</span>
                   <select
                     className="settings-input"
                     value={`${form.aprsSymbolTable ?? '/'}${form.aprsSymbolCode ?? '>'}`}
@@ -6503,15 +6501,11 @@ export function SettingsPanel({
                       </option>
                     ))}
                   </select>
-                  <span className="settings-hint">
-                    The icon other stations see on the map for your beacon. Digipeater and iGate
-                    come from the alternate symbol table and are what a fixed station running as
-                    infrastructure should show.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.symbol.hint')}</span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Beacon comment</span>
+                  <span className="settings-label">{t('settings.aprs.comment.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -6520,14 +6514,11 @@ export function SettingsPanel({
                     onChange={(e) => update('aprsComment', e.target.value)}
                     autoComplete="off"
                   />
-                  <span className="settings-hint">
-                    Free text carried with your position — a name, a net, a URL. This goes on the
-                    air, and APRS caps it at 43 characters.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.comment.hint')}</span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Digipeater path</span>
+                  <span className="settings-label">{t('settings.aprs.path.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -6544,14 +6535,16 @@ export function SettingsPanel({
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Which digipeaters may repeat your beacon. <code>WIDE1-1, WIDE2-1</code> is the
-                    near-universal default — one hop through a local fill-in digi, then one wide
-                    hop. Leave it empty to transmit direct, with no digipeaters at all.
+                    <T
+                      k="settings.aprs.path.hint"
+                      tags={{ code: <code /> }}
+                      vals={{ path: APRS_EXAMPLES.path }}
+                    />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Beacon SSID</span>
+                  <span className="settings-label">{t('settings.aprs.ssid.label')}</span>
                   <select
                     className="settings-input"
                     value={form.aprsSsid == null ? '' : String(form.aprsSsid)}
@@ -6560,29 +6553,29 @@ export function SettingsPanel({
                     {/* '' = null = follow the callsign, exactly like the channel picker above.
                         NOT `updateNum` — a plain number cannot express "I have not chosen", and
                         writing 0 unconditionally would demote a station whose call is KD9TAW-9. */}
-                    <option value="">From my callsign</option>
-                    {APRS_SSIDS.map(([n, what]) => (
-                      <option key={n} value={String(n)}>
-                        {n} — {what}
+                    <option value="">{t('settings.aprs.ssid.fromCallsign')}</option>
+                    {APRS_SSIDS.map(({ ssid, labelKey }) => (
+                      <option key={ssid} value={String(ssid)}>
+                        {ssid} — {t(labelKey)}
                       </option>
                     ))}
                   </select>
                   <span className="settings-hint">
-                    The suffix on your callsign in every APRS frame you send, which is how other
-                    operators tell your mobile from your home station.{' '}
-                    <strong>From my callsign</strong> uses whatever your callsign already spells
-                    out — so if you have set it to <code>KD9TAW-9</code> on the Station tab,
-                    that is what goes out.
+                    <T
+                      k="settings.aprs.ssid.hint"
+                      tags={{ b: <strong />, code: <code /> }}
+                      vals={{ example: APRS_EXAMPLES.ssid }}
+                    />
                   </span>
                 </label>
               </div>
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">APRS-IS (internet feed)</span>
+              <span className="settings-featgroup-title">{t('settings.aprs.is.title')}</span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">APRS-IS feed</span>
+                    <span className="settings-label">{t('settings.aprs.is.enabled.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6593,32 +6586,30 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Plot stations the internet reports alongside the ones your own antenna hears —
-                    each one tagged so you can always tell which is which. Runs whether or not the
-                    APRS decoder is armed: it uses no radio and never transmits. If internet
-                    stations appear while your receiver stays silent, the fault is in the RF chain.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.enabled.hint')}</span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">Server</span>
+                  <span className="settings-label">{t('settings.aprs.is.host.label')}</span>
                   <input
                     className="settings-input"
                     value={form.aprsIsHost ?? ''}
                     onChange={(e) => update('aprsIsHost', e.target.value)}
-                    placeholder="rotate.aprs2.net"
+                    placeholder={APRS_EXAMPLES.isHost}
                     spellCheck={false}
                     disabled={!form.aprsIsEnabled}
                   />
                   <span className="settings-hint">
-                    Your regional Tier 2 rotate is best — noam / soam / euro / asia / aunz
-                    .aprs2.net. <code>rotate.aprs2.net</code> works anywhere.
+                    <T
+                      k="settings.aprs.is.host.hint"
+                      tags={{ code: <code /> }}
+                      vals={{ host: APRS_EXAMPLES.isHost }}
+                    />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Port</span>
+                  <span className="settings-label">{t('settings.aprs.is.port.label')}</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -6628,14 +6619,11 @@ export function SettingsPanel({
                     onChange={(e) => updateNum('aprsIsPort', Number(e.target.value))}
                     disabled={!form.aprsIsEnabled}
                   />
-                  <span className="settings-hint">
-                    14580 is the filtered port clients and iGates should use. The full-feed ports
-                    would send you the entire planet.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.port.hint')}</span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Radius (km)</span>
+                  <span className="settings-label">{t('settings.aprs.is.radius.label')}</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -6645,14 +6633,11 @@ export function SettingsPanel({
                     onChange={(e) => updateNum('aprsIsRadiusKm', Number(e.target.value))}
                     disabled={!form.aprsIsEnabled}
                   />
-                  <span className="settings-hint">
-                    How far around your grid square to subscribe. APRS is a local mode; 150 km is a
-                    generous 2 m-plus-digipeater horizon. 0 = no distance limit (busy).
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.radius.hint')}</span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Watched calls</span>
+                  <span className="settings-label">{t('settings.aprs.is.watchCalls.label')}</span>
                   <input
                     className="settings-input"
                     value={(form.aprsIsWatchCalls ?? []).join(', ')}
@@ -6664,19 +6649,16 @@ export function SettingsPanel({
                           .filter(Boolean),
                       )
                     }
-                    placeholder="W9XYZ-9, KD9ABC"
+                    placeholder={APRS_EXAMPLES.watchCalls}
                     spellCheck={false}
                     disabled={!form.aprsIsEnabled}
                   />
-                  <span className="settings-hint">
-                    Comma separated. These come through from anywhere on earth, however far outside
-                    your radius they are — the club tracker on a road trip, a friend chasing a summit.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.watchCalls.hint')}</span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Weather stations</span>
+                    <span className="settings-label">{t('settings.aprs.is.weather.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6688,12 +6670,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">Include weather reports in the feed.</span>
+                  <span className="settings-hint">{t('settings.aprs.is.weather.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Objects &amp; items</span>
+                    <span className="settings-label">{t('settings.aprs.is.objects.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6705,14 +6687,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Repeaters, NWS alerts and event markers other stations have placed on the map.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.objects.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Messages</span>
+                    <span className="settings-label">{t('settings.aprs.is.messages.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6724,14 +6704,11 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Show APRS text messages from the feed. Display only — replying to an internet
-                    message is not wired up.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.messages.hint')}</span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">Keep stations for (min)</span>
+                  <span className="settings-label">{t('settings.aprs.stationTtl.label')}</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -6740,18 +6717,12 @@ export function SettingsPanel({
                     value={form.aprsStationTtlMin ?? 60}
                     onChange={(e) => updateNum('aprsStationTtlMin', Number(e.target.value))}
                   />
-                  <span className="settings-hint">
-                    How long a station stays on the map after its last packet. Stations start to fade
-                    at a third of this. An hour by default: fixed stations often beacon only every
-                    ten to thirty minutes, and a shorter window makes the slow ones blink off between
-                    their own beacons. 0 keeps every station forever (no fade, no removal — the
-                    2000-station ceiling still applies).
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.stationTtl.hint')}</span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Receive-only iGate</span>
+                    <span className="settings-label">{t('settings.aprs.is.uplink.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6763,13 +6734,19 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
+                  {/* Two WHOLE sentences, not a stem and two tails: "Publishes under KD9TAW"
+                      and "Publishes under your callsign" are different statements, and a
+                      language that orders them differently cannot be served by a glued tail. */}
                   <span className="settings-hint">
-                    Contribute packets <strong>your own antenna hears</strong> to APRS-IS, so
-                    stations in your area reach the global map through you. Publishes under{' '}
-                    {form.mycall ? <strong>{form.mycall.toUpperCase()}</strong> : 'your callsign'}, so
-                    it is a separate choice from watching the feed, and it needs the APRS decoder
-                    running to have anything to send. Nexus never sends the other way: gating the
-                    internet back onto the air means transmitting unattended.
+                    {form.mycall ? (
+                      <T
+                        k="settings.aprs.is.uplink.hint.call"
+                        tags={{ b: <strong /> }}
+                        vals={{ call: form.mycall.toUpperCase() }}
+                      />
+                    ) : (
+                      <T k="settings.aprs.is.uplink.hint.noCall" tags={{ b: <strong /> }} />
+                    )}
                   </span>
                 </div>
               </div>
@@ -6780,21 +6757,23 @@ export function SettingsPanel({
           {/* ---- Frequencies (working-frequency table overrides) ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-working-frequencies">
-            <legend>Working Frequencies</legend>
+            <legend>{t('settings.workingFrequencies.legend')}</legend>
             <p className="settings-note">
-              The dial frequency used when a band/mode is selected. These are{' '}
-              <strong>overrides</strong> of the stock WSJT-X working-frequency table — leave the
-              list empty to use stock everywhere. An override replaces the stock row for its
-              band + mode (e.g. to move FT8 to an alternate sub-band).
+              <T k="settings.workingFrequencies.note" tags={{ b: <strong /> }} />
             </p>
 
             <div className="settings-field">
-              <span className="settings-label">Standard table (read-only)</span>
+              <span className="settings-label">
+                {t('settings.workingFrequencies.stock.label')}
+              </span>
+              {/* Every dial reading below is DATA, formatted invariantly by `toFixed(6)`; the
+                  band and mode cells print the table's own tokens. Only the three column
+                  headings are words. */}
               <div className="freq-table">
                 <div className="freq-row head">
-                  <span className="freq-cell">Band</span>
-                  <span className="freq-cell">Mode</span>
-                  <span className="freq-cell">Dial (MHz)</span>
+                  <span className="freq-cell">{t('settings.workingFrequencies.stock.band')}</span>
+                  <span className="freq-cell">{t('settings.workingFrequencies.stock.mode')}</span>
+                  <span className="freq-cell">{t('settings.workingFrequencies.stock.dial')}</span>
                 </div>
                 {STOCK_WORKING_FREQUENCIES.map((r) => {
                   const ov = overrideByKey.get(`${r.band}|${r.mode}`)
@@ -6805,10 +6784,14 @@ export function SettingsPanel({
                       {ov != null ? (
                         <span
                           className="freq-cell mono freq-override"
-                          title={`Your override — stock is ${r.mhz.toFixed(6)} MHz`}
+                          title={t('settings.workingFrequencies.stock.overrideTitle', {
+                            mhz: r.mhz.toFixed(6),
+                          })}
                         >
                           {ov.toFixed(6)}
-                          <span className="freq-override-tag">override</span>
+                          <span className="freq-override-tag">
+                            {t('settings.workingFrequencies.stock.overrideTag')}
+                          </span>
                         </span>
                       ) : (
                         <span className="freq-cell mono">{r.mhz.toFixed(6)}</span>
@@ -6818,15 +6801,18 @@ export function SettingsPanel({
                 })}
               </div>
               <span className="settings-hint">
-                WSJT-X stock dial frequencies. A row with an active override shows your value
-                (highlighted) instead of the stock one.
+                {t('settings.workingFrequencies.stock.hint')}
               </span>
             </div>
 
             <div className="settings-field">
-              <span className="settings-label">Your overrides</span>
+              <span className="settings-label">
+                {t('settings.workingFrequencies.overrides.label')}
+              </span>
               {overrides.length === 0 && (
-                <span className="settings-hint">None — the stock table is in effect.</span>
+                <span className="settings-hint">
+                  {t('settings.workingFrequencies.overrides.none')}
+                </span>
               )}
               {overrides.map((o, i) => {
                 const dup = dupKeys.has(`${o.band}|${o.mode}`)
@@ -6835,7 +6821,9 @@ export function SettingsPanel({
                     <select
                       className="settings-input"
                       value={o.band}
-                      aria-label={`Override ${i + 1} band`}
+                      aria-label={t('settings.workingFrequencies.overrides.band.aria', {
+                        n: i + 1,
+                      })}
                       onChange={(e) => updateOverride(i, { band: e.target.value })}
                     >
                       {FREQ_BANDS.map((b) => (
@@ -6847,7 +6835,9 @@ export function SettingsPanel({
                     <select
                       className="settings-input"
                       value={o.mode}
-                      aria-label={`Override ${i + 1} mode`}
+                      aria-label={t('settings.workingFrequencies.overrides.mode.aria', {
+                        n: i + 1,
+                      })}
                       onChange={(e) => updateOverride(i, { mode: e.target.value })}
                     >
                       {FREQ_MODES.map((m) => (
@@ -6862,7 +6852,9 @@ export function SettingsPanel({
                       inputMode="decimal"
                       min="0"
                       step="0.0001"
-                      aria-label={`Override ${i + 1} dial frequency in MHz`}
+                      aria-label={t('settings.workingFrequencies.overrides.mhz.aria', {
+                        n: i + 1,
+                      })}
                       value={mhzDraft && mhzDraft.idx === i ? mhzDraft.text : o.mhz.toFixed(6)}
                       onChange={(e) => {
                         setMhzDraft({ idx: i, text: e.target.value })
@@ -6875,20 +6867,25 @@ export function SettingsPanel({
                       type="button"
                       className="settings-refresh"
                       onClick={() => removeOverride(i)}
-                      aria-label={`Remove the ${o.band} ${o.mode} override`}
-                      title="Remove this override"
+                      aria-label={t('settings.workingFrequencies.overrides.remove.aria', {
+                        band: o.band,
+                        mode: o.mode,
+                      })}
+                      title={t('settings.workingFrequencies.overrides.remove.title')}
                     >
                       ✕
                     </button>
                     {dup && (
-                      <span className="freq-dup-tag">duplicate band + mode — the last row wins</span>
+                      <span className="freq-dup-tag">
+                        {t('settings.workingFrequencies.overrides.duplicate')}
+                      </span>
                     )}
                   </div>
                 )
               })}
               <div className="settings-input-row freq-actions">
                 <button type="button" className="settings-refresh" onClick={addOverride}>
-                  Add override
+                  {t('settings.workingFrequencies.overrides.add')}
                 </button>
                 <button
                   type="button"
@@ -6896,12 +6893,11 @@ export function SettingsPanel({
                   onClick={resetOverrides}
                   disabled={overrides.length === 0}
                 >
-                  Reset to standard
+                  {t('settings.workingFrequencies.overrides.reset')}
                 </button>
               </div>
               <span className="settings-hint">
-                MHz is the dial (suppressed-carrier) frequency. Save to apply — band switches
-                then use your value for that band + mode.
+                {t('settings.workingFrequencies.overrides.hint')}
               </span>
             </div>
           </fieldset>

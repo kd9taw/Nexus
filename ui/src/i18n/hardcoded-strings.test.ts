@@ -323,9 +323,12 @@ const MIGRATED = [
  * Audio, Headphone monitor, Satellite Doppler, Orbital elements and Rotator. Batch 16
  * (2026-08-19) took the Digital tab: the FT8/FT4 section's Logging Behavior, Decoder and
  * Station Housekeeping sub-groups, and the six weak-signal mode sections after it (JT65,
- * MSK144, Beacons — WSPR & FST4W, FST4, Q65, Quick-reply macros). Putting the file on
- * MIGRATED would report the tabs still to come; leaving it off entirely would make every key
- * those sections use look like an orphan.
+ * MSK144, Beacons — WSPR & FST4W, FST4, Q65, Quick-reply macros). Batch 17 (2026-08-19) took
+ * the rest of the per-mode surface: the whole Phone tab, the whole CW tab (keyer, keying
+ * ports, CW ID and the F-key macro editor with its role table and its two profile prompts),
+ * and the Digital tab's RTTY, PSK, SSTV, APRS and Working Frequencies sections. Putting the
+ * file on MIGRATED would report the tabs still to come; leaving it off entirely would make
+ * every key those sections use look like an orphan.
  *
  * ⚠️ AND THE DIGITAL TAB IS THE OTHER REASON THIS FILE CANNOT GRADUATE YET, on the same
  * ruling that keeps `SetupHealth.tsx` below: the FT8/FT4 section's first two sub-groups,

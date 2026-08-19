@@ -4688,6 +4688,297 @@ export const EN = {
   'settings.quickReply.band.label': 'Band / CQ',
   'settings.quickReply.band.hint': 'Open broadcasts — the Call CQ launchpad + band feed.',
 
+  // ════════════════════════════════════════════════════════════════════════════════════
+  // Settings ▸ Phone · CW · RTTY · PSK · SSTV · APRS · Working Frequencies
+  //
+  // ⚠️ SEVEN LEGENDS BELOW ARE MODE NAMES — Phone, CW, RTTY, PSK, SSTV, APRS. A locale keeps
+  // every one of them exactly as written; they are entries at all only because the settings
+  // registry guard reads a `<legend>` either literally or through this catalog and accepts
+  // nothing else (`settings/registry.test.ts`). Same concession `aprs.source.rf.label` makes,
+  // and for the same mechanical reason.
+  //
+  // ⚠️ EVERY NUMBER AND EVERY DEVICE NAME BELOW IS AN INVARIANT TECHNICAL QUANTITY, written
+  // inside the entry and listed here so a translator can see the whole set at once: the CW
+  // sidetone's 300–1200 Hz range, WinKey's 1200 baud, RTTY's 45.45 / 75 baud and its 170 Hz
+  // shift, APRS-IS's port 14580 and 150 km radius, its 43-character comment cap and its
+  // 2000-station ceiling, SSTV's 290 seconds of key-down, and the repeater offsets (2 m
+  // 600 k, 70 cm 5 M). So is every NAME an operator matches against hardware or another
+  // program: the modes and sidebands (SSB, USB, LSB, FM, FT8, PSK31, AFSK, FSK, Baudot), the
+  // SSTV mode names (Scottie 1, Martin 1, PD-120), the rig and interface models (IC-756PRO
+  // III, FTDX10, K1EL, WinKeyer, Timewave Navigator, microHAM, Buxcomm), the serial control
+  // lines (DTR, RTS), ARISS, NWS, and the Tier 2 rotate hostnames. None of them is ever
+  // produced by a formatter.
+  //
+  // ⚠️ WHAT IS NOT WRITTEN HERE, because a decimal comma in one would be an operating fault:
+  // the ISS SSTV downlink, the North American APRS channel and every stock working frequency
+  // reach these sentences as INTERPOLATED VALUES from the panel, formatted invariantly. So do
+  // the COM-port examples, the callsign/SSID and watched-call examples, the default digipeater
+  // path, the APRS-IS host and the §97.119 citation — each a named constant in the component.
+  // ════════════════════════════════════════════════════════════════════════════════════
+
+  // ── Settings ▸ Phone (SSB / FM) ─────────────────────────────────────────────────────
+  // The CTCSS picker's tones are rendered from `CTCSS_TONES`, never from a string here; only
+  // its "Off" row is prose.
+  'settings.phone.legend': 'Phone (SSB / FM)',
+  'settings.phone.mode.title': 'Mode',
+  'settings.phone.mode.label': 'Phone mode',
+  'settings.phone.mode.ssb': 'SSB (USB/LSB by band)',
+  'settings.phone.mode.fm': 'FM (VHF/UHF + repeaters)',
+  'settings.phone.mode.hint': 'FM drives the rig to FM + the shift/tone below.',
+  'settings.phone.shift.label': 'Repeater shift',
+  'settings.phone.shift.simplex': 'Simplex (no shift)',
+  'settings.phone.shift.plus': 'Plus (+)',
+  'settings.phone.shift.minus': 'Minus (−)',
+  'settings.phone.shift.hint': 'Offset is the band standard (2 m 600 k, 70 cm 5 M…).',
+  'settings.phone.ctcss.label': 'CTCSS (PL) tone',
+  'settings.phone.ctcss.off': 'Off',
+  'settings.phone.ctcss.hint': 'Repeater access tone (PL).',
+  'settings.phone.mic.title': 'Microphone',
+  'settings.phone.mic.hint':
+    'Mic gain and voice-keyer message recording are in the Phone cockpit (live CAT + one-touch record).',
+  'settings.phone.voiceMic.label': 'Voice mic (recording)',
+  'settings.phone.voiceMic.default': 'Same as audio input (default)',
+  'settings.phone.voiceMic.hint':
+    "Mic used when RECORDING a voice-keyer message. Default records from the audio input device — but on a digital setup that's the rig's RX audio, so you'd record the band, not your voice. Pick your actual mic here. If it can't open, recording falls back to the input device (never silent).",
+
+  // ── Settings ▸ CW ───────────────────────────────────────────────────────────────────
+  // ⚠️ `keyer.hint` HAS NO SPACE between "K1EL." and `<b>Soundcard</b>`. That is what the
+  // panel has always rendered — the JSX it came from lost the space at a line break — and
+  // this phase changes no visible text. Putting it back is a wording change and belongs in
+  // its own commit, not smuggled in behind a migration.
+  //
+  // ⚠️ The macro TOKENS in the two hints below — {MYCALL}, {NAME}, {MYGRID}, {MYSTATE},
+  // {RST}, {HISNAME}, {HISSTATE} and the bare `!` — are what the expander matches LITERALLY.
+  // They must survive translation character for character, which is the whole reason this
+  // catalog interpolates on `{{double}}` braces: single braces would eat every one of them.
+  // The F1…F8 key names and the F1→F2→F3→F4 order are tokens too.
+  'settings.cw.legend': 'CW',
+  'settings.cw.keyer.title': 'Keyer',
+  'settings.cw.keyer.label': 'Keyer backend',
+  'settings.cw.keyer.cat': 'CAT — the rig keys CW (Hamlib send_morse; newer rigs only)',
+  'settings.cw.keyer.serial': "Serial keyline (DTR/RTS) — key the rig's KEY jack",
+  'settings.cw.keyer.winkeyer': 'WinKeyer — K1EL hardware keyer',
+  'settings.cw.keyer.soundcard': 'Soundcard — audio tone through SSB (workaround)',
+  'settings.cw.keyer.hint':
+    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — the clean N1MM/fldigi method, needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone through SSB — a workaround; set drive so ALC reads zero. Also switchable live from the CW cockpit.",
+  'settings.cw.pitch.label': 'Sidetone pitch (Hz)',
+  'settings.cw.pitch.hint':
+    'CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope zero-beat marker.',
+  'settings.cw.winkeyerPort.label': 'WinKeyer port',
+  'settings.cw.winkeyerPort.placeholder': '{{example}} — K1EL WinKeyer serial port',
+  'settings.cw.winkeyerPort.hint':
+    "The serial port your WinKey presents. 1200 baud. A WinKey micro inside a multi-function interface (Timewave Navigator, microHAM) counts — use that device's CW/WinKey port, not its CAT port.",
+  'settings.cw.keyPort.label': 'Keyline serial port',
+  'settings.cw.keyPort.placeholder': '{{example}} — the keying interface (separate from CAT)',
+  'settings.cw.keyPort.hint':
+    "The USB-to-serial into your keying interface (Buxcomm, a homebrew DTR cable, …) that plugs into the rig's KEY jack. Must be a SEPARATE port from CAT. Set the rig to CW and its key-jack to straight-key / bug. An interface with a WinKey chip in it — Timewave Navigator, microHAM, a K1EL WinKeyer — does <b>not</b> key on DTR: pick the WinKeyer backend above instead and give it that device's CW port.",
+  'settings.cw.keyLine.label': 'Keying line',
+  'settings.cw.keyLine.dtr': 'DTR (the CW convention)',
+  'settings.cw.keyLine.hint':
+    'Which control line keys the rig. DTR is standard (RTS = PTT); flip to RTS if your interface is wired the other way.',
+  'settings.cw.idAfter73.label': 'CW ID after 73',
+  'settings.cw.idAfter73.hint':
+    'Keys your callsign in CW once the final 73 has fully left the air (stock WSJT-X option, default off). Uses the normal CW keying path — PTT + tone — after the FT8 over, never on top of it.',
+
+  // The F-key macro editor. Each key's ROLE is prose (what the key is FOR); F1's role is the
+  // Q-code it sends and stays a token in the panel, exactly as the QSO macro set does.
+  'settings.cw.macros.title': 'Macros (F-key profiles)',
+  'settings.cw.macros.label': 'CW cockpit F-keys',
+  'settings.cw.macros.profiles.aria': 'Active CW macro profile',
+  'settings.cw.macros.profiles.unnamed': 'Profile {{n}}',
+  'settings.cw.macros.profiles.add': 'New',
+  'settings.cw.macros.profiles.addPrompt': 'New CW macro profile name:',
+  'settings.cw.macros.profiles.rename': 'Rename',
+  'settings.cw.macros.profiles.renamePrompt': 'Rename CW macro profile:',
+  'settings.cw.macros.profiles.delete': 'Delete',
+  'settings.cw.macros.profiles.deleteTitle': 'Delete this profile',
+  'settings.cw.macros.profiles.keepOne': 'Keep at least one profile',
+  'settings.cw.macros.builtin.hint':
+    'Using the built-in F1–F8 set. Customize to make them your own (labels + templates; tokens: {MYCALL} {RST} {NAME} and ! = the worked call).',
+  'settings.cw.macros.customize': 'Customize',
+  'settings.cw.macros.row.label.aria': '{{key}} label',
+  'settings.cw.macros.row.text.aria': '{{key}} text',
+  'settings.cw.macros.tokens.hint':
+    "Tokens: {MYCALL} {NAME} {MYGRID} {MYSTATE} {RST} · ! = the worked call · {HISNAME} {HISSTATE} = the worked station's QRZ name/state (fill in Settings ▸ Station for {MYSTATE}; the rest auto-fill from the copilot / roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's next-step highlight follows the role, so customized text still rolls through F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other station's call inserted. Save to apply.",
+  'settings.cw.macros.reset': 'Reset to defaults',
+  'settings.cw.macros.role.answer': 'Answer a station',
+  'settings.cw.macros.role.report': 'Send report',
+  'settings.cw.macros.role.signOff': 'Sign off (73)',
+  'settings.cw.macros.role.myCall': 'My call',
+  'settings.cw.macros.role.hisCall': 'His call',
+  'settings.cw.macros.role.askRepeat': 'Ask repeat',
+  'settings.cw.macros.role.query': 'Query',
+
+  // ── Settings ▸ RTTY ─────────────────────────────────────────────────────────────────
+  // The 425 and 850 Hz shifts are rows with nothing in them but a number, so they stay in
+  // the panel; only the 170 Hz row and the two baud rows carry prose beside the figure.
+  'settings.rtty.legend': 'RTTY',
+  'settings.rtty.keying.title': 'Keying',
+  'settings.rtty.backend.label': 'Keying backend',
+  'settings.rtty.backend.afsk': 'AFSK — soundcard tones through the rig in LSB (default)',
+  'settings.rtty.backend.fsk': 'True FSK — serial keyline (DTR/RTS), rig in RTTY mode',
+  'settings.rtty.backend.hint':
+    "How Nexus transmits RTTY. <b>AFSK</b> plays the two-tone waveform through the same TX audio path as FT8 (soundcard-clocked = jitter-free; set drive so ALC reads just zero). <b>True FSK</b> bit-bangs the rig's FSK input over a serial control line with the rig in RTTY mode — unlocking its narrow RTTY filters (e.g. the FTDX10's) — with PTT on CAT or its own line. Software FSK timing is casual/Field-Day grade; AFSK is the timing-cleanest path.",
+  'settings.rtty.fskPort.label': 'FSK serial port',
+  'settings.rtty.fskPort.placeholder': "{{example}} — e.g. the FTDX10's USB Enhanced COM",
+  'settings.rtty.fskPort.hint':
+    "The port whose control line feeds the rig's FSK input. Empty = the CAT serial port.",
+  'settings.rtty.fskLine.label': 'FSK data line',
+  'settings.rtty.fskLine.dtr': 'DTR (the common wiring — RTS stays free for PTT)',
+  'settings.rtty.fskLine.hint':
+    'Which control line carries the data bits. PTT must ride its OWN path — CAT PTT or the separate PTT line, never this one; Nexus refuses a send if they collide.',
+  'settings.rtty.signal.title': 'Signal',
+  'settings.rtty.baud.label': 'Baud rate',
+  'settings.rtty.baud.hf': '45.45 — the HF standard',
+  'settings.rtty.baud.vhf': '75 — VHF / some nets',
+  'settings.rtty.baud.hint':
+    'Drives the TX bit clock and the RX demodulator (true 45.45, never rounded to 45).',
+  'settings.rtty.shift.label': 'Shift (Hz)',
+  'settings.rtty.shift.hf': '170 — the HF standard',
+  'settings.rtty.shift.hint': 'Mark/space spacing — the TX tone pair and the RX demodulator both.',
+  'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
+  'settings.rtty.reverse.hint':
+    'The convention is LSB with mark on the lower audio tone. Turn this on when deliberately running the opposite sideband (e.g. AFSK in USB/DATA-U) so the on-air sense stays correct — applies to TX and the RX decoder.',
+
+  // ── Settings ▸ PSK ──────────────────────────────────────────────────────────────────
+  'settings.psk.legend': 'PSK',
+  'settings.psk.rxAutoArm.label': 'Start receiving when PSK opens',
+  'settings.psk.rxAutoArm.hint':
+    'The PSK screen starts the decoder as soon as you open it — click a trace on the waterfall and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). Stopping the receiver yourself is already remembered for the rest of the session. PSK31 is receive-only for now; transmit is on the keyboard-modes roadmap.',
+
+  // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
+  // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its
+  // duration and its raster — and are data, not prose. `{{freq}}` is the ISS downlink and
+  // `{{rule}}` the FCC citation; both arrive as constants from the panel. The quoted
+  // "My picture already shows my callsign" is the SSTV screen's own tick-box, quoted here so
+  // the two surfaces read as one.
+  'settings.sstv.legend': 'SSTV',
+  'settings.sstv.receiving.title': 'Receiving',
+  'settings.sstv.rxAutoArm.label': 'Start receiving when SSTV opens',
+  'settings.sstv.rxAutoArm.hint':
+    'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
+  'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
+  'settings.sstv.issAutoArm.hint':
+    'Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead, restores your dial at LOS. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.',
+  'settings.sstv.transmitting.title': 'Transmitting',
+  'settings.sstv.txMode.label': 'Transmit mode',
+  'settings.sstv.txMode.auto': 'Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)',
+  'settings.sstv.txMode.hint':
+    'This is the mode the SSTV screen starts on; you can still change it there for one picture. <b>Automatic</b> follows the band: HF gets Scottie 1 (the NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is what ARISS transmits.',
+  'settings.sstv.txPower.label': 'Transmit power',
+  'settings.sstv.txPower.aria': 'SSTV transmit power percent',
+  'settings.sstv.txPower.hint':
+    'The drive the SSTV screen starts on, and the level an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB drive. Your Phone power cap still applies on top of this.',
+  'settings.sstv.callsignNote':
+    'Your callsign is burned into the top-left of every picture you transmit, and there is no switch for it: an SSTV over is one long carrier of picture-only audio, so the picture is the identification ({{rule}}). Send is refused until you have set a callsign in Settings ▸ Station. If a picture already shows your call — a pre-made QSO card — tick “My picture already shows my callsign” in the SSTV screen: that is per-picture on purpose and resets with every new image.',
+
+  // ── Settings ▸ APRS ─────────────────────────────────────────────────────────────────
+  // The channel picker's rows and the beacon symbols come from `aprsBeacon.ts` — a dial
+  // reading and a symbol name, both values. The SSID CONVENTIONS below are prose: they are
+  // what the community reads each suffix to mean, and the number beside every one of them is
+  // the stored value, printed by the panel.
+  'settings.aprs.legend': 'APRS',
+  'settings.aprs.rf.title': 'Over the air',
+  'settings.aprs.channel.label': 'Channel (RF)',
+  'settings.aprs.channel.derived': 'Automatic — {{freq}} from your grid',
+  'settings.aprs.channel.default': 'Automatic — {{freq}} (set your grid on the Station tab)',
+  'settings.aprs.channel.custom': '{{freq}} · custom',
+  'settings.aprs.channel.hint':
+    'The 2 m FM channel APRS runs on, which is regional. <b>Automatic</b> follows your grid square, so moving to another region lands you on the right channel with nothing to configure — the number it picked is shown above. The boundaries are approximate; pick a channel here to pin it for good.',
+  'settings.aprs.symbol.label': 'Beacon symbol',
+  'settings.aprs.symbol.hint':
+    'The icon other stations see on the map for your beacon. Digipeater and iGate come from the alternate symbol table and are what a fixed station running as infrastructure should show.',
+  'settings.aprs.comment.label': 'Beacon comment',
+  'settings.aprs.comment.hint':
+    'Free text carried with your position — a name, a net, a URL. This goes on the air, and APRS caps it at 43 characters.',
+  'settings.aprs.path.label': 'Digipeater path',
+  'settings.aprs.path.hint':
+    'Which digipeaters may repeat your beacon. <code>{{path}}</code> is the near-universal default — one hop through a local fill-in digi, then one wide hop. Leave it empty to transmit direct, with no digipeaters at all.',
+  'settings.aprs.ssid.label': 'Beacon SSID',
+  'settings.aprs.ssid.fromCallsign': 'From my callsign',
+  'settings.aprs.ssid.hint':
+    'The suffix on your callsign in every APRS frame you send, which is how other operators tell your mobile from your home station. <b>From my callsign</b> uses whatever your callsign already spells out — so if you have set it to <code>{{example}}</code> on the Station tab, that is what goes out.',
+  'settings.aprs.ssid.fixed': 'fixed station',
+  'settings.aprs.ssid.genericSecondary': 'generic / secondary',
+  'settings.aprs.ssid.generic': 'generic',
+  'settings.aprs.ssid.phone': 'phone / tablet',
+  'settings.aprs.ssid.satellite': 'satellite / special',
+  'settings.aprs.ssid.handheld': 'handheld',
+  'settings.aprs.ssid.boat': 'boat / marine mobile',
+  'settings.aprs.ssid.mobile': 'mobile (car)',
+  'settings.aprs.ssid.igate': 'iGate / internet',
+  'settings.aprs.ssid.balloon': 'balloon / aircraft',
+  'settings.aprs.ssid.tracker': 'tracker',
+  'settings.aprs.ssid.weather': 'weather station',
+  'settings.aprs.ssid.truck': 'truck / freight',
+
+  // The internet feed. ⚠️ `uplink.hint.call` and `uplink.hint.noCall` are TWO WHOLE
+  // SENTENCES, not a stem and two tails: "Publishes under KD9TAW" and "Publishes under your
+  // callsign" are different statements, and a language that orders them differently cannot
+  // be served by gluing a fragment on.
+  'settings.aprs.is.title': 'APRS-IS (internet feed)',
+  'settings.aprs.is.enabled.label': 'APRS-IS feed',
+  'settings.aprs.is.enabled.hint':
+    'Plot stations the internet reports alongside the ones your own antenna hears — each one tagged so you can always tell which is which. Runs whether or not the APRS decoder is armed: it uses no radio and never transmits. If internet stations appear while your receiver stays silent, the fault is in the RF chain.',
+  'settings.aprs.is.host.label': 'Server',
+  'settings.aprs.is.host.hint':
+    'Your regional Tier 2 rotate is best — noam / soam / euro / asia / aunz .aprs2.net. <code>{{host}}</code> works anywhere.',
+  'settings.aprs.is.port.label': 'Port',
+  'settings.aprs.is.port.hint':
+    '14580 is the filtered port clients and iGates should use. The full-feed ports would send you the entire planet.',
+  'settings.aprs.is.radius.label': 'Radius (km)',
+  'settings.aprs.is.radius.hint':
+    'How far around your grid square to subscribe. APRS is a local mode; 150 km is a generous 2 m-plus-digipeater horizon. 0 = no distance limit (busy).',
+  'settings.aprs.is.watchCalls.label': 'Watched calls',
+  'settings.aprs.is.watchCalls.hint':
+    'Comma separated. These come through from anywhere on earth, however far outside your radius they are — the club tracker on a road trip, a friend chasing a summit.',
+  'settings.aprs.is.weather.label': 'Weather stations',
+  'settings.aprs.is.weather.hint': 'Include weather reports in the feed.',
+  'settings.aprs.is.objects.label': 'Objects & items',
+  'settings.aprs.is.objects.hint':
+    'Repeaters, NWS alerts and event markers other stations have placed on the map.',
+  'settings.aprs.is.messages.label': 'Messages',
+  'settings.aprs.is.messages.hint':
+    'Show APRS text messages from the feed. Display only — replying to an internet message is not wired up.',
+  'settings.aprs.stationTtl.label': 'Keep stations for (min)',
+  'settings.aprs.stationTtl.hint':
+    'How long a station stays on the map after its last packet. Stations start to fade at a third of this. An hour by default: fixed stations often beacon only every ten to thirty minutes, and a shorter window makes the slow ones blink off between their own beacons. 0 keeps every station forever (no fade, no removal — the 2000-station ceiling still applies).',
+  'settings.aprs.is.uplink.label': 'Receive-only iGate',
+  'settings.aprs.is.uplink.hint.call':
+    'Contribute packets <b>your own antenna hears</b> to APRS-IS, so stations in your area reach the global map through you. Publishes under <b>{{call}}</b>, so it is a separate choice from watching the feed, and it needs the APRS decoder running to have anything to send. Nexus never sends the other way: gating the internet back onto the air means transmitting unattended.',
+  'settings.aprs.is.uplink.hint.noCall':
+    'Contribute packets <b>your own antenna hears</b> to APRS-IS, so stations in your area reach the global map through you. Publishes under your callsign, so it is a separate choice from watching the feed, and it needs the APRS decoder running to have anything to send. Nexus never sends the other way: gating the internet back onto the air means transmitting unattended.',
+
+  // ── Settings ▸ Working Frequencies ──────────────────────────────────────────────────
+  // ⚠️ NOT ONE FREQUENCY IS WRITTEN HERE. The stock table, the overrides and the "stock is …"
+  // tooltip all interpolate a dial reading the panel formats with `toFixed(6)`, and the band
+  // and mode pickers offer `FREQ_BANDS` / `FREQ_MODES` verbatim. The three column headings
+  // are the WORDS "band" and "mode", which is why they are entries while the values under
+  // them are not.
+  'settings.workingFrequencies.legend': 'Working Frequencies',
+  'settings.workingFrequencies.note':
+    'The dial frequency used when a band/mode is selected. These are <b>overrides</b> of the stock WSJT-X working-frequency table — leave the list empty to use stock everywhere. An override replaces the stock row for its band + mode (e.g. to move FT8 to an alternate sub-band).',
+  'settings.workingFrequencies.stock.label': 'Standard table (read-only)',
+  'settings.workingFrequencies.stock.band': 'Band',
+  'settings.workingFrequencies.stock.mode': 'Mode',
+  'settings.workingFrequencies.stock.dial': 'Dial (MHz)',
+  'settings.workingFrequencies.stock.overrideTitle': 'Your override — stock is {{mhz}} MHz',
+  'settings.workingFrequencies.stock.overrideTag': 'override',
+  'settings.workingFrequencies.stock.hint':
+    'WSJT-X stock dial frequencies. A row with an active override shows your value (highlighted) instead of the stock one.',
+  'settings.workingFrequencies.overrides.label': 'Your overrides',
+  'settings.workingFrequencies.overrides.none': 'None — the stock table is in effect.',
+  'settings.workingFrequencies.overrides.band.aria': 'Override {{n}} band',
+  'settings.workingFrequencies.overrides.mode.aria': 'Override {{n}} mode',
+  'settings.workingFrequencies.overrides.mhz.aria': 'Override {{n}} dial frequency in MHz',
+  'settings.workingFrequencies.overrides.remove.aria': 'Remove the {{band}} {{mode}} override',
+  'settings.workingFrequencies.overrides.remove.title': 'Remove this override',
+  'settings.workingFrequencies.overrides.duplicate': 'duplicate band + mode — the last row wins',
+  'settings.workingFrequencies.overrides.add': 'Add override',
+  'settings.workingFrequencies.overrides.reset': 'Reset to standard',
+  'settings.workingFrequencies.overrides.hint':
+    'MHz is the dial (suppressed-carrier) frequency. Save to apply — band switches then use your value for that band + mode.',
+
   // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
   // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
   // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,
