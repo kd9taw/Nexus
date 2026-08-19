@@ -247,7 +247,7 @@ export function OperateQsoStrip({
             className={`op-btn hold${radio.holdTxFreq ? ' on' : ''}`}
             aria-pressed={radio.holdTxFreq}
             onClick={() => onSetHoldTxFreq?.(!radio.holdTxFreq)}
-            title="Hold Tx Freq: keep your TX offset fixed when you click the waterfall to set RX"
+            title="Hold Tx Freq: keep your TX offset where you put it when you double-click a station to work them. Off, your TX moves onto theirs (WSJT-X's behaviour). A plain waterfall click never moves TX either way."
           >
             Hold Tx
           </button>

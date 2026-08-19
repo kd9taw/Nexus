@@ -69,6 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while investigating a Greek-Windows launch report. If this bit you, `log.adi.bak` beside
   your log holds the original.
 
+- **The Hold Tx button's tooltip described the wrong thing.** It said Hold keeps your TX offset
+  fixed "when you click the waterfall to set RX" — but a plain waterfall click has not moved TX
+  since 1.0, Hold or no Hold. What Hold actually governs is the double-click: work a station with
+  Hold off and your TX moves onto their frequency, which is WSJT-X's behaviour and is what you
+  want most of the time; turn Hold on and your TX stays exactly where you set it with a
+  right-click. The tooltip now says that, in the Operate strip and in the top bar. No behaviour
+  changed.
+
 - **A Windows update no longer throws away what Nexus was holding in memory.** Installing an
   update on Windows hands off to the installer and ends the app then and there — so the
   conversation history, the Field Day log, a propagation opening still in progress and your
