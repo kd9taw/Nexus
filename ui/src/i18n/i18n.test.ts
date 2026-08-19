@@ -87,6 +87,60 @@ describe('plurals', () => {
     expect(selectPluralForm('pl', 3, { ...forms, few: 'kilka' })).toBe('kilka')
   })
 
+  // `new Intl.PluralRules(...)` is the one expensive call in this module — Intl constructors
+  // are orders of magnitude slower than the Map lookup around them. A plural string rendered
+  // per row (a decode row, a roster row) would pay it on every row of every frame, so the
+  // object is built once per locale and kept. This test is what stops a later edit from
+  // quietly moving the construction back inside the call.
+  it('builds Intl.PluralRules ONCE per locale, however many lookups', () => {
+    const real = Intl.PluralRules
+    const built: string[] = []
+    // A subclass, not a mock: the real selection logic must still run, or this test would
+    // pass while the plural forms silently stopped being correct.
+    class Counting extends real {
+      constructor(locale?: string | string[], opts?: Intl.PluralRulesOptions) {
+        built.push(String(locale))
+        super(locale, opts)
+      }
+    }
+    ;(Intl as unknown as { PluralRules: unknown }).PluralRules = Counting
+    try {
+      // Tags no other test in this file touches — the cache is process-wide and warm for
+      // 'en'/'pl' by now, which would make a zero here mean nothing.
+      for (let i = 0; i < 50; i++) selectPluralForm('sv', i, forms)
+      for (let i = 0; i < 50; i++) selectPluralForm('cs', i, forms)
+      // Control: the counter really does see constructions — and exactly one per locale.
+      expect(built.length, 'one construction per locale, not per lookup').toBe(2)
+      expect(new Set(built)).toEqual(new Set(['sv', 'cs']))
+    } finally {
+      ;(Intl as unknown as { PluralRules: unknown }).PluralRules = real
+    }
+    // Selection is unchanged by the caching: Czech has `few` for 2..4, Swedish does not.
+    expect(selectPluralForm('sv', 1, forms)).toBe('one thing')
+    expect(selectPluralForm('cs', 3, { ...forms, few: 'kilka' })).toBe('kilka')
+  })
+
+  it('a structurally invalid locale tag falls back without rebuilding on every call', () => {
+    const real = Intl.PluralRules
+    let built = 0
+    class Counting extends real {
+      constructor(locale?: string | string[], opts?: Intl.PluralRulesOptions) {
+        built++
+        super(locale, opts)
+      }
+    }
+    ;(Intl as unknown as { PluralRules: unknown }).PluralRules = Counting
+    try {
+      // A tag Intl rejects: the throw must be remembered, not re-thrown 20 times.
+      for (let i = 0; i < 20; i++) selectPluralForm('not a tag', 1, forms)
+      expect(built, 'the failure is cached too').toBe(1)
+    } finally {
+      ;(Intl as unknown as { PluralRules: unknown }).PluralRules = real
+    }
+    expect(selectPluralForm('not a tag', 1, forms)).toBe('one thing')
+    expect(selectPluralForm('not a tag', 7, forms)).toBe('{{count}} things')
+  })
+
   it('resolves a plural entry end to end through t()', () => {
     installCatalog('zz', {
       'reveal.enable': { one: 'ein Ding', other: '{{count}} Dinge' },

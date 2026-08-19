@@ -131,19 +131,50 @@ export function getLocale(): string {
 // ── Lookup ────────────────────────────────────────────────────────────────────────────
 
 /**
+ * One `Intl.PluralRules` per locale, built on first use and kept.
+ *
+ * ⚠️ THE ONLY EXPENSIVE CALL IN THIS MODULE. Constructing an `Intl` object is orders of
+ * magnitude dearer than the Map and property lookups around it — everything else here is
+ * effectively free next to React's own render work, and this is not. Today every plural
+ * string is a per-VIEW counter (a band-map header, a spots filter count), so a per-call
+ * construction would have been survivable; the moment one lands in a decode row or a roster
+ * row it is paid per row, per frame, and that is a change nobody would connect to this file.
+ * Built once instead. `i18n.test.ts` counts the constructions so a later edit cannot quietly
+ * move it back inside the call.
+ *
+ * A `null` entry means the tag was rejected — remembered deliberately, so a bad locale costs
+ * one throw rather than one per lookup. Bounded by the number of distinct tags asked for,
+ * which in practice is the number of installed catalogs.
+ */
+const pluralRules = new Map<string, Intl.PluralRules | null>()
+
+function pluralRulesFor(locale: string): Intl.PluralRules | null {
+  const hit = pluralRules.get(locale)
+  if (hit !== undefined) return hit
+  let made: Intl.PluralRules | null = null
+  try {
+    made = new Intl.PluralRules(locale)
+  } catch {
+    made = null
+  }
+  pluralRules.set(locale, made)
+  return made
+}
+
+/**
  * Select a plural form for `count` under `locale`.
  *
- * `Intl.PluralRules` owns the per-language rules, so this stays four lines however many
+ * `Intl.PluralRules` owns the per-language rules, so this stays a few lines however many
  * languages ship. A category the catalog does not carry falls to `other`, which is required.
  */
 export function selectPluralForm(locale: string, count: number, forms: PluralForms): string {
-  let category: keyof PluralForms = 'other'
-  try {
-    category = new Intl.PluralRules(locale).select(count) as keyof PluralForms
-  } catch {
-    // A structurally invalid tag. English-ish two-form behaviour is a better guess than a throw.
-    category = count === 1 ? 'one' : 'other'
-  }
+  const rules = pluralRulesFor(locale)
+  // A structurally invalid tag. English-ish two-form behaviour is a better guess than a throw.
+  const category: keyof PluralForms = rules
+    ? (rules.select(count) as keyof PluralForms)
+    : count === 1
+      ? 'one'
+      : 'other'
   return forms[category] ?? forms.other
 }
 
