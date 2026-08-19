@@ -326,6 +326,35 @@ const MIGRATED = [
   'components/OperateDecodes.tsx',
   'components/OperateRoster.tsx',
   'components/TxPanel.tsx',
+  // Batch 20 (2026-08-19) — the CW cockpit. ONE file of the transmit half that graduates
+  // straight to MIGRATED rather than to PARTIAL, and that is the batch's finding: CW's
+  // stop-line census is Stop TX (→ stopCw + haltTx), Tune and Esc, and NOT ONE OF THEM HAS
+  // A STRING IN THIS FILE — the first two are drawn by `CockpitHeader` (deferred there,
+  // with the RTTY/SSTV latch) and Esc is a window keydown with no element at all. So the
+  // file has nothing to defer: the F-key macros and the send bar are SENDERS (the batch-18
+  // ruling), and the keyer back-end, speed and pitch controls are CONFIGURATION on the
+  // transmit path, which moves exactly as PTT Method and the drive slider did (batch 13).
+  // `stop-line.test.tsx` was re-run for the CW case, which finds both controls by
+  // accessible name in the header this file does not own.
+  //
+  // The units rule lands on the KEY AND THE DIAL: every WPM figure, sidetone pitch, filter
+  // width, scope span and reference level, dial reading, callsign, RST and bearing stays in
+  // the code, as does the vocabulary the file gathers as constants (CW, the WPM/dB/dBm
+  // units, the rig's own DSP/NR/AGC/BW group names, CAT and WinKeyer — a protocol and a
+  // product — and the SPLIT ▲/REC plates), the macro TEXTS with their {MYCALL}/{RST}/{NAME}/
+  // {EXCH} tokens, the ± zoom presets and every <select> value.
+  //
+  // Two things this batch settles that the nineteen before it did not. A LABEL TABLE THAT
+  // ANOTHER TEST PARSES OUT OF THE SOURCE moves its guard with it: `docs-match-code.test.ts`
+  // reads DEFAULT_MACROS/DEFAULT_FD_MACROS out of this file and compares the captions with
+  // the tables docs/manual/CW.md publishes, so the captions that are WORDS now carry a
+  // `labelKey` and that guard resolves it through this catalog — asserting exactly what it
+  // asserted before (proved by drifting one entry and watching both doc rows go red). And a
+  // MEASUREMENT PLATE beside a translated one is computed, not written in the catalog: the
+  // scope sub-plate's fed span in MHz is assembled in the component and the audio view's
+  // word is the only entry, the same split the AI decoder's 400–1200 Hz window and the BW
+  // nudge's ±50 Hz take inside their sentences.
+  'components/CwCockpit.tsx',
 ]
 
 /**

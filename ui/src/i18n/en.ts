@@ -6666,6 +6666,194 @@ export const EN = {
   'sstv.gallery.edit.failed': 'Could not load that image into the composer',
 
   // ══════════════════════════════════════════════════════════════════════════════════════
+  // THE CW COCKPIT — the keyer, the zero-beat scope, the decode and the F-key dock.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // One cockpit, four surfaces: a header that carries the keyer (back-end, speed, pitch,
+  // macro profile, filter width), a scope strip that is either the rig's own panadapter or
+  // the CW-narrow audio view, a pane region (decode, sent echo, rig controls, band activity,
+  // copilot, log) and a TX dock of F-key macros with a type-ahead send bar.
+  //
+  // ⚠️ THE UNITS RULE LANDS ON THE KEY AND THE DIAL. Every WPM figure, sidetone pitch in Hz,
+  // filter width in Hz, scope span and reference level in dB/dBm, dial reading, callsign,
+  // RST and bearing on this screen is data and stays in the code — as do the vocabulary the
+  // file gathers as named constants (the CW mode badge, the WPM/dB/dBm units, the rig's own
+  // DSP/NR/AGC/BW group names, the CAT and WinKeyer back-end names, the SPLIT ▲ and REC
+  // plates), the F-key macro TEXTS with their {MYCALL}/{RST}/{NAME}/{EXCH} tokens, the ± zoom
+  // presets, and the `value` of every <select>. What moved is the prose around them.
+  //
+  // Nothing that STOPS a transmission is here, and nothing was deferred either: CW's stop
+  // line is Stop TX (→ stopCw + haltTx) and Tune, both drawn by `CockpitHeader`, plus Esc,
+  // which is a window keydown with no string at all. The F-key macros and the send bar are
+  // SENDERS, which move normally (the batch-18 ruling), and the keyer back-end, speed and
+  // pitch controls are CONFIGURATION on the transmit path, which moves exactly as PTT Method
+  // and the drive slider did (the batch-13 ruling).
+
+  // ── CW ▸ the ⊞ panel names and the pane frames ──────────────────────────────────────
+  // Two spellings on purpose, as RTTY has: the ⊞ menu names the pane in title case and says
+  // which cockpit's Decode it is, while the frame head above the pane prints the short word.
+  'cw.panel.scope': 'Scope',
+  'cw.panel.scopeCtl': 'Scope Controls',
+  'cw.panel.dsp': 'DSP Toggles',
+  'cw.panel.txmeters': 'TX Meters',
+  'cw.panel.rxdsp': 'RX DSP Levels',
+  'cw.panel.bandActivity': 'Band Activity',
+  'cw.panel.copilot': 'CW Copilot',
+  'cw.panel.decode': 'CW Decode',
+  'cw.panel.sent': 'Sent Echo',
+  'cw.pane.decode.title': 'Decode',
+  'cw.pane.sent.title': 'Sent',
+  'cw.pane.rigctl.title': 'Rig controls',
+  'cw.pane.bandActivity.title': 'Band activity',
+  'cw.pane.copilot.title': 'Copilot',
+  'cw.pane.log.title': 'Log',
+
+  // ── CW ▸ the header: the mode badge, speed, keyer, pitch, macro profile, filter ──────
+  'cw.header.mode.title': "The rig is set to CW while you're in this section",
+  'cw.wpm.label': 'Speed',
+  'cw.wpm.aria': 'CW keyer speed (WPM)',
+  // Two whole sentences, not a stem plus a Mac tail: compact Mac keyboards have no
+  // PgUp/PgDn and Fn+↑/Fn+↓ is what sends them, which is a second statement.
+  'cw.wpm.title': 'Keyer speed — PgUp/PgDn to nudge (Shift = ±4)',
+  'cw.wpm.title.mac': 'Keyer speed — PgUp/PgDn to nudge (Shift = ±4) · on a Mac: Fn+↑/Fn+↓',
+  'cw.keyer.label': 'Keyer',
+  'cw.keyer.aria': 'CW keyer back-end',
+  // The four back-end LABELS: `CAT` is a protocol and `WinKeyer` a product, so both stay in
+  // the code; these two are words. Every `value` is the stored token and never moves.
+  'cw.keyer.serial.label': 'Serial',
+  'cw.keyer.soundcard.label': 'Soundcard',
+  // What each back-end IS and what it needs — carried on the select AND on each option. The
+  // soundcard entry is the one that stops an operator keying a tone through SSB with nothing
+  // routed and the drive over ALC, so it is operating information, not chrome.
+  'cw.keyer.cat.title': 'CAT keyer — the rig generates CW (rig in CW). Zero extra hardware.',
+  'cw.keyer.serial.title':
+    "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean N1MM/fldigi method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
+  'cw.keyer.winkeyer.title':
+    'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings ▸ CW.',
+  'cw.keyer.soundcard.title':
+    "Soundcard keyer — a keyed audio tone through SSB (rig in USB). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
+  'cw.pitch.label': 'Pitch',
+  'cw.pitch.aria': 'CW pitch (Hz)',
+  'cw.pitch.title': "Sidetone / zero-beat pitch (Hz) — the scope's dashed marker",
+  'cw.macroProfile.label': 'Macros',
+  'cw.macroProfile.aria': 'CW macro profile',
+  'cw.macroProfile.title':
+    'CW macro profile — your active F-key set (edit sets in Settings ▸ CW)',
+  // What an unnamed profile is called in the picker. `{{n}}` is its position, invariant.
+  'cw.macroProfile.unnamed': 'Profile {{n}}',
+  'cw.macroProfile.failed': 'Could not switch macro profile',
+  'cw.filter.title': 'RX filter / passband width (CAT) — narrow to dig CW out of QRM',
+  // `{{step}}` is the nudge in Hz — supplied by the call site, never written here.
+  'cw.filter.narrower.title': 'Narrower (−{{step}} Hz)',
+  'cw.filter.wider.title': 'Wider (+{{step}} Hz)',
+  'cw.filter.failed': 'Could not set filter width',
+  // `{{call}}` is a callsign, `{{bearing}}` a heading in degrees and `{{error}}` the engine's
+  // own words — all three arrive invariant.
+  'cw.rotator.pointed': 'Rotator → {{call}}: {{bearing}}°',
+  'cw.rotator.failed': 'Rotator: {{error}}',
+  // `{{freq}}` is the split TX frequency, already formatted invariantly.
+  'cw.split.title': 'Split — TX {{freq}} MHz',
+  'cw.record.start.aria': 'Record QSO audio',
+  'cw.record.stop.aria': 'Stop recording this QSO',
+  'cw.record.off.title': 'Record the received audio to a WAV in the recordings folder',
+  'cw.record.on.title': 'Recording — click to stop recording this QSO',
+  'cw.record.startFailed': 'Could not start recording',
+  'cw.record.stopFailed': 'Could not stop recording',
+
+  // ── CW ▸ the scope strip and its zoom ───────────────────────────────────────────────
+  // The strip is the rig's real RF panadapter when one streams and the CW-narrow audio view
+  // otherwise, so each state names itself. `{{lo}}` and `{{hi}}` are the audio window's edges
+  // in Hz and `{{khz}}` a zoom preset — all three are supplied by the call site.
+  'cw.scope.tuneHint': 'Scroll here to tune the VFO',
+  'cw.scope.nativeRf.label': 'RF Panadapter',
+  'cw.scope.nativeRf.title': 'Native RF panadapter — the real RF spectrum around your dial.',
+  'cw.scope.audio.label': 'CW audio',
+  'cw.scope.audio.title':
+    'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
+  'cw.scope.audio.sub': 'zero-beat',
+  'cw.scope.colors.label': 'Colors',
+  'cw.scope.splitter.label': 'scope height',
+  'cw.rfZoom.aria': 'Panadapter zoom',
+  'cw.rfZoom.full.label': 'Full',
+  'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
+  'cw.rfZoom.span.title': '±{{khz}} kHz around your dial',
+
+  // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
+  // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
+  // escape so it cannot be lost to a careless edit: each is one chip label whose two words
+  // must not be split across a line, and a translation keeps it. `{{span}}` is a sweep width
+  // the call site prints.
+  'cw.rigScope.aria': 'Rig scope control',
+  'cw.rigScope.label': 'Rig\u00a0scope',
+  'cw.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
+  'cw.rigScope.span.title': "Set the radio's scope span to {{span}}",
+  'cw.rigScope.ref.title': 'Scope reference level — lower to lift weak signals out of the noise',
+  'cw.rigScope.ref.aria': 'Scope reference level (dB)',
+  'cw.flexPan.aria': 'Flex panadapter control',
+  'cw.flexPan.label': 'Flex\u00a0pan',
+  'cw.flexPan.title':
+    "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
+  'cw.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
+  'cw.flexPan.ref.title':
+    'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
+  'cw.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
+  // One word, one key: both reference sliders are labelled for the same thing.
+  'cw.scope.ref.label': 'Ref',
+  // The DSP function NAMES (NB, NR, Notch, AGC) are the rig's own and stay in the code;
+  // `{{func}}` is the one the toggle failed on.
+  'cw.dsp.aria': 'Rig DSP functions',
+  'cw.dsp.nb.title': 'Noise Blanker — kills impulse/ignition noise (RX)',
+  'cw.dsp.nr.title': 'Noise Reduction — pulls a tone out of broadband hiss (RX, DSP)',
+  'cw.dsp.notch.title': 'Auto-Notch (ANF) — nulls a competing carrier (RX, DSP)',
+  'cw.dsp.toggleFailed': 'Could not toggle {{func}}',
+  'cw.rxDsp.aria': 'RX DSP levels',
+  'cw.rxDsp.nr.title':
+    'Noise-reduction depth — raise until the noise floor drops, back off if the tone gets watery',
+  'cw.rxDsp.nr.aria': 'Noise-reduction level',
+  'cw.rxDsp.agc.aria': 'AGC speed',
+  'cw.rxDsp.agc.title': 'AGC time constant — Fast for CW/pileups, Slow for steady copy',
+  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  'cw.rxDsp.agc.fast': 'Fast',
+  'cw.rxDsp.agc.mid': 'Mid',
+  'cw.rxDsp.agc.slow': 'Slow',
+
+  // ── CW ▸ the decode pane and the sent echo ──────────────────────────────────────────
+  // `{{window}}` is the AI decoder's audio window in Hz, supplied by the call site.
+  'cw.decode.ai.badge': 'AI',
+  'cw.decode.ai.on.title': 'AI decoder on — click for the classic pitch decoder',
+  'cw.decode.ai.off.title': 'AI decoder off (classic pitch decoder) — click to turn AI on',
+  'cw.decode.clear.label': 'Clear',
+  'cw.decode.clear.title': 'Clear the decoded + sent transcript',
+  'cw.decode.title':
+    'Live CW decode — the AI (neural-net) decoder reads the whole {{window}} Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder.',
+  'cw.decode.log.aria': 'Decoded CW',
+  'cw.decode.listening': 'listening…',
+  'cw.sent.title': "What you've transmitted (F-key macros expanded to the real text)",
+
+  // ── CW ▸ the copilot chips ──────────────────────────────────────────────────────────
+  'cw.copilot.working.label': 'Working',
+  'cw.copilot.heard.label': 'Heard',
+  'cw.copilot.empty': 'Decoded calls appear here…',
+  'cw.copilot.worked.title': "The station you're working — the F-keys + log use this",
+  'cw.copilot.work.title': 'Work {{call}} — set it for the F-keys + log',
+
+  // ── CW ▸ the TX dock: the F-key macros and the send bar ─────────────────────────────
+  // The macro TEXTS are what goes on the air and are invariant, every character of them; so
+  // are the labels that are on-air shorthand (CQ, 73, AGN, TU, CQ FD, ?). These five are
+  // words, and each names a MEANING both macro sets share — the casual and the Field Day set
+  // both have a "Call".
+  'cw.macros.aria': 'CW macros',
+  'cw.macro.call.label': 'Call',
+  'cw.macro.reply.label': 'Reply',
+  'cw.macro.exch.label': 'Exch',
+  'cw.macro.myCall.label': 'My Call',
+  'cw.macro.hisCall.label': 'His Call',
+  'cw.compose.placeholder': 'Type CW to send… (Enter)',
+  'cw.compose.send.label': 'Send',
+  'cw.send.txLocked': 'TX locked — this frequency is outside your license privileges',
+  'cw.send.failed': 'CW send failed',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
   // THE SHELL — chrome, navigation, and the ⊞ panel menu.
   // ══════════════════════════════════════════════════════════════════════════════════════
   //
