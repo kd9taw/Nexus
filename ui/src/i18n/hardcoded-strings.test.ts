@@ -68,6 +68,17 @@ const MIGRATED = [
   'features/updateCheck.ts',
   'components/ErrorBoundary.tsx',
   'main.tsx',
+  // Batch 2 (2026-08-18) — the logbook and QSO entry. The densest UNITS surface in the tree:
+  // every callsign, RST, band, mode, frequency, park reference and ADIF field name in these
+  // five files is invariant and stays in the code (LOG_EXAMPLES in Logbook.tsx and
+  // LogEntry.tsx, PARK_PROGRAMS, and the Q-code/service labels beside them), while the prose
+  // around them moves. It also carried nine of the tree's hand-rolled plurals, which is what
+  // proves the `{{count}}` path on real shipped counts rather than on a fixture.
+  'components/Logbook.tsx',
+  'components/LogEntry.tsx',
+  'components/LogConfirm.tsx',
+  'components/StationCard.tsx',
+  'components/StationList.tsx',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */

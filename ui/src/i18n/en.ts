@@ -443,6 +443,472 @@ export const EN = {
   'crash.panelWindow': 'The {{panel}} window',
   'externalLink.failed': 'Could not open the link: {{detail}}',
 
+  // ── The callbook lookup (QRZ, then HamQTH) ──────────────────────────────────────────
+  // Shared by the Logbook form and the cockpit log strip, because looking a callsign up in
+  // the callbook is genuinely one act with one wording — see the `common.*` note at the end
+  // of this file for when that is and is not true.
+  //
+  // ⚠️ `{{call}}` is a CALLSIGN, `{{grid}}` a Maidenhead locator and `{{detail}}` a callbook
+  // answer (name · grid · state) assembled from data. All three pass through verbatim.
+  // `QRZ` and `QRZ.com` are the site's name, not a word: they stay as they are.
+  'callbook.lookupFailed': 'QRZ lookup failed',
+  'callbook.detail.grid': 'grid {{grid}}',
+  'callbook.detail.found': 'found',
+  // Two whole sentences rather than one plus an appended note: where the "you need a
+  // subscription for this" clause belongs is a decision for each language.
+  'callbook.result': 'QRZ {{call}}: {{detail}}',
+  'callbook.resultNoGrid': 'QRZ {{call}}: {{detail}} · grid/state need a QRZ subscription',
+  'callbook.qrzPage.title': '{{call}} on QRZ.com (opens your browser)',
+  'callbook.qrzPage.failed': 'Could not open {{call}} on QRZ',
+
+  // ── Logbook (the Logbook view) ──────────────────────────────────────────────────────
+  // ⚠️ THE UNITS RULE IS DENSE HERE. Everything this surface *shows* about a contact is an
+  // invariant technical token and is therefore absent from this file: callsigns, grid
+  // squares, band names (20m), mode names (FT8), frequencies, RST reports, POTA/SOTA
+  // references, QSL letters (L/C/E) and the Q-codes and service names printed as button
+  // labels (QRZ, eQSL, CL, HL, QSL▸). Those live in `components/Logbook.tsx` as named
+  // constants — LOG_EXAMPLES and the labels beside it. What IS here is the prose around
+  // them, and the ADIF field names quoted inside that prose (SIG_INFO, MY_SIG_INFO) are
+  // wire identifiers that must survive translation verbatim, exactly as `ADIF OPERATOR`
+  // does in `settings.station.fdOperator.hint`.
+  //
+  // PLURALS: this view carried nine hand-rolled `n === 1 ? '' : 's'` ternaries. Every one is
+  // a `{{count}}` entry below, because English's two forms are not Polish's four.
+  'logbook.title': 'Logbook',
+  'logbook.subtitle': 'ADIF contacts',
+
+  'logbook.import.adif.label': 'Import ADIF',
+  'logbook.import.failed': 'ADIF import failed',
+  // THREE STATEMENTS, NOT THREE FRAGMENTS OF ONE SENTENCE — and the difference matters.
+  // Each carries its OWN count, and one message cannot select a plural form for two counts
+  // at once, so the cross-product a single string would need is unrepresentable. Each entry
+  // therefore holds its own leading separator, and a locale is free to change it.
+  'logbook.import.imported': {
+    one: 'Imported {{count}} QSO',
+    other: 'Imported {{count}} QSOs',
+  },
+  'logbook.import.dupes': ' ({{count}} dupes skipped)',
+  'logbook.import.updated': {
+    one: ' · {{count}} existing QSO updated with confirmations/credits',
+    other: ' · {{count}} existing QSOs updated with confirmations/credits',
+  },
+
+  'logbook.sync.label': 'Sync confirmations',
+  'logbook.sync.title':
+    'Reconcile a LoTW ADIF export into the log — upgrades confirmations + credit on existing QSOs',
+  'logbook.sync.failed': 'LoTW sync failed',
+  'logbook.sync.done': 'Synced: {{confirmed}} newly confirmed, {{credited}} credited',
+  'logbook.sync.doneUnmatched':
+    'Synced: {{confirmed}} newly confirmed, {{credited}} credited · {{unmatched}} unmatched',
+
+  'logbook.pota.label': 'Import POTA',
+  'logbook.pota.title':
+    'Import a pota.app hunter/activator ADIF export — stamps park references onto your matching logged QSOs. Never creates or overwrites records.',
+  'logbook.pota.failed': 'POTA import failed',
+  'logbook.pota.stamped': {
+    one: 'POTA: {{count}} QSO stamped with park refs',
+    other: 'POTA: {{count}} QSOs stamped with park refs',
+  },
+  'logbook.pota.already': ' · {{count}} already stamped',
+  'logbook.pota.unmatched': ' · {{count}} had no matching QSO (not added)',
+
+  'logbook.fetchLotw.label': 'Fetch LoTW',
+  'logbook.fetchLotw.title':
+    'Fetch confirmations directly from LoTW (no file download — uses the LoTW credentials saved in Settings ▸ Confirmations)',
+  'logbook.fetchLotw.failed': 'LoTW fetch failed',
+  'logbook.fetchLotw.done': 'LoTW — {{confirmed}} newly confirmed, {{credited}} credited',
+
+  'logbook.qrzSync.label': 'Sync QRZ',
+  'logbook.qrzSync.title':
+    'Fetch your online QRZ Logbook and merge it here — QSOs logged elsewhere plus QRZ confirmation status (needs the QRZ Logbook API key in Settings ▸ Confirmations)',
+  'logbook.qrzSync.failed': 'QRZ sync failed',
+  'logbook.qrzSync.done': {
+    one: 'QRZ sync — {{count}} new QSO, {{confirmed}} newly confirmed',
+    other: 'QRZ sync — {{count}} new QSOs, {{confirmed}} newly confirmed',
+  },
+
+  'logbook.export.from.label': 'from',
+  'logbook.export.from.title':
+    'Export only QSOs on/after this UTC date (empty = from the beginning)',
+  'logbook.export.to.label': 'to',
+  'logbook.export.to.title': 'Export only QSOs on/before this UTC date (empty = to the end)',
+  'logbook.export.adif.label': 'Export ADIF',
+  'logbook.export.adif.title': 'Save the whole logbook as an ADIF file in your Downloads folder',
+  'logbook.export.adif.titleRange':
+    'Save the selected date range as an ADIF file in your Downloads folder',
+  'logbook.export.csv.label': 'Export CSV',
+  'logbook.export.csv.title': 'Save the whole logbook as a CSV spreadsheet in your Downloads folder',
+  'logbook.export.csv.titleRange':
+    'Save the selected date range as a CSV spreadsheet in your Downloads folder',
+  'logbook.export.failed': 'Export failed',
+  // `{{path}}` is a file path — data, never translated, never re-punctuated.
+  'logbook.export.done': {
+    one: 'Exported {{count}} QSO → {{path}}',
+    other: 'Exported {{count}} QSOs → {{path}}',
+  },
+  'logbook.export.perOperator.label': 'Export per operator',
+  // `{{operators}}` is a comma-joined list of CALLSIGNS.
+  'logbook.export.perOperator.title': 'One ADIF per operator ({{operators}}) plus the combined log',
+  'logbook.export.perOperator.done': 'Exported {{count}} files → Downloads',
+
+  'logbook.lotw.upload.label': 'Upload to LoTW',
+  'logbook.lotw.upload.labelCount': 'Upload to LoTW ({{count}})',
+  'logbook.lotw.upload.busy': 'Uploading…',
+  'logbook.lotw.upload.title':
+    'Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)',
+  // A second statement appended to the title above, with its own count — see the import
+  // note. It keeps its leading separator for the same reason.
+  'logbook.lotw.upload.timeless': {
+    one: ' — {{count}} imported QSO has no time of day and can never match at LoTW, so they are not sent',
+    other:
+      ' — {{count}} imported QSOs have no time of day and can never match at LoTW, so they are not sent',
+  },
+  'logbook.lotw.upload.nothingNew': 'Nothing new to upload to LoTW',
+  'logbook.lotw.upload.pending': {
+    one: "Signed + uploaded {{count}} QSO to LoTW — they'll confirm as partners upload",
+    other: "Signed + uploaded {{count}} QSOs to LoTW — they'll confirm as partners upload",
+  },
+  // The `one` form reads "1 QSO were", which is what shipped; this phase changes no visible
+  // English. A translator writes their own language's agreement and is not bound by it.
+  'logbook.lotw.upload.duplicate': {
+    one: '{{count}} QSO were already on LoTW',
+    other: '{{count}} QSOs were already on LoTW',
+  },
+  'logbook.lotw.upload.retry': 'LoTW unreachable — try again shortly',
+  // `{{detail}}` is the server's own words, passed through untranslated.
+  'logbook.lotw.upload.authFailed': 'LoTW rejected your certificate/Station Location',
+  'logbook.lotw.upload.authFailedDetail':
+    'LoTW rejected your certificate/Station Location: {{detail}}',
+  'logbook.lotw.upload.failed': 'LoTW upload failed',
+  'logbook.lotw.upload.failedDetail': 'LoTW upload failed: {{detail}}',
+
+  // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
+  // ("1,234"). It is a count of contacts, not a technical quantity — no dial, no report, no
+  // wire value — so grouping it is a display choice, not the hazard the invariant rule is
+  // about. `{{count}}` (the raw number) rides alongside it purely to select the plural form.
+  'logbook.markLotw.label': 'Mark on LoTW',
+  'logbook.markLotw.title':
+    'Already have these on LoTW (uploaded via another tool)? Mark them so Nexus stops counting them as needing upload.',
+  'logbook.markLotw.aria': 'Mark as already on LoTW',
+  'logbook.markLotw.heading': {
+    one: 'Mark {{formatted}} QSO as already on LoTW?',
+    other: 'Mark {{formatted}} QSOs as already on LoTW?',
+  },
+  'logbook.markLotw.body': {
+    one: "Use this if you imported a log you'd already uploaded to LoTW another way (Ham2K Polo, TQSL…). It marks the {{formatted}} un-uploaded QSO as already on LoTW, so the <b>Upload to LoTW</b> count stops offering to re-send them. It only updates Nexus's own record — nothing is sent, and your LoTW account and log are untouched. New QSOs you make later still upload normally.",
+    other:
+      "Use this if you imported a log you'd already uploaded to LoTW another way (Ham2K Polo, TQSL…). It marks the {{formatted}} un-uploaded QSOs as already on LoTW, so the <b>Upload to LoTW</b> count stops offering to re-send them. It only updates Nexus's own record — nothing is sent, and your LoTW account and log are untouched. New QSOs you make later still upload normally.",
+  },
+  'logbook.markLotw.cancel': 'Cancel',
+  'logbook.markLotw.confirm': 'Mark {{formatted}} as on LoTW',
+  'logbook.markLotw.failed': 'Could not update LoTW state',
+  'logbook.markLotw.done': {
+    one: 'Marked {{formatted}} QSO as already on LoTW',
+    other: 'Marked {{formatted}} QSOs as already on LoTW',
+  },
+  'logbook.markLotw.nothing': 'Nothing to mark',
+
+  // The purge gate. `{{word}}` is the typed confirmation token (`DELETE`) — it is matched
+  // against what the operator types, so it is a token, not prose, and it stays in the code.
+  'logbook.purge.label': 'Purge log',
+  'logbook.purge.title': 'Delete every contact in the local logbook (irreversible)',
+  'logbook.purge.aria': 'Purge logbook',
+  'logbook.purge.heading': 'Purge the entire logbook?',
+  'logbook.purge.irreversible': 'Irreversible',
+  'logbook.purge.warn': {
+    one: "This permanently deletes <b>all {{count}} contact</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. There is no undo — export an ADIF backup first if you might want it.",
+    other:
+      "This permanently deletes <b>all {{count}} contacts</b> from your local logbook and rewrites the ADIF file to empty. It does <b>not</b> remove anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. There is no undo — export an ADIF backup first if you might want it.",
+  },
+  'logbook.purge.syncWarn':
+    'It also resets your <b>LoTW and eQSL sync position</b>, so the next sync re-downloads your whole confirmation history instead of only recent matches. That is what brings your confirmations back after a purge — but it takes considerably longer than a routine sync, so give it time to finish.',
+  'logbook.purge.typeWord': 'Type <b>{{word}}</b> to confirm',
+  'logbook.purge.cancel': 'Cancel',
+  'logbook.purge.busy': 'Purging…',
+  'logbook.purge.confirm': {
+    one: 'Purge {{count}} contact',
+    other: 'Purge {{count}} contacts',
+  },
+  'logbook.purge.failed': 'Could not purge the log',
+  'logbook.purge.done': {
+    one: 'Purged {{count}} contact from the log',
+    other: 'Purged {{count}} contacts from the log',
+  },
+
+  // The hand-log form. Every placeholder that is a pure token (W1AW, FN31, 20m, US-1234…)
+  // is in LOG_EXAMPLES, not here; the three that are human prose are.
+  'logbook.form.open': 'Log QSO',
+  'logbook.form.close': 'Close',
+  'logbook.field.call.label': 'Call',
+  'logbook.field.qrz.title': 'Look up name + grid on QRZ.com',
+  'logbook.field.grid.label': 'Grid',
+  'logbook.field.band.label': 'Band',
+  'logbook.field.freq.label': 'Freq (MHz)',
+  'logbook.field.mode.label': 'Mode',
+  'logbook.field.rstSent.label': 'RST Sent',
+  'logbook.field.rstRcvd.label': 'RST Rcvd',
+  'logbook.field.when.label': 'Date + time (UTC)',
+  'logbook.field.when.title':
+    'When the contact actually happened, in UTC. Leave blank to stamp now.',
+  'logbook.field.state.label': 'State',
+  'logbook.field.state.title':
+    'US state — drives Worked All States. A hand-logged contact has no decode to derive it from.',
+  'logbook.field.txPower.label': 'TX power (W)',
+  'logbook.field.parkTheirs.label': 'Park (worked)',
+  'logbook.field.parkTheirs.title':
+    'POTA reference of the park the station you worked was activating (ADIF SIG_INFO). Defaults to POTA.',
+  'logbook.field.parkMine.label': 'Park (mine)',
+  'logbook.field.parkMine.title':
+    'POTA reference of YOUR own activation for this contact (ADIF MY_SIG_INFO). Defaults to POTA.',
+  'logbook.field.name.label': 'Name',
+  // Prose, not a token: a locale should offer a first name its operators recognise.
+  'logbook.field.name.placeholder': 'Jim',
+  'logbook.field.qth.label': 'QTH',
+  // Also prose — QTH is free text, so the example is a place a reader recognises.
+  'logbook.field.qth.placeholder': 'Dayton, OH',
+  'logbook.field.comment.label': 'Comment',
+  'logbook.field.comment.placeholder': 'Shared on the QSL',
+  'logbook.field.notes.label': 'Notes',
+  'logbook.field.notes.placeholder': 'Rig / antenna / weather / what you talked about…',
+  'logbook.form.callRequired': 'Callsign is required.',
+  'logbook.form.editingNote':
+    'Editing — confirmations and upload state are kept, unless you change the callsign: a corrected call re-sends to every service and drops confirmations matched on the old one.',
+  'logbook.form.save': 'Save',
+  'logbook.form.log': 'Log',
+  'logbook.form.saveFailed': 'Could not save the edit',
+  'logbook.form.updated': 'Updated {{call}}',
+  'logbook.form.logFailed': 'Could not log QSO',
+
+  // The table. Column headers name a CONCEPT and are prose; every value under them is a
+  // token. `{{query}}` is what the operator typed, inserted verbatim.
+  'logbook.globe.loading': 'Loading globe…',
+  'logbook.search.placeholder': 'Search call / grid / band / mode / date…',
+  'logbook.search.clear': 'Clear',
+  'logbook.filter.needsConfirmation.label': 'needs confirmation',
+  'logbook.filter.needsConfirmation.title':
+    "Show only contacts without an award-eligible (LoTW/paper) confirmation. Rows you've already sent a QSL request for stay here — a request is not a confirmation.",
+  'logbook.column.call': 'Call',
+  'logbook.column.country': 'Country',
+  'logbook.column.band': 'Band',
+  'logbook.column.freq': 'Freq',
+  'logbook.column.mode': 'Mode',
+  'logbook.column.sent': 'Sent',
+  'logbook.column.rcvd': 'Rcvd',
+  'logbook.column.time': 'Time (UTC)',
+  'logbook.column.park': 'Park',
+  'logbook.column.actions': 'Edit / delete',
+  'logbook.empty': 'No logged contacts yet.',
+  'logbook.emptySearch': 'No contacts match “{{query}}”.',
+
+  // A row. `{{program}}` (POTA/SOTA/WWFF) and `{{ref}}` are references, `{{call}}` a callsign.
+  'logbook.row.park.worked': '{{program}} {{ref}} (worked)',
+  'logbook.row.park.mine': 'My activation: {{program}} {{ref}}',
+  'logbook.row.qsl.lotw': 'LoTW confirmed (award-eligible)',
+  'logbook.row.qsl.card': 'Paper card received (award-eligible)',
+  'logbook.row.qsl.eqsl': 'eQSL received (NOT DXCC/WAZ/WAS-eligible)',
+  'logbook.row.qsl.confirmed': 'LoTW / paper — award-eligible',
+  'logbook.row.qsl.eqslOnly': 'eQSL only — not accepted for DXCC/WAZ/WAS',
+  'logbook.row.qsl.none': 'Not confirmed',
+  'logbook.row.spot.title':
+    "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",
+  'logbook.row.spot.aria': 'Spot {{call}} to the DX cluster',
+  'logbook.row.pushQrz.title':
+    'Push {{call}} to your QRZ logbook (re-push is safe — duplicates are detected)',
+  'logbook.row.pushQrz.aria': 'Push {{call}} to QRZ',
+  'logbook.row.pushClublog.title':
+    'Push {{call}} to ClubLog (re-push is safe — duplicates are detected)',
+  'logbook.row.pushClublog.aria': 'Push {{call}} to ClubLog',
+  'logbook.row.pushHrdlog.title':
+    'Push {{call}} to HRDLog.net (live-logging/awards site — not an ARRL confirmation source; re-push is safe)',
+  'logbook.row.pushHrdlog.aria': 'Push {{call}} to HRDLog.net',
+  // The <select>'s VALUES are the ADIF QSL_SENT_VIA letters B/D/E and stay in the code; only
+  // these labels are prose. They are capitalised menu items, which is why they are not the
+  // same entries as the lower-case words that appear inside the sentences below.
+  'logbook.row.qslSent.title':
+    "Mark a QSL request sent to {{call}} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.",
+  'logbook.row.qslSent.aria': 'Mark QSL sent to {{call}}',
+  'logbook.row.qslSent.bureau': 'Bureau',
+  'logbook.row.qslSent.direct': 'Direct',
+  'logbook.row.qslSent.electronic': 'Electronic',
+  'logbook.row.edit': 'Edit {{call}}',
+  'logbook.row.delete': 'Delete {{call}}',
+
+  // The QSL-request note. Four whole sentences instead of a stem plus " via …" and " on …"
+  // tails: both stamps land in a different place in different languages. `{{date}}` is a
+  // UTC calendar date, already formatted invariantly by the call site.
+  'logbook.qsl.via.bureau': 'bureau',
+  'logbook.qsl.via.direct': 'direct',
+  'logbook.qsl.via.electronic': 'electronic',
+  'logbook.qsl.sent': 'QSL sent',
+  'logbook.qsl.sentOn': 'QSL sent {{date}}',
+  'logbook.qsl.sentVia': 'QSL sent via {{via}}',
+  'logbook.qsl.sentOnVia': 'QSL sent {{date}} via {{via}}',
+  'logbook.qsl.marked': 'Marked QSL sent to {{call}} ({{via}})',
+  'logbook.qsl.markFailed': 'Could not mark QSL sent',
+
+  // Manual per-QSO pushes. `{{reason}}` and `{{detail}}` are the service's own words.
+  'logbook.push.qrz.ok': '✓ {{call}} pushed to QRZ logbook',
+  'logbook.push.qrz.duplicate':
+    '✓ {{call}} already in your QRZ logbook (duplicate) — upload chain works',
+  'logbook.push.qrz.rejected': '✗ QRZ rejected {{call}}: {{reason}}',
+  'logbook.push.qrz.failed': '✗ QRZ push failed: {{detail}}',
+  'logbook.push.clublog.ok': '✓ {{call}} pushed to ClubLog',
+  'logbook.push.clublog.duplicate':
+    '✓ {{call}} already on ClubLog (duplicate) — upload chain works',
+  'logbook.push.clublog.rejected': '✗ ClubLog rejected {{call}}: {{reason}}',
+  'logbook.push.clublog.failed': '✗ ClubLog push failed: {{detail}}',
+  'logbook.push.hrdlog.ok': '✓ {{call}} pushed to HRDLog.net',
+  'logbook.push.hrdlog.duplicate':
+    '✓ {{call}} already on HRDLog.net (duplicate) — upload chain works',
+  'logbook.push.hrdlog.unavailable':
+    'HRDLog.net unavailable — {{call}} not confirmed uploaded; try again later',
+  'logbook.push.hrdlog.rejected': '✗ HRDLog.net rejected {{call}}: {{reason}}',
+  'logbook.push.hrdlog.failed': '✗ HRDLog.net push failed: {{detail}}',
+
+  // Deleting one contact. `{{band}}` is a band name — never translated.
+  'logbook.delete.heading': 'Delete the QSO with {{call}} on {{band}}?',
+  'logbook.delete.body': "This removes it from your log. This can't be undone.",
+  'logbook.delete.confirm': 'Delete QSO',
+  'logbook.delete.failed': 'Could not delete the QSO',
+  'logbook.delete.done': 'Deleted {{call}}',
+
+  // ── The log strip (the cockpits' LOG pane, "Log this QSO") ──────────────────────────
+  // One component serves Phone, CW and Satellites, plus a Field Day variant, so these keys
+  // name the ACT — logging the contact in front of you — not any one cockpit.
+  //
+  // ⚠️ Invariant here and therefore absent: callsigns, RST, grid squares, band and mode
+  // names, frequencies, POTA/SOTA references, the FD class and ARRL section codes, and the
+  // MHz unit. They are LOG_EXAMPLES / PARK_PROGRAMS in `components/LogEntry.tsx`. Grid
+  // squares quoted INSIDE a sentence that explains the format (EN52, EN52XA, EN52XA25) do
+  // stay in the message, as `ADIF OPERATOR` does elsewhere — a translator must leave them.
+  'logEntry.title': 'Log this QSO',
+  'logEntry.clear.label': 'Clear',
+  'logEntry.clear.title': 'Clear the log fields',
+  'logEntry.hunt.title':
+    'This QSO will be tagged with the hunted park reference when you log it (matched by callsign).',
+  'logEntry.hunt.mismatch': '(call ≠ hunt)',
+  'logEntry.call.placeholder': 'Call',
+  'logEntry.lookup.label': 'Lookup',
+  'logEntry.lookup.title':
+    'Look up name + QTH in the callbook — QRZ first, then HamQTH (grid/state need a QRZ subscription)',
+  'logEntry.rstSent.label': 'Sent',
+  'logEntry.rstSent.title': 'Signal report you SENT them',
+  'logEntry.rstRcvd.label': 'Rcvd',
+  'logEntry.rstRcvd.title': 'Signal report you RECEIVED from them',
+  'logEntry.grid.placeholder': 'Grid',
+  'logEntry.grid.title':
+    'Their Maidenhead locator — the satellite exchange. 4, 6 or 8 characters (EN52, EN52XA or EN52XA25); auto-filled by the callbook lookup only while it is blank',
+  'logEntry.grid.blocked':
+    '“{{grid}}” isn’t a grid square — Nexus logs 4, 6 or 8 characters (EN52, EN52XA or EN52XA25). Fix it or clear it to log.',
+  'logEntry.grid.blockedToast':
+    '“{{grid}}” isn’t a grid square — enter EN52, EN52XA or EN52XA25, or clear it',
+  'logEntry.grid.blockedTitle':
+    'Enter a 4-, 6- or 8-character grid square (EN52, EN52XA or EN52XA25), or clear it',
+  'logEntry.name.placeholder': 'Name',
+  'logEntry.qth.placeholder': 'QTH (city)',
+  'logEntry.state.placeholder': 'State',
+  'logEntry.state.title': 'State / province — auto-filled by the QRZ lookup when available',
+  'logEntry.country.placeholder': 'Country',
+  'logEntry.country.title': 'DXCC entity — auto-filled from the callsign when available',
+  'logEntry.comment.placeholder': 'Comment (sharable)',
+  'logEntry.park.program.title': 'On-the-air program for the park/summit you worked',
+  // `{{example}}` is a park/summit REFERENCE from the call site — a wire format, never
+  // localised. The prose around it is the part a translator owns.
+  'logEntry.park.ref.placeholderPota': 'Park ({{example}} or name)',
+  'logEntry.park.ref.placeholderSota': 'Summit ({{example}})',
+  'logEntry.park.ref.title':
+    'Park/summit reference of the station you worked — logged to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF)',
+  'logEntry.park.live.label': 'live',
+  'logEntry.park.live.title': 'Fetched live from the POTA directory',
+  'logEntry.notes.placeholder': 'Notes (private, multi-line)…',
+  'logEntry.override.toggle': 'Log a contact from another radio',
+  'logEntry.override.toggleSub': '· adjust band · freq · mode · time (UTC)',
+  'logEntry.override.title':
+    "Log a contact you made on another radio that isn't connected to Nexus — set the band, frequency, mode, and UTC time by hand",
+  'logEntry.override.date.label': 'Date (UTC)',
+  'logEntry.override.time.label': 'Time (UTC)',
+  'logEntry.override.band.label': 'Band',
+  'logEntry.override.freq.label': 'Freq (MHz)',
+  'logEntry.override.mode.label': 'Mode',
+  // ⚠️ `{{freq}}` is exactly what the operator typed into the frequency box, and `{{band}}`
+  // a band name. Neither is reformatted on its way through.
+  'logEntry.override.offBand': '{{freq}} MHz is outside {{band}} — logged as entered',
+  'logEntry.override.needFreq': 'Enter a numeric frequency',
+  'logEntry.override.blockedHint': 'Enter a frequency for the override to log',
+  'logEntry.override.blocked': 'Enter a valid frequency for the override, or close it',
+  // Two whole sentences: a dial the band plan cannot name (QO-100 at 10 GHz) has no band
+  // slot at all, and a sentence assembled around an empty slot reads as a hole.
+  'logEntry.summary': 'Logs to the shared logbook as {{mode}} · {{freq}} MHz',
+  'logEntry.summaryBand': 'Logs to the shared logbook as {{mode}} · {{band}} · {{freq}} MHz',
+  'logEntry.log': 'Log',
+  'logEntry.logged': 'Logged {{call}} ({{mode}})',
+  'logEntry.logFailed': 'Could not log the QSO',
+  'logEntry.spot.label': '📢 Spot',
+  'logEntry.spot.title': 'Spot this call to the DX cluster (pre-fills the call + your frequency)',
+
+  // Field Day variant. `{{class}}` and `{{section}}` are exchange codes (1D, WI) and
+  // `{{mode}}` the FD mode code (CW/PH) — all wire values.
+  'logEntry.fd.chip': 'FD LOG',
+  'logEntry.fd.hint': '{{band}} · contacts go to the Field Day log',
+  'logEntry.fd.call.label': 'Call',
+  'logEntry.fd.class.label': 'Class',
+  'logEntry.fd.class.title': 'Their Field Day class',
+  'logEntry.fd.section.label': 'Section',
+  'logEntry.fd.section.title': 'Their ARRL section',
+  'logEntry.fd.log': 'Log FD',
+  'logEntry.fd.needClass': 'Enter their Field Day class to log.',
+  'logEntry.fd.badSection':
+    'Section "{{section}}" isn\'t a known ARRL/RAC section — required to log.',
+  'logEntry.fd.logged': 'FD: logged {{call}} {{class}}/{{section}} ({{mode}})',
+  'logEntry.fd.failed': 'FD log failed',
+
+  // ── Confirm-before-log prompt (WSJT-X's "Prompt me to log QSO") ─────────────────────
+  // Its own area, not `logEntry.*`: this is the popup that reviews a contact the sequencer
+  // already made, and its four field labels are read in a different context.
+  'logPrompt.aria': 'Log QSO',
+  'logPrompt.title': 'Log this QSO?',
+  'logPrompt.call.label': 'Call',
+  'logPrompt.grid.label': 'Grid',
+  // RST is the signal-report format's name — it stays as it is inside the label.
+  'logPrompt.rstSent.label': 'RST sent',
+  'logPrompt.rstRcvd.label': 'RST rcvd',
+  'logPrompt.discard': 'Discard',
+  'logPrompt.log': 'Log QSO',
+
+  // ── Station roster (the Stations list and its cards) ────────────────────────────────
+  // ⚠️ `{{call}}` is a callsign; the SNR badge, grid, country, distance and bearing on a
+  // card are all data and never pass through here. `B4` is ham shorthand printed as-is.
+  'roster.title': 'Stations',
+  'roster.band.label': 'Band — calling CQ',
+  'roster.band.title': 'Call CQ and see open broadcasts on the band',
+  'roster.recents.aria': 'Recent conversations',
+  'roster.recents.head': 'Recent chats',
+  'roster.recents.open': 'Open conversation with {{call}}',
+  'roster.recents.offline': 'not heard recently',
+  'roster.recents.archive.title': 'Delete this conversation',
+  'roster.recents.archive.aria': 'Delete conversation with {{call}}',
+  'roster.onBandNow': 'On the band now',
+  'roster.filter.aria': 'Station filter',
+  'roster.filter.all': 'All',
+  'roster.filter.heardNow': 'Heard now',
+  'roster.filter.beaconing': 'Beaconing',
+  'roster.filter.needed': 'Needed',
+  'roster.empty': 'No stations match.',
+  'roster.card.doubleClick': 'Double-click to work {{call}}',
+  'roster.card.open': 'Open {{call}}',
+  'roster.card.b4.sameBand': 'Worked before on this band',
+  'roster.card.b4.otherBand': 'Worked before (another band)',
+  'roster.card.work.label': 'Work',
+  'roster.card.work.title': 'Work {{call}}',
+  // "Slots" are T/R periods, not clock time — the count is the number of periods since the
+  // station was last decoded, so it is a plural entry, not a duration format.
+  'roster.card.heard.now': 'now',
+  'roster.card.heard.slots': {
+    one: '{{count}} slot ago',
+    other: '{{count}} slots ago',
+  },
+  'roster.card.heard.minutes': '{{count}} min ago',
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning

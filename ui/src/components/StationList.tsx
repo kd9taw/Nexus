@@ -1,7 +1,14 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT: the callsigns and
+// message previews in the recents list (data), and the presence CODE a dot's tooltip falls back
+// to ('active' / 'idle' / 'stale') — that is a state value off the wire, not a phrase, and it is
+// migrated with the presence vocabulary rather than spelled out here.
+
 import { useMemo, useState } from 'react'
 import type { Conversation as Conv, NeedAlert, NeedTag, Station, Tier } from '../types'
 import { StationCard } from './StationCard'
 import { tagsForSurface } from '../features/needs'
+import { t, type MessageKey } from '../i18n'
 
 type Presence = Station['presence'] | 'offline'
 
@@ -44,11 +51,12 @@ interface Props {
   dropAfterCycles?: number
 }
 
-const FILTERS: { id: Filter; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'heard-now', label: 'Heard now' },
-  { id: 'beaconing', label: 'Beaconing' },
-  { id: 'needed', label: 'Needed' },
+/** The filter `id`s are persisted-shaped tokens; only the labels are prose. */
+const FILTERS: { id: Filter; labelKey: MessageKey }[] = [
+  { id: 'all', labelKey: 'roster.filter.all' },
+  { id: 'heard-now', labelKey: 'roster.filter.heardNow' },
+  { id: 'beaconing', labelKey: 'roster.filter.beaconing' },
+  { id: 'needed', labelKey: 'roster.filter.needed' },
 ]
 
 export function StationList({
@@ -139,24 +147,24 @@ export function StationList({
   return (
     <aside className="station-list panel">
       <div className="panel-header">
-        <h2>Stations</h2>
+        <h2>{t('roster.title')}</h2>
         <span className="count-badge">{stations.length}</span>
       </div>
       <button
         type="button"
         className={`band-row${bandActive ? ' active' : ''}`}
         onClick={onSelectBand}
-        title="Call CQ and see open broadcasts on the band"
+        title={t('roster.band.title')}
       >
         <span className="band-row-star" aria-hidden="true">
           ★
         </span>
-        Band — calling CQ
+        {t('roster.band.label')}
         {!bandActive && bandUnread > 0 && <span className="unread-badge">{bandUnread}</span>}
       </button>
       {recents.length > 0 && (
-        <div className="recent-chats" aria-label="Recent conversations">
-          <div className="recent-head">Recent chats</div>
+        <div className="recent-chats" aria-label={t('roster.recents.aria')}>
+          <div className="recent-head">{t('roster.recents.head')}</div>
           {recents.map((r) => (
             <div
               key={r.peer}
@@ -166,12 +174,12 @@ export function StationList({
                 type="button"
                 className="recent-open"
                 onClick={() => onSelect(r.peer)}
-                title={`Open conversation with ${r.peer}`}
+                title={t('roster.recents.open', { call: r.peer })}
               >
                 <span
                   className={`presence-dot ${r.presence}`}
                   aria-hidden="true"
-                  title={r.presence === 'offline' ? 'not heard recently' : r.presence}
+                  title={r.presence === 'offline' ? t('roster.recents.offline') : r.presence}
                 />
                 <span className="recent-call">{r.peer}</span>
                 <span className="recent-preview">{r.preview}</span>
@@ -183,8 +191,8 @@ export function StationList({
                 type="button"
                 className="recent-archive"
                 onClick={() => onArchive(r.peer)}
-                title="Delete this conversation"
-                aria-label={`Delete conversation with ${r.peer}`}
+                title={t('roster.recents.archive.title')}
+                aria-label={t('roster.recents.archive.aria', { call: r.peer })}
               >
                 ✕
               </button>
@@ -192,8 +200,8 @@ export function StationList({
           ))}
         </div>
       )}
-      {recents.length > 0 && <div className="roster-head">On the band now</div>}
-      <div className="filter-row" role="tablist" aria-label="Station filter">
+      {recents.length > 0 && <div className="roster-head">{t('roster.onBandNow')}</div>}
+      <div className="filter-row" role="tablist" aria-label={t('roster.filter.aria')}>
         {FILTERS.map((f) => (
           <button
             key={f.id}
@@ -203,12 +211,12 @@ export function StationList({
             className={`filter-chip${filter === f.id ? ' active' : ''}`}
             onClick={() => setFilter(f.id)}
           >
-            {f.label}
+            {t(f.labelKey)}
           </button>
         ))}
       </div>
       <div className="station-scroll">
-        {filtered.length === 0 && <p className="empty">No stations match.</p>}
+        {filtered.length === 0 && <p className="empty">{t('roster.empty')}</p>}
         {filtered.map((s) => (
           <StationCard
             key={s.call}
