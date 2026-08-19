@@ -233,8 +233,11 @@ const MIGRATED = [
  * (B4) & dupes, Integrations & Feeds with its Antenna gain disclosure, DXKeeper, N3FJP, N1MM+,
  * the LoTW users list and the callsign→state database, and batch 11 (2026-08-19) took
  * Confirmations itself — LoTW, eQSL, QRZ, HamQTH, ClubLog, HRDLog, RepeaterBook and
- * Cloudlog/Wavelog. Putting the file on MIGRATED would report the tabs still to come; leaving
- * it off entirely would make every key those sections use look like an orphan.
+ * Cloudlog/Wavelog. Batch 12 (2026-08-19) took the first three sections of the Radio tab —
+ * the dual-radio roster with its band coverage and band+mode routing table, Profiles, and Rig
+ * & CAT down to Test CAT, Advanced included. Putting the file on MIGRATED would report the
+ * tabs still to come; leaving it off entirely would make every key those sections use look
+ * like an orphan.
  *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be

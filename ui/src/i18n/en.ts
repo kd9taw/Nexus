@@ -3792,6 +3792,300 @@ export const EN = {
   'settings.connections.cloudlog.key.clearFailed': 'Could not clear the Cloudlog API key',
   'settings.connections.cloudlog.key.cleared': 'Cloudlog API key cleared from the keychain',
 
+  // ── Settings ▸ Radio ▸ Radios (the roster, band coverage, band+mode routing) ────────
+  // ⚠️ EVERY INTERPOLATED VALUE HERE IS A TOKEN AND STAYS ONE: `{{name}}` is a radio's own
+  // name, `{{rig}}` a Hamlib model name, `{{cat}}` a COM port / host:port / OmniRig slot,
+  // `{{ip}}` an address, `{{audio}}` the OS's own sound-device name, `{{port}}` a TCP port,
+  // `{{bands}}` a list of band names and `{{mode}}` a routing mode class. The band and mode
+  // names written into the sentences (2 m, FT8, FM, APRS) are that same vocabulary and are
+  // not translated either — they name what the operator selects. The FIVE ROUTING MODE
+  // CLASSES are deliberately absent from this file: they are mode names, and the panel's
+  // `ROUTE_MODES` must match the Rust `RouteMode::label`, so they stay in the code.
+  'settings.radios.legend': 'Radios',
+  // The two stand-ins a radio with no name of its own is called by inside a sentence; they
+  // fill a `{{name}}` slot, so the sentence around them stays one whole sentence.
+  'settings.radios.anotherRadio': 'another radio',
+  'settings.radios.selectedRadio': 'the selected radio',
+  'settings.radios.editingNote':
+    "<b>Editing {{name}}</b> — not your operating radio. <b>Save</b> writes only this radio's CAT / audio config; your active radio and station-wide settings are untouched.",
+  'settings.radios.name.placeholder': 'Radio name',
+  'settings.radios.active.badge': 'Active',
+  'settings.radios.active.title': 'Your operating radio.',
+  'settings.radios.editing.badge': 'Editing',
+  'settings.radios.editing.title': 'The Rig / CAT + Audio form below is editing this radio.',
+  'settings.radios.edit.action': 'Edit',
+  'settings.radios.edit.title':
+    "Edit this radio's CAT / audio below — WITHOUT changing your operating radio (no swap, no dropped carrier).",
+  'settings.radios.makeActive.action': 'Make active',
+  'settings.radios.makeActive.title':
+    'Make this your operating radio (swaps rigs; drops any carrier first).',
+  'settings.radios.remove.action': 'Remove',
+  'settings.radios.remove.title': 'Remove this radio from the roster',
+  'settings.radios.remove.title.blocked':
+    'This is your operating radio — make another radio active first, then remove this one.',
+  // The roster card's summary line, and it is ONE entry because the words BETWEEN the tokens
+  // are labels — "CAT", "audio", "CAT helper port" — that a language ordering them differently
+  // cannot be served four fragments of. The Flex clause is optional and is interpolated whole.
+  'settings.radios.card.meta':
+    '{{rig}} · CAT {{cat}}{{flex}} · audio {{audio}} · CAT helper port {{port}}',
+  'settings.radios.card.meta.flex': ' · Flex radio {{ip}}',
+  'settings.radios.card.omnirig': 'Set up in OmniRig',
+  'settings.radios.card.noModel': 'No rig model set',
+  'settings.radios.card.noAddress': 'no address',
+  'settings.radios.card.noPort': 'no COM port',
+  'settings.radios.card.audioDefault': 'default',
+  'settings.radios.bands.hint': 'Covers bands (for auto band-routing; none = covers all):',
+  'settings.radios.add.action': '+ Add radio',
+  'settings.radios.hint.multi':
+    "The Rig / CAT + Audio settings below edit “{{name}}”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio.",
+  'settings.radios.hint.single':
+    'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.',
+  // The accessible name is its own entry, not a slice of the hint below it: a hint is a whole
+  // sentence and a control's name is a name, and the two are free to differ in a language.
+  'settings.radios.simultaneous.aria': 'Run both radios at the same time',
+  'settings.radios.simultaneous.hint':
+    '<b>Run both radios at the same time</b> — launch Nexus and it asks which radio this window drives; open a second window for the other. Both share one logbook. Leave off if you only ever use one radio at a time (you can still switch between them from the top bar).',
+
+  // Band + mode routing. `{{n}}` is a rule's position in the table, counted from 1.
+  'settings.routing.intro':
+    '<b>Route by band AND mode</b> — band coverage above sends a whole band to one radio. Add rules here when TWO radios share a band and the MODE decides which one: 2 m FT8 to the digital rig, 2 m FM and APRS to the FM rig. Rules are checked top to bottom and the FIRST match wins; anything no rule matches falls back to band coverage, then to the default radio.',
+  'settings.routing.empty': "No rules — routing is by band only (today's behavior).",
+  'settings.routing.rule.mode.aria': 'Rule {{n}} mode',
+  'settings.routing.rule.mode.any': 'Any mode',
+  // "Satellite" is a CONTEXT designation, not a sixth mode class (the panel says so at the
+  // dropdown), so unlike the five mode classes beside it, it is prose and moves.
+  'settings.routing.rule.satellite': 'Satellite',
+  'settings.routing.rule.satellite.title':
+    'Satellite passes only: picking a transponder checks Satellite rules before the mode rules, so the FM & APRS rule can keep terrestrial packet while satellites go to the sat rig. Terrestrial tunes never match this rule.',
+  'settings.routing.rule.radio.aria': 'Rule {{n}} radio',
+  'settings.routing.rule.up.title': 'Check this rule earlier (first match wins)',
+  'settings.routing.rule.up.aria': 'Move rule {{n}} up',
+  'settings.routing.rule.down.title': 'Check this rule later',
+  'settings.routing.rule.down.aria': 'Move rule {{n}} down',
+  'settings.routing.rule.remove.aria': 'Remove rule {{n}}',
+  // One line, three holes — never three glued fragments. `.anyMode` is the mid-sentence form
+  // of `.rule.mode.any` and is a separate entry on purpose: lower-casing a translated noun is
+  // wrong wherever nouns capitalise.
+  'settings.routing.rule.summary': '{{bands}} · {{mode}} → {{radio}}',
+  'settings.routing.rule.summary.anyBand': 'Any band',
+  'settings.routing.rule.summary.anyMode': 'any mode',
+  'settings.routing.rule.summary.radio': 'Radio {{id}}',
+  'settings.routing.add.action': '+ Add routing rule',
+  'settings.routing.default.label': 'Everything else',
+  'settings.routing.default.aria': 'Default radio',
+  'settings.routing.default.stay': 'Stay on the current radio',
+  'settings.routing.test.label': 'Test a band + mode',
+  'settings.routing.test.band.aria': 'Test band',
+  'settings.routing.test.mode.aria': 'Test mode',
+  'settings.routing.test.action': 'Where would this go?',
+  'settings.routing.test.result': '{{band}} {{mode}} → <b>{{radio}}</b>',
+
+  // ── Settings ▸ Radio ▸ Profiles ─────────────────────────────────────────────────────
+  // A whole-station config saved under a name the operator types. The example name is human
+  // prose — a locale should offer one its operators recognise — while VHF inside it is the
+  // band class and stays as written.
+  'settings.profiles.legend': 'Profiles',
+  'settings.profiles.list.label': 'Saved profiles',
+  'settings.profiles.list.none': '— Select a profile —',
+  'settings.profiles.list.hint': 'Switch a whole rig / antenna / CAT / band setup in one move.',
+  'settings.profiles.load.action': 'Load',
+  'settings.profiles.load.title':
+    'Apply this profile — merged onto your current settings. Your callsign, license class, radio roster and sync history never come from a profile, and anything the profile predates keeps its current value.',
+  'settings.profiles.delete.action': 'Delete',
+  'settings.profiles.save.label': 'Save current as',
+  'settings.profiles.save.placeholder': 'e.g. Portable VHF',
+  'settings.profiles.save.action': 'Save',
+  'settings.profiles.save.hint': 'Snapshots the current settings under a name.',
+
+  // ── Settings ▸ Radio ▸ Rig & CAT ────────────────────────────────────────────────────
+  // THE DENSEST INVARIANT-TOKEN SURFACE IN SETTINGS, so read the rule before adding an entry
+  // here. Everything an operator TYPES OR PICKS on this screen is a token and is NOT in this
+  // file: COM / `/dev/cu.…` device names, baud rates, Hamlib model numbers and model names,
+  // host:port addresses, IPs, TCP port numbers, CI-V addresses and OmniRig's own RIG 1 / RIG 2
+  // slot names. So is the `value` of every <select> — only the LABEL moved. What the sentences
+  // below DO carry, verbatim and untranslated, are the names of things the operator has to go
+  // and find somewhere else: CAT, PTT, RTS, DTR, VOX, rigctld, Hamlib, OmniRig, SmartSDR CAT,
+  // DAX, VITA-49, Thetis, PowerSDR, piHPSDR, Digirig, SO2R, CI-V, DATA-U / USB-D / PKTUSB,
+  // SERIAL-B, CP210x, "Enhanced", the Icom menu path and the rig and interface model names.
+  'settings.rigControl.legend': 'Rig & CAT',
+
+  // PTT. A configuration <select>, not a transmit control: the labels are prose, the stored
+  // `value` is the token the radio loop reads, and nothing about keying changed.
+  'settings.rigControl.ptt.label': 'PTT Method',
+  'settings.rigControl.ptt.hint': 'How transmit is keyed.',
+  'settings.rigControl.ptt.cat': 'CAT (via rigctld)',
+  'settings.rigControl.ptt.rts': 'Serial RTS',
+  'settings.rigControl.ptt.dtr': 'Serial DTR',
+  'settings.rigControl.ptt.vox': 'VOX (no keying)',
+  'settings.rigControl.pttPort.label': 'PTT Serial Port',
+  // `{{example}}` is the platform's own device-name example, supplied by the panel as an
+  // invariant token (RIG_EXAMPLES) — a "localised" COM16 names no port on any machine.
+  'settings.rigControl.pttPort.placeholder': 'e.g. {{example}} — blank = use the CAT port',
+  'settings.rigControl.pttPort.hint':
+    'COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R) that routes PTT on its own port, separate from CAT. Leave blank if keying shares the CAT port, which is how a single-cable interface like a Digirig Mobile is wired; CAT keeps working either way. <b>Per radio</b>: each rig on an SO2R box has its own keying port, and this one follows the radio you switch to.',
+  'settings.rigControl.catRts.label': 'Interface keys RTS on the CAT port',
+  'settings.rigControl.catRts.hint':
+    'Tick this if your interface keys the radio from the CAT port’s RTS line — a Digirig Mobile and most other one-cable interfaces are wired this way. Nexus then holds RTS down, instead of leaving it up where it puts some rigs into transmit the moment the port opens. <b>If your radio transmits as soon as Nexus starts, this is the setting.</b> Leave it off if a plain serial cable goes straight to the radio: the radio may be using that line for flow control, and taking it away can cost you CAT.',
+
+  // Detection. `{{radio}}`, `{{ip}}`, `{{port}}`, `{{chip}}` and `{{device}}` are all names the
+  // OS or the radio reported; `{{note}}` is the backend's own sentence about a driver, passed
+  // through as a value and translated in phase 3, never here. The two "· …" clauses are whole
+  // optional clauses with their own separator, exactly as the sync reports above are.
+  'settings.rigControl.detect.label': 'Zero-config setup',
+  'settings.rigControl.detect.action': 'Detect my radio',
+  'settings.rigControl.detect.scanning': 'Scanning…',
+  'settings.rigControl.detect.use': 'Use this',
+  'settings.rigControl.detect.hint':
+    'One scan for everything: USB radios (fills model, port, sound device) AND FlexRadios on the network (fills the SmartSDR CAT config). Review, then Save.',
+  'settings.rigControl.detect.flex.name': '{{radio}} — network',
+  'settings.rigControl.detect.flex.meta':
+    '{{ip}} · via SmartSDR CAT on this PC (slice A, TCP 5002)',
+  'settings.rigControl.detect.unknownRadio': 'Unknown radio',
+  'settings.rigControl.detect.civ.isCiv': ' · CI-V port — use this one',
+  'settings.rigControl.detect.civ.notCiv': ' · second port, not CI-V',
+  'settings.rigControl.detect.interface':
+    'This is an interface cable, not a radio — pick your rig in <em>Rig Model</em> below. {{note}}',
+  'settings.rigControl.detect.noModel':
+    '⚠ Found the port but not the exact model — normal when the rig sits behind a generic USB bridge chip that reports only its own name (common on Icom, Yaesu, Kenwood, Elecraft, and Xiegu). Pick your rig in <em>Rig Model</em> below, or click <em>Auto-test</em> (it tries the common rigs to find the right port + baud for you).',
+  'settings.rigControl.detect.driverLink': 'driver ↗',
+
+  // The rig picker. The model NAMES and NUMBERS are Hamlib's and never move; the count line is
+  // a plural, so `Intl.PluralRules` picks the form instead of a hand-rolled `s`.
+  'settings.rigControl.rigModel.label': 'Rig Model',
+  'settings.rigControl.rigModel.filter.placeholder': 'Find a rig — type a name or model number',
+  'settings.rigControl.rigModel.filter.aria': 'Filter the rig model list',
+  'settings.rigControl.rigModel.filter.none':
+    'No model matches — clear the box, or enter the model number directly.',
+  'settings.rigControl.rigModel.filter.count': {
+    one: '{{count}} model match.',
+    other: '{{count}} models match.',
+  },
+  'settings.rigControl.rigModel.none': '— None —',
+  'settings.rigControl.rigModel.number.placeholder': 'or enter model #',
+  'settings.rigControl.rigModel.number.aria': 'Enter a Hamlib rig model number directly',
+  'settings.rigControl.rigModel.showAll.aria': 'Show all Hamlib rig models',
+  // The loading clause is interpolated whole rather than glued on, so a language that marks
+  // the state elsewhere in the sentence can move it.
+  'settings.rigControl.rigModel.showAll.hint':
+    'Show all models{{loading}} — the list above defaults to ~50 curated common rigs; check this for the full Hamlib catalog.',
+  'settings.rigControl.rigModel.showAll.loading': ' (loading…)',
+  'settings.rigControl.rigModel.hint':
+    'Hamlib rig model. Not listed? Type its model number directly — Hamlib may still support it even without a friendly name here.',
+
+  // Connection kind. `{{availability}}` is the whole closing sentence about OmniRig on this
+  // platform — one of the two entries below it, never a fragment.
+  'settings.rigControl.conn.label': 'Connection',
+  'settings.rigControl.conn.serial': 'Serial (USB / COM port)',
+  'settings.rigControl.conn.network': 'Network (host:port — SDR software, or a remote rig)',
+  'settings.rigControl.conn.omnirig': 'OmniRig (the radio is set up in OmniRig)',
+  'settings.rigControl.conn.omnirig.unavailable': 'OmniRig — Windows only',
+  'settings.rigControl.conn.hint':
+    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio.',
+  'settings.rigControl.conn.omnirig.hint':
+    "<b>OmniRig</b> hands rig control to VE3NEA's OmniRig server, the one most Windows logging and contest programs already use. Set the radio up <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there, so the Rig Model, Serial Port and Baud above are not used. {{availability}}",
+  'settings.rigControl.conn.omnirig.unavailable.why':
+    'It is greyed out here because OmniRig is a Windows program and this is not Windows.',
+  'settings.rigControl.conn.omnirig.install':
+    'Install and run OmniRig first; Nexus will not start without it.',
+  // ⚠️ RIG 1 / RIG 2 are the labels OmniRig's OWN window uses. They are how the operator
+  // matches this picker to that window, so they stay in the panel, untranslated.
+  'settings.rigControl.omnirig.label': 'OmniRig radio',
+  'settings.rigControl.omnirig.aria': 'OmniRig rig slot',
+  'settings.rigControl.omnirig.hint':
+    "Which of OmniRig's two radios this Nexus radio drives. OmniRig's own window labels them RIG 1 and RIG 2 — pick the one whose rig type matches this radio. A two-radio station can put one on each.",
+
+  // Network address. Every port number in these sentences is a number the operator types into
+  // another program's field — a dial setting, not prose — and stays exactly as written.
+  'settings.rigControl.netAddr.label': 'Network Address',
+  'settings.rigControl.dax.action': '⚡ Pair DAX audio ({{device}})',
+  'settings.rigControl.dax.title':
+    "SmartSDR's DAX virtual audio devices were detected — one click sets them as Nexus's audio in/out (bit-clean digital audio, no sound card)",
+  'settings.rigControl.dax.paired': 'DAX paired: {{input}} → in, {{output}} → out',
+  'settings.rigControl.netAddr.hint':
+    "host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so 127.0.0.1:5002 with the FLEX-6xxx / 8xxx model works out of the box; audio rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001, C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the slice you run digital on. (Direct-to-radio :4992 needs Hamlib's experimental native model and failed on real hardware.) Other rigs: a remote rigctld's host:port with their normal model.",
+  'settings.rigControl.netAddr.sdrPorts':
+    'Running an SDR program? Read the port out of the program, don\'t guess it: <b>Thetis</b> → Setup ▸ Serial/Network/Midi CAT ▸ <em>TCP/IP CAT Server</em> (its own box, factory 13013 — not the <em>TCI Server</em> box beside it, factory 50001; TCI is a different protocol and the Hamlib we ship has no backend for it, so pick a CAT profile such as "Thetis" and use the CAT server port); <b>SmartSDR CAT</b> → 5002; <b>piHPSDR</b> → 19090. Whatever it shows, type that.',
+
+  // The serial port and its two rig-specific notes. Each note is ONE sentence per platform,
+  // because what it says is a different answer, not a different ending; the Xiegu COM-number
+  // clause is the one genuinely optional half and is interpolated whole.
+  'settings.rigControl.serialPort.label': 'Serial Port',
+  'settings.rigControl.serialPort.placeholder': 'Select or type, e.g. {{example}}',
+  'settings.rigControl.serialPort.refresh.action': 'Refresh',
+  'settings.rigControl.serialPort.refresh.title': 'Re-scan serial ports',
+  'settings.rigControl.serialPort.autoTest.action': 'Auto-test',
+  'settings.rigControl.serialPort.autoTest.title':
+    'Probe each USB port (read-only — never transmits) and auto-select the one that drives your rig',
+  'settings.rigControl.serialPort.hint.mac':
+    'Serial device (/dev/cu.…) for rig control — or Auto-test to find it.',
+  'settings.rigControl.serialPort.hint.other':
+    'COM / serial device for rig control — or Auto-test to find it.',
+  'settings.rigControl.serialPort.xiegu':
+    '<b>Xiegu:</b> the radio makes two serial ports — CAT is on the <b>SERIAL-B</b> one{{note}}.',
+  'settings.rigControl.serialPort.xiegu.comNumber': ' (often the higher COM number)',
+  'settings.rigControl.serialPort.icom.mac':
+    '<b>Icom:</b> this radio makes two /dev/cu.* ports and only one speaks CI-V — with the Silicon Labs VCP driver it is usually the first of the pair (plain <b>cu.SLAB_USBtoUART</b>; the dead twin gets a numeric suffix). The other one never answers.',
+  'settings.rigControl.serialPort.icom.other':
+    '<b>Icom:</b> this radio makes two COM ports and only one speaks CI-V — in Device Manager it is the CP210x port marked <b>Enhanced</b> (Icom\'s driver: “Serial Port A (CI-V)”). The “Standard” / “Serial Port B” one never answers.',
+
+  // ⚠️ THE BAUD RATES THEMSELVES ARE NOT HERE AND NEVER WILL BE. The picker renders them from
+  // `STANDARD_BAUDS`; the two written into this hint are the rates a rig's own menu offers,
+  // spelled the way that menu spells them.
+  'settings.rigControl.baud.label': 'Baud',
+  'settings.rigControl.baud.hint':
+    "Serial baud rate — match your rig's CAT setting (most modern rigs: 38,400 or 115,200). Native Icom CI-V scope needs 115,200 here <em>and</em> on the rig.",
+
+  // Split operation. The three choices are WSJT-X's own Split Operation wording (the panel
+  // keeps parity with it) and the hint names each one, so the two move together.
+  'settings.rigControl.split.label': 'Split operation',
+  'settings.rigControl.split.none': 'None',
+  'settings.rigControl.split.rig': 'Rig',
+  'settings.rigControl.split.fakeit': 'Fake It',
+  'settings.rigControl.split.hint':
+    'Keeps your transmitted audio between 1500–2000 Hz by shifting the TX dial in 500 Hz steps, so audio harmonics fall outside the transmit filter — cleaner signal. Rig = uses VFO B split. Fake It = retunes the VFO around each over (works on any CAT rig). None = stock WSJT-X default, transmits at the raw audio offset.',
+
+  // The multiplier beside this label (×1.00) is a number and is rendered by the panel.
+  'settings.rigControl.wheel.label': 'Wheel tuning sensitivity',
+  'settings.rigControl.wheel.aria': 'Mouse-wheel tuning sensitivity',
+  'settings.rigControl.wheel.hint':
+    'How far the dial moves per mouse-wheel notch. Lower it if a high-resolution or free-spin mouse tunes too far per flick; raise it to tune faster. Applies to the frequency readout and the Phone/CW scope wheel.',
+
+  // ── Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ─────────────────────────────────────────
+  'settings.rigControl.advanced.title': 'Advanced',
+  'settings.rigControl.rigctldPort.label': 'rigctld TCP Port',
+  'settings.rigControl.rigctldPort.hint': 'Port Nexus launches rigctld on.',
+  'settings.rigControl.plainSsb.label': 'Data modes use plain SSB',
+  'settings.rigControl.plainSsb.hint':
+    "<b>Leave this off unless you know you need it.</b> Nexus normally puts the radio in its DATA submode (DATA-U / USB-D / PKTUSB) for FT8, FT4, RTTY-AFSK and SSTV, because on most rigs that is the only mode where the USB codec reaches the transmitter. Turn this on and Nexus commands plain <b>USB/LSB</b> for those modes instead, and stays there — through band changes and when you call a station. Correct if your transmit audio goes in the <b>microphone</b> path, as with an interface wired to the mic jack (some RIGblaster models) — or if you simply prefer plain USB to the DATA submode (for its wider receive passband, say) and your rig is set to send its USB-codec audio in SSB, which on many modern rigs (FT-991A, IC-7300 and the like) is a single menu item. Either way the rig has to put the audio you're feeding onto the air in plain SSB: where it does not — the codec feeds only the data port and nothing carries in SSB — plain SSB takes audio from the mic and the radio transmits <b>no RF at all</b>, a red TX light and nothing on the air. <b>Per radio</b>, since it depends on how that rig is cabled and set. True FSK RTTY is unaffected — it keeps the rig's own RTTY mode.",
+  'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
+  'settings.rigControl.icomNative.hint':
+    'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',
+  'settings.rigControl.flexPan.label': 'Flex native panadapter (early access)',
+  'settings.rigControl.flexPan.hint':
+    "Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref controls. <b>Unverified on hardware</b>, so it's opt-in: needs the Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the scope stays blank or the app hitches, turn it back off. Save to apply.",
+  'settings.rigControl.flexAudio.label': 'Flex native DAX audio (early access)',
+  'settings.rigControl.flexAudio.hint':
+    'Carry this FlexRadio\'s audio straight over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices — which are <b>invisible under Remote Desktop</b>. <b>Both directions:</b> the decoders read the rig\'s receive audio directly, and transmit audio goes out over DAX too, which disconnects the rig\'s microphone while this is on. Turning it off, switching radio or quitting Nexus puts the mic back. <b>Unverified on hardware</b>, opt-in: needs the Flex IP set and SmartSDR reachable. If decodes or transmit stop, turn it back off. Save to apply.',
+  // ⚠️ `{{path}}` is a file path the backend chose. Markers are parsed BEFORE values are
+  // substituted, so a path that happens to contain `<b>` is text, never markup.
+  'settings.rigControl.civLog.label': 'CI-V bus diagnostic log',
+  'settings.rigControl.civLog.failed': 'Could not toggle the CI-V diagnostic log',
+  'settings.rigControl.civLog.recording':
+    "<b>Recording</b> to <code>{{path}}</code> — this keeps running while you're on other screens, so go to the FT8 or Phone cockpit and reproduce the issue (Tune or transmit) now. Come back and turn it off when done, then send that file. It shows exactly what's on the bus during the fault.",
+  'settings.rigControl.civLog.idle':
+    'Records every byte to/from the radio on the native CI-V path to a file in your Downloads — a support tool for hardware-only issues like the IC-9700 PTT flicker. Turn on, reproduce the problem, turn off, then send the file.',
+  'settings.rigControl.flexIp.label': 'Flex radio IP (native panadapter + DAX)',
+  'settings.rigControl.flexIp.hint':
+    "Your FlexRadio's LAN IP (SmartSDR API, port 4992) — turns on the native RF panadapter. This is the <em>radio's</em> address, not the SmartSDR-CAT port above.",
+  'settings.rigControl.sharingPort.label': 'Sharing port',
+  'settings.rigControl.sharingPort.hint':
+    'The "Share this radio" address other programs connect to (Hamlib NET rigctl default 4532). Change it only if something else on this computer already owns the port.',
+
+  // Test CAT reads the rig's frequency back. It is a read-only probe, not a transmit control.
+  'settings.rigControl.testCat.action': 'Test CAT',
+  'settings.rigControl.testCat.testing': 'Testing…',
+  'settings.rigControl.testCat.title': 'Save settings, connect to the rig, and read its frequency',
+
   // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
   // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
   // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,

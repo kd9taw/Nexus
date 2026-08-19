@@ -198,11 +198,14 @@ const FD_SECTION_CODES = new Set(FD_SECTION_OPTIONS.map((s) => s.code))
 // Operator basics (band / dial / sideband are handled by FrequencyControl) live in
 // `SettingsStation.tsx` — extracted 2026-08-18 as the i18n pilot, DOM unchanged.
 
-const PTT_METHODS: { value: string; label: string }[] = [
-  { value: 'cat', label: 'CAT (via rigctld)' },
-  { value: 'rts', label: 'Serial RTS' },
-  { value: 'dtr', label: 'Serial DTR' },
-  { value: 'vox', label: 'VOX (no keying)' },
+// How transmit is keyed. ⚠️ The `value` is the persisted token the settings file and the radio
+// loop read; only the LABEL is prose, and CAT / rigctld / RTS / DTR / VOX inside those labels
+// name the keying paths themselves, so they survive translation unchanged.
+const PTT_METHODS: { value: string; labelKey: MessageKey }[] = [
+  { value: 'cat', labelKey: 'settings.rigControl.ptt.cat' },
+  { value: 'rts', labelKey: 'settings.rigControl.ptt.rts' },
+  { value: 'dtr', labelKey: 'settings.rigControl.ptt.dtr' },
+  { value: 'vox', labelKey: 'settings.rigControl.ptt.vox' },
 ]
 
 // Standard EIA CTCSS (PL) tones, Hz — for the FM repeater-access tone picker.
@@ -433,11 +436,12 @@ export const ROTATOR_MODELS: { model: number; label: string }[] = [
   { model: 1, label: 'Dummy (testing — no hardware)' },
 ]
 
-/** WSJT-X Split Operation choices (Settings ▸ Radio parity). */
-const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; label: string }[] = [
-  { value: 'none', label: 'None' },
-  { value: 'rig', label: 'Rig' },
-  { value: 'fakeit', label: 'Fake It' },
+/** WSJT-X Split Operation choices (Settings ▸ Radio parity). The stored `value` is the token;
+ * the label is WSJT-X's own wording for the choice and is prose, named by the hint beside it. */
+const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; labelKey: MessageKey }[] = [
+  { value: 'none', labelKey: 'settings.rigControl.split.none' },
+  { value: 'rig', labelKey: 'settings.rigControl.split.rig' },
+  { value: 'fakeit', labelKey: 'settings.rigControl.split.fakeit' },
 ]
 
 // SAT_VFO_MAPS moved to features/satVfo.ts — the Satellites readiness rail
@@ -500,7 +504,13 @@ const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12
 const FREQ_MODES = ['FT8', 'FT4']
 
 /** The mode classes radio ROUTING decides on, with the operator-facing labels (must match the Rust
- * `RouteMode::label`). Coarser than the submode list on purpose: five rules cover a whole station. */
+ * `RouteMode::label`). Coarser than the submode list on purpose: five rules cover a whole station.
+ *
+ * ⚠️ NOT IN THE CATALOG, DELIBERATELY (i18n phase 2). These five are MODE NAMES — the same
+ * invariant vocabulary that keeps the Phone / CW / Digital tabs above untranslated — and this
+ * array's own contract is that they match the Rust `RouteMode::label`, which no locale reaches.
+ * Translating this copy alone would break that parity. The words around them (`Any mode`,
+ * `Satellite`, the rule summary) ARE prose and live in `en.ts`. */
 const ROUTE_MODES: [RouteMode, string][] = [
   ['digital', 'Weak-signal digital'],
   ['fm', 'FM & APRS'],
@@ -572,8 +582,8 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; labelKey?: MessageKey }[]
  * Windows, so a component-only test could only ever see the disabled half. */
 export function omnirigChoiceFor(isWindows: boolean): { disabled: boolean; label: string } {
   return isWindows
-    ? { disabled: false, label: 'OmniRig (the radio is set up in OmniRig)' }
-    : { disabled: true, label: 'OmniRig — Windows only' }
+    ? { disabled: false, label: t('settings.rigControl.conn.omnirig') }
+    : { disabled: true, label: t('settings.rigControl.conn.omnirig.unavailable') }
 }
 
 /** [`omnirigChoiceFor`] for the machine this is actually running on. */
@@ -661,6 +671,27 @@ const CONFIRMATION_EXAMPLES = {
   rbToken: 'rbuapp_…',
   cloudlogUrl: 'https://log.example.com',
 } as const
+
+/**
+ * The serial-device names the Rig & CAT port fields show INSIDE a placeholder, one per
+ * platform — same rule as `LOGGER_EXAMPLES`. A device name is whatever the OS enumerated, so a
+ * "localised" `COM16` or `/dev/cu.usbserial-1420` names no port on any machine; the prose
+ * around them ("Select or type, e.g. …") is a catalog entry that interpolates one of these.
+ */
+const RIG_EXAMPLES = {
+  macSerialPort: '/dev/cu.usbserial-1420',
+  serialPort: 'COM16',
+} as const
+
+/**
+ * OmniRig's two rig slots, named the way OmniRig's own window names them.
+ *
+ * Same category as `RIG_EXAMPLES`: this is not prose, it is the string an operator reads in
+ * ANOTHER program's interface and has to match this picker against. A translated "RIG 1" names
+ * nothing in OmniRig, so the label the panel shows is also the label OmniRig shows. Indexed by
+ * the stored slot number, which is the `value` beside it.
+ */
+const OMNIRIG_SLOTS: Record<1 | 2, string> = { 1: 'RIG 1', 2: 'RIG 2' }
 
 export function SettingsPanel({
   onSaved,
@@ -2749,14 +2780,18 @@ export function SettingsPanel({
               affordance a single-radio operator sees; the per-radio list + band coverage only
               matter once there's a 2nd radio. */}
           <fieldset className="settings-section" id="settings-radios">
-            <legend>Radios</legend>
+            <legend>{t('settings.radios.legend')}</legend>
             {editingRadioId != null && editingRadioId !== form.activeRadio && (
               <p className="settings-note radio-editing-note">
-                <strong>
-                  Editing {form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'another radio'}
-                </strong>{' '}
-                — not your operating radio. <strong>Save</strong> writes only this radio&apos;s CAT /
-                audio config; your active radio and station-wide settings are untouched.
+                <T
+                  k="settings.radios.editingNote"
+                  tags={{ b: <strong /> }}
+                  vals={{
+                    name:
+                      form.radios?.find((r) => r.id === editingRadioId)?.name ??
+                      t('settings.radios.anotherRadio'),
+                  }}
+                />
               </p>
             )}
             <div className="radios-manager">
@@ -2774,7 +2809,7 @@ export function SettingsPanel({
                         className="settings-input radio-name-input"
                         type="text"
                         defaultValue={r.name}
-                        placeholder="Radio name"
+                        placeholder={t('settings.radios.name.placeholder')}
                         onBlur={(e) => {
                           const v = e.target.value.trim()
                           if (v && v !== r.name) handleRenameRadio(r.id, v)
@@ -2783,16 +2818,19 @@ export function SettingsPanel({
                         spellCheck={false}
                       />
                       {isActive && (
-                        <span className="radio-active-badge" title="Your operating radio.">
-                          Active
+                        <span
+                          className="radio-active-badge"
+                          title={t('settings.radios.active.title')}
+                        >
+                          {t('settings.radios.active.badge')}
                         </span>
                       )}
                       {isEditing && !isActive && (
                         <span
                           className="radio-editing-badge"
-                          title="The Rig / CAT + Audio form below is editing this radio."
+                          title={t('settings.radios.editing.title')}
                         >
-                          Editing
+                          {t('settings.radios.editing.badge')}
                         </span>
                       )}
                       {!isEditing && (
@@ -2800,9 +2838,9 @@ export function SettingsPanel({
                           type="button"
                           className="settings-refresh"
                           onClick={() => handleConfigureRadio(r.id)}
-                          title="Edit this radio's CAT / audio below — WITHOUT changing your operating radio (no swap, no dropped carrier)."
+                          title={t('settings.radios.edit.title')}
                         >
-                          Edit
+                          {t('settings.radios.edit.action')}
                         </button>
                       )}
                       {!isActive && (
@@ -2810,9 +2848,9 @@ export function SettingsPanel({
                           type="button"
                           className="settings-refresh"
                           onClick={() => handleMakeActive(r.id)}
-                          title="Make this your operating radio (swaps rigs; drops any carrier first)."
+                          title={t('settings.radios.makeActive.title')}
                         >
-                          Make active
+                          {t('settings.radios.makeActive.action')}
                         </button>
                       )}
                       {multi && (
@@ -2826,11 +2864,11 @@ export function SettingsPanel({
                           disabled={isActive}
                           title={
                             isActive
-                              ? 'This is your operating radio — make another radio active first, then remove this one.'
-                              : 'Remove this radio from the roster'
+                              ? t('settings.radios.remove.title.blocked')
+                              : t('settings.radios.remove.title')
                           }
                         >
-                          Remove
+                          {t('settings.radios.remove.action')}
                         </button>
                       )}
                     </div>
@@ -2840,33 +2878,38 @@ export function SettingsPanel({
                         CAT-helper port — and this row printed two of them as bare numbers with
                         nothing saying which was which. Naming them costs one word each; the row
                         keeps its shape, so no pane sizing is involved. */}
+                    {/* ONE sentence, four holes. Every value in it is a TOKEN — a Hamlib
+                        model name, OmniRig's own slot name, a COM port or host:port, the OS's
+                        sound-device name, a TCP port — and only the labels between them are
+                        prose, which is why they cannot be four separate fragments. */}
                     <div className="radio-card-meta">
-                      {r.rigConn === 'omnirig'
-                        ? 'Set up in OmniRig'
-                        : r.rigModelName && r.rigModelName !== 'None / VOX'
-                          ? r.rigModelName
-                          : 'No rig model set'}
-                      {' · CAT '}
-                      {r.rigConn === 'omnirig'
-                        ? `OmniRig RIG ${r.omnirigSlot === 2 ? 2 : 1}`
-                        : r.rigConn === 'network'
-                          ? r.rigAddr || 'no address'
-                          : r.serialPort || 'no COM port'}
-                      {(r.flexRadioIp ?? '').trim() !== '' && (
-                        <>
-                          {' · Flex radio '}
-                          {r.flexRadioIp}
-                        </>
-                      )}
-                      {' · audio '}
-                      {r.audioIn ? (audioLabels.input[r.audioIn] ?? r.audioIn) : 'default'}
-                      {' · CAT helper port '}
-                      {r.rigctldPort}
+                      {t('settings.radios.card.meta', {
+                        rig:
+                          r.rigConn === 'omnirig'
+                            ? t('settings.radios.card.omnirig')
+                            : r.rigModelName && r.rigModelName !== 'None / VOX'
+                              ? r.rigModelName
+                              : t('settings.radios.card.noModel'),
+                        cat:
+                          r.rigConn === 'omnirig'
+                            ? `OmniRig ${OMNIRIG_SLOTS[r.omnirigSlot === 2 ? 2 : 1]}`
+                            : r.rigConn === 'network'
+                              ? r.rigAddr || t('settings.radios.card.noAddress')
+                              : r.serialPort || t('settings.radios.card.noPort'),
+                        flex:
+                          (r.flexRadioIp ?? '').trim() !== ''
+                            ? t('settings.radios.card.meta.flex', { ip: r.flexRadioIp ?? '' })
+                            : '',
+                        audio: r.audioIn
+                          ? (audioLabels.input[r.audioIn] ?? r.audioIn)
+                          : t('settings.radios.card.audioDefault'),
+                        port: r.rigctldPort,
+                      })}
                     </div>
                     {multi && (
                       <div className="radio-band-coverage">
                         <span className="settings-hint">
-                          Covers bands (for auto band-routing; none = covers all):
+                          {t('settings.radios.bands.hint')}
                         </span>
                         <div className="band-chip-row">
                           {FREQ_BANDS.map((b) => {
@@ -2892,29 +2935,25 @@ export function SettingsPanel({
             </div>
             <div className="radios-actions">
               <button type="button" className="settings-refresh" onClick={handleAddRadio}>
-                + Add radio
+                {t('settings.radios.add.action')}
               </button>
               <span className="settings-hint">
                 {(form.radios?.length ?? 1) > 1
-                  ? `The Rig / CAT + Audio settings below edit “${
-                      form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'the selected radio'
-                    }”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio.`
-                  : 'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.'}
+                  ? t('settings.radios.hint.multi', {
+                      name:
+                        form.radios?.find((r) => r.id === editingRadioId)?.name ??
+                        t('settings.radios.selectedRadio'),
+                    })
+                  : t('settings.radios.hint.single')}
               </span>
             </div>
             {(form.radios?.length ?? 1) > 1 && (
               <div className="routing-rules">
                 <span className="settings-hint">
-                  <strong>Route by band AND mode</strong> — band coverage above sends a whole band to
-                  one radio. Add rules here when TWO radios share a band and the MODE decides which
-                  one: 2 m FT8 to the digital rig, 2 m FM and APRS to the FM rig. Rules are checked
-                  top to bottom and the FIRST match wins; anything no rule matches falls back to band
-                  coverage, then to the default radio.
+                  <T k="settings.routing.intro" tags={{ b: <strong /> }} />
                 </span>
                 {(form.routingRules ?? []).length === 0 && (
-                  <p className="settings-note">
-                    No rules — routing is by band only (today&apos;s behavior).
-                  </p>
+                  <p className="settings-note">{t('settings.routing.empty')}</p>
                 )}
                 {(form.routingRules ?? []).map((rule, i) => (
                   <div className="routing-rule" key={i}>
@@ -2939,19 +2978,16 @@ export function SettingsPanel({
                                 },
                           )
                         }
-                        aria-label={`Rule ${i + 1} mode`}
+                        aria-label={t('settings.routing.rule.mode.aria', { n: i + 1 })}
                       >
-                        <option value="">Any mode</option>
+                        <option value="">{t('settings.routing.rule.mode.any')}</option>
                         {ROUTE_MODES.map(([v, label]) => (
                           <option key={v} value={v}>
                             {label}
                           </option>
                         ))}
-                        <option
-                          value="satellite"
-                          title="Satellite passes only: picking a transponder checks Satellite rules before the mode rules, so the FM & APRS rule can keep terrestrial packet while satellites go to the sat rig. Terrestrial tunes never match this rule."
-                        >
-                          Satellite
+                        <option value="satellite" title={t('settings.routing.rule.satellite.title')}>
+                          {t('settings.routing.rule.satellite')}
                         </option>
                       </select>
                       <span className="routing-rule-arrow">→</span>
@@ -2959,7 +2995,7 @@ export function SettingsPanel({
                         className="settings-input"
                         value={rule.radio}
                         onChange={(e) => handlePatchRule(i, { radio: Number(e.target.value) })}
-                        aria-label={`Rule ${i + 1} radio`}
+                        aria-label={t('settings.routing.rule.radio.aria', { n: i + 1 })}
                       >
                         {(form.radios ?? []).map((r) => (
                           <option key={r.id} value={r.id}>
@@ -2972,8 +3008,8 @@ export function SettingsPanel({
                         className="settings-refresh"
                         onClick={() => handleMoveRule(i, -1)}
                         disabled={i === 0}
-                        title="Check this rule earlier (first match wins)"
-                        aria-label={`Move rule ${i + 1} up`}
+                        title={t('settings.routing.rule.up.title')}
+                        aria-label={t('settings.routing.rule.up.aria', { n: i + 1 })}
                       >
                         ↑
                       </button>
@@ -2982,8 +3018,8 @@ export function SettingsPanel({
                         className="settings-refresh"
                         onClick={() => handleMoveRule(i, 1)}
                         disabled={i === (form.routingRules?.length ?? 0) - 1}
-                        title="Check this rule later"
-                        aria-label={`Move rule ${i + 1} down`}
+                        title={t('settings.routing.rule.down.title')}
+                        aria-label={t('settings.routing.rule.down.aria', { n: i + 1 })}
                       >
                         ↓
                       </button>
@@ -2991,7 +3027,7 @@ export function SettingsPanel({
                         type="button"
                         className="settings-refresh danger"
                         onClick={() => handleRemoveRule(i)}
-                        aria-label={`Remove rule ${i + 1}`}
+                        aria-label={t('settings.routing.rule.remove.aria', { n: i + 1 })}
                       >
                         ✕
                       </button>
@@ -3013,33 +3049,39 @@ export function SettingsPanel({
                       })}
                     </div>
                     <span className="settings-hint">
-                      {rule.bands.length === 0 ? 'Any band' : rule.bands.join(', ')}
-                      {' · '}
-                      {rule.context === 'satellite'
-                        ? 'Satellite'
-                        : rule.mode
-                          ? ROUTE_MODE_LABEL[rule.mode]
-                          : 'any mode'}
-                      {' → '}
-                      {form.radios?.find((r) => r.id === rule.radio)?.name ?? `Radio ${rule.radio}`}
+                      {t('settings.routing.rule.summary', {
+                        bands:
+                          rule.bands.length === 0
+                            ? t('settings.routing.rule.summary.anyBand')
+                            : rule.bands.join(', '),
+                        mode:
+                          rule.context === 'satellite'
+                            ? t('settings.routing.rule.satellite')
+                            : rule.mode
+                              ? ROUTE_MODE_LABEL[rule.mode]
+                              : t('settings.routing.rule.summary.anyMode'),
+                        radio:
+                          form.radios?.find((r) => r.id === rule.radio)?.name ??
+                          t('settings.routing.rule.summary.radio', { id: rule.radio }),
+                      })}
                     </span>
                   </div>
                 ))}
                 <div className="radios-actions">
                   <button type="button" className="settings-refresh" onClick={handleAddRule}>
-                    + Add routing rule
+                    {t('settings.routing.add.action')}
                   </button>
                   <label className="settings-input-row routing-default">
-                    <span className="settings-label">Everything else</span>
+                    <span className="settings-label">{t('settings.routing.default.label')}</span>
                     <select
                       className="settings-input"
                       value={form.defaultRadio ?? ''}
                       onChange={(e) =>
                         handleSetDefaultRadio(e.target.value === '' ? null : Number(e.target.value))
                       }
-                      aria-label="Default radio"
+                      aria-label={t('settings.routing.default.aria')}
                     >
-                      <option value="">Stay on the current radio</option>
+                      <option value="">{t('settings.routing.default.stay')}</option>
                       {(form.radios ?? []).map((r) => (
                         <option key={r.id} value={r.id}>
                           {r.name}
@@ -3051,13 +3093,13 @@ export function SettingsPanel({
                 {/* Test affordance: check the table without QSYing a rig. Answered by the same
                     resolver the radio loop uses, so it can't drift from real behavior. */}
                 <div className="routing-test">
-                  <span className="settings-label">Test a band + mode</span>
+                  <span className="settings-label">{t('settings.routing.test.label')}</span>
                   <div className="settings-input-row">
                     <select
                       className="settings-input"
                       value={routeTest.band}
                       onChange={(e) => runRouteTest(e.target.value, routeTest.mode)}
-                      aria-label="Test band"
+                      aria-label={t('settings.routing.test.band.aria')}
                     >
                       {FREQ_BANDS.map((b) => (
                         <option key={b} value={b}>
@@ -3069,7 +3111,7 @@ export function SettingsPanel({
                       className="settings-input"
                       value={routeTest.mode}
                       onChange={(e) => runRouteTest(routeTest.band, e.target.value as RouteMode)}
-                      aria-label="Test mode"
+                      aria-label={t('settings.routing.test.mode.aria')}
                     >
                       {ROUTE_MODES.map(([v, label]) => (
                         <option key={v} value={v}>
@@ -3082,13 +3124,20 @@ export function SettingsPanel({
                       className="settings-refresh"
                       onClick={() => runRouteTest(routeTest.band, routeTest.mode)}
                     >
-                      Where would this go?
+                      {t('settings.routing.test.action')}
                     </button>
                   </div>
                   {routeTestResult && (
                     <p className="settings-note routing-test-result">
-                      {routeTest.band} {ROUTE_MODE_LABEL[routeTest.mode]} →{' '}
-                      <strong>{routeTestResult}</strong>
+                      <T
+                        k="settings.routing.test.result"
+                        tags={{ b: <strong /> }}
+                        vals={{
+                          band: routeTest.band,
+                          mode: ROUTE_MODE_LABEL[routeTest.mode],
+                          radio: routeTestResult,
+                        }}
+                      />
                     </p>
                   )}
                 </div>
@@ -3101,30 +3150,27 @@ export function SettingsPanel({
                     type="checkbox"
                     checked={!!form.simultaneousRadios}
                     onChange={(e) => updateBool('simultaneousRadios', e.target.checked)}
-                    aria-label="Run both radios at the same time"
+                    aria-label={t('settings.radios.simultaneous.aria')}
                   />
                   <span className="settings-hint">
-                    <strong>Run both radios at the same time</strong> — launch Nexus and it asks
-                    which radio this window drives; open a second window for the other. Both share
-                    one logbook. Leave off if you only ever use one radio at a time (you can still
-                    switch between them from the top bar).
+                    <T k="settings.radios.simultaneous.hint" tags={{ b: <strong /> }} />
                   </span>
                 </span>
               </label>
             )}
           </fieldset>
           <fieldset className="settings-section" id="settings-profiles">
-            <legend>Profiles</legend>
+            <legend>{t('settings.profiles.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Saved profiles</span>
+                <span className="settings-label">{t('settings.profiles.list.label')}</span>
                 <div className="settings-input-row">
                   <select
                     className="settings-input"
                     value={selectedProfile}
                     onChange={(e) => setSelectedProfile(e.target.value)}
                   >
-                    <option value="">— Select a profile —</option>
+                    <option value="">{t('settings.profiles.list.none')}</option>
                     {profiles.map((p) => (
                       <option key={p.name} value={p.name}>
                         {p.name}
@@ -3136,9 +3182,9 @@ export function SettingsPanel({
                     className="settings-refresh"
                     onClick={handleLoadProfile}
                     disabled={!selectedProfile}
-                    title="Apply this profile — merged onto your current settings. Your callsign, license class, radio roster and sync history never come from a profile, and anything the profile predates keeps its current value."
+                    title={t('settings.profiles.load.title')}
                   >
-                    Load
+                    {t('settings.profiles.load.action')}
                   </button>
                   <button
                     type="button"
@@ -3146,22 +3192,20 @@ export function SettingsPanel({
                     onClick={handleDeleteProfile}
                     disabled={!selectedProfile}
                   >
-                    Delete
+                    {t('settings.profiles.delete.action')}
                   </button>
                 </div>
-                <span className="settings-hint">
-                  Switch a whole rig / antenna / CAT / band setup in one move.
-                </span>
+                <span className="settings-hint">{t('settings.profiles.list.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Save current as</span>
+                <span className="settings-label">{t('settings.profiles.save.label')}</span>
                 <div className="settings-input-row">
                   <input
                     className="settings-input"
                     type="text"
                     value={newProfileName}
-                    placeholder="e.g. Portable VHF"
+                    placeholder={t('settings.profiles.save.placeholder')}
                     onChange={(e) => setNewProfileName(e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -3172,19 +3216,19 @@ export function SettingsPanel({
                     onClick={handleSaveProfile}
                     disabled={!newProfileName.trim()}
                   >
-                    Save
+                    {t('settings.profiles.save.action')}
                   </button>
                 </div>
-                <span className="settings-hint">Snapshots the current settings under a name.</span>
+                <span className="settings-hint">{t('settings.profiles.save.hint')}</span>
               </label>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-rig-control">
-            <legend>Rig &amp; CAT</legend>
+            <legend>{t('settings.rigControl.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">PTT Method</span>
+                <span className="settings-label">{t('settings.rigControl.ptt.label')}</span>
                 <select
                   className="settings-input"
                   value={form.pttMethod}
@@ -3192,40 +3236,35 @@ export function SettingsPanel({
                 >
                   {PTT_METHODS.map((m) => (
                     <option key={m.value} value={m.value}>
-                      {m.label}
+                      {t(m.labelKey)}
                     </option>
                   ))}
                 </select>
-                <span className="settings-hint">How transmit is keyed.</span>
+                <span className="settings-hint">{t('settings.rigControl.ptt.hint')}</span>
               </label>
 
               {(form.pttMethod === 'rts' || form.pttMethod === 'dtr') && (
                 <label className="settings-field">
-                  <span className="settings-label">PTT Serial Port</span>
+                  <span className="settings-label">
+                    {t('settings.rigControl.pttPort.label')}
+                  </span>
                   <input
                     className="settings-input"
                     list="serial-port-list"
                     value={form.pttSerialPort}
-                    placeholder={
-                      IS_MAC
-                        ? 'e.g. /dev/cu.usbserial-1420 — blank = use the CAT port'
-                        : 'e.g. COM16 — blank = use the CAT port'
-                    }
+                    placeholder={t('settings.rigControl.pttPort.placeholder', {
+                      example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
+                    })}
                     onChange={(e) => update('pttSerialPort', e.target.value)}
                   />
                   <span className="settings-hint">
-                    COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R)
-                    that routes PTT on its own port, separate from CAT. Leave blank if keying
-                    shares the CAT port, which is how a single-cable interface like a Digirig
-                    Mobile is wired; CAT keeps working either way. <strong>Per radio</strong>:
-                    each rig on an SO2R box has its own keying port, and this one follows the
-                    radio you switch to.
+                    <T k="settings.rigControl.pttPort.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
               )}
 
               <label className="settings-field">
-                <span className="settings-label">Interface keys RTS on the CAT port</span>
+                <span className="settings-label">{t('settings.rigControl.catRts.label')}</span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
@@ -3234,18 +3273,12 @@ export function SettingsPanel({
                   />
                 </span>
                 <span className="settings-hint">
-                  Tick this if your interface keys the radio from the CAT port&rsquo;s RTS line —
-                  a Digirig Mobile and most other one-cable interfaces are wired this way. Nexus
-                  then holds RTS down, instead of leaving it up where it puts some rigs into
-                  transmit the moment the port opens.{' '}
-                  <strong>If your radio transmits as soon as Nexus starts, this is the setting.</strong>{' '}
-                  Leave it off if a plain serial cable goes straight to the radio: the radio may
-                  be using that line for flow control, and taking it away can cost you CAT.
+                  <T k="settings.rigControl.catRts.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
 
               <div className="settings-field">
-                <span className="settings-label">Zero-config setup</span>
+                <span className="settings-label">{t('settings.rigControl.detect.label')}</span>
                 <div className="settings-input-row">
                   <button
                     type="button"
@@ -3253,7 +3286,9 @@ export function SettingsPanel({
                     onClick={onDetectRigs}
                     disabled={detecting}
                   >
-                    {detecting ? 'Scanning…' : 'Detect my radio'}
+                    {detecting
+                      ? t('settings.rigControl.detect.scanning')
+                      : t('settings.rigControl.detect.action')}
                   </button>
                 </div>
                 {(detected.length > 0 || detectedFlex.length > 0) && (
@@ -3262,15 +3297,18 @@ export function SettingsPanel({
                       <li className="rig-detect" key={`flex-${f.ip}-${i}`}>
                         <div className="rig-detect-main">
                           <span className="rig-detect-name">
-                            {f.model}
-                            {f.nickname ? ` “${f.nickname}”` : ''} — network
+                            {/* Model + the nickname its owner gave it: both tokens, assembled
+                                here so the sentence carries ONE hole. */}
+                            {t('settings.rigControl.detect.flex.name', {
+                              radio: `${f.model}${f.nickname ? ` “${f.nickname}”` : ''}`,
+                            })}
                           </span>
                           <span className="rig-detect-meta">
-                            {f.ip} · via SmartSDR CAT on this PC (slice A, TCP 5002)
+                            {t('settings.rigControl.detect.flex.meta', { ip: f.ip })}
                           </span>
                         </div>
                         <button type="button" className="settings-save" onClick={() => applyDetectedFlex(f)}>
-                          Use this
+                          {t('settings.rigControl.detect.use')}
                         </button>
                       </li>
                     ))}
@@ -3280,16 +3318,16 @@ export function SettingsPanel({
                           <span className="rig-detect-name">
                             {r.interfaceName ??
                               r.suggestedModelName ??
-                              (r.product || 'Unknown radio')}
+                              (r.product || t('settings.rigControl.detect.unknownRadio'))}
                           </span>
                           <span className="rig-detect-meta">
                             {r.portName} · {r.chip}
                             {/* Dual-UART Icoms (IC-7610/9700) show up as TWO rows that both
                                 say the rig's name — the A/B tag is the only tie-breaker. */}
                             {r.civSide === true
-                              ? ' · CI-V port — use this one'
+                              ? t('settings.rigControl.detect.civ.isCiv')
                               : r.civSide === false
-                                ? ' · second port, not CI-V'
+                                ? t('settings.rigControl.detect.civ.notCiv')
                                 : ''}
                             {/* The suggestion is a device NAME (that is what gets stored);
                                 show its human label so the Linux row reads
@@ -3304,17 +3342,18 @@ export function SettingsPanel({
                               which reads as a failure when nothing actually went wrong. */}
                           {r.interfaceName && (
                             <span className="rig-detect-interface">
-                              This is an interface cable, not a radio — pick your rig in{' '}
-                              <em>Rig Model</em> below. {r.interfaceNote}
+                              {/* `interfaceNote` is the backend's own sentence — interpolated
+                                  as a VALUE, translated in phase 3, never here. */}
+                              <T
+                                k="settings.rigControl.detect.interface"
+                                tags={{ em: <em /> }}
+                                vals={{ note: r.interfaceNote ?? '' }}
+                              />
                             </span>
                           )}
                           {!r.suggestedModel && !r.interfaceName && (
                             <span className="rig-detect-nomodel">
-                              ⚠ Found the port but not the exact model — normal when the rig sits
-                              behind a generic USB bridge chip that reports only its own name (common
-                              on Icom, Yaesu, Kenwood, Elecraft, and Xiegu). Pick your rig in{' '}
-                              <em>Rig Model</em> below, or click <em>Auto-test</em> (it tries the
-                              common rigs to find the right port + baud for you).
+                              <T k="settings.rigControl.detect.noModel" tags={{ em: <em /> }} />
                             </span>
                           )}
                           {r.driverNote && !r.driverBundled && (
@@ -3324,7 +3363,7 @@ export function SettingsPanel({
                                 <>
                                   {' '}
                                   <a href={r.driverUrl} target="_blank" rel="noreferrer">
-                                    driver ↗
+                                    {t('settings.rigControl.detect.driverLink')}
                                   </a>
                                 </>
                               )}
@@ -3332,20 +3371,17 @@ export function SettingsPanel({
                           )}
                         </div>
                         <button type="button" className="settings-save" onClick={() => applyDetectedRig(r)}>
-                          Use this
+                          {t('settings.rigControl.detect.use')}
                         </button>
                       </li>
                     ))}
                   </ul>
                 )}
-                <span className="settings-hint">
-                  One scan for everything: USB radios (fills model, port, sound device)
-                  AND FlexRadios on the network (fills the SmartSDR CAT config). Review, then Save.
-                </span>
+                <span className="settings-hint">{t('settings.rigControl.detect.hint')}</span>
               </div>
 
               <label className="settings-field">
-                <span className="settings-label">Rig Model</span>
+                <span className="settings-label">{t('settings.rigControl.rigModel.label')}</span>
                 {/* Type-to-find. It sits BEFORE the select, so it is what the wrapping label
                     now targets — hence the explicit aria-label on the select below, which
                     also fixes the name it used to get (the whole label's text, hints and
@@ -3354,11 +3390,11 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={rigFilter}
-                  placeholder="Find a rig — type a name or model number"
+                  placeholder={t('settings.rigControl.rigModel.filter.placeholder')}
                   onChange={(e) => setRigFilter(e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
-                  aria-label="Filter the rig model list"
+                  aria-label={t('settings.rigControl.rigModel.filter.aria')}
                 />
                 {/* Mounted unconditionally and EMPTY until there is something to say: a live
                     region added to the DOM at the same moment as its first content is a
@@ -3368,17 +3404,19 @@ export function SettingsPanel({
                   {rigFilterTokens.length === 0
                     ? ''
                     : rigModelMatches.length === 0
-                      ? 'No model matches — clear the box, or enter the model number directly.'
-                      : `${rigModelMatches.length} model${rigModelMatches.length === 1 ? '' : 's'} match.`}
+                      ? t('settings.rigControl.rigModel.filter.none')
+                      : t('settings.rigControl.rigModel.filter.count', {
+                          count: rigModelMatches.length,
+                        })}
                 </span>
                 <div className="settings-input-row">
                   <select
                     className="settings-input"
                     value={String(form.rigModel)}
                     onChange={(e) => selectRig(Number(e.target.value))}
-                    aria-label="Rig Model"
+                    aria-label={t('settings.rigControl.rigModel.label')}
                   >
-                    <option value="0">— None —</option>
+                    <option value="0">{t('settings.rigControl.rigModel.none')}</option>
                     {rigModelOptions.map(([num, name]) => (
                       <option key={num} value={String(num)}>
                         {name} ({num})
@@ -3390,7 +3428,7 @@ export function SettingsPanel({
                     type="number"
                     inputMode="numeric"
                     min="0"
-                    placeholder="or enter model #"
+                    placeholder={t('settings.rigControl.rigModel.number.placeholder')}
                     onChange={(e) => {
                       const raw = e.target.value
                       const n = Number(raw)
@@ -3401,7 +3439,7 @@ export function SettingsPanel({
                         )
                       }
                     }}
-                    aria-label="Enter a Hamlib rig model number directly"
+                    aria-label={t('settings.rigControl.rigModel.number.aria')}
                   />
                 </div>
                 <span className="settings-input-row">
@@ -3409,28 +3447,28 @@ export function SettingsPanel({
                     type="checkbox"
                     checked={showAllRigModels}
                     onChange={(e) => onToggleShowAllRigModels(e.target.checked)}
-                    aria-label="Show all Hamlib rig models"
+                    aria-label={t('settings.rigControl.rigModel.showAll.aria')}
                   />
                   <span className="settings-hint">
-                    Show all models{allRigModelsLoading ? ' (loading…)' : ''} — the list above
-                    defaults to ~50 curated common rigs; check this for the full Hamlib catalog.
+                    {t('settings.rigControl.rigModel.showAll.hint', {
+                      loading: allRigModelsLoading
+                        ? t('settings.rigControl.rigModel.showAll.loading')
+                        : '',
+                    })}
                   </span>
                 </span>
-                <span className="settings-hint">
-                  Hamlib rig model. Not listed? Type its model number directly — Hamlib may
-                  still support it even without a friendly name here.
-                </span>
+                <span className="settings-hint">{t('settings.rigControl.rigModel.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Connection</span>
+                <span className="settings-label">{t('settings.rigControl.conn.label')}</span>
                 <select
                   className="settings-input"
                   value={form.rigConn || 'serial'}
                   onChange={(e) => update('rigConn', e.target.value)}
                 >
-                  <option value="serial">Serial (USB / COM port)</option>
-                  <option value="network">Network (host:port — SDR software, or a remote rig)</option>
+                  <option value="serial">{t('settings.rigControl.conn.serial')}</option>
+                  <option value="network">{t('settings.rigControl.conn.network')}</option>
                   {/* Offered on every platform and DISABLED off Windows, rather than hidden:
                       OmniRig is named in the docs and in half the Windows logging ecosystem, so
                       a mac/Linux operator who goes looking for it must find the answer here
@@ -3440,46 +3478,44 @@ export function SettingsPanel({
                   </option>
                 </select>
                 <span className="settings-hint">
-                  Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for
-                  anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR,
-                  SmartSDR CAT, piHPSDR), or a remote rigctld. The <strong>Rig Model</strong>
-                  {' '}still picks which CAT dialect is spoken — for an SDR, choose the program
-                  you launched, not the board inside the radio.
+                  <T k="settings.rigControl.conn.hint" tags={{ b: <strong /> }} />
                 </span>
                 <span className="settings-hint">
-                  <strong>OmniRig</strong> hands rig control to VE3NEA's OmniRig server, the one
-                  most Windows logging and contest programs already use. Set the radio up{' '}
-                  <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there,
-                  so the Rig Model, Serial Port and Baud above are not used.{' '}
-                  {omnirigChoice().disabled
-                    ? 'It is greyed out here because OmniRig is a Windows program and this is not Windows.'
-                    : 'Install and run OmniRig first; Nexus will not start without it.'}
+                  <T
+                    k="settings.rigControl.conn.omnirig.hint"
+                    tags={{ b: <strong />, em: <em /> }}
+                    vals={{
+                      availability: omnirigChoice().disabled
+                        ? t('settings.rigControl.conn.omnirig.unavailable.why')
+                        : t('settings.rigControl.conn.omnirig.install'),
+                    }}
+                  />
                 </span>
               </label>
 
               {form.rigConn === 'omnirig' && (
                 <label className="settings-field">
-                  <span className="settings-label">OmniRig radio</span>
+                  <span className="settings-label">{t('settings.rigControl.omnirig.label')}</span>
                   <select
                     className="settings-input"
                     value={String(form.omnirigSlot || 1)}
                     onChange={(e) => updateNum('omnirigSlot', Number(e.target.value))}
-                    aria-label="OmniRig rig slot"
+                    aria-label={t('settings.rigControl.omnirig.aria')}
                   >
-                    <option value="1">RIG 1</option>
-                    <option value="2">RIG 2</option>
+                    {/* ⚠️ NOT PROSE. These are the labels OmniRig's OWN window puts on its two
+                        slots; they are how the operator matches this picker to that window, so
+                        they read the same in every language (RIG_EXAMPLES, beside the device
+                        names, for the same reason). */}
+                    <option value="1">{OMNIRIG_SLOTS[1]}</option>
+                    <option value="2">{OMNIRIG_SLOTS[2]}</option>
                   </select>
-                  <span className="settings-hint">
-                    Which of OmniRig's two radios this Nexus radio drives. OmniRig's own window
-                    labels them RIG 1 and RIG 2 — pick the one whose rig type matches this
-                    radio. A two-radio station can put one on each.
-                  </span>
+                  <span className="settings-hint">{t('settings.rigControl.omnirig.hint')}</span>
                 </label>
               )}
 
               {form.rigConn === 'network' && (
                 <label className="settings-field">
-                  <span className="settings-label">Network Address</span>
+                  <span className="settings-label">{t('settings.rigControl.netAddr.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -3503,24 +3539,22 @@ export function SettingsPanel({
                         onClick={() => {
                           update('audioIn', dax.input)
                           update('audioOut', dax.output)
-                          pushToast(`DAX paired: ${dax.input} → in, ${dax.output} → out`, 'success', 6000)
+                          pushToast(
+                            t('settings.rigControl.dax.paired', {
+                              input: dax.input,
+                              output: dax.output,
+                            }),
+                            'success',
+                            6000,
+                          )
                         }}
-                        title="SmartSDR's DAX virtual audio devices were detected — one click sets them as Nexus's audio in/out (bit-clean digital audio, no sound card)"
+                        title={t('settings.rigControl.dax.title')}
                       >
-                        ⚡ Pair DAX audio ({dax.input})
+                        {t('settings.rigControl.dax.action', { device: dax.input })}
                       </button>
                     ) : null
                   })()}
-                  <span className="settings-hint">
-                    host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app
-                    on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so
-                    127.0.0.1:5002 with the FLEX-6xxx / 8xxx model works out of the box; audio
-                    rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001,
-                    C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the
-                    slice you run digital on. (Direct-to-radio :4992 needs Hamlib's
-                    experimental native model and failed on real hardware.) Other rigs:
-                    a remote rigctld's host:port with their normal model.
-                  </span>
+                  <span className="settings-hint">{t('settings.rigControl.netAddr.hint')}</span>
                   {/* Where an SDR operator finds the real number. Nothing here is a default —
                       every one of these programs lets the operator move the port, and the
                       Thetis field report was a rig served on a port that is Thetis's TCI
@@ -3541,14 +3575,7 @@ export function SettingsPanel({
                       The check that settles this class is one command: start rigctld on the
                       model and see whether it does. Do not infer a backend from a grep. */}
                   <span className="settings-hint">
-                    Running an SDR program? Read the port out of the program, don't guess it:{' '}
-                    <strong>Thetis</strong> → Setup ▸ Serial/Network/Midi CAT ▸{' '}
-                    <em>TCP/IP CAT Server</em> (its own box, factory 13013 — not the{' '}
-                    <em>TCI Server</em> box beside it, factory 50001; TCI is a different
-                    protocol and the Hamlib we ship has no backend for it, so pick a CAT
-                    profile such as "Thetis" and use the CAT server port);{' '}
-                    <strong>SmartSDR CAT</strong> → 5002; <strong>piHPSDR</strong> → 19090.
-                    Whatever it shows, type that.
+                    <T k="settings.rigControl.netAddr.sdrPorts" tags={{ b: <strong />, em: <em /> }} />
                   </span>
                 </label>
               )}
@@ -3560,7 +3587,7 @@ export function SettingsPanel({
               {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && (
                 <>
               <label className="settings-field">
-                <span className="settings-label">Serial Port</span>
+                <span className="settings-label">{t('settings.rigControl.serialPort.label')}</span>
                 <div className="settings-input-row">
                   {/* Combobox, not a bare <select>: some driver setups (virtual/SO2R COM
                       ports) make enumeration come back empty, so the operator must be able
@@ -3569,11 +3596,9 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.serialPort}
-                    placeholder={
-                      IS_MAC
-                        ? 'Select or type, e.g. /dev/cu.usbserial-1420'
-                        : 'Select or type, e.g. COM16'
-                    }
+                    placeholder={t('settings.rigControl.serialPort.placeholder', {
+                      example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
+                    })}
                     onChange={(e) => update('serialPort', e.target.value)}
                   />
                   {/* Shared by the CAT + PTT port inputs. The label text shows the USB product
@@ -3591,57 +3616,58 @@ export function SettingsPanel({
                     className="settings-refresh"
                     onClick={refreshPorts}
                     disabled={portsLoading}
-                    title="Re-scan serial ports"
+                    title={t('settings.rigControl.serialPort.refresh.title')}
                   >
-                    {portsLoading ? '…' : 'Refresh'}
+                    {portsLoading ? '…' : t('settings.rigControl.serialPort.refresh.action')}
                   </button>
                   <button
                     type="button"
                     className="settings-refresh"
                     onClick={() => handleAutoTestPorts()}
                     disabled={catTesting}
-                    title="Probe each USB port (read-only — never transmits) and auto-select the one that drives your rig"
+                    title={t('settings.rigControl.serialPort.autoTest.title')}
                   >
-                    {catTesting ? '…' : 'Auto-test'}
+                    {catTesting ? '…' : t('settings.rigControl.serialPort.autoTest.action')}
                   </button>
                 </div>
                 <span className="settings-hint">
                   {/* Never say "tty device": on a Mac the tty.* node is exactly the twin the
                       picker hides because it hangs CAT on carrier detect — cu.* is the one. */}
                   {IS_MAC
-                    ? 'Serial device (/dev/cu.…) for rig control — or Auto-test to find it.'
-                    : 'COM / serial device for rig control — or Auto-test to find it.'}
+                    ? t('settings.rigControl.serialPort.hint.mac')
+                    : t('settings.rigControl.serialPort.hint.other')}
                   {[3088, 3087, 3091, 3089, 3076].includes(form.rigModel) && (
                     <>
                       {' '}
-                      <strong>Xiegu:</strong> the radio makes two serial ports — CAT is on the{' '}
-                      <strong>SERIAL-B</strong> one
-                      {IS_MAC ? '.' : ' (often the higher COM number).'}
+                      <T
+                        k="settings.rigControl.serialPort.xiegu"
+                        tags={{ b: <strong /> }}
+                        vals={{
+                          note: IS_MAC
+                            ? ''
+                            : t('settings.rigControl.serialPort.xiegu.comNumber'),
+                        }}
+                      />
                     </>
                   )}
-                  {[3078, 3081].includes(form.rigModel) &&
-                    (IS_MAC ? (
-                      <>
-                        {' '}
-                        <strong>Icom:</strong> this radio makes two /dev/cu.* ports and only one
-                        speaks CI-V — with the Silicon Labs VCP driver it is usually the first of
-                        the pair (plain <strong>cu.SLAB_USBtoUART</strong>; the dead twin gets a
-                        numeric suffix). The other one never answers.
-                      </>
-                    ) : (
-                      <>
-                        {' '}
-                        <strong>Icom:</strong> this radio makes two COM ports and only one speaks
-                        CI-V — in Device Manager it is the CP210x port marked{' '}
-                        <strong>Enhanced</strong> (Icom's driver: “Serial Port A (CI-V)”). The
-                        “Standard” / “Serial Port B” one never answers.
-                      </>
-                    ))}
+                  {[3078, 3081].includes(form.rigModel) && (
+                    <>
+                      {' '}
+                      {/* One whole sentence per platform, each named by its own key: the guard
+                          reads keys as literals, and a key computed in a ternary is a key no
+                          extractor can see. */}
+                      {IS_MAC ? (
+                        <T k="settings.rigControl.serialPort.icom.mac" tags={{ b: <strong /> }} />
+                      ) : (
+                        <T k="settings.rigControl.serialPort.icom.other" tags={{ b: <strong /> }} />
+                      )}
+                    </>
+                  )}
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Baud</span>
+                <span className="settings-label">{t('settings.rigControl.baud.label')}</span>
                 <select
                   className="settings-input"
                   value={String(form.baud)}
@@ -3657,16 +3683,19 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  Serial baud rate — match your rig's CAT setting (most modern rigs: 38,400 or 115,200).
-                  Native Icom CI-V scope needs 115,200 here <em>and</em> on the rig.
+                  <T k="settings.rigControl.baud.hint" tags={{ em: <em /> }} />
                 </span>
               </label>
                 </>
               )}
 
               <div className="settings-field">
-                <span className="settings-label">Split operation</span>
-                <div className="theme-switcher" role="group" aria-label="Split operation">
+                <span className="settings-label">{t('settings.rigControl.split.label')}</span>
+                <div
+                  className="theme-switcher"
+                  role="group"
+                  aria-label={t('settings.rigControl.split.label')}
+                >
                   {SPLIT_MODES.map((m) => (
                     <button
                       key={m.value}
@@ -3675,21 +3704,16 @@ export function SettingsPanel({
                       aria-pressed={(form.splitMode ?? 'none') === m.value}
                       onClick={() => setSplitMode(m.value)}
                     >
-                      {m.label}
+                      {t(m.labelKey)}
                     </button>
                   ))}
                 </div>
-                <span className="settings-hint">
-                  Keeps your transmitted audio between 1500–2000 Hz by shifting the TX dial in
-                  500 Hz steps, so audio harmonics fall outside the transmit filter — cleaner
-                  signal. Rig = uses VFO B split. Fake It = retunes the VFO around each over (works
-                  on any CAT rig). None = stock WSJT-X default, transmits at the raw audio offset.
-                </span>
+                <span className="settings-hint">{t('settings.rigControl.split.hint')}</span>
               </div>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  Wheel tuning sensitivity{' '}
+                  {t('settings.rigControl.wheel.label')}{' '}
                   <span className="settings-value">×{(form.wheelTuneSensitivity ?? 1).toFixed(2)}</span>
                 </span>
                 <input
@@ -3700,18 +3724,20 @@ export function SettingsPanel({
                   step="0.05"
                   value={String(form.wheelTuneSensitivity ?? 1)}
                   onChange={(e) => updateNum('wheelTuneSensitivity', Number(e.target.value))}
-                  aria-label="Mouse-wheel tuning sensitivity"
+                  aria-label={t('settings.rigControl.wheel.aria')}
                 />
-                <span className="settings-hint">
-                  How far the dial moves per mouse-wheel notch. Lower it if a high-resolution or
-                  free-spin mouse tunes too far per flick; raise it to tune faster. Applies to the
-                  frequency readout and the Phone/CW scope wheel.
-                </span>
+                <span className="settings-hint">{t('settings.rigControl.wheel.hint')}</span>
               </label>
             </div>
-            <SettingsGroup id="rig-advanced" title="Advanced" defaultOpen={false}>
+            <SettingsGroup
+              id="rig-advanced"
+              title={t('settings.rigControl.advanced.title')}
+              defaultOpen={false}
+            >
               <label className="settings-field">
-                <span className="settings-label">rigctld TCP Port</span>
+                <span className="settings-label">
+                  {t('settings.rigControl.rigctldPort.label')}
+                </span>
                 <input
                   className="settings-input"
                   type="number"
@@ -3721,11 +3747,11 @@ export function SettingsPanel({
                   onChange={(e) => update('rigctldPort', e.target.value)}
                   autoComplete="off"
                 />
-                <span className="settings-hint">Port Nexus launches rigctld on.</span>
+                <span className="settings-hint">{t('settings.rigControl.rigctldPort.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Data modes use plain SSB</span>
+                <span className="settings-label">{t('settings.rigControl.plainSsb.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -3736,31 +3762,16 @@ export function SettingsPanel({
                   <span className="toggle-knob" />
                 </button>
                 <span className="settings-hint">
-                  <strong>Leave this off unless you know you need it.</strong> Nexus normally puts
-                  the radio in its DATA submode (DATA-U / USB-D / PKTUSB) for FT8, FT4, RTTY-AFSK
-                  and SSTV, because on most rigs that is the only mode where the USB codec reaches
-                  the transmitter. Turn this on and Nexus commands plain{' '}
-                  <strong>USB/LSB</strong> for those modes instead, and stays there — through band
-                  changes and when you call a station.
-                  {' '}
-                  Correct if your transmit audio goes in the <strong>microphone</strong> path, as
-                  with an interface wired to the mic jack (some RIGblaster models) — or if you
-                  simply prefer plain USB to the DATA submode (for its wider receive passband, say)
-                  and your rig is set to send its USB-codec audio in SSB, which on many modern rigs
-                  (FT-991A, IC-7300 and the like) is a single menu item. Either way the rig has to
-                  put the audio you're feeding onto the air in plain SSB: where it does not — the
-                  codec feeds only the data port and nothing carries in SSB — plain SSB takes audio
-                  from the mic and the radio transmits <strong>no RF at all</strong>, a red TX light
-                  and nothing on the air. <strong>Per radio</strong>, since it depends on how that
-                  rig is cabled and set. True FSK RTTY is unaffected — it keeps the rig's own RTTY
-                  mode.
+                  <T k="settings.rigControl.plainSsb.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
 
               {form.rigConn !== 'network' &&
                 /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') && (
                   <label className="settings-field">
-                    <span className="settings-label">Native Icom CI-V (early access)</span>
+                    <span className="settings-label">
+                      {t('settings.rigControl.icomNative.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -3771,16 +3782,7 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      Nexus drives this Icom's CI-V directly instead of launching rigctld —
-                      unlocking the rig's real spectrum scope in the waterfall ("CI-V RF") and
-                      instant dial tracking. The scope needs{' '}
-                      <strong>115200 baud, set the same on BOTH the radio and Nexus</strong>:
-                      (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" ={' '}
-                      <strong>115200</strong>; (2) on the rig, same menu, "CI-V USB Port" =
-                      "Unlink from [REMOTE]"; (3) the <strong>Baud</strong> field above ={' '}
-                      <strong>115200</strong> to match. Below that the rig refuses to stream the
-                      scope (CAT still works; the panadapter just stays off). Save to apply; turn
-                      off any time to return to the classic Hamlib path.
+                      <T k="settings.rigControl.icomNative.hint" tags={{ b: <strong /> }} />
                     </span>
                   </label>
                 )}
@@ -3792,7 +3794,9 @@ export function SettingsPanel({
               {form.rigConn === 'network' &&
                 ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
                   <label className="settings-field">
-                    <span className="settings-label">Flex native panadapter (early access)</span>
+                    <span className="settings-label">
+                      {t('settings.rigControl.flexPan.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -3803,11 +3807,7 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the
-                      cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref
-                      controls. <strong>Unverified on hardware</strong>, so it's opt-in: needs the
-                      Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the
-                      scope stays blank or the app hitches, turn it back off. Save to apply.
+                      <T k="settings.rigControl.flexPan.hint" tags={{ b: <strong /> }} />
                     </span>
                   </label>
                 )}
@@ -3816,7 +3816,9 @@ export function SettingsPanel({
               {form.rigConn === 'network' &&
                 ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
                   <label className="settings-field">
-                    <span className="settings-label">Flex native DAX audio (early access)</span>
+                    <span className="settings-label">
+                      {t('settings.rigControl.flexAudio.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -3827,15 +3829,7 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      Carry this FlexRadio's audio straight over the network (VITA-49 DAX) instead of
-                      the "DAX Audio RX" / "DAX TX" sound devices — which are <strong>invisible under
-                      Remote Desktop</strong>. <strong>Both directions:</strong> the decoders read the
-                      rig's receive audio directly, and transmit audio goes out over DAX too, which
-                      disconnects the rig's microphone while this is on. Turning it off, switching
-                      radio or quitting Nexus puts the mic back.{' '}
-                      <strong>Unverified on hardware</strong>, opt-in: needs the Flex IP set and
-                      SmartSDR reachable. If decodes or transmit stop, turn it back off. Save to
-                      apply.
+                      <T k="settings.rigControl.flexAudio.hint" tags={{ b: <strong /> }} />
                     </span>
                   </label>
                 )}
@@ -3844,7 +3838,7 @@ export function SettingsPanel({
                 /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&
                 form.icomNativeCat && (
                   <label className="settings-field">
-                    <span className="settings-label">CI-V bus diagnostic log</span>
+                    <span className="settings-label">{t('settings.rigControl.civLog.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -3853,7 +3847,7 @@ export function SettingsPanel({
                       onClick={() =>
                         void withErrorToast(
                           () => civDiagnosticLog(civLogPath === null),
-                          'Could not toggle the CI-V diagnostic log',
+                          t('settings.rigControl.civLog.failed'),
                         ).then((path) => {
                           if (path === undefined) return // error already toasted
                           setCivLogPath(path === '' ? null : path)
@@ -3864,19 +3858,13 @@ export function SettingsPanel({
                     </button>
                     <span className="settings-hint">
                       {civLogPath !== null ? (
-                        <>
-                          <strong>Recording</strong> to <code>{civLogPath}</code> — this keeps
-                          running while you're on other screens, so go to the FT8 or Phone cockpit
-                          and reproduce the issue (Tune or transmit) now. Come back and turn it off
-                          when done, then send that file. It shows exactly what's on the bus during
-                          the fault.
-                        </>
+                        <T
+                          k="settings.rigControl.civLog.recording"
+                          tags={{ b: <strong />, code: <code /> }}
+                          vals={{ path: civLogPath }}
+                        />
                       ) : (
-                        <>
-                          Records every byte to/from the radio on the native CI-V path to a file in
-                          your Downloads — a support tool for hardware-only issues like the IC-9700
-                          PTT flicker. Turn on, reproduce the problem, turn off, then send the file.
-                        </>
+                        t('settings.rigControl.civLog.idle')
                       )}
                     </span>
                   </label>
@@ -3884,7 +3872,7 @@ export function SettingsPanel({
 
               {(form.rigModel === 2036 || form.rigModel === 23005) && (
                 <label className="settings-field">
-                  <span className="settings-label">Flex radio IP (native panadapter + DAX)</span>
+                  <span className="settings-label">{t('settings.rigControl.flexIp.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -3894,8 +3882,7 @@ export function SettingsPanel({
                     autoComplete="off"
                   />
                   <span className="settings-hint">
-                    Your FlexRadio's LAN IP (SmartSDR API, port 4992) — turns on the native RF
-                    panadapter. This is the <em>radio's</em> address, not the SmartSDR-CAT port above.
+                    <T k="settings.rigControl.flexIp.hint" tags={{ em: <em /> }} />
                   </span>
                 </label>
               )}
@@ -3905,7 +3892,7 @@ export function SettingsPanel({
                   port stays editable here for the rare collision, nothing else. */}
               {form.catBroker && (
                 <label className="settings-field">
-                  <span className="settings-label">Sharing port</span>
+                  <span className="settings-label">{t('settings.rigControl.sharingPort.label')}</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -3916,9 +3903,7 @@ export function SettingsPanel({
                     autoComplete="off"
                   />
                   <span className="settings-hint">
-                    The &quot;Share this radio&quot; address other programs connect to (Hamlib NET
-                    rigctl default 4532). Change it only if something else on this computer
-                    already owns the port.
+                    {t('settings.rigControl.sharingPort.hint')}
                   </span>
                 </label>
               )}
@@ -3929,9 +3914,11 @@ export function SettingsPanel({
                 className="settings-testcat"
                 onClick={handleTestCat}
                 disabled={catTesting}
-                title="Save settings, connect to the rig, and read its frequency"
+                title={t('settings.rigControl.testCat.title')}
               >
-                {catTesting ? 'Testing…' : 'Test CAT'}
+                {catTesting
+                  ? t('settings.rigControl.testCat.testing')
+                  : t('settings.rigControl.testCat.action')}
               </button>
               {(() => {
                 // Show the just-run test result, else the live CAT status from the snapshot.
