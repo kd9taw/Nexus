@@ -168,6 +168,31 @@ const MIGRATED = [
   'components/FieldDayView.tsx',
   'components/ContestCalendarPane.tsx',
   'fdEvent.ts',
+  // Batch 7 (2026-08-18) — the Satellites section, the Connect Passes pane and the nine
+  // composers behind them. One 3,900-line planning surface plus nine small modules, and the
+  // units rule lands on the SKY and the DIAL: bird names, NORAD ids, TLE epochs, every
+  // uplink/downlink frequency and offset, the SatNOGS transponder descriptions with their
+  // per-leg mode names, azimuths, elevations, ranges, altitudes and the compass letters all
+  // stay in the code, as do the mode names the radio binding prints (MODE_FM/MODE_SSB), the
+  // NORAD label and the passband plot's centre tick. Two things this batch proves the earlier
+  // ones did not: an INSTRUMENT can have text that is not prose — the sky dome's `az 143°`
+  // plates are sized from the string by viewBox arithmetic, so they are tick labels and are
+  // deliberately not migrated — and a module-level LABEL TABLE with a wire value beside every
+  // label (`satVfo.ts`, read by two components) migrates through getters exactly as
+  // `needVisuals.ts` did, so Settings ▸ Radio reads it unchanged. It also carried the tree's
+  // heaviest run of mid-sentence conditionals: the Doppler row's six states, the badge's
+  // four, the readiness rail's uplink offers and the TX-sideband note are each ONE entry with
+  // the variable clause interpolated.
+  'components/SatellitesView.tsx',
+  'features/satHealth.ts',
+  'features/satLane.ts',
+  'features/satVfo.ts',
+  'features/satAlarm.ts',
+  'features/issAutoArm.ts',
+  'features/tleMessages.ts',
+  'features/elementBands.ts',
+  'features/satPassAlert.ts',
+  'components/prop/SatPassesPane.tsx',
 ]
 
 /**

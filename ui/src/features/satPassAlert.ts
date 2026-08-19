@@ -25,9 +25,18 @@
 // dialog's modality is exactly what an alert must not have. 30 s outlives a
 // glance away without becoming a banner the operator has to come dismiss.
 
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every
+// alert is a whole sentence in the catalog; the bird's name, the bearings, the
+// elevation and the minutes are the facts being reported. The LOS report is a
+// head plus up to two further COMPLETE sentences about what came back, joined
+// with a space — each stands on its own, so a translator never has to reorder
+// half a sentence around a conditional.
+
 import { aosEarcon, losEarcon } from '../alerts'
 import { pushToast } from '../toast'
 import { markSatPassFired } from './satAlarm'
+import { t } from '../i18n'
 import type { SatTrackStatus } from '../types'
 
 /** The Settings facts a tick needs at fire time — read live by the caller
@@ -67,8 +76,8 @@ export function resetSatPassAlerts(): void {
 
 /** One pass, one moment: `aos:` / `los:` / `rotor:` per (bird, exact frozen
  * AOS). */
-function passMoment(t: SatTrackStatus, phase: 'aos' | 'los' | 'rotor'): string {
-  return `${phase}:${t.name}|${t.aosUnix}`
+function passMoment(track: SatTrackStatus, phase: 'aos' | 'los' | 'rotor'): string {
+  return `${phase}:${track.name}|${track.aosUnix}`
 }
 
 /**
@@ -82,34 +91,39 @@ function passMoment(t: SatTrackStatus, phase: 'aos' | 'los' | 'rotor'): string {
  * per pass, and only for a rotator that WAS being driven — a track armed
  * without one never had a mast to lose.
  */
-function fireRotorLost(t: SatTrackStatus): void {
-  const key = passMoment(t, 'rotor')
+function fireRotorLost(track: SatTrackStatus): void {
+  const key = passMoment(track, 'rotor')
   if (fired.has(key)) return
   fired.add(key)
-  pushToast(
-    `🛰 ${t.name}: the rotator stopped answering — point it yourself. ` +
-      `The pass, the transponder and Doppler keep running.`,
-    'error',
-    30_000,
-    { prominent: true },
-  )
+  pushToast(t('sat.passAlert.rotorLost', { name: track.name }), 'error', 30_000, {
+    prominent: true,
+  })
 }
 
-function fireAos(t: SatTrackStatus, nowSecs: number, opts: SatPassAlertOpts): void {
-  const key = passMoment(t, 'aos')
+function fireAos(track: SatTrackStatus, nowSecs: number, opts: SatPassAlertOpts): void {
+  const key = passMoment(track, 'aos')
   if (fired.has(key)) return
   fired.add(key)
   // Cross-channel dedupe: ⏰'s late-wake path must never add a second popup
   // at/after AOS for the pass the operator is already being told about.
-  markSatPassFired(t.name, t.aosUnix)
+  markSatPassFired(track.name, track.aosUnix)
   if (!opts.soundOff) aosEarcon()
-  const late = nowSecs - t.aosUnix > AOS_LATE_SECS
+  const late = nowSecs - track.aosUnix > AOS_LATE_SECS
   const msg = late
     ? // Observed late: the rise already happened — report the truth of NOW.
-      `🛰 ${t.name} pass in progress — ${Math.max(1, Math.round((t.losUnix - nowSecs) / 60))} min left, max el ${Math.round(t.maxElDeg)}°`
+      t('sat.passAlert.inProgress', {
+        name: track.name,
+        mins: Math.max(1, Math.round((track.losUnix - nowSecs) / 60)),
+        maxEl: Math.round(track.maxElDeg),
+      })
     : // The facts the operator needs with hands on the rotor: where the bird
       // rises, how high it gets, how long they have.
-      `🛰 AOS ${t.name} — point ${Math.round(t.aosAzDeg)}°, max el ${Math.round(t.maxElDeg)}°, ${Math.max(1, Math.round((t.losUnix - t.aosUnix) / 60))} min pass`
+      t('sat.passAlert.aos', {
+        name: track.name,
+        az: Math.round(track.aosAzDeg),
+        maxEl: Math.round(track.maxElDeg),
+        mins: Math.max(1, Math.round((track.losUnix - track.aosUnix) / 60)),
+      })
   pushToast(msg, 'success', 30_000, { prominent: true })
 }
 
@@ -120,24 +134,16 @@ function fireLos(ended: SatTrackStatus, opts: SatPassAlertOpts): void {
   if (!opts.soundOff) losEarcon()
   const rotorHalf = ended.mode === 'rotor+doppler' || ended.mode === 'rotor-only'
   const rotPostPass = opts.rotPostPass ?? 'stop'
-  pushToast(
-    `🛰 ${ended.name} pass complete — LOS.` +
-      // What came back keys on the LEGS that were driven: the downlink leg
-      // held the dial; an uplink-only track only ever held the TX split.
-      (ended.dopplerDownlink
-        ? ' Dial handed back.'
-        : ended.dopplerUplink
-          ? ' Uplink split released.'
-          : '') +
-      // Only when the mast is about to move ON ITS OWN — the "stop" policy
-      // leaves it where the pass finished, and a stationary rotor needs no
-      // announcement.
-      (rotorHalf && rotPostPass === 'park' ? ' Rotor parking.' : '') +
-      (rotorHalf && rotPostPass === 'ready' ? ' Rotor moving to the ready position.' : ''),
-    'info',
-    12_000,
-    { prominent: true },
-  )
+  const parts = [t('sat.passAlert.los', { name: ended.name })]
+  // What came back keys on the LEGS that were driven: the downlink leg held the
+  // dial; an uplink-only track only ever held the TX split.
+  if (ended.dopplerDownlink) parts.push(t('sat.passAlert.los.dial'))
+  else if (ended.dopplerUplink) parts.push(t('sat.passAlert.los.split'))
+  // Only when the mast is about to move ON ITS OWN — the "stop" policy leaves
+  // it where the pass finished, and a stationary rotor needs no announcement.
+  if (rotorHalf && rotPostPass === 'park') parts.push(t('sat.passAlert.los.rotorPark'))
+  if (rotorHalf && rotPostPass === 'ready') parts.push(t('sat.passAlert.los.rotorReady'))
+  pushToast(parts.join(' '), 'info', 12_000, { prominent: true })
 }
 
 /**

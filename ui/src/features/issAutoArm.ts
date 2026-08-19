@@ -10,7 +10,14 @@
 // disarmed ONLY for a pass WE armed. `savedDial` is in-session (a mid-pass app
 // restart forfeits the restore — acceptable for v1).
 
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
+// three notices come from the catalog; the DIAL and the MODE are interpolated
+// from the constants below and never become text, because a decimal comma
+// reaching 145.800 is an operating fault rather than a cosmetic one.
+
 import { pushToast } from '../toast'
+import { t } from '../i18n'
 import type { SatPass } from '../types'
 
 // The ISS SSTV downlink — the 2 m band-plan channel (bandplan.rs).
@@ -109,7 +116,7 @@ export function tickIssAutoArm(
   // Opt-in OFF: unwind an arm still in flight (so turning it off mid-pass puts
   // the dial back), then stay completely inert.
   if (!enabled) {
-    if (weArmedIt) unwind(radio, deps, 'ISS auto-arm off — SSTV disarmed, dial restored')
+    if (weArmedIt) unwind(radio, deps, t('sat.iss.optOut'))
     return
   }
 
@@ -117,7 +124,7 @@ export function tickIssAutoArm(
 
   // Armed, but the pass is over (or no longer reported) → LOS unwind.
   if (weArmedIt && !inPass) {
-    unwind(radio, deps, 'ISS LOS — SSTV disarmed, dial restored')
+    unwind(radio, deps, t('sat.iss.los'))
     return
   }
 
@@ -133,6 +140,11 @@ export function tickIssAutoArm(
     weArmedIt = true
     // Finite (not persistent) so the banner can't linger past LOS reading "armed"
     // after we've disarmed — the live SSTV section shows the armed state itself.
-    pushToast('ISS overhead — tuned 145.800 FM, SSTV armed', 'success', 12000, { prominent: true })
+    pushToast(
+      t('sat.iss.armed', { dial: ISS_DIAL_MHZ.toFixed(3), mode: ISS_MODE }),
+      'success',
+      12000,
+      { prominent: true },
+    )
   }
 }

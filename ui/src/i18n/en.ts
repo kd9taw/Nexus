@@ -2536,6 +2536,590 @@ export const EN = {
   'settings.fieldDay.power.hint':
     'Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.',
 
+  // ── Satellites ──────────────────────────────────────────────────────────────────────
+  // The Satellites section, the Connect Passes pane, and the nine composers behind them.
+  //
+  // The units rule is nearly the whole review here, and it lands on the SKY and the DIAL.
+  // Staying in the code, never entries: bird names, NORAD ids, TLE epochs, every uplink and
+  // downlink frequency, the SatNOGS transponder descriptions and their per-leg mode names,
+  // grids, azimuths, elevations, ranges, altitudes, the compass letters, the mode names the
+  // radio binding prints (FM/SSB), and the `value` of every <select> on these screens.
+  //
+  // Abbreviations an operator reads OFF AN INSTRUMENT stay verbatim where they sit inside a
+  // sentence: AOS, LOS, TCA, TLE, NORAD, VFO, MHz/kHz/Hz, km, and the ± × Δ ↑ ↓ symbols are
+  // amateur-satellite vocabulary, the same in every language, and a translator leaves them
+  // exactly as they are. The sky dome's own plate text (`az 143°` / `el 47°`, `▲ AOS`,
+  // `▼ LOS`) is not here at all: those plates are SIZED from the string, in viewBox units,
+  // by arithmetic the component documents at length — they are instrument tick labels.
+
+  // What a bird's catalog record says about it (features/satHealth.ts) — one chip, rendered
+  // by every surface that names a bird. SatNOGS is the database's own name.
+  'sat.health.silent.label': 'silent',
+  'sat.health.silent.title':
+    'In orbit, but the catalog lists no live amateur transmitter — the pass geometry is real, there is nothing to work on it.',
+  'sat.health.dead.label': 'dead',
+  'sat.health.dead.title':
+    'SatNOGS reports this bird silent. Its passes are still computed from real elements; working it is not expected.',
+  'sat.health.reentered.label': 're-entered',
+  'sat.health.reentered.title':
+    'SatNOGS reports this bird has re-entered — it is gone. Any pass shown is modelled from the last elements on file.',
+  'sat.health.preLaunch.label': 'pre-launch',
+  'sat.health.preLaunch.title':
+    'SatNOGS has this bird on record but not yet deployed — nothing to work until it launches.',
+  // An upstream status this build has never seen. `{{status}}` is the SOURCE's own word,
+  // printed as it arrived — only the frame around it moves.
+  'sat.health.unknown.title': 'SatNOGS reports this bird\'s status as "{{status}}".',
+  'sat.health.noElements.label': 'no elements',
+  'sat.health.noElements.title':
+    'No source carries orbital elements for this bird right now, so its passes cannot be computed. It stays starred; rows return when elements do.',
+  'sat.health.staleElements.label': 'stale elements',
+  'sat.health.staleElements.title':
+    'The newest elements on file are past the 30-day ceiling where SGP4 accuracy is gone. Refresh elements, or wait for the next automatic refresh.',
+  'sat.health.noPosition.label': 'no position',
+  'sat.health.noPosition.title':
+    'Current elements, but the propagator refused a position for them — a decaying orbit does this. Nothing is being hidden; there is genuinely no place to draw.',
+
+  // The set-wide element bands (features/elementBands.ts) — one wording for the Satellites
+  // header, the Now-Bar lane, the Connect Passes pane, the Settings fieldset and the refresh
+  // toast, so two surfaces can never describe one catalog differently. `14 d` and `30 d` are
+  // the thresholds themselves.
+  'sat.elements.pastLine': '{{past}} of {{total}} past 14 d',
+  'sat.elements.parts.aging': '{{count}} past 14 d',
+  'sat.elements.parts.heldBack': {
+    one: '{{count}} sits out past 30 d',
+    other: '{{count}} sit out past 30 d',
+  },
+  // English says "birds" at every count, one included. That wording predates this migration
+  // and the phase changes no visible text; a locale that needs forms adds them here.
+  'sat.elements.summary.birds': '{{count}} birds',
+  'sat.elements.sentence.aging': {
+    one: '{{count}} bird is past the 14-day line and drifting.',
+    other: '{{count}} birds are past the 14-day line and drifting.',
+  },
+  'sat.elements.sentence.heldBack': {
+    one: '{{count}} bird is past 30 days and sits out until fresh elements arrive.',
+    other: '{{count}} birds are past 30 days and sit out until fresh elements arrive.',
+  },
+
+  // The Now-Bar `sat` lane (features/satLane.ts): a two- or three-word chip, and the detail
+  // that carries the fix. Celestrak and hamradiotools.io are the sources' own names.
+  'sat.lane.blocked.message': 'Sat: Celestrak blocked',
+  'sat.lane.blocked.detail':
+    'Celestrak refused direct element fetches (HTTP 403/404) — direct attempts are stopped for 24 h. The hamradiotools.io mirror keeps retrying; elements may age until it lands.',
+  'sat.lane.unusable.message': 'Sat: elements unusable',
+  'sat.lane.unusable.detail':
+    'Every cached element set is over 30 days old — satellite surfaces refuse to point or tune on them. Refresh in Settings ▸ Radio ▸ Orbital elements, or import a fresh file.',
+  'sat.lane.stale.message': 'Sat: elements {{days}} d old',
+  'sat.lane.stale.detail':
+    'Orbital elements are past the 14-day stale line — pass times, pointing and Doppler drift with age. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.',
+  'sat.lane.mostlyStale.message': 'Sat: {{label}}',
+  'sat.lane.mostlyStale.detail':
+    "Most of the element sets you hold are past the 14-day stale line — {{label}}. The typical bird is still current, so the age reads calm; the rest of the catalog's pass times, pointing and Doppler are drifting. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.",
+
+  // The satellite VFO-mapping enumeration (features/satVfo.ts) — LABELS ONLY. Every `value`
+  // ('off', 'a-down-b-up', …) is a persisted token and stays in the code, and so do the VFO
+  // names and the rig model in the one example: A, B, Main and Sub are printed on the
+  // radio's own front panel, and IC-9700 is what it says on the box.
+  'sat.vfoMap.off': 'Not set — downlink only',
+  'sat.vfoMap.downlinkOnly': 'Downlink only (receive)',
+  'sat.vfoMap.uplinkOnly': 'Uplink only (transmit)',
+  'sat.vfoMap.aDownBUp': 'VFO A = downlink, VFO B = uplink',
+  'sat.vfoMap.aUpBDown': 'VFO A = uplink, VFO B = downlink',
+  'sat.vfoMap.mainDownSubUp': 'Main = downlink, Sub = uplink (IC-9700 full duplex)',
+  'sat.vfoMap.mainUpSubDown': 'Main = uplink, Sub = downlink',
+
+  // The ⏰ per-pass alarm (features/satAlarm.ts). TWO whole messages rather than one sentence
+  // with a variable clause dropped into the middle: the bird is up, or it is about to rise.
+  'sat.alarm.up': '⏰ {{name}} is UP now (LOS {{los}}) · max {{maxEl}}°',
+  'sat.alarm.rises': '⏰ {{name}} rises {{aos}} (~{{mins}} min) · max {{maxEl}}°',
+  'sat.alarm.stop': 'Stop alarm',
+
+  // ISS SSTV auto-arm (features/issAutoArm.ts). The dial and the mode are interpolated from
+  // the module's own constants and never become text: a decimal comma reaching 145.800 is an
+  // operating fault, not a cosmetic one. ISS and SSTV are the station's and the mode's names.
+  'sat.iss.optOut': 'ISS auto-arm off — SSTV disarmed, dial restored',
+  'sat.iss.los': 'ISS LOS — SSTV disarmed, dial restored',
+  'sat.iss.armed': 'ISS overhead — tuned {{dial}} {{mode}}, SSTV armed',
+
+  // The manual element-refresh result (features/tleMessages.ts) — one composer for the
+  // Update-now toast and the Settings "Last refresh" line, so the two can never drift.
+  // `{{source}}` is the serving source's own name, printed as it arrives.
+  'sat.refresh.mirrorDown': 'Mirror unreachable — fetched from Celestrak: {{count}} birds',
+  'sat.refresh.ok': 'Orbital elements updated — {{count}} birds ({{source}})',
+  'sat.refresh.blocked':
+    'Celestrak refused direct element fetches — direct attempts are stopped for 24 h; the mirror keeps retrying.',
+  'sat.refresh.mirrorUnreachableCurrent':
+    "The element mirror isn't reachable (it goes live with the next release); your elements are {{age}} d old — current.",
+  'sat.refresh.mirrorUnreachableStale':
+    'The element mirror is unreachable and your elements are {{days}} d old — import a fresh element file or retry later.',
+  'sat.refresh.mirrorUnreachableEmpty':
+    'The element mirror is unreachable and no usable elements are cached — import an element file to get the satellite surfaces running.',
+  'sat.refresh.failed':
+    'Element update failed — no source delivered a usable set; retry shortly or import an element file.',
+
+  // AOS/LOS alerts for the armed pass track (features/satPassAlert.ts).
+  'sat.passAlert.rotorLost':
+    '🛰 {{name}}: the rotator stopped answering — point it yourself. The pass, the transponder and Doppler keep running.',
+  'sat.passAlert.inProgress': '🛰 {{name}} pass in progress — {{mins}} min left, max el {{maxEl}}°',
+  'sat.passAlert.aos': '🛰 AOS {{name}} — point {{az}}°, max el {{maxEl}}°, {{mins}} min pass',
+  // The LOS report is a HEAD plus up to two whole sentences about what came back. Each is a
+  // complete statement joined with a space — never a fragment glued into the middle of one.
+  'sat.passAlert.los': '🛰 {{name}} pass complete — LOS.',
+  'sat.passAlert.los.dial': 'Dial handed back.',
+  'sat.passAlert.los.split': 'Uplink split released.',
+  'sat.passAlert.los.rotorPark': 'Rotor parking.',
+  'sat.passAlert.los.rotorReady': 'Rotor moving to the ready position.',
+
+  // The Connect ▸ Passes pane (components/prop/SatPassesPane.tsx) — the compact glance view.
+  // `sat.passesPane.line` is also the pane's Basic projection, so it is one whole sentence.
+  'sat.passesPane.noElements': 'No orbital elements yet — satellite data loads once online.',
+  'sat.passesPane.noPasses':
+    'No passes over your QTH in the next 24 h (set your grid in Settings?).',
+  'sat.passesPane.line': 'Next: {{name}} {{when}}, max {{maxEl}}° {{aos}}→{{los}}.',
+  'sat.passesPane.now': 'now',
+  'sat.passesPane.inMins': 'in {{mins}} min',
+  'sat.passesPane.favFilter.aria': 'Filter to ★ birds',
+  'sat.passesPane.favFilter.on':
+    'Showing your ★ birds (map + globe follow) — click to show all satellites',
+  'sat.passesPane.favFilter.off':
+    'Showing all satellites — click to show only your ★ birds (map + globe follow)',
+  'sat.passesPane.favFilter.all': 'All',
+  'sat.passesPane.stale.title': 'Orbital elements decay; pass times drift as they age',
+  'sat.passesPane.stale': 'stale elements ({{days}} d) — times are approximate',
+  'sat.passesPane.mostlyStale.title':
+    'The typical bird in your catalog is still current, so the times below are good for it — but most of the set is past the 14-day line, or held back past 30 days. Refresh elements from the Satellites section.',
+  'sat.passesPane.mostlyStale': '{{label}} — most times are approximate',
+  'sat.passesPane.favEmpty': 'No passes for your ★ birds in the next 24 h.',
+  'sat.passesPane.chase.on': 'Chasing — sorts first, footprint ring on the map. Click to stop.',
+  'sat.passesPane.chase.off':
+    'Chase this bird — sort its passes first + draw its footprint on the map',
+  'sat.passesPane.peakEl.title': 'Peak elevation {{el}}° — higher = longer, stronger pass',
+  'sat.passesPane.arc.title': 'Rise → set compass directions',
+  'sat.passesPane.duration': '{{mins}} min',
+
+  // ── Satellites ▸ the section ─────────────────────────────────────────────────────────
+  'sat.head.title': 'Satellites',
+  'sat.head.sub': 'passes over your grid',
+  'sat.head.bands.title':
+    'Elements past the 14-day line still fly the pass, with drifting times; elements past 30 days are not used at all — each of those birds is listed, with its reason, in the Birds list.',
+  'sat.head.stale.title':
+    'Orbital elements are {{days}} days old — pass times and Doppler drift with element age. Click to refresh now; they also refresh automatically every 6 h when the network allows.',
+  // The chip voice is uppercase, so the unit is spelled out ("9 d" would render "9 D"), and
+  // it is always plural — stale starts past 14 days. `TLE` is the element set's own name.
+  'sat.head.stale.chip': 'TLE {{days}} days — STALE',
+  'sat.head.stale.refreshing': '· refreshing…',
+  'sat.head.stale.refresh': '· refresh',
+  'sat.head.quiet.title':
+    'Orbital elements are {{days}} days old (the median of the {{sets}} sets in use). They refresh automatically every 6 h when the network allows; click to refresh now.',
+  'sat.head.quiet.titleEmpty':
+    'No usable orbital elements are cached. Click to fetch them now; you can also import a file under Settings ▸ Radio ▸ Orbital elements.',
+  'sat.head.quiet.refreshing': '⟳ refreshing…',
+  'sat.head.quiet.refresh': '⟳ refresh elements',
+  'sat.head.popOut.title': 'Open in its own window',
+  'sat.head.seed.notice':
+    'Starred {{count}} active birds to get you started — change them any time with the ★ beside any bird.',
+  'sat.head.seed.dismiss.aria': 'Dismiss the starred-birds notice',
+  'sat.head.seed.dismiss.title': 'Dismiss — your ★ birds stay exactly as they are',
+
+  // The pass-quality ladder — the section's ONE vocabulary for "how good is this pass",
+  // read by the Next/Best strip and by the discovery band's elevation cell.
+  'sat.quality.overhead': 'overhead pass',
+  'sat.quality.high': 'high pass',
+  'sat.quality.workable': 'workable pass',
+  'sat.quality.low': 'low horizon pass',
+
+  // The countdown to a pass, and the two states a pass itself can be in.
+  'sat.countdown.now': 'NOW',
+  'sat.countdown.mins': 'in {{mins}} min',
+  'sat.countdown.hours': 'in {{hours}} h',
+  'sat.state.inPass': 'IN PASS — {{mins}} min to LOS',
+  'sat.state.prepositioning': 'slewing to the AOS azimuth',
+
+  // The why-line under a strip row. ONE sentence: the fragments it used to be could not be
+  // reordered by a language that words "already up, 47° high pass, 11 min" differently.
+  'sat.why': '{{when}} — {{el}}° {{quality}}, {{dur}} min, {{aos}}→{{los}}{{status}}',
+  // Reported by the backscan rather than modelled: the pass out-lasted the scan window, so
+  // its rise time is unknown and its duration is a lower bound (the code marks it `+`).
+  'sat.why.alreadyUp': 'already up',
+  'sat.why.alive': ' · reported alive (SatNOGS)',
+  'sat.why.reported': ' · reported {{status}} (SatNOGS)',
+
+  // What a pass would EARN, in the app's need-chip vocabulary.
+  'sat.earn.entities.title': {
+    one: "{{count}} never-worked entity reachable through this pass's footprint: {{names}}{{more}}",
+    other:
+      "{{count}} never-worked entities reachable through this pass's footprint: {{names}}{{more}}",
+  },
+  // Satellite VUCC is the award programme's own name — an operator applies for it by that
+  // name, and a translated one names nothing.
+  'sat.earn.grids.title': {
+    one: "{{count}} new Satellite VUCC grid reachable through this pass's footprint: {{grids}}{{more}}",
+    other:
+      "{{count}} new Satellite VUCC grids reachable through this pass's footprint: {{grids}}{{more}}",
+  },
+  'sat.earn.more': ' +{{count}} more',
+
+  // The sky dome. Only the WORDS are here — every angle, the compass letters and the plate
+  // text the geometry is sized from stay in the component.
+  'sat.dome.aria.bird':
+    'Sky dome for {{name}}, north up. Satellite at azimuth {{az}} degrees, elevation {{el}} degrees.',
+  'sat.dome.aria.track':
+    'Sky dome for {{name}}, north up. Pass track from azimuth {{aos}} to {{los}} degrees, maximum elevation {{maxEl}} degrees.',
+  'sat.dome.aos.title': 'AOS — rises at {{az}} ({{wind}}) {{time}}',
+  'sat.dome.los.title': 'LOS — sets at {{az}} ({{wind}}) {{time}}',
+  'sat.dome.ghost.title': 'Antenna: commanded az/el (not a rotator read-back)',
+  'sat.dome.ghost.azOnly.title':
+    'Antenna: azimuth {{az}} commanded — az-only rotator, no elevation sent',
+  'sat.dome.bird.title': '{{name}} — az {{az}} el {{el}}',
+  'sat.dome.azEl': 'az {{az}} el {{el}}',
+  'sat.dome.antenna.noCommand': 'armed — no rotor command sent yet',
+  'sat.dome.antenna.azOnly': 'az {{az}} · elevation not commanded (az-only rotator)',
+  'sat.dome.readout.satellite': 'Satellite',
+  'sat.dome.readout.range': 'Range',
+  'sat.dome.readout.range.title': 'Slant range — how far the bird is FROM YOU.',
+  'sat.dome.readout.km': '{{km}} km',
+  'sat.dome.readout.rangeRate': ' · {{rate}} km/s {{trend}}',
+  'sat.dome.readout.closing': 'closing',
+  'sat.dome.readout.opening': 'opening',
+  'sat.dome.readout.altitude': 'Altitude',
+  'sat.dome.readout.altitude.title':
+    'Altitude — how far above the earth the bird is. Not range (its distance from you).',
+  'sat.dome.readout.antenna': 'Antenna',
+  'sat.dome.readout.antenna.title':
+    'What the rotator was COMMANDED — not a read-back. Δ is the true angular gap to the bird.',
+  'sat.dome.readout.riseSet': 'Rise / set',
+
+  // The AOS · TCA · LOS timeline under the dome.
+  'sat.timeline.aos': 'AOS {{time}}',
+  'sat.timeline.los': 'LOS {{time}}',
+  'sat.timeline.peak': '{{tca}}max {{maxEl}}°',
+  'sat.timeline.tca': 'TCA {{time}} · ',
+  'sat.timeline.nextPass': 'next pass {{countdown}}',
+
+  // The Doppler readout. When nothing is being tuned it says WHY, in the words of the thing
+  // the operator would have to change.
+  'sat.doppler.head': 'Doppler',
+  'sat.doppler.none.off':
+    'Doppler is off — nothing is being tuned (Settings ▸ Radio ▸ Satellite Doppler).',
+  'sat.doppler.none.pickConfirm':
+    'No transponder selected — pick one below; once your mapping is confirmed for this radio, Doppler tunes your uplink and the dial stays yours.',
+  'sat.doppler.none.pickUplink':
+    'No transponder selected — pick one below and Doppler tunes your uplink; the dial stays yours.',
+  'sat.doppler.none.pick': 'No transponder selected — pick one below to put the dial under Doppler.',
+  'sat.doppler.none.unconfirmed':
+    'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned.',
+  'sat.doppler.none.beforeAos':
+    'Doppler corrects from AOS — nothing to correct until the bird is up.',
+  'sat.doppler.none.noTuning': 'Doppler has not reported a tuning for this pass yet.',
+  // ONE sentence, two surfaces: the Doppler readout's reason and the chooser's state line
+  // say the same thing about the same bird, and they must never drift apart.
+  'sat.uplinkOnly.noLeg':
+    'Your uplink-only mapping has nothing to drive here — this bird has no separate uplink. Nothing is being tuned.',
+  'sat.leg.downlink': '↓ Downlink',
+  'sat.leg.uplink': '↑ Uplink',
+  'sat.doppler.txMode.title':
+    "The TX (split) VFO's sideband — this bird's uplink runs {{mode}} while the downlink does not, and the radio's TX leg is set to match. Commanded by the engine with the Doppler tuning; shown here so a swapped sideband is never a surprise.",
+  // The inverting mark and its lesson — one chip and one tooltip, rendered by the Doppler
+  // head, the readiness rail and every transponder card.
+  'sat.inverting.label': 'INVERTING',
+  'sat.inverting.title':
+    'Inverting linear transponder: tune the downlink UP and your uplink goes DOWN, and the sidebands swap (LSB up, USB down).',
+
+  // The transponder passband strip.
+  'sat.passband.head': 'Passband',
+  'sat.passband.inverting': 'inverting — tune up, transmit down',
+  'sat.passband.nonInverting': 'non-inverting — both legs move the same way',
+  'sat.passband.inverting.word': 'inverting',
+  'sat.passband.nonInverting.word': 'non-inverting',
+  'sat.passband.aria':
+    'Transponder passband, {{mode}}, ±{{half}} kHz either side of centre. Downlink {{down}} from centre, uplink {{up}} from centre.',
+  'sat.passband.lane.downlink': 'Downlink',
+  'sat.passband.lane.uplink': 'Uplink',
+  'sat.passband.mark.title':
+    '{{glyph}} {{leg}}{{freq}} — offset {{offset}} from passband centre{{clamped}}',
+  'sat.passband.mark.freq': ' — {{hz}} Hz',
+  'sat.passband.mark.clamped': ' (outside the passband — the mark is parked on the edge)',
+  'sat.passband.axis.title': 'kHz from passband centre',
+  'sat.passband.noWidth':
+    'No passband to tune inside — this is a single channel, or SatNOGS carries no width for it. There is no axis to draw; the offsets below are still exact.',
+  'sat.passband.readout.doppler': 'Doppler {{shift}}',
+  'sat.passband.readout.offset': 'offset {{offset}}',
+  'sat.passband.readout.width': '±{{half}} kHz from centre',
+
+  // SatNOGS `type` in operator words, for the chooser cards.
+  'sat.kind.beacon': 'beacon',
+  'sat.kind.linear': 'linear',
+  'sat.kind.fmRepeater': 'FM repeater',
+
+  // The readiness rail — five gates, each not-ready row carrying its own fix.
+  'sat.rail.gate.pass': 'Pass',
+  'sat.rail.gate.rotor': 'Rotor',
+  'sat.rail.gate.transponder': 'Transponder',
+  'sat.rail.gate.doppler': 'Doppler',
+  'sat.rail.gate.elements': 'Elements',
+  'sat.rail.pass.armedIn': 'armed — AOS in {{mins}} min',
+  'sat.rail.pass.armed': 'armed',
+  'sat.rail.stop.title':
+    'Stop this track (rotor halts if it holds one; the dial is handed back)',
+  'sat.rail.rotor.lost':
+    'stopped answering — pointing is yours; the pass, Doppler and your transponder keep running',
+  'sat.rail.rotor.notInTrack': 'not in this track — re-arm to take the rotor',
+  'sat.rail.rotor.none': 'no rotator configured — Settings ▸ Radio ▸ Rotator',
+  'sat.rail.rotor.tracking': 'tracking · cmd az {{az}}{{el}}',
+  'sat.rail.rotor.azOnly': ' (az only)',
+  'sat.rail.rotor.armed': 'armed — takes the rotor 5 min before AOS',
+  'sat.rail.transponder.none': 'none — the dial stays yours',
+  'sat.rail.transponder.auto': ' picked for you',
+  'sat.rail.transponder.change': 'change',
+  'sat.rail.transponder.pick': 'pick',
+  'sat.rail.transponder.goTo': 'Go to the transponder chooser below',
+  'sat.rail.transponder.nothingToPick':
+    'No transmitters listed for this bird (SatNOGS) — nothing to pick',
+  'sat.rail.doppler.off': 'off — nothing is being tuned',
+  'sat.rail.doppler.waitingConfirm':
+    'waiting for a transponder — once your mapping is confirmed for this radio, Doppler tunes your uplink; the dial stays yours',
+  'sat.rail.doppler.waitingUplink':
+    'waiting for a transponder — then Doppler tunes your uplink; the dial stays yours',
+  'sat.rail.doppler.waiting': 'waiting for a transponder — then the downlink follows the bird',
+  'sat.rail.doppler.simplex': 'on — one channel: both legs ride the same dial',
+  'sat.rail.doppler.simplexUplinkOnly':
+    'one channel and an uplink-only mapping — nothing is being tuned; the dial stays yours',
+  'sat.rail.doppler.both': 'correcting the downlink and the uplink',
+  'sat.rail.doppler.downlink': 'correcting the downlink. {{next}}',
+  'sat.rail.doppler.uplink': 'correcting the uplink — the dial stays yours',
+  'sat.rail.doppler.uplinkOnly': 'uplink-only mapping, nothing is being tuned. {{next}}',
+  // What ONE confirmation would hand over, named for the radio that would receive it.
+  'sat.rail.doppler.yourRadio': 'your radio',
+  'sat.rail.uplink.confirm': 'Confirm the uplink and Doppler drives {{rig}} as {{pair}}.',
+  'sat.rail.uplink.confirmMapping':
+    'Confirm {{mapping}} for {{rig}} and Doppler drives its uplink.',
+  'sat.rail.uplink.switchMapping':
+    'Your mapping cannot carry this pass on {{rig}} — switch it to {{pair}} and Doppler drives the uplink.',
+  'sat.rail.uplink.ask': 'Pick which VFO carries your uplink to have Doppler tune that too.',
+  'sat.rail.uplink.yours': 'The transmit VFO stays yours.',
+  'sat.rail.doppler.turnOn': 'turn on',
+  'sat.rail.doppler.turnOn.title':
+    'Turn Doppler correction back on (the same switch as Settings ▸ Radio ▸ Satellite Doppler)',
+  'sat.rail.uplink.switch.label': 'switch mapping',
+  'sat.rail.uplink.confirm.label': 'confirm uplink',
+  'sat.rail.uplink.switch.title':
+    'Switch {{rig}} to {{pair}}. Your mapping cannot carry this pass on this radio — nothing was written to it — and this is the layout Nexus drives here. Nothing changes until you click, and a wrong mapping transmits on your own downlink.',
+  'sat.rail.uplink.confirm.title':
+    'Confirm {{pair}} for {{rig}}. Nexus read this from your radio model; nothing reaches your transmit VFO until you confirm it, and a wrong mapping transmits on your own downlink.',
+  'sat.rail.uplink.confirmMapping.title':
+    'Confirm {{mapping}} — your chosen mapping — for {{rig}}. Nothing reaches its transmit VFO until you confirm it for this radio, and a wrong mapping transmits on your own downlink.',
+  'sat.rail.vfoMap.aria': 'Satellite VFO mapping',
+  'sat.rail.vfoMap.title':
+    'Which VFO carries your uplink — match it to how your radio is wired. A wrong mapping transmits on your own downlink, into the satellite\'s output passband, on top of everyone else working the bird. Picking one confirms it for the radio Doppler is driving. Every mapping except Uplink only keeps the downlink corrected; Uplink only hands your one VFO to the transmit leg.',
+  'sat.rail.elements.current': '{{age}} d old — current',
+  'sat.rail.elements.stale': '{{days}} days old — pointing and Doppler drift',
+  'sat.rail.elements.refresh': 'refresh',
+  'sat.rail.elements.refresh.title':
+    'Fetch fresh orbital elements now. This armed pass keeps its frozen set — re-arm to track with the fresh one.',
+
+  // Which rig will move (the radio binding line), and the way back onto the bird.
+  'sat.binding.name': 'Radio',
+  'sat.binding.thisRadio': 'this radio',
+  'sat.binding.legs': ' — {{legs}} MHz{{note}}',
+  'sat.binding.note': ' — {{note}}',
+  'sat.binding.pegged': '🔒 pinned',
+  'sat.binding.unpegged': '🔓 pin this radio',
+  'sat.binding.pegged.title':
+    'Peg-lock is ON — this bird stays on the active radio; band+mode routing will not hand it to another rig. Click to unlock.',
+  'sat.binding.unpegged.title':
+    'Peg-lock is OFF — a pick routes to the radio that owns the band and mode class. Click to pin the active radio instead.',
+  'sat.lockOn.name': 'Dial',
+  'sat.lockOn.state': 'moved off the transponder? put the radio back on the bird',
+  'sat.lockOn.label': 'Lock on',
+  'sat.lockOn.title':
+    'Re-run your transponder pick — routes, sets the band and mode, writes both legs, and re-centres you in the passband. Use it after moving the dial off the transponder by hand, or when the rig came back somewhere else.',
+
+  // The tracking badge on the arm bar.
+  'sat.badge.rotorLost.title':
+    'The rotator stopped answering, so this track let it go — point the antenna yourself. The pass clock, the transponder and Doppler carry on to LOS.',
+  'sat.badge.passOnly.title':
+    'Pass timing only — nothing is driven: no rotor in this track, and Doppler is not driving the dial (correction switched off, no transponder held, or an uplink-only mapping that is not driving this pass). The pass clock and geometry still run.',
+  'sat.badge.dopplerOnly.title': 'No rotator in this track — Doppler {{what}}; nothing moves an antenna',
+  'sat.badge.dopplerOnly.dialNow': 'is steering the radio dial',
+  'sat.badge.dopplerOnly.dialAtAos': 'takes the radio dial at AOS',
+  'sat.badge.dopplerOnly.splitNow': 'is steering the TX (split) VFO — the dial stays yours',
+  'sat.badge.dopplerOnly.splitAtAos': 'takes the TX (split) VFO at AOS — the dial stays yours',
+  'sat.badge.rotorWaiting.title':
+    'The rotor has NOT been commanded yet — auto-track takes it 5 min before AOS',
+  'sat.badge.rotorDriving.title':
+    'Auto-track is driving the rotor — angles shown are what was COMMANDED (rotctld read-back lives on the rotor strip/pane)',
+  'sat.badge.open.title':
+    "Open this pass's detail (sky dome, readiness rail) — tracking is not affected",
+  'sat.badge.armed': 'armed',
+  'sat.badge.tracking': 'tracking',
+  'sat.badge.mode.rotorLost': ' · rotor stopped answering',
+  'sat.badge.mode.dopplerOnly': ' · Doppler only',
+  'sat.badge.mode.passOnly': ' · pass timing only',
+  'sat.badge.mode.rotorOnly': ' · rotor only',
+  'sat.badge.risesAz': 'rises az {{az}}°',
+  'sat.badge.cmdAz': 'cmd az {{az}}° {{el}}',
+  'sat.badge.azOnly': '(az only)',
+  // The one stop shared by the rail and the badge — the same act, so the same word.
+  'sat.track.stop': '■ stop',
+  'sat.track.stop.rotor.title': 'Stop auto-tracking (rotor halts)',
+  'sat.track.stop.noRotor.title': 'Stop this track (no rotor involved; the dial is handed back)',
+  'sat.detail.close.aria': "Close this bird's detail",
+  'sat.detail.close.title':
+    'Close — a tracked pass keeps tracking; the badge on this bar brings you back',
+
+  // The gate ladder and the Next/Best strip.
+  'sat.noGrid':
+    'Set your grid square (Settings ▸ Station) first — passes are computed over YOUR location, and without a locator there is nothing honest to show.',
+  'sat.strip.next.label': 'Next',
+  'sat.strip.next.why':
+    'The two soonest workable passes (10° peak or better), any bird — a pass already in progress leads',
+  'sat.strip.best.label': 'Best 24 h',
+  'sat.strip.best.why':
+    'The two highest-quality passes in the next 24 h — max elevation first, duration breaking ties',
+  'sat.strip.row.title': '{{name}} — {{why}}',
+  'sat.strip.fav.title': 'One of your ★ birds',
+  'sat.work.label': '▶ Work this pass',
+  'sat.work.title.rotor':
+    'Work this pass: opens the bird, picks its transponder, arms rotor auto-track + the pass clock (Doppler tunes when its switches are on)',
+  'sat.work.title.noRotor':
+    'Work this pass: opens the bird, picks its transponder, starts the pass clock + Doppler (no rotator configured — nothing will move)',
+  'sat.work.short': '▶ Work',
+
+  // The 48 h schedule, its sortable headers and the discovery band beneath it.
+  'sat.schedule.head': 'Schedule — favorites, next {{hours}} h',
+  'sat.schedule.sortBy': 'Sort by {{label}}',
+  'sat.schedule.column.bird': 'Bird',
+  'sat.schedule.column.aos': 'AOS local',
+  'sat.schedule.column.maxEl': 'Max el',
+  'sat.schedule.column.dur': 'Dur',
+  'sat.schedule.column.path': 'Path',
+  'sat.schedule.column.status': 'Status',
+  'sat.schedule.column.needed': 'Needed',
+  'sat.schedule.empty.noFavs':
+    'No ★ birds yet — star a bird (☆ in the rows below, or in the Birds list) and its passes, alarms and needed-grid chips appear here.',
+  'sat.schedule.empty.noPasses':
+    'No upcoming passes for your favorites in the next {{hours}} h{{why}}.',
+  'sat.schedule.empty.noElements':
+    ' — waiting for orbital elements (first fetch needs the network once)',
+  'sat.schedule.empty.excluded':
+    ' (birds whose elements are older than 30 days are excluded until a refresh)',
+  'sat.schedule.unstar.title':
+    'Unstar removes the bird from this schedule and disarms its alarm',
+  'sat.schedule.alive.label': 'alive',
+  'sat.schedule.alive.title': 'SatNOGS community reports it transmitting',
+  'sat.schedule.dead.title':
+    'SatNOGS reports it silent/re-entered — geometry still shown, working it is unlikely',
+  'sat.schedule.alarm.on': 'Alarm armed — click to disarm',
+  'sat.schedule.alarm.off': 'Wake me before this bird rises (per-bird, survives restarts)',
+  'sat.schedule.alarm.lead.title': 'Lead time before AOS',
+  'sat.schedule.stop.title': 'Stop this track',
+  'sat.discovery.chip': 'Other birds overhead · {{count}} workable · 24 h',
+  'sat.discovery.chip.title':
+    'Birds outside your ★ set flying a workable pass (10° peak or better) over your grid in the next 24 h — one row per bird, its best pass. Star one to move it into your schedule.',
+  'sat.discovery.bar':
+    "Other birds — each row is that bird's best pass in the next 24 h · ☆ moves it into your schedule",
+  'sat.discovery.star.title':
+    'Star to move this bird into your schedule above — it gains needed-grid chips, the pass alarm and the 48 h view',
+  'sat.discovery.workable.title': 'Workable passes (10° peak or better) in the next 24 h',
+  'sat.discovery.workable': '{{count}} in 24 h',
+  'sat.discovery.altitude.title': 'Current altitude',
+  'sat.discovery.altitude': '{{km}} km up',
+  'sat.discovery.clamped.title':
+    'Rose before the 6 h scan window — its true rise time is unknown here',
+  'sat.discovery.showAll': 'show all {{count}} ▾',
+  'sat.discovery.empty':
+    'no other birds with a workable pass (10° peak or better) over your grid in the next 24 h',
+
+  // The radio quadrant: what the dial is doing, and what to point it at.
+  'sat.radio.frequencies.head': 'Frequencies',
+  'sat.radio.idle.noBird':
+    'Open a bird to see its transponders; arm a pass and the live dial, the Doppler shift and your place in the passband read out here.',
+  'sat.radio.idle.noTrack':
+    'Arm a pass (▶ Work this pass) and the live dial, the Doppler shift and your place in the passband read out here.',
+  'sat.transponder.head': 'Transponder',
+  'sat.transponder.list.aria': 'Transponder — where Doppler puts the dial',
+  'sat.transponder.none.aria': 'Work no transponder — leave the dial to me',
+  'sat.transponder.none.label': 'None — leave the dial to me',
+  'sat.transponder.card.aria': 'Work {{description}}',
+  'sat.transponder.auto': 'picked for you — change it here if this is not the one',
+  'sat.transponder.showAll': 'show all {{count}} ▾',
+  'sat.transponder.showAll.title': 'Show every workable transmitter SatNOGS lists for this bird',
+  'sat.transponder.dead': 'reported dead (SatNOGS) — not workable',
+  'sat.transponder.showDead': 'show {{count}} inactive',
+  'sat.transponder.showDead.title':
+    'Transmitters SatNOGS reports dead/re-entered — shown for the record, never workable',
+  // The TX-sideband note. `{{tx}}`, `{{up}}` and `{{down}}` are the record's own mode names.
+  'sat.transponder.txMode.commanded':
+    'TX sideband: the uplink (split) VFO is set to <b>{{tx}}</b> — the downlink stays {{down}} while Doppler runs this pass.',
+  'sat.transponder.txMode.notCommanded':
+    'This bird lists {{up}} up / {{down}} down (SatNOGS) — the TX sideband is not being commanded for this pass ({{why}}).',
+  'sat.transponder.txMode.why.dopplerOff': 'Doppler correction is off',
+  'sat.transponder.txMode.why.notDriving': 'Doppler is not driving the uplink on this radio',
+  'sat.transponder.txMode.why.shared': 'the legs share a sideband, or the mode is yours',
+  'sat.transponder.txMode.forecast':
+    'TX sideband: this bird runs {{up}} up / {{down}} down (SatNOGS). Once your uplink mapping is confirmed for the radio in use, the TX (split) VFO is set to match while a tracked pass runs.',
+  'sat.transponder.state.dopplerOff':
+    'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.',
+  'sat.transponder.state.uplinkOnly.driving':
+    'Your uplink-only mapping keeps the dial yours — only the transmit VFO is tuned.',
+  'sat.transponder.state.uplinkOnly.unconfirmed':
+    'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned. Confirm it on the pass rail.',
+  'sat.transponder.state.uplinkOnly.pending':
+    'Your uplink-only mapping keeps the dial yours — the transmit VFO is tuned once it is confirmed for the radio in use and a tracked pass runs.',
+  'sat.transponder.state.tuning':
+    'Doppler tunes this transponder while auto-track is following the pass.',
+  'sat.transponder.otherBird':
+    'Doppler holds a transponder on {{name}}. Picking one here takes the dial from it.',
+  // ⚠️ The attribution itself: the source's name and the licence identifier are what the
+  // CC-BY-SA terms require to be reproduced, so they stay exactly as they are.
+  'sat.credit.satnogs': 'frequencies & status: SatNOGS DB (CC-BY-SA 4.0)',
+  'sat.credit.noBird': 'Open a bird to choose which transponder Doppler puts the dial on.',
+  'sat.credit.noData': 'no transponder data yet — fetched from SatNOGS DB when online',
+  'sat.credit.noTransmitters': 'no transmitters listed for this bird (SatNOGS DB)',
+
+  // The pass line that stands in for the dome when there is no pass in the detail's window.
+  'sat.passline.beyond': 'next pass over you rises {{time}} ({{countdown}})',
+  'sat.passline.none': 'no pass over you in the next 24 h',
+
+  // The log strip's note. ⚠️ PROP_MODE and SAT_NAME are ADIF field names — wire identifiers
+  // an operator types into their own log — and LoTW and VUCC are the programmes' own names.
+  'sat.log.note':
+    'Logs an ordinary contact from your dial, exactly as the Phone and CW log panels do. It is <b>not</b> tagged as a satellite QSO: Nexus does not write the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward neither LoTW satellite credit <b>nor Nexus’s own satellite totals</b>. Add <b>both</b> fields yourself if you want that credit — one without the other is refused at signing, and on 2 m the grid otherwise counts toward your terrestrial VUCC, which a satellite contact does not earn.',
+  'sat.log.note.title':
+    'Logs an ordinary contact from your dial, exactly as the Phone and CW log panels do. It is NOT tagged as a satellite QSO: Nexus does not write the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward neither LoTW satellite credit nor Nexus\'s own satellite totals. Add BOTH fields yourself if you want that credit — one without the other is refused at signing, and on 2 m the grid otherwise counts toward your terrestrial VUCC, which a satellite contact does not earn.',
+
+  // The Birds catalog.
+  'sat.birds.head': 'Birds ({{count}})',
+  'sat.birds.search.placeholder': 'search…',
+  'sat.birds.star.title': '★ favorites drive the schedule, the map emphasis, and alarms',
+  'sat.birds.alt': 'alt {{km}} km',
+  'sat.birds.alt.title':
+    'Altitude — how far above the earth the bird is right now. Not range (its distance from you).',
+  'sat.birds.empty': 'no elements yet — first fetch needs the network once',
+
+  // The toasts the section raises, and the >14 d arm confirm.
+  'sat.toast.track': 'Pass track {{name}}: {{doing}}',
+  'sat.toast.track.rotor': 'armed — the rotor stays yours until 5 min before AOS',
+  'sat.toast.track.doppler': 'armed — no rotor in this track; Doppler takes the dial at AOS',
+  'sat.toast.track.passOnly': 'armed — pass timing only; the dial stays yours',
+  'sat.toast.track.following': 'following the pass',
+  'sat.toast.track.nothing': 'Nothing to track — no matching pass to arm',
+  'sat.toast.track.failed': 'Track failed: {{error}}',
+  'sat.toast.transponder.cleared': 'Transponder cleared — the dial is yours',
+  'sat.toast.transponder.working': 'Working {{name}} {{label}}{{auto}}',
+  'sat.toast.transponder.working.auto': ' (picked for you — change below)',
+  'sat.toast.transponder.failed': 'Transponder not selected: {{error}}',
+  'sat.toast.doppler.failed': 'Doppler setting: {{error}}',
+  'sat.toast.peg.failed': 'Peg-lock: {{error}}',
+  'sat.toast.vfoMap.failed': 'VFO mapping: {{error}}',
+  'sat.armConfirm.title': 'Stale orbital elements',
+  'sat.armConfirm.body':
+    '{{name}}: elements are {{days}} days old — pointing and Doppler will be off.',
+  'sat.armConfirm.refreshing': 'Refreshing…',
+  'sat.armConfirm.refresh': 'Refresh elements',
+  'sat.armConfirm.armAnyway': 'Arm anyway',
+  'sat.armConfirm.cancel': 'Cancel',
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning
