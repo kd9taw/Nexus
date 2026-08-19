@@ -444,15 +444,10 @@ jobs:
   # ship — which is exactly how the first run failed (`ld: library 'gfortran' not found`, after the
   # Fortran itself had built fine). Apple Silicon is also what most Mac operators are on.
   #
-  # ⚠️ UNPROVEN UNTIL IT FIRST RUNS, and said plainly rather than discovered. The step
-  # list mirrors `windows-cross` exactly (same node, same UI build, same AICW escape
-  # hatch, same cargo invocation), but no macOS runner was available to author it
-  # against. The likely first failure is libtempo's CMake step not finding Homebrew's
-  # gfortran/fftw/boost under the `gcc` formula's versioned binary names — that is a
-  # brew-prefix/CMAKE_Fortran_COMPILER fix in this job, not a source problem. Expect one
-  # or two iterations; do not let a red run here be read as "macOS is broken".
+  # (The "unproven until it first runs" caveat that stood here is retired: it has run many times,
+  # and the CMake/Homebrew failure it predicted was fixed rather than theoretical.)
   macos-check:
-    name: macOS compile check (not a shipped platform)
+    name: macOS compile check (fast link check; the shipping build is in release.yml)
     runs-on: macos-14
     steps:
       - name: Checkout
