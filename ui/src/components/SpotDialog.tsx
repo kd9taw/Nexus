@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { postSpot } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
+import { parseOperatorNumber } from '../numInput'
 
 // Compose + post a DX-cluster spot. The backend `post_spot` command validates the callsign,
 // checks a cluster is connected, and sanitizes the line — this is just the reviewable popup the
@@ -40,7 +41,11 @@ export function SpotDialog({
 
   if (!open) return null
 
-  const freqNum = parseFloat(freq)
+  // `parseFloat('14,074')` is 14 — a comma-decimal operator (Greek-Windows report, 2026-08)
+  // spotted the whole cluster onto 14 MHz, out of band, and the Spot button looked perfectly
+  // happy about it. The `canSpot` guard below is what turns an unreadable entry into a
+  // greyed-out button instead of a wrong spot in front of everyone.
+  const freqNum = parseOperatorNumber(freq)
   const canSpot = call.trim().length > 0 && Number.isFinite(freqNum) && freqNum > 0
 
   const submit = async () => {

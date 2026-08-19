@@ -176,6 +176,10 @@ fn spawn_cat_daemon(
                 // Recorded, not just printed: the probe detail must SAY the tested
                 // backend was the fallback, or the operator debugs the wrong daemon.
                 eprintln!("tempo-audio: native CI-V daemon failed ({e}); falling back to rigctld");
+                tempo_core::applog::warn(
+                    "cat",
+                    &format!("native CI-V daemon failed ({e}); falling back to rigctld"),
+                );
                 native_fallback = Some(e.to_string());
             }
         }
@@ -972,9 +976,22 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
 pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(), String> {
     let in_name = (!cfg.audio_in.is_empty()).then(|| cfg.audio_in.clone());
     let out_name = (!cfg.audio_out.is_empty()).then(|| cfg.audio_out.clone());
+    // Diagnostic log (see `tempo_core::applog`): the radio loop's OPEN is the single most
+    // asked-about failure in the tracker, and until now it left no trace an operator could
+    // send. Only the open/failure edges are logged here — never a per-tick or per-decode
+    // line, which would defeat the file's size bound and bury exactly this.
+    tempo_core::applog::info(
+        "audio",
+        &format!(
+            "radio loop starting (in {:?}, out {:?})",
+            in_name.as_deref().unwrap_or("<system default>"),
+            out_name.as_deref().unwrap_or("<system default>")
+        ),
+    );
     let mut backend = match CpalBackend::open(in_name.as_deref(), out_name.as_deref()) {
         Ok(b) => b,
         Err(e) => {
+            tempo_core::applog::error("audio", &format!("sound card failed to open: {e}"));
             // Surface a sound-card open failure to the UI (which would otherwise
             // see only a silent, blank waterfall).
             {
@@ -1026,6 +1043,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // itself and clears the banner, with no restart and no re-picking.
             cfg.audio_in.clear();
             cfg.audio_out.clear();
+            tempo_core::applog::warn(
+                "audio",
+                "opened the system default sound card instead of the configured one",
+            );
             b
         }
     };
@@ -1051,6 +1072,17 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // Initial open: allow coexisting onto a pre-existing EXTERNAL rigctld (e.g. WSJT-X already sharing
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
     let (mut rig, rigctld_proc, init_probe) = open_rig(&applied, true);
+    // The CAT open, once, with the same detail string the UI shows. A launch that dies later
+    // leaves this as the last line in the file, which is the whole point of the milestone.
+    // `ok` is `None` for VOX (no control channel to be healthy or not) — that is not a failure
+    // and must not read as one in the file.
+    match init_probe.ok {
+        Some(true) => tempo_core::applog::info("cat", &format!("connected: {}", init_probe.detail)),
+        Some(false) => {
+            tempo_core::applog::error("cat", &format!("not connected: {}", init_probe.detail))
+        }
+        None => tempo_core::applog::info("cat", &format!("no CAT channel: {}", init_probe.detail)),
+    }
     let init_freq = init_probe.freq_hz;
     {
         let mut eng = engine_lock(&engine);

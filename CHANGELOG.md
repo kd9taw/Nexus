@@ -36,6 +36,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everywhere you hear it, and a need is judged by the band it was heard on — so a 6 m grid
   stays marked on a roster you are reading while parked on 20 m. Where the band cannot be
   worked out at all, the icon is shown: a missing chip is worse than an extra one.
+- **A diagnostic log you can send us.** Nexus now keeps a plain-text record of what it did:
+  `nexus-diag.log`, in the same folder as `ALL.TXT` and the crash report
+  (`%LOCALAPPDATA%\Nexus` on Windows) — the Reveal button beside the ALL.TXT path in Settings
+  opens it. Timestamped, human-readable lines covering the startup steps, the CAT and audio
+  device open and any failure, updater checks, and crashes. Until now Nexus wrote nothing at
+  all about its own health, so "it won't start" reports arrived with nothing to look at. It
+  bounds itself: two files, about 8 MB in total worst case, and the older one is simply
+  renamed aside rather than rewritten, so a big log never slows a launch down. Passwords, API
+  keys and tokens are masked before anything is written — the file is meant to be attachable
+  to a public bug report.
+
+- **Periodic logbook backups, in a `backups/` folder beside your log.** Nexus now keeps dated
+  snapshots of `log.adi`: at most one a day, only when the log has actually changed, **plus**
+  an immediate copy any time a save is about to make the log *smaller* — the one shape of
+  failure that has ever cost QSOs here. The folder is bounded three ways so it cannot creep:
+  the ten most recent snapshots, a 64 MB ceiling over the whole folder, and the one-a-day
+  rule. Oldest go first. The original `log.adi.bak` anchor is separate and is never rotated or
+  deleted. Snapshots are taken when the log is **saved**, never when it is opened, so however
+  large your log gets, launching Nexus does no extra disk work for this.
+
+### Fixed
+
+- **A logbook with accented or non-English text in it could load as EMPTY — and the next save
+  wrote that empty log to disk.** If your `log.adi` held a single byte that wasn't plain
+  English — a Greek name, a German umlaut, a French accent in NAME, QTH or COMMENT, which is
+  exactly what a Greek, German or French Windows writes — Nexus failed to read the file,
+  treated it as an empty logbook, skipped its own safety copy *because* it looked empty, and
+  the next save rewrote `log.adi` from zero records. Every QSO, gone, silently, with no
+  backup. Nexus now reads the log as raw bytes and never fails a load over an encoding: the
+  contacts all load, and the one-time safety copy is taken from the original bytes. Found
+  while investigating a Greek-Windows launch report. If this bit you, `log.adi.bak` beside
+  your log holds the original.
+
+- **Nexus could fail to start with no window, no error and nothing to send.** If the Microsoft
+  Edge WebView2 runtime — the component Nexus uses to draw its window — was missing, damaged or
+  had a corrupt cache, the app exited without a trace: no window, no message, no crash file.
+  That is the Greek-Windows report, and it is why reinstalling did not help. Nexus now says so
+  in a dialog that names WebView2 and gives the repair steps, writes the reason to the new
+  diagnostic log, and repairs the commonest case itself: the WebView2 cache folder is set aside
+  and startup is retried once before giving up.
+
+- **Frequencies and coordinates typed with a comma decimal separator were read wrong.** On a
+  Greek, German, French or any other comma-decimal Windows, typing `14,074` into the cluster
+  spot box, a memory channel or the APRS beacon latitude produced a wrong number — the APRS
+  case put bad position data on the air. Every place Nexus takes a typed number now accepts
+  both `14,074` and `14.074`, and rejects what is not a number instead of storing it.
 
 ## [1.7.0] — 2026-08-18
 

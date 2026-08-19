@@ -36,6 +36,7 @@ import { importPack, STARTER_PACKS, type Pack } from '../features/packs'
 import { saveTextToDownloads } from '../api'
 import { pushToast } from '../toast'
 import { modChord } from '../platform'
+import { parseOperatorNumber } from '../numInput'
 
 export interface MemoriesViewProps {
   /** Current dial (MHz) + mode — what "Save current" captures. */
@@ -115,6 +116,34 @@ function CommitInput({
       {...rest}
     />
   )
+}
+
+/**
+ * Apply an operator-typed number, or do nothing at all.
+ *
+ * Every numeric field here used to commit a bare `Number(v)` (Greek-Windows report, 2026-08),
+ * which is two bugs in one expression: `Number('145,5')` is `NaN` on any comma-decimal locale,
+ * and — far worse — `Number('')` is `0`, so a rejected entry moved the channel to 0 MHz.
+ *
+ * ⚠️ **THE DECIMAL FIELDS ARE `inputMode="decimal"`, NOT `type="number"`, AND THAT IS THE
+ * ACTUAL FIX — DO NOT PUT `type="number"` BACK.** A number input never hands JavaScript what
+ * the operator typed: the UA runs its own LOCALE-AWARE sanitisation first, and on a
+ * comma-decimal locale `.` is the GROUP separator. So `14.074` typed into a number input on a
+ * Greek/German Windows arrives at `.value` as `"14074"` — a valid number, a plausible number,
+ * and a memory channel 14 GHz off frequency, with nothing for a guard to catch. Text with
+ * `inputMode="decimal"` keeps the phone keypad and hands `parseOperatorNumber` the literal
+ * characters, which is what the other three numeric sites in the app already do. `step` went
+ * with the type; it is inert on a text input, and the spinner it drove was never the point.
+ *
+ * ⚠️ The `Number.isFinite` guard is NOT redundant with `coerceMemory`'s `posNum`. That rejects
+ * a bad number, but for the OPTIONAL fields (`offsetMhz`, `txMhz`, `ctcssEncHz`, `dtcsCode`)
+ * rejecting means the key is left off the rebuilt memory — so a fumbled edit did not fail, it
+ * silently DELETED a repeater's offset or tone. Not committing at all leaves the stored value
+ * where it was, and `CommitInput` snaps the draft back so the bad text never looks saved.
+ */
+function withNumber(v: string, apply: (n: number) => void): void {
+  const n = parseOperatorNumber(v)
+  if (Number.isFinite(n)) apply(n)
 }
 
 /** One-line offset/tone summary for a row ("−0.600 · 103.5" / "→52.030"). */
@@ -356,10 +385,9 @@ export function MemoriesView({
           <span>RX MHz</span>
           <CommitInput
             resetKey={`${m.id}:rx:${m.rxMhz}`}
-            type="number"
-            step="0.001"
+            inputMode="decimal"
             value={String(m.rxMhz)}
-            onCommit={(v) => up({ rxMhz: Number(v) })}
+            onCommit={(v) => withNumber(v, (n) => up({ rxMhz: n }))}
           />
         </label>
         <label className="mv-field">
@@ -390,10 +418,9 @@ export function MemoriesView({
                 <span>Offset MHz</span>
                 <CommitInput
                   resetKey={`${m.id}:off:${m.offsetMhz ?? 0}`}
-                  type="number"
-                  step="0.05"
+                  inputMode="decimal"
                   value={String(m.offsetMhz ?? 0)}
-                  onCommit={(v) => up({ offsetMhz: Number(v) })}
+                  onCommit={(v) => withNumber(v, (n) => up({ offsetMhz: n }))}
                 />
               </label>
             )}
@@ -402,10 +429,9 @@ export function MemoriesView({
                 <span>TX MHz</span>
                 <CommitInput
                   resetKey={`${m.id}:tx:${m.txMhz ?? m.rxMhz}`}
-                  type="number"
-                  step="0.001"
+                  inputMode="decimal"
                   value={String(m.txMhz ?? m.rxMhz)}
-                  onCommit={(v) => up({ txMhz: Number(v) })}
+                  onCommit={(v) => withNumber(v, (n) => up({ txMhz: n }))}
                 />
               </label>
             )}
@@ -427,10 +453,9 @@ export function MemoriesView({
                 <CommitInput
                   resetKey={`${m.id}:ctcss:${m.ctcssEncHz ?? ''}`}
                   list="mv-ctcss"
-                  type="number"
-                  step="0.1"
+                  inputMode="decimal"
                   value={m.ctcssEncHz != null ? String(m.ctcssEncHz) : ''}
-                  onCommit={(v) => up({ ctcssEncHz: Number(v) })}
+                  onCommit={(v) => withNumber(v, (n) => up({ ctcssEncHz: n }))}
                 />
               </label>
             )}
@@ -441,7 +466,7 @@ export function MemoriesView({
                   resetKey={`${m.id}:dtcs:${m.dtcsCode ?? ''}`}
                   type="number"
                   value={m.dtcsCode != null ? String(m.dtcsCode) : ''}
-                  onCommit={(v) => up({ dtcsCode: Number(v) })}
+                  onCommit={(v) => withNumber(v, (n) => up({ dtcsCode: n }))}
                 />
               </label>
             )}
@@ -900,10 +925,9 @@ export function MemoriesView({
                       <CommitInput
                         className="mv-cell mv-cell-num"
                         resetKey={`${m.id}:grx:${m.rxMhz}`}
-                        type="number"
-                        step="0.001"
+                        inputMode="decimal"
                         value={String(m.rxMhz)}
-                        onCommit={(v) => editRow(m.id, { rxMhz: Number(v) })}
+                        onCommit={(v) => withNumber(v, (n) => editRow(m.id, { rxMhz: n }))}
                       />
                     </td>
                     <td>
