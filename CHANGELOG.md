@@ -88,6 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   right-click. The tooltip now says that, in the Operate strip and in the top bar. No behaviour
   changed.
 
+- **The QSL chip now says which confirmations count.** The chip on a worked-but-unconfirmed
+  station read "a QSL from this station would close it", which left you to guess whether eQSL or
+  QRZ would clear it. They will not: Nexus counts a LoTW match or a paper card — the same grade
+  the awards screens count, so the chip and your award progress can never disagree — and the
+  tooltip now says exactly that. (Asked on air: the chip is easy to read as QSO at pill size,
+  and relabelling it LoTW would have been wrong for the card half.)
+
 - **Nexus could arrive in FT8 with the transmitter already armed.** Entering PSK31, CW, Phone or
   RTTY arms transmit — correct for those modes, which are a live key or mic, and arming by
   itself sends nothing. But nothing disarmed on the way back, so returning to FT8 left the

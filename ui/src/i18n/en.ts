@@ -1200,7 +1200,7 @@ export const EN = {
   'need.badge.dxped.title': 'Active DXpedition — limited-time window',
   'need.badge.confirm.label': 'NEEDS QSL',
   'need.badge.confirm.title':
-    'This entity/zone/grid is worked on this band but not yet confirmed — a QSL from this station would close it. Not a claim about this callsign: B4 is the worked-this-call chip.',
+    'This entity/zone/grid is worked on this band but not yet confirmed — a LoTW match or a paper card would close it (eQSL and QRZ do not count toward awards, so they do not clear this). Not a claim about this callsign: B4 is the worked-this-call chip.',
   'need.badge.pota.title': 'Live POTA activator',
   'need.badge.sota.title': 'Live SOTA activator',
   'need.badge.wanted.label': 'WANTED',
@@ -1229,7 +1229,7 @@ export const EN = {
   'need.chip.confirm.label': 'NEEDS QSL',
   'need.chip.confirm.short': 'QSL',
   'need.chip.confirm.title':
-    'Worked on this band but not yet confirmed — a QSL from this station would close it',
+    'Worked on this band but not yet confirmed — a LoTW match or a paper card closes it; eQSL and QRZ do not count toward awards',
   'need.chip.dxped.label': 'DXPED',
   'need.chip.dxped.short': 'DXP',
   'need.chip.dxped.title': 'Active announced DXpedition — a limited-time window',
