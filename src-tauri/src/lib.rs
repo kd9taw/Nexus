@@ -279,6 +279,7 @@ type SharedOpeningTracker = Arc<Mutex<propagation::OpeningTracker>>;
 /// A NEWTYPE, not a `type` alias: Tauri keys managed state by `TypeId`, and an
 /// alias to `Arc<Mutex<LiveSpots>>` would collide with `SharedLivePaths` (same
 /// TypeId) → `.manage()` panics at startup and DI can't tell the buffers apart.
+#[derive(Clone)]
 struct SharedRegionPaths(Arc<Mutex<propagation::LiveSpots>>);
 
 /// Lifetime stop flag for the PSK Reporter MQTT daemon thread (see CLUSTER_STOP).
@@ -15976,6 +15977,180 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     tempo_core::applog::flush();
 }
 
+/// Everything the Tauri builder chain MOVES, in one clonable bundle.
+///
+/// It exists so [`build_app`] can be attempted twice. Every field is an `Arc` (or an
+/// `Arc`-backed handle), so a clone is a refcount bump and both attempts address the same
+/// live state — a retry must not hand the app a second, empty engine.
+#[derive(Clone)]
+struct BuildDeps {
+    engine: SharedEngine,
+    spectrum_feed: tempo_app::engine::SpectrumFeed,
+    meter_feed: tempo_app::engine::MeterFeed,
+    prop_cache: PropCache,
+    aurora_cache: AuroraCache,
+    kc2g_cache: Kc2gCache,
+    proton_cache: ProtonCache,
+    scales_cache: ScalesCache,
+    spots: SharedSpots,
+    live_paths: SharedLivePaths,
+    ota_spots: SharedOtaSpots,
+    parks: SharedParks,
+    region_paths: SharedRegionPaths,
+    health: SharedHealth,
+    /// The pounce detector's receiver — the one thing here that cannot be cloned. Shared as a
+    /// take-once cell; see where it is claimed in the setup hook.
+    pounce_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<pouncer::SpotHint>>>>,
+}
+
+/// Where Tauri puts the WebView2 user-data folder on Windows — and, when it is corrupt, the
+/// thing that stops Nexus opening a window at all.
+///
+/// **Verified against the tauri 2.11.2 source, not assumed** (`tauri/src/manager/webview.rs`,
+/// "in `windows`, we need to force a data_directory"): when a webview declares no
+/// `data_directory` of its own — Nexus declares none — Tauri sets it to
+/// `BaseDirectory::LocalData` joined with the bundle **identifier**. So it is
+/// `%LOCALAPPDATA%\com.kd9taw.tempo` (the identifier from `tauri.conf.json`), NOT
+/// `%LOCALAPPDATA%\Nexus`, which is the product-named folder the app's own data lives in. The
+/// folder holds nothing but WebView2's cache and profile, so losing it costs nothing an
+/// operator would notice.
+#[cfg(windows)]
+fn webview_data_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("com.kd9taw.tempo"))
+}
+
+/// A build failed. Set the WebView2 user-data folder aside and try **exactly once** more.
+///
+/// This mirrors the discipline `Settings::load` already uses for an unreadable settings.json:
+/// never delete the evidence, rename it out of the way (`.corrupt-<stamp>`) and carry on from
+/// a clean slate. A corrupt WebView2 profile is the same shape of problem — a cache that has
+/// gone bad and that nothing will ever repair on its own, because every launch re-reads it.
+///
+/// `None` means the launch is over: the message box has been shown and the reason logged.
+///
+/// # What this can and cannot reach (tauri 2.11.2)
+///
+/// `Builder::build()` creates the event loop, the plugins and the app manager. It does **not**
+/// create any window: `tauri::app::setup` — which builds the configured windows and then runs
+/// our `.setup` hook — is invoked later, from inside `App::run`'s `Ready` event, and it
+/// `panic!`s rather than returning an error. So a WebView2 failure most often arrives as a
+/// PANIC during `run`, not as an `Err` here; that path is covered by the panic hook, which
+/// shows the same message box while `STARTUP_REACHED_WINDOW` is still false. Both roads lead
+/// to the operator seeing a dialog that names WebView2 instead of nothing at all.
+fn rebuild_after_setting_webview_data_aside(
+    first: &tauri::Error,
+    deps: BuildDeps,
+) -> Option<tauri::App> {
+    tempo_core::applog::error("webview", &format!("build failed: {first}"));
+    #[cfg(windows)]
+    {
+        if let Some(dir) = webview_data_dir() {
+            if dir.exists() {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let aside = dir.with_file_name(format!("com.kd9taw.tempo.corrupt-{stamp}"));
+                match std::fs::rename(&dir, &aside) {
+                    Ok(()) => tempo_core::applog::warn(
+                        "webview",
+                        &format!("set the WebView2 user-data folder aside as {}", aside.display()),
+                    ),
+                    Err(e) => tempo_core::applog::warn(
+                        "webview",
+                        &format!("could not set {} aside: {e}", dir.display()),
+                    ),
+                }
+            }
+        }
+        // EXACTLY once. A loop here would be an infinite relaunch on a machine with no
+        // WebView2 at all, which is the commonest cause by far.
+        match build_app(deps) {
+            Ok(app) => {
+                tempo_core::applog::info("webview", "second build attempt succeeded");
+                return Some(app);
+            }
+            Err(second) => {
+                tempo_core::applog::error("webview", &format!("second build failed: {second}"));
+                show_startup_failure(&format!("{second}"));
+                return None;
+            }
+        }
+    }
+    // Non-Windows: there is no WebView2 and no user-data folder to set aside, so there is
+    // nothing a retry could change — but the failure is still logged and still said out loud,
+    // because a silent launch failure is the defect being fixed, not a Windows detail.
+    #[cfg(not(windows))]
+    {
+        let _ = deps;
+        show_startup_failure(&format!("{first}"));
+        None
+    }
+}
+
+/// True once the main window exists. Everything that can leave an operator with a
+/// window-less process happens before it is set, so a panic while it is false is a panic the
+/// operator will experience as "nothing happened" — and is the one worth interrupting them
+/// for.
+static STARTUP_REACHED_WINDOW: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// The dialog is shown at most once per process: a failing startup can panic on several
+/// threads, and a stack of identical message boxes is its own bug report.
+static STARTUP_FAILURE_SHOWN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Tell the operator, in a window, that the app could not start — and what to do about it.
+///
+/// The whole point of the exercise: with `windows_subsystem = "windows"` the alternative is
+/// literally nothing on screen. Native `MessageBoxW`, declared inline exactly as the crash
+/// reporter in `main.rs` declares its Win32 calls, so this adds no dependency and needs no
+/// window, no webview and no Tauri app — none of which exist when it is called.
+fn show_startup_failure(reason: &str) {
+    use std::sync::atomic::Ordering;
+    if STARTUP_FAILURE_SHOWN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let body = format!(
+        "Nexus could not start.\n\n\
+         {reason}\n\n\
+         This is almost always the Microsoft Edge WebView2 runtime, which Nexus uses to draw \
+         its window.\n\n\
+         To repair it:\n\
+         1. Open Settings \u{25b8} Apps \u{25b8} Installed apps\n\
+         2. Find \"Microsoft Edge WebView2 Runtime\"\n\
+         3. Choose Modify \u{25b8} Repair, then start Nexus again.\n\n\
+         If that does not help, check your antivirus quarantine (Windows Security \u{25b8} \
+         Protection history) — Nexus is unsigned, and some scanners remove parts of it.\n\n\
+         A diagnostic log has been written to:\n{}",
+        diag_log_path().display()
+    );
+    eprintln!("nexus: {body}");
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn MessageBoxW(
+                hwnd: *mut std::ffi::c_void,
+                text: *const u16,
+                caption: *const u16,
+                utype: u32,
+            ) -> i32;
+        }
+        const MB_ICONERROR: u32 = 0x0000_0010;
+        const MB_SETFOREGROUND: u32 = 0x0001_0000;
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let text = wide(&body);
+        let caption = wide("Nexus — startup failed");
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_ICONERROR | MB_SETFOREGROUND,
+            );
+        }
+    }
+}
+
 /// Route Rust panics into the diagnostic log, keeping whatever hook was already installed.
 ///
 /// Without this a panic in a release build goes to a stderr that `windows_subsystem =
@@ -15994,6 +16169,15 @@ fn install_panic_logger() {
         // Error level flushes, but a panic can be followed immediately by an abort, so make
         // the wait explicit rather than relying on the writer getting a slice first.
         tempo_core::applog::flush();
+        // ★ THE STARTUP-SILENCE CATCH. A panic BEFORE the main window exists is the shape the
+        // operator experiences as "I double-click it and nothing happens" — and in tauri
+        // 2.11.2 that is exactly where a WebView2 failure lands, because windows are created
+        // in `tauri::app::setup` (inside `App::run`), which panics rather than returning an
+        // error. Say so in a dialog; after the window is up, a panic is visible by other
+        // means and a modal box on top of a working app would be noise.
+        if !STARTUP_REACHED_WINDOW.load(std::sync::atomic::Ordering::SeqCst) {
+            show_startup_failure(&format!("{info}"));
+        }
         previous(info);
     }));
 }
@@ -16993,24 +17177,89 @@ pub fn run() {
     let (pounce_tx, pounce_rx) = pouncer::channel();
     let _ = POUNCE_TX.set(pounce_tx);
 
+    // Everything the builder chain moves, bundled so a retry can be handed an identical set.
+    let deps = BuildDeps {
+        engine,
+        spectrum_feed,
+        meter_feed,
+        prop_cache,
+        aurora_cache,
+        kc2g_cache,
+        proton_cache,
+        scales_cache,
+        spots,
+        live_paths,
+        ota_spots,
+        parks,
+        region_paths,
+        health,
+        // The pounce receiver is the one non-clonable thing the chain takes. Shared as a
+        // take-once cell so both attempts can hold the bundle: whichever setup runs first
+        // gets the receiver, and a retry whose predecessor already consumed it skips the
+        // detector rather than failing the launch over an alerting nicety.
+        pounce_rx: Arc::new(Mutex::new(Some(pounce_rx))),
+    };
+
+    let app = match build_app(deps.clone()) {
+        Ok(app) => app,
+        Err(e) => match rebuild_after_setting_webview_data_aside(&e, deps) {
+            Some(app) => app,
+            None => return,
+        },
+    };
+    app.run(|app_handle, event| {
+        // Flush conversation history, Field Day log, opening episodes and window
+        // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
+        //
+        // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
+        // deliver different events and neither is a superset of the other:
+        //  - window close (all platforms) and `app.exit()`/`request_restart()`:
+        //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
+        //    exactly as it always did, and the second arm no-ops on the guard;
+        //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
+        //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
+        //    is never emitted on that path, which is how Cmd+Q used to skip the
+        //    whole cleanup. `Exit` arrives synchronously inside the terminate
+        //    callback, so the unkey wait still completes before the process dies.
+        match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                quit_cleanup(app_handle);
+            }
+            _ => {}
+        }
+    });
+}
+
+/// One attempt at building the Tauri application.
+///
+/// Split out of [`run`] for exactly one reason: it has to be callable TWICE. `build()` used to
+/// end in `.expect(...)`, one of only two panic sites in `run`, and under
+/// `windows_subsystem = "windows"` a panic there produces nothing at all — no window, no
+/// dialog, no console, no crash file, because the native handler in `main.rs` only fires on
+/// access violations. That is the shape of the 2026-08 Greek-Windows report: the app simply
+/// does not start, and there is nothing to send.
+///
+/// Everything the chain MOVES arrives in [`BuildDeps`], which clones, so the caller can hand a
+/// second identical set to a retry after setting a corrupt WebView2 user-data folder aside.
+fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(engine)
-        .manage(spectrum_feed)
-        .manage(meter_feed)
-        .manage(prop_cache)
-        .manage(aurora_cache)
-        .manage(kc2g_cache)
-        .manage(proton_cache)
-        .manage(scales_cache)
-        .manage(spots)
-        .manage(live_paths)
-        .manage(ota_spots)
-        .manage(parks)
-        .manage(region_paths)
-        .manage(health)
+        .manage(d.engine)
+        .manage(d.spectrum_feed)
+        .manage(d.meter_feed)
+        .manage(d.prop_cache)
+        .manage(d.aurora_cache)
+        .manage(d.kc2g_cache)
+        .manage(d.proton_cache)
+        .manage(d.scales_cache)
+        .manage(d.spots)
+        .manage(d.live_paths)
+        .manage(d.ota_spots)
+        .manage(d.parks)
+        .manage(d.region_paths)
+        .manage(d.health)
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
         .manage(SharedQrzSession::default())
@@ -17316,7 +17565,9 @@ pub fn run() {
             qsy_pause,
             qsy_stop
         ])
-        .setup(|app| {
+        // `move`: the hook claims the pounce receiver out of the shared bundle, so it owns
+        // its half of `d` rather than borrowing a local that is about to go out of scope.
+        .setup(move |app| {
             // Classic startup splash: the borderless `splashscreen` window shows on top for ~3s
             // while the `main` window (declared hidden) loads behind it; then reveal main and
             // close the splash. A plain thread timer — no dependency on the frontend being ready.
@@ -17358,22 +17609,35 @@ pub fn run() {
             // A diagnostic log that stops short of it says "the webview never came up", which
             // is the answer the Greek-Windows report needed and could not get.
             tempo_core::applog::info("startup", "main window created; app setup running");
+            STARTUP_REACHED_WINDOW.store(true, std::sync::atomic::Ordering::SeqCst);
             // Pounce detector. Emits `pounce` to every window when a rare one appears — the
             // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
             // panel windows get it too without tracking listener lifetimes.
             {
                 use tauri::Emitter;
-                let eng = app.state::<SharedEngine>().inner().clone();
-                let emit_handle = app.handle().clone();
-                let rx = pounce_rx;
-                std::thread::Builder::new()
-                    .name("nexus-pounce".into())
-                    .spawn(move || {
-                        pouncer::run(eng, rx, move |p| {
-                            let _ = emit_handle.emit("pounce", &p);
-                        });
-                    })
-                    .expect("spawn pounce detector");
+                // Take-once: the dependency bundle is cloned for a possible retry, so the
+                // receiver is shared and whichever setup runs first claims it. `None` on a
+                // retry whose predecessor already took it — the detector is an alerting
+                // nicety, and going without it is strictly better than failing a launch that
+                // has just healed itself.
+                let claimed = d.pounce_rx.lock().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some(rx) = claimed {
+                    let eng = app.state::<SharedEngine>().inner().clone();
+                    let emit_handle = app.handle().clone();
+                    std::thread::Builder::new()
+                        .name("nexus-pounce".into())
+                        .spawn(move || {
+                            pouncer::run(eng, rx, move |p| {
+                                let _ = emit_handle.emit("pounce", &p);
+                            });
+                        })
+                        .expect("spawn pounce detector");
+                } else {
+                    tempo_core::applog::warn(
+                        "startup",
+                        "pounce detector not started (receiver already claimed by a prior build attempt)",
+                    );
+                }
             }
 
             let handle = app.handle().clone();
@@ -17474,28 +17738,6 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building the Nexus application")
-        .run(|app_handle, event| {
-            // Flush conversation history, Field Day log, opening episodes and window
-            // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
-            //
-            // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
-            // deliver different events and neither is a superset of the other:
-            //  - window close (all platforms) and `app.exit()`/`request_restart()`:
-            //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
-            //    exactly as it always did, and the second arm no-ops on the guard;
-            //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
-            //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
-            //    is never emitted on that path, which is how Cmd+Q used to skip the
-            //    whole cleanup. `Exit` arrives synchronously inside the terminate
-            //    callback, so the unkey wait still completes before the process dies.
-            match event {
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                    quit_cleanup(app_handle);
-                }
-                _ => {}
-            }
-        });
 }
 
 #[cfg(test)]
