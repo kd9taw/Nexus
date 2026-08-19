@@ -23,9 +23,9 @@
 // worse than none.
 // ---------------------------------------------------------------------------------------
 //
-//   • It checks exactly the files in MIGRATED. On 2026-08-18 that is TEN of ~251 non-test
-//     `.ts`/`.tsx` files in `ui/src`. Everything else — including the other 8,900 lines of
-//     SettingsPanel.tsx — is deliberately unchecked and still hardcoded English.
+//   • It checks exactly the files in MIGRATED. Everything else — including the other 8,900
+//     lines of SettingsPanel.tsx, which appears in PARTIAL for its keys alone — is
+//     deliberately unchecked and still hardcoded English.
 //   • The list only ever GROWS. Removing a file from it is how a surface silently un-migrates,
 //     so removal needs the same scrutiny as the migration did.
 //   • It cannot see prose that reaches the operator from Rust (~440 `format!` sites), from a
@@ -135,7 +135,41 @@ const MIGRATED = [
   'components/prop/ScalesAnnunciator.tsx',
   'components/prop/SpaceWxGauges.tsx',
   'components/prop/WorkNowCard.tsx',
+  // Batch 5 (2026-08-18) — spots, the watch list, the display filters and the Settings
+  // sections that configure them. The firehose is nearly ALL tokens: every callsign,
+  // spotter, DXCC entity, US state, band, mode, submode, frequency and cluster comment on
+  // these screens is data and stays in the code, as do the POTA/SOTA programme names, the
+  // P/S/✈/B badge glyphs, `de`, `DXCC`, and the prefix/grid EXAMPLES the watch and hide
+  // filters offer (WATCH_EXAMPLES, HIDE_EXAMPLES). It also proves the registry-by-getter
+  // path a second time: `SpotLegend.tsx`'s two badge tables resolve their words when read,
+  // so `BandStrip.tsx` — which this batch does not own — reads them unchanged.
+  'components/SpotsPanel.tsx',
+  'components/SpotDialog.tsx',
+  'components/SpotLegend.tsx',
+  'components/BandMap.tsx',
+  'components/PounceBanner.tsx',
+  'components/WatchlistPanel.tsx',
+  'components/HideCallsPicker.tsx',
+  'components/CountryExclude.tsx',
+  'components/RoamPanel.tsx',
+  'alerts.ts',
 ]
+
+/**
+ * Files where ONE SECTION is migrated and the rest is not.
+ *
+ * They are scanned for KEYS (so the catalog checks below see the entries they use) but NOT
+ * for hardcoded strings, because the un-migrated remainder of the file is still English by
+ * design. `SettingsPanel.tsx` is 9,000 lines and its Spots & Alerts sections were migrated
+ * with the panels they configure — putting the whole file on MIGRATED would report the other
+ * 8,900 lines, and leaving it off entirely would make every key those two sections use look
+ * like an orphan.
+ *
+ * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
+ * partial; when the last section moves it graduates to MIGRATED, and nothing else may be
+ * added to it to dodge a failing check.
+ */
+const PARTIAL = ['components/SettingsPanel.tsx']
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
 const VISIBLE_ATTRS = new Set([
@@ -312,7 +346,12 @@ describe('the detector fires', () => {
 describe('migrated surfaces carry no hardcoded operator-visible strings', () => {
   it('has a non-empty scope — a guard over nothing proves nothing', () => {
     expect(MIGRATED.length).toBeGreaterThan(0)
-    for (const rel of MIGRATED) expect(read(rel).length, `${rel} is readable`).toBeGreaterThan(0)
+    for (const rel of [...MIGRATED, ...PARTIAL])
+      expect(read(rel).length, `${rel} is readable`).toBeGreaterThan(0)
+  })
+
+  it('never checks a PARTIAL file for hardcoded strings — that is the whole concession', () => {
+    for (const rel of PARTIAL) expect(MIGRATED).not.toContain(rel)
   })
 
   for (const rel of MIGRATED) {
@@ -331,7 +370,7 @@ describe('migrated surfaces carry no hardcoded operator-visible strings', () => 
 // ── keys and catalog agree ────────────────────────────────────────────────────────────
 
 describe('every key resolves, and every entry is used', () => {
-  const used = new Set(MIGRATED.flatMap((rel) => findKeys(rel, read(rel))))
+  const used = new Set([...MIGRATED, ...PARTIAL].flatMap((rel) => findKeys(rel, read(rel))))
 
   it('finds keys at all — the extractor is not silently returning nothing', () => {
     expect(used.size).toBeGreaterThan(10)

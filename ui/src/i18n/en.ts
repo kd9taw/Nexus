@@ -1935,6 +1935,328 @@ export const EN = {
   'share.saved': 'Share card saved → {{path}}',
   'share.saveFailed': 'Could not save the share card: {{detail}}',
 
+  // ── Spots, watchlists and the display filters ───────────────────────────────────────
+  // ⚠️ A SPOT IS ALL TOKENS. Everything these surfaces SHOW about one is invariant and is
+  // therefore absent from this file: callsigns and spotter callsigns, DXCC entity names, US
+  // state codes, band names, mode and submode names (CW, SSB, FT8, FT4, RTTY, PSK), dial
+  // frequencies in MHz, the prefixes and grid squares an operator types into a watch/hide
+  // filter, and the comment the spotter sent. `de` (the cluster's "from"), the P/S/✈/B badge
+  // glyphs and the POTA/SOTA programme names live in the components as named constants.
+  // Where a token appears INSIDE a sentence below — VP8*, NCDXF, W1AW, DXCC, CQ, QRM, QSY,
+  // FCC Part 97, VUCC/FFMA, 6 m — a translator leaves it exactly as it is, the same rule
+  // `ADIF OPERATOR` follows in the Station hint.
+  //
+  // Two boards, deliberately not one set of keys: the Needed board (`needed.*`) is the
+  // curated "what to work" list and this is the firehose, and they already word their
+  // filters and empty states differently.
+  'spots.title': 'Spots',
+  'spots.countFiltered': 'of {{count}}',
+  'spots.hint': 'every spot on the air — single-click to work it',
+  'spots.search.placeholder': 'Search call · entity · spotter · freq…',
+  'spots.search.label': 'Search spots',
+  'spots.search.clear': 'Clear search',
+  'spots.popOut.label': '⧉ Pop out',
+  'spots.popOut.title': 'Open in its own window',
+
+  'spots.filters.aria': 'Filter spots',
+  'spots.filters.modes.aria': 'Modes shown',
+  'spots.filters.states.aria': 'US states shown',
+  'spots.filter.toggle.title': 'Filter spots by band, mode, state, or privileges',
+  'spots.filter.toggle.active': 'Filtered',
+  'spots.filter.toggle.idle': 'Filter',
+  // `{{mode}}` is a mode name and `{{state}}` a US state code — the tooltip is prose, the
+  // token in it is not.
+  'spots.filter.mode.show.title': 'Show {{mode}} spots',
+  'spots.filter.mode.hide.title': 'Hide {{mode}} spots',
+  'spots.filter.state.title':
+    "Show only {{state}} spots (state resolved from stations you've heard before)",
+  'spots.filter.privileges.label': 'My privileges',
+  'spots.filter.privileges.title':
+    'Show only spots you may transmit to under your license class (Settings ▸ license). Open class sees everything either way.',
+  'spots.filter.clear.label': 'Clear',
+  'spots.filter.clear.title': 'Clear all filters',
+
+  // The grid. Column headings name a CONCEPT; every value under them is a token.
+  'spots.column.age': 'Age',
+  'spots.column.call': 'Call',
+  'spots.column.entity': 'Entity',
+  'spots.column.state': 'St',
+  'spots.column.band': 'Band',
+  'spots.column.freq': 'Freq',
+  'spots.column.mode': 'Mode',
+  'spots.column.spotter': 'Spotter',
+  'spots.column.comment': 'Comment',
+  'spots.empty.filtered': 'No spots match the current filters — clear to see all.',
+  'spots.empty': 'No spots yet — cluster/RBN spots appear here as they arrive.',
+  // ⚠️ `{{freq}}` is a dial frequency the call site has already formatted invariantly. Two
+  // whole tooltips, not a stem plus a "Work …" head: a row you cannot QSY to says something
+  // different, and where the callsign belongs in each is a decision for each language.
+  'spots.row.work.title': 'Work {{call}} — {{mode}} @ {{freq}} MHz (spotted by {{spotter}})',
+  'spots.row.title': '{{call}} @ {{freq}} MHz (spotted by {{spotter}})',
+  'spots.row.mode.title': '{{mode}} spot',
+  'spots.row.mode.submode.title': '{{submode}} spot ({{mode}})',
+
+  // Composing a spot for the cluster (opened from a log row or a cockpit).
+  'spots.post.aria': 'Spot a callsign',
+  'spots.post.title': 'Spot to the DX cluster',
+  'spots.post.call.label': 'Callsign',
+  'spots.post.freq.label': 'Frequency (MHz)',
+  'spots.post.comment.label': 'Comment',
+  // An example cluster comment. The mode name, the split offset and the report are tokens a
+  // translator leaves; the word between them is theirs.
+  'spots.post.comment.placeholder': 'e.g. FT8 up 2 · loud · 599',
+  'spots.post.cancel': 'Cancel',
+  'spots.post.submit': 'Spot',
+  'spots.post.busy': 'Spotting…',
+  'spots.post.done': 'Spotted {{call}} on the cluster',
+  'spots.post.failed': 'Spot failed',
+
+  // The colour + type key, rendered by BOTH the band strip and the band map from one
+  // component — the two surfaces must explain their dots identically, so they share these
+  // keys. The need COLOURS are named by `need.chip.*`; these are the type badges beside them.
+  'spots.legend.aria': 'Spot colour + type key',
+  'spots.legend.pota.title': 'Live POTA activator — the call is on a park now',
+  'spots.legend.sota.title': 'Live SOTA activator — the call is on a summit now',
+  'spots.legend.dxped.label': 'DXped',
+  'spots.legend.dxped.title': 'Active announced DXpedition — a limited-time window',
+  'spots.legend.beacon.label': 'Beacon',
+  'spots.legend.beacon.title':
+    'One-way transmission (NCDXF/IARU beacon or W1AW bulletin) — real propagation evidence, but it never answers, so it is never scored as a need',
+  // The badge WORDS, read out of the shared badge tables into a spot's tooltip. POTA and
+  // SOTA are the programmes' own names and stay in the component beside them.
+  'spots.type.dxped': 'DXpedition',
+  'spots.beacon.ncdxf': 'NCDXF beacon — one-way, not workable',
+  'spots.beacon.w1aw': 'W1AW bulletin — one-way, not workable',
+
+  // ── The vertical band map (the N1MM-style torn-off window) ──────────────────────────
+  // ⚠️ Band and mode names, dial frequencies and every spot's own data are tokens and stay
+  // in the component. `{{mode}}` here is CW or SSB — the plotted spot mode, not prose.
+  'bandMap.title': 'Band map',
+  'bandMap.offPlan': '{{band}} — off the band plan',
+  'bandMap.empty.noPlan': 'no band-plan data for {{band}}',
+  // What stands in for the band name when the dial is somewhere the plan cannot name.
+  'bandMap.empty.thisFrequency': 'this frequency',
+  'bandMap.count': {
+    one: '{{count}} {{mode}} spot · {{band}}',
+    other: '{{count}} {{mode}} spots · {{band}}',
+  },
+  // Its own statement with its own count and its own leading separator — see the
+  // `logbook.import.dupes` note; one message cannot select a plural form for two counts.
+  'bandMap.count.more': ' · {{count}} more',
+  'bandMap.empty.none': 'no {{mode}} spots on {{band}} yet',
+  'bandMap.legend.label': 'Legend',
+  'bandMap.legend.title': 'Show/hide the colour + type key',
+  'bandMap.dock.left.title': 'Dock to the left screen edge',
+  'bandMap.dock.right.title': 'Dock to the right screen edge',
+  'bandMap.dock.left.titleRemembered':
+    'Dock this window to the left screen edge (full-height strip, remembered)',
+  'bandMap.dock.right.titleRemembered':
+    'Dock this window to the right screen edge (full-height strip, remembered)',
+  'bandMap.track.title': '{{band}} — high at top, low at bottom (MHz)',
+  'bandMap.track.title.tunable':
+    '{{band}} — high at top, low at bottom (MHz). Click to tune here; scroll to tune.',
+  'bandMap.shade.title': 'Your licensed phone segment on this band',
+  // `{{detail}}` is the spot line — call, frequency, age, badges, spotter and comment —
+  // assembled from data by the call site.
+  'bandMap.spot.title': '{{detail}} — click to work',
+  'bandMap.age.secs': '{{secs}}s ago',
+  'bandMap.age.mins': '{{mins}}m ago',
+  'bandMap.age.hours': '{{hours}}h ago',
+  // The "you are here" marker. Two whole tooltips: the blocked one is a different statement,
+  // not a tail. It is a READOUT, not a transmit control.
+  'bandMap.dial.title': 'You: {{freq}} MHz',
+  'bandMap.dial.title.blocked':
+    'You: {{freq}} MHz — transmit blocked (outside your privileges)',
+
+  // ── Pounce (the rare-one banner) ────────────────────────────────────────────────────
+  // The need word comes from `need.badge.*`; this is only what shows when the alert carries
+  // a tag the chip vocabulary has no entry for.
+  'pounce.tag.fallback': 'NEW',
+  'pounce.work.label': 'Work it',
+  'pounce.work.title': 'QSY to {{call}} and start the QSO',
+  'pounce.dismiss.aria': 'Dismiss alert',
+
+  // ── The watch list ("alert me loudly when THIS shows up") ───────────────────────────
+  // ⚠️ The prefixes, grid squares and entity names in the examples are TOKENS supplied by
+  // the component (WATCH_EXAMPLES); the ones quoted inside the hint stay in the sentence,
+  // as `ADIF OPERATOR` does elsewhere. `DXCC` is a programme name, not a word.
+  'watchlist.hint':
+    "Get a loud alert when a matching station is decoded — a callsign or prefix (wildcards: <code>VP8*</code>, <code>*ABC</code>), a whole DXCC entity, or a grid square (<code>FN31</code>, <code>EM7*</code>). A grid you name here alerts on every band — the HF grid-quiet default doesn't apply to squares you asked for.",
+  'watchlist.item.kind.call': 'CALL',
+  'watchlist.item.kind.grid': 'GRID',
+  'watchlist.item.cqOnly': 'CQ only',
+  'watchlist.item.remove.title': 'Remove from watch list',
+  // `{{value}}` is the call, prefix, grid or entity the operator typed.
+  'watchlist.item.remove.aria': 'Remove {{value}}',
+  'watchlist.add.kind.aria': 'Watch kind',
+  // The <option> VALUES ('call', 'dxcc', 'grid') are persisted tokens and stay in the code.
+  'watchlist.add.kind.call': 'Call / prefix',
+  'watchlist.add.kind.dxcc': 'DXCC entity',
+  'watchlist.add.kind.grid': 'Grid square',
+  'watchlist.add.value.aria': 'Watch value',
+  'watchlist.add.value.placeholder.call': 'e.g. {{first}}  or  {{second}}',
+  'watchlist.add.value.placeholder.grid': 'e.g. {{first}}  or  {{second}}',
+  'watchlist.add.value.placeholder.dxcc': 'e.g. {{entity}}',
+  'watchlist.add.cqOnly.label': 'CQ only',
+  'watchlist.add.cqOnly.title': 'Only alert on a CQ call',
+  'watchlist.add.submit': 'Add',
+
+  // ── The two display filters (hide calls / hide countries) ───────────────────────────
+  // Both say the same thing about themselves and say it differently, which is why they do
+  // not share keys: one is about callsigns you are tired of seeing, the other about whole
+  // entities. `{{examples}}` is a space-separated list of prefixes from the component.
+  'hideCalls.chip.label': 'Hide calls',
+  'hideCalls.chip.title':
+    'Hide callsigns (or VP8*-style prefixes) from this pane — a display filter only; decoding, logging, alerts and the auto-responder are untouched',
+  'hideCalls.head': 'Hide these callsigns',
+  'hideCalls.placeholder': 'e.g. {{examples}}',
+  'hideCalls.note':
+    'Space-separated. A trailing <code>*</code> is a prefix ("VP8*" hides every VP8). A view filter only — the stations you are working and those calling you always show. To stop your auto-CQ from answering a call, Alt-double-click it instead.',
+
+  'hideCountries.chip.label': 'Countries',
+  // What the chip says instead of the count while the ticks are kept but nothing is hidden.
+  'hideCountries.chip.paused': 'paused',
+  'hideCountries.chip.title':
+    'Hide chosen countries from this pane (a display filter — decoding, logging and alerts are untouched)',
+  'hideCountries.head': 'Hide these countries',
+  'hideCountries.pause': 'Pause (keep my ticks, show everything)',
+  'hideCountries.other.head': 'Other country…',
+  'hideCountries.search.placeholder': 'search all entities…',
+  'hideCountries.note':
+    'A view filter only — decoding, logging and alerts are untouched. Stations calling you, the one you are working, and new entities or band slots still show.',
+  // The count is of COUNTRIES ticked, never of rows that vanished.
+  'hideCountries.hidden': {
+    one: '{{count}} country hidden',
+    other: '{{count}} countries hidden',
+  },
+  'hideCountries.clear.label': 'Clear',
+  'hideCountries.clear.aria': 'Clear country filter',
+  'hideCountries.clear.title': 'Show every country again',
+
+  // ── Coordinated QSY (Roam) ──────────────────────────────────────────────────────────
+  // ⚠️ The role word (`initiator` / `follower` / `idle`) is the backend's own enum, printed
+  // as it arrives — only the "unpaired" stand-in below is ours. Band names, channel labels
+  // and dial frequencies are tokens. `Stop → home` stops the CHANNEL HOPPING, not a
+  // transmission: it is not a stop-line control.
+  'roam.title': 'Coordinated QSY · Roam',
+  'roam.subtitle': 'move together off QRM & casual listeners',
+  'roam.disclaimer':
+    '<b>Not private — announced in the clear.</b> Coordinated QSY steps you and one other station to a new channel together, with the move sent as plain text (FCC Part 97 forbids encryption / obscured meaning, and your callsign IDs every 10 min). It shakes a <em>casual</em> scanner parked on the old frequency — it does <em>not</em> hide you from anyone with a wideband receiver, who can follow. Use it for anti-QRM and modest obscurity, never for secrecy.',
+  'roam.enable.title': 'Coordinated QSY',
+  'roam.enable.sub.on': 'Enabled — separate from your normal Chat/QSO modes.',
+  'roam.enable.sub.off': 'Off by default.',
+  'roam.enable.on': 'Enabled',
+  'roam.enable.off': 'Enable',
+  'roam.partner.title': 'Roaming partner',
+  // `{{partner}}` is a callsign and `{{role}}` the backend's role word.
+  'roam.partner.line': '<b>{{partner}}</b> · you are the <b>{{role}}</b>',
+  'roam.partner.none': 'Select a station in the roster — you move together with that peer.',
+  'roam.role.unpaired': 'unpaired',
+  'roam.channels.legend': 'Channel set',
+  'roam.channels.hint':
+    'The initiator round-robins through these (skipping the current one). Pick at least two. Announced QSY is legal on every band.',
+  'roam.channel.title': '{{label}} — {{freq}} MHz {{mode}}',
+  'roam.cadence.legend': 'Hop cadence',
+  'roam.cadence.aria': 'Hop cadence',
+  'roam.cadence.hint':
+    'How often the initiator announces a move. Conservative by default (never per-over) so it reads as a normal QSY.',
+  // The offered cadences are 3, 6, 10 and 20, so English never needs a singular here; a
+  // locale that needs more forms supplies them as an overlay.
+  'roam.cadence.option': '{{count}} overs',
+  'roam.controls.legend': 'Controls',
+  'roam.moveNow.label': 'Move now',
+  'roam.moveNow.title': 'Announce a move on your next over (initiator only)',
+  'roam.pause.label': 'Pause',
+  'roam.resume.label': 'Resume',
+  'roam.pause.title': 'Hold on the current channel',
+  'roam.stop.label': 'Stop → home',
+  'roam.stop.title': 'Stop and return to the home channel',
+  'roam.failed.configure': 'Could not update QSY set',
+  'roam.failed.enable': 'Could not toggle coordinated QSY',
+  'roam.failed.moveNow': 'Could not request a move',
+  'roam.failed.pause': 'Could not toggle pause',
+  'roam.failed.stop': 'Could not stop coordinated QSY',
+  // One whole status line per state. `{{channel}}` is a band-plan token and `{{slot}}` a
+  // T/R slot number.
+  'roam.status.off': 'Off',
+  'roam.status.paused': 'Paused · holding {{channel}}',
+  'roam.status.lostSync': 'Lost sync → returning to {{home}}',
+  'roam.status.next': 'Next: {{channel}}',
+  'roam.status.nextSlot': 'Next: {{channel}} @ slot {{slot}}',
+  'roam.status.auto': 'Auto · on {{channel}} · hopping every {{count}} overs',
+  'roam.status.following': 'Following {{partner}} · on {{channel}}',
+  'roam.status.idle': 'Select a station to roam with',
+  // The stand-ins when the backend has not named a home channel or a partner yet.
+  'roam.status.home': 'home',
+  'roam.status.partner': 'partner',
+
+  // ── Decode alerts (the beeps' toasts and the spoken batch summary) ──────────────────
+  // ⚠️ `{{call}}` is a callsign, `{{entity}}` a DXCC entity name, `{{grid}}` a Maidenhead
+  // locator and `{{what}}` the watch filter's own label — all data, none translated here.
+  // `{{where}}` and `{{grid}}` arrive as whole optional CLAUSES assembled by the call site
+  // (the `map.hover.aprs` pattern), because a toast with no entity must not leave a dangling
+  // separator behind.
+  'alerts.where': ' — {{entity}}',
+  // Who the alert is about when the decode carried no callsign.
+  'alerts.station': 'station',
+  'alerts.watch': '⭐ Watch {{what}}: {{call}}{{where}}',
+  'alerts.newDxcc': '🎯 NEW DXCC: {{call}}{{where}}',
+  'alerts.myCall': '📢 {{call}} is calling you',
+  'alerts.newGrid': 'New grid: {{call}}{{where}}',
+  'alerts.rareGrid': '💎 {{tier}} grid{{grid}}: {{call}}{{where}}',
+  'alerts.tier.rare': 'RARE',
+  'alerts.tier.ultraRare': 'ULTRA-RARE',
+  // The toast's own button. Answering someone who called you and working a station you found
+  // are different acts, which is why they are different words.
+  'alerts.action.work': 'Work',
+  'alerts.action.answer': 'Answer',
+  'alerts.cq': 'CQ from {{call}}{{where}}',
+  // The spoken batch summary. Two statements: the count, then the CQ callers — `{{calls}}`
+  // is a comma-joined list of callsigns with their entities, built by the call site.
+  'alerts.batch.decodes': {
+    one: '{{count}} new decode.',
+    other: '{{count}} new decodes.',
+  },
+  'alerts.batch.cq': ' CQ from {{calls}}.',
+
+  // ── Settings ▸ Spots & Alerts ───────────────────────────────────────────────────────
+  // Paired with the panels above so the wording matches on both sides of the setting. The
+  // <select> VALUES ('off', 'atno', 'hf', 'vhf', 'all' …) are persisted tokens and stay in
+  // the code; only these labels are read.
+  'settings.pounce.legend': 'Pounce — new-one alert',
+  'settings.pounce.note':
+    'Interrupts you the INSTANT a needed station appears on the cluster or RBN, rather than waiting for the spot board to refresh. A loud tone plays whether or not Nexus is the window you are looking at, and a banner offers one-click Work. Off until you switch it on. How rare "rare" is depends on your own totals: if you are chasing your first hundred entities then almost every DX spot is a new one and this would never stop talking. Start with <em>New DXCC entity only</em> once your log is far enough along that a new one is genuinely an event. Each station alerts once per band and mode.',
+  'settings.pounce.threshold.label': 'Alert me for',
+  'settings.pounce.threshold.off': 'Off (default)',
+  'settings.pounce.threshold.atno': 'New DXCC entity only',
+  'settings.pounce.threshold.atnoOrZone': 'New entity or CQ zone',
+  'settings.pounce.threshold.atnoZoneOrState': 'New entity, zone, or US state',
+
+  'settings.alerts.legend': 'Alerts',
+  'settings.alerts.myCall.label': 'My call',
+  'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
+  'settings.alerts.cq.label': 'CQ calls',
+  'settings.alerts.cq.hint': 'Alert on any decoded CQ. Off by default — CQs are constant.',
+  // One band-scope vocabulary, read by all three selects — the same four choices mean the
+  // same thing on each, and a translator writes them once.
+  'settings.alerts.scope.off': 'Off',
+  'settings.alerts.scope.hf': 'HF only',
+  'settings.alerts.scope.vhf': 'VHF+ (6 m and up)',
+  'settings.alerts.scope.all': 'All bands',
+  'settings.alerts.dxcc.label': 'New DXCC',
+  'settings.alerts.dxcc.aria': 'New DXCC alert bands',
+  'settings.alerts.dxcc.hint':
+    'Loud alert on a new DXCC entity — a “new one”. Does NOT alert on every decode. The band choice also decides where the NEW ONE icon is shown.',
+  'settings.alerts.grid.label': 'New grid',
+  'settings.alerts.grid.aria': 'New grid alert bands',
+  'settings.alerts.grid.hint':
+    "Quiet toast on a grid you haven't worked. Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid. The band choice also decides where the GRID icon is shown, on the roster and the decode rows.",
+  'settings.alerts.rareGrid.label': 'Rare grid 💎',
+  'settings.alerts.rareGrid.aria': 'Rare grid alert bands',
+  'settings.alerts.rareGrid.hint':
+    'The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing HF chatter keeps the gems. Covers their GRID icon too.',
+  'settings.alerts.watchlist.label': 'Watch list',
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning

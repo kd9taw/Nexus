@@ -67,6 +67,11 @@ import {
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+// Only the Spots & Alerts sections (Pounce + Alerts) read the catalog today — they were
+// migrated with the panels they configure. The rest of this file is still hardcoded English
+// and is deliberately outside the i18n guard's scope; see its header.
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
 import {
   getAssistanceJournal,
@@ -6841,29 +6846,25 @@ export function SettingsPanel({
           {/* ---- Alerts ---- */}
           {tab === 'spots' && (
           <>
+          {/* MIGRATED to the string catalog (i18n/hardcoded-strings.test.ts) with the Spots
+              and alert panels this section configures, so the wording matches on both sides.
+              The <select> VALUES are persisted tokens and stay here. The rest of this file is
+              NOT migrated — see the guard's scope note. */}
           <fieldset className="settings-section" id="settings-pounce">
-            <legend>Pounce — new-one alert</legend>
+            <legend>{t('settings.pounce.legend')}</legend>
             <p className="settings-note">
-              Interrupts you the INSTANT a needed station appears on the cluster or RBN, rather
-              than waiting for the spot board to refresh. A loud tone plays whether or not Nexus
-              is the window you are looking at, and a banner offers one-click Work.
-              {' '}
-              Off until you switch it on. How rare "rare" is depends on your own totals: if you
-              are chasing your first hundred entities then almost every DX spot is a new one and
-              this would never stop talking. Start with <em>New DXCC entity only</em> once your
-              log is far enough along that a new one is genuinely an event. Each station alerts
-              once per band and mode.
+              <T k="settings.pounce.note" tags={{ em: <em /> }} />
             </p>
             <label className="settings-field">
-              <span className="settings-label">Alert me for</span>
+              <span className="settings-label">{t('settings.pounce.threshold.label')}</span>
               <select
                 value={form.pounceThreshold ?? 'off'}
                 onChange={(e) => update('pounceThreshold', e.target.value as never)}
               >
-                <option value="off">Off (default)</option>
-                <option value="atno">New DXCC entity only</option>
-                <option value="atnoOrZone">New entity or CQ zone</option>
-                <option value="atnoZoneOrState">New entity, zone, or US state</option>
+                <option value="off">{t('settings.pounce.threshold.off')}</option>
+                <option value="atno">{t('settings.pounce.threshold.atno')}</option>
+                <option value="atnoOrZone">{t('settings.pounce.threshold.atnoOrZone')}</option>
+                <option value="atnoZoneOrState">{t('settings.pounce.threshold.atnoZoneOrState')}</option>
               </select>
             </label>
           </fieldset>
@@ -6940,12 +6941,15 @@ export function SettingsPanel({
 
           {tab === 'spots' && (
           <>
+          {/* MIGRATED to the string catalog — see the note on the Pounce section above. The
+              band-scope <option> VALUES are persisted tokens; the four labels are one shared
+              vocabulary because the same four choices mean the same thing on all three. */}
           <fieldset className="settings-section" id="settings-alerts">
-            <legend>Alerts</legend>
+            <legend>{t('settings.alerts.legend')}</legend>
             <div className="settings-grid">
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">My call</span>
+                  <span className="settings-label">{t('settings.alerts.myCall.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6956,12 +6960,12 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">Beep + flash when someone directs a call at you.</span>
+                <span className="settings-hint">{t('settings.alerts.myCall.hint')}</span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">CQ calls</span>
+                  <span className="settings-label">{t('settings.alerts.cq.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6972,80 +6976,68 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">Alert on any decoded CQ. Off by default — CQs are constant.</span>
+                <span className="settings-hint">{t('settings.alerts.cq.hint')}</span>
               </div>
 
               {/* Per-type band scopes: all decode alerts fire on the CURRENT band, so the
                   scope is "should this alert on the band I'm on". VHF+ = 6 m and up. */}
               <div className="settings-field">
                 <label className="settings-inline-label">
-                  <span className="settings-label">New DXCC</span>
+                  <span className="settings-label">{t('settings.alerts.dxcc.label')}</span>
                   <select
                     className="settings-input"
                     value={!form.alertNew ? 'off' : (form.alertDxccBands ?? 'all')}
-                    aria-label="New DXCC alert bands"
+                    aria-label={t('settings.alerts.dxcc.aria')}
                     onChange={(e) => changeAlertScope('alertDxccBands', e.target.value)}
                   >
-                    <option value="off">Off</option>
-                    <option value="hf">HF only</option>
-                    <option value="vhf">VHF+ (6 m and up)</option>
-                    <option value="all">All bands</option>
+                    <option value="off">{t('settings.alerts.scope.off')}</option>
+                    <option value="hf">{t('settings.alerts.scope.hf')}</option>
+                    <option value="vhf">{t('settings.alerts.scope.vhf')}</option>
+                    <option value="all">{t('settings.alerts.scope.all')}</option>
                   </select>
                 </label>
-                <span className="settings-hint">
-                  Loud alert on a new DXCC entity — a “new one”. Does NOT alert on every decode.
-                  The band choice also decides where the NEW ONE icon is shown.
-                </span>
+                <span className="settings-hint">{t('settings.alerts.dxcc.hint')}</span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-inline-label">
-                  <span className="settings-label">New grid</span>
+                  <span className="settings-label">{t('settings.alerts.grid.label')}</span>
                   <select
                     className="settings-input"
                     value={!form.alertNew ? 'off' : (form.alertGridBands ?? 'vhf')}
-                    aria-label="New grid alert bands"
+                    aria-label={t('settings.alerts.grid.aria')}
                     onChange={(e) => changeAlertScope('alertGridBands', e.target.value)}
                   >
-                    <option value="off">Off</option>
-                    <option value="hf">HF only</option>
-                    <option value="vhf">VHF+ (6 m and up)</option>
-                    <option value="all">All bands</option>
+                    <option value="off">{t('settings.alerts.scope.off')}</option>
+                    <option value="hf">{t('settings.alerts.scope.hf')}</option>
+                    <option value="vhf">{t('settings.alerts.scope.vhf')}</option>
+                    <option value="all">{t('settings.alerts.scope.all')}</option>
                   </select>
                 </label>
-                <span className="settings-hint">
-                  Quiet toast on a grid you haven&apos;t worked. Default VHF+ only — grid awards
-                  (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid.
-                  The band choice also decides where the GRID icon is shown, on the roster and
-                  the decode rows.
-                </span>
+                <span className="settings-hint">{t('settings.alerts.grid.hint')}</span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-inline-label">
-                  <span className="settings-label">Rare grid 💎</span>
+                  <span className="settings-label">{t('settings.alerts.rareGrid.label')}</span>
                   <select
                     className="settings-input"
                     value={!form.alertNew ? 'off' : (form.alertRareGridBands ?? 'vhf')}
-                    aria-label="Rare grid alert bands"
+                    aria-label={t('settings.alerts.rareGrid.aria')}
                     onChange={(e) => changeAlertScope('alertRareGridBands', e.target.value)}
                   >
-                    <option value="off">Off</option>
-                    <option value="hf">HF only</option>
-                    <option value="vhf">VHF+ (6 m and up)</option>
-                    <option value="all">All bands</option>
+                    <option value="off">{t('settings.alerts.scope.off')}</option>
+                    <option value="hf">{t('settings.alerts.scope.hf')}</option>
+                    <option value="vhf">{t('settings.alerts.scope.vhf')}</option>
+                    <option value="all">{t('settings.alerts.scope.all')}</option>
                   </select>
                 </label>
-                <span className="settings-hint">
-                  The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) —
-                  separate from plain grids so silencing HF chatter keeps the gems. Covers their
-                  GRID icon too.
-                </span>
+                <span className="settings-hint">{t('settings.alerts.rareGrid.hint')}</span>
               </div>
 
             </div>
             <div className="settings-watchlist-block">
-              <span className="settings-label">Watch list</span>
+              <span className="settings-label">{t('settings.alerts.watchlist.label')}</span>
               <WatchlistPanel />
             </div>
           </fieldset>
