@@ -3940,11 +3940,22 @@ impl RadioLoop {
                                  input's level.{mac_hint}"
                             )));
                         }
+                        // The receive side finally says something. This condition was detected
+                        // and surfaced in the UI but never written down, so a log from a
+                        // station that "stopped decoding" showed a healthy audio open and
+                        // nothing after it. A TRANSITION, logged once on the way in and once on
+                        // the way out — never on a timer.
+                        tempo_core::applog::warn(
+                            "audio",
+                            "capture is open but every sample is zero — check the rig's USB \
+                             audio cable and the input level",
+                        );
                         self.err_owner = ErrOwner::SilentCapture;
                     }
                 } else {
                     self.silent_capture_since = None;
                     if self.err_owner == ErrOwner::SilentCapture {
+                        tempo_core::applog::info("audio", "capture has audio again");
                         {
                             let mut eng = engine_lock(engine);
                             eng.set_audio_error(None);

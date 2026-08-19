@@ -1429,6 +1429,8 @@ pub struct Engine {
     rx_offset_hz: f32,
     /// Keep TX offset fixed when RX changes (WSJT-X "Hold Tx Freq").
     hold_tx_freq: bool,
+    /// Consecutive boundary periods with no decode — see DECODE_DROUGHT_PERIODS.
+    quiet_periods: u32,
     /// Suppress the per-step transmit log lines while a COMPOSITE operation runs, so the
     /// operation logs once with its cause instead of narrating its own internals. Set only by
     /// `halt_tx_for_context_change`, and cleared in the same function — never a mode.
@@ -3534,6 +3536,7 @@ impl Engine {
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
+            quiet_periods: 0,
             quiet_tx_log: false,
             tx_parity,
             tx_cycle_auto: true,
@@ -7276,6 +7279,23 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // One line per contact — the event behind "my log is missing a QSO". Bounded by
+        // contacts, which is bounded by the operator: a busy hour is a few dozen lines, and a
+        // quiet one is none. Nothing here is on a timer.
+        tempo_core::applog::info(
+            "logbook",
+            &format!(
+                "QSO logged: {} on {} {} at {:.6} MHz",
+                if rec.call.trim().is_empty() {
+                    "(no call)"
+                } else {
+                    rec.call.trim()
+                },
+                rec.band,
+                rec.mode,
+                rec.freq_mhz
+            ),
+        );
         // THE SATELLITE STAMP, rebuilt (2026-08-10) with the three guards whose absence
         // got the 0.24-era stamp removed — the removal notice that used to live here was
         // this block's design brief:
@@ -15169,7 +15189,42 @@ impl Engine {
 
     /// Fold a slot's decodes into the app/sequencer state (the shared back half
     /// of [`Engine::ingest`] / [`Engine::ingest_early`]).
+    /// How many consecutive boundary periods produced no decode at all.
+    ///
+    /// Eight periods is two minutes on FT8. On a live band that is a fault worth a line — the
+    /// dial is wrong, the mode is wrong, the passband is squelched, the audio is silent. On a
+    /// dead band it is one line and then silence, because this logs the TRANSITION in and the
+    /// transition out, never the state.
+    const DECODE_DROUGHT_PERIODS: u32 = 8;
+
     fn process_decodes(&mut self, frame: &[f32], decodes: Vec<modes::Decode>, slot: u64) -> usize {
+        if decodes.is_empty() {
+            self.quiet_periods = self.quiet_periods.saturating_add(1);
+            if self.quiet_periods == Self::DECODE_DROUGHT_PERIODS {
+                tempo_core::applog::warn(
+                    "decode",
+                    &format!(
+                        "no decodes for {} periods on {} {:?} at {:.6} MHz",
+                        Self::DECODE_DROUGHT_PERIODS,
+                        if self.settings.band.is_empty() {
+                            "off-band"
+                        } else {
+                            &self.settings.band
+                        },
+                        self.app.tier(),
+                        self.settings.dial_mhz
+                    ),
+                );
+            }
+        } else {
+            if self.quiet_periods >= Self::DECODE_DROUGHT_PERIODS {
+                tempo_core::applog::info(
+                    "decode",
+                    &format!("decoding again after {} quiet periods", self.quiet_periods),
+                );
+            }
+            self.quiet_periods = 0;
+        }
         // Keep the ON-AIR text for UDP consumers BEFORE any hound rewriting —
         // JTAlert/GridTracker must never receive a message the Fox didn't send.
         let hound_active = matches!(

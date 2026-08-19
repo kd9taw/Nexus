@@ -50,11 +50,13 @@
 //! return, and no file is created. That keeps it out of unit tests and off any target that
 //! has no business writing files.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Bytes the active file may reach before it is renamed away. 4 MiB is roughly 40,000 lines
 /// at the ~100 bytes a line here runs to. A healthy session writes tens of lines, so this is
@@ -162,6 +164,69 @@ pub fn log(level: Level, event: &str, detail: &str) {
 /// A startup milestone / ordinary event.
 pub fn info(event: &str, detail: &str) {
     log(Level::Info, event, detail);
+}
+
+/// Log at most once per `every` for a given `key`, counting what was suppressed.
+///
+/// ⚠️ THE MECHANISM THAT MAKES FIDELITY AFFORDABLE. The size bound is not the problem — a log
+/// that fills with routine traffic pushes the interesting lines into the previous generation
+/// and then off the end. A CAT timeout every 500 ms is 7,200 lines an hour and would bury a
+/// startup failure inside a day. This is how a repeating condition stays ONE line plus a count.
+///
+/// The key names the CONDITION, not the occurrence (`"cat-timeout"`, not the message), and the
+/// count of suppressed repeats rides on the next line that does emit — so the reader sees both
+/// that it is still happening and how often, without the file paying for it.
+///
+/// Not a substitute for logging a state CHANGE: a condition that starts and stops should say
+/// so. This is for one that simply persists.
+/// The throttle's accounting, split from its I/O so it can be TESTED.
+///
+/// `None` ⇒ suppress (inside the window; the repeat has been counted). `Some(n)` ⇒ emit, where
+/// `n` is how many were suppressed since the last emitted line. Kept pure and `now`-injected
+/// because the alternative — asserting on a log file from a module that is inert in tests — is
+/// a test that cannot fail for the right reason.
+fn throttle_decision(
+    seen: &mut HashMap<&'static str, (Instant, u64)>,
+    key: &'static str,
+    now: Instant,
+    every: Duration,
+) -> Option<u64> {
+    match seen.get_mut(key) {
+        Some((last, count)) if now.duration_since(*last) < every => {
+            *count += 1;
+            None
+        }
+        Some((last, count)) => {
+            let n = std::mem::replace(count, 0);
+            *last = now;
+            Some(n)
+        }
+        None => {
+            seen.insert(key, (now, 0));
+            Some(0)
+        }
+    }
+}
+
+pub fn throttled(level: Level, event: &str, key: &'static str, every: Duration, detail: &str) {
+    static SEEN: OnceLock<Mutex<HashMap<&'static str, (Instant, u64)>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut map) = seen.lock() else {
+        return log(level, event, detail); // a poisoned lock must not cost the line
+    };
+    let Some(suppressed) = throttle_decision(&mut map, key, Instant::now(), every) else {
+        return; // still inside the window — counted, not written
+    };
+    drop(map); // never hold the map across a write
+    if suppressed == 0 {
+        log(level, event, detail);
+    } else {
+        log(
+            level,
+            event,
+            &format!("{detail} ({suppressed} more since the last of these)"),
+        );
+    }
 }
 
 /// Something degraded but survivable — a device that would not open, a fetch that failed.
@@ -558,6 +623,44 @@ fn is_sensitive(lower_ident: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// The throttle is what the whole fidelity plan rests on, so its accounting is pinned in
+    /// both directions: it must SUPPRESS inside the window, and it must EMIT again afterwards
+    /// carrying the count of what it swallowed. A throttle that drops the tail silently is
+    /// worse than none, because the reader concludes the condition stopped.
+    #[test]
+    fn throttle_suppresses_inside_the_window_then_reports_what_it_swallowed() {
+        let mut seen = HashMap::new();
+        let t0 = Instant::now();
+        let every = Duration::from_secs(10);
+
+        // First sighting always emits, having swallowed nothing.
+        assert_eq!(throttle_decision(&mut seen, "k", t0, every), Some(0));
+        // Three repeats inside the window are counted, not written.
+        for i in 1..=3 {
+            assert_eq!(
+                throttle_decision(&mut seen, "k", t0 + Duration::from_secs(i), every),
+                None,
+                "repeat {i} must be suppressed"
+            );
+        }
+        // Past the window it emits again AND reports the three.
+        assert_eq!(
+            throttle_decision(&mut seen, "k", t0 + Duration::from_secs(11), every),
+            Some(3),
+            "the suppressed count rides the next emitted line"
+        );
+        // …and the counter resets, so the count is per-gap and never cumulative.
+        assert_eq!(
+            throttle_decision(&mut seen, "k", t0 + Duration::from_secs(22), every),
+            Some(0)
+        );
+        // Keys are independent: one noisy condition cannot mute another.
+        assert_eq!(
+            throttle_decision(&mut seen, "other", t0 + Duration::from_secs(22), every),
+            Some(0)
+        );
+    }
 
     /// A LOG WE ASK STRANGERS TO READ MUST NOT CARRY THE BUILD MACHINE'S PATHS.
     ///
