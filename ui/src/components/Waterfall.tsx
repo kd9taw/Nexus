@@ -1,3 +1,13 @@
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the wide graph's
+// prose — its heading, the gesture hint, the zoom/gain/zero controls, the scroll, 3D, pause and
+// pop-out buttons, the canvas and the legend — is in the catalog under `waterfall.*`. It is an
+// INSTRUMENT: its gestures set the RX and TX audio offsets, and it holds no transmit control.
+//
+// The units rule lands on the SPECTRUM: every span in kHz, the `dBr` legend and its ticks, the
+// frequency axis and the scrollback time tape drawn into the bitmap, and the RX/TX marker names
+// are measurements and tokens, so they stay in the code — as do the zoom LABELS, which live in
+// `waterfall.ts` and are not this batch's file. The one thing drawn on the canvas that IS prose
+// is the paused chip, and it comes from the catalog.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getSpectrumRow } from '../api'
 import { sampleLut } from '../colormaps'
@@ -26,6 +36,10 @@ import { drawDss } from '../dss'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { PalettePicker } from './PalettePicker'
 import { MOD_LABEL } from '../platform'
+import { t } from '../i18n'
+
+/** The legend's unit — relative dB, the scale WSJT-X uses. A unit, not a word. */
+const DBR = 'dBr'
 
 /** Persist the operator's manual waterfall contrast (gain/zero) in localStorage; 0 = auto.
  * The palette lives in the shared master store (see `waterfallPalette.ts`).
@@ -738,9 +752,15 @@ export function Waterfall({
         const off = offsetRef.current
         octx.font = '600 10px system-ui, sans-serif'
         octx.fillStyle = 'rgba(255,200,80,0.95)'
+        // The chip is a STATE MESSAGE and comes from the catalog; the age beside it (and the
+        // time tape below, and the axis) are measurements drawn as tick labels.
         const newest = h.frameAt(off)
-        const backLabel = newest ? ageLabel(Date.now() - newest.tsMs) : 'now'
-        octx.fillText(off > 0 ? `⏸ PAUSED · −${backLabel}` : '⏸ PAUSED', 6, 20)
+        const backLabel = newest ? ageLabel(Date.now() - newest.tsMs) : t('waterfall.paused.now')
+        octx.fillText(
+          off > 0 ? t('waterfall.paused.back', { age: backLabel }) : t('waterfall.paused'),
+          6,
+          20,
+        )
         // Time tape: 4 evenly spaced age labels down the right edge. Each label's age is
         // read off the SAME mapping renderInto paints with — newest end at the bottom by
         // default, at the top when the operator has flipped the scroll direction.
@@ -870,15 +890,15 @@ export function Waterfall({
   return (
     <div className="waterfall-wrap">
       <div className="panel-header">
-        <h2>Waterfall</h2>
+        <h2>{t('waterfall.title')}</h2>
         {/* MOD_LABEL: advertising "Ctrl" on a Mac names the OS right-click gesture — ⌘ there. */}
-        <span className="wf-hint">{hint ?? `left = RX · right / Shift = TX · ${MOD_LABEL} = both`}</span>
+        <span className="wf-hint">{hint ?? t('waterfall.hint', { mod: MOD_LABEL })}</span>
         <PalettePicker scope={paletteScope} />
         <select
           className="wf-palette wf-zoom"
           value={zoomSpan}
-          aria-label="Waterfall zoom span"
-          title="Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–4 kHz), or zoom in around the RX marker"
+          aria-label={t('waterfall.zoom.aria')}
+          title={t('waterfall.zoom.title')}
           onChange={(e) => {
             const span = Number(e.target.value)
             const r = zoomRange(rxOffsetHz, span)
@@ -898,7 +918,7 @@ export function Waterfall({
             </option>
           ))}
         </select>
-        <label className="wf-knob" title="Gain — contrast (how punchy strong signals look). Center = auto.">
+        <label className="wf-knob" title={t('waterfall.gain.title')}>
           <span>G</span>
           <input
             type="range"
@@ -906,7 +926,7 @@ export function Waterfall({
             max={1}
             step={0.05}
             value={gain}
-            aria-label="Waterfall gain (contrast)"
+            aria-label={t('waterfall.gain.aria')}
             onChange={(e) => {
               const v = Number(e.target.value)
               setGain(v)
@@ -934,7 +954,7 @@ export function Waterfall({
             the un-bounded form did to an ordinary station. */}
         <label
           className="wf-knob"
-          title="Zero — where the black point sits relative to the noise floor. Center = the default (background black); left shows more of the noise, right buries it deeper."
+          title={t('waterfall.zero.title')}
         >
           <span>Z</span>
           <input
@@ -943,7 +963,7 @@ export function Waterfall({
             max={1}
             step={0.05}
             value={zero}
-            aria-label="Waterfall zero (baseline)"
+            aria-label={t('waterfall.zero.aria')}
             onChange={(e) => {
               const v = Number(e.target.value)
               setZero(v)
@@ -980,14 +1000,19 @@ export function Waterfall({
             // rebuild — a half-flipped waterfall.
             rebuildRef.current?.()
           }}
+          // Four WHOLE tooltips, never a stem plus an appended sentence: what the 3D view does
+          // with the direction is part of the statement, not a tail glued to it.
           title={
-            (newestAtTop
-              ? 'Scrolls down — the newest row appears at the TOP and history travels downward. Click for the other way: newest at the bottom, history travelling up (the default).'
-              : 'Scrolls up — the newest row appears at the BOTTOM and history travels upward (the default). Click for the other way: newest at the top, history travelling down.') +
-            (dss ? ' The 3D view keeps its own front-to-back perspective either way.' : '')
+            newestAtTop
+              ? dss
+                ? t('waterfall.flow.down.title.dss')
+                : t('waterfall.flow.down.title')
+              : dss
+                ? t('waterfall.flow.up.title.dss')
+                : t('waterfall.flow.up.title')
           }
         >
-          {newestAtTop ? 'Scrolls down' : 'Scrolls up'}
+          {newestAtTop ? t('waterfall.flow.down.label') : t('waterfall.flow.up.label')}
         </button>
         <button
           type="button"
@@ -1000,11 +1025,7 @@ export function Waterfall({
             surfaceSet(THREED_KEY, next ? '1' : '0')
             rebuildRef.current?.() // repaint immediately in the new view
           }}
-          title={
-            dss
-              ? 'Switch to the flat 2D waterfall'
-              : 'Switch to the 3D stacked-spectrum view (a rolling perspective of the last ~96 rows)'
-          }
+          title={dss ? t('waterfall.dss.on.title') : t('waterfall.dss.off.title')}
         >
           {dss ? '▤' : '◭'}
         </button>
@@ -1022,11 +1043,7 @@ export function Waterfall({
             }
             rebuildRef.current?.()
           }}
-          title={
-            paused
-              ? 'Resume the live waterfall (history kept accumulating while paused)'
-              : 'Pause the waterfall — then scroll back through history with the mouse wheel'
-          }
+          title={paused ? t('waterfall.pause.resume.title') : t('waterfall.pause.title')}
         >
           {paused ? '▶' : '⏸'}
         </button>
@@ -1035,7 +1052,7 @@ export function Waterfall({
             type="button"
             className="wf-popout"
             onClick={onPopOut}
-            title="Pop the waterfall out into its own window (frees this space; drag to another monitor)"
+            title={t('waterfall.popOut.title')}
           >
             ⧉
           </button>
@@ -1066,21 +1083,21 @@ export function Waterfall({
               rebuildRef.current?.()
             }
           }}
-          title={`Click sets RX (WSJT-X) · Shift+click sets TX · ${MOD_LABEL}+click sets both`}
+          title={t('waterfall.canvas.title', { mod: MOD_LABEL })}
         />
         {/* Axis + Rx/Tx markers layer — transparent, cleared each frame, never scrolled. */}
         <canvas ref={overlayRef} className="waterfall-overlay" aria-hidden="true" />
         <div
           className="wf-legend"
           aria-hidden="true"
-          title="Color = signal strength (dB relative to the current strongest signal)"
+          title={t('waterfall.legend.title')}
         >
           <span className="wf-legend-tick">0</span>
           <div className="wf-legend-bar" style={{ background: legendGradient }} />
           <span className="wf-legend-tick">
             <span ref={dbLabelRef}>−40</span>
           </span>
-          <span className="wf-legend-cap">dBr</span>
+          <span className="wf-legend-cap">{DBR}</span>
         </div>
       </div>
     </div>

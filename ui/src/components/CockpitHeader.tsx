@@ -1,3 +1,15 @@
+// ⚠️ THIS FILE IS **PARTIAL** ON THE i18n LIST (i18n/hardcoded-strings.test.ts), and what is
+// deferred is the whole reason this batch exists: THE TX-ENABLE LATCH, TUNE, ATU AND STOP TX
+// stay written here. This one header draws them for SIX cockpits — Phone, CW, RTTY, PSK, SSTV
+// and Operate — so a typo in any of the four labels below is a six-cockpit safety regression,
+// and three of them are what `components/stop-line.test.tsx` matches by accessible name
+// (/^stop tx$/i, /^tune$|^tuning…$/i, /^▼ tx on$|^■ tx off$/i). ATU keys the rig's own tuning
+// carrier exactly as SetupHealth's Prove TX does. Transmit-path controls and their accessible
+// names move in their own batch, with the stop-line sweeps re-run.
+//
+// Everything else in the header is migrated under `cockpit.header.*`: the wheel-tune tooltips,
+// the band-edge toast, the power slider (a CONFIGURATION control on the transmit path, which
+// moves exactly as PTT Method and the drive slider did) and the CAT pill's two states.
 import { useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { AppSnapshot } from '../types'
@@ -5,6 +17,17 @@ import { bandLabelForMhz, bandRangeForLabel } from '../band'
 import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
+import { t } from '../i18n'
+
+/** The header's annunciator plates — state, not prose: the CAT link's ✓/✗ pill and the three
+ *  readings of the TX/RX pill. The pill is the PASSIVE rendering of the TX-enable latch below,
+ *  which this batch defers, so its words stay here with the button's for the same reason: the
+ *  two must never read as different controls. */
+const CAT_OK = 'CAT ✓'
+const CAT_BAD = 'CAT ✗'
+const TX_KEYING = '▲ KEYING'
+const TX_RX = '▼ RX'
+const TX_OFF = '■ TX off'
 
 /**
  * Shared cockpit header for the Phone, Digital (FT8/FT4) and CW cockpits.
@@ -102,9 +125,12 @@ function edgeMessage(dialMhz: number, targetMhz: number): string {
   if (!range) return ''
   const up = targetMhz > dialMhz
   const edge = up ? range.hi : range.lo
-  return `Stopped at the ${label} band edge, ${edge.toFixed(4)} MHz — scroll again to keep tuning ${
-    up ? 'up' : 'down'
-  }`
+  // Two WHOLE sentences, one per direction — never a stem with `up`/`down` glued on the end,
+  // which no language with a different word order could take. The band name and the edge
+  // frequency are invariant tokens and are formatted here, not by the catalog. Each key is
+  // written out so the catalog guard can see both of them.
+  const vals = { band: label, edge: edge.toFixed(4) }
+  return up ? t('cockpit.header.bandEdge.up', vals) : t('cockpit.header.bandEdge.down', vals)
 }
 
 export function CockpitHeader({
@@ -122,7 +148,7 @@ export function CockpitHeader({
   actions,
   power,
   txState = true,
-  txActiveLabel = '▲ KEYING',
+  txActiveLabel = TX_KEYING,
   onTune,
   onAtuTune,
   onStopTx,
@@ -199,7 +225,7 @@ export function CockpitHeader({
   // TX). `txBusyReason` ships whenever ANY of the seven owners holds the transmitter; the
   // same rule the wheel-tune gate above already follows.
   const onAir = radio.transmitting || radio.txBusyReason != null || radio.rigKeyed === true
-  const txPill = onAir ? txActiveLabel : radio.txEnabled ? '▼ RX' : '■ TX off'
+  const txPill = onAir ? txActiveLabel : radio.txEnabled ? TX_RX : TX_OFF
 
   return (
     <div className="cockpit-header">
@@ -210,7 +236,11 @@ export function CockpitHeader({
           className="ch-readout"
           ref={readoutRef}
           title={
-            digitTune ? 'Scroll a digit to tune it' : wheelTune ? 'Scroll to tune' : undefined
+            digitTune
+              ? t('cockpit.header.readout.digitTune.title')
+              : wheelTune
+                ? t('cockpit.header.readout.wheelTune.title')
+                : undefined
           }
         >
           <FrequencyReadout
@@ -243,9 +273,14 @@ export function CockpitHeader({
         {power && (
           <label
             className={`cockpit-pwr${power.unit === '%' ? ' ph-power' : ''}`}
-            title={power.title ?? `${power.label ?? 'Power'} — trim so your rig's ALC is just zero`}
+            title={
+              power.title ??
+              t('cockpit.header.power.title', {
+                label: power.label ?? t('cockpit.header.power.label'),
+              })
+            }
           >
-            <span>{power.label ?? 'Power'}</span>
+            <span>{power.label ?? t('cockpit.header.power.label')}</span>
             <input
               type="range"
               min={0}
@@ -272,7 +307,7 @@ export function CockpitHeader({
               }}
               onPointerDown={power.onPointerDown}
               onPointerUp={power.onPointerUp}
-              aria-label={power.label ?? 'Power'}
+              aria-label={power.label ?? t('cockpit.header.power.label')}
             />
             <span className="cockpit-pwr-val">
               {power.unit === '%' ? `${Math.round(power.value)}%` : `${Math.round(power.value * 100)}%`}
@@ -286,7 +321,11 @@ export function CockpitHeader({
             flips this branch). Gating it on the arbiter's `onAir` would replace the latch
             with a passive pill exactly while an over is keying — removing a stop control.
             Only the PASSIVE pill below (Phone/CW, which pass no onSetTxEnabled) reads the
-            arbiter. */}
+            arbiter.
+
+            ⚠️ DEFERRED (i18n): the latch's two labels are the accessible name
+            `stop-line.test.tsx` matches for RTTY and SSTV, where this button IS a stop
+            control. It moves in the transmit-path batch — see this file's header. */}
         {txState &&
           (onSetTxEnabled && !radio.transmitting ? (
             <button
@@ -311,6 +350,8 @@ export function CockpitHeader({
             </span>
           ))}
 
+        {/* ⚠️ DEFERRED (i18n): Tune keys a carrier and is on the Phone, CW and Operate
+            stop-line censuses; `stop-line.test.tsx` finds it by accessible name. */}
         {onTune && (
           <button
             type="button"
@@ -328,7 +369,10 @@ export function CockpitHeader({
             when the rig reports a tuner (`radio.atu` non-null) — an ATU button on a radio with no
             ATU is worse than no button. Disabled on the licence lockout exactly like Tune; every
             other refusal (TX off, transmitter busy) comes back from the backend WITH ITS REASON
-            and is shown, because a control that keys the transmitter must never fail silently. */}
+            and is shown, because a control that keys the transmitter must never fail silently.
+
+            ⚠️ DEFERRED (i18n): it keys the rig's own tuning carrier, exactly as SetupHealth's
+            Prove TX does. */}
         {onAtuTune && radio.atu != null && (
           <button
             type="button"
@@ -345,6 +389,8 @@ export function CockpitHeader({
           </button>
         )}
 
+        {/* ⚠️ DEFERRED (i18n): THE stop control of six cockpits. Its label is the accessible
+            name every stop-line sweep looks for (/^stop tx$/i). */}
         {onStopTx && (
           <button type="button" className="cockpit-stoptx" onClick={onStopTx} title="Stop TX (Esc)">
             Stop TX
@@ -354,9 +400,13 @@ export function CockpitHeader({
         {catStatus ?? (
           <span
             className={`cockpit-cat ${catOk ? 'ok' : 'bad'}`}
-            title={radio.catDetail || (catOk ? 'CAT link OK' : 'No CAT link')}
+            // `catDetail` is the backend's own report and passes through verbatim.
+            title={
+              radio.catDetail ||
+              (catOk ? t('cockpit.header.cat.ok.title') : t('cockpit.header.cat.bad.title'))
+            }
           >
-            {catOk ? 'CAT ✓' : 'CAT ✗'}
+            {catOk ? CAT_OK : CAT_BAD}
           </span>
         )}
       </div>

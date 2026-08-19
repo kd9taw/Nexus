@@ -4805,14 +4805,14 @@ export function SettingsPanel({
               keep working exactly as before; they are transmit POLICY and station plumbing, not
               the CAT link, so they get a heading that says so and stop burying it. */}
           <fieldset className="settings-section" id="settings-transmit-limits">
-            <legend>Transmit limits &amp; sharing</legend>
+            <legend>{t('settings.transmit.legend')}</legend>
             {/* Band-edge tones live with the RIG, not with Digital: useBandEdgeTones is
                 called at App top level off snap.radio.txAllowed (App.tsx:739), so the cue
                 fires on phone and CW exactly as it does on FT8. It was only ever filed
                 under Digital by accident. */}
             <div className="settings-field">
               <label className="settings-toggle">
-                <span className="settings-label">Band-edge tones</span>
+                <span className="settings-label">{t('settings.transmit.bandEdgeTones.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -4823,15 +4823,14 @@ export function SettingsPanel({
                   <span className="toggle-knob" />
                 </button>
               </label>
-              <span className="settings-hint">
-                A short audio cue when the dial crosses your license privileges — a rising
-                "ding" back in band, a falling "dong" past an edge. Applies on every mode.
-              </span>
+              <span className="settings-hint">{t('settings.transmit.bandEdgeTones.hint')}</span>
             </div>
 
             <div className="settings-field">
-              <span className="settings-label">Max power by mode (safety)</span>
+              <span className="settings-label">{t('settings.transmit.powerCaps.label')}</span>
               <div className="settings-power-caps">
+                {/* The three names are MODE names — tokens, exactly as they are everywhere else
+                    in this panel — and the cap itself is a percentage. Only the prose moved. */}
                 {(
                   [
                     ['Phone', 'maxPowerPhone'],
@@ -4854,19 +4853,14 @@ export function SettingsPanel({
                   </label>
                 ))}
               </div>
-              <span className="settings-hint">
-                A ceiling on RF output per mode — leave blank for full power. FT8/FT4/RTTY run
-                ~100% duty cycle, so capping the Digital modes (e.g. 30%) protects your finals and
-                any amplifier. The rig is brought down to the cap the moment you enter a capped
-                mode, not only when you touch the power slider.
-              </span>
+              <span className="settings-hint">{t('settings.transmit.powerCaps.hint')}</span>
             </div>
 
             <p className="settings-note">
-              Saving applies your rig settings live (no restart). <strong>Test CAT</strong> saves,
-              launches the bundled <code>rigctld</code> (Hamlib ships with Nexus on Windows — no
-              separate install), and reads your rig&apos;s frequency to confirm CAT. For CAT, pick
-              your <em>Rig Model</em> and <em>Serial Port</em>; serial RTS/DTR and VOX need no model.
+              <T
+                k="settings.transmit.note"
+                tags={{ b: <strong />, code: <code />, em: <em /> }}
+              />
             </p>
 
             {/* Sharing the rig with another program (#48, rogerloxton). A serial port is
@@ -4884,7 +4878,7 @@ export function SettingsPanel({
                 operators never open, and the honest answer to "how do I move to a new laptop"
                 was to go and find it. */}
             <div className="settings-field">
-              <span className="settings-label">Back up your setup</span>
+              <span className="settings-label">{t('settings.transmit.backup.label')}</span>
               <div className="rig-share-row">
                 <button
                   type="button"
@@ -4893,13 +4887,15 @@ export function SettingsPanel({
                     withErrorToast(async () => {
                       const text = await exportSettingsBundle()
                       const stamp = new Date().toISOString().slice(0, 10)
+                      // The FILE NAME is invariant (batch 8): a translated word in it would
+                      // reduce a non-Latin locale's backup to `nexus-settings-.json`.
                       const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
-                      pushToast(`Settings backed up → ${path}`, 'success')
-                    }, 'Backup failed')
+                      pushToast(t('settings.transmit.backup.done', { path }), 'success')
+                    }, t('settings.transmit.backup.failed'))
                   }
-                  title="Save your radios, preferences, memory channels and watchlist to a file"
+                  title={t('settings.transmit.backup.title')}
                 >
-                  Back up
+                  {t('settings.transmit.backup.action')}
                 </button>
                 <input
                   ref={backupFileRef}
@@ -4912,18 +4908,13 @@ export function SettingsPanel({
                   type="button"
                   className="settings-linkbtn"
                   onClick={() => backupFileRef.current?.click()}
-                  title="Replace your current setup with a saved backup"
+                  title={t('settings.transmit.restore.title')}
                 >
-                  Restore…
+                  {t('settings.transmit.restore.action')}
                 </button>
               </div>
               <span className="settings-hint">
-                Your radios, operating preferences, memory channels, watchlist and chase sets in
-                one file — for a new computer, or before a rebuild. <strong>It holds no
-                passwords or API keys</strong>: those stay in your operating system&apos;s
-                keychain, so a restore asks for them again, and the file is safe to keep on a USB
-                stick. Your contact log is separate — export that from the Logbook. Restoring
-                replaces your current setup.
+                <T k="settings.transmit.backup.hint" tags={{ b: <strong /> }} />
               </span>
             </div>
 
@@ -4936,7 +4927,7 @@ export function SettingsPanel({
                 that used to live separately is merged here: two share affordances meant neither
                 told the whole story. */}
             <div className="settings-field">
-              <span className="settings-label">Share this radio with other programs</span>
+              <span className="settings-label">{t('settings.transmit.share.label')}</span>
               <div className="rig-share-row">
                 <button
                   type="button"
@@ -4960,41 +4951,40 @@ export function SettingsPanel({
                           ?.writeText(`127.0.0.1:${form.catBrokerPort || 4532}`)
                           .catch(() => {})
                       }}
-                      title="Copy the address to paste into the other program"
+                      title={t('settings.transmit.share.copy.title')}
                     >
-                      Copy
+                      {t('settings.transmit.share.copy.action')}
                     </button>
                   </>
                 )}
               </div>
+              {/* The PROGRAM NAMES (VarAC, FreeDV, WSJT-X, JS8Call, fldigi) and the rig-model
+                  name `Hamlib NET rigctl` are the other software's own, so they are written in
+                  the sentence and emphasised by the markers this call site supplies. */}
               {form.catBroker ? (
                 <span className="settings-hint">
-                  Nexus itself answers at this address, so <strong>VarAC</strong>,{' '}
-                  <strong>FreeDV</strong>, <strong>WSJT-X</strong>, <strong>JS8Call</strong> and{' '}
-                  <strong>fldigi</strong> can use the radio while Nexus runs — pick the rig{' '}
-                  <em>Hamlib NET rigctl</em> (VarAC and FreeDV call it a network or rigctld
-                  connection), give it the address above, and leave their serial port blank. They
-                  stay connected even while Nexus tests or reconfigures the radio link, and they
-                  follow whichever radio is active. Only for this computer — the address is not
-                  reachable from the network. Takes effect right away. Both programs can command
-                  the rig, so expect them to argue if you tune in both at once.
+                  <T k="settings.transmit.share.hint.on" tags={{ b: <strong />, em: <em /> }} />
                 </span>
               ) : (
                 <span className="settings-hint">
-                  Off — other programs cannot use the radio while Nexus runs. Turn it on and
-                  point them at the address that appears here (<em>Hamlib NET rigctl</em>).
+                  <T k="settings.transmit.share.hint.off" tags={{ em: <em /> }} />
                 </span>
               )}
               {form.catBroker && (form.radios?.length ?? 0) > 1 && (
                 <span className="settings-hint">
-                  Driving a specific radio that is <em>not</em> the active one: use its direct
-                  address <code className="rig-share-direct mono">127.0.0.1:{form.rigctldPort || 4532}</code>{' '}
-                  (per-radio; this link drops briefly whenever Nexus reconfigures that radio).
+                  <T
+                    k="settings.transmit.share.hint.direct"
+                    tags={{
+                      em: <em />,
+                      code: <code className="rig-share-direct mono" />,
+                    }}
+                    vals={{ address: `127.0.0.1:${form.rigctldPort || 4532}` }}
+                  />
                 </span>
               )}
               {form.catBroker && (
                 <div className="settings-field">
-                  <span className="settings-label">Other programs may key transmit</span>
+                  <span className="settings-label">{t('settings.transmit.foreignPtt.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -5004,11 +4994,7 @@ export function SettingsPanel({
                   >
                     <span className="toggle-knob" />
                   </button>
-                  <span className="settings-hint">
-                    On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when
-                    it owned the CAT cable — every Nexus transmit safeguard still applies. Off:
-                    shared programs tune and read but never transmit.
-                  </span>
+                  <span className="settings-hint">{t('settings.transmit.foreignPtt.hint')}</span>
                 </div>
               )}
             </div>

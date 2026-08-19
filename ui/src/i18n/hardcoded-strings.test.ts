@@ -355,6 +355,42 @@ const MIGRATED = [
   // word is the only entry, the same split the AI decoder's 400–1200 Hz window and the BW
   // nudge's ±50 Hz take inside their sentences.
   'components/CwCockpit.tsx',
+  // Batch 22 (2026-08-19) — THE SHARED COCKPIT FURNITURE, and the last batch of the phase. The
+  // instruments every cockpit hangs on the same frame: the dial readout, the tuning strip, the
+  // rig scope and the FT wide graph, the RX and TX meters, the MSK144 Fast Graph, and the
+  // rotator's strip and pane. None of these is a transmit control — they read, they draw, and
+  // the two ■ buttons among them stop a MAST and a satellite track, never an over — so all
+  // eight files graduate straight to MIGRATED. The two files that DO draw transmit controls,
+  // `CockpitHeader.tsx` and `TopBar.tsx`, are on PARTIAL below and are the reason this batch
+  // was ordered last.
+  //
+  // The units rule lands on the INSTRUMENT: the formatted dial and every digit's decade, the
+  // tuning steps and RIT/XIT offsets, the scope's three window widths and its S-units, the
+  // waterfall's spans and its `dBr` legend, every meter reading in SWR/percent/watts/dB, and
+  // every azimuth in degrees are measurements and stay in the code — as do the vocabularies
+  // each file now gathers as named constants (`dB`/`dBr`, `FLEX RF`/`CI-V RF`, the `DIAL`,
+  // `SAT` and `ROTOR` plates, the four TX meter names, `RIT`/`XIT` and the VFO letters).
+  //
+  // Three things this batch settles that the twenty-one before it did not. TEXT DRAWN ON A
+  // CANVAS is not automatically a tick label: the waterfall's frequency axis and its scrollback
+  // time tape are measurements and stayed, while the ⏸ PAUSED chip beside them is a state
+  // message and moved — the test is whether the string says something or measures something.
+  // A CONTROL THAT STOPS SOMETHING THAT IS NOT A TRANSMISSION is an ordinary control: the Rotor
+  // pane's ■ STOP and the strip's two ■ buttons halt the mast, the satellite track and a
+  // transponder hold, no sweep looks for them, and their words moved with everything around
+  // them. And a DEFAULT PROP VALUE that is prose resolves as a parameter default (`label =
+  // t(…)`), which is evaluated on every render — a module constant would freeze the first
+  // locale loaded, which is the same trap `RF_SPANS` documented in batch 20.
+  'components/FrequencyReadout.tsx',
+  'components/TuningStrip.tsx',
+  'components/PhoneScope.tsx',
+  'components/Waterfall.tsx',
+  'components/FastGraph.tsx',
+  'components/LevelMeter.tsx',
+  'components/LiveMeters.tsx',
+  'components/TxMeters.tsx',
+  'components/RotorStrip.tsx',
+  'components/prop/RotorPane.tsx',
 ]
 
 /**
@@ -379,9 +415,12 @@ const MIGRATED = [
  * MSK144, Beacons — WSPR & FST4W, FST4, Q65, Quick-reply macros). Batch 17 (2026-08-19) took
  * the rest of the per-mode surface: the whole Phone tab, the whole CW tab (keyer, keying
  * ports, CW ID and the F-key macro editor with its role table and its two profile prompts),
- * and the Digital tab's RTTY, PSK, SSTV, APRS and Working Frequencies sections. Putting the
- * file on MIGRATED would report the tabs still to come; leaving it off entirely would make
- * every key those sections use look like an orphan.
+ * and the Digital tab's RTTY, PSK, SSTV, APRS and Working Frequencies sections. Batch 22
+ * (2026-08-19) took Transmit limits & sharing — the band-edge tones, the per-mode power caps,
+ * the setup backup and the CAT-broker sharing block with its foreign-PTT permission, all of
+ * them transmit POLICY and station plumbing rather than a control that keys or stops an over.
+ * Putting the file on MIGRATED would report the tabs still to come; leaving it off entirely
+ * would make every key those sections use look like an orphan.
  *
  * ⚠️ AND THE DIGITAL TAB IS THE OTHER REASON THIS FILE CANNOT GRADUATE YET, on the same
  * ruling that keeps `SetupHealth.tsx` below: the FT8/FT4 section's first two sub-groups,
@@ -472,12 +511,39 @@ const MIGRATED = [
  * `TxMeters.tsx`, which this batch does not own — moving two of five would leave one menu
  * speaking two languages. They are named constants, so the guard cannot see them either way.
  *
+ * `CockpitHeader.tsx` and `TopBar.tsx` (batch 22, 2026-08-19) are here on that same ruling, and
+ * they are WHERE THE STOP LINE ACTUALLY RENDERS — which is why that batch was ordered last:
+ *
+ *   · The cockpit header draws FOUR transmit controls for SIX cockpits at once (Phone, CW,
+ *     RTTY, PSK, SSTV and Operate), so one wrong word there is a six-cockpit regression that
+ *     the name backstop — exact-word on vocabulary ids — cannot see. STOP TX (the `halt_tx` on
+ *     every one of those censuses), TUNE (Phone, CW and Operate), the TX-ENABLE LATCH (a stop
+ *     control in RTTY and SSTV, and the reason its branch keys on the slot flag rather than the
+ *     arbiter) and ATU, which keys the rig's own tuning carrier exactly as SetupHealth's Prove
+ *     TX does. Three of the four are matched by accessible name in `stop-line.test.tsx`
+ *     (/^stop tx$/i, /^tune$|^tuning…$/i, /^▼ tx on$|^■ tx off$/i). The TX/RX pill's three
+ *     plates stay with them: the pill is the PASSIVE rendering of that same latch, and the two
+ *     must never read as different controls.
+ *   · The top bar keeps its TX CLUSTER: TX On/Off, whose two tooltip arms state the abort
+ *     semantics ("an FT over already in flight finishes" — the batch-18 ruling), TUNE, STOP TX,
+ *     and the TX WATCHDOG chip, which is what the watchdog says once it has halted an over.
+ *
+ * Everything around them moved — the wheel-tune tooltips and the band-edge toast, the power
+ * slider (batch 13: a configuration control on the transmit path is not a transmit control),
+ * the CAT pill, the tier pills, the operator/Help/Field chips, the RX meter, the clock and
+ * sync readouts, Hold Tx and the whole transmit-cycle group — and so did the mode-capability
+ * prose the deferred controls SHARE ("this mode is receive-only"), which describes the MODE
+ * and not the control it is hung on. Both files graduate the moment the transmit-path batch
+ * lands.
+ *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be
  * added to it to dodge a failing check.
  */
 const PARTIAL = [
   'components/SettingsPanel.tsx',
+  'components/CockpitHeader.tsx',
+  'components/TopBar.tsx',
   'components/SetupHealth.tsx',
   'components/AprsCockpit.tsx',
   'components/OperateQsoStrip.tsx',

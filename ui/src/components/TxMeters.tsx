@@ -1,5 +1,20 @@
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the meter names
+// are the rig's own front-panel vocabulary and stay as the constants below, every reading is a
+// measurement built here (SWR ratio, ALC %, watts, dB), and the prose around them — the four
+// tooltips, the group's name and the idle line — is in the catalog under `meters.tx.*`.
+//
+// These are READOUTS, not transmit controls: nothing here keys, gates or stops anything.
 import { useRef } from 'react'
 import type { RadioStatus } from '../types'
+import { t } from '../i18n'
+
+/** The rig's own meter names, as they are printed on a radio's front panel — technical tokens
+ *  exactly as a mode name is, gathered here so the catalog guard reads them as the deliberate
+ *  constants they are. */
+const SWR = 'SWR'
+const ALC = 'ALC'
+const PO = 'PO'
+const COMP = 'COMP'
 
 /** Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter: only the
  *  meters the rig actually reports over CAT (each independently capability-gated, so a rig
@@ -16,7 +31,13 @@ import type { RadioStatus } from '../types'
 /** WHEN these meters have anything to show. The panel's own idle line and every ⊞ Panels
  *  entry that offers this panel read this one string, so the menu cannot drift from what
  *  the panel does — and the default (unpinned) variant, which renders nothing at all on
- *  receive, stops looking like a checkbox that does nothing. */
+ *  receive, stops looking like a checkbox that does nothing.
+ *
+ *  ⚠️ DELIBERATELY NOT IN THE CATALOG YET, on the batch-21 ruling: the other ⊞ menu notes on
+ *  the same menu live in `features/panelHost.ts` and `waterfall.ts`, and the three cockpits
+ *  that pass this one in are not this batch's files either — moving one note of five would
+ *  leave a single menu speaking two languages. The idle line below interpolates it whole, so
+ *  the panel and the menu still cannot drift, and it moves when that menu does. */
 export const TX_METERS_WHEN = 'readings appear on transmit'
 
 type Zone = 'ok' | 'warn' | 'hot'
@@ -77,17 +98,17 @@ export function TxMeters({
 
   const rows: MeterRow[] = []
   if (radio.txSwr != null)
-    rows.push({ label: 'SWR', title: 'Antenna match — keep it under 2:1', bar: swrBar(radio.txSwr) })
+    rows.push({ label: SWR, title: t('meters.tx.swr.title'), bar: swrBar(radio.txSwr) })
   if (radio.txAlc != null)
     rows.push({
-      label: 'ALC',
-      title: 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
+      label: ALC,
+      title: t('meters.tx.alc.title'),
       bar: alcBar(radio.txAlc),
     })
   if (radio.txPoW != null)
-    rows.push({ label: 'PO', title: 'Actual output power', bar: poBar(radio.txPoW) })
+    rows.push({ label: PO, title: t('meters.tx.po.title'), bar: poBar(radio.txPoW) })
   if (radio.txCompDb != null)
-    rows.push({ label: 'COMP', title: 'Speech compression', bar: compBar(radio.txCompDb) })
+    rows.push({ label: COMP, title: t('meters.tx.comp.title'), bar: compBar(radio.txCompDb) })
 
   // ON AIR via the ARBITER, not the FT slot flag (#57): `transmitting` is written only by
   // the slot/beacon path, so a voice or CW over — the overs Phone/CW actually key — never
@@ -107,8 +128,8 @@ export function TxMeters({
     // Pinned but no reading has EVER arrived (rig reports no meters, or hasn't keyed yet):
     // a fixed-height hint keeps the panel discoverable without inventing numbers.
     return (
-      <div className={`ph-txmeters${variant} idle`} role="group" aria-label="Transmit meters">
-        <span className="ph-txmeters-hint">TX meters — {TX_METERS_WHEN}</span>
+      <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
+        <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
       </div>
     )
   }
@@ -118,7 +139,7 @@ export function TxMeters({
     <div
       className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}`}
       role="group"
-      aria-label="Transmit meters"
+      aria-label={t('meters.tx.aria')}
     >
       {shown.map((r) => (
         <div key={r.label} className="ph-txmeter" title={r.title}>
