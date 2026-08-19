@@ -132,3 +132,58 @@ describe('mode-class + band normalization on the decode feed', () => {
     expect(r.cats).toContain('band')
   })
 })
+
+// The operator's report is about the DECODE FEED as much as the roster, and the feed's
+// grid/entity icons come from the decode's OWN engine flags — not only from the alerts.
+// Gating the alerts alone leaves the icon exactly where he saw it.
+describe('the alert band scopes gate the decode-native flags too', () => {
+  const DEFAULTS = { dxcc: 'all', grid: 'vhf', rareGrid: 'vhf' }
+
+  it('no scopes → unchanged (the flag alone still tags)', () => {
+    expect(resolveDecodeNeeds(decode({ newGrid: true }), '20m', []).cats).toEqual(['grid'])
+  })
+
+  it('HF + grid scope VHF+ → no GRID icon', () => {
+    const r = resolveDecodeNeeds(decode({ newGrid: true }), '20m', [], 'Digital', DEFAULTS)
+    expect(r.cats).toEqual([])
+    expect(r.rowNeed).toBeNull()
+  })
+
+  it('POSITIVE CONTROL — 6 m keeps the GRID icon', () => {
+    const r = resolveDecodeNeeds(decode({ newGrid: true }), '6m', [], 'Digital', DEFAULTS)
+    expect(r.cats).toEqual(['grid'])
+  })
+
+  it('a rare grid follows the RARE scope', () => {
+    const gem = decode({ newGrid: true, gridRarity: 'ultraRare' })
+    expect(resolveDecodeNeeds(gem, '20m', [], 'Digital', DEFAULTS).cats).toEqual([])
+    expect(
+      resolveDecodeNeeds(gem, '20m', [], 'Digital', { ...DEFAULTS, rareGrid: 'all' }).cats,
+    ).toEqual(['grid'])
+  })
+
+  it('the DXCC scope gates the native ATNO flag (set it to vhf — it defaults to all)', () => {
+    const atno = decode({ newDxcc: true })
+    expect(resolveDecodeNeeds(atno, '20m', [], 'Digital', DEFAULTS).cats).toEqual(['entity'])
+    const hfOff = { ...DEFAULTS, dxcc: 'vhf' }
+    expect(resolveDecodeNeeds(atno, '20m', [], 'Digital', hfOff).cats).toEqual([])
+    expect(resolveDecodeNeeds(atno, '6m', [], 'Digital', hfOff).cats).toEqual(['entity'])
+  })
+
+  it('a new BAND keeps its icon on HF — only the scoped kinds are withheld', () => {
+    const r = resolveDecodeNeeds(
+      decode({ newGrid: true }),
+      '20m',
+      [alert(['NewBand'], '20m')],
+      'Digital',
+      DEFAULTS,
+    )
+    expect(r.cats).toEqual(['band'])
+  })
+
+  it('an unresolvable band stays permissive', () => {
+    expect(resolveDecodeNeeds(decode({ newGrid: true }), '', [], 'Digital', DEFAULTS).cats).toEqual(
+      ['grid'],
+    )
+  })
+})

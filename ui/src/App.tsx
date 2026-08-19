@@ -821,9 +821,24 @@ export default function App() {
       setPendingWork({ call: wc, view: target, ts: Date.now() })
     }
   }, [snap?.workTick, snap?.workView, cwEnabled, phoneEnabled, rttyEnabled])
+  // Declared here (rather than beside bandPlan below) because the need gate reads it: the
+  // band scopes live in settings and everything derived from `needAlerts` sits right below.
+  const [settings, setSettings] = useState<Settings | null>(null)
+  // The operator's per-type alert BAND SCOPES (Settings ▸ Spots & Alerts). They gate the
+  // need ICONS as well as the sound/toast — "I selected grids, vhf/uhf 6m and up ... and its
+  // still showing the grid icons in ft8 in both roster and classic mode when on hf bands"
+  // (operator, twice). Undefined until settings load, which is permissive by design.
+  const needScopes = useMemo(
+    () => ({
+      dxcc: settings?.alertDxccBands,
+      grid: settings?.alertGridBands,
+      rareGrid: settings?.alertRareGridBands,
+    }),
+    [settings?.alertDxccBands, settings?.alertGridBands, settings?.alertRareGridBands],
+  )
   const visibleAlerts = useMemo(
-    () => visibleNeeds(needAlerts, { cw: cwEnabled, phone: phoneEnabled }),
-    [needAlerts, cwEnabled, phoneEnabled],
+    () => visibleNeeds(needAlerts, { cw: cwEnabled, phone: phoneEnabled }, needScopes),
+    [needAlerts, cwEnabled, phoneEnabled, needScopes],
   )
   // Activity TYPE per heard call (POTA / SOTA / DXpedition), independent of the need tier.
   // needByCall keeps only tags[0], so a POTA activator that's ALSO a new band shows the band
@@ -841,7 +856,6 @@ export default function App() {
   const needByCall = useMemo(() => topNeedByCall(needAlertsByCall), [needAlertsByCall])
   const [typingTick, setTypingTick] = useState(0)
   const [bandPlan, setBandPlan] = useState<BandChannel[]>([])
-  const [settings, setSettings] = useState<Settings | null>(null)
   // Operators this log has already seen (#25) — the seat-swap roster. Refreshed when the
   // operator changes, which is the moment a new name can have entered the log.
   const [opRoster, setOpRoster] = useState<string[]>([])
@@ -2181,6 +2195,7 @@ export default function App() {
         harqRescues={snap.harqRescues}
         onCall={handleCall}
         needAlertsByCall={needAlertsByCall}
+        needScopes={needScopes}
         myGrid={snap.mygrid}
         compact
         title="Band Activity — heard on the band"
@@ -2750,6 +2765,7 @@ export default function App() {
               roster={operateStationsPanel}
               needByCall={needByCall}
               needAlertsByCall={needAlertsByCall}
+              needScopes={needScopes}
               selectedCall={activePeer}
               onSelect={handleSelect}
               layoutMode={operateLayout}

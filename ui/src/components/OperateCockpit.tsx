@@ -10,6 +10,7 @@ import type {
   Tier,
 } from '../types'
 import { isRxOnly, isBeacon } from '../types'
+import type { NeedBandScopes } from '../features/needs'
 import { bandLabelForMhz } from '../band'
 import {
   clampOffsetHz,
@@ -108,6 +109,10 @@ interface Props {
   /** Full NeedAlerts per call — drives the band-activity decode feed's need icons +
    * row colour. Forwarded to every OperateDecodes instance. */
   needAlertsByCall?: Map<string, NeedAlert[]>
+  /** The operator's per-type alert band scopes — forwarded to every OperateDecodes so the
+   * need icons honour them exactly as the sound/toast does. The ROSTER needs none: its
+   * alerts arrive already scoped. */
+  needScopes?: NeedBandScopes
   /** Currently selected/open station (highlighted in the Roster layout). */
   selectedCall: string | null
   /** Select (open) a station from the Roster layout (single click). */
@@ -252,6 +257,7 @@ export function OperateCockpit({
   roster,
   needByCall,
   needAlertsByCall,
+  needScopes,
   selectedCall,
   onSelect,
   layoutMode,
@@ -1114,6 +1120,7 @@ export function OperateCockpit({
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}
+                        needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
                         onErase={() => notifyErase(0)}
@@ -1142,6 +1149,7 @@ export function OperateCockpit({
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}
+                        needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
                         onErase={() => notifyErase(1)}
@@ -1180,6 +1188,7 @@ export function OperateCockpit({
                     harqRescues={snap.harqRescues}
                     onCall={onCall}
                     needAlertsByCall={needAlertsByCall}
+                    needScopes={needScopes}
                     myGrid={snap.mygrid}
                     {...decodeClickProps}
                     onErase={() => notifyErase(0)}
@@ -1203,6 +1212,7 @@ export function OperateCockpit({
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}
+                        needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
                         onErase={() => notifyErase(1)}

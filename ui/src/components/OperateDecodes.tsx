@@ -3,6 +3,7 @@ import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
 import type { DecodeRow, NeedAlert, Tier } from '../types'
 import { resolveDecodeNeeds, isAwardNeed } from '../features/decodeNeeds'
+import type { NeedBandScopes } from '../features/needs'
 import { NEED_VISUALS, type NeedCat } from '../features/needVisuals'
 import {
   DECODE_FILTERS,
@@ -109,6 +110,14 @@ interface Props {
    */
   needAlertsByCall?: Map<string, NeedAlert[]>
   /**
+   * The operator's per-type alert BAND SCOPES (Settings ▸ Spots & Alerts). They gate the
+   * need icons the same way they gate the sound/toast — a grid scope of VHF+ must take the
+   * GRID icon off an HF row, which is the operator's twice-reported complaint. Needed here
+   * as well as on the alert set because a row's entity/grid icon comes from the DECODE's own
+   * engine flags. Every host passes it; omitting it withholds nothing.
+   */
+  needScopes?: NeedBandScopes
+  /**
    * Called AFTER the internal erase() wipe so the cockpit can mirror the
    * operator's clear gesture to cooperating loggers via notifyErase (UDP Clear).
    * Only called on operator-initiated Erase, NOT on snap.clearTick (no echo loop).
@@ -185,6 +194,7 @@ export function OperateDecodes({
   title = 'Band Activity',
   highlights = NO_HIGHLIGHTS,
   needAlertsByCall = NO_NEEDS,
+  needScopes,
   onErase,
   clearTick = 0,
   history,
@@ -522,7 +532,7 @@ export function OperateDecodes({
           const hlTip = hlEntry ? ' · highlighted by your logger (UDP)' : ''
           // Need context for this row (why is this station worth working) — icons + colour.
           const rowAlerts = d.from ? (needAlertsByCall.get(d.from.toUpperCase()) ?? []) : []
-          const needs = resolveDecodeNeeds(d, band, rowAlerts)
+          const needs = resolveDecodeNeeds(d, band, rowAlerts, 'Digital', needScopes)
           // Beam heading for this row: the decode's own grid when it sent one, else
           // the centre of its entity (marked `~`), else nothing at all.
           const az = azimuthTo(myGrid, d.grid, d.country, centroids)
