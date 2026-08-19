@@ -54,6 +54,10 @@ struct SatSplit {
 pub struct CivBackend {
     h: CivHandle,
     addr: u8,
+    /// Which Icom DATA mode to select for digital operating (1..=3, default 1 = today's
+    /// behaviour). Atomic because a settings save must move it under a RUNNING daemon: the
+    /// alternative is a CI-V restart to change a menu choice, which drops CAT mid-session.
+    data_mode: std::sync::atomic::AtomicU8,
     /// Split state the UI/`s` verb reads back (the rig's `0F` read is skipped — the
     /// last commanded state is authoritative for the session, like the Hamlib cache).
     split: AtomicBool,
@@ -81,10 +85,18 @@ pub struct CivBackend {
 }
 
 impl CivBackend {
+    /// Point the backend at a different DATA mode (1..=3). Clamped, so a bad setting can never
+    /// reach the bus.
+    pub fn set_data_mode_pref(&self, mode: u8) {
+        self.data_mode
+            .store(mode.clamp(1, 3), std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn new(h: CivHandle, addr: u8, tx_intent: Arc<AtomicBool>) -> Self {
         CivBackend {
             h,
             addr,
+            data_mode: std::sync::atomic::AtomicU8::new(1),
             split: AtomicBool::new(false),
             tx_intent,
             band: Mutex::new(SatSplit {
@@ -474,7 +486,14 @@ impl RigBackend for CivBackend {
         let mode_ok = self.ack(commands::set_mode(self.addr, base, None));
         // Data-mode set: tolerate a NAK when turning it OFF (some rigs NAK a redundant
         // off) but require the ACK when turning it ON — FT8 must actually get USB-D.
-        let data_ok = self.ack(commands::set_data_mode(self.addr, data, None));
+        // The operator's DATA mode (D1/D2/D3), not a hard 1 — see `set_data_mode_n`. Turning
+        // data OFF is still just off.
+        let data_ok = if data {
+            let n = self.data_mode.load(std::sync::atomic::Ordering::Relaxed);
+            self.ack(commands::set_data_mode_n(self.addr, n, None))
+        } else {
+            self.ack(commands::set_data_mode(self.addr, false, None))
+        };
         mode_ok && (data_ok || !data)
     }
 

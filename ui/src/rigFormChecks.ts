@@ -109,3 +109,34 @@ export function checkRigForm(
 export function blocks(checks: RigCheck[]): boolean {
   return checks.some((c) => c.level === 'error')
 }
+
+/**
+ * Hamlib model numbers whose radios Nexus can drive with its OWN CI-V engine.
+ *
+ * ⚠️ MIRRORS `icom_scope_model` in crates/tempo-audio/src/rigmodels.rs, and
+ * `rigFormChecks.test.ts` reads that file and fails if the two drift. It exists because the
+ * screen used to ask a DIFFERENT question from the engine: the engine asked "is this model
+ * 3078?", the screen asked "does the model NAME look like an IC-7610?" — and a radio stored as
+ * `Icom 7610`, `IC-7610M`, or with an empty model name passed the first and failed the second,
+ * so the option vanished for a radio Nexus fully supports. A user reported exactly that
+ * (2026-08-19). One question, asked from one list.
+ */
+export const NATIVE_CIV_MODELS: readonly number[] = [3073, 3078, 3081, 3085, 3090]
+
+/** Can this radio's CI-V be driven natively, and if not, why not? `null` = yes. */
+export function nativeCivBlockedReason(rigModel: number, rigConn: string): string | null {
+  if (!NATIVE_CIV_MODELS.includes(rigModel)) return 'not-supported'
+  if (rigConn === 'network') return 'network'
+  if (rigConn === 'omnirig') return 'omnirig'
+  return null
+}
+
+/**
+ * Icoms with more than ONE data mode, where `1A 06`'s first byte selects D1/D2/D3.
+ *
+ * ⚠️ NEEDS BENCH. The IC-7300 has a single DATA mode and is deliberately absent; the rest are
+ * listed from their CI-V references and none of it has been confirmed against a radio here. The
+ * selector defaults to D1 — today's behaviour — so an operator who never touches it is
+ * unaffected either way.
+ */
+export const MULTI_DATA_MODE_ICOMS: readonly number[] = [3078, 3081, 3085, 3090]

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { confirmDialog } from '../confirm'
-import { checkRigForm, blocks, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   exportSettingsBundle,
@@ -2503,6 +2503,9 @@ export function SettingsPanel({
 
   // Field Day section validity: a non-empty value that isn't a known ARRL/RAC
   // section is flagged inline so it never silently reaches the Cabrillo log.
+  // Why native CI-V cannot be offered for THIS radio, or null when it can. Derived rather than
+  // inlined so the control and its explanation can never disagree about the condition.
+  const civBlocked = nativeCivBlockedReason(form.rigModel, form.rigConn)
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
 
@@ -3894,8 +3897,12 @@ export function SettingsPanel({
                 </span>
               </label>
 
-              {form.rigConn !== 'network' &&
-                /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') && (
+              {/* Offered on the ENGINE's question — the model number — not on what the model
+                  NAME happens to look like. And when the answer is "this radio qualifies but
+                  the connection cannot carry it", the control is DISABLED WITH THE REASON
+                  rather than hidden: an absent control is a mystery, a greyed one with a
+                  sentence is an answer. (IC-7610 report, 2026-08-19.) */}
+              {NATIVE_CIV_MODELS.includes(form.rigModel) && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.icomNative.label')}
@@ -3905,15 +3912,46 @@ export function SettingsPanel({
                       role="switch"
                       aria-checked={form.icomNativeCat ?? false}
                       className={`toggle${form.icomNativeCat ? ' on' : ''}`}
+                      disabled={civBlocked !== null}
                       onClick={() => updateBool('icomNativeCat', !form.icomNativeCat)}
                     >
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      <T k="settings.rigControl.icomNative.hint" tags={{ b: <strong /> }} />
+                      {civBlocked === 'network' ? (
+                        'Not available on a network connection: the CI-V engine speaks to the radio over its serial port, and a LAN-connected radio has none for Nexus to open. Connect this radio by USB to use it.'
+                      ) : civBlocked === 'omnirig' ? (
+                        'Not available through OmniRig: OmniRig holds the COM port, so Nexus cannot open it to speak CI-V.'
+                      ) : (
+                        <T k="settings.rigControl.icomNative.hint" tags={{ b: <strong /> }} />
+                      )}
                     </span>
                   </label>
                 )}
+
+              {/* WHICH Icom data mode. Only for the radios that have more than one, and only
+                  through the native CI-V engine — Hamlib's PKT modes always select D1, so
+                  offering the choice on that path would be a control that does nothing. */}
+              {MULTI_DATA_MODE_ICOMS.includes(form.rigModel) && (
+                <label className="settings-field">
+                  <span className="settings-label">Data mode</span>
+                  <select
+                    className="settings-input"
+                    value={String(form.icomDataMode ?? 1)}
+                    disabled={!form.icomNativeCat}
+                    onChange={(e) => updateNum('icomDataMode', Number(e.target.value))}
+                  >
+                    <option value="1">D1</option>
+                    <option value="2">D2</option>
+                    <option value="3">D3</option>
+                  </select>
+                  <span className="settings-hint">
+                    {form.icomNativeCat
+                      ? 'Which DATA mode this radio is put into for digital operating. Pick the one your USB audio is wired to — D1 unless you changed it on the radio. Needs a bench check on a real radio before it is trusted.'
+                      : 'Needs the native CI-V connection above: through Hamlib the radio always lands on D1.'}
+                  </span>
+                </label>
+              )}
 
               {/* SmartSDR-only streams, gated on the MODEL NUMBER — never on the model's name.
                   A name-sniff for "flex" also matched the PowerSDR entry, offering an ANAN/HL2

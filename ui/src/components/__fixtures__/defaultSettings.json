@@ -38,6 +38,7 @@
   "rigConn": "serial",
   "rigAddr": "",
   "icomNativeCat": false,
+  "icomDataMode": 1,
   "setRigMode": true,
   "operatingMode": "digital",
   "licenseClass": "open",

@@ -388,11 +388,31 @@ pub fn set_rptr_offset(radio: u8, hz: u64) -> Frame {
     let bcd = freq_to_bcd(hz / 100);
     Frame::command(radio, 0x0D, &bcd[..3])
 }
-/// DATA mode on/off (cmd `1A 06`): `on` selects USB-D/LSB-D (soundcard digital); the
-/// filter byte keeps the current selection when `None`.
+/// DATA mode (cmd `1A 06`). The first data byte is `00` for off, and for ON it is **which**
+/// data mode — which is the part that was wrong here.
+///
+/// ⚠️ ON A SINGLE-DATA-MODE ICOM (IC-7300) the byte is simply 1 = on. On the multi-data-mode
+/// radios (IC-7610, IC-9700, IC-705, IC-905) it SELECTS D1/D2/D3, and passing a hard 1 is why
+/// those radios always landed on D1 — an IC-7610 operator with USB audio wired to D2 found the
+/// radio moved back under them on every mode assert (report, 2026-08-19). `mode` is clamped to
+/// 1..=3 so a bad setting can never put an undefined value on the bus.
+///
+/// The filter byte keeps the rig's current selection when `None`.
+pub fn set_data_mode_n(radio: u8, mode: u8, filter: Option<u8>) -> Frame {
+    let m = mode.clamp(1, 3);
+    let fil = filter.unwrap_or(0x01);
+    Frame::command(radio, 0x1A, &[0x06, m, fil])
+}
+
+/// DATA mode on/off, selecting D1 when on — the long-standing behaviour, kept for the callers
+/// that have no operator preference to apply (a tune restore putting the rig back the way it
+/// was found).
 pub fn set_data_mode(radio: u8, on: bool, filter: Option<u8>) -> Frame {
-    let fil = filter.unwrap_or(if on { 0x01 } else { 0x00 });
-    Frame::command(radio, 0x1A, &[0x06, u8::from(on), fil])
+    if !on {
+        let fil = filter.unwrap_or(0x00);
+        return Frame::command(radio, 0x1A, &[0x06, 0x00, fil]);
+    }
+    set_data_mode_n(radio, 1, filter)
 }
 /// Read the DATA mode state (cmd `1A 06`).
 pub fn read_data_mode(radio: u8) -> Frame {
@@ -609,6 +629,37 @@ fn from_bcd(b: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
+
+    /// THE BYTE THAT SENT AN IC-7610 TO D1 FOREVER.
+    ///
+    /// `1A 06`'s first data byte is `00` for off and, on the multi-data-mode Icoms, WHICH data
+    /// mode for on. Nexus sent a hard `1`, so an operator with USB audio wired to D2 had the
+    /// radio moved back under them on every mode assert (report, 2026-08-19).
+    #[test]
+    fn data_mode_selects_the_operators_d_number() {
+        // D1 is what the old call produced — the byte is identical, so nothing moves for an
+        // operator who never touches the setting.
+        assert_eq!(
+            set_data_mode_n(0x98, 1, None).data,
+            set_data_mode(0x98, true, None).data,
+            "D1 must be byte-identical to the long-standing behaviour"
+        );
+        assert_eq!(set_data_mode_n(0x98, 2, None).data, vec![0x06, 0x02, 0x01]);
+        assert_eq!(set_data_mode_n(0x98, 3, None).data, vec![0x06, 0x03, 0x01]);
+        // Off is off, whatever number is configured.
+        assert_eq!(
+            set_data_mode(0x98, false, None).data,
+            vec![0x06, 0x00, 0x00]
+        );
+        // A nonsense setting can never reach the bus: 0 and 9 both clamp into range.
+        assert_eq!(set_data_mode_n(0x98, 0, None).data[1], 0x01);
+        assert_eq!(set_data_mode_n(0x98, 9, None).data[1], 0x03);
+        // The filter byte is still honoured when the caller has one.
+        assert_eq!(
+            set_data_mode_n(0x98, 2, Some(0x02)).data,
+            vec![0x06, 0x02, 0x02]
+        );
+    }
     use super::*;
     use crate::civ::frame::bcd_to_freq;
 

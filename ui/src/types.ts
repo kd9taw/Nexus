@@ -2438,6 +2438,8 @@ export interface Settings {
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */
   icomNativeCat: boolean
+  /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
+  icomDataMode: number
   /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
    * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
    *
@@ -2895,6 +2897,8 @@ export interface RadioProfile {
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */
   icomNativeCat: boolean
+  /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
+  icomDataMode: number
   /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
    * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
    *

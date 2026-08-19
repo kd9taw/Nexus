@@ -786,6 +786,10 @@ pub struct Settings {
     /// [`RadioProfile::icom_native_cat`]). Default off.
     #[serde(default)]
     pub icom_native_cat: bool,
+    /// Which Icom DATA mode the active radio uses (flat mirror — see
+    /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
+    #[serde(default = "one")]
+    pub icom_data_mode: u8,
     /// Plain SSB instead of the DATA submode on the soundcard modes, for the active radio
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
@@ -2167,6 +2171,12 @@ impl RoutingRule {
 /// One radio's complete, independently-configurable connection profile. A single-radio station has
 /// exactly one (migrated from the flat `Settings` rig/audio fields); adding a 2nd radio in Settings
 /// appends another. Serde-defaulted throughout so partial/older records load.
+/// serde default for `icom_data_mode`: D1, which is what every Icom has and what Nexus has
+/// always selected.
+fn one() -> u8 {
+    1
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RadioProfile {
@@ -2208,6 +2218,20 @@ pub struct RadioProfile {
     /// launching rigctld) and serves the same protocol on `rigctld_port` — unlocking the
     /// rig's real spectrum-scope waveform + instant transceive dial tracking. Only honored
     /// for a scope-capable Icom on a serial connection; off (default) = classic rigctld.
+    /// Which Icom DATA mode to select for digital operating: 1, 2 or 3.
+    ///
+    /// ⚠️ **1 IS TODAY'S BEHAVIOUR AND THE DEFAULT.** On the multi-data-mode Icoms (IC-7610,
+    /// IC-9700, IC-705, IC-905) the CI-V byte Nexus has always sent as "data mode on" is in
+    /// fact the data mode NUMBER, so every one of those radios lands on D1 — and an operator
+    /// who wires USB audio to D2 finds the radio moved back under them on every mode assert.
+    /// An IC-7610 operator reported exactly that (2026-08-19): "in ft mode the radio goes to
+    /// data-d1, I need data-d2 — did I miss a setting?" They had not; there was none.
+    ///
+    /// ⚠️ NEEDS BENCH. This is a CAT change across a class of radios and cannot be verified
+    /// here. It ships defaulting to 1 so nothing changes for anyone who does not choose
+    /// otherwise, and 2/3 want a real radio in front of someone before they are called working.
+    #[serde(default = "one")]
+    pub icom_data_mode: u8,
     pub icom_native_cat: bool,
     /// Command PLAIN SSB (USB/LSB by band) instead of the DATA submode on the soundcard
     /// modes — Digital (FT8/FT4/FT1), RTTY-AFSK and SSTV. Off by default: the DATA submode
@@ -2298,6 +2322,10 @@ pub struct RadioProfilePatch {
     pub omnirig_slot: u8,
     pub rigctld_port: u16,
     pub icom_native_cat: bool,
+    /// See `RadioProfile::icom_data_mode` — D1/D2/D3. `#[serde(default = "one")]` so a payload
+    /// written before the field existed still deserializes as today's behaviour.
+    #[serde(default = "one")]
+    pub icom_data_mode: u8,
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
@@ -2343,6 +2371,7 @@ impl RadioProfilePatch {
         p.omnirig_slot = self.omnirig_slot;
         p.rigctld_port = self.rigctld_port;
         p.icom_native_cat = self.icom_native_cat;
+        p.icom_data_mode = self.icom_data_mode;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
@@ -2430,6 +2459,7 @@ impl Default for RadioProfile {
             // rigctld number stays the BROKER's, so external loggers land on the broker.
             rigctld_port: 4534,
             icom_native_cat: false,
+            icom_data_mode: 1,
             data_modes_plain_ssb: false,
             audio_in: String::new(),
             audio_out: String::new(),
@@ -2734,6 +2764,7 @@ impl Default for Settings {
             rig_addr: String::new(),
             omnirig_slot: 1,
             icom_native_cat: false,
+            icom_data_mode: 1,
             data_modes_plain_ssb: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
@@ -3021,6 +3052,7 @@ impl Settings {
             omnirig_slot: self.omnirig_slot,
             rigctld_port: self.rigctld_port,
             icom_native_cat: self.icom_native_cat,
+            icom_data_mode: self.icom_data_mode,
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
@@ -3924,6 +3956,7 @@ mod tests {
             omnirig_slot: 2,
             rigctld_port: 4533,
             icom_native_cat: true,
+            icom_data_mode: 2,
             data_modes_plain_ssb: true,
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
@@ -3998,6 +4031,7 @@ mod tests {
             omnirig_slot: 0,
             rigctld_port: 0,
             icom_native_cat: false,
+            icom_data_mode: 3,
             data_modes_plain_ssb: false,
             audio_in: String::new(),
             audio_out: String::new(),
@@ -4168,6 +4202,7 @@ mod tests {
             omnirig_slot: p.omnirig_slot,
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
+            icom_data_mode: 1,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),

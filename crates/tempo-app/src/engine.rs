@@ -27654,6 +27654,7 @@ mod tests {
             omnirig_slot: p.omnirig_slot,
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
+            icom_data_mode: p.icom_data_mode,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
