@@ -10774,7 +10774,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// THE DECISION THAT CAN KEY THE WRONG RADIO, and it is a warning as well as a guard: when this
     /// says true, Nexus REFUSES a rigctld it could otherwise have shared. So the cases that must
     /// come back false matter as much as the ones that must come back true.
@@ -10853,6 +10852,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn transport_from_settings_maps_fields() {
         let t = Transport::from_settings(&test_settings());
         assert_eq!(t.ptt_method, "cat");
