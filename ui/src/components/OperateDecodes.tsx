@@ -12,6 +12,7 @@ import {
   orderEntries,
   passesFilter,
   periodStartMs,
+  renderWindow,
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
@@ -353,6 +354,13 @@ export function OperateDecodes({
       ),
     sort,
   )
+  // What the pane DRAWS: the newest MAX_ROWS of what the filter kept. The store behind it is
+  // ten times deeper (see decodeHistory's MAX_HISTORY) so a filtered pane can be scrolled back
+  // through hours of its own frequency, but the row count that is actually painted — the cost
+  // the 4 Hz ticker pays on a machine without GPU compositing — is exactly what it always was.
+  // Everything below counts `shown`, not `list`: the "N heard" readout means what is on screen,
+  // and the roving-keyboard index must address the rows that exist.
+  const shown = renderWindow(list)
 
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
@@ -383,8 +391,8 @@ export function OperateDecodes({
 
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works the station,
   // Alt+Enter toggles ignore — the pointerless equivalent of click/double-click.
-  const roving = useRovingList(list.length, (i, mods) => {
-    const d = list[i]
+  const roving = useRovingList(shown.length, (i, mods) => {
+    const d = shown[i]
     if (!d?.from) return
     if (mods.alt) onToggleIgnore?.(d.from)
     else if (mods.shift) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
@@ -471,7 +479,7 @@ export function OperateDecodes({
 
       <div className="od-status">
         <span className={`od-paused${!pinned ? ' on' : ''}`} aria-live="polite">
-          {pinned ? `${list.length} heard` : '▲ reviewing — scroll to bottom to follow'}
+          {pinned ? `${shown.length} heard` : '▲ reviewing — scroll to bottom to follow'}
         </span>
         {/* Beside the count, so a pane that is hiding rows always says so — including the
             compact panes, which render no chip bar to notice the picker in. */}
@@ -497,7 +505,7 @@ export function OperateDecodes({
         onScroll={onScroll}
         onKeyDown={roving.containerProps.onKeyDown}
       >
-        {list.length === 0 &&
+        {shown.length === 0 &&
           // TWO different empty states, and conflating them cost a field report its
           // diagnosis: with the "To me" chip lit on a busy band this pane said
           // "No decodes yet — waiting for the next slot" while its history held
@@ -517,7 +525,7 @@ export function OperateDecodes({
               detail={`${histRef.current.entries().length} decodes in history are hidden by the current filter — pick another chip to see them.`}
             />
           ))}
-        {list.map((d, i) => {
+        {shown.map((d, i) => {
           const ignoredRow = isIgnored(ignores, d.from)
           const selectedRow = !!d.from && !!selectedUp && d.from.toUpperCase() === selectedUp
           // JTAlert highlight lookup: match the from-call case-insensitively.

@@ -69,6 +69,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while investigating a Greek-Windows launch report. If this bit you, `log.adi.bak` beside
   your log holds the original.
 
+- **The decode panes remember ten times as much, so you can actually scroll back.** Both panes
+  kept 300 rows — but they keep the WHOLE band and filter at display time, so on a busy evening
+  the Rx Frequency pane spent all 300 on signals it never shows and could only look back about
+  four minutes. The two or three rows on your own frequency, which is the entire point of that
+  pane, were thrown away with the rest. The store is now 3,000 rows: roughly ten minutes of a
+  packed band in Band Activity, and hours of your own frequency in the Rx pane. What gets drawn
+  at once is unchanged, so nothing renders slower — measured at 0.12 ms per redraw with the
+  store completely full.
+
 - **The Hold Tx button's tooltip described the wrong thing.** It said Hold keeps your TX offset
   fixed "when you click the waterfall to set RX" — but a plain waterfall click has not moved TX
   since 1.0, Hold or no Hold. What Hold actually governs is the double-click: work a station with
