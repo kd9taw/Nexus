@@ -1,5 +1,11 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The two toasts that
+// carry prose come from the catalog. The other two carry none: a first's line is a glyph plus
+// the backend's own title and detail, and a rung's is a glyph plus the rung label and the
+// ladder title — all four of those words come from `get_journey`, which is phase-3 work.
+
 import { useEffect, useRef } from 'react'
 import { getJourney } from './api'
+import { t } from './i18n'
 import { pushToast } from './toast'
 import { readSeen, writeSeen } from './seenSet'
 import type { JourneyTier } from './types'
@@ -44,7 +50,12 @@ export function useJourneyUnlocks(enabled = true): void {
         }
       }
       for (const ft of j.feats) {
-        if (ft.unlocked) items.push({ id: `feat:${ft.id}`, msg: `★ ${ft.title} unlocked!`, tier: ft.tier })
+        if (ft.unlocked)
+          items.push({
+            id: `feat:${ft.id}`,
+            msg: t('journey.unlock.feat', { title: ft.title }),
+            tier: ft.tier,
+          })
       }
       for (const l of j.ladders) {
         for (const r of l.rungs) {
@@ -76,7 +87,11 @@ export function useJourneyUnlocks(enabled = true): void {
         pushToast(i.msg, 'success', big ? 8000 : 5000)
       }
       if (fresh.length > MAX_BURST) {
-        pushToast(`+${fresh.length - MAX_BURST} more milestones — open Journey to see them`, 'success', 5000)
+        pushToast(
+          t('journey.unlock.more', { count: fresh.length - MAX_BURST }),
+          'success',
+          5000,
+        )
       }
       writeSeen(STORAGE_KEY, seen)
     }

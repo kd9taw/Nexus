@@ -79,6 +79,21 @@ const MIGRATED = [
   'components/LogConfirm.tsx',
   'components/StationCard.tsx',
   'components/StationList.tsx',
+  // Batch 3 (2026-08-18) — awards, journey, stats and the needed board. Two things this
+  // batch proves that the first two did not: the AWARD NAMES are invariant tokens exactly as
+  // callsigns are (DXCC, WAZ, VUCC, IOTA name programmes an operator applies to — a
+  // translated one names nothing), and a REGISTRY can be migrated without touching its
+  // consumers. `needVisuals.ts` and `statusMeta.ts` are label tables a dozen surfaces index
+  // directly; their words resolve through getters, so the record shape is unchanged and the
+  // lookup happens when the string is read rather than when the module loads.
+  'components/AwardsView.tsx',
+  'components/AwardsJourney.tsx',
+  'components/JourneyView.tsx',
+  'components/NeededPanel.tsx',
+  'components/StatsView.tsx',
+  'features/needVisuals.ts',
+  'statusMeta.ts',
+  'useJourneyUnlocks.ts',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */

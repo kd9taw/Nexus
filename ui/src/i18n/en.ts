@@ -909,6 +909,465 @@ export const EN = {
   },
   'roster.card.heard.minutes': '{{count}} min ago',
 
+  // ── Awards (the official tracker) ───────────────────────────────────────────────────
+  // ⚠️ AWARD NAMES ARE INVARIANT TOKENS and are therefore absent from this file: DXCC,
+  // Honor Roll, Challenge, 5-Band DXCC, WAZ, WAS, VUCC, Sat VUCC and IOTA are the names of
+  // ARRL/CQ programmes, not words — they live in `components/AwardsView.tsx` as AWARD_NAMES.
+  // So are the DXCC entity names, CQ zones, grid squares, band and mode names the tables
+  // print (data), and the service names (LoTW, QRZ, ClubLog, eQSL, TQSL, Club Log). Where one
+  // of those appears INSIDE a sentence below — `5BWAS`, `ARRL`, `6 m`, `50 MHz` — a translator
+  // leaves it exactly as it is, the same rule `ADIF OPERATOR` follows in the Station hint.
+  //
+  // THE TRAILING "· N ready to submit" CLAUSE is its own entry with its own leading
+  // separator, for the reason `logbook.import.dupes` is: it is a separate STATEMENT with its
+  // own count, and a locale must be free to word and place it independently.
+  'awards.title': 'Awards',
+  'awards.subtitle': 'DXCC · computed from your log',
+
+  'awards.load.failed.title': "Couldn't load awards",
+  'awards.load.failed.detail': 'The award tally failed to compute.',
+  'awards.loading.title': 'Tallying awards…',
+  'awards.loading.detail': 'Resolving your log against the DXCC entity list.',
+  'awards.empty.title': 'No contacts yet',
+  'awards.empty.detail':
+    'Log contacts or import an ADIF (Logbook → Import ADIF) to start tracking DXCC.',
+
+  // The tiles. Each note is ONE sentence per state — the shipped text glued a conditional
+  // head onto a shared tail, which no language with a different word order can reproduce.
+  'awards.dxcc.note.achieved':
+    'DXCC achieved ✓ · {{confirmed}} entities · {{worked}} worked · {{credited}} credited',
+  'awards.dxcc.note.toGo': '{{remaining}} confirmed to go · {{worked}} worked · {{credited}} credited',
+  'awards.dxcc.note.readyToSubmit': ' · {{count}} ready to submit',
+  'awards.honorRoll.note.numberOne': '#1 Honor Roll ✓ — all {{total}} entities',
+  'awards.honorRoll.note.achieved': 'Honor Roll ✓ · {{needed}} to #1',
+  'awards.honorRoll.note.toGo':
+    '{{needed}} more confirmed needed — Honor Roll entry at {{threshold}}',
+  'awards.challenge.note': '{{worked}} entity×band slots worked',
+  'awards.confirmed.label': 'Confirmed',
+  'awards.confirmed.note':
+    '{{confirmed}} of {{total}} QSOs confirmed via LoTW or card (eQSL / QRZ matches don’t count toward ARRL awards)',
+  'awards.fiveBand.note':
+    'weakest of the 5 classic bands (ARRL counts each band on its own) · {{worked}} worked',
+  'awards.waz.note.achieved': 'Worked All Zones ✓ · {{worked}} worked',
+  'awards.waz.note.toGo': '{{remaining}} zones to go · {{worked}} worked',
+  'awards.was.note.achieved':
+    'Worked All States ✓ · {{worked}} worked · 5BWAS weakest band {{fiveBand}}/50',
+  'awards.was.note.toGo':
+    '{{remaining}} states to go · {{worked}} worked · 5BWAS weakest band {{fiveBand}}/50',
+  // `{{bands}}` is a joined list of BAND NAMES and `{{band}}` a single one — never translated.
+  'awards.vucc.note.achieved':
+    'VUCC ✓ {{bands}} · {{confirmed}} grids confirmed on all bands (tracker)',
+  'awards.vucc.note.toGo':
+    '{{remaining}} grids to go on {{band}} · {{confirmed}} grids confirmed on all bands (tracker)',
+  'awards.vucc.note.none':
+    'No 6 m-and-up grids yet · {{confirmed}} grids confirmed on all bands (tracker — VUCC itself is 50 MHz and up)',
+  'awards.satVucc.note.achieved':
+    'Satellite VUCC ✓ · {{worked}} grids worked · Sat DXCC {{satDxcc}} confirmed',
+  'awards.satVucc.note.toGo':
+    '{{remaining}} more to confirm · {{worked}} grids worked · Sat DXCC {{satDxcc}} confirmed',
+  'awards.satVucc.note.tagging':
+    'Pass contacts are tagged automatically when logged on the bird’s downlink (ISS excepted — no LoTW designator to derive)',
+  'awards.iota.note.achieved':
+    'IOTA ✓ (card-confirmed) · {{cards}} on cards — IOTA credits cards / Club Log, not LoTW',
+  'awards.iota.note.worked':
+    '{{worked}} worked · {{cards}} on cards — IOTA credits cards / Club Log, not LoTW',
+
+  // The breakdown panels. Every band and mode name under these headings is data.
+  'awards.bands.head': 'DXCC by band',
+  'awards.grids.head': 'Grids by band (VUCC)',
+  'awards.modes.head': 'DXCC by mode',
+  'awards.bar.title': '{{confirmed}} confirmed / {{worked}} worked',
+  'awards.bar.titleGrids': '{{confirmed}} confirmed / {{worked}} worked grids',
+
+  // The four chase lists. `{{count}}` is the length of the list beside the heading.
+  'awards.chase.entities.head': 'Confirm for a new one ({{count}})',
+  'awards.chase.entities.empty': 'Every worked entity is confirmed. 🎉',
+  'awards.chase.slots.head': 'Confirm for a Challenge slot ({{count}})',
+  'awards.chase.slots.empty': 'No worked-but-unconfirmed band slots.',
+  'awards.chase.bandTargets.head': 'Work for a band slot ({{count}})',
+  'awards.chase.bandTargets.empty': 'No almost-complete entities to chase.',
+  'awards.chase.was.head': 'WAS — states needed ({{count}})',
+  'awards.chase.was.empty': 'All 50 states confirmed. 🎉',
+
+  // The chase list's own filter + sort. `{{query}}` is what the operator typed.
+  'awards.needList.filter.placeholder': 'filter entities…',
+  'awards.needList.filter.label': 'Filter entities',
+  'awards.needList.sort.alpha.label': 'A–Z',
+  'awards.needList.sort.alpha.title': 'Sort A–Z',
+  'awards.needList.sort.bands.label': '# bands',
+  'awards.needList.sort.bands.title': 'Sort by number of bands needed',
+  'awards.needList.noMatch': 'No entities match “{{query}}”.',
+
+  // "Why isn't this credited?" — the confirmation diagnostics. `{{service}}` is a service
+  // name, `{{field}}` an ADIF field name, `{{call}}` a callsign, `{{reason}}`/`{{detail}}`
+  // the service's own words: all pass through verbatim.
+  'awards.conf.head': "Confirmations — why isn't this credited?",
+  'awards.conf.oneAway.label': 'One fix away:',
+  'awards.conf.oneAway.newEntity.title':
+    "{{entity}} ({{bands}}): one LoTW upload / data fix puts a NEW DXCC entity in play — the partner's confirmation still decides",
+  'awards.conf.oneAway.slots.title': {
+    one: "{{entity}} ({{bands}}): one LoTW upload / data fix puts {{count}} Challenge slot in play — the partner's confirmation still decides",
+    other:
+      "{{entity}} ({{bands}}): one LoTW upload / data fix puts {{count}} Challenge slots in play — the partner's confirmation still decides",
+  },
+  'awards.conf.oneAway.more': '+{{count}} more',
+  'awards.conf.bucket.upload': 'Upload {{count}}',
+  'awards.conf.uploading': 'Uploading…',
+  'awards.conf.pushing': 'Pushing…',
+  'awards.conf.reupload': 'Re-upload',
+  'awards.conf.uploadToLotw': 'Upload to LoTW',
+  'awards.conf.push': 'Push to {{service}}',
+  'awards.conf.repush': 'Re-push to {{service}}',
+  'awards.conf.push.title':
+    'Pushes this QSO to your {{service}} logbook — does not count for ARRL DXCC/WAS (LoTW only)',
+  'awards.conf.fixCert': 'Fix cert in TQSL',
+  'awards.conf.fixLoginInSettings': 'Fix {{service}} login in Settings',
+  'awards.conf.fixLogin': 'Fix {{service}} login',
+  'awards.conf.fixLogin.title':
+    'Opens Settings ▸ Confirmations, where the {{service}} login is saved',
+  'awards.conf.waitingOn': 'Waiting on {{call}}',
+  'awards.conf.reviewDup': 'Review dup #{{number}}',
+  'awards.conf.fixField': 'Fix {{field}}',
+  'awards.conf.bustedCall': 'Was it {{call}}?',
+  'awards.conf.likely': 'likely',
+  'awards.conf.waitingOnPartner': {
+    one: '{{count}} QSO uploaded to LoTW — waiting on the other operator to confirm.',
+    other: '{{count}} QSOs uploaded to LoTW — waiting on the other operator to confirm.',
+  },
+  'awards.conf.pendingLag': {
+    one: '{{count}} recently-worked QSO still awaiting a confirmation — not a problem, just give it time.',
+    other:
+      '{{count}} recently-worked QSOs still awaiting a confirmation — not a problem, just give it time.',
+  },
+
+  // The LoTW (re)upload result line. `{{outcome}}` is a wire enum, printed as-is.
+  'awards.upload.pending': 'Signed and sent {{count}} to LoTW — awaiting confirmation.',
+  'awards.upload.duplicate': 'Already on LoTW ({{count}}) — nothing to re-send.',
+  'awards.upload.rejected': 'LoTW rejected the upload.',
+  'awards.upload.rejectedDetail': 'LoTW rejected the upload: {{detail}}.',
+  'awards.upload.authFailed':
+    'LoTW rejected your certificate / Station Location — fix it in TQSL, then retry.',
+  'awards.upload.retry': 'LoTW was unreachable — your log is unchanged; try again shortly.',
+  'awards.upload.none': 'Nothing to upload.',
+  'awards.upload.finished': 'Upload finished ({{outcome}}).',
+
+  // Per-QSO pushes from a diagnosis row. Worded for THIS surface — the Logbook's own
+  // `logbook.push.*` lines say the same thing to an operator who is somewhere else.
+  'awards.push.noQso': 'Could not find that QSO in the log — reload Awards and try again.',
+  'awards.push.qrz.ok': '✓ {{call}} pushed to your QRZ logbook.',
+  'awards.push.qrz.duplicate':
+    '✓ {{call}} already in your QRZ logbook (duplicate) — nothing to re-send.',
+  'awards.push.qrz.rejected': '✗ QRZ rejected {{call}}: {{reason}}',
+  'awards.push.clublog.ok': '✓ {{call}} on ClubLog.',
+  'awards.push.clublog.duplicate': '✓ {{call}} on ClubLog (already there).',
+  'awards.push.clublog.rejected': '✗ ClubLog rejected {{call}}: {{reason}}',
+  'awards.push.eqsl.ok': '✓ {{call}} sent to eQSL.',
+  'awards.push.eqsl.duplicate': '✓ {{call}} sent to eQSL (already there).',
+  'awards.push.eqsl.rejected': '✗ eQSL: {{detail}}',
+  'awards.push.failed': '✗ {{service}} push failed: {{detail}}',
+
+  'awards.achievements.head': 'Achievements ({{unlocked}}/{{total}})',
+
+  // The section's two tabs. The Journey layer's own strings are `journey.*`.
+  'awards.tabs.aria': 'Awards and Journey',
+  'awards.tab.journey': 'Journey',
+  'awards.tab.official': 'Official Awards',
+
+  // ── The Needed board ────────────────────────────────────────────────────────────────
+  // ⚠️ Callsigns, DXCC entity names, band names, mode names, CQ zones, frequencies and
+  // headings are the DATA this board exists to show — none of them is here. Mode-class
+  // names (Digital, CW, Phone) are mode names and stay in `components/NeededPanel.tsx`, as
+  // do the POTA/SOTA filter chips: those are the programmes' own names.
+  'needed.title': 'Needed now',
+  'needed.countFiltered': 'of {{count}}',
+  'needed.hint': 'single-click a row to QSY the radio to that band and listen',
+  'needed.filters.aria': 'Filter needed alerts',
+  'needed.filters.modes.aria': 'Modes shown',
+  'needed.filter.toggle.title': 'Filter the board by need type, band, or mode',
+  'needed.filter.toggle.active': 'Filtered',
+  'needed.filter.toggle.idle': 'Filter',
+  'needed.filter.clear.label': 'Clear',
+  'needed.filter.clear.title': 'Clear all filters',
+  'needed.filter.all': 'All',
+  'needed.filter.wanted': 'Watch list',
+  'needed.filter.atno': 'ATNO',
+  'needed.filter.newBand': 'New band',
+  'needed.filter.newMode': 'New mode',
+  'needed.filter.newZone': 'New zone',
+  'needed.filter.newGrid': 'New grid',
+  'needed.filter.newState': 'New state',
+  'needed.filter.confirm': 'Needs confirm',
+  'needed.filter.dxped': 'DXped',
+  // `{{mode}}` is a mode-class name — the tooltip is prose, the mode is not.
+  'needed.filter.mode.show.title': 'Show {{mode}} needs',
+  'needed.filter.mode.hide.title': 'Hide {{mode}} needs',
+  'needed.popOut.label': '⧉ Pop out',
+  'needed.popOut.title': 'Open this board in its own window (for a second monitor)',
+  'needed.autoPop.label': 'open at launch',
+  'needed.autoPop.title': 'Open this board in its own window automatically when the app starts',
+
+  // The rotator strip. `{{deg}}` is a bearing in degrees — a number, never grouped.
+  'needed.rotator.title': 'Antenna rotator — live heading + manual point (via rotctld)',
+  'needed.rotator.azimuth.placeholder': 'az',
+  'needed.rotator.azimuth.label': 'Rotator azimuth (degrees)',
+  'needed.rotator.go.title': 'Turn the rotator to this azimuth',
+  'needed.rotator.pointed': '↗ Rotator → {{deg}}°',
+  'needed.rotator.failed': 'Rotator command failed',
+
+  // Phone-source liveness. `{{host}}` is a hostname:port and `{{state}}` a wire enum.
+  'needed.phone.live.text': 'Phone source: {{host}} · live',
+  'needed.phone.live.title': 'SSB/phone spots are flowing from {{host}}.',
+  'needed.phone.connected.text': 'Phone source: {{host}} · connected',
+  'needed.phone.connected.title':
+    'Connected to {{host}} — no phone spot yet (an empty Phone board just means nothing you need is on SSB right now).',
+  'needed.phone.connecting.text': 'Phone source: {{host}} · connecting…',
+  'needed.phone.connecting.title': 'Reaching the SSB cluster node {{host}}.',
+  'needed.phone.down.text': 'Phone source: {{host}} · down',
+  'needed.phone.down.title':
+    'Lost the connection to {{host}} — no SSB/phone needs until it reconnects.',
+  'needed.phone.idle.text': 'Phone source: {{host}} · idle',
+  'needed.phone.idle.title': 'Connected to {{host}} but quiet — a lull in human SSB spots.',
+  'needed.phone.unknown.text': 'Phone source: {{host}} · {{state}}',
+  'needed.phone.unknown.title': '{{host}}: {{state}}',
+  // TWO STATEMENTS, each with its OWN count — one message cannot select a plural form for
+  // two counts at once, so each keeps its own leading separator (the `logbook.import.*`
+  // pattern) and a locale may re-word and re-order both.
+  'needed.phone.spots': {
+    one: ' · {{count}} SSB spot',
+    other: ' · {{count}} SSB spots',
+  },
+  'needed.phone.needs': {
+    one: ' → {{count}} need',
+    other: ' → {{count}} needs',
+  },
+  // The whole sentence, with the settings link as a MARKER — the element comes from the
+  // call site, so the catalog cannot introduce one.
+  'needed.phone.off.link': 'Phone source off — <a>turn on “DX Cluster / RBN spots”</a>',
+  'needed.phone.off.plain':
+    'Phone source off — turn on “DX Cluster / RBN spots” in Settings ▸ Integrations & Feeds',
+  'needed.phone.off.title':
+    'Phone/SSB needs come only from a human DX-cluster node. This shows when the DX Cluster feed is disabled OR no human host is set — turn on “DX Cluster / RBN spots” and add a host (e.g. ve7cc.net:23) in Settings ▸ Integrations & Feeds. RBN carries only CW + digital, never SSB.',
+
+  // The grid. Column headings name a CONCEPT; every value under them is a token.
+  'needed.grid.aria': 'Needed now — arrow to move, Enter to work or QSY',
+  'needed.column.need': 'Need',
+  'needed.column.call': 'Call',
+  'needed.column.entity': 'Entity',
+  'needed.column.band': 'Band',
+  'needed.column.mode': 'Mode',
+  'needed.column.zone': 'Zone',
+  'needed.column.why': 'Why',
+  'needed.empty.filtered': 'No alerts match the current filters — clear to see all.',
+  'needed.empty':
+    "Nothing needed on the air right now — needed stations (new ones, band-slots, modes, grids, POTA/SOTA) appear here as they're heard or spotted.",
+
+  // A row. `{{freq}}` is a dial frequency the call site has already formatted invariantly.
+  'needed.row.work.title': 'Work {{call}} — {{mode}} on {{band}}',
+  'needed.row.work.titleFreq': 'Work {{call}} — {{mode}} on {{band}} @ {{freq}} MHz',
+  'needed.row.mainWindow.title':
+    '{{call}} ({{mode}}) — open the main window to work this (pop-out only QSYs the band)',
+  'needed.row.qsy.titleFreq': 'QSY to {{freq}} MHz and listen for {{call}}',
+  'needed.row.qsy.titleBand': 'QSY to {{band}} and listen for {{call}}',
+  'needed.row.aria': '{{call}}, {{entity}}, {{band}} {{mode}}, needed {{tags}}',
+  'needed.row.ariaAzimuth':
+    '{{call}}, {{entity}}, about {{deg}} degrees, {{band}} {{mode}}, needed {{tags}}',
+  'needed.row.point.title': 'Point the antenna at {{call}}',
+  'needed.row.mode.title': 'Needed on {{mode}}',
+
+  // ── The need vocabulary (chips + decode badges) ─────────────────────────────────────
+  // ONE set of words for "why this station is worth working", shared by the board, the
+  // roster, the decode feed and the map — the registry is `features/needVisuals.ts`.
+  // ⚠️ POTA and SOTA are the programmes' own names and are NOT here; the CSS class and the
+  // icon beside each entry are code tokens and are not here either.
+  //
+  // Two vocabularies, deliberately not one: the decode feed's badge and the board's chip
+  // already word their tooltips differently, and a shared key could not be split later
+  // without orphaning both translations.
+  'need.badge.entity.label': 'NEW ONE',
+  'need.badge.entity.title': 'New DXCC entity — an all-time new one',
+  'need.badge.zone.label': 'ZONE',
+  'need.badge.zone.title': 'New CQ zone on this band (5BWAZ)',
+  'need.badge.band.label': 'BAND',
+  'need.badge.band.title': 'New band-slot for this entity',
+  'need.badge.mode.label': 'MODE',
+  'need.badge.mode.title': 'New mode for this entity',
+  'need.badge.grid.label': 'GRID',
+  'need.badge.grid.title': 'New grid square on this band (VUCC is per band)',
+  'need.badge.state.label': 'STATE',
+  'need.badge.state.title':
+    'New US state on this band (5BWAS) — a hint from the grid; confirm from the log',
+  'need.badge.dxped.label': 'DXPED',
+  'need.badge.dxped.title': 'Active DXpedition — limited-time window',
+  'need.badge.confirm.label': 'NEEDS QSL',
+  'need.badge.confirm.title':
+    'This entity/zone/grid is worked on this band but not yet confirmed — a QSL from this station would close it. Not a claim about this callsign: B4 is the worked-this-call chip.',
+  'need.badge.pota.title': 'Live POTA activator',
+  'need.badge.sota.title': 'Live SOTA activator',
+  'need.badge.wanted.label': 'WANTED',
+  'need.badge.wanted.title': 'On your wanted watch list',
+
+  // The board/roster chip. `short` is the dense-column form — a translation needs both, and
+  // the short one has to stay short.
+  'need.chip.newEntity.label': 'NEW ONE',
+  'need.chip.newEntity.short': 'NEW',
+  'need.chip.newEntity.title': 'All-time-new DXCC entity (ATNO)',
+  'need.chip.newZone.label': 'ZONE',
+  'need.chip.newZone.short': 'ZONE',
+  'need.chip.newZone.title': 'New CQ zone on this band',
+  'need.chip.newBand.label': 'BAND',
+  'need.chip.newBand.short': 'BAND',
+  'need.chip.newBand.title': 'New band-slot for this entity',
+  'need.chip.newMode.label': 'MODE',
+  'need.chip.newMode.short': 'MODE',
+  'need.chip.newMode.title': 'New mode for this entity',
+  'need.chip.newGrid.label': 'GRID',
+  'need.chip.newGrid.short': 'GRID',
+  'need.chip.newGrid.title': 'New grid square on this band',
+  'need.chip.newState.label': 'STATE',
+  'need.chip.newState.short': 'ST',
+  'need.chip.newState.title': 'New US state on this band — best-guess from the grid',
+  'need.chip.confirm.label': 'NEEDS QSL',
+  'need.chip.confirm.short': 'QSL',
+  'need.chip.confirm.title':
+    'Worked on this band but not yet confirmed — a QSL from this station would close it',
+  'need.chip.dxped.label': 'DXPED',
+  'need.chip.dxped.short': 'DXP',
+  'need.chip.dxped.title': 'Active announced DXpedition — a limited-time window',
+  'need.chip.pota.title': "Live POTA activator — the row's call is on a park right now",
+  'need.chip.sota.title': "Live SOTA activator — the row's call is on a summit right now",
+  'need.chip.wanted.label': 'WANTED',
+  'need.chip.wanted.short': 'WANT',
+  'need.chip.wanted.title': 'On your wanted watch list',
+
+  // ── Status roles (the colour+glyph pairing table) ───────────────────────────────────
+  // `statusMeta.ts` pairs each role with a CSS token, a CVD-immune glyph and this label.
+  // The token and the glyph are code; only the label is read.
+  'status.newEntity.label': 'New entity (ATNO)',
+  'status.newBand.label': 'New band',
+  'status.newMode.label': 'New mode',
+  'status.worked.label': 'Worked, unconfirmed',
+  'status.confirmed.label': 'Confirmed',
+  'status.dupe.label': 'Already worked',
+  'status.snrStrong.label': 'Strong signal',
+  'status.snrMarginal.label': 'Marginal signal',
+  'status.snrWeak.label': 'Weak signal',
+  'status.tx.label': 'Transmitting',
+  'status.rx.label': 'Receiving',
+  'status.bandOpen.label': 'Band open',
+  'status.bandMarginal.label': 'Band marginal',
+  'status.bandClosed.label': 'Band closed',
+  'status.alertCritical.label': 'Critical',
+  'status.alertWarning.label': 'Warning',
+  'status.alertInfo.label': 'Info',
+
+  // ── Journey (the beginner-first achievement layer) ──────────────────────────────────
+  // ⚠️ Every title, meaning, heritage note, gate hint, unit and personal-best value on this
+  // surface comes from the backend (`get_journey`) and is NOT here — those are phase-3.
+  // What is here is the frame the app writes around them. `{{xp}}`, `{{qsos}}` and the
+  // ladder counts arrive already formatted by the call site.
+  'journey.load.failed.title': "Couldn't load your Journey",
+  'journey.loading.title': 'Loading your Journey…',
+  'journey.loading.detail': 'Reading your log.',
+  'journey.level': 'Level {{level}}',
+  'journey.levelCap': 'level',
+  'journey.xpEarned.title': '{{xp}} XP earned',
+  'journey.xpToLevel': '{{into}} / {{forLevel}} XP to level {{next}}',
+  'journey.qsosLogged': '{{qsos}} QSOs logged',
+  'journey.streak.title': 'Consecutive weeks with at least one contact',
+  'journey.streak': {
+    one: '{{count}} week on the air',
+    other: '{{count}} weeks on the air',
+  },
+  // Its own statement, appended — see the `logbook.import.*` note.
+  'journey.streak.pending': ' · this week pending',
+  'journey.next.title': 'Your most-attainable next milestone',
+  'journey.next.cap': 'Next milestone',
+  'journey.next.go': '{{remaining}} to go ({{current}}/{{target}})',
+
+  // The share cards — rendered to an image locally, never uploaded.
+  'journey.share.label': '⤴ Share',
+  'journey.share.title':
+    'Copy a share-card image of your Journey (local render — nothing is uploaded)',
+  'journey.share.feat.title':
+    'Copy a share-card image of this feat (local render — nothing is uploaded)',
+  // Stands in for the operator's callsign when none is set — prose, not a call.
+  'journey.share.anonCall': 'MY STATION',
+  'journey.share.sub': '{{qsos}} QSOs logged · {{xp}} XP',
+  'journey.share.footer': 'Journey · Nexus',
+  'journey.share.featFooter': '{{tier}} feat · Journey · Nexus',
+
+  'journey.marathon.head': 'DX Marathon {{year}}',
+  'journey.marathon.note':
+    'Entities + zones worked this calendar year — resets every Jan 1 (CQ DX Marathon-style, personal).',
+  'journey.marathon.score.title': 'Entities + zones this year',
+  'journey.marathon.parts': '{{entities}} entities · {{zones}} zones',
+  'journey.marathon.best': 'personal best {{score}} ({{year}})',
+  'journey.marathon.bestBeaten': 'personal best {{score}} ({{year}}) — beaten!',
+  'journey.marathon.bestYear': 'your best year yet',
+
+  'journey.firsts.head': 'Firsts',
+  'journey.first.locked.title': 'Locked — {{meaning}}',
+  'journey.ladders.head': 'Climb toward the awards',
+  'journey.ladders.note':
+    'Sub-award ladders — the official awards are the capstones in the Awards tab.',
+  'journey.ladder.worked': 'worked',
+  'journey.ladder.confirmed': 'confirmed',
+  'journey.ladder.toGo': '{{count}} to go',
+  'journey.ladder.complete': 'Complete ★',
+  'journey.collections.head': 'Collections',
+  // `{{label}}` is the cell's own name — a band, a mode, a continent.
+  'journey.cell.confirmed.title': '{{label}} — confirmed',
+  'journey.cell.worked.title': '{{label}} — worked',
+  'journey.cell.needed.title': '{{label}} — needed',
+  'journey.feats.head': 'Feats',
+  'journey.bests.head': 'Personal bests',
+  'journey.tier.bronze': 'Bronze',
+  'journey.tier.silver': 'Silver',
+  'journey.tier.gold': 'Gold',
+  'journey.tier.platinum': 'Platinum',
+  'journey.tier.legendary': 'Legendary',
+
+  // The unlock toasts. The first/rung lines are pure data (a backend title, a rung label)
+  // and carry no prose, so only these two are here.
+  'journey.unlock.feat': '★ {{title}} unlocked!',
+  'journey.unlock.more': '+{{count}} more milestones — open Journey to see them',
+
+  // ── Logbook statistics ──────────────────────────────────────────────────────────────
+  // ⚠️ Band names, mode names, years, DXCC entity names, US state codes, continents and CQ
+  // zone numbers are the DATA these cards slice — none of them is here. `LoTW` and `eQSL`
+  // are service names and `DX` is ham shorthand: all three stay in `components/StatsView.tsx`.
+  // The counts arrive already formatted by the call site.
+  'stats.title': 'Statistics',
+  'stats.failed': 'Couldn’t read the logbook — try reopening this view.',
+  'stats.loading': 'Loading your logbook…',
+  'stats.empty': 'No QSOs logged yet — your stats will fill in here as you work stations.',
+  'stats.qsos': 'QSOs',
+  'stats.uniqueCalls': 'unique calls',
+  'stats.dxccEntities': 'DXCC entities',
+  'stats.confirmed': 'confirmed',
+  'stats.byBand.head': 'By band',
+  'stats.byMode.head': 'By mode',
+  'stats.byYear.head': 'By year',
+  'stats.topEntities.head': 'Top DXCC entities',
+  'stats.byState.head': 'Most-worked states (WAS)',
+  'stats.byHour.head': 'Activity by hour (UTC)',
+  // `{{hour}}` is a zero-padded UTC hour — a clock reading, formatted by the call site.
+  'stats.hour.title': '{{hour}}:00 UTC — {{count}} QSOs',
+  'stats.hoursMissing': {
+    one: '{{formatted}} QSO not shown — imported with a date but no time of day.',
+    other: '{{formatted}} QSOs not shown — imported with a date but no time of day.',
+  },
+  'stats.confirmations.head': 'Confirmations',
+  'stats.confirmations.awardGrade': 'Award-grade',
+  'stats.confirmations.paperCard': 'Paper card',
+  'stats.byContinent.head': 'By continent',
+  'stats.continent.entities': '· {{count}} ent',
+  'stats.byZone.head': 'By CQ zone',
+  'stats.zone.label': 'Zone {{zone}}',
+  'stats.dxSplit.head': 'DX vs domestic',
+  'stats.dxSplit.domestic': 'Domestic',
+  'stats.unplaced': '{{unplaced}} of {{total}} QSOs couldn’t be placed by callsign',
+
   // ── Shared across surfaces ──────────────────────────────────────────────────────────
   // `common.*` is for words that are genuinely the same act everywhere. Resist it: a shared
   // key that two surfaces want to word differently cannot be split later without orphaning
