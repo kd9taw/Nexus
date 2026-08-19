@@ -15198,6 +15198,21 @@ impl Engine {
     const DECODE_DROUGHT_PERIODS: u32 = 8;
 
     fn process_decodes(&mut self, frame: &[f32], decodes: Vec<modes::Decode>, slot: u64) -> usize {
+        if tempo_core::applog::debug_enabled() {
+            tempo_core::applog::debug(
+                "decode",
+                &format!(
+                    "slot {slot}: {} decode(s) on {} {:?}",
+                    decodes.len(),
+                    if self.settings.band.is_empty() {
+                        "off-band"
+                    } else {
+                        &self.settings.band
+                    },
+                    self.app.tier()
+                ),
+            );
+        }
         if decodes.is_empty() {
             self.quiet_periods = self.quiet_periods.saturating_add(1);
             if self.quiet_periods == Self::DECODE_DROUGHT_PERIODS {

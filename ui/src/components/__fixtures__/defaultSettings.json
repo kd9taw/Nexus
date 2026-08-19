@@ -103,6 +103,7 @@
   "wsjtxUdp": false,
   "wsjtxUdpAddr": "127.0.0.1:2237",
   "writeAllTxt": false,
+  "diagDebugLog": false,
   "hrdLogging": false,
   "hrdUdpAddr": "127.0.0.1:2333",
   "companionAddr": "127.0.0.1:2237",

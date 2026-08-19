@@ -2576,6 +2576,9 @@ export interface Settings {
   wsjtxUdpAddr: string
   /** Append every decode to a WSJT-X-format ALL.TXT decode log (loggers/GridTracker tail it). */
   writeAllTxt: boolean
+  /** Write the DEBUG tier to the diagnostic log. Off by default; a session switch, not a
+   *  better log. */
+  diagDebugLog: boolean
   /** Auto-save a WAV of the recent RX audio when a QSO is logged (per-contact recording). */
   saveQsoWav: boolean
   /** Log each QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP port. */

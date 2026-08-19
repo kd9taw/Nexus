@@ -81,6 +81,10 @@ const REDACTED: &str = "<redacted>";
 /// Severity. Only [`Level::Error`] forces an immediate flush.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
+    /// Detail for a session someone is CHASING something in — per-over keying, per-period
+    /// decode counts, CAT traffic. Written only while [`set_debug`] is on, which is a setting
+    /// the operator turns on and a fresh install has off.
+    Debug,
     Info,
     Warn,
     Error,
@@ -89,6 +93,7 @@ pub enum Level {
 impl Level {
     fn tag(self) -> &'static str {
         match self {
+            Level::Debug => "DEBUG",
             Level::Info => "INFO ",
             Level::Warn => "WARN ",
             Level::Error => "ERROR",
@@ -158,6 +163,33 @@ pub fn log(level: Level, event: &str, detail: &str) {
     let text = format!("{event}: {detail}");
     if tx.try_send(Msg::Line { level, text }).is_err() {
         DROPPED.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Whether the DEBUG tier is being written. Off unless the operator turns it on.
+static DEBUG_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turn the DEBUG tier on or off. Called from the settings load and every save, so the operator
+/// can start a diagnostic session without restarting.
+pub fn set_debug(on: bool) {
+    DEBUG_ON.store(on, Ordering::Relaxed);
+}
+
+/// Is the DEBUG tier on? (For the startup header, which must say so — a log read months later
+/// should never leave a reader wondering whether the quiet was real or just the level.)
+pub fn debug_enabled() -> bool {
+    DEBUG_ON.load(Ordering::Relaxed)
+}
+
+/// High-rate diagnostic detail. **Costs one atomic load when off**, which is what makes it
+/// safe to call from the radio loop and the decode path.
+///
+/// ⚠️ THE ARGUMENT IS EVALUATED BY THE CALLER. `debug("x", &format!(…))` formats even when the
+/// tier is off. On any path that runs per tick or per decode, guard with [`debug_enabled`]
+/// first — the check is the cheap part, the `format!` is not.
+pub fn debug(event: &str, detail: &str) {
+    if DEBUG_ON.load(Ordering::Relaxed) {
+        log(Level::Debug, event, detail);
     }
 }
 

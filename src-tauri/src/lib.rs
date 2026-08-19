@@ -7519,6 +7519,9 @@ fn set_settings(
     // empty), so clearing the node list to go RBN-only actually sticks — otherwise `load`'s
     // upgrade seed would re-inject the stale legacy host on the next launch.
     settings.cluster_host = settings.cluster_hosts.first().cloned().unwrap_or_default();
+    // Live, so an operator can start a diagnostic session mid-flight without restarting — the
+    // thing being chased is usually happening right now.
+    tempo_core::applog::set_debug(settings.diag_debug_log);
     // The LoTW-mark resolver reads its recency window from this atomic.
     LOTW_MAX_AGE_DAYS.store(
         settings.lotw_max_age_days,
@@ -16330,6 +16333,14 @@ pub fn run() {
     }
 
     let mut settings = Settings::load(&settings_path());
+    // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
+    // the startup it was turned on for, not just what came after.
+    tempo_core::applog::set_debug(settings.diag_debug_log);
+    if settings.diag_debug_log {
+        // Said out loud, because a reader months from now must never mistake the extra
+        // traffic for a fault, nor a QUIET log for a healthy one when the level was simply low.
+        tempo_core::applog::info("diag", "DEBUG tier is ON for this session (operator setting)");
+    }
     // A milestone, not the settings themselves — this file is designed to be emailed to a
     // stranger, and `Settings` is where the operator's callsign and connector accounts live.
     tempo_core::applog::info(

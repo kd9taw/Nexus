@@ -1059,6 +1059,12 @@ pub struct Settings {
     /// Append every decode to a WSJT-X-format `ALL.TXT` decode log in the app data dir —
     /// the running record loggers/GridTracker tail. Off by default.
     pub write_all_txt: bool,
+    /// Write the DEBUG tier to the diagnostic log — per-over keying, per-period decode counts,
+    /// CAT traffic. **Off by default and meant to stay off**: it is the "we are chasing
+    /// something, turn it up for this session" switch, not a better log. It writes to the same
+    /// file so there is still one thing to send, and the startup header records that it was on
+    /// (a reader months later must never wonder whether the quiet was real or just the level).
+    pub diag_debug_log: bool,
     /// Push each logged QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP
     /// listener (one raw ADIF record per datagram — the same standard WSJT-X/JTAlert
     /// use). Off by default. HRD Logbook must be running.
@@ -2797,6 +2803,7 @@ impl Default for Settings {
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
             write_all_txt: false,
+            diag_debug_log: false,
             hrd_logging: false,
             hrd_udp_addr: "127.0.0.1:2333".to_string(),
             companion_addr: "127.0.0.1:2237".to_string(),

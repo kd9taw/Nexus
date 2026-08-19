@@ -7408,6 +7408,32 @@ export function SettingsPanel({
                   </button>
                 </div>
 
+                {/* The DEBUG tier. Deliberately a SEPARATE field under the log rather than a
+                    line in its hint: it is a session switch an operator is talked into by us
+                    ("turn this on and send me the log"), not a preference, and it should read
+                    as the exception it is. Applies live — no restart — because whatever is
+                    being chased is usually happening right now. */}
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">Extra detail in the diagnostic log</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.diagDebugLog}
+                      className={`toggle${form.diagDebugLog ? ' on' : ''}`}
+                      onClick={() => updateBool('diagDebugLog', !form.diagDebugLog)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Records each transmission, per-period decode counts and CAT traffic. Leave
+                    this OFF for normal operating — it is for a session where something is being
+                    chased, and the extra volume shortens how far back the log reaches. The log
+                    says at the top when it was on.
+                  </span>
+                </div>
+
                 <div className="settings-field">
                   <label className="settings-toggle">
                     <span className="settings-label">
