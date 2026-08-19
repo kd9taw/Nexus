@@ -69,6 +69,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while investigating a Greek-Windows launch report. If this bit you, `log.adi.bak` beside
   your log holds the original.
 
+- **A Windows update no longer throws away what Nexus was holding in memory.** Installing an
+  update on Windows hands off to the installer and ends the app then and there — so the
+  conversation history, the Field Day log, a propagation opening still in progress and your
+  window positions were never written, and the diagnostic log lost the lines covering the
+  update itself. All of it is now flushed to disk immediately before the handoff. The
+  transmitter is untouched by this: installing is already refused while you are transmitting,
+  tuning, in a QSO, running or merely TX-armed. macOS and Linux were never affected — there
+  the app restarts through its normal shutdown.
+
 - **Nexus could fail to start with no window, no error and nothing to send.** If the Microsoft
   Edge WebView2 runtime — the component Nexus uses to draw its window — was missing, damaged or
   had a corrupt cache, the app exited without a trace: no window, no message, no crash file.

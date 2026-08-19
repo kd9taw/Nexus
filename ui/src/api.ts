@@ -852,6 +852,15 @@ export async function updateInstallBlock(): Promise<string | null> {
   return invoke<string | null>('update_install_block')
 }
 
+/** Flush the conversations, the Field Day log, the open propagation episodes and the window
+ * geometry to disk before a self-update hands off to the installer. Called immediately BEFORE
+ * the plugin's `install()`, because on Windows that call ends the process outright
+ * (`ShellExecuteW` then `exit(0)`) and the ordinary quit cleanup never runs. A no-op on
+ * macOS/Linux, where `restartApp()` takes the normal exit path. */
+export async function prepareUpdateInstall(): Promise<void> {
+  return invoke<void>('prepare_update_install')
+}
+
 /** Restart Nexus after a self-update install — through the backend's ordinary quit cleanup
  * (TX unkey, journal flushes, window geometry), never a hard kill. The updater plugin's
  * `install()` restarts nothing on macOS/Linux, so this call is what makes "Nexus will

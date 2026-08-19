@@ -15925,19 +15925,8 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     if QUIT_CLEANUP_RAN.swap(true, Ordering::SeqCst) {
         return;
     }
-    // Window geometry FIRST, while the windows still exist. On the Cmd+Q path (the reason
-    // this is here) every window is alive; on a window-close quit they are already destroyed
-    // and both captures no-op — `CloseRequested` snapshotted them before the teardown.
-    if !QUIT_SKIP_GEOMETRY.load(Ordering::SeqCst) {
-        window_state::capture_now(app_handle);
-        for (label, w) in app_handle.webview_windows() {
-            if label != "main" {
-                // No-op for anything that is not a band-map window, and skips minimized
-                // windows itself — safe to sweep the whole map.
-                capture_bandmap_window(&w);
-            }
-        }
-    }
+    // Window geometry FIRST, while the windows still exist.
+    capture_all_window_geometry(app_handle);
     // Unkey the transmitter before the process dies: signal the radio
     // loop to drop PTT and give it a brief window to flush the un-key
     // command to the rig. A stuck carrier on quit is a TX-safety
@@ -15964,17 +15953,80 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
         // ordinary case where the loop's drops already ran.
         tempo_audio::rigctld_proc::kill_leftover_daemons();
     }
-    persist_conversations(app_handle.state::<SharedEngine>().inner());
-    persist_field_day_log(app_handle.state::<SharedEngine>().inner());
-    // An opening still in progress at quit becomes a journaled episode —
-    // a 6m Es evening isn't lost because the app closed mid-opening.
-    if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
-        record_opening_episodes(tr.close_all(now_unix()));
-    }
+    persist_journals(app_handle);
     // LAST: a clean exit is itself diagnostic — its absence in the file says the process
     // died rather than quit. Bounded wait; a wedged writer can never hold up an exit.
     tempo_core::applog::info("startup", "clean shutdown");
     tempo_core::applog::flush();
+}
+
+/// Snapshot the main window's box and every band-map pop-out's, while they still exist.
+///
+/// On the Cmd+Q path (the reason this exists) every window is alive; on a window-close quit
+/// they are already destroyed and both captures no-op — `CloseRequested` snapshotted them
+/// before the teardown.
+fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
+    if QUIT_SKIP_GEOMETRY.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    window_state::capture_now(app_handle);
+    for (label, w) in app_handle.webview_windows() {
+        if label != "main" {
+            // No-op for anything that is not a band-map window, and skips minimized windows
+            // itself — safe to sweep the whole map.
+            capture_bandmap_window(&w);
+        }
+    }
+}
+
+/// Write out everything the engine is holding in memory: the conversations, the Field Day log,
+/// and any propagation opening still in progress (a 6m Es evening isn't lost because the app
+/// closed mid-opening).
+///
+/// Split out of [`quit_cleanup`] so the Windows self-update path can reach it — see
+/// [`prepare_update_install`]. Every call is a plain overwrite of the same files, so running it
+/// twice costs a second write and changes nothing.
+fn persist_journals(app_handle: &tauri::AppHandle) {
+    persist_conversations(app_handle.state::<SharedEngine>().inner());
+    persist_field_day_log(app_handle.state::<SharedEngine>().inner());
+    if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
+        record_opening_episodes(tr.close_all(now_unix()));
+    }
+}
+
+/// Flush to disk before a self-update hands the machine to the installer.
+///
+/// **Windows exits without warning here, and nothing downstream of this call runs.**
+/// `tauri-plugin-updater` 2.10.1 ends its Windows arm with `ShellExecuteW(installer)` followed
+/// by `std::process::exit(0)` (`updater.rs:865`) — it does not even read the ShellExecute
+/// result, so reaching that line ends the process. `exit` unwinds nothing and delivers no
+/// `RunEvent`, and [`quit_cleanup`] hangs off `RunEvent::ExitRequested`/`Exit`; so a Windows
+/// self-update used to throw away the conversation history, the Field Day log, any open
+/// propagation episode, the window geometry, and the un-flushed tail of the diagnostic log —
+/// the log covering the update itself, which is exactly the part worth having when an operator
+/// reports that an upgrade broke their install. The plugin's own `on_before_exit` hook cannot
+/// be reached from the JS command path (its plugin `Builder` does not expose it), so the
+/// frontend asks for this immediately before it calls `install()`.
+///
+/// **The transmitter is deliberately NOT touched here.** `install_block_reason` already refuses
+/// the install outright while the radio is transmitting, tuning, in a QSO, running, or merely
+/// TX-armed, so there is nothing to unkey — and a failed install (a bad signature, a download
+/// that never verified) must leave a working app behind, not one whose radio loop has been shut
+/// down under it. Persisting is idempotent; shutting down is not.
+///
+/// A no-op off Windows: there `install()` returns to its caller, the frontend calls
+/// `restart_app`, and `quit_cleanup` runs in full on the ordinary exit path.
+#[tauri::command]
+fn prepare_update_install(app: tauri::AppHandle) {
+    #[cfg(windows)]
+    {
+        tempo_core::applog::info("updater", "flushing journals before the installer handoff");
+        capture_all_window_geometry(&app);
+        persist_journals(&app);
+        tempo_core::applog::flush();
+    }
+    #[cfg(not(windows))]
+    let _ = app;
 }
 
 /// Everything the Tauri builder chain MOVES, in one clonable bundle.
@@ -17266,6 +17318,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
             update_install_block,
+            prepare_update_install,
             restart_app,
             log_operators,
             export_settings_bundle,
