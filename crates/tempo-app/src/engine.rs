@@ -6116,6 +6116,7 @@ impl Engine {
             // the operator re-enters the mode (a band/contact switch). CW is manual keying: hitting
             // the key must always transmit (privilege permitting — tx_allowed still gates). FT8 is
             // unaffected: it never calls send_cw and keeps its Monitor/double-click keying gate.
+            tempo_core::applog::info("tx", &format!("CW over queued: {expanded:?}"));
             self.tx_enabled = true;
             // A fresh send supersedes BOTH pending one-shot aborts: the CW abort, and the
             // radio loop's mid-over cut. `send_cw` is the only self-re-arming transmit
@@ -6761,6 +6762,10 @@ impl Engine {
     /// any still-pending message (one voice over at a time).
     pub fn send_voice(&mut self, samples: Vec<f32>) {
         if self.tx_enabled && self.tx_allowed() && !samples.is_empty() {
+            tempo_core::applog::info(
+                "tx",
+                &format!("voice-keyer over queued: {} samples", samples.len()),
+            );
             self.voice_tx = Some(samples);
         }
     }
@@ -11707,6 +11712,12 @@ impl Engine {
                 Self::PSK_MAX_SEND_CHARS
             ));
         }
+        // Manual-mode overs reach the diagnostic log too. Only the FT path recorded, so an
+        // operator who sent a PSK CQ and then reported an FT8 problem sent a log with a hole
+        // exactly where their own transmissions were ("it didnt actually log the psk move and
+        // the cq I sent on that mode", 2026-08-19). The trace is the same shape as the FT one:
+        // what went out, and on which mode.
+        tempo_core::applog::info("tx", &format!("PSK over queued: {filtered:?}"));
         // An explicit operator send restarts the TX-watchdog clock.
         self.reset_tx_watchdog();
         self.psk_queue.push_back(filtered);
@@ -12066,6 +12077,7 @@ impl Engine {
                  per over"
             ));
         }
+        tempo_core::applog::info("tx", &format!("RTTY over queued: {up:?}"));
         // An explicit operator send restarts the TX-watchdog clock (see poll_rtty_one).
         if reset_watchdog {
             self.reset_tx_watchdog();
