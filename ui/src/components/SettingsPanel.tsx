@@ -75,7 +75,8 @@ import { pushToast, withErrorToast } from '../toast'
 // two Contesting sections (Contest Category + Field Day Setup). Every remaining tab's
 // fieldsets are still hardcoded English and are deliberately outside the i18n guard's scope;
 // see its header.
-import { t, type MessageKey } from '../i18n'
+import { setLocale, t, type MessageKey } from '../i18n'
+import { LOCALE_CHOICES, LOCALE_NATIVE_NAME, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
 import { FD_EVENT_NAMES } from '../fdEvent'
 import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
@@ -769,6 +770,9 @@ export function SettingsPanel({
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [MAX_STEP])
+  // Re-render the panel when the language changes, so the picker's own labels switch with it
+  // (the panel is the one screen guaranteed to be open at that moment).
+  const locale = useLocale()
   const [allTxtPath, setAllTxtPath] = useState('')
   const [diagLogPath, setDiagLogPath] = useState('')
   const [recordingsPath, setRecordingsPath] = useState('')
@@ -2477,6 +2481,30 @@ export function SettingsPanel({
           <fieldset className="settings-section" id="settings-workspace">
             <legend>{t('settings.workspace.legend')}</legend>
             <div className="settings-grid">
+              {/* LANGUAGE. Rendered only when a second catalog is actually installed — a picker
+                  offering one language is a control that cannot do anything, and this app's
+                  premise is that a setting exists because it changes something. It appears the
+                  day a translation ships and not before. The native name is what a picker shows
+                  (an operator looking for German is looking for "Deutsch"), with the tag beside
+                  it for the ones that share a word. */}
+              {LOCALE_CHOICES.length > 1 && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.language.label')}</span>
+                  <select
+                    className="settings-input"
+                    value={locale}
+                    onChange={(e) => setLocale(e.target.value)}
+                    aria-label={t('settings.workspace.language.label')}
+                  >
+                    {LOCALE_CHOICES.map((l) => (
+                      <option key={l} value={l}>
+                        {LOCALE_NATIVE_NAME[l] ?? l}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-hint">{t('settings.workspace.language.hint')}</span>
+                </div>
+              )}
               {/* Theme lives HERE now, not the top bar (operator, 2026-08-10): Light/Dark
                   is a set-once preference, and the bar keeps only the Field quick toggle. */}
               {theme && onThemeChange && (

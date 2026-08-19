@@ -111,16 +111,60 @@ export function availableLocales(): string[] {
   return [SOURCE_LOCALE, ...[...catalogs.keys()].filter((l) => l !== SOURCE_LOCALE).sort()]
 }
 
+/** Fired on a real locale CHANGE, same-window. A `storage` event only reaches OTHER windows,
+ *  and Nexus's pop-outs are other windows — both are listened for (see `useLocale`). */
+export const LOCALE_EVENT = 'nexus-locale-changed'
+/** Where the operator's choice persists. Read synchronously at startup, before first paint. */
+export const LOCALE_KEY = 'nexus.locale'
+
 /**
  * Switch the prose locale. An unknown locale is IGNORED and English stays active — a typo in a
- * setting must not blank the interface.
+ * setting, or a stored language whose catalog was removed from the build, must never blank the
+ * interface.
  *
- * ⚠️ Nothing in the app re-renders on this today, because nothing changes it: phase 1 ships
- * English only. Before a locale picker exists, this needs the subscribe/notify pair `units.ts`
- * uses (a window event + a hook), or a switch will leave the mounted tree in the old language.
+ * Mirrors `units.ts`: persist, then notify, and only when the value actually changed. Without
+ * the notify the mounted tree keeps rendering the old language until something else happens to
+ * re-render it, which reads as "the setting did nothing".
  */
 export function setLocale(locale: string): void {
-  if (catalogs.has(locale)) active = locale
+  if (!catalogs.has(locale) || locale === active) return
+  active = locale
+  try {
+    localStorage.setItem(LOCALE_KEY, locale)
+  } catch {
+    // Private mode / quota: the language still applies for this session. A storage failure
+    // must not cost the operator the switch they just made.
+  }
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(LOCALE_EVENT))
+}
+
+/**
+ * Apply the stored locale, or the OS one when there is no stored choice.
+ *
+ * Called once before first paint. The OS default is deliberate — an operator running a German
+ * Windows gets a German Nexus without being asked, which is the "works without being configured"
+ * premise — and it is matched by LANGUAGE ONLY (`de-AT` → `de`): a region-specific catalog we do
+ * not ship must not silently fall back to English when the language one exists.
+ */
+export function initLocale(): void {
+  let stored: string | null = null
+  try {
+    stored = localStorage.getItem(LOCALE_KEY)
+  } catch {
+    stored = null
+  }
+  if (stored && catalogs.has(stored)) {
+    active = stored
+    return
+  }
+  const os = typeof navigator !== 'undefined' ? navigator.language : ''
+  if (!os) return
+  if (catalogs.has(os)) {
+    active = os
+    return
+  }
+  const lang = os.split('-')[0]
+  if (lang && catalogs.has(lang)) active = lang
 }
 
 /** The active prose locale. Never consult this to format a number — see the rule above. */
@@ -306,3 +350,4 @@ export function parseRich(text: string, knownTags: readonly string[]): RichNode[
   flush()
   return out
 }
+

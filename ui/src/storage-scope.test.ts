@@ -65,6 +65,10 @@ export const PER_SURFACE = [
 const SHARED = [
   // Display units: one preference the whole station shares, like the country exclude.
   'nexus.units',
+  // Prose language: the same preference in every window, for the same reason units are. A
+  // pop-out band map reading a different language than the window that spawned it would be
+  // the shape of bug this list exists to prevent.
+  'nexus.locale',
   // Wildcard call-hide: a standing display preference across windows (features/hideCalls).
   'nexus.decodes.hideCalls',
   // Arbitrary-entity country excludes, stored beside the curated keys (F4MQS).

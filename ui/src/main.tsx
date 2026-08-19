@@ -5,6 +5,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable } from './features/durableStore'
+import { initLocale } from './i18n'
 import { installExternalLinkInterceptor } from './externalLinks'
 import { isTauri, openExternalUrl } from './api'
 import { pushToast } from './toast'
@@ -94,5 +95,10 @@ const tree = (
 // change that does let it throw still renders the app rather than a blank window — the 0.24.6
 // failure mode, and not one to re-create over a preferences file.
 void loadDurable().finally(() => {
+  // Language BEFORE the first render, for the same reason the durable store is: `t()` reads a
+  // module-level variable, so a locale applied after mount would leave the first paint in
+  // English and switch it under the operator a frame later. Reads the stored choice, else the
+  // OS language; unknown or uninstalled falls through to English, silently and safely.
+  initLocale()
   createRoot(document.getElementById('root')!).render(tree)
 })

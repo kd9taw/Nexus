@@ -278,3 +278,92 @@ describe('the checker fires', () => {
     expect(skipped).toBe(2)
   })
 })
+
+// ── every OTHER catalog must agree with English ───────────────────────────────────────
+//
+// The guard above checks call sites against the ENGLISH catalog. A translation is the other
+// half of the same contract and it is the half nobody can eyeball: a reviewer who does not read
+// German cannot see that `{{callsign}}` came back as `{{rufzeichen}}`, and the operator finds
+// out when their screen says `{{rufzeichen}}` in the middle of a sentence.
+//
+// Three rules, and the third is the one with teeth:
+//   1. Same placeholders as English — a translation may reorder them, never rename or drop one.
+//   2. Same markup markers — `<b>` may move within the sentence, but a marker the call site
+//      never declared renders as literal angle brackets.
+//   3. NO DECIMAL COMMA IN A NUMBER. German writes 14,074 for fourteen-point-oh-seven-four.
+//      A translator (human or machine) "fixing" a frequency in an example sentence would put a
+//      comma into something an operator reads as a dial setting. Nothing else in this project
+//      guards that, because nothing else looks at a translated catalog.
+describe('translated catalogs agree with English', () => {
+  // Every catalog the build ships, by locale. English is the source and is checked by the
+  // suite above; this loop covers the rest, and is EMPTY until a translation lands — hence
+  // the fixture control below, which proves the rules bite before there is anything to bite.
+  const OTHER: Array<[string, Record<string, unknown>]> = []
+
+  const holesOf = (v: unknown): Set<string> => {
+    const texts = typeof v === 'string' ? [v] : Object.values(v as Record<string, string>)
+    const out = new Set<string>()
+    for (const t of texts) for (const m of String(t).matchAll(/\{\{(\w+)\}\}/g)) out.add(m[1])
+    return out
+  }
+  const marksOf = (v: unknown): Set<string> => {
+    const texts = typeof v === 'string' ? [v] : Object.values(v as Record<string, string>)
+    const out = new Set<string>()
+    for (const t of texts) for (const m of String(t).matchAll(/<(\w+)>/g)) out.add(m[1])
+    return out
+  }
+  /** A digit, a comma, then digits — `14,074`. The shape a decimal comma takes in prose. */
+  const DECIMAL_COMMA = /\d,\d/
+
+  /** The three checks, exported through the closure so the fixture can run them too. */
+  function catalogProblems(locale: string, cat: Record<string, unknown>): string[] {
+    const out: string[] = []
+    for (const [key, value] of Object.entries(cat)) {
+      const en = (EN as Record<string, unknown>)[key]
+      if (en === undefined) {
+        out.push(`${locale}/${key}: no such key in English`)
+        continue
+      }
+      const wantHoles = [...holesOf(en)].sort()
+      const gotHoles = [...holesOf(value)].sort()
+      if (wantHoles.join() !== gotHoles.join())
+        out.push(`${locale}/${key}: placeholders ${gotHoles.join(',')} ≠ English ${wantHoles.join(',')}`)
+      const wantMarks = [...marksOf(en)].sort()
+      const gotMarks = [...marksOf(value)].sort()
+      if (wantMarks.join() !== gotMarks.join())
+        out.push(`${locale}/${key}: markers ${gotMarks.join(',')} ≠ English ${wantMarks.join(',')}`)
+      const texts = typeof value === 'string' ? [value] : Object.values(value as Record<string, string>)
+      for (const t of texts)
+        if (DECIMAL_COMMA.test(String(t)))
+          out.push(`${locale}/${key}: DECIMAL COMMA in "${t}" — a number an operator may read as a dial`)
+    }
+    return out
+  }
+
+  it('the rules bite (positive control — the catalogs list is empty until a language ships)', () => {
+    const broken = {
+      'settings.search.matched': 'gefunden “{{suchbegriff}}”', // renamed hole
+      'reveal.prompt': 'kein Markup hier', // dropped markers
+      'reveal.notNow': 'Nicht jetzt — 14,074 MHz', // decimal comma
+      'not.a.real.key': 'x',
+    }
+    const found = catalogProblems('de', broken)
+    expect(found.some((p) => p.includes('placeholders'))).toBe(true)
+    expect(found.some((p) => p.includes('markers'))).toBe(true)
+    expect(found.some((p) => p.includes('DECIMAL COMMA'))).toBe(true)
+    expect(found.some((p) => p.includes('no such key'))).toBe(true)
+    // …and a correct translation passes all four.
+    expect(
+      catalogProblems('de', {
+        'settings.search.matched': 'gefunden “{{term}}”',
+        'reveal.notNow': 'Nicht jetzt',
+      }),
+    ).toEqual([])
+  })
+
+  for (const [locale, cat] of OTHER) {
+    it(`${locale} carries English's holes, markers and no decimal comma`, () => {
+      expect(catalogProblems(locale, cat)).toEqual([])
+    })
+  }
+})

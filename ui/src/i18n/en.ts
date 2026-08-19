@@ -4874,6 +4874,9 @@ export const EN = {
   // invariant number and the `%` stays glued to it. The chips themselves (`100%`, `175%`)
   // are numbers alone and never enter this file.
   'settings.workspace.legend': 'Workspace',
+  'settings.workspace.language.label': 'Language',
+  'settings.workspace.language.hint':
+    'The language Nexus writes in. Frequencies, signal reports, callsigns, grid squares, band and mode names are never translated or reformatted — a dial reads the same in every language.',
   'settings.workspace.theme.label': 'Theme',
   'settings.workspace.theme.hint':
     'Light reads best outdoors in daylight; the top bar’s Field chip boosts contrast and size in whichever theme you use.',
