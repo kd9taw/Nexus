@@ -27,10 +27,65 @@ Let it finish.
 
 Expected — the installers are unsigned. Click **More info → Run anyway**.
 
-### The window comes up blank
+### The window comes up blank — or Nexus doesn't start at all
 
-Rare; it means the install itself was interrupted (the WebView2 runtime ships inside the
-installer). Run the installer again and let it complete.
+Nexus draws its whole interface in the **Microsoft Edge WebView2 runtime**, so when that
+runtime is missing, damaged, or has a corrupt cache, you get a blank window — or, worse,
+nothing at all: no window, no error, no sign the program ran.
+
+Re-running the installer is worth one try, but it is **not** the fix for the two commonest
+causes, and if you have already tried it, skip straight past it.
+
+Work down this list:
+
+1. **Check your antivirus quarantine.** The installers are unsigned (see SmartScreen,
+   above), and some scanners react to that by silently deleting parts of Nexus *after* a
+   successful install. Open **Windows Security ▸ Virus & threat protection ▸ Protection
+   history** — third-party scanners have their own equivalent — and look for a Nexus entry.
+   **Restore** it, then add an **exclusion** for the install folder
+   (`%LOCALAPPDATA%\Nexus`) so it does not happen again on the next update.
+
+2. **Repair the WebView2 runtime.** Open **Settings ▸ Apps ▸ Installed apps**, find
+   **Microsoft Edge WebView2 Runtime**, and choose **Modify ▸ Repair**. Start Nexus again
+   when it finishes. If it is not in the list at all, it is not installed — run the Nexus
+   installer, which carries the full runtime.
+
+3. **Let Nexus repair its own cache.** Current builds detect this failure themselves: Nexus
+   shows a dialog naming WebView2 instead of exiting silently, and on the first failure it
+   sets the WebView2 cache folder aside and retries once, which clears a corrupt profile
+   with nothing for you to do. If you get that dialog, its text tells you where you are.
+   **Older builds exit silently** — so if launching does nothing at all, no window and no
+   message, you are on one of those, and updating is worth doing before anything else.
+
+4. **Read the diagnostic log** (below). It records each startup step as it happens, so the
+   last line in the file is the point Nexus got to before it stopped.
+
+### The diagnostic log — what to send us when it won't start
+
+Nexus keeps a plain-text record of what it did, in its data folder:
+
+| | |
+|---|---|
+| **Windows** | `%LOCALAPPDATA%\Nexus\nexus-diag.log` |
+| **macOS and Linux** | `~/.local/share/Nexus/nexus-diag.log` (or `$XDG_DATA_HOME/Nexus/`) |
+
+It sits beside `ALL.TXT` and the crash report `nexus-crash.txt`, so there is one folder to
+look in. If Nexus does start, **Settings ▸ Logging & Connectors ▸ Write ALL.TXT decode log ▸
+Reveal in folder** opens that folder for you.
+
+It holds timestamped, human-readable lines for the startup steps, the CAT and audio device
+open and any failure, updater checks, panics, and webview failures — not routine decoding
+traffic. When a launch fails, **the last line is the answer**: it names the last step that
+completed.
+
+Two things worth knowing:
+
+- **It cannot grow without bound.** There are two files at most — the active
+  `nexus-diag.log` and one previous generation, `nexus-diag.1.log` — about 8 MB in total,
+  worst case. When the active file fills, it is simply renamed aside and a fresh one
+  started, so a large log never slows a launch down.
+- **It is safe to attach to a public bug report.** Passwords, API keys and tokens are
+  masked before anything is written to it. It is designed to be sent to a stranger.
 
 ---
 
@@ -374,6 +429,11 @@ A report we can act on has three things:
 2. **Your rig and setup** — rig model, connection (USB / network), OS.
 3. **What you saw vs. what you expected** — band, dial, mode, and for connector
    issues, the relevant lines from the **Connections log**.
+
+4. **The diagnostic log** — attach `nexus-diag.log` ([where to find it](#the-diagnostic-log--what-to-send-us-when-it-wont-start)).
+   It is the single most useful thing you can send, and it is the *only* thing that helps
+   when Nexus will not start far enough to show you a version number. Credentials are masked
+   before they are written, so it is safe to post publicly.
 
 File it at <https://sourceforge.net/p/nexus-ham-radio/tickets/>. That detail is the difference
 between a fix and a round-trip of questions.
