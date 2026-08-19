@@ -88,6 +88,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   right-click. The tooltip now says that, in the Operate strip and in the top bar. No behaviour
   changed.
 
+- **Nexus could arrive in FT8 with the transmitter already armed.** Entering PSK31, CW, Phone or
+  RTTY arms transmit — correct for those modes, which are a live key or mic, and arming by
+  itself sends nothing. But nothing disarmed on the way back, so returning to FT8 left the
+  transmitter armed from the previous mode, and in FT8 an armed transmitter is what turns
+  selecting a station into an immediate call. Reported on air: PSK31 → FT8 → pick 20 m → "it
+  started transmitting on its own." Leaving a manual mode now lowers the arm switch, so FT8 is
+  armed only by Monitor, a double-click, or Call CQ — the three gates it always claimed to have.
+  A queued CW or RTTY over waiting for you to come back is still held, exactly as before.
+
 - **A Windows update no longer throws away what Nexus was holding in memory.** Installing an
   update on Windows hands off to the installer and ends the app then and there — so the
   conversation history, the Field Day log, a propagation opening still in progress and your

@@ -5357,6 +5357,13 @@ impl Engine {
         self.drop_rtty_latch();
         // …and PSK's, for the identical reason.
         self.drop_psk_latch();
+        let left_a_manual_mode = matches!(
+            self.settings.operating_mode,
+            OperatingMode::Phone
+                | OperatingMode::Cw
+                | OperatingMode::Rtty
+                | OperatingMode::Keyboard
+        );
         self.settings.operating_mode = om;
         // SAFETY re-clamp: entering a mode with a lower power ceiling (SSB → FT8) must bring the
         // rig DOWN to the cap now, not wait for the operator to touch the power slider. If a cap
@@ -5414,6 +5421,33 @@ impl Engine {
                 | OperatingMode::Keyboard
         ) {
             self.set_tx_enabled(true);
+        } else if left_a_manual_mode {
+            // …AND DISARM ON THE WAY BACK. Field incident 2026-08-19: PSK31 → FT8 → pick 20 m
+            // → "it started transmitting on its own". Arming above had no counterpart, so an
+            // operator who used a manual mode arrived in the FT8 cockpit with the transmitter
+            // still armed from it — and in FT8 an armed latch is what turns a station
+            // selection into an immediate over. The invariant the comment above claims ("the
+            // app never auto-keys FT8") held at LAUNCH and nowhere else.
+            //
+            // Deliberately narrow: only the transition OUT of a manual mode disarms. A
+            // digital → digital re-assert (the FT8/FT4 sub-mode click, which routes through
+            // here with follow_freq=false) must not drop the latch under an operator who
+            // armed it here and is working someone. Nothing else in this method turns TX ON,
+            // so this is the only arm that needs undoing.
+            //
+            // ⚠️ NOT through `set_tx_enabled(false)`, and that is not a shortcut skipped. That
+            // path carries TX-OFF's semantics — it clears the CW, RTTY and PSK queues and arms
+            // their aborts — and a section change is not an operator pressing TX Off. A manual
+            // mode's queued over is HELD across a section change and keys when the operator
+            // returns to it; `rtty_and_ft8_sequencers_never_key_together` pins exactly that,
+            // and it went red when this was first written the blunt way. So: lower the latch,
+            // bump the gate generation (an over planned while armed must not commit), and
+            // nothing else. One bit changes, and it is the operator's.
+            if self.tx_enabled {
+                tempo_core::applog::info("tx", "transmit disarmed by leaving a manual mode");
+            }
+            self.tx_enabled = false;
+            self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         }
     }
 
@@ -8553,6 +8587,13 @@ impl Engine {
         // Stop transmitting AND stay stopped: disable TX so the auto-sequencer
         // doesn't immediately re-arm on the next slot (WSJT-X "Halt Tx" also
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
+        //
+        // Logged here rather than through `set_tx_enabled` because this writes the latch
+        // directly — and a halt that does not stick is exactly the shape under investigation,
+        // so the trace must show the halt as well as whatever re-arms after it.
+        if self.tx_enabled {
+            tempo_core::applog::info("tx", "transmit disarmed by halt");
+        }
         self.tx_enabled = false;
         // Halt is the IMMEDIATE kill: arm the one-shot the radio loop consumes to
         // cut a slot over in flight (drop PTT + flush). A plain TX-disable
@@ -8805,7 +8846,27 @@ impl Engine {
         }
     }
 
+    #[track_caller]
     pub fn set_tx_enabled(&mut self, on: bool) {
+        // WHO ARMED IT. Field incident 2026-08-19: the operator halted twice and an over went
+        // out 45 s later, so something re-armed — and no amount of reading named it, because
+        // every arm path funnels through here from a dozen call sites. `#[track_caller]` makes
+        // the LOG name it: one line per transition, carrying the file:line of whoever asked.
+        // Transitions only (an idempotent re-arm is silent), so this is a handful of lines a
+        // session, and the whole point is that the next report arrives with its cause attached.
+        let was = self.tx_enabled;
+        if was != on {
+            let at = std::panic::Location::caller();
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "transmit {} by {}:{}",
+                    if on { "ARMED" } else { "disarmed" },
+                    at.file(),
+                    at.line()
+                ),
+            );
+        }
         // BACKSTOP for the receive-only tiers. Every arm path funnels here, so this
         // is where "armed but unable to transmit" is made unrepresentable — the UI
         // reads `tx_enabled`, so letting it latch true is exactly what made the app
@@ -21180,6 +21241,63 @@ mod tests {
     ///
     /// The defect was that the Hold test lived in `set_rx_offset`, one level too low, so it
     /// applied to every caller including the click that must never move Tx.
+    /// FIELD INCIDENT 2026-08-19 (KD9TAW, 1.7.1-test1): "I was on psk31, then moved to ft,
+    /// selected the 20m band and almost immediately it tried to call XE1IHD, it started
+    /// transmitting on its own."
+    ///
+    /// `set_operating_mode` ARMED transmit for the manual modes (Phone/CW/RTTY/Keyboard —
+    /// correct: they are a live mic and key, and arming keys nothing by itself) and then never
+    /// disarmed on the way back. So an operator who used PSK31 and returned to FT8 arrived with
+    /// the transmitter already armed, and the comment two lines above the arm — "Digital is NOT
+    /// auto-armed … so the app never auto-keys FT8 on launch — the safety invariant" — was true
+    /// of LAUNCH and false of every mode transition. In FT8 an armed latch is what turns a
+    /// station selection into an immediate over, and the operator has no reason to think they
+    /// armed anything.
+    ///
+    /// Digital now disarms on entry, so FT8 is armed only by its own three gates: Monitor,
+    /// a double-click, or Call CQ.
+    #[test]
+    fn returning_to_digital_from_a_manual_mode_disarms_transmit() {
+        use crate::settings::OperatingMode;
+        for (wire, manual) in [
+            ("phone", OperatingMode::Phone),
+            ("cw", OperatingMode::Cw),
+            ("rtty", OperatingMode::Rtty),
+            ("keyboard", OperatingMode::Keyboard),
+        ] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_operating_mode(wire, false);
+            assert!(
+                e.tx_enabled(),
+                "{manual:?}: control — a manual mode still arms on entry (it is a live key)"
+            );
+            e.set_operating_mode("digital", false);
+            assert!(
+                !e.tx_enabled(),
+                "{manual:?} → digital left TX ARMED: the FT8 cockpit must be armed only by \
+                 Monitor, a double-click or Call CQ"
+            );
+        }
+    }
+
+    /// The disarm must not undo an arm that the SAME action is about to make: the Needed /
+    /// spot click sets the operating mode and then works the station, and the working half is
+    /// what arms. Order, not absence, is what keeps both true.
+    #[test]
+    fn a_needed_click_into_digital_still_ends_up_armed() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.work_spot("digital", 14.074, "20m");
+        assert!(
+            !e.tx_enabled(),
+            "the QSY alone must not arm — it is not a transmit action"
+        );
+        let _ = e.call_station_ctx("K2DEF", None, None, None, Some(1200.0));
+        assert!(
+            e.tx_enabled(),
+            "working the station is the transmit action, and it arms (double_click_sets_tx)"
+        );
+    }
+
     #[test]
     fn a_waterfall_click_moves_only_rx_whatever_hold_tx_freq_says() {
         for hold in [false, true] {
