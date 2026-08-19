@@ -7618,6 +7618,7 @@ impl Engine {
         self.reset_tx_watchdog();
         self.tx_queue.clear();
         self.broadcast_queue.clear();
+        tempo_core::applog::info("tx", &format!("own-TX feed cleared: mode -> {spec}"));
         self.own_tx.clear();
         // A new QSO (or mode change) starts a fresh auto-log window.
         self.qso_logged = false;
@@ -8148,6 +8149,20 @@ impl Engine {
     /// free-text frames so they don't double / show "A13DE KD9TAW".)
     fn record_own_tx(&mut self, text: String) {
         const OWN_TX_RING: usize = 30;
+        // Diagnostic trace. An operator reported (2026-08-18) their own calls not appearing in
+        // the Rx-Frequency pane on one band and appearing after a QSY — an intermittent nobody
+        // can reproduce from the code, and the pane's own filters were cleared of it (`mine`
+        // rows bypass the frequency test and every optional hide). This line and the two
+        // `cleared` ones below are the pair that settles it from a log: an over that was
+        // recorded and never rendered is a UI fault; an over that was recorded and then wiped
+        // names the wiper.
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "over recorded: {:?} at {} Hz",
+                text, self.tx_offset_hz as i32
+            ),
+        );
         self.own_tx.push_back(OwnTx {
             text,
             freq_hz: self.tx_offset_hz,
@@ -8587,6 +8602,7 @@ impl Engine {
         self.sstv_tx_progress = None;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
+        tempo_core::applog::info("tx", "own-TX feed cleared: halt TX");
         self.own_tx.clear();
         self.app.set_transmitting(false);
     }
