@@ -1970,6 +1970,10 @@ export const EN = {
   'spots.filter.mode.hide.title': 'Hide {{mode}} spots',
   'spots.filter.state.title':
     "Show only {{state}} spots (state resolved from stations you've heard before)",
+  'spots.filter.local.label': 'Heard near me',
+  'spots.filter.local.hidden': 'Heard near me · {{count}} hidden',
+  'spots.filter.local.title':
+    'Show only spots someone on your continent actually heard. A station reported solely from another continent says nothing about a path from your station — the same test the Needed board uses. Turn it off for the worldwide cluster feed.',
   'spots.filter.privileges.label': 'My privileges',
   'spots.filter.privileges.title':
     'Show only spots you may transmit to under your license class (Settings ▸ license). Open class sees everything either way.',

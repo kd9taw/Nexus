@@ -85,6 +85,14 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
   // `licensed` flag is computed backend-side from the SAME tables as the TX lockout;
   // an Open-class (non-US) operator has every spot licensed, so the toggle is a no-op.
   const [licensedOnly, setLicensedOnly] = useSessionState('nexus.spots.licensedOnly', false)
+  // "Heard near me" — keep only spots at least one voice on the operator's OWN CONTINENT
+  // reported. The same question the Needed board asks; the panel had no locality test at all,
+  // so a US operator saw JA stations only Europe and Asia had heard, which says nothing about a
+  // path from here (operator, 2026-08-19).
+  //
+  // DEFAULT ON, and the count of what it hides is printed beside it — a filter that removes
+  // rows silently is how "my spots disappeared" becomes an unanswerable report.
+  const [localOnly, setLocalOnly] = useSessionState('nexus.spots.localOnly', true)
   // US-state (WAS) filter, from the roster-resolved state on each spot. Empty = all.
   const [states, setStates] = useSessionState<string[]>('nexus.spots.states', [])
 
@@ -123,12 +131,13 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
     setStates((prev) => (prev.includes(st) ? prev.filter((x) => x !== st) : [...prev, st]))
 
   const hasActiveFilters =
-    bands.length > 0 || hiddenModes.length > 0 || licensedOnly || states.length > 0
+    bands.length > 0 || hiddenModes.length > 0 || licensedOnly || localOnly || states.length > 0
 
   const rows = useMemo(() => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
     const filtered = spots.filter((s) => {
       if (licensedOnly && !s.licensed) return false
+      if (localOnly && s.spotterLocal === false) return false
       if (hiddenModes.includes(s.submode ?? s.mode)) return false
       if (bands.length > 0 && !bands.includes(s.band)) return false
       // A state filter hides spots whose state is unknown (cluster spots of unheard stations).
@@ -170,7 +179,15 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
       return c * dir
     })
     return filtered
-  }, [spots, hiddenModes, bands, states, sort, query, licensedOnly])
+  }, [spots, hiddenModes, bands, states, sort, query, licensedOnly, localOnly])
+
+  // How many rows the locality filter is holding back RIGHT NOW — the honest half of a filter
+  // that is on by default. Counted against everything else the operator has chosen, so it says
+  // "hidden from what you asked for", not "hidden from the firehose".
+  const farHidden = useMemo(
+    () => (localOnly ? spots.filter((s) => s.spotterLocal === false).length : 0),
+    [spots, localOnly],
+  )
 
   const th = (key: SortKey, label: string) => (
     <button
@@ -300,6 +317,19 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           >
             {t('spots.filter.privileges.label')}
           </button>
+          {/* Locality. The count of what it is hiding rides ON the chip, so the answer to
+              "where are my spots" is on screen rather than in a support thread. */}
+          <button
+            type="button"
+            className={`np-chip${localOnly ? ' active' : ''}`}
+            aria-pressed={localOnly}
+            onClick={() => setLocalOnly((v) => !v)}
+            title={t('spots.filter.local.title')}
+          >
+            {localOnly && farHidden > 0
+              ? t('spots.filter.local.hidden', { count: farHidden })
+              : t('spots.filter.local.label')}
+          </button>
           {hasActiveFilters && (
             <button
               type="button"
@@ -309,6 +339,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                 setHiddenModes([])
                 setStates([])
                 setLicensedOnly(false)
+                setLocalOnly(false)
               }}
               title={t('spots.filter.clear.title')}
             >

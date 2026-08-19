@@ -11778,6 +11778,23 @@ struct SpotRow {
     /// panel's "my privileges" filter — computed here so the legal band data has ONE
     /// source of truth (the same tables as the TX lockout).
     licensed: bool,
+    /// True when at least one voice for this spot — the spotter or a corroborator — is on the
+    /// OPERATOR'S OWN CONTINENT.
+    ///
+    /// The same question the Needed board asks (`propagation::hf_admit_spotters`), asked here
+    /// so the Spots panel can offer the operator the same relief: a US station does not need a
+    /// row for a JA that only Europe and Asia heard, because that says nothing about a path
+    /// from Illinois. Computed in Rust because resolving a callsign to a continent needs
+    /// cty.dat, which the UI does not have.
+    ///
+    /// ⚠️ A FLAG, NOT A FILTER. The row is always sent; the panel decides. Filtering here
+    /// would make "where did my spots go" unanswerable from the UI, and the count of what is
+    /// being hidden is what keeps the feature honest.
+    ///
+    /// True when locality cannot be judged at all (an unresolvable operator callsign), which
+    /// is `hf_admit_spotters`'s own fail-open posture: an empty panel is a worse answer than
+    /// an unfiltered one.
+    spotter_local: bool,
     /// Set when this spot is a ONE-WAY transmission — an NCDXF/IARU beacon slot or a W1AW
     /// bulletin — and therefore not workable. The row is still shown (an audible beacon is
     /// real propagation evidence); the UI badges it and never paints a need colour on it.
@@ -11820,12 +11837,19 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
     //
     // Poison recovers (engine_lock), so the gate always sees real state; the Option
     // shape is kept for the chains below.
-    let (class, roster_grids) = {
+    let (class, my_call, roster_grids) = {
         let eng = Some(engine_lock(&state));
         let class = eng
             .as_ref()
             .map(|e| e.settings().license_class)
             .unwrap_or(LicenseClass::Open);
+        // The operator's own call decides "my continent" for the locality flag below. Read
+        // under the SAME lock as the class, so a settings save mid-build cannot give one row
+        // the old callsign and the next the new one.
+        let my_call = eng
+            .as_ref()
+            .map(|e| e.settings().mycall.clone())
+            .unwrap_or_default();
         let grids: std::collections::HashMap<String, String> = eng
             .as_ref()
             .map(|e| {
@@ -11838,7 +11862,7 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
                     .collect()
             })
             .unwrap_or_default();
-        (class, grids)
+        (class, my_call, grids)
     };
     let mut rows: Vec<SpotRow> = recent
         .into_iter()
@@ -11886,6 +11910,13 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
                 age_secs,
                 comment: cs.comment.clone(),
                 licensed,
+                spotter_local: {
+                    // Every voice for this spot, the spotter first — one on my continent is
+                    // enough, exactly as on the Needed board.
+                    let mut voices: Vec<&str> = vec![cs.spotter.as_str()];
+                    voices.extend(cs.corroborators.iter().map(String::as_str));
+                    propagation::hf_admit_spotters(&voices, &my_call).is_some()
+                },
                 beacon: propagation::beacons::classify(&cs.dx_call, freq),
             }
         })

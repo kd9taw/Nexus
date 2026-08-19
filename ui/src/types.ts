@@ -1813,6 +1813,13 @@ export interface SpotRow {
   comment: string
   /** Operator may transmit at this freq+mode (license privileges; Open class ⇒ true). */
   licensed: boolean
+  /** At least one voice for this spot — the spotter or a corroborator — is on the operator's
+   *  own continent. True when locality cannot be judged (fail open).
+   *
+   *  OPTIONAL on purpose: a row from an older backend, or any fixture that predates the flag,
+   *  is "not judged" and must be KEPT rather than silently filtered out. The panel tests
+   *  `=== false`, never falsiness, for exactly that reason. */
+  spotterLocal?: boolean
   /** Set when this spot is a ONE-WAY transmission and so not workable: an NCDXF/IARU beacon
    * slot or a W1AW bulletin. Still displayed (an audible beacon is real propagation evidence)
    * but badged, and never painted with a need colour. Score suppression happens in the

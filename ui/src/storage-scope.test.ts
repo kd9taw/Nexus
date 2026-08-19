@@ -156,6 +156,7 @@ const SESSION_SCOPED = [
   'nexus.spots.filtersOpen',
   'nexus.spots.hiddenModes',
   'nexus.spots.licensedOnly',
+  'nexus.spots.localOnly',
   'nexus.spots.query',
   'nexus.spots.sort',
   'nexus.spots.states',
