@@ -5,6 +5,20 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **AGC now offers AUTO and OFF, and stops reporting them as Mid.** The Phone and CW cockpits gave
+  three AGC settings — Fast, Mid, Slow — while the radios have five: an FT-710 offers AUTO and OFF
+  on its own front panel. Worse than missing, they were *misreported*: a rig sitting on AUTO, which
+  is where many operators leave it, displayed as **Mid**, and so did AGC switched off, because
+  anything Nexus did not recognise folded to "mid". So the cockpit could state a setting the radio
+  was not on. AUTO now appears to the left of Fast and OFF to the right of Slow, and a read-back of
+  either shows what the rig is actually doing. Offered for every rig rather than guessed at:
+  Hamlib does not report which AGC constants a backend accepts, so a rig that refuses one says so
+  and the read-back shows what it really did.
+
 ## [1.7.0] — 2026-08-18
 
 ### Added
