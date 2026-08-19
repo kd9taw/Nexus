@@ -1349,7 +1349,10 @@ pub fn spawn_rotctld(
     let rot_bin = resolve_rotctld();
     tempo_core::applog::info(
         "proc",
-        &format!("spawn rotctld: {}", rot_bin.to_string_lossy()),
+        &format!(
+            "rotctld for model {model} on {port} @ {baud} baud (tcp {tcp_port}) — {}",
+            rot_bin.to_string_lossy()
+        ),
     );
     let mut cmd = Command::new(rot_bin);
     cmd.args(&args);

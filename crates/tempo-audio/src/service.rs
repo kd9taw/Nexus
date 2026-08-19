@@ -176,9 +176,17 @@ fn spawn_cat_daemon(
                 // Recorded, not just printed: the probe detail must SAY the tested
                 // backend was the fallback, or the operator debugs the wrong daemon.
                 eprintln!("tempo-audio: native CI-V daemon failed ({e}); falling back to rigctld");
+                // NAME THE SUBJECT. On Windows "The system cannot find the file specified" from
+                // a serial open means the COM PORT IS NOT THERE — the radio is off, or the USB
+                // adapter enumerated somewhere else. Without the port and the radio in the
+                // line, a three-radio station gets a failure it has to guess the owner of
+                // (operator, 2026-08-19).
                 tempo_core::applog::warn(
                     "cat",
-                    &format!("native CI-V daemon failed ({e}); falling back to rigctld"),
+                    &format!(
+                        "{}: native CI-V on {} @ {} baud failed ({e}); falling back to rigctld",
+                        t.radio_label, t.serial_port, t.baud
+                    ),
                 );
                 native_fallback = Some(e.to_string());
             }
@@ -1076,12 +1084,19 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // leaves this as the last line in the file, which is the whole point of the milestone.
     // `ok` is `None` for VOX (no control channel to be healthy or not) — that is not a failure
     // and must not read as one in the file.
+    let who = applied.log_subject();
     match init_probe.ok {
-        Some(true) => tempo_core::applog::info("cat", &format!("connected: {}", init_probe.detail)),
-        Some(false) => {
-            tempo_core::applog::error("cat", &format!("not connected: {}", init_probe.detail))
+        Some(true) => {
+            tempo_core::applog::info("cat", &format!("{who}: connected — {}", init_probe.detail))
         }
-        None => tempo_core::applog::info("cat", &format!("no CAT channel: {}", init_probe.detail)),
+        Some(false) => tempo_core::applog::error(
+            "cat",
+            &format!("{who}: NOT connected — {}", init_probe.detail),
+        ),
+        None => tempo_core::applog::info(
+            "cat",
+            &format!("{who}: no CAT channel — {}", init_probe.detail),
+        ),
     }
     let init_freq = init_probe.freq_hz;
     {
@@ -1312,6 +1327,7 @@ impl Transport {
     /// CAT-only) and the broker port dropped (only the active radio talks to the broker).
     fn from_profile(p: &RadioProfile) -> Self {
         Self {
+            radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
             ptt_method: p.ptt_method.clone(),
             rig_model: p.rig_model,
             serial_port: p.serial_port.clone(),
@@ -3732,7 +3748,7 @@ impl RadioLoop {
                         // channel, and `Rig::ptt` on a Vox rig sets `keyed` and answers Ok.
                         // `cat_hold_active` is therefore part of `may_key`, so no key-up runs
                         // until the transport is rebuilt.
-                        eng.halt_tx_for_context_change();
+                        eng.halt_tx_for_context_change("CAT probe hold");
                     }
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     *rig = Rig::vox();
@@ -3767,7 +3783,7 @@ impl RadioLoop {
                         // or a CAT-config save, never an operator Stop TX. A plain `halt_tx`
                         // here silently undid the engine-side re-arm a switch had just made,
                         // and the operator's next PTT press went nowhere.
-                        eng.halt_tx_for_context_change();
+                        eng.halt_tx_for_context_change("CAT daemon rebuild");
                     }
                 }
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
@@ -3983,7 +3999,7 @@ impl RadioLoop {
                         let mut eng = engine_lock(engine);
                         // CONTEXT halt, same as the rig rebuild above: swapping the sound card
                         // to the newly active radio must not disarm the operator's mic.
-                        eng.halt_tx_for_context_change();
+                        eng.halt_tx_for_context_change("audio backend rebuild");
                     }
                 }
                 // ⚠️ RELEASE THE OLD CARD FIRST — see `AudioBackend::release_device`.
@@ -8444,8 +8460,82 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
 /// (from the engine's settings) against the one it has `applied` and rebuilds
 /// the rig / re-opens the sound card when these change — so a Settings "Save"
 /// reconnects CAT without an app restart.
+/// A radio's name for the log when only the Hamlib model is known.
+fn radio_label(model_name: &str, model: u32) -> String {
+    match model_name.trim() {
+        "" if model == 0 => "no rig (VOX)".to_string(),
+        "" => format!("model {model}"),
+        n => format!("{n} (model {model})"),
+    }
+}
+
+/// A radio's name for the log when the operator has given it one — theirs first, because that
+/// is the name they will use when they report a problem.
+fn radio_label_named(name: &str, model_name: &str, model: u32) -> String {
+    match name.trim() {
+        "" => radio_label(model_name, model),
+        n => format!("{n} — {}", radio_label(model_name, model)),
+    }
+}
+
+impl Transport {
+    /// How this radio names itself in the log: the operator's name and model, plus HOW it is
+    /// reached — a serial port, a host, or an OmniRig slot. One string, so every subsystem
+    /// writes the same subject and a reader can grep one name through a whole session.
+    fn log_subject(&self) -> String {
+        let via = match self.rig_conn.as_str() {
+            "network" if !self.rig_addr.is_empty() => format!(" via {}", self.rig_addr),
+            "omnirig" => format!(" via OmniRig RIG {}", self.omnirig_slot.max(1)),
+            _ if !self.serial_port.is_empty() => {
+                format!(" on {} @ {} baud", self.serial_port, self.baud)
+            }
+            _ => String::new(),
+        };
+        format!("{}{via}", self.radio_label)
+    }
+}
+
+/// Display text that is deliberately NOT part of transport identity.
+///
+/// ⚠️ WHY A TYPE AND NOT A HAND-WRITTEN `PartialEq`. The transport comparison decides whether
+/// to tear down and relaunch CAT, so a radio's display name must not count — renaming a radio
+/// in Settings would otherwise drop the operator's connection for a cosmetic edit. The first
+/// attempt at that was a hand-written `impl PartialEq for Transport` listing the fields to
+/// compare, and it silently OMITTED SIX of them (`voice_mic_device`, `tx_level`, `rx_gain`, and
+/// the three monitor fields) — so changing the voice mic compared EQUAL, no rebuild happened,
+/// and the mic never opened. Three shipped tests caught it; nothing else would have, and the
+/// next field anyone added would have been dropped the same way.
+///
+/// This makes the mistake unrepresentable: `Transport` derives `PartialEq` again, so every
+/// field — present and future — is compared by default, and exactly one type opts out.
+#[derive(Clone, Debug, Default)]
+struct LogLabel(String);
+
+impl PartialEq for LogLabel {
+    fn eq(&self, _: &Self) -> bool {
+        true // display text, never identity
+    }
+}
+
+impl std::fmt::Display for LogLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct Transport {
+    /// WHO THIS IS, for the diagnostic log — the operator's own radio name where they gave
+    /// one, else the Hamlib model name, else the bare model number.
+    ///
+    /// ⚠️ NOT part of transport IDENTITY: it is display text, and two transports that differ
+    /// only by label are the same transport. Every `PartialEq`/rebuild comparison must skip it,
+    /// or renaming a radio in Settings would tear down and relaunch CAT.
+    ///
+    /// It exists because a three-radio station's log said `native CI-V daemon failed` and
+    /// `Connected — 7.074 MHz` without ever naming which radio either line was about, and the
+    /// operator had to guess (2026-08-19).
+    radio_label: LogLabel,
     ptt_method: String,
     rig_model: u32,
     serial_port: String,
@@ -8494,6 +8584,7 @@ struct Transport {
 impl Transport {
     fn from_cfg(c: &RadioConfig) -> Self {
         Self {
+            radio_label: LogLabel(radio_label("", c.rig_model)),
             ptt_method: c.ptt_method.clone(),
             rig_model: c.rig_model,
             // The upgrade heal for a stored mac /dev/tty.* twin (hangs CAT on carrier
@@ -8535,6 +8626,13 @@ impl Transport {
 
     fn from_settings(s: &Settings) -> Self {
         Self {
+            radio_label: LogLabel(
+                s.radios
+                    .iter()
+                    .find(|r| r.id == s.active_radio)
+                    .map(|r| radio_label_named(&r.name, &r.rig_model_name, r.rig_model))
+                    .unwrap_or_else(|| radio_label(&s.rig_model_name, s.rig_model)),
+            ),
             ptt_method: s.ptt_method.clone(),
             rig_model: s.rig_model,
             // Same tty.*→cu.* heal as `from_cfg`, and on BOTH port fields here (a dedicated
@@ -16109,6 +16207,7 @@ mod tests {
 
     fn cat_transport(rigctld_port: u16, broker_self_port: Option<u16>) -> Transport {
         Transport {
+            radio_label: LogLabel(radio_label("", 1035)),
             ptt_method: "cat".to_string(),
             rig_model: 1035,
             serial_port: "/dev/ttyUSB0".to_string(),

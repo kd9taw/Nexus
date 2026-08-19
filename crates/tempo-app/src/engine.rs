@@ -1429,6 +1429,10 @@ pub struct Engine {
     rx_offset_hz: f32,
     /// Keep TX offset fixed when RX changes (WSJT-X "Hold Tx Freq").
     hold_tx_freq: bool,
+    /// Suppress the per-step transmit log lines while a COMPOSITE operation runs, so the
+    /// operation logs once with its cause instead of narrating its own internals. Set only by
+    /// `halt_tx_for_context_change`, and cleared in the same function — never a mode.
+    quiet_tx_log: bool,
     tx_parity: u64,
     /// When true (default), answering a heard station in chat auto-picks the OPPOSITE
     /// T/R cycle (FT8-style); an explicit 1st/2nd selection clears it. A CQ run holds
@@ -3530,6 +3534,7 @@ impl Engine {
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
+            quiet_tx_log: false,
             tx_parity,
             tx_cycle_auto: true,
             beacon_every: 8,
@@ -4276,6 +4281,23 @@ impl Engine {
         if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
             return;
         }
+        // THE CONTEXT EVERY OTHER LINE IS READ AGAINST. Past the no-op guard above, so this is
+        // a real transition and fires once per operator action — never on a timer.
+        let from = self
+            .settings
+            .radios
+            .iter()
+            .find(|p| p.id == self.settings.active_radio)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("radio {}", self.settings.active_radio));
+        let to = self
+            .settings
+            .radios
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("radio {id}"));
+        tempo_core::applog::info("radio", &format!("active radio {from} → {to}"));
         // Switching rigs leaves the APRS FM-simplex context (the new radio has its own band/mode).
         // The band-gate in `rig_mode_effective` already prevents an FM leak onto a non-2 m band;
         // this clears the flag outright so it never lingers pointed at a different radio.
@@ -4318,7 +4340,7 @@ impl Engine {
         // (see `halt_tx_for_context_change`). EVERY path that changes the active radio — band
         // routing, satellite routing, the coverage fallback, the operator's own radio button —
         // arrives here, so this one line covers all of them.
-        self.halt_tx_for_context_change();
+        self.halt_tx_for_context_change("radio handoff");
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
         // A pending split was authorized against the OUTGOING radio — for the
@@ -4518,6 +4540,22 @@ impl Engine {
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
+        // Band transitions only. The dial itself moves constantly (RIT, a click on the
+        // waterfall, Doppler on a pass) and logging THAT would be per-tick noise; the band is
+        // what a reader needs to make sense of the lines under it.
+        if !band.is_empty() && band != self.settings.band {
+            tempo_core::applog::info(
+                "band",
+                &format!(
+                    "{} → {band} ({dial_mhz:.6} MHz {mode}, {origin:?})",
+                    if self.settings.band.is_empty() {
+                        "off-band"
+                    } else {
+                        &self.settings.band
+                    }
+                ),
+            );
+        }
         // #35 instrumentation: every dial REQUEST with its provenance (stderr; the
         // operator-visible half is the service loop's dial→rig Connections-log notes).
         eprintln!("tempo: dial request: {dial_mhz:.4} MHz ({band} {mode}, {origin:?})");
@@ -4651,9 +4689,9 @@ impl Engine {
             // and no in-section control to re-arm with, so the operator keeps the mic
             // they were already holding (see `halt_tx_for_context_change`) — Digital
             // is untouched, which is what the paragraph above is about.
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("band change");
         } else if leaving_the_bands {
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("tuned off the ham bands");
         }
         // A band change drops the transient mode override, so a QSY re-asserts the auto sideband
         // (LSB <10 MHz / USB above) — "manual mode, but don't impede band auto-select".
@@ -4817,7 +4855,7 @@ impl Engine {
                 modes::reset_ft8_a7();
                 // Context halt, exactly like the app-commanded band change above: spinning
                 // the rig's own VFO across a band edge must not take the operator's mic away.
-                self.halt_tx_for_context_change();
+                self.halt_tx_for_context_change("band change at the rig");
                 self.clear_cw_decode(); // stale CW copy across a cross-band knob QSY
                                         // A knob QSY across bands drops the transient mode override too, exactly like an
                                         // app-commanded band change (set_frequency) — so the tooltip's "until you change
@@ -4861,7 +4899,7 @@ impl Engine {
             // paired check. (`context_band_changed` above has already banked the band being
             // left; all that remains here is to blank the label and cut transmit.)
             self.settings.band = String::new();
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("tuned off the ham bands at the rig");
         }
         // Declare the knob's provenance after the band write, so whichever answer it is
         // names the cell the dial landed in. The hand on the knob is always the operator's,
@@ -5357,6 +5395,16 @@ impl Engine {
         self.drop_rtty_latch();
         // …and PSK's, for the identical reason.
         self.drop_psk_latch();
+        // The other half of the context pair (see the tier line): which section the operator is
+        // in decides what every transmit, CAT and audio line beneath it means. Logged only when
+        // it CHANGES — this method is re-asserted on every view entry, and a line per re-assert
+        // would be exactly the timer-driven noise the strategy forbids.
+        if self.settings.operating_mode != om {
+            tempo_core::applog::info(
+                "mode",
+                &format!("section {:?} → {:?}", self.settings.operating_mode, om),
+            );
+        }
         let left_a_manual_mode = matches!(
             self.settings.operating_mode,
             OperatingMode::Phone
@@ -7657,7 +7705,6 @@ impl Engine {
         self.reset_tx_watchdog();
         self.tx_queue.clear();
         self.broadcast_queue.clear();
-        tempo_core::applog::info("tx", &format!("own-TX feed cleared: mode -> {spec}"));
         self.own_tx.clear();
         // A new QSO (or mode change) starts a fresh auto-log window.
         self.qso_logged = false;
@@ -8334,6 +8381,9 @@ impl Engine {
         self.app.inbox.roster.clear();
         // Captured BEFORE the swap: the halt below asks what we are LEAVING.
         let from = self.app.tier();
+        // A real transition (the no-op guard above already returned). State TRANSITIONS are
+        // logged; current state never is, and nothing here is on a timer.
+        tempo_core::applog::info("mode", &format!("tier {:?} → {:?}", self.app.tier(), tier));
         self.app.set_tier(tier);
         // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
         //
@@ -8596,7 +8646,7 @@ impl Engine {
         // Logged here rather than through `set_tx_enabled` because this writes the latch
         // directly — and a halt that does not stick is exactly the shape under investigation,
         // so the trace must show the halt as well as whatever re-arms after it.
-        if self.tx_enabled {
+        if self.tx_enabled && !self.quiet_tx_log {
             tempo_core::applog::info("tx", "transmit disarmed by halt");
         }
         self.tx_enabled = false;
@@ -8648,7 +8698,6 @@ impl Engine {
         self.sstv_tx_progress = None;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
-        tempo_core::applog::info("tx", "own-TX feed cleared: halt TX");
         self.own_tx.clear();
         self.app.set_transmitting(false);
     }
@@ -8697,8 +8746,14 @@ impl Engine {
     /// engine now says "key" during windows where the radio loop is holding a `Rig` that is
     /// not the operator's radio — a deferred dual-radio handoff, the Test-CAT port hold. The
     /// cleared latch used to mask those; `RadioLoop::may_key` is what stops them now.
-    pub fn halt_tx_for_context_change(&mut self) {
+    pub fn halt_tx_for_context_change(&mut self, why: &str) {
         use crate::settings::OperatingMode;
+        // ONE EVENT, ONE LINE. This method halts and then puts the operator's arm switch back,
+        // and logging those two steps separately made a routine QSY read as a fight in the file
+        // — "transmit disarmed by halt" and "transmit ARMED by …:8713" in the same second, with
+        // nothing saying what changed (operator, 2026-08-19). The steps below stay silent (see
+        // the `quiet` guard) and this says what actually happened, with its cause.
+        let was = self.tx_enabled;
         let restore = self.tx_enabled
             && matches!(
                 self.settings.operating_mode,
@@ -8708,7 +8763,17 @@ impl Engine {
                     | OperatingMode::Keyboard
             );
         let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
+        self.quiet_tx_log = true;
         self.halt_tx();
+        self.quiet_tx_log = false;
+        tempo_core::applog::info(
+            "tx",
+            &match (was, restore) {
+                (false, _) => format!("{why}: transmit was already off"),
+                (true, true) => format!("{why}: transmit halted and re-armed (manual mode)"),
+                (true, false) => format!("{why}: transmit halted and left off"),
+            },
+        );
         if restore {
             self.set_tx_enabled(true);
             self.immediate_retune = retune;
@@ -8860,7 +8925,7 @@ impl Engine {
         // Transitions only (an idempotent re-arm is silent), so this is a handful of lines a
         // session, and the whole point is that the next report arrives with its cause attached.
         let was = self.tx_enabled;
-        if was != on {
+        if was != on && !self.quiet_tx_log {
             let at = std::panic::Location::caller();
             tempo_core::applog::info(
                 "tx",
