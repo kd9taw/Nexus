@@ -302,6 +302,30 @@ const MIGRATED = [
   'components/panes/CockpitPaneFrame.tsx',
   'features/profiles.ts',
   'features/registry.ts',
+  // Batch 18 (2026-08-19) — the Operate cockpit: its header, the waterfall strip, the two
+  // decode panes, the Call Roster and the WSJT-X Tx1–Tx6 message machine. THE FIRST BATCH OF
+  // THE TRANSMIT HALF, and the line it draws is the point: a cockpit is not a transmit
+  // control, and neither is a pane that starts a transmission — the decode panes and the
+  // roster start a QSO on a double-click and their strings moved normally, exactly as the ⊞
+  // menu entry for a sender did in batch 15. What did NOT move is in `OperateQsoStrip.tsx`,
+  // which is on PARTIAL below for four controls and nothing else.
+  //
+  // The units rule lands on the DIAL AND THE DECODE here: every callsign, grid, entity,
+  // state, band, mode, tier, SNR/dB report, DT in seconds, audio offset in Hz, dial and split
+  // frequency, bearing, distance, slot count and UTC stamp on these screens is data and stays
+  // in the code — as do the vocabularies each file gathers as named constants (DECODE_TOKENS,
+  // ROSTER_TOKENS, and OperateCockpit's HOUND/SPLIT/Native/Companion/Rx/Tx/Hz). Two things
+  // this batch settles that the seventeen before it did not. A backend WORD an operator reads
+  // beside a button of ours is a token, not prose: `radio.sourceLabel` is interpolated into
+  // the signal-source tooltip, so `Native` and `Companion` on the buttons stay as written or
+  // the button and the readout beside it would disagree. And an ARIA row label assembled from
+  // optional appositives — the decode row's country and heading, the roster row's grid, need,
+  // worked and working-now — is ONE entry per row with each clause interpolated whole,
+  // carrying its own separator, rather than six variant sentences or a glued string.
+  'components/OperateCockpit.tsx',
+  'components/OperateDecodes.tsx',
+  'components/OperateRoster.tsx',
+  'components/TxPanel.tsx',
 ]
 
 /**
@@ -350,6 +374,19 @@ const MIGRATED = [
  * no cockpit's stop-line census), but the latch is still a transmit-path control, and those
  * move with the sweeps. It graduates the moment that batch lands.
  *
+ * `OperateQsoStrip.tsx` (batch 18, 2026-08-19) is here on the same narrow ruling, for FOUR
+ * controls: STOP TX and TUNE — Operate's stop-line census, and Stop TX is the only control in
+ * this cockpit that cuts an over in flight; ATU, which keys the rig's own tuning carrier
+ * exactly as SetupHealth's Prove TX does; and the TX On/Off TOOLTIP, the wording that states
+ * the abort semantics ("an FT over already in flight finishes"). Their labels and tooltips
+ * stay written in the strip until the transmit-path batch moves them with the stop-line
+ * sweeps re-run. Everything else in that file is migrated — the sequencer roles, the state
+ * cap, the rig-divergence and narrow-filter chips, the now-sending readout, the free-text
+ * form, the transmit-cycle and Skip Tx1 controls and the next-slot countdown — and the
+ * mode-capability prose those controls SHARE ("this mode is receive-only", the beacon note)
+ * moved with them: it describes the MODE, not the control it is hung on. Operate's third
+ * census holder, Esc, is a window keydown with no string at all.
+ *
  * ⚠️ THIS LIST IS A CONCESSION, NOT A HOME. A file belongs here only while a migration is
  * partial; when the last section moves it graduates to MIGRATED, and nothing else may be
  * added to it to dodge a failing check.
@@ -358,6 +395,7 @@ const PARTIAL = [
   'components/SettingsPanel.tsx',
   'components/SetupHealth.tsx',
   'components/AprsCockpit.tsx',
+  'components/OperateQsoStrip.tsx',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */

@@ -5943,6 +5943,371 @@ export const EN = {
   'aprs.card.age.days': '{{days}} d',
 
   // ══════════════════════════════════════════════════════════════════════════════════════
+  // THE OPERATE COCKPIT — the FT8/FT4 operating surface.
+  // ══════════════════════════════════════════════════════════════════════════════════════
+  //
+  // The cockpit header, the merged operating strip, the two decode panes (Band Activity and
+  // Rx Frequency), the Call Roster and the WSJT-X Tx1–Tx6 message machine.
+  //
+  // ⚠️ THIS IS THE FIRST SURFACE OF THE TRANSMIT HALF, AND PART OF IT IS DELIBERATELY ABSENT.
+  // The strip's Stop TX button, its Tune button, the ATU button (all three key or cut a
+  // carrier) and the TX On/Off tooltip that states the abort semantics are NOT here: they
+  // stay written in `OperateQsoStrip.tsx` until the transmit-path batch moves them with the
+  // stop-line sweeps re-run. Operate's third stop, Esc, is keyboard-only and has no string.
+  //
+  // ⚠️ THE UNITS RULE OWNS EVERY READING ON THESE SCREENS, and none of them is here: every
+  // callsign, grid, DXCC entity, US state, band and mode name, SNR and dB report, audio
+  // offset in Hz, DT in seconds, dial frequency, bearing, distance and slot count arrives
+  // from the snapshot and is interpolated as data. So do the TOKENS this cockpit is built
+  // out of, which stay in the components as named constants: the mode chips' own names
+  // (FT8/FT4/FT2 and their T/R slot lengths), `Native` and `Companion` (the backend's own
+  // words for the signal source — `radio.sourceLabel` is interpolated beside them), `Rx`/`Tx`
+  // on the two audio-offset spinners, `SPLIT ▲`, `AUTO-CQ`, `HOUND`, `CQ`, `B4`, `HARQ`,
+  // `SNR`, `DT`, `Hz`, `QRZ`, and the `Tx` of the six message rows. The QRZ button reuses
+  // `callbook.qrzPage.*` — looking a callsign up is one act with one wording, and five other
+  // surfaces already share it.
+
+  // ── Operate ▸ the cockpit header ────────────────────────────────────────────────────
+  // The mode chips carry the tier name in the code and their EXPLANATION here; the T/R
+  // period, the Hz threshold and the band names inside these sentences are written where
+  // they are read, exactly as every other explanatory number in this file is.
+  'operate.header.modes.aria': 'Operating mode',
+  'operate.mode.ft8.title': 'Standard WSJT-X FT8 — 15 s T/R',
+  'operate.mode.ft4.title': 'Standard WSJT-X FT4 — 7.5 s T/R',
+  'operate.mode.ft2.title': 'FT2 (Decodium) — 3.75 s T/R, FT4 with a halved symbol time',
+  'operate.header.msk144Period.aria': 'MSK144 T/R period (seconds)',
+  'operate.header.msk144Period.title':
+    'T/R period — 15 s is the 6 m workhorse; 30 s eases deep-search on 2 m',
+
+  'operate.header.decodeDepth.aria': 'Decode depth',
+  'operate.header.decodeDepth.title':
+    'FT8/FT4 decode depth — Deep catches weaker signals but uses more CPU/battery (a field/POTA lever)',
+  'operate.header.decodeDepth.fast': 'Fast',
+  'operate.header.decodeDepth.norm': 'Norm',
+  'operate.header.decodeDepth.deep': 'Deep',
+
+  // A CONFIGURATION control on the transmit path is not a transmit control — the batch-13
+  // ruling, where the drive slider moved and Prove TX did not.
+  'operate.header.power.label': 'Pwr',
+  'operate.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+
+  // The DXpedition selector. `Hound` is WSJT-X's role name and stays in the code; only its
+  // explanation and the Off row are words.
+  'operate.header.dxped.label': 'DXped:',
+  'operate.header.dxped.aria': 'DXpedition mode',
+  'operate.dxped.off.label': 'Off',
+  'operate.dxped.off.title': 'No DXpedition special mode',
+  'operate.dxped.hound.title':
+    "DXpedition hound: calls go out above 1000 Hz; your R+report auto-moves to the Fox's frequency",
+
+  // The signal source. `{{active}}` is the backend's own `sourceLabel` and `{{addr}}` the
+  // configured companion UDP address — both data. Two whole sentences, because the
+  // "listening …" clause is a statement about where we are listening, not a tail.
+  'operate.header.source.aria': 'Signal source',
+  'operate.header.source.title':
+    'Where decodes come from — active: {{active}}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP {{addr}}.',
+  'operate.header.source.title.listening':
+    'Where decodes come from — active: {{active}} · listening {{addr}}. Native = Nexus decodes local audio; Companion = ride an upstream WSJT-X/JTDX/MSHV decode stream over UDP {{addr}}.',
+  'operate.header.source.native.title': 'Native engine — Nexus decodes local audio',
+  'operate.header.source.companion.title':
+    'Companion — ride an existing WSJT-X / JTDX / MSHV decode stream over UDP {{addr}}',
+
+  // The two DF spinners. `{{label}}` is `Rx` or `Tx` — a direction token supplied by the
+  // cockpit, so the sentence reads the same for both without being written twice.
+  'operate.header.offsets.aria': 'Audio offsets (Hz)',
+  'operate.header.df.title':
+    '{{label}} audio offset (Hz) — Enter/blur commits, clamped 200–4000',
+  'operate.header.df.aria': '{{label}} offset in Hz',
+
+  // `{{hint}}` is FN_KEY_HINT (platform.ts) — appended on the Mac only, and migrated with
+  // that module rather than here.
+  'operate.header.decode.label': 'Decode',
+  'operate.header.decode.title': 'Re-decode the last period (F6)',
+  'operate.header.decode.title.mac': 'Re-decode the last period (F6)\n{{hint}}',
+
+  'operate.header.record.start.aria': 'Record QSO audio',
+  'operate.header.record.stop.aria': 'Stop recording this QSO',
+  'operate.header.record.start.title':
+    'Record the received audio to a WAV in the recordings folder',
+  'operate.header.record.stop.title': 'Recording — click to stop recording this QSO',
+  // One whole sentence per outcome, never "Could not " plus a verb.
+  'operate.header.record.startFailed': 'Could not start recording',
+  'operate.header.record.stopFailed': 'Could not stop recording',
+
+  // `{{freq}}` is the split TX frequency, already formatted invariantly by the cockpit.
+  'operate.header.split.title':
+    'Rig split active — TX {{freq}} MHz (pile-up). Any QSY returns to simplex.',
+
+  'operate.header.layout.aria': 'Operate layout',
+  'operate.header.layout.classic.label': 'Classic',
+  'operate.header.layout.classic.title':
+    'Classic — WSJT-X layout (Band Activity + Rx Frequency pair, roster aside)',
+  'operate.header.layout.roster.label': 'Roster',
+  'operate.header.layout.roster.title': 'Roster — GridTracker layout (Call Roster dominant)',
+
+  'operate.header.spot.aria': 'Spot a callsign to the DX cluster',
+  'operate.header.spot.title':
+    'Spot a callsign to the DX cluster (opens a popup — call, frequency, comment)',
+  'operate.header.popOut.aria': 'Open Operate in its own window',
+  'operate.header.popOut.title': 'Open Operate in its own window (for a second monitor)',
+
+  // ── Operate ▸ the waterfall strip, the seams and the ⊞ panel names ──────────────────
+  'operate.waterfall.redock.label': '⧉ Waterfall popped out — click to re-dock',
+  'operate.waterfall.redock.title':
+    'The waterfall is in its own window — click to bring it back here',
+  'operate.waterfall.splitter.label': 'waterfall height',
+  'operate.seam.bandActivityRxFreq.label': 'Band Activity / Rx Frequency',
+  'operate.seam.qsocolStations.label': 'Rx Frequency column / Stations roster',
+
+  // The ⊞ menu's entries — the panes' operator-facing names, resolved when the menu is
+  // built rather than at import (the registry-by-getter rule, batch 3).
+  'operate.panel.waterfall': 'Waterfall',
+  'operate.panel.bandActivity': 'Band Activity',
+  'operate.panel.callRoster': 'Call Roster',
+  'operate.panel.rxfreq': 'Rx Frequency',
+  'operate.panel.txmsgs': 'Tx Messages',
+  'operate.panel.stations': 'Stations',
+  'operate.panel.txmeters': 'TX Meters',
+
+  // The rotor's two answers. `{{call}}` is a callsign, `{{deg}}` a bearing and `{{error}}`
+  // the backend's own refusal — all three pass through verbatim.
+  'operate.rotor.pointed': 'Rotator → {{call}}: {{deg}}°',
+  'operate.rotor.failed': 'Rotator: {{error}}',
+
+  // ── Operate ▸ the merged operating strip ────────────────────────────────────────────
+  // ⚠️ Stop TX, Tune, ATU and the TX On/Off tooltip are ABSENT by design — see the block
+  // header. What is here is the sequencer, the readouts and the QSO controls around them.
+  //
+  // Why a mode cannot run a QSO: one sentence each, shown on every control it disables.
+  'operate.strip.rxOnly.why':
+    'This mode is receive-only in Nexus — it decodes but does not transmit',
+  'operate.strip.beacon.why':
+    'This is a beacon mode — it transmits your callsign, grid and power on a schedule. There is no QSO sequence. Set the transmit % and power in Settings ▸ Beacons (WSPR & FST4W).',
+
+  'operate.strip.roles.aria': 'Sequencer role',
+  'operate.strip.callCq.label': 'Call CQ',
+  'operate.strip.callCq.title':
+    'Auto CQ — call CQ continuously, work each station that answers with the normal FT8/FT4 sequence, then return to CQ automatically',
+  'operate.strip.sandp.label': 'S&P',
+  'operate.strip.sandp.title': 'Monitor — search & pounce',
+  'operate.strip.txControls.aria': 'Transmit controls',
+  'operate.strip.holdTx.label': 'Hold Tx',
+  'operate.strip.holdTx.title':
+    'Hold Tx Freq: keep your TX offset fixed when you click the waterfall to set RX',
+
+  // The state cap — a readout, not a control.
+  'operate.strip.state.transmitting': '▲ TRANSMITTING',
+  'operate.strip.state.receiving': '▼ Receiving',
+  'operate.strip.state.txOff': '■ TX off',
+
+  // The rig moved under us. `{{rigMode}}` is what the radio reports and `{{mode}}` what
+  // Nexus commanded — both mode names, and both data.
+  'operate.strip.rigDiverge.label': 'rig: {{mode}}',
+  'operate.strip.rigDiverge.title':
+    'Your rig is on {{rigMode}}, but Nexus has {{mode}}. Something moved it at the radio (SmartSDR, another program, or the mode knob). Transmit and logging use {{mode}} — set the radio to match, or re-pick the band here.',
+  'operate.strip.narrowFilter.label': 'filter {{hz}} Hz',
+  'operate.strip.narrowFilter.title':
+    "The radio's receive filter is {{hz}} Hz — far narrower than an FT8/FT4 window. Signals outside it are not reaching the decoder at all. Widen the filter at the radio (2.4-3 kHz is normal).",
+
+  'operate.strip.autoCq.title':
+    'Auto CQ is running — calling CQ continuously, working each station that answers, then returning to CQ for the next one. Click S&P to stop.',
+  'operate.strip.report.title': 'Report received about your signal',
+
+  // "Now sending". The three non-message states are whole answers; `txNow` itself is the
+  // message on the air and is never translated.
+  'operate.strip.now.stalled': 'Stalled',
+  'operate.strip.now.rxOnly': '— receive-only, not transmitting',
+  'operate.strip.now.beacon': '— beacon: transmits on schedule',
+  'operate.strip.now.listening': '— listening',
+  // Only ever rendered above one, so English needs a single wording; `{{count}}` is passed
+  // so a locale that inflects can answer with plural forms.
+  'operate.strip.attempts.title': 'Sent {{count}} times — calling repeatedly',
+  'operate.strip.resend.title': 'Re-arm and re-send this message',
+
+  'operate.strip.freetext.placeholder': 'Free text (Tx5)',
+  'operate.strip.freetext.aria': 'In-QSO free text',
+  'operate.strip.send.label': 'Send',
+  'operate.strip.send.title': 'Send on the next over',
+  'operate.strip.log.label': 'Log',
+  'operate.strip.log.title': 'Log this QSO now',
+
+  // The transmit-cycle button: four WHOLE labels, never a stem plus a period token.
+  'operate.strip.period.title':
+    'Transmit cycle — click to cycle Auto → Tx 1st → Tx 2nd. Auto picks the opposite cycle of the station you answer; the station you work must be on the OPPOSITE period.',
+  'operate.strip.period.auto.first': 'TX AUTO / 1st',
+  'operate.strip.period.auto.second': 'TX AUTO / 2nd',
+  'operate.strip.period.first': 'TX 1st / even',
+  'operate.strip.period.second': 'TX 2nd / odd',
+  'operate.strip.skipTx1.label': 'Skip Tx1',
+  'operate.strip.skipTx1.title':
+    'Skip Tx1 — when you answer a CQ, open with your signal report (Tx2) instead of your grid (Tx1), saving a cycle. Standard callsigns only (a compound call still sends its grid). Resets each launch, like WSJT-X.',
+  'operate.strip.nextSlot.label': 'next {{secs}}s',
+  'operate.strip.nextSlot.title': 'Time to the next slot',
+
+  // ── Operate ▸ the decode panes (Band Activity / Rx Frequency) ───────────────────────
+  'operate.decodes.title': 'Band Activity',
+  // `{{hz}}` is the live RX audio offset, rounded by the cockpit and never formatted here.
+  'operate.decodes.rxFreq.title': 'Rx Frequency · {{hz}} Hz',
+  'operate.decodes.erase.label': 'Erase',
+  'operate.decodes.erase.title': 'Erase this pane (WSJT-X Erase)',
+
+  // The filter chips. `CQ`, `CQ+73` and `B4` are Q-code/log tokens and stay in the code;
+  // these four are words. Every chip's EXPLANATION is a word.
+  'operate.decodes.filters.aria': 'Filter decodes',
+  'operate.decodes.filter.all': 'All',
+  'operate.decodes.filter.me': 'To me',
+  'operate.decodes.filter.rx': 'On RX',
+  'operate.decodes.filter.new': 'New',
+  'operate.decodes.filter.title.all': 'All decodes',
+  'operate.decodes.filter.title.cq': 'CQ calls only',
+  'operate.decodes.filter.title.cq73':
+    '73 and RR73 signoffs included — a free frequency is about to appear',
+  'operate.decodes.filter.title.me': 'Directed to my callsign',
+  'operate.decodes.filter.title.rx':
+    'On my RX frequency (±50 Hz), plus anything addressed to me — follow a QSO without clutter',
+  'operate.decodes.filter.title.b4': 'Worked before',
+  'operate.decodes.filter.title.new': 'New DXCC / new grid — the "new one" chase',
+
+  'operate.decodes.hideBlocked.label': '−Blk',
+  'operate.decodes.hideBlocked.title':
+    'Hide blocked callsigns from this pane (they render dimmed when off). The auto-responder never answers blocked calls regardless — Alt-double-click a row to block or unblock.',
+  'operate.decodes.hideConfirmed.label': '−Conf',
+  'operate.decodes.hideConfirmed.title':
+    "Hide stations whose ENTITY is already confirmed (LoTW/card) on this band — chase what you still need. It is the country that is confirmed, not necessarily this callsign. A station that's new on the band always shows.",
+  'operate.decodes.hideB4.title':
+    'Hide stations you have already worked (B4) from whichever filter is active — CQ-only minus B4, and friends',
+  'operate.decodes.hideB4.title.idle':
+    'The B4 chip shows worked stations — the hide switch is idle there',
+
+  // The sort picker. Its `value`s are stored tokens; `SNR` and `DT` are column tokens and
+  // stay in the code, so only these two labels are words.
+  'operate.decodes.sort.label': 'sort',
+  'operate.decodes.sort.time': 'Time',
+  'operate.decodes.sort.freq': 'Freq',
+
+  // `{{count}}` is how many rows the pane is showing.
+  'operate.decodes.heard': '{{count}} heard',
+  'operate.decodes.reviewing': '▲ reviewing — scroll to bottom to follow',
+  // `decode(s)` is the shipped English and stays as written; a locale may answer with
+  // plural forms, which is what `{{count}}` is for.
+  'operate.decodes.harq.title': 'IR-HARQ recovered {{count}} decode(s) this session',
+
+  'operate.decodes.list.aria':
+    'Decoded stations — arrow to move, Enter to select, Shift+Enter to work',
+  // TWO empty states, deliberately different: nothing decoded at all, versus a filter
+  // hiding what the history holds.
+  'operate.decodes.empty.title': 'No decodes yet',
+  'operate.decodes.empty.detail':
+    'Waiting for the next slot — decoded signals will appear here as they arrive.',
+  'operate.decodes.emptyFiltered.title': 'Nothing matches “{{filter}}”',
+  'operate.decodes.emptyFiltered.detail':
+    '{{count}} decodes in history are hidden by the current filter — pick another chip to see them.',
+  // `{{time}}` is the period's UTC start, formatted invariantly by decodeHistory.
+  'operate.decodes.period.aria': 'Period {{time}} UTC',
+
+  // A row, read aloud. Everything in it is data; the two optional clauses are interpolated
+  // whole, each carrying its own separator, so no language is served four fragments.
+  'operate.decodes.row.aria': '{{call}}, {{snr}} dB, {{hz}} hertz, {{message}}{{country}}{{azimuth}}',
+  'operate.decodes.row.aria.country': ', {{country}}',
+  'operate.decodes.row.aria.azimuth': ', {{deg}} degrees',
+  'operate.decodes.row.aria.azimuth.approx': ', about {{deg}} degrees',
+  'operate.decodes.row.title': 'Click to select {{call}} · double-click to work{{highlight}}',
+  'operate.decodes.row.highlighted': ' · highlighted by your logger (UDP)',
+
+  'operate.decodes.tier.title': 'Decoded by {{tier}}',
+  'operate.decodes.utc.title': 'UTC heard',
+  'operate.decodes.dt.title': 'DT — time offset (s); large = clock/sync skew',
+  'operate.decodes.dt.title.msk144': 'T — when in the period the ping landed (s)',
+  'operate.decodes.marker.lowConf.title': 'Low-confidence decode',
+  'operate.decodes.marker.ap.title': 'AP-assisted decode',
+  'operate.decodes.needs.aria': 'needs',
+  'operate.decodes.harqRv.title': 'Recovered by IR-HARQ (RV0–RV{{rv}})',
+  'operate.decodes.tag.you': 'YOU',
+  'operate.decodes.lotw.title':
+    'Uploads to LoTW — a QSO with {{call}} should confirm (ARRL activity list)',
+  'operate.decodes.lotw.thisStation': 'this station',
+
+  // ── Operate ▸ the Call Roster ───────────────────────────────────────────────────────
+  'operate.roster.title': 'Call Roster',
+  'operate.roster.filter.neededOnly': 'Needed only',
+  'operate.roster.filter.hideWorked': 'Hide worked',
+  'operate.roster.filter.hideBlocked': 'Hide blocked',
+  'operate.roster.filter.hideBlocked.title':
+    'Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.',
+  // Two whole labels: the button names the station when there is one to name.
+  'operate.roster.spot.label': 'Spot',
+  'operate.roster.spot.label.call': 'Spot {{call}}',
+  'operate.roster.spot.title': 'Spot {{call}} to the DX cluster at the current dial',
+  'operate.roster.spot.title.none': 'Select a station to spot it to the DX cluster',
+
+  'operate.roster.grid.aria': 'Call roster — arrow to move, Enter to select, Shift+Enter to work',
+  // `{{column}}` is the header's own word, so the sort hint is written once.
+  'operate.roster.sort.title': 'Sort by {{column}}',
+  'operate.roster.col.call': 'Call',
+  'operate.roster.col.calling': 'Calling',
+  'operate.roster.col.calling.title':
+    'Sort by who each station is calling (CQ = calling nobody)',
+  'operate.roster.col.need': 'Need',
+  'operate.roster.col.country': 'Country',
+  'operate.roster.col.state': 'State',
+  'operate.roster.col.state.title':
+    'Sort by state or province (from the callsign, or the heard grid)',
+  'operate.roster.col.grid': 'Grid',
+  'operate.roster.col.dist': 'Dist',
+  'operate.roster.col.bearing': 'Brg',
+  'operate.roster.col.age': 'Age',
+
+  'operate.roster.empty': 'No stations heard yet — decoded stations appear here as they arrive.',
+  // The row, read aloud — four optional clauses, each interpolated whole with its own
+  // separator. `{{need}}` is a need TAG (NewMode, Confirm…), a token like a band name.
+  'operate.roster.row.aria': '{{call}}{{grid}}{{need}}{{worked}}{{working}}',
+  'operate.roster.row.aria.grid': ', grid {{grid}}',
+  'operate.roster.row.aria.need': ', needed {{need}}',
+  'operate.roster.row.aria.worked': ', worked',
+  'operate.roster.row.aria.working': ', working now',
+  'operate.roster.row.work.title': 'Double-click to work {{call}}',
+  'operate.roster.lotw.title': 'Uploads to LoTW — this contact should confirm',
+  'operate.roster.calling.title': 'Working {{call}}',
+  'operate.roster.calling.cq.title': 'Calling CQ — not in a QSO',
+  'operate.roster.state.title': '{{call}} is in {{state}}',
+  // The Age column. The unit letter rides inside the message with its number, so a
+  // translation can never separate the two (the Now-Bar's rule, batch 15).
+  'operate.roster.age.now': 'now',
+  'operate.roster.age.slots': '{{count}} sl',
+  'operate.roster.age.minutes': '{{minutes}}m',
+
+  // ── Operate ▸ shared by both panes ──────────────────────────────────────────────────
+  // One wording each, because a decode row and a roster row say the same thing about the
+  // same station and reading two is how the pair drifts.
+  'operate.row.ignored.title': 'Ignored this session (Alt-double-click to restore)',
+  'operate.b4.sameBand': 'Worked before on this band',
+  'operate.b4.otherBand': 'Worked before (another band)',
+
+  // ── Operate ▸ the WSJT-X Tx1–Tx6 message machine ────────────────────────────────────
+  // The six rows are named `Tx 1`…`Tx 6` in the code — WSJT-X's own slot names, and the
+  // tokens the Alt+N hints and this panel's own label point at.
+  'operate.tx.aria': 'Standard messages (Tx1–Tx6)',
+  'operate.tx.dxCall.label': 'DX Call',
+  'operate.tx.dxCall.aria': 'DX callsign',
+  'operate.tx.dxGrid.label': 'DX Grid',
+  'operate.tx.dxGrid.aria': 'DX grid locator',
+  'operate.tx.generate.label': 'Generate Std Msgs',
+  'operate.tx.generate.title':
+    'Generate the six standard messages from DX Call / Grid / report (WSJT-X Generate Std Msgs)',
+  'operate.tx.clear.label': 'Clear',
+  'operate.tx.clear.title': 'Clear DX Call + Grid (F4)',
+  'operate.tx.rows.aria': 'Tx message rows',
+  'operate.tx.next.title': 'Queued as the next transmission',
+  'operate.tx.tx5.placeholder': 'Free text',
+  'operate.tx.tx5.aria': 'Tx5 free text',
+  'operate.tx.tx6.placeholder': 'CQ call',
+  'operate.tx.tx6.aria': 'Tx6 Call CQ (edit for a directed CQ)',
+  // The directed-CQ tokens are what goes on the air; they stay as written.
+  'operate.tx.tx6.hint': 'Edit for a directed CQ — CQ DX / CQ NA / CQ POTA / CQ TEST',
+  'operate.tx.callCq.title': 'Call CQ (Alt+6)',
+  'operate.tx.send.title': 'Send this as the next transmission (Alt+{{n}})',
+
+  // ══════════════════════════════════════════════════════════════════════════════════════
   // THE SHELL — chrome, navigation, and the ⊞ panel menu.
   // ══════════════════════════════════════════════════════════════════════════════════════
   //

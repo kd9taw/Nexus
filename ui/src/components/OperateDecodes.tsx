@@ -1,4 +1,10 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading in this
+// pane is DATA and stays in the code: the callsign, the decoded message, the SNR and dB, the
+// DT in seconds, the audio offset in Hz, the UTC stamp, the band, the tier and the country.
+// So do the TOKENS the pane is built out of — gathered in DECODE_TOKENS below so a translator
+// can see the whole set at once. What moved is the prose around them.
 import { Fragment, useEffect, useRef, useState } from 'react'
+import { t } from '../i18n'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
 import type { DecodeRow, NeedAlert, Tier } from '../types'
@@ -27,6 +33,24 @@ import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
+
+/**
+ * The pane's invariant vocabulary — never translated, never locale-formatted.
+ *
+ * `CQ` is a Q-code; `B4` is the log shorthand for "worked before" and names the filter chip
+ * an operator matches against his own log; `HARQ`/`RV` name the incremental-redundancy
+ * mechanism the decoder reports; `SNR` and `DT` are WSJT-X's own column names, printed
+ * verbatim in the DT tooltip; `QRZ` is the site's name (QRZ_LABEL, as in Logbook.tsx).
+ */
+const DECODE_TOKENS = {
+  cq: 'CQ',
+  b4: 'B4',
+  harq: 'HARQ',
+  rv: 'RV',
+  snr: 'SNR',
+  dt: 'DT',
+  qrz: 'QRZ',
+} as const
 
 /** JTAlert UDP highlight entry — bg/fg may be null/missing. */
 export interface HighlightEntry {
@@ -191,7 +215,9 @@ export function OperateDecodes({
   onToggleIgnore,
   lockedFilter,
   compact = false,
-  title = 'Band Activity',
+  // A DEFAULT PARAMETER, so the lookup happens on every render rather than at import — a
+  // module-level constant would freeze whichever locale loaded this file first.
+  title = t('operate.decodes.title'),
   highlights = NO_HIGHLIGHTS,
   needAlertsByCall = NO_NEEDS,
   needScopes,
@@ -392,8 +418,13 @@ export function OperateDecodes({
   })
 
   const eraseBtn = (
-    <button type="button" className="od-chip od-clear" onClick={erase} title="Erase this pane (WSJT-X Erase)">
-      Erase
+    <button
+      type="button"
+      className="od-chip od-clear"
+      onClick={erase}
+      title={t('operate.decodes.erase.title')}
+    >
+      {t('operate.decodes.erase.label')}
     </button>
   )
 
@@ -405,7 +436,7 @@ export function OperateDecodes({
           eraseBtn
         ) : (
           <div className="od-controls">
-            <div className="od-filters" role="group" aria-label="Filter decodes">
+            <div className="od-filters" role="group" aria-label={t('operate.decodes.filters.aria')}>
               {DECODE_FILTERS.map((f) => (
                 <button
                   key={f}
@@ -426,18 +457,18 @@ export function OperateDecodes({
               className={`od-chip od-blocked${hideBlocked ? ' active' : ''}`}
               aria-pressed={hideBlocked}
               onClick={() => pickHideBlocked(!hideBlocked)}
-              title="Hide blocked callsigns from this pane (they render dimmed when off). The auto-responder never answers blocked calls regardless — Alt-double-click a row to block or unblock."
+              title={t('operate.decodes.hideBlocked.title')}
             >
-              −Blk
+              {t('operate.decodes.hideBlocked.label')}
             </button>
             <button
               type="button"
               className={`od-chip od-conf${hideConfirmed ? ' active' : ''}`}
               aria-pressed={hideConfirmed}
               onClick={() => pickHideConfirmed(!hideConfirmed)}
-              title="Hide stations whose ENTITY is already confirmed (LoTW/card) on this band — chase what you still need. It is the country that is confirmed, not necessarily this callsign. A station that's new on the band always shows."
+              title={t('operate.decodes.hideConfirmed.title')}
             >
-              −Conf
+              {t('operate.decodes.hideConfirmed.label')}
             </button>
             <button
               type="button"
@@ -447,21 +478,23 @@ export function OperateDecodes({
               onClick={() => pickHideB4(!hideB4)}
               title={
                 filter === 'b4'
-                  ? 'The B4 chip shows worked stations — the hide switch is idle there'
-                  : 'Hide stations you have already worked (B4) from whichever filter is active — CQ-only minus B4, and friends'
+                  ? t('operate.decodes.hideB4.title.idle')
+                  : t('operate.decodes.hideB4.title')
               }
             >
-              −B4
+              −{DECODE_TOKENS.b4}
             </button>
             <CountryExcludePicker keys={countries.keys} onToggle={countries.toggle} paused={countries.paused} onPauseChange={countries.setPaused} entities={countries.entities} onToggleEntity={countries.toggleEntity} />
             <HideCallsPicker />
             <label className="od-sort">
-              <span className="od-sort-label">sort</span>
+              <span className="od-sort-label">{t('operate.decodes.sort.label')}</span>
+              {/* The <option> VALUES are stored tokens; only the labels are words, and two
+                  of the four are column tokens themselves. */}
               <select value={sort} onChange={(e) => setSort(e.target.value as DecodeSort)}>
-                <option value="time">Time</option>
-                <option value="snr">SNR</option>
-                <option value="freq">Freq</option>
-                <option value="dt">DT</option>
+                <option value="time">{t('operate.decodes.sort.time')}</option>
+                <option value="snr">{DECODE_TOKENS.snr}</option>
+                <option value="freq">{t('operate.decodes.sort.freq')}</option>
+                <option value="dt">{DECODE_TOKENS.dt}</option>
               </select>
             </label>
             {eraseBtn}
@@ -471,7 +504,9 @@ export function OperateDecodes({
 
       <div className="od-status">
         <span className={`od-paused${!pinned ? ' on' : ''}`} aria-live="polite">
-          {pinned ? `${list.length} heard` : '▲ reviewing — scroll to bottom to follow'}
+          {pinned
+            ? t('operate.decodes.heard', { count: list.length })
+            : t('operate.decodes.reviewing')}
         </span>
         {/* Beside the count, so a pane that is hiding rows always says so — including the
             compact panes, which render no chip bar to notice the picker in. */}
@@ -483,8 +518,11 @@ export function OperateDecodes({
           />
         )}
         {harqRescues > 0 && (
-          <span className="harq-chip" title={`IR-HARQ recovered ${harqRescues} decode(s) this session`}>
-            HARQ ×{harqRescues}
+          <span
+            className="harq-chip"
+            title={t('operate.decodes.harq.title', { count: harqRescues })}
+          >
+            {DECODE_TOKENS.harq} ×{harqRescues}
           </span>
         )}
       </div>
@@ -492,7 +530,7 @@ export function OperateDecodes({
       <div
         className="od-scroll"
         role="listbox"
-        aria-label="Decoded stations — arrow to move, Enter to select, Shift+Enter to work"
+        aria-label={t('operate.decodes.list.aria')}
         ref={scrollRef}
         onScroll={onScroll}
         onKeyDown={roving.containerProps.onKeyDown}
@@ -507,14 +545,18 @@ export function OperateDecodes({
           (histRef.current.entries().length === 0 ? (
             <StateBlock
               kind="empty"
-              title="No decodes yet"
-              detail="Waiting for the next slot — decoded signals will appear here as they arrive."
+              title={t('operate.decodes.empty.title')}
+              detail={t('operate.decodes.empty.detail')}
             />
           ) : (
             <StateBlock
               kind="empty"
-              title={`Nothing matches “${FILTER_LABEL[filter] ?? filter}”`}
-              detail={`${histRef.current.entries().length} decodes in history are hidden by the current filter — pick another chip to see them.`}
+              title={t('operate.decodes.emptyFiltered.title', {
+                filter: FILTER_LABEL[filter] ?? filter,
+              })}
+              detail={t('operate.decodes.emptyFiltered.detail', {
+                count: histRef.current.entries().length,
+              })}
             />
           ))}
         {list.map((d, i) => {
@@ -529,7 +571,8 @@ export function OperateDecodes({
               }
             : undefined
           // Tooltip suffix for highlighted rows so the operator knows why the color appeared.
-          const hlTip = hlEntry ? ' · highlighted by your logger (UDP)' : ''
+          // An appended CLAUSE carrying its own separator, interpolated whole.
+          const hlTip = hlEntry ? t('operate.decodes.row.highlighted') : ''
           // Need context for this row (why is this station worth working) — icons + colour.
           const rowAlerts = d.from ? (needAlertsByCall.get(d.from.toUpperCase()) ?? []) : []
           const needs = resolveDecodeNeeds(d, band, rowAlerts, 'Digital', needScopes)
@@ -545,7 +588,13 @@ export function OperateDecodes({
                   the separator stamps the RX period the signals were ON AIR in
                   (WSJT-X labels the audio period, not the decode moment). */}
               {sort === 'time' && i > 0 && d.slot !== list[i - 1].slot && (
-                <div className="od-period-sep" role="separator" aria-label={`Period ${fmtUtc(periodStartMs(d.slot - 1, tier))} UTC`}>
+                <div
+                  className="od-period-sep"
+                  role="separator"
+                  aria-label={t('operate.decodes.period.aria', {
+                    time: fmtUtc(periodStartMs(d.slot - 1, tier)),
+                  })}
+                >
                   <span className="od-sep-utc">{fmtUtc(periodStartMs(d.slot - 1, tier))}</span>
                   <span className="od-sep-band">{band}</span>
                 </div>
@@ -556,7 +605,22 @@ export function OperateDecodes({
                 aria-selected={selectedRow}
                 aria-label={
                   d.from
-                    ? `${d.from}, ${fmtSnr(d.snr)} dB, ${Math.round(d.freqHz)} hertz, ${d.message}${d.country ? `, ${d.country}` : ''}${az ? `, ${az.approx ? 'about ' : ''}${az.deg} degrees` : ''}`
+                    ? t('operate.decodes.row.aria', {
+                        call: d.from,
+                        snr: fmtSnr(d.snr),
+                        hz: Math.round(d.freqHz),
+                        message: d.message,
+                        // Two optional clauses, each interpolated WHOLE with its own
+                        // separator — never a sentence glued from fragments.
+                        country: d.country
+                          ? t('operate.decodes.row.aria.country', { country: d.country })
+                          : '',
+                        azimuth: az
+                          ? az.approx
+                            ? t('operate.decodes.row.aria.azimuth.approx', { deg: az.deg })
+                            : t('operate.decodes.row.aria.azimuth', { deg: az.deg })
+                          : '',
+                      })
                     : d.message
                 }
                 tabIndex={roving.rowProps(i).tabIndex}
@@ -570,16 +634,19 @@ export function OperateDecodes({
                 onDoubleClick={(e) => handleDouble(e, d)}
                 title={
                   ignoredRow
-                    ? 'Ignored this session (Alt-double-click to restore)'
+                    ? t('operate.row.ignored.title')
                     : d.from
-                      ? `Click to select ${d.from} · double-click to work${hlTip}`
+                      ? t('operate.decodes.row.title', { call: d.from, highlight: hlTip })
                       : undefined
                 }
               >
-                <span className={`decode-tier ${d.tier.toLowerCase()}`} title={`Decoded by ${d.tier}`}>
+                <span
+                  className={`decode-tier ${d.tier.toLowerCase()}`}
+                  title={t('operate.decodes.tier.title', { tier: d.tier })}
+                >
                   {d.tier}
                 </span>
-                <span className="decode-utc" title="UTC heard">{fmtUtc(d.at)}</span>
+                <span className="decode-utc" title={t('operate.decodes.utc.title')}>{fmtUtc(d.at)}</span>
                 <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
                 {/* On MSK144 dt is the ping's TIME WITHIN THE PERIOD (WSJT-X renames this
                     column "T"), so it is legitimately 0..period and the FT8 clock-skew
@@ -588,8 +655,8 @@ export function OperateDecodes({
                   className={`decode-dt ${d.tier === 'MSK144' ? 'ok' : dtClass(d.dtSec)}`}
                   title={
                     d.tier === 'MSK144'
-                      ? 'T — when in the period the ping landed (s)'
-                      : 'DT — time offset (s); large = clock/sync skew'
+                      ? t('operate.decodes.dt.title.msk144')
+                      : t('operate.decodes.dt.title')
                   }
                 >
                   {fmtDt(d.dtSec)}
@@ -602,10 +669,20 @@ export function OperateDecodes({
                   {(d.lowConf || d.ap) && (
                     <span className="decode-confidence-markers">
                       {d.lowConf && (
-                        <span className="decode-marker decode-marker-lc" title="Low-confidence decode">?</span>
+                        <span
+                          className="decode-marker decode-marker-lc"
+                          title={t('operate.decodes.marker.lowConf.title')}
+                        >
+                          ?
+                        </span>
                       )}
                       {d.ap && (
-                        <span className="decode-marker decode-marker-ap" title="AP-assisted decode">a</span>
+                        <span
+                          className="decode-marker decode-marker-ap"
+                          title={t('operate.decodes.marker.ap.title')}
+                        >
+                          a
+                        </span>
                       )}
                     </span>
                   )}
@@ -613,7 +690,7 @@ export function OperateDecodes({
                       grid, DXpedition, worked-but-unconfirmed) — the SAME labelled text chips
                       the Needed panel uses, so the two views read as one. Capped, with +N. */}
                   {needs.cats.length > 0 && (
-                    <span className="decode-needs" aria-label="needs">
+                    <span className="decode-needs" aria-label={t('operate.decodes.needs.aria')}>
                       {needs.cats.slice(0, MAX_NEED_ICONS).map((c: NeedCat) => {
                         const v = NEED_VISUALS[c]
                         return (
@@ -638,23 +715,30 @@ export function OperateDecodes({
                   {d.worked && (
                     <span
                       className={`b4-chip${d.workedBand ? ' b4-band' : ''}`}
-                      title={d.workedBand ? 'Worked before on this band' : 'Worked before (another band)'}
+                      title={d.workedBand ? t('operate.b4.sameBand') : t('operate.b4.otherBand')}
                     >
-                      B4
+                      {DECODE_TOKENS.b4}
                     </span>
                   )}
-                  {d.isCq && !d.directedToMe && <span className="decode-tag cq">CQ</span>}
-                  {d.directedToMe && <span className="decode-tag me">YOU</span>}
+                  {d.isCq && !d.directedToMe && (
+                    <span className="decode-tag cq">{DECODE_TOKENS.cq}</span>
+                  )}
+                  {d.directedToMe && (
+                    <span className="decode-tag me">{t('operate.decodes.tag.you')}</span>
+                  )}
                   {d.rv > 0 && (
-                    <span className="harq-chip" title={`Recovered by IR-HARQ (RV0–RV${d.rv})`}>
-                      HARQ·RV{d.rv}
+                    <span className="harq-chip" title={t('operate.decodes.harqRv.title', { rv: d.rv })}>
+                      {DECODE_TOKENS.harq}·{DECODE_TOKENS.rv}
+                      {d.rv}
                     </span>
                   )}
                   <RarityChip rarity={d.gridRarity} />
                   {d.lotwUser && (
                     <span
                       className="lotw-mark"
-                      title={`Uploads to LoTW — a QSO with ${d.from ?? 'this station'} should confirm (ARRL activity list)`}
+                      title={t('operate.decodes.lotw.title', {
+                        call: d.from ?? t('operate.decodes.lotw.thisStation'),
+                      })}
                     >
                       L
                     </span>
@@ -677,10 +761,10 @@ export function OperateDecodes({
                   <button
                     type="button"
                     className="qrz-link-call decode-qrz"
-                    onClick={(e) => { e.stopPropagation(); const c = d.from as string; void withErrorToast(() => openQrzPage(c), `Could not open ${c} on QRZ`) }}
-                    title={`${d.from} on QRZ.com (opens your browser)`}
+                    onClick={(e) => { e.stopPropagation(); const c = d.from as string; void withErrorToast(() => openQrzPage(c), t('callbook.qrzPage.failed', { call: c })) }}
+                    title={t('callbook.qrzPage.title', { call: d.from })}
                   >
-                    QRZ
+                    {DECODE_TOKENS.qrz}
                   </button>
                 )}
               </div>
@@ -692,23 +776,51 @@ export function OperateDecodes({
   )
 }
 
+// The chip vocabulary. THE WORDS RESOLVE LAZILY, through getters (the registry rule, batch 3):
+// these are module constants a render reads, so looking them up at import would freeze
+// whichever locale loaded this file first and no re-render could move it. The record SHAPE is
+// unchanged, so every consumer — including the empty-state message that quotes the active
+// chip — reads them exactly as before. `CQ`, `CQ+73` and `B4` are Q-code / log tokens and are
+// not words at all.
 const FILTER_LABEL: Record<DecodeFilter, string> = {
-  all: 'All',
-  cq: 'CQ',
-  cq73: 'CQ+73',
-  me: 'To me',
-  rx: 'On RX',
-  b4: 'B4',
-  new: 'New',
+  get all() {
+    return t('operate.decodes.filter.all')
+  },
+  cq: DECODE_TOKENS.cq,
+  cq73: `${DECODE_TOKENS.cq}+73`,
+  get me() {
+    return t('operate.decodes.filter.me')
+  },
+  get rx() {
+    return t('operate.decodes.filter.rx')
+  },
+  b4: DECODE_TOKENS.b4,
+  get new() {
+    return t('operate.decodes.filter.new')
+  },
 }
 const FILTER_TITLE: Record<DecodeFilter, string> = {
-  all: 'All decodes',
-  cq: 'CQ calls only',
-  cq73: '73 and RR73 signoffs included — a free frequency is about to appear',
-  me: 'Directed to my callsign',
-  rx: 'On my RX frequency (±50 Hz), plus anything addressed to me — follow a QSO without clutter',
-  b4: 'Worked before',
-  new: 'New DXCC / new grid — the "new one" chase',
+  get all() {
+    return t('operate.decodes.filter.title.all')
+  },
+  get cq() {
+    return t('operate.decodes.filter.title.cq')
+  },
+  get cq73() {
+    return t('operate.decodes.filter.title.cq73')
+  },
+  get me() {
+    return t('operate.decodes.filter.title.me')
+  },
+  get rx() {
+    return t('operate.decodes.filter.title.rx')
+  },
+  get b4() {
+    return t('operate.decodes.filter.title.b4')
+  },
+  get new() {
+    return t('operate.decodes.filter.title.new')
+  },
 }
 
 /** DT (time offset, s) with sign; flags large skew. */
