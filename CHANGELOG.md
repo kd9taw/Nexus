@@ -9,20 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Groundwork for other languages — nothing visible yet.** Nexus is English-only today and
-  still is after this change: no translation ships, and every screen reads exactly as it did
-  before. What landed is the machinery a translation would need — a string catalog, plural and
-  markup handling, and a test that stops a migrated screen from quietly going back to hardcoded
-  English. Four small pieces of the Settings ▸ Station screen were moved onto it to prove the
-  pattern end to end; the other ~250 files are untouched. There is no language setting to
-  change, because there is nothing yet to change it to.
+- **Deutsch.** Nexus can now run in German — the first language it has ever offered. Pick it in
+  Settings ▸ Appearance ▸ Language, or just run it on a German Windows and it starts in German
+  by itself. Anything not yet translated appears in English rather than blank, so nothing can
+  break by being missing.
 
-  The one decision worth stating plainly, because it is the part that could bite an operator:
-  **frequencies, signal reports, callsigns, grid squares, band and mode names, Q-codes and ADIF
-  fields will never be translated or reformatted.** 14.074 MHz is 14.074 MHz in every language.
-  A decimal comma in a frequency field is an operating hazard, not a matter of taste, and the
-  new code cannot produce one.
+  **Nothing technical is translated, and that is deliberate:** frequencies, signal reports,
+  callsigns, grid squares, band and mode names, Q-codes, RST, POTA/SOTA references and ADIF
+  field names read the same in every language. In particular a frequency never picks up a German
+  decimal comma — 14.074 is 14.074, and a test fails the build if a comma ever appears in a
+  translated number. Every screen is covered — about 4,600 phrases — except the transmit
+  controls themselves (Stop TX, Tune, the TX arm switch, ATU and the TX/RX indicator), which
+  stay in English until they can be changed as their own reviewed step. Those are the controls
+  that stop a transmission, and they are not something to get wrong in a language nobody here
+  reads.
+
 ### Fixed
+
+- **Periodic logbook backups, in a `backups/` folder beside your log.** Nexus now keeps dated
+  snapshots of `log.adi`: at most one a day, only when the log has actually changed, **plus**
+  an immediate copy any time a save is about to make the log *smaller* — the one shape of
+  failure that has ever cost QSOs here. The folder is bounded three ways so it cannot creep:
+  the ten most recent snapshots, a 64 MB ceiling over the whole folder, and the one-a-day
+  rule. Oldest go first. The original `log.adi.bak` anchor is separate and is never rotated or
+  deleted. Snapshots are taken when the log is **saved**, never when it is opened, so however
+  large your log gets, launching Nexus does no extra disk work for this.
+
+- **A diagnostic log you can send us.** Nexus now keeps a plain-text record of what it did:
+  `nexus-diag.log`, in the same folder as `ALL.TXT` and the crash report
+  (`%LOCALAPPDATA%\Nexus` on Windows) — the Reveal button beside the ALL.TXT path in Settings
+  opens it. Timestamped, human-readable lines covering the startup steps, the CAT and audio
+  device open and any failure, updater checks, and crashes. Until now Nexus wrote nothing at
+  all about its own health, so "it won't start" reports arrived with nothing to look at. It
+  bounds itself: two files, about 8 MB in total worst case, and the older one is simply
+  renamed aside rather than rewritten, so a big log never slows a launch down. Passwords, API
+  keys and tokens are masked before anything is written — the file is meant to be attachable
+  to a public bug report. Settings ▸ Logging & Connectors ▸ Integrations & Feeds names it and
+  has its own Reveal button, and the settings search finds it under "diagnostic log", "log
+  file" or "troubleshooting".
 
 - **Virtual COM ports show up in the rig picker on Windows.** If you run SmartSDR CAT, com0com,
   or any virtual serial pair, its ports were missing from the port list while your real USB
@@ -74,44 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everywhere you hear it, and a need is judged by the band it was heard on — so a 6 m grid
   stays marked on a roster you are reading while parked on 20 m. Where the band cannot be
   worked out at all, the icon is shown: a missing chip is worse than an extra one.
-- **A diagnostic log you can send us.** Nexus now keeps a plain-text record of what it did:
-  `nexus-diag.log`, in the same folder as `ALL.TXT` and the crash report
-  (`%LOCALAPPDATA%\Nexus` on Windows) — the Reveal button beside the ALL.TXT path in Settings
-  opens it. Timestamped, human-readable lines covering the startup steps, the CAT and audio
-  device open and any failure, updater checks, and crashes. Until now Nexus wrote nothing at
-  all about its own health, so "it won't start" reports arrived with nothing to look at. It
-  bounds itself: two files, about 8 MB in total worst case, and the older one is simply
-  renamed aside rather than rewritten, so a big log never slows a launch down. Passwords, API
-  keys and tokens are masked before anything is written — the file is meant to be attachable
-  to a public bug report. Settings ▸ Logging & Connectors ▸ Integrations & Feeds names it and
-  has its own Reveal button, and the settings search finds it under "diagnostic log", "log
-  file" or "troubleshooting".
-
-- **Periodic logbook backups, in a `backups/` folder beside your log.** Nexus now keeps dated
-  snapshots of `log.adi`: at most one a day, only when the log has actually changed, **plus**
-  an immediate copy any time a save is about to make the log *smaller* — the one shape of
-  failure that has ever cost QSOs here. The folder is bounded three ways so it cannot creep:
-  the ten most recent snapshots, a 64 MB ceiling over the whole folder, and the one-a-day
-  rule. Oldest go first. The original `log.adi.bak` anchor is separate and is never rotated or
-  deleted. Snapshots are taken when the log is **saved**, never when it is opened, so however
-  large your log gets, launching Nexus does no extra disk work for this.
-
-- **Deutsch.** Nexus can now run in German — the first language it has ever offered. Pick it in
-  Settings ▸ Appearance ▸ Language, or just run it on a German Windows and it starts in German
-  by itself. Anything not yet translated appears in English rather than blank, so nothing can
-  break by being missing.
-
-  **Nothing technical is translated, and that is deliberate:** frequencies, signal reports,
-  callsigns, grid squares, band and mode names, Q-codes, RST, POTA/SOTA references and ADIF
-  field names read the same in every language. In particular a frequency never picks up a German
-  decimal comma — 14.074 is 14.074, and a test fails the build if a comma ever appears in a
-  translated number. Every screen is covered — about 4,600 phrases — except the transmit
-  controls themselves (Stop TX, Tune, the TX arm switch, ATU and the TX/RX indicator), which
-  stay in English until they can be changed as their own reviewed step. Those are the controls
-  that stop a transmission, and they are not something to get wrong in a language nobody here
-  reads.
-
-### Fixed
 
 - **A logbook with accented or non-English text in it could load as EMPTY — and the next save
   wrote that empty log to disk.** If your `log.adi` held a single byte that wasn't plain
