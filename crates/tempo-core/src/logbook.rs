@@ -1383,20 +1383,23 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if r.freq_mhz.is_finite() && r.freq_mhz > 0.0 {
         out.push_str(&field("FREQ", &format!("{:.6}", r.freq_mhz)));
     }
-    // Novel Tempo protocols ride as MFSK submodes. The ADIF Mode enumeration is CLOSED
-    // (47 values; "DATA" is not among them — that exists only inside LoTW), so a bare
-    // <MODE:9>TempoFast is rejected outright by TQSL: its cascade is MODE%SUBMODE ->
-    // SUBMODE -> MODE, all three miss, and the record is dropped with "Invalid MODE".
-    // SUBMODE is data type String and is explicitly NOT validated against its enumeration,
-    // so MODE=MFSK + an unregistered SUBMODE is spec-legal today with no coordination.
-    // MFSK is the honest family, not a flag of convenience: TempoFast is 4-CPM h=1/2 BT=0.3,
-    // the same continuous-phase FSK family as FST4 (4-GFSK), which already lives under MFSK.
+    // A mode whose own spelling is not in the ADIF Mode enumeration rides as its REGISTERED
+    // PARENT + a SUBMODE. The enumeration is CLOSED (47 values; "DATA" is not among them —
+    // that exists only inside LoTW), so a bare <MODE:9>TempoFast is rejected outright by
+    // TQSL: its cascade is MODE%SUBMODE -> SUBMODE -> MODE, all three miss, and the record
+    // is dropped with "Invalid MODE". SUBMODE is data type String and is explicitly NOT
+    // validated against its enumeration, so a parent MODE + an unregistered SUBMODE is
+    // spec-legal today with no coordination.
+    // The parent comes from the table, it is NOT always MFSK: MFSK is the honest family for
+    // the Tempo protocols and FT2 (TempoFast is 4-CPM h=1/2 BT=0.3, the same continuous-phase
+    // FSK family as FST4 (4-GFSK), which already lives under MFSK), but FreeDV's parent is
+    // DIGITALVOICE and the VARA family's is DYNAMIC — see `adif_submode` for #68.
     // APP_TEMPO_MODE preserves the exact protocol for round-trip fidelity into our own log;
     // it is never the primary carrier, because an APP_-only mode is invisible to every
     // uploader.
     match adif_submode(&r.mode) {
-        Some(sub) => {
-            out.push_str(&field("MODE", "MFSK"));
+        Some((parent, sub)) => {
+            out.push_str(&field("MODE", parent));
             out.push_str(&field("SUBMODE", sub));
             out.push_str(&field("APP_TEMPO_MODE", &r.mode));
         }
@@ -1590,15 +1593,23 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
 /// Emit the ADIF fields for one OTA side. SOTA uses its dedicated `*_SOTA_REF` field;
 /// every other program (POTA, WWFF) uses the generic `SIG`/`SIG_INFO` pair. Empty
 /// when not activating/hunting that side.
-/// ADIF SUBMODE for a Nexus-native protocol, or `None` for anything already in the ADIF
-/// Mode enumeration (FT8, CW, SSB, RTTY, ...), which is emitted verbatim.
+/// The ADIF `(MODE, SUBMODE)` pair for a mode whose OWN spelling is not in the ADIF Mode
+/// enumeration, or `None` for anything already in it (FT8, CW, SSB, RTTY, ...), which is
+/// emitted verbatim.
+///
+/// A PAIR, not a bare submode: the parent used to be hardcoded to `MODE=MFSK` at the call
+/// site, which is right for the Tempo protocols and FT2 and wrong for everything else.
+/// #68 (rogerloxton) is exactly that gap — FreeDV and VarAC QSOs exported as
+/// `<MODE:6>FREEDV` / `<MODE:7>VARA HF`, spellings that miss the Mode enumeration and get
+/// the record dropped by TQSL for the same reason a bare `<MODE:9>TempoFast` is, and
+/// neither of their registered parents is MFSK.
 ///
 /// Uppercase on the wire: TQSL uppercases everything anyway, ADIF enumeration values are
 /// case-insensitive, and house style for new submodes is uppercase (FST4W, SCAMP_FAST).
-fn adif_submode(mode: &str) -> Option<&'static str> {
+fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
     match mode.trim().to_ascii_uppercase().as_str() {
-        "TEMPOFAST" => Some("TEMPOFAST"),
-        "TEMPODEEP" => Some("TEMPODEEP"),
+        "TEMPOFAST" => Some(("MFSK", "TEMPOFAST")),
+        "TEMPODEEP" => Some(("MFSK", "TEMPODEEP")),
         // ⭐ FT2 RIDES HERE FOR THE SAME REASON THE TEMPO MODES DO, and leaving it
         // out would have LOST CONTACTS. FT2 is Decodium's mode, not WSJT-X's, so it
         // is in neither the ADIF MODE enumeration nor TQSL's own mode table — a
@@ -1609,7 +1620,29 @@ fn adif_submode(mode: &str) -> Option<&'static str> {
         // MFSK is the honest family here too, not a flag of convenience: FT2 is
         // 4-GFSK at 41.67 baud — the same continuous-phase FSK family as FST4,
         // which already lives under MFSK, and as FT4, whose symbol time it halves.
-        "FT2" => Some("FT2"),
+        "FT2" => Some(("MFSK", "FT2")),
+        // -- #68 (rogerloxton): FreeDV and VarAC ------------------------------------
+        // Neither program's mode name is a MODE value; both are SUBMODE values whose
+        // parent IS in the enumeration. FreeDV's parent is DIGITALVOICE (it is digital
+        // voice, and the awards/propagation side already classes FREEDV as Phone —
+        // that classification reads `QsoRecord::mode`, which this does not touch).
+        "FREEDV" | "FREE DV" => Some(("DIGITALVOICE", "FREEDV")),
+        // Every VARA variant hangs off DYNAMIC. The registered submode spellings carry
+        // the variant, and VARA FM carries its SPEED as part of the name — so an exact
+        // typed spelling gets the exact registered submode.
+        "VARA HF" | "VARAHF" => Some(("DYNAMIC", "VARA HF")),
+        "VARA FM 1200" | "VARAFM1200" => Some(("DYNAMIC", "VARA FM 1200")),
+        "VARA FM 9600" | "VARAFM9600" => Some(("DYNAMIC", "VARA FM 9600")),
+        "VARA SATELLITE" | "VARASATELLITE" | "VARA SAT" => Some(("DYNAMIC", "VARA SATELLITE")),
+        // Bare "VARA" / "VARA FM": the PARENT is certain (all of them are DYNAMIC), the
+        // registered submode is not — bare "VARA" does not say HF, FM or satellite, and
+        // "VARA FM" is registered only with a speed. Guessing one would put a bit rate
+        // nobody measured in somebody else's database, so the operator's own words ride
+        // as an unregistered SUBMODE instead: MODE=DYNAMIC is what makes the record land
+        // (TQSL's cascade falls through an unmatched SUBMODE to it), which is the same
+        // ground TEMPOFAST stands on.
+        "VARA" => Some(("DYNAMIC", "VARA")),
+        "VARA FM" | "VARAFM" => Some(("DYNAMIC", "VARA FM")),
         _ => None,
     }
 }
@@ -2045,7 +2078,17 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         })
         .or_else(|| mode_field.clone())
         .unwrap_or_default();
-    if let Some(sub) = submode.filter(|s| promoted_submode(s).is_none()) {
+    // #68 (rogerloxton): "the writer re-derives them" is only true for a submode the
+    // PROMOTION consumes. FREEDV / VARA are deliberately not promoted (see
+    // `promoted_submode`), so their SUBMODE used to park in `extra` and be emitted a
+    // SECOND time next to the one `adif_submode` regenerates — a two-SUBMODE record on
+    // the re-export of our own file. Drop a submode the writer will re-derive from the
+    // resolved mode; a foreign one (Log4OM's SSB+USB, an imported VarAC row whose MODE
+    // we keep as DYNAMIC) is untouched and still round-trips verbatim.
+    if let Some(sub) = submode.filter(|s| {
+        promoted_submode(s).is_none()
+            && !adif_submode(&mode).is_some_and(|(_, w)| w.eq_ignore_ascii_case(s.trim()))
+    }) {
         f.insert("SUBMODE".to_string(), sub);
     }
     let rec = QsoRecord {
@@ -2617,6 +2660,104 @@ mod tests {
         );
         // Round-trip fidelity: our own log can still tell TempoFast from TempoDeep.
         assert!(adif.contains("APP_TEMPO_MODE"), "app field missing: {adif}");
+    }
+
+    /// #68 (rogerloxton): FreeDV and VarAC QSOs exported with an invalid ADIF mode.
+    /// The typed spelling went straight into MODE — `<MODE:6>FREEDV`, `<MODE:7>VARA HF` —
+    /// and neither is in the ADIF Mode enumeration, so TQSL drops the record exactly as it
+    /// drops a bare `<MODE:9>TempoFast`. Both have a REGISTERED parent that is NOT MFSK:
+    /// FreeDV is a DIGITALVOICE submode, the whole VARA family is DYNAMIC.
+    #[test]
+    fn freedv_and_vara_ride_as_their_registered_parent_mode_plus_submode() {
+        for (typed, parent, submode) in [
+            ("FreeDV", "DIGITALVOICE", "FREEDV"),
+            ("FREEDV", "DIGITALVOICE", "FREEDV"),
+            ("VARA HF", "DYNAMIC", "VARA HF"),
+            ("VARAHF", "DYNAMIC", "VARA HF"),
+            ("VARA FM 1200", "DYNAMIC", "VARA FM 1200"),
+            ("VARA FM 9600", "DYNAMIC", "VARA FM 9600"),
+            ("VARA SATELLITE", "DYNAMIC", "VARA SATELLITE"),
+            // No registered submode says which VARA this was, so the operator's own
+            // words ride as an unregistered SUBMODE — the parent is what makes the
+            // record land, and nothing invents a speed or a band nobody measured.
+            ("VARA", "DYNAMIC", "VARA"),
+            ("VARA FM", "DYNAMIC", "VARA FM"),
+        ] {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.mode = typed.into();
+            let adif = adif_record(&r);
+            assert!(
+                adif.contains(&field("MODE", parent)),
+                "{typed} must ride as MODE={parent}: {adif}"
+            );
+            assert!(
+                adif.contains(&field("SUBMODE", submode)),
+                "{typed} must carry SUBMODE={submode}: {adif}"
+            );
+            assert!(
+                !adif.contains(&field("MODE", typed)),
+                "{typed} must NOT emit the bare invalid mode: {adif}"
+            );
+            // Round-trip: our own file must still say what was actually worked, with the
+            // operator's own spelling intact (APP_TEMPO_MODE, same cascade the Tempo modes use).
+            let back = &parse_adif(&(adif_header() + &adif))[0];
+            assert_eq!(back.mode, typed, "the typed mode must survive our own file");
+            // ...and re-exporting that record must not emit the SUBMODE twice. FREEDV/VARA are
+            // deliberately NOT in `promoted_submode`, so without the writer-derived filter in
+            // `record_from` the parsed submode parks in `extra` and is re-emitted alongside the
+            // one the writer regenerates — a malformed two-SUBMODE record on the second export.
+            let again = adif_record(back);
+            assert_eq!(
+                again.matches("<SUBMODE:").count(),
+                1,
+                "{typed}: exactly one SUBMODE on re-export: {again}"
+            );
+        }
+    }
+
+    /// #68 guard: `adif_submode` returning a (MODE, SUBMODE) pair instead of a bare submode
+    /// sits on the path EVERY export and EVERY upload crosses, so no mode that already worked
+    /// may move a single byte. These goldens are the pre-#68 writer's exact output.
+    #[test]
+    fn existing_modes_emit_byte_identical_adif_mode_blocks() {
+        for (mode, golden) in [
+            ("FT8", "<MODE:3>FT8"),
+            ("FT4", "<MODE:3>FT4"),
+            ("CW", "<MODE:2>CW"),
+            ("SSB", "<MODE:3>SSB"),
+            ("RTTY", "<MODE:4>RTTY"),
+            ("PSK31", "<MODE:5>PSK31"),
+            ("SSTV", "<MODE:4>SSTV"),
+            ("MFSK", "<MODE:4>MFSK"),
+            ("Q65", "<MODE:3>Q65"),
+            ("WSPR", "<MODE:4>WSPR"),
+            (
+                "TempoFast",
+                "<MODE:4>MFSK<SUBMODE:9>TEMPOFAST<APP_TEMPO_MODE:9>TempoFast",
+            ),
+            (
+                "TempoDeep",
+                "<MODE:4>MFSK<SUBMODE:9>TEMPODEEP<APP_TEMPO_MODE:9>TempoDeep",
+            ),
+            ("FT2", "<MODE:4>MFSK<SUBMODE:3>FT2<APP_TEMPO_MODE:3>FT2"),
+        ] {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.mode = mode.into();
+            let adif = adif_record(&r);
+            assert!(
+                adif.contains(golden),
+                "{mode}: the mode block moved — expected {golden} in {adif}"
+            );
+            // One MODE field, and a SUBMODE exactly when the golden has one (a mode that
+            // never carried a submode must not grow one). `<APP_TEMPO_MODE:` does not
+            // contain `<MODE:`, so the count is honest.
+            assert_eq!(adif.matches("<MODE:").count(), 1, "{mode}: {adif}");
+            assert_eq!(
+                adif.matches("<SUBMODE:").count(),
+                usize::from(golden.contains("<SUBMODE:")),
+                "{mode}: {adif}"
+            );
+        }
     }
 
     #[test]
