@@ -894,6 +894,12 @@ export const EN = {
   'roster.filter.beaconing': 'Beaconing',
   'roster.filter.needed': 'Needed',
   'roster.empty': 'No stations match.',
+  'roster.countFiltered': 'of {{count}}',
+  'roster.search.placeholder': 'Call or PA*…',
+  'roster.search.label': 'Search stations',
+  'roster.search.title':
+    'Search by callsign. * and ? are wildcards — PA* finds every PA prefix, ON?AOI fills in one character. Several terms mean "any of these": PA* ON4*. Esc clears.',
+  'roster.search.clear': 'Clear search',
   'roster.card.doubleClick': 'Double-click to work {{call}}',
   'roster.card.open': 'Open {{call}}',
   'roster.card.b4.sameBand': 'Worked before on this band',
@@ -1952,7 +1958,7 @@ export const EN = {
   'spots.title': 'Spots',
   'spots.countFiltered': 'of {{count}}',
   'spots.hint': 'every spot on the air — single-click to work it',
-  'spots.search.placeholder': 'Search call · entity · spotter · freq…',
+  'spots.search.placeholder': 'Search call · entity · spotter · freq…  (PA* works)',
   'spots.search.label': 'Search spots',
   'spots.search.clear': 'Clear search',
   'spots.popOut.label': '⧉ Pop out',
@@ -4011,7 +4017,7 @@ export const EN = {
   'settings.rigControl.conn.omnirig': 'OmniRig (the radio is set up in OmniRig)',
   'settings.rigControl.conn.omnirig.unavailable': 'OmniRig — Windows only',
   'settings.rigControl.conn.hint':
-    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio.',
+    'Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR, SmartSDR CAT, piHPSDR), or a remote rigctld. The <b>Rig Model</b> still picks which CAT dialect is spoken — for an SDR, choose the program you launched, not the board inside the radio. An Icom on its <b>LAN port</b> comes in this way too: Icom\'s network protocol is its own, so run wfview (or RS-BA1) against the radio and point Nexus at wfview\'s rigctld server with Rig Model <b>NET rigctl</b>.',
   'settings.rigControl.conn.omnirig.hint':
     "<b>OmniRig</b> hands rig control to VE3NEA's OmniRig server, the one most Windows logging and contest programs already use. Set the radio up <em>in OmniRig</em> — rig type, COM port, baud — and Nexus talks to it there, so the Rig Model, Serial Port and Baud above are not used. {{availability}}",
   'settings.rigControl.conn.omnirig.unavailable.why':
@@ -6414,6 +6420,9 @@ export const EN = {
     'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
   'rtty.header.backend.afsk.title':
     'AFSK — soundcard tones through the rig in LSB (soundcard-clocked, the robust default). Change the backend in Settings → RTTY.',
+  'rtty.header.power.label': 'Power',
+  'rtty.header.power.title':
+    'RF output power — RTTY keys the carrier for the whole over, so most rigs want well under their SSB rating',
   'rtty.header.band.title': "Showing the rig's current band",
   'rtty.waterfall.hint': 'click nets the decoder',
 
@@ -6492,6 +6501,9 @@ export const EN = {
   'psk.panel.waterfall': 'Waterfall',
   'psk.panel.stream': 'Decoded Text',
   'psk.header.mode.aria': 'PSK sub-mode',
+  'psk.header.power.label': 'Power',
+  'psk.header.power.title':
+    'RF output power — key Tune and wind it back until the ALC stops moving; overdriven PSK splatters',
   'psk.mode.failed': 'PSK mode switch refused',
   'psk.rev.on.label': 'Rev on',
   'psk.rev.off.label': 'Rev off',

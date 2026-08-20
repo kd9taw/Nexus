@@ -15,6 +15,7 @@ import { PSK_PANEL_IDS, type PskPanelId, type PanelLayoutApi } from '../features
 import { FrequencyControl } from './FrequencyControl'
 import { Waterfall } from './Waterfall'
 import {
+  atuTune,
   getLicensedBandPlan,
   getPskState,
   haltTx,
@@ -28,6 +29,8 @@ import {
   pskSetMode,
   pskStop,
   pskType,
+  setRfPower,
+  setTune,
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
@@ -205,6 +208,24 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     void getLicensedBandPlan('psk').then(setPlan).catch(() => {})
   }, [])
 
+  // RF POWER, and in PSK31 it is not a convenience control — it is the mode's one
+  // operating hazard. A BPSK31 signal is a constant-envelope carrier only while it is
+  // idling on reversals; through real text the envelope swings, so an overdriven rig
+  // clips it into IMD splatter that reads clean on your own waterfall and dirty on
+  // everyone else's. The cure is drive low enough that ALC never moves, and that means
+  // the drive control has to be ON THIS SCREEN with the meters, not four clicks away in
+  // the rig menu. Mirrors the rig's own read-back (Phone's pattern, same 2% deadband)
+  // and never fights an in-flight drag.
+  const [power, setPower] = useState(100)
+  const powerDrag = useRef(false)
+  useEffect(() => {
+    const rb = snap?.radio.rfPower
+    if (rb != null && !powerDrag.current) {
+      const pct = Math.round(rb * 100)
+      setPower((p) => (Math.abs(p - pct) >= 2 ? pct : p))
+    }
+  }, [snap?.radio.rfPower])
+
   // Commit a typed dial from the shared header readout. An EMPTY band label is
   // not a refusal: listening off the ham bands is first-class (the RTTY rule).
   const commitDial = (mhz: number) => {
@@ -332,6 +353,35 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           txActiveLabel="▲ PSK"
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}
+          power={{
+            value: power,
+            unit: '%',
+            onChange: (pct: number) => {
+              setPower(pct)
+              void setRfPower(pct / 100)
+            },
+            label: t('psk.header.power.label'),
+            title: t('psk.header.power.title'),
+            onPointerDown: () => {
+              powerDrag.current = true
+            },
+            onPointerUp: () => {
+              powerDrag.current = false
+            },
+          }}
+          // TUNE — a steady carrier, which in PSK is how you set the drive above: key it,
+          // wind the power up until ALC just starts to move, back off. It is also a stop
+          // control (it stops the carrier it started), so it is on this cockpit's stop-line
+          // census and its sweep. The engine's MAX_TUNE_MS ceiling bounds it either way.
+          onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+          // The RIG's own ATU. Beside Tune because it keys the transmitter too — and the
+          // header renders it only when the rig actually reports a tuner. A refusal (TX off,
+          // outside privileges, no tuner) comes back as the backend's reason, not silence.
+          onAtuTune={() =>
+            void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
           modeIndicator={
             <>
               {/* The sub-mode NAME and its one-line hint come from `pskModes.ts` and move

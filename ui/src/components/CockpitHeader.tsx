@@ -350,8 +350,8 @@ export function CockpitHeader({
             </span>
           ))}
 
-        {/* ⚠️ DEFERRED (i18n): Tune keys a carrier and is on the Phone, CW and Operate
-            stop-line censuses; `stop-line.test.tsx` finds it by accessible name. */}
+        {/* ⚠️ DEFERRED (i18n): Tune keys a carrier and is on the Phone, CW, Operate, RTTY and
+            PSK stop-line censuses; `stop-line.test.tsx` finds it by accessible name. */}
         {onTune && (
           <button
             type="button"

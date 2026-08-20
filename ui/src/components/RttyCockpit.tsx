@@ -16,6 +16,7 @@ import { RTTY_PANEL_IDS, type RttyPanelId, type PanelLayoutApi } from '../featur
 import { FrequencyControl } from './FrequencyControl'
 import { Waterfall } from './Waterfall'
 import {
+  atuTune,
   getLicensedBandPlan,
   getRttyState,
   haltTx,
@@ -31,6 +32,8 @@ import {
   rttySetLatched,
   rttyStop,
   rttyType,
+  setRfPower,
+  setTune,
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
@@ -221,6 +224,21 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     void getLicensedBandPlan('rtty').then(setPlan).catch(() => {})
   }, [])
 
+  // RF POWER. RTTY is a 100%-duty-cycle mode — the carrier is on for the whole over
+  // with no let-up — so most rigs want it run well below their SSB rating or the finals
+  // and the ALC both suffer. That is a decision the operator makes per over, at the
+  // radio, which is why the control belongs in the header beside Tune rather than in a
+  // settings page. Mirrors the rig's read-back and never fights an in-flight drag.
+  const [power, setPower] = useState(100)
+  const powerDrag = useRef(false)
+  useEffect(() => {
+    const rb = snap?.radio.rfPower
+    if (rb != null && !powerDrag.current) {
+      const pct = Math.round(rb * 100)
+      setPower((p) => (Math.abs(p - pct) >= 2 ? pct : p))
+    }
+  }, [snap?.radio.rfPower])
+
   // Commit a typed dial from the shared header readout (same path as the
   // band-plan QSY); rejects out-of-plan frequencies with a toast.
   const commitDial = (mhz: number) => {
@@ -371,6 +389,32 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           txActiveLabel="▲ RTTY"
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}
+          power={{
+            value: power,
+            unit: '%',
+            onChange: (pct: number) => {
+              setPower(pct)
+              void setRfPower(pct / 100)
+            },
+            label: t('rtty.header.power.label'),
+            title: t('rtty.header.power.title'),
+            onPointerDown: () => {
+              powerDrag.current = true
+            },
+            onPointerUp: () => {
+              powerDrag.current = false
+            },
+          }}
+          // TUNE — the steady carrier you set power and load the antenna against. It is a
+          // stop control (it stops the carrier it started) and is on this cockpit's
+          // stop-line census and its sweep; MAX_TUNE_MS bounds it regardless.
+          onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+          // The RIG's own ATU, rendered by the header only when the rig reports a tuner.
+          onAtuTune={() =>
+            void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
           modeIndicator={
             <>
               <span className="cw-mode-badge" title={t('rtty.header.mode.title')}>
