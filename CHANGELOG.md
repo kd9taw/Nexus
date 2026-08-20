@@ -24,7 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that stop a transmission, and they are not something to get wrong in a language nobody here
   reads.
 
-### Fixed
+- **Find a station in a crowded list.** The Stations panel has a search box beside its
+  filter chips, and it takes wildcards: type `PA*` for every PA prefix, `ON4*` for every
+  ON4, or both at once — several terms mean "any of these". `?` fills in exactly one
+  character, and a plain word like `4FD` still matches anywhere in a call. It narrows
+  whatever the chips are already showing rather than replacing them, the count beside the
+  title tells you how many of the total you are looking at, and **Esc** clears it. The same
+  wildcards now work in the Spots panel's search.
+
+- **Tune, ATU and RF power in the PSK and RTTY headers.** Both cockpits were missing the
+  controls every other one puts in the same place, so an operator who tuned up in Phone and
+  switched to PSK found the button gone. In PSK this is the mode's one real hazard: set the
+  drive against a Tune carrier, below where ALC starts to move, and your signal stays clean —
+  overdriven PSK31 splatters, and it looks fine on your own waterfall while it does it. RTTY
+  keys the carrier for the whole over, so it wants running well under the rig's SSB rating.
+  The ATU button appears only if your rig actually reports a tuner.
 
 - **Periodic logbook backups, in a `backups/` folder beside your log.** Nexus now keeps dated
   snapshots of `log.adi`: at most one a day, only when the log has actually changed, **plus**
@@ -47,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to a public bug report. Settings ▸ Logging & Connectors ▸ Integrations & Feeds names it and
   has its own Reveal button, and the settings search finds it under "diagnostic log", "log
   file" or "troubleshooting".
+
+### Fixed
+
+- **OmniRig failing with "requires elevation" now says what to do about it.** If Windows
+  refuses to start OmniRig for Nexus (`0x800702E4`), it is because OmniRig is set to run as
+  administrator and Nexus is not — nothing in Nexus is missing or misconfigured. The message
+  now says that, and tells you the fix: start OmniRig yourself and leave it running (Nexus
+  attaches to the copy already up), or clear "Run this program as an administrator" on
+  OmniRig.exe, or run both as administrator.
+
+- **The Connection help now says how a LAN-connected Icom gets in.** Icom's network protocol
+  is its own, so the route is wfview (or RS-BA1) against the radio and Nexus pointed at
+  wfview's rigctld server with Rig Model **NET rigctl** — which has always worked, and was
+  written down nowhere.
 
 - **Virtual COM ports show up in the rig picker on Windows.** If you run SmartSDR CAT, com0com,
   or any virtual serial pair, its ports were missing from the port list while your real USB
