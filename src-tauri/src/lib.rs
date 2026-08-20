@@ -16518,6 +16518,15 @@ pub fn run() {
         rx_tap: std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
         meter_feed: meter_feed.clone(),
         ptt_method: settings.ptt_method.clone(),
+        // The operator's D1/D2/D3 choice, from the ACTIVE radio's profile. Without this the
+        // picker is decorative: the setting saved, the UI moved, the CI-V command supported it,
+        // and nothing carried the value into the backend (found by issue triage, same day).
+        icom_data_mode: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| r.icom_data_mode)
+            .unwrap_or(settings.icom_data_mode),
         rig_model: settings.rig_model,
         // The operator's name for the active radio, so the STARTUP CAT line names it. Without
         // this the first line of every log said "model 1042" while every later line said

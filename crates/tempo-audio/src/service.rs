@@ -169,7 +169,13 @@ fn spawn_cat_daemon(
     let mut native_fallback: Option<String> = None;
     #[cfg(feature = "serial")]
     if let Some(addr) = native_civ_addr(t).filter(|_| ptt_line.is_none()) {
-        match crate::civ::broker::CivDaemon::start(&t.serial_port, t.baud, addr, t.rigctld_port) {
+        match crate::civ::broker::CivDaemon::start(
+            &t.serial_port,
+            t.baud,
+            addr,
+            t.rigctld_port,
+            t.icom_data_mode,
+        ) {
             Ok(d) => return Ok((CatDaemon::Native(d), None)),
             Err(e) => {
                 // Fall through to rigctld — CAT keeps working, just without the scope.
@@ -852,6 +858,9 @@ pub struct RadioConfig {
     /// Display only — see `Transport::radio_label`. Empty is fine: the label falls back to the
     /// model number, which is what the startup line showed before this existed.
     pub radio_label: String,
+    /// The operator's Icom DATA-mode choice (D1/D2/D3) for this radio. 1 = today's
+    /// behaviour; see `RadioProfile::icom_data_mode`.
+    pub icom_data_mode: u8,
     pub rig_model: u32,
     /// The operator's "my interface keys PTT on the CAT port's RTS line" declaration
     /// (`Settings::cat_rts_keys_ptt`). Carried in the STARTUP SEED, not left to the first
@@ -907,6 +916,7 @@ impl Default for RadioConfig {
             meter_feed: tempo_app::engine::MeterFeed::default(),
             ptt_method: "vox".to_string(),
             radio_label: String::new(),
+            icom_data_mode: 1,
             rig_model: 0,
             cat_rts_keys_ptt: false,
             serial_port: String::new(),
@@ -1331,6 +1341,7 @@ impl Transport {
     fn from_profile(p: &RadioProfile) -> Self {
         Self {
             radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
+            icom_data_mode: p.icom_data_mode,
             ptt_method: p.ptt_method.clone(),
             rig_model: p.rig_model,
             serial_port: p.serial_port.clone(),
@@ -8577,6 +8588,10 @@ struct Transport {
     /// Native Icom CI-V opt-in for this radio (see `RadioProfile::icom_native_cat`) —
     /// selects Nexus's own CI-V daemon instead of rigctld at the spawn sites.
     icom_native_cat: bool,
+    /// The operator's D1/D2/D3 choice (`RadioProfile::icom_data_mode`), handed to the CI-V
+    /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
+    /// relaunch the daemon, because the value is applied when the backend is built.
+    icom_data_mode: u8,
     /// The port our OWN CAT broker is serving on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     broker_self_port: Option<u16>,
@@ -8598,6 +8613,7 @@ struct Transport {
 impl Transport {
     fn from_cfg(c: &RadioConfig) -> Self {
         Self {
+            icom_data_mode: c.icom_data_mode,
             radio_label: LogLabel(if c.radio_label.is_empty() {
                 radio_label("", c.rig_model)
             } else {
@@ -8644,6 +8660,7 @@ impl Transport {
 
     fn from_settings(s: &Settings) -> Self {
         Self {
+            icom_data_mode: s.icom_data_mode,
             radio_label: LogLabel(
                 s.radios
                     .iter()
@@ -9580,6 +9597,41 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
 
 #[cfg(test)]
 mod tests {
+
+    /// THE LINK THAT DID NOT EXIST. The D1/D2/D3 picker shipped inert: the setting saved, the
+    /// UI wrote it, `set_data_mode_n` built the right CI-V frame — and nothing carried the
+    /// operator's choice from `Settings` into the audio side at all. `icom_data_mode` appeared
+    /// in tempo-app and nowhere else; the backend's setter had zero callers. Every test passed,
+    /// because every test checked one PIECE of the chain.
+    ///
+    /// This pins the missing link itself: the transport the daemon is built from must carry the
+    /// operator's number. Downstream of here it cannot be dropped — `CivDaemon::start` and
+    /// `CivBackend::new` take it as a REQUIRED argument rather than a setter someone remembers.
+    #[test]
+    fn the_transport_carries_the_operators_icom_data_mode() {
+        let s = Settings {
+            icom_data_mode: 2,
+            ..Settings::default()
+        };
+        assert_eq!(
+            Transport::from_settings(&s).icom_data_mode,
+            2,
+            "the flat mirror must reach the transport"
+        );
+
+        // …and from the ACTIVE radio's own profile, which is where the UI writes it.
+        let prof = tempo_app::settings::RadioProfile {
+            icom_data_mode: 3,
+            ..Default::default()
+        };
+        assert_eq!(Transport::from_profile(&prof).icom_data_mode, 3);
+
+        // Control: the default is D1 — today's behaviour, and what every radio has.
+        assert_eq!(
+            Transport::from_settings(&Settings::default()).icom_data_mode,
+            1
+        );
+    }
     use super::*;
     use crate::backend::MockBackend;
 
@@ -12093,7 +12145,7 @@ mod tests {
         drop(probe);
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.dead = true;
-        let daemon = crate::civ::broker::CivDaemon::start_with_io(Box::new(radio), 0xA2, port)
+        let daemon = crate::civ::broker::CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1)
             .expect("daemon starts (TCP binds) even though the radio I/O is dead");
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let mut cat = CatDaemon::Native(daemon);
@@ -16226,6 +16278,7 @@ mod tests {
     fn cat_transport(rigctld_port: u16, broker_self_port: Option<u16>) -> Transport {
         Transport {
             radio_label: LogLabel(radio_label("", 1035)),
+            icom_data_mode: 1,
             ptt_method: "cat".to_string(),
             rig_model: 1035,
             serial_port: "/dev/ttyUSB0".to_string(),
@@ -17684,7 +17737,7 @@ mod tests {
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.mute = mute;
         let regs = radio.regs();
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port).unwrap();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
         (d, Rig::rigctld(&format!("127.0.0.1:{port}")), regs)
     }
 

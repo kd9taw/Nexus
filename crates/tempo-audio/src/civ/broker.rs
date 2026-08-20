@@ -85,18 +85,11 @@ pub struct CivBackend {
 }
 
 impl CivBackend {
-    /// Point the backend at a different DATA mode (1..=3). Clamped, so a bad setting can never
-    /// reach the bus.
-    pub fn set_data_mode_pref(&self, mode: u8) {
-        self.data_mode
-            .store(mode.clamp(1, 3), std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn new(h: CivHandle, addr: u8, tx_intent: Arc<AtomicBool>) -> Self {
+    pub fn new(h: CivHandle, addr: u8, tx_intent: Arc<AtomicBool>, data_mode: u8) -> Self {
         CivBackend {
             h,
             addr,
-            data_mode: std::sync::atomic::AtomicU8::new(1),
+            data_mode: std::sync::atomic::AtomicU8::new(data_mode.clamp(1, 3)),
             split: AtomicBool::new(false),
             tx_intent,
             band: Mutex::new(SatSplit {
@@ -780,10 +773,13 @@ pub struct CivDaemon {
 
 impl CivDaemon {
     /// Start on an already-open transport (tests use the in-memory fake radio).
+    /// `data_mode` is REQUIRED here for the same reason it is on [`start`]: it reached the wire
+    /// through nothing at all when it was a setter.
     pub fn start_with_io(
         io: Box<dyn super::engine::CivIo>,
         civ_addr: u8,
         tcp_port: u16,
+        data_mode: u8,
     ) -> std::io::Result<CivDaemon> {
         let engine = CivEngine::start(io, civ_addr);
         let listener = TcpListener::bind(("127.0.0.1", tcp_port))?;
@@ -793,6 +789,7 @@ impl CivDaemon {
             engine.handle(),
             civ_addr,
             tx_intent.clone(),
+            data_mode,
         ));
         let tcp_stop = Arc::new(AtomicBool::new(false));
         let tcp_thread = {
@@ -844,11 +841,18 @@ impl CivDaemon {
 
     /// Open the real COM port and start the daemon (the production entry).
     #[cfg(feature = "serial")]
+    /// `data_mode` is the operator's D1/D2/D3 choice — a REQUIRED argument on purpose.
+    ///
+    /// ⚠️ It shipped as a `set_data_mode_pref` setter first, and nothing ever called it: the
+    /// setting saved, the picker moved, the CI-V command supported it, and the wire never saw
+    /// it. A setter is easy to forget; a parameter cannot be. Caught by issue triage the same
+    /// day it was written, before release.
     pub fn start(
         port_name: &str,
         baud: u32,
         civ_addr: u8,
         tcp_port: u16,
+        data_mode: u8,
     ) -> std::io::Result<CivDaemon> {
         let mut port = serialport::new(port_name, baud)
             .timeout(super::engine::READ_TIMEOUT)
@@ -860,7 +864,7 @@ impl CivDaemon {
         // `control_line::idle_both_lines`. (This path carries real data at the operator's
         // baud, so it cannot go through `open_control_line_port` and its baud ladder.)
         crate::control_line::idle_both_lines(&mut port);
-        Self::start_with_io(Box::new(port), civ_addr, tcp_port)
+        Self::start_with_io(Box::new(port), civ_addr, tcp_port, data_mode)
     }
 
     /// The CI-V address to drive `model_name` at, when it's a native-capable Icom.
@@ -958,6 +962,7 @@ impl Drop for CivDaemon {
 
 #[cfg(test)]
 mod tests {
+
     use super::super::engine::tests_support::FakeRadio;
     use super::*;
     use std::io::{BufRead, BufReader, Write};
@@ -969,7 +974,7 @@ mod tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
         let (radio, _push) = FakeRadio::new(0xA2);
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port).unwrap();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
         (d, port)
     }
 
@@ -1028,7 +1033,7 @@ mod tests {
         drop(probe);
         let (radio, _push) = FakeRadio::new(0xA2);
         let regs = radio.regs();
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port).unwrap();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
         (d, port, regs)
     }
 
@@ -1261,7 +1266,7 @@ mod tests {
         let (radio, _push) = FakeRadio::new(0x94);
         let regs = radio.regs();
         regs.lock().unwrap().no_satmode = true;
-        let _d = CivDaemon::start_with_io(Box::new(radio), 0x94, port).unwrap();
+        let _d = CivDaemon::start_with_io(Box::new(radio), 0x94, port, 1).unwrap();
         let (mut c, mut rd) = client(port);
 
         assert_eq!(roundtrip(&mut c, &mut rd, "S 1 Sub\n"), "RPRT -1\n");
@@ -1416,7 +1421,7 @@ mod tests {
         let (radio, _push) = FakeRadio::new(0xA2);
         let regs = radio.regs();
         let engine = CivEngine::start(Box::new(radio), 0xA2);
-        let backend = CivBackend::new(engine.handle(), 0xA2, Arc::new(AtomicBool::new(false)));
+        let backend = CivBackend::new(engine.handle(), 0xA2, Arc::new(AtomicBool::new(false)), 1);
 
         assert!(
             backend.set_mode("PKTFM", 0),
@@ -1467,6 +1472,7 @@ mod tests {
             engine.handle(),
             0xA2,
             Arc::new(AtomicBool::new(false)),
+            1,
         ));
         assert!(backend.set_freq(435_640_000));
         assert_eq!(backend.set_split(true, "Sub"), Some(true));
