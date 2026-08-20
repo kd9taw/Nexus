@@ -13,6 +13,7 @@ import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
+import { compileTerm, searchTerms } from '../searchQuery'
 import { t } from '../i18n'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
@@ -134,7 +135,12 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
     bands.length > 0 || hiddenModes.length > 0 || licensedOnly || localOnly || states.length > 0
 
   const rows = useMemo(() => {
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+    // Terms still narrow (AND), which is right here: a spot row is call + entity + spotter
+    // + mode + band + frequency flattened together, so "20m ft8" means both. What changed is
+    // that a term may now carry `*`/`?` and be matched as a whole-word pattern — `PA*` finds
+    // the PA prefix here exactly as it does in the Stations list. A term without a wildcard
+    // behaves as it always has, so nobody's saved habits move.
+    const terms = searchTerms(query).map(compileTerm)
     const filtered = spots.filter((s) => {
       if (licensedOnly && !s.licensed) return false
       if (localOnly && s.spotterLocal === false) return false
@@ -143,8 +149,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
       // A state filter hides spots whose state is unknown (cluster spots of unheard stations).
       if (states.length > 0 && (!s.state || !states.includes(s.state))) return false
       if (terms.length > 0) {
-        const hay = `${s.call} ${s.entity} ${s.spotter} ${s.mode} ${s.submode ?? ''} ${s.band} ${s.freqMhz.toFixed(4)}`.toLowerCase()
-        for (const t of terms) if (!hay.includes(t)) return false
+        const hay = `${s.call} ${s.entity} ${s.spotter} ${s.mode} ${s.submode ?? ''} ${s.band} ${s.freqMhz.toFixed(4)}`.toUpperCase()
+        for (const t of terms) if (!t(hay)) return false
       }
       return true
     })

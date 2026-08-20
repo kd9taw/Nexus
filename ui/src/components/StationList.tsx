@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react'
 import type { Conversation as Conv, NeedAlert, NeedTag, Station, Tier } from '../types'
 import { StationCard } from './StationCard'
 import { tagsForSurface } from '../features/needs'
+import { matchAnyTerm } from '../searchQuery'
 import { t, type MessageKey } from '../i18n'
 
 type Presence = Station['presence'] | 'offline'
@@ -79,6 +80,12 @@ export function StationList({
   feedMode,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all')
+  // The search box. Deliberately NOT persisted: a filter chip is a way of working and
+  // survives the session, but a search is a thing you are doing right now, and finding
+  // yesterday's `PA*` still narrowing a 478-station list on the next band is a bug report
+  // waiting to happen. Esc clears it, which is also the way out for anyone who typed into
+  // it by accident and cannot see why the band went quiet.
+  const [query, setQuery] = useState('')
 
   // The full set of need tags per call — union of every alert's tags, deduped, falling
   // back to the single top tier when the alerts map isn't provided. This is what lets
@@ -124,6 +131,12 @@ export function StationList({
 
   const filtered = useMemo(() => {
     let list = stations
+    // The search runs FIRST and against the callsign alone — this list is a column of
+    // calls, and matching the country or the grid behind them would make `ON4*` quietly
+    // return Ontario-nothing and Belgium-everything. `PA* ON4*` is two prefixes the
+    // operator wants, so the terms are alternatives (searchQuery.ts owns that ruling).
+    const matches = matchAnyTerm(query)
+    if (matches) list = list.filter((s) => matches(s.call))
     // Decode-cycle flush (FT cockpit only): count MISSED DECODE CYCLES, not wall time.
     if (dropAfterCycles != null) {
       list = list.filter((s) => currentSlot - s.lastHeardSlot <= dropAfterCycles)
@@ -142,13 +155,21 @@ export function StationList({
     return [...list].sort(
       (a, b) => order[a.presence] - order[b.presence] || b.snr - a.snr,
     )
-  }, [stations, filter, needByCall, needAlertsByCall, band, feedMode, currentSlot, dropAfterCycles])
+  }, [stations, filter, query, needByCall, needAlertsByCall, band, feedMode, currentSlot, dropAfterCycles])
 
   return (
     <aside className="station-list panel">
       <div className="panel-header">
         <h2>{t('roster.title')}</h2>
-        <span className="count-badge">{stations.length}</span>
+        {/* The badge counts what is ON SCREEN, with the total beside it when a filter or a
+            search is holding something back (the Spots panel's idiom). It used to show the
+            total unconditionally, which read as "478 stations" over a list of three. */}
+        <span className="count-badge">{filtered.length}</span>
+        {filtered.length !== stations.length && (
+          <span className="count-badge count-badge-total">
+            {t('roster.countFiltered', { count: stations.length })}
+          </span>
+        )}
       </div>
       <button
         type="button"
@@ -201,19 +222,48 @@ export function StationList({
         </div>
       )}
       {recents.length > 0 && <div className="roster-head">{t('roster.onBandNow')}</div>}
-      <div className="filter-row" role="tablist" aria-label={t('roster.filter.aria')}>
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            role="tab"
-            aria-selected={filter === f.id}
-            className={`filter-chip${filter === f.id ? ' active' : ''}`}
-            onClick={() => setFilter(f.id)}
-          >
-            {t(f.labelKey)}
-          </button>
-        ))}
+      {/* The chips and the search share one row, which is where the operator asked for it.
+          The `role="tablist"` moved onto the chip group rather than the row: a tablist may
+          only contain tabs, and a textbox inside one is read out wrong by every screen
+          reader. The row keeps `.filter-row` so its padding and rule are the shipped ones. */}
+      <div className="filter-row station-filter-row">
+        <div className="station-filter-tabs" role="tablist" aria-label={t('roster.filter.aria')}>
+          {FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              role="tab"
+              aria-selected={filter === f.id}
+              className={`filter-chip${filter === f.id ? ' active' : ''}`}
+              onClick={() => setFilter(f.id)}
+            >
+              {t(f.labelKey)}
+            </button>
+          ))}
+        </div>
+        <span className="station-search">
+          <input
+            type="search"
+            value={query}
+            placeholder={t('roster.search.placeholder')}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setQuery('')
+            }}
+            aria-label={t('roster.search.label')}
+            title={t('roster.search.title')}
+          />
+          {query && (
+            <button
+              type="button"
+              className="station-search-clear"
+              onClick={() => setQuery('')}
+              title={t('roster.search.clear')}
+            >
+              ✕
+            </button>
+          )}
+        </span>
       </div>
       <div className="station-scroll">
         {filtered.length === 0 && <p className="empty">{t('roster.empty')}</p>}
