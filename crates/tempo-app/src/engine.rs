@@ -5445,6 +5445,7 @@ impl Engine {
         // side, the new section names the form (Digital → PKTUSB/PKTLSB, CW → CW/CWR,
         // Phone → the bird's sideband) via `rig_mode_effective`'s existing arms. This is
         // exactly the behavior the same-mode re-entry (`follow_freq = false`) always had.
+        let mut re_homed = false;
         if follow_freq && self.sat_dial_owner.is_none() {
             let band = self.settings.band.clone();
             if let Some((dial, sideband)) = self
@@ -5452,7 +5453,53 @@ impl Engine {
                 .or_else(|| self.mode_home(om))
             {
                 self.set_frequency(dial, &band, &sideband); // also flags immediate_retune
+                re_homed = true;
             }
+        }
+        // ⭐ THE DIGITAL SECTION RE-DERIVES ITS SIDE EVEN WHEN IT DOES NOT QSY —
+        // ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
+        //
+        // `settings.sideband` is written VERBATIM by every QSY (`tune_dial`), so it names
+        // the channel of whichever section wrote it last — and the RTTY and SSTV plans are
+        // LSB on every HF band. Digital is the ONE section whose policy reads that field
+        // DIRECTLY (`Settings::rig_mode`: an FT dial's side is a property of the CHANNEL,
+        // not of the band convention, so 40 m FT8 is USB where the band would say LSB), so
+        // a stale LSB commands PKTLSB — Yaesu DATA-L, Flex DIGL — on a USB-side channel.
+        // It is the same class as the 20 m DATA-L report that `sstv_tune` exists for: a
+        // section entry that asserts nothing leaves the section being LEFT in charge.
+        //
+        // The re-home above was the only thing that ever corrected it, and it is gated on
+        // `follow_freq` — which BOTH clicks on the reported path leave false. The UI's
+        // Tempo (chat) view maps to this section but is not one of the views it re-homes
+        // for, and entering it still records the section as entered, so the later click
+        // into the FT cockpit is not a mode CHANGE either. The DOUBLE-click is only what
+        // makes it visible: `set_tx_enabled(true)` arms `immediate_retune`, which re-pushes
+        // the commanded mode over the operator's manual DIGU correction.
+        //
+        // LSB is the only value that can be wrong here, and the only one corrected: the
+        // Digital arm already maps every non-LSB word (including empty/garbled) to PKTUSB,
+        // no tier's band plan has an LSB channel (pinned in `bandplan.rs`), and leaving the
+        // others alone keeps `tune_dial`'s FM-family hop test reading the channel word it
+        // was actually written from. A HELD PASS keeps its side for the same reason the QSY
+        // above stands down: the BIRD names it, from the transponder record, and
+        // `rig_mode_effective`'s linear arm answers without ever reading this field.
+        //
+        // ⚠️ NEEDS-BENCH — this changes the MODE word commanded over CAT for the FT modes.
+        // Its blast radius is bounded by never widening a privilege: the corrected side
+        // moves the judged emission from `dial - offset` to `dial + offset`
+        // (`emission_allowed`), which is the passband the operator is actually keying, and
+        // the same field feeds the logged on-air frequency and the TX-gate stamp — all
+        // three now agree with the DATA submode being commanded instead of contradicting it.
+        if om == OperatingMode::Digital
+            && !re_homed
+            && self.sat_dial_owner.is_none()
+            && self.settings.sideband.eq_ignore_ascii_case("LSB")
+        {
+            self.settings.sideband = "USB".to_string();
+            // Keep the app's mirror in step, as every other writer of this field does — the
+            // two copies feeding one display is how a cockpit comes to disagree with the rig.
+            let (dial, band) = (self.settings.dial_mhz, self.settings.band.clone());
+            self.app.set_radio(dial, &band, "USB");
         }
         // Re-assert the rig mode now even if the dial didn't change (e.g. picking CW while
         // already on a CW freq must still command CW, not wait for a dial change).
@@ -19192,6 +19239,50 @@ mod tests {
         assert!(
             e.take_immediate_retune(),
             "a mode change still arms a retune"
+        );
+    }
+
+    #[test]
+    fn the_digital_section_never_inherits_another_plans_lsb() {
+        // ⭐ ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
+        //
+        // `settings.sideband` is written VERBATIM by every QSY, the RTTY band plan is LSB
+        // on every HF band, and `Settings::rig_mode`'s Digital arm reads that field
+        // DIRECTLY — so an FT dial reached from the RTTY section commanded PKTLSB, which
+        // is Yaesu DATA-L and Flex DIGL, on a channel that is USB-side.
+        //
+        // The section-entry re-home was the only thing that ever corrected it, and it is
+        // gated on `follow_freq` — which BOTH clicks on this path leave false: the UI's
+        // Tempo (chat) view maps to the Digital section but is not one of the views it
+        // re-homes for, and entering it still sets `lastOpModeRef = 'digital'`, so the
+        // later click into the FT cockpit is not a mode CHANGE either.
+        use crate::settings::OperatingMode;
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        // The RTTY cockpit — its own section entry DOES re-home, to 20 m RTTY, LSB.
+        e.set_operating_mode("rtty", true);
+        assert_eq!(
+            e.settings().sideband,
+            "LSB",
+            "precondition: the RTTY band plan is LSB"
+        );
+        // …Tempo (chat): the Digital policy, no re-home…
+        e.set_operating_mode("digital", false);
+        // …then the FT cockpit, which is no longer a mode change.
+        e.set_operating_mode("digital", false);
+        assert_eq!(e.settings().operating_mode, OperatingMode::Digital);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTUSB",
+            "the Digital section commands the USB-side DATA submode, never the LSB the \
+             RTTY plan left in `settings.sideband`"
+        );
+        // …and it is the SIDE that is re-derived, never the dial: a section entry with
+        // `follow_freq = false` must still leave the VFO exactly where it was.
+        assert!(
+            (e.settings().dial_mhz - 14.083).abs() < 1e-9,
+            "the dial is untouched, got {}",
+            e.settings().dial_mhz
         );
     }
 
