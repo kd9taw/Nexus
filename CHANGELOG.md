@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new code cannot produce one.
 ### Fixed
 
+- **The waterfall's frequency scale follows the RX marker when you are zoomed in.** On any
+  zoom level other than Std or Full, the numbers along the bottom of the waterfall were set
+  once, when the screen opened, and never moved again — so a display that came up before the
+  radio said where you were listening kept labelling a 600 Hz zoom 200–800 Hz however far you
+  tuned, and the picture no longer agreed with the scale under it. A zoom is meant to be that
+  many Hz wide, centred on the green RX marker: it now re-centres whenever you move the
+  marker — a waterfall click, a double-clicked decode, netting RTTY or PSK — and the labels
+  travel with it. Std and Full are fixed views of the whole passband and are unchanged.
+  (#115, reported by akhepcat)
+
 - **The alert band scope now governs the need ICONS, not just the sound.** Set
   Settings ▸ Spots & Alerts ▸ **New grid** to *VHF+ (6 m and up)* and 20 m went quiet — but
   every FT8 row on the Call Roster and in Band Activity still wore a GRID chip, in both

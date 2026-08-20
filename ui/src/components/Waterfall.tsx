@@ -200,12 +200,25 @@ export function Waterfall({
   const [gain, setGain] = useState<number>(() => loadKnob(GAIN_KEY))
   const [zero, setZero] = useState<number>(() => loadKnob(ZERO_KEY))
   // Span/zoom: the displayed audio-band window. 0 = the default Std 0–3 kHz view, -1 = Full
-  // 0–4 kHz, positive = a sub-window centered (at pick time) on the RX marker. The window only
-  // moves when the operator picks a level, so the accumulated waterfall doesn't kink on retune.
+  // 0–4 kHz, positive = a sub-window centered on the RX marker. Only the SPAN is state; the
+  // window is DERIVED from (span, RX marker) on every render and never stored.
+  //
+  // ⚠️ The window used to be `useState` too, and that is issue #115 (akhepcat — "waterfall
+  // X-axis labels incorrect when switching bandpass"). A stored copy of a derived value has
+  // to be re-synced by hand, and there was exactly one writer — the zoom <select>'s onChange
+  // below — plus a useState INITIALISER that ran at FIRST RENDER. So a persisted span centered
+  // on whatever `rxOffsetHz` happened to be at mount (0 before the first snapshot lands) and
+  // then froze: the axis went on labelling 200–800 Hz however far the operator tuned. The
+  // labels were always right FOR the window — the window was stale. Deriving it retires the
+  // staleness class outright rather than adding a second hand-written writer.
+  //
+  // Std/Full are FIXED windows (see `zoomRange`), so a retune is a no-op for them — the same
+  // edges come back and the rebuild effect below sees no change. And `rxOffsetHz` moves only
+  // when the operator moves it (a waterfall click, a decode double-click, `rtty_net`/`psk_net`
+  // — RTTY/PSK AFC is reported separately and does NOT drag the netted center), so following
+  // it costs one cold re-render per retune, not one per poll.
   const [zoomSpan, setZoomSpan] = useState<number>(loadZoom)
-  const [view, setView] = useState<{ lo: number; hi: number }>(() =>
-    zoomRange(rxOffsetHz, loadZoom()),
-  )
+  const view = useMemo(() => zoomRange(rxOffsetHz, zoomSpan), [rxOffsetHz, zoomSpan])
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)
@@ -277,6 +290,19 @@ export function Waterfall({
     // could only affect rows painted after the switch.
     rebuildRef.current?.()
   }, [palette, theme])
+
+  // The view window moved — a zoom pick, or the RX marker moving under a zoomed view (issue
+  // #115). Re-render the ACCUMULATED history at the new edges, the same cold path a palette
+  // switch takes; without it the operator watches the old image scroll under a re-labelled
+  // axis. `viewLoRef`/`viewHiRef` are assigned in the render body above, so they already hold
+  // the new edges by the time this runs. useLayoutEffect (not useEffect) for the same reason
+  // as the LUT: the picture and the axis overlay must never disagree for a frame.
+  // ⚠️ This is the ONLY repaint-on-window-change path now. The zoom <select> used to poke the
+  // refs and call the rebuild by hand, which is exactly why the window followed a zoom pick
+  // and nothing else. Do not re-add that poke — a second writer is how #115 happened.
+  useLayoutEffect(() => {
+    rebuildRef.current?.()
+  }, [view.lo, view.hi])
 
   // Legend gradient (weak→strong, bottom→top) for the active colormap.
   const legendGradient = useMemo(() => {
@@ -900,16 +926,12 @@ export function Waterfall({
           aria-label={t('waterfall.zoom.aria')}
           title={t('waterfall.zoom.title')}
           onChange={(e) => {
+            // The SPAN is the only thing the operator picks; the window follows from it and
+            // the RX marker (see the `view` memo). The repaint is the rebuild layout-effect's
+            // job — this handler deliberately touches neither the view refs nor the canvas.
             const span = Number(e.target.value)
-            const r = zoomRange(rxOffsetHz, span)
             setZoomSpan(span)
-            setView(r)
             surfaceSet(ZOOM_KEY, String(span))
-            // Re-render the ACCUMULATED history at the new view immediately (refs first —
-            // the state lands next render, but the rebuild uses the refs now).
-            viewLoRef.current = r.lo
-            viewHiRef.current = r.hi
-            rebuildRef.current?.()
           }}
         >
           {WATERFALL_ZOOMS.map((z) => (
