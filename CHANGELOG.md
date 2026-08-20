@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new code cannot produce one.
 ### Fixed
 
+- **Virtual COM ports show up in the rig picker on Windows.** If you run SmartSDR CAT, com0com,
+  or any virtual serial pair, its ports were missing from the port list while your real USB
+  adapters showed up fine — so the only way to use one was to type the name in by hand. The
+  Windows port scan asks for two device categories that virtual pairs do not belong to, and its
+  backup lookup was discarded whenever you had more real adapters than virtual ports. Both lists
+  are now merged, so every port either one knows about is offered, once. (#117)
+
 - **Saving in Settings no longer ends the contact you are working.** Pressing **Save** while a
   QSO was in flight threw the contact away — the sequencer that owns it was reset back to Chat,
   so the QSO never completed, nothing auto-logged, and the **Log** button then did nothing at
