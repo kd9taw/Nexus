@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new code cannot produce one.
 ### Fixed
 
+- **CW speed slider now reaches a WinKeyer.** Moving the speed slider between overs did
+  nothing on the WinKeyer back-end: the speed was only ever sent to the keyer at the
+  moment a word left the queue, so a hardware keyer sat on its own front-panel pot or
+  power-on speed and the number in the cockpit was a number Nexus alone believed. The
+  speed now goes to the keyer as soon as you move the slider — idle, or part-way through
+  a message — and is re-sent whenever the keyer's port opens, so one plugged in late or
+  power-cycled comes back at your speed. Switching from the CAT keyer to a WinKeyer at
+  the same speed pushes it too; the two back-ends no longer share one "already told it"
+  record. The CAT keyer is unchanged and still sends `KEYSPD` at the start of a send.
+  Thanks to **swinn** for the report (#135).
+
 - **The waterfall's frequency scale follows the RX marker when you are zoomed in.** On any
   zoom level other than Std or Full, the numbers along the bottom of the waterfall were set
   once, when the screen opened, and never moved again — so a display that came up before the
