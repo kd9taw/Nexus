@@ -3902,8 +3902,14 @@ impl Engine {
 
     /// Apply new settings. A change of callsign/grid rebinds identity IN PLACE
     /// (preserving roster + conversations + the `*` band feed — see
-    /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place. The
-    /// operating mode returns to Chat.
+    /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place.
+    ///
+    /// The operating mode is touched ONLY to reconcile Field Day with the
+    /// `fd_active` master switch — a contact in flight survives a save and stays
+    /// loggable (#100). Still heavyweight in every other respect: the TX gate
+    /// generation bumps and the TX/broadcast queues are cleared, so a save is
+    /// never the way to persist one field (see [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
+    /// and the other narrow setters — #54).
     pub fn apply_settings(&mut self, s: Settings) {
         // A settings save can rewrite anything the TX gate reads (dial, mode,
         // offsets, license class) — an over planned before it must not key
@@ -4058,10 +4064,23 @@ impl Engine {
         self.hold_tx_freq = self.settings.hold_tx_freq;
         // A settings save reconciles the operating mode with the Field Day
         // master switch `fd_active`, which is authoritative over whether the
-        // engine operates in Field Day (spec §1). apply_settings is heavyweight
-        // — it resets the mode to Chat and clears the TX queue — so this is the
-        // one place a save re-enters (or leaves) FD to keep it in step with the
-        // master.
+        // engine operates in Field Day (spec §1). This is the one place a save
+        // re-enters (or leaves) FD to keep it in step with the master.
+        //
+        // ⭐ #100 (kr4fqg, "Lost logging when in Settings and FT8 completes a
+        // call"): this reconcile is the ONLY reason `apply_settings` touches the
+        // operating mode, and it used to write `mode = Mode::Chat` on EVERY save
+        // — on the stated belief that "a QSO is transient". It is not. The
+        // `Mode::Qso` variant OWNS the contact: the sequencer, the DX call, the
+        // received report. Throwing it away mid-contact meant the completion
+        // never fired (no auto-log, no `pending_log`) and the manual Log button
+        // then fell through `log_current_qso`'s `_ => return false` — so a save
+        // pressed while a contact was on the air lost it three ways at once.
+        // The distinction is now explicit: this reset fires when Field Day is
+        // being ENTERED or LEFT, and never as collateral on a live contact. It
+        // is deliberately NOT the whole of the heavyweight save — the TX gate
+        // generation still bumps and the TX/broadcast queues are still cleared
+        // below, so no over planned before the save can key after it.
         if self.settings.fd_active {
             // Master ON. PRESERVE an already-active FD session in place: the
             // Mode::FieldDay variant carries the whole dupe-checked contest log
@@ -4070,28 +4089,34 @@ impl Engine {
             // other live copy). The FD panel saves settings on every bonus-
             // checkbox toggle, so this preservation is load-bearing. If NOT yet
             // in FD, this save turned the master on (or followed a mode change):
-            // reset the heavyweight state, then enter passive S&P so every
-            // cockpit goes FD-aware — but only once class + section are set
-            // (else `restore_field_day_if_enabled` leaves Chat so the UI can
-            // prompt for them; the exchange goes on the air and `set_mode`
-            // refuses a blank one).
-            if !matches!(self.mode, Mode::FieldDay { .. }) {
-                self.mode = Mode::Chat;
-                self.cq_running = false;
-                self.restore_field_day_if_enabled();
-            }
-        } else {
-            // Master OFF. Field Day must be fully EXITED — reset to Chat
-            // regardless of the current mode. This closes the gap (spec §1.3)
-            // where flipping the master off left a lingering Mode::FieldDay, so
-            // the operator was stranded in FD with the nav hidden. The durable
-            // journal (written per contact) restores the log on the next
-            // re-enable. Every non-FD mode is likewise safe to reset — Chat
-            // holds nothing, a QSO is transient.
+            // enter passive S&P so every cockpit goes FD-aware — but only once
+            // class + section are set (the exchange goes on the air and
+            // `set_mode` refuses a blank one).
+            //
+            // `set_mode("fieldday-sp")` REPLACES the mode wholesale and clears
+            // cq_running/the queues itself, so the old `mode = Mode::Chat` here
+            // was redundant on the success path — and on the failure path (blank
+            // class/section) it reset the operator to Chat for an entry that
+            // never happened. That is the #100 teardown again, on a save that
+            // changed nothing about Field Day: with the master left on and no
+            // exchange filled in, EVERY save killed the contact in flight.
+            self.restore_field_day_if_enabled();
+        } else if matches!(self.mode, Mode::FieldDay { .. }) {
+            // Master OFF while IN Field Day. FD must be fully EXITED — reset to
+            // Chat. This closes the gap (spec §1.3) where flipping the master
+            // off left a lingering Mode::FieldDay, so the operator was stranded
+            // in FD with the nav hidden. The durable journal (written per
+            // contact) restores the log on the next re-enable.
+            //
+            // Gated on actually being in FD (#100): a save made in Chat wrote
+            // Chat — a no-op — and a save made mid-QSO wrote away the contact.
+            // Only the FD exit ever needed this line.
             self.mode = Mode::Chat;
-            // Clear the CQ-run flag alongside the mode reset — otherwise a save
-            // that drops out of a QSO run leaves `cq_running` stale-true, which
-            // suppresses the smart auto-cycle on the next chat answer.
+            // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
+            // sets it, and leaving it stale-true after the exit suppresses the
+            // smart auto-cycle on the next chat answer. Scoped to the reset for
+            // the same reason: outside an FD exit the flag belongs to the run
+            // that is still going.
             self.cq_running = false;
         }
         // A save carries a `band` field; now that the Field Day log survives a
@@ -4153,6 +4178,10 @@ impl Engine {
     /// non-blank class + section (the exchange goes on the air; `set_mode`
     /// refuses a blank one) and the engine is not already in FD (never rebuild a
     /// live in-memory FD log).
+    ///
+    /// A no-op leaves the operating mode EXACTLY as it was — load-bearing since
+    /// #100: `apply_settings` calls this on every save with the master on, so a
+    /// master left on with a blank exchange must not disturb a contact in flight.
     pub fn restore_field_day_if_enabled(&mut self) {
         if self.settings.fd_active
             && !self.settings.fd_class.trim().is_empty()
@@ -22134,31 +22163,42 @@ mod tests {
     }
 
     /// The hourly QRZ auto-sync persists ONE field. Persisting it through apply_settings
-    /// tore down the whole session (#54): CONTROL — apply_settings really does reset the
-    /// mode and drop the TX queue (that is why the narrow setter exists); then the narrow
-    /// setter advances the cursor and touches neither.
+    /// tore down the whole session (#54): CONTROL — apply_settings really is heavyweight
+    /// (that is why the narrow setter exists); then the narrow setter advances the cursor
+    /// and touches none of it.
+    ///
+    /// The control asserts the QUEUE drop, not a mode reset: since #100 a save no longer
+    /// evaporates a contact in flight (only a Field Day master transition moves the mode).
+    /// A background thread firing this path once an hour would still drop the operator's
+    /// queued over and re-derive the TX cycle from a snapshot, so the narrow setter is as
+    /// load-bearing as it ever was.
     #[test]
     fn the_qrz_sync_cursor_advances_without_the_heavyweight_reset() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
         e.call_station("PJ4DX");
         assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
-        // Control: the heavyweight path kills it.
+        e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
+        // Control: the heavyweight path drops the queued over.
         let s = e.settings().clone();
         e.apply_settings(s);
         assert!(
-            e.snapshot().qso.is_none(),
-            "control: apply_settings must reset the mode, or the narrow setter is pointless"
+            e.tx_queue.is_empty(),
+            "control: apply_settings must drop the TX queue, or the narrow setter is pointless"
         );
-        // Re-arm, then the narrow path: cursor moves, QSO survives.
-        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
-        e.call_station("PJ4DX");
-        assert!(e.snapshot().qso.is_some(), "harness: re-armed");
+        // Re-arm, then the narrow path: cursor moves, QSO and queue survive.
+        e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
+        assert!(e.snapshot().qso.is_some(), "harness: the QSO is still up");
         e.set_qrz_sync_cursor(1_754_700_000);
         assert_eq!(e.settings().qrz_last_sync_unix, 1_754_700_000);
         assert!(
             e.snapshot().qso.is_some(),
             "advancing the sync cursor must not evaporate an in-flight QSO"
+        );
+        assert_eq!(
+            e.tx_queue.len(),
+            1,
+            "…nor drop the over already queued for it"
         );
     }
 
@@ -22168,8 +22208,13 @@ mod tests {
     /// (#54): mode back to Chat, TX queue dropped, and the TX parity re-derived from the
     /// form's `tx_even` — which, on a struct the panel loaded before the answer picked a
     /// cycle, puts the next over on the DX's own period. CONTROL first (the old path must
-    /// still tear all three down, or this test cannot tell the fix from the bug), then the
+    /// still tear the rest down, or this test cannot tell the fix from the bug), then the
     /// narrow setter, which touches none of them.
+    ///
+    /// TWO of the three, since #100: a save no longer resets the mode (only a Field Day
+    /// master transition does), so the QSO survives the control too. The queue drop and
+    /// the cycle re-derive are untouched — and the cycle one is why a seat swap must never
+    /// take this path, stale form or not.
     #[test]
     fn the_fd_operator_swap_keeps_the_qso_the_queue_and_the_cycle() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
@@ -22186,14 +22231,10 @@ mod tests {
             "harness: answering a slot-5 decode took the odd cycle"
         );
 
-        // Control: the old path really does tear all three down.
+        // Control: the old path really does tear the queue and the cycle down.
         let mut patched = stale_form.clone();
         patched.fd_operator = "W1ABC".into();
         e.apply_settings(patched);
-        assert!(
-            e.snapshot().qso.is_none(),
-            "control: apply_settings resets the mode"
-        );
         assert!(
             e.tx_queue.is_empty(),
             "control: apply_settings drops the TX queue"
@@ -22202,8 +22243,16 @@ mod tests {
             e.tx_parity, 0,
             "control: apply_settings re-derives the cycle from the stale form"
         );
+        // …and since #100 it leaves the contact itself alone. Asserted, not assumed: this
+        // is the seam the narrowing moved, so it goes red if a save starts killing QSOs
+        // again — from either direction.
+        assert!(
+            e.snapshot().qso.is_some(),
+            "a save must not tear down the contact in flight (#100)"
+        );
 
-        // Re-arm, then the narrow path: the operator changes, nothing else does.
+        // Re-arm the two it DID tear down (a fresh call re-derives the cycle from the
+        // DX's own period), then the narrow path: the operator changes, nothing else does.
         e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
         e.call_station("PJ4DX");
         assert!(e.snapshot().qso.is_some(), "harness: re-armed");
@@ -22225,6 +22274,80 @@ mod tests {
             e.tx_parity, 1,
             "the answering cycle must survive the swap — a flip transmits on the DX's period"
         );
+    }
+
+    /// #100 (kr4fqg, "Lost logging when in Settings and FT8 completes a call"): pressing
+    /// SAVE in Settings mid-QSO tore the contact down. `apply_settings` reset the mode to
+    /// Chat unconditionally, so the sequencer that owns the contact was thrown away — the
+    /// completion never fired (no auto-log, no `pending_log`), and the manual Log button
+    /// then fell through `log_current_qso`'s `_ => return false` because there was no
+    /// `Mode::Qso` left to read a call out of. One cause, all three of his symptoms.
+    ///
+    /// The save must be narrow enough that a live contact survives it AND still logs.
+    #[test]
+    fn a_settings_save_mid_qso_keeps_the_contact_and_it_still_logs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        // Their report comes back — the contact is now loggable (a report was exchanged).
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("W9XYZ"),
+            "harness: a QSO with a report exchanged is in flight"
+        );
+
+        // The operator is sitting in Settings and presses SAVE. The panel sends the whole
+        // struct back, unchanged — this is the ordinary save, not a Field Day toggle.
+        let form = e.settings().clone();
+        e.apply_settings(form);
+
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("W9XYZ"),
+            "a settings save must not tear down the contact in flight (#100)"
+        );
+        // …and the Log button still reaches the logbook, which is what he lost.
+        assert!(
+            e.log_current_qso(),
+            "the Log button must still log the contact after a save (#100)"
+        );
+        assert_eq!(e.get_log().len(), 1, "the contact reached the logbook");
+        assert_eq!(e.get_log()[0].call, "W9XYZ");
+    }
+
+    /// The other half of #100: the mode reset is a FIELD DAY reconcile, so it must still
+    /// happen for Field Day. Master OFF with a live FD session → the engine truly leaves
+    /// `Mode::FieldDay` even though a QSO-bearing mode now survives a save (spec §1.3 —
+    /// a lingering `Mode::FieldDay` strands the operator with the nav hidden). Guards the
+    /// narrowing above from being widened into "a save never touches the mode".
+    #[test]
+    fn the_field_day_master_still_forces_the_exit_after_the_100_narrowing() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        assert!(
+            matches!(e.mode, Mode::FieldDay { .. }),
+            "harness: the master put the engine in Field Day"
+        );
+        // A Field Day RUN, so `cq_running` is genuinely true going in — otherwise the
+        // flag assertion below passes on a flag that was never set.
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.cq_running, "harness: an FD run is calling CQ");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = false;
+            e.apply_settings(s);
+        }
+        assert!(
+            matches!(e.mode, Mode::Chat),
+            "master off must still force the FD exit — not merely hide the chrome"
+        );
+        assert!(!e.cq_running, "and clear the CQ-run flag it left behind");
     }
 
     /// Mode-matrix audit (2026-08-10): apply_settings adopted the form's operating_mode
@@ -24439,9 +24562,18 @@ mod tests {
     /// Master ON but the exchange is incomplete: `apply_settings` must NOT enter
     /// FD on a blank class/section (the exchange goes on the air) — it leaves the
     /// engine non-FD so the setup screen (spec §1.2 #1) can prompt for them.
+    ///
+    /// …and it must leave the operator where they ARE while it declines (#100). This
+    /// is a sticky state — the master stays on until someone turns it off — so the
+    /// old unconditional `mode = Mode::Chat` before the attempt meant EVERY save made
+    /// with FD armed but unconfigured tore down whatever contact was in flight, for a
+    /// Field Day entry that then did not happen.
     #[test]
     fn apply_settings_master_on_without_exchange_stays_out_of_field_day() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // A contact in flight when the save lands.
+        e.call_station("K1ABC");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
         {
             let mut s = e.settings().clone();
             s.fd_active = true; // master flipped on, but class/section still blank
@@ -24450,6 +24582,11 @@ mod tests {
         assert!(
             e.snapshot().field_day.is_none(),
             "no FD entry without a class/section to transmit"
+        );
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("K1ABC"),
+            "an FD entry that DECLINED must not have reset the operator to Chat (#100)"
         );
     }
 

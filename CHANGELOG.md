@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new code cannot produce one.
 ### Fixed
 
+- **Saving in Settings no longer ends the contact you are working.** Pressing **Save** while a
+  QSO was in flight threw the contact away — the sequencer that owns it was reset back to Chat,
+  so the QSO never completed, nothing auto-logged, and the **Log** button then did nothing at
+  all: no logbook entry, no QRZ upload. A save now leaves a contact in progress exactly where
+  it was, and it still logs. The mode is only reset where that was ever the point — turning the
+  Field Day master switch on or off, which still enters and leaves Field Day as before. A save
+  is still a heavyweight act in every other respect: queued transmissions are dropped and the
+  transmit cycle is re-derived, so it is still not the way to change one setting mid-QSO.
+  Reported by kr4fqg ([#100](https://github.com/kd9taw/Nexus/issues/100)).
+
 - **CW speed slider now reaches a WinKeyer.** Moving the speed slider between overs did
   nothing on the WinKeyer back-end: the speed was only ever sent to the keyer at the
   moment a word left the queue, so a hardware keyer sat on its own front-panel pot or

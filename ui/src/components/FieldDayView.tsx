@@ -645,9 +645,10 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
   }
 
   // Persist the settable Field Day operator (optimistic). NOT the whole-struct save that
-  // toggleBonus uses: a seat swap happens mid-QSO, and the heavyweight path resets the mode,
-  // drops the TX queue and re-derives the TX cycle from this component's settings snapshot
-  // (#54). The engine trims + uppercases.
+  // toggleBonus uses: a seat swap happens mid-QSO, and the heavyweight path drops the TX
+  // queue and re-derives the TX cycle from this component's settings snapshot (#54). Since
+  // #100 it no longer resets the operating mode, but those two still land on a live contact.
+  // The engine trims + uppercases.
   const saveOperator = async (call: string) => {
     if (!settings) return
     const op = call.trim().toUpperCase()
