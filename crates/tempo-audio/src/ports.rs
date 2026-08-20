@@ -194,29 +194,68 @@ pub struct UsbPort {
 
 /// USB serial ports currently present, with their USB descriptor fields. Non-USB
 /// ports (legacy RS-232, Bluetooth SPP, …) are omitted — zero-config only reasons
-/// about USB. Empty without the `serial` feature or if enumeration fails.
+/// about USB. Empty without the `serial` feature, or if enumeration fails or PANICS
+/// ([`guarded_usb_ports`] — this runs when the Settings tab opens; #132).
 #[cfg(feature = "serial")]
 pub fn available_usb_ports() -> Vec<UsbPort> {
-    use serialport::SerialPortType;
-    let ports = match serialport::available_ports() {
-        Ok(ports) => ports
-            .into_iter()
-            .filter_map(|p| match p.port_type {
-                SerialPortType::UsbPort(info) => Some(UsbPort {
-                    port_name: p.port_name,
-                    vid: info.vid,
-                    pid: info.pid,
-                    product: info.product.unwrap_or_default(),
-                    manufacturer: info.manufacturer.unwrap_or_default(),
-                }),
-                _ => None,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    #[cfg(target_os = "macos")]
-    let ports = collapse_tty_twins(ports);
-    ports
+    guarded_usb_ports(|| {
+        use serialport::SerialPortType;
+        let ports = match serialport::available_ports() {
+            Ok(ports) => ports
+                .into_iter()
+                .filter_map(|p| match p.port_type {
+                    SerialPortType::UsbPort(info) => Some(UsbPort {
+                        port_name: p.port_name,
+                        vid: info.vid,
+                        pid: info.pid,
+                        product: info.product.unwrap_or_default(),
+                        manufacturer: info.manufacturer.unwrap_or_default(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        #[cfg(target_os = "macos")]
+        let ports = collapse_tty_twins(ports);
+        ports
+    })
+}
+
+/// Panic containment for [`available_usb_ports`] — the same guard [`available_ports`] and
+/// `device::available_devices` carry, and for the same reason: a driver DLL that panics while
+/// enumerating must not take the window down when the operator opens Settings.
+///
+/// #132 (K4KCX) found this one UNGUARDED while both its siblings were wrapped, even though all
+/// three run on the Settings MOUNT path (`SettingsPanel` → `get_serial_ports_detailed`) — so
+/// the click that opened the gear ran two guarded enumerations and one bare one.
+///
+/// ⚠️ A native ACCESS VIOLATION inside a driver DLL is not a Rust panic and is NOT caught here
+/// (see `src-tauri/src/main.rs`); this closes a real hole but does not prove it was #132's.
+///
+/// The enumeration is an argument for the same reason [`linux_virtual_ports`] takes its
+/// directory and [`heal_tty_twin_with`] takes its existence check: the part that touches the
+/// machine is the untestable part, so it goes outside. That makes the guard exercisable on
+/// every platform without a broken driver to hand.
+#[cfg_attr(not(feature = "serial"), allow(dead_code))]
+fn guarded_usb_ports(
+    enumerate: impl FnOnce() -> Vec<UsbPort> + std::panic::UnwindSafe,
+) -> Vec<UsbPort> {
+    std::panic::catch_unwind(enumerate).unwrap_or_else(|_| {
+        // NEVER swallow silently: detection and the auto-test sweep poll this, so a per-poll
+        // panic is invisible but costs real CPU (unwind + panic hook every time) — the
+        // "sluggish laptop" failure mode. Rate-limited so a storm doesn't also flood stderr.
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static CAUGHT: AtomicU32 = AtomicU32::new(0);
+        let n = CAUGHT.fetch_add(1, Ordering::Relaxed) + 1;
+        if n == 1 || n.is_multiple_of(100) {
+            eprintln!(
+                "nexus: USB serial-port enumeration panicked (caught; occurrence {n}) — \
+                 a driver issue on this system; USB port list returned empty"
+            );
+        }
+        Vec::new()
+    })
 }
 
 /// macOS lists every serial port TWICE: `/dev/cu.X` and `/dev/tty.X` are the same hardware.
@@ -415,6 +454,41 @@ mod tests {
         // A twin that does not exist (on any platform) is left alone.
         let lone = "/dev/tty.nexus-test-no-such-twin";
         assert_eq!(heal_stored_port(lone.to_string()), lone);
+    }
+
+    /// ⭐ FAILING-FIRST for #132 (K4KCX, "Settings gear crashes Nexus on Windows 10 and 11").
+    ///
+    /// [`available_usb_ports`] is on the Settings MOUNT path (`SettingsPanel` →
+    /// `get_serial_ports_detailed`) and was the ONE of the three enumerations there with no
+    /// `catch_unwind` — its two siblings, [`available_ports`] and `device::available_devices`,
+    /// both carry one, and both comments say the guard exists BECAUSE this runs when the
+    /// Settings tab opens. Unguarded, a driver that panics while enumerating unwinds out of a
+    /// Tauri command thread and takes the window down on the click of the gear.
+    ///
+    /// ⚠️ This does NOT prove #132's cause: a native access violation inside a driver DLL is
+    /// not a Rust panic and `catch_unwind` cannot see it.
+    #[test]
+    fn a_panicking_usb_enumeration_is_contained() {
+        let ports = guarded_usb_ports(|| panic!("driver DLL panicked while enumerating"));
+        assert!(
+            ports.is_empty(),
+            "a panicking enumerator must yield an empty list (the operator can still TYPE a \
+             COM port), never unwind into the caller: {ports:?}"
+        );
+        // The other direction — the guard must not be a blanket swallow. A normal enumeration
+        // reaches the picker unchanged, or "no crash" would be indistinguishable from "no ports".
+        let port = UsbPort {
+            port_name: "COM5".into(),
+            vid: 0x10c4,
+            pid: 0xea60,
+            product: "CP2102 USB to UART Bridge Controller".into(),
+            manufacturer: "Silicon Labs".into(),
+        };
+        assert_eq!(
+            guarded_usb_ports(|| vec![port.clone()]),
+            vec![port],
+            "a healthy enumeration must pass through the guard untouched"
+        );
     }
 
     #[test]
