@@ -136,6 +136,7 @@
       "call": "N7GHI",
       "calling": null,
       "country": null,
+      "cqDir": null,
       "freqHz": 1500,
       "grid": "DM79",
       "gridRarity": null,

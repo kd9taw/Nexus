@@ -87,6 +87,12 @@ pub struct Station {
     /// operator see who is already engaged before double-clicking a row.
     #[serde(default)]
     pub calling: Option<String>,
+    /// The CQ modifier when this station's last frame was a CQ — `DX`, `NA`, `POTA`, `TEST`,
+    /// a zone number. `None` for a plain CQ or a station working somebody. The roster shows
+    /// it beside "CQ" so a CQ DX is not mistaken for a call you can answer (operator request
+    /// 2026-08-21: he clicked one from CONUS and only then saw the DX in Band Activity).
+    #[serde(default)]
+    pub cq_dir: Option<String>,
     /// Primary administrative subdivision — a US state or a Canadian province, as the ADIF
     /// `STATE` code either way. From the callsign (the FCC index / the Canadian regional
     /// numeral) or the heard grid: the SAME hint the needed board and WAS use, never a

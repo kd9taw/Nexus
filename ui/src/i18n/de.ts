@@ -3427,6 +3427,7 @@ export const DE: PartialCatalog = {
   "operate.roster.lotw.title": "Lädt zu LoTW hoch — dieses QSO sollte bestätigt werden",
   "operate.roster.calling.title": "Arbeitet {{call}}",
   "operate.roster.calling.cq.title": "Ruft CQ — nicht in einem QSO",
+  "operate.roster.calling.cqDir.title": "Ruft CQ {{dir}} — ein GERICHTETER Ruf. Er sucht ausschließlich {{dir}}; eine Antwort von woanders wird meist ignoriert.",
   "operate.roster.state.title": "{{call}} ist in {{state}}",
   "operate.roster.age.now": "jetzt",
   "operate.roster.age.slots": "{{count}} Sl",

@@ -942,6 +942,10 @@ export interface Station {
   /** Who this station is calling — the addressee of its last decoded frame. Null when
    * it addressed nobody, i.e. it is calling CQ (the roster renders that as "CQ"). */
   calling?: string | null
+  /** The CQ modifier when the last frame was a CQ — 'DX', 'NA', 'POTA', 'TEST', a zone
+   *  number. Null for a plain CQ or a station working somebody. Shown beside "CQ" so a
+   *  directed call is not mistaken for one you can answer. */
+  cqDir?: string | null
   /** Primary administrative subdivision as its ADIF `STATE` code — a US state from the
    * callsign (FCC index) or the heard grid, or a Canadian province from the regional
    * numeral. The same hint the needed board uses. Null elsewhere in the world, or when

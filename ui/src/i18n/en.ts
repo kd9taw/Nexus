@@ -6348,6 +6348,8 @@ export const EN = {
   'operate.roster.lotw.title': 'Uploads to LoTW — this contact should confirm',
   'operate.roster.calling.title': 'Working {{call}}',
   'operate.roster.calling.cq.title': 'Calling CQ — not in a QSO',
+  'operate.roster.calling.cqDir.title':
+    'Calling CQ {{dir}} — a DIRECTED call. He is asking for {{dir}} only, so answering from anywhere else will usually be ignored.',
   'operate.roster.state.title': '{{call}} is in {{state}}',
   // The Age column. The unit letter rides inside the message with its number, so a
   // translation can never separate the two (the Now-Bar's rule, batch 15).

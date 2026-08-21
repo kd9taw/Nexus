@@ -873,6 +873,7 @@ impl AppState {
             grid_rarity: None,
             freq_hz: h.freq_hz,
             calling: h.calling.clone(),
+            cq_dir: h.cq_dir.clone(),
             // Stamped by the engine from the subdivision resolver; None at this layer.
             state: None,
         }
