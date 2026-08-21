@@ -22,7 +22,12 @@
 // every section change. Instead the boundary clears its OWN error state when
 // `resetKey` changes; in the no-error steady state it renders children with no
 // wrapper element at all, so the `.shell` flex layout and the hosts are untouched.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string here comes from the catalog; a hardcoded one fails CI. `label` and `action.label` are
+// PROPS — the caller owns those strings, and the caller translates them.
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { t } from '../i18n'
 
 interface Props {
   /** What crashed, operator-facing ("Connect", "Needed pop-out"). */
@@ -71,11 +76,8 @@ export class ErrorBoundary extends Component<Props, State> {
       // role="alert" — announced assertively (a11y is always-on; a crashed section
       // must not be silent to a screen-reader operator).
       <div className="view-crash" role="alert">
-        <h2 className="view-crash-title">{label} hit an error</h2>
-        <p className="view-crash-hint">
-          The rest of Nexus is still running — the radio was not touched. Pick another
-          section from the rail, or copy the details below into a bug report.
-        </p>
+        <h2 className="view-crash-title">{t('crash.title', { label })}</h2>
+        <p className="view-crash-hint">{t('crash.hint')}</p>
         {/* The escape hatch sits ABOVE the details deliberately: a component stack is
             long, and the way out must be in the first screenful at every window size
             (the layout contract's "nothing unreachable"). */}

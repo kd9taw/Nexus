@@ -3,6 +3,7 @@
 // intensity = distinct anchored stations, colored by the existing inferno heatColor LUT.
 import { heatColor } from '../../propViz'
 import type { RegionBandCell } from '../../types'
+import { t } from '../../i18n'
 
 const BAND_ORDER = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m']
 
@@ -23,7 +24,7 @@ export function ActivityMatrix({
     <table className="amx">
       <thead>
         <tr>
-          <th className="amx-corner" aria-label="band" />
+          <th className="amx-corner" aria-label={t('prop.activityMatrix.corner.aria')} />
           {regions.map((r) => (
             <th key={r} className="amx-region">
               {r}
@@ -37,7 +38,7 @@ export function ActivityMatrix({
             <th
               className={`amx-band${onBandClick ? ' is-clickable' : ''}`}
               onClick={onBandClick ? () => onBandClick(band) : undefined}
-              title={onBandClick ? `Focus ${band} on the map` : undefined}
+              title={onBandClick ? t('prop.focusBand.title', { band }) : undefined}
             >
               {band}
             </th>
@@ -51,8 +52,14 @@ export function ActivityMatrix({
                   style={n > 0 ? { background: heatColor(n / max) } : undefined}
                   title={
                     cell
-                      ? `${region} ${band}: ${n} stn${n === 1 ? '' : 's'} (${cell.hearMe} hear you, ${cell.iHear} you hear)`
-                      : `${region} ${band}: —`
+                      ? t('prop.activityMatrix.cell.title', {
+                          region,
+                          band,
+                          count: n,
+                          hearMe: cell.hearMe,
+                          iHear: cell.iHear,
+                        })
+                      : t('prop.activityMatrix.cell.empty', { region, band })
                   }
                 >
                   {n > 0 ? n : ''}

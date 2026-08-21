@@ -34,7 +34,10 @@ import {
 } from './dxpedLanes'
 import { dxpedLink, dxpedLinkTitle } from './dxpedLink'
 import { azimuthLabel, backendAzimuth } from '../../grid'
+import { t } from '../../i18n'
 
+// Weekday and month names are DATE FORMATTING, not catalog prose — they stay with the rest
+// of the date handling in this file (`toLocaleDateString` below) rather than becoming keys.
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 const DATE_FMT: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', timeZone: 'UTC' }
@@ -99,7 +102,7 @@ export function DxpedMonth({
     })
 
   return (
-    <div className="dxm" aria-label="DXpedition month grid">
+    <div className="dxm" aria-label={t('dxped.month.aria')}>
       <div className="dxm-head" role="row">
         {WEEKDAYS.map((w) => (
           <div key={w} className="dxm-wd" role="columnheader">
@@ -144,7 +147,7 @@ export function DxpedMonth({
                 >
                   <div className="dxm-dom">
                     {label}
-                    {isToday && <span className="dxm-todaytag">TODAY</span>}
+                    {isToday && <span className="dxm-todaytag">{t('dxped.month.today')}</span>}
                   </div>
                 </div>
               )
@@ -172,8 +175,8 @@ export function DxpedMonth({
                     onOpenPage?.(e)
                   }}
                   title={`${barDetail(e)}${link ? `\n${dxpedLinkTitle(link)}` : ''}`}
-                  aria-label={`${barDetail(e)}${isChased ? ' · chasing' : ''}${
-                    link ? ` · opens ${link.url}` : ''
+                  aria-label={`${barDetail(e)}${isChased ? t('dxped.month.bar.chasing') : ''}${
+                    link ? t('dxped.month.bar.opens', { url: link.url }) : ''
                   }`}
                 >
                   <span className="dxm-barcall">
@@ -201,7 +204,7 @@ export function DxpedMonth({
                   className="dxm-more"
                   style={{ gridColumn: col + 1, gridRow: row.laneRows + 1 }}
                   onClick={() => toggleWeek(row.weekStart)}
-                  title={`${n} more operation${n === 1 ? '' : 's'} on this day — show the whole week`}
+                  title={t('dxped.month.more.title', { count: n })}
                 >
                   +{n}
                 </button>
@@ -214,7 +217,7 @@ export function DxpedMonth({
                 style={{ gridColumn: '1 / -1', gridRow: trackCount + 1 }}
                 onClick={() => toggleWeek(row.weekStart)}
               >
-                show fewer
+                {t('dxped.month.showFewer')}
               </button>
             )}
           </div>

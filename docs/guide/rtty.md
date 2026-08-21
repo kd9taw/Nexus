@@ -36,9 +36,12 @@ no digital privileges never appears.
 On the right: **⊞ Panels**, the **TX On / TX Off** latch, **Stop TX** and the CAT
 pill. The latch is this cockpit's Enable-Tx — the top bar's TX cluster is hidden
 behind the digital chrome here, so without it a send would sit at "TX is off"
-with no way to arm from this screen. There is no power slider and no **Tune**
-button in this cockpit: drive is **Tx Power** in
-[Settings ▸ Radio ▸ Audio](settings-reference.md#audio), set so ALC reads just zero.
+with no way to arm from this screen. Since 1.7.5 the header also carries a **Power**
+slider, **Tune**, and an **ATU** button when your rig reports a tuner — RTTY keys the
+carrier for the whole over, so most rigs want it run well under their SSB rating. Set it
+the way you would on the radio: key **Tune**, wind Power back until the ALC barely moves,
+press **Tune** again. Soundcard drive is still **Tx Power** in
+[Settings ▸ Radio ▸ Audio](settings-reference.md#audio).
 
 **The waterfall** is the same instrument the FT cockpit uses, run at the
 live-band cadence: a new row every 50 ms rather than the 120 ms the slot-synchronous

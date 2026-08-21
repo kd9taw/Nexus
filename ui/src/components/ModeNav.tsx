@@ -26,8 +26,16 @@ import {
 } from 'lucide-react'
 import { useState, type ButtonHTMLAttributes } from 'react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
+import { t, type MessageKey } from '../i18n'
 import { type FeatureId, type View } from '../features/registry'
 import { orderNav, moveNav, loadNavOrder, saveNavOrder, resetNavOrder } from '../navOrder'
+
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every button's
+// TOOLTIP is prose and lives in the catalog. Its LABEL is prose only where the section is
+// named for itself: the six mode buttons (FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS) and
+// the two named for an event or a programme (Field Day, POTA / SOTA) carry their names
+// verbatim below, because a mode name and a programme name are the same letters in every
+// language (`i18n/index.ts`, the invariant-token rule).
 
 // `View` now lives in the feature registry (features ARE the views); re-export so
 // existing `import { type View } from './ModeNav'` call-sites keep working.
@@ -54,9 +62,11 @@ export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'psk' | 'sstv' | 'aprs'
 
 interface DigitalSub {
   mode: DigitalMode
+  /** The mode's own name — an invariant token, carried verbatim. */
   label: string
   icon: LucideIcon
-  title: string
+  /** Tooltip + accessible name: prose, so a catalog key. */
+  titleKey: MessageKey
   /** Whether this sub-item is the active one, given the current view + tier. */
   active: (view: View, tier: Tier) => boolean
 }
@@ -71,14 +81,14 @@ const DIGITAL_SUBS: DigitalSub[] = [
     mode: 'digital',
     label: 'FT',
     icon: Radio,
-    title: 'FT weak-signal cockpit — FT8 / FT4 (pick the tier in the top bar)',
+    titleKey: 'nav.digital.ft.title',
     active: (v) => v === 'operate',
   },
   {
     mode: 'tempo',
     label: 'Tempo',
     icon: MessageSquare,
-    title: 'Tempo — two-way free-text calling (TempoFast / TempoDeep), with Roam (coordinated QSY) inside',
+    titleKey: 'nav.digital.tempo.title',
     active: (v) => v === 'chat',
   },
   // RTTY + SSTV are opt-in sections (feature-gated like Phone/CW, on by default) —
@@ -87,28 +97,28 @@ const DIGITAL_SUBS: DigitalSub[] = [
     mode: 'rtty',
     label: 'RTTY',
     icon: Type,
-    title: 'RTTY — Baudot teletype (45.45 baud): streaming decode + F-key macros',
+    titleKey: 'nav.digital.rtty.title',
     active: (v) => v === 'rtty',
   },
   {
     mode: 'psk',
     label: 'PSK',
     icon: Keyboard,
-    title: 'PSK31 — narrow-band keyboard mode: click a trace on the waterfall, read the ragchew (receive)',
+    titleKey: 'nav.digital.psk.title',
     active: (v) => v === 'psk',
   },
   {
     mode: 'sstv',
     label: 'SSTV',
     icon: ImageIcon,
-    title: 'SSTV — slow-scan TV: received images decode into the gallery',
+    titleKey: 'nav.digital.sstv.title',
     active: (v) => v === 'sstv',
   },
   {
     mode: 'aprs',
     label: 'APRS',
     icon: MapPin,
-    title: 'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon',
+    titleKey: 'nav.digital.aprs.title',
     active: (v) => v === 'aprs',
   },
 ]
@@ -120,19 +130,45 @@ interface Item {
   title: string
 }
 
+/**
+ * One rail button, with its words looked up when they are READ rather than at import.
+ *
+ * These are module constants a dozen renders index directly, so resolving at import time
+ * would freeze whichever locale loaded this module first and no re-render could move it —
+ * the `features/needVisuals.ts` lesson. A getter keeps the record's SHAPE (`.label`,
+ * `.title`) and does the lookup at the moment the string is read.
+ */
+function item(v: { id: View; icon: LucideIcon; labelKey: MessageKey; titleKey: MessageKey }): Item {
+  return {
+    id: v.id,
+    icon: v.icon,
+    get label() {
+      return t(v.labelKey)
+    },
+    get title() {
+      return t(v.titleKey)
+    },
+  }
+}
+
 // The two non-digital operating cockpits, first in the rail (operator order:
-// Phone · CW · Digital group). Both opt-in (gated by `enabled`).
+// Phone · CW · Digital group). Both opt-in (gated by `enabled`). Their labels are the
+// MODES' own names, so they are carried here rather than in the catalog.
 const PHONE: Item = {
   id: 'phone',
   label: 'Phone',
   icon: Mic,
-  title: 'Phone (SSB) operating — PTT, sideband, RF power, panadapter (casual)',
+  get title() {
+    return t('nav.phone.title')
+  },
 }
 const CW: Item = {
   id: 'cw',
   label: 'CW',
   icon: Zap,
-  title: 'CW operating — keyboard + F-key macros, WPM, spectrum (casual)',
+  get title() {
+    return t('nav.cw.title')
+  },
 }
 
 // Everything below the operating group: global situational/logging surfaces + opt-in
@@ -141,25 +177,44 @@ const CW: Item = {
 // and Tempo. ('qso' stays retired from the nav; the Digital cockpit sequences inline.)
 // 'band' (Broadcasts) and 'log' (Field Log) have been removed — deleted sections.
 export const ITEMS: Item[] = [
-  { id: 'connect', label: 'Connect', icon: Radar, title: 'Connect — THE map: grayline globe + live spots + openings + propagation, with click-to-work' },
-  { id: 'needed', label: 'Needed', icon: Target, title: 'Needed — what you still need that\'s on the air now; single-click to QSY' },
-  { id: 'spots', label: 'Spots', icon: Rss, title: 'Spots — every cluster/RBN spot on the air (the raw firehose); filter by band/mode' },
-  { id: 'dxped', label: 'DXped', icon: Plane, title: 'DXpeditions — active now, the forward calendar, and what you need from each' },
-  { id: 'sats', label: 'Satellites', icon: Satellite, title: 'Satellites — pass times over your grid, favorites, polar plots, and rotor tracking' },
-  { id: 'logbook', label: 'Logbook', icon: BookOpen, title: 'Logbook — your ADIF contacts' },
-  { id: 'awards', label: 'Awards', icon: Trophy, title: 'Awards — your Journey (firsts, ladders, milestones) + official DXCC/WAS/WAZ progress' },
-  { id: 'stats', label: 'Stats', icon: BarChart3, title: 'Statistics — your logbook sliced: QSOs by band/mode/year/hour, top DXCC entities, states, confirmations' },
-  { id: 'fieldDay', label: 'Field Day', icon: Tent, title: 'Field Day — contest rate workspace' },
-  { id: 'pota', label: 'POTA/SOTA', icon: Trees, title: 'POTA / SOTA — parks & summits: who\'s on now (hunt) + tag your activation' },
-  { id: 'memories', label: 'Memories', icon: Bookmark, title: 'Memories — saved channels: repeaters, nets, calling freqs; groups + ★ favorites; one click to tune' },
-  { id: 'program', label: 'Program', icon: Cable, title: 'Program — build channel lists for your radios: local repeaters → CHIRP CSV, rig memories, or tune-now' },
+  item({ id: 'connect', icon: Radar, labelKey: 'nav.connect.label', titleKey: 'nav.connect.title' }),
+  item({ id: 'needed', icon: Target, labelKey: 'nav.needed.label', titleKey: 'nav.needed.title' }),
+  item({ id: 'spots', icon: Rss, labelKey: 'nav.spots.label', titleKey: 'nav.spots.title' }),
+  item({ id: 'dxped', icon: Plane, labelKey: 'nav.dxped.label', titleKey: 'nav.dxped.title' }),
+  item({ id: 'sats', icon: Satellite, labelKey: 'nav.sats.label', titleKey: 'nav.sats.title' }),
+  item({ id: 'logbook', icon: BookOpen, labelKey: 'nav.logbook.label', titleKey: 'nav.logbook.title' }),
+  item({ id: 'awards', icon: Trophy, labelKey: 'nav.awards.label', titleKey: 'nav.awards.title' }),
+  item({ id: 'stats', icon: BarChart3, labelKey: 'nav.stats.label', titleKey: 'nav.stats.title' }),
+  // The ARRL event's own name, and the two programmes' — tokens, not prose.
+  {
+    id: 'fieldDay',
+    label: 'Field Day',
+    icon: Tent,
+    get title() {
+      return t('nav.fieldDay.title')
+    },
+  },
+  {
+    id: 'pota',
+    label: 'POTA/SOTA',
+    icon: Trees,
+    get title() {
+      return t('nav.pota.title')
+    },
+  },
+  item({ id: 'memories', icon: Bookmark, labelKey: 'nav.memories.label', titleKey: 'nav.memories.title' }),
+  item({ id: 'program', icon: Cable, labelKey: 'nav.program.label', titleKey: 'nav.program.title' }),
 ]
 
 // Roam is no longer a rail section — it lives INSIDE the Tempo cockpit
 // (header chip + settings panel), per operator request.
 
+// The operating-mode badge. `QSO` is a Q-code and `FIELD DAY` the event's own name — both
+// invariant — so only the conversational mode's word resolves from the catalog.
 const MODE_LABEL: Record<OpMode, string> = {
-  chat: 'CHAT',
+  get chat() {
+    return t('nav.mode.chat')
+  },
   qso: 'QSO',
   fieldDay: 'FIELD DAY',
 }
@@ -223,14 +278,14 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: 
   }
   return (
     <TooltipProvider>
-      <nav className="mode-nav" aria-label="Operating mode">
+      <nav className="mode-nav" aria-label={t('nav.aria')}>
         <div className="mode-nav-top">
           {/* Operating group order (operator spec): Phone · CW · Digital group
               (FT + Tempo). The FT8/FT4 pick lives in the top bar's tier pills. */}
           {enabled.phone !== false && navBtn(PHONE)}
           {enabled.cw !== false && navBtn(CW)}
-          <div className="mode-nav-group" role="group" aria-label="Digital modes">
-            <span className="mode-nav-group-label">Digital</span>
+          <div className="mode-nav-group" role="group" aria-label={t('nav.digital.group.aria')}>
+            <span className="mode-nav-group-label">{t('nav.digital.group.label')}</span>
             {DIGITAL_SUBS.filter(
               // FT + Tempo are core (always shown); RTTY/SSTV hide when disabled
               // in Settings ▸ Features (their DigitalMode doubles as FeatureId).
@@ -238,13 +293,14 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: 
             ).map((s) => {
               const Icon = s.icon
               const active = s.active(view, tier)
+              const title = t(s.titleKey)
               return (
-                <Tooltip key={s.mode} content={s.title}>
+                <Tooltip key={s.mode} content={title}>
                   <button
                     type="button"
                     className={`mode-btn sub${active ? ' active' : ''}`}
                     aria-current={active ? 'page' : undefined}
-                    aria-label={s.title}
+                    aria-label={title}
                     onClick={() => onDigitalMode(s.mode)}
                   >
                     <span className="mode-glyph" aria-hidden="true">
@@ -295,32 +351,34 @@ export function ModeNav({ view, mode, enabled, onSelect, tier, onDigitalMode }: 
             <button
               type="button"
               className="mode-nav-reset"
-              title="Reset the section order to default"
+              title={t('nav.order.reset.title')}
               onClick={resetOrder}
             >
               <RotateCcw size={13} strokeWidth={1.75} aria-hidden="true" />
-              <span className="mode-label">Reset order</span>
+              <span className="mode-label">{t('nav.order.reset.label')}</span>
             </button>
           )}
         </div>
 
         <div className="mode-nav-bottom">
-          <span className="mode-current" title="Active operating mode">
+          <span className="mode-current" title={t('nav.mode.title')}>
             <span className="mode-current-dot" aria-hidden="true" />
             {MODE_LABEL[mode]}
           </span>
-          <Tooltip content="Settings">
+          {/* One word for the gear: tooltip, accessible name and visible label are the same
+              claim about the same button, so they are one entry. */}
+          <Tooltip content={t('nav.settings.label')}>
             <button
               type="button"
               className={`mode-btn gear${view === 'settings' ? ' active' : ''}`}
               aria-current={view === 'settings' ? 'page' : undefined}
-              aria-label="Settings"
+              aria-label={t('nav.settings.label')}
               onClick={() => onSelect('settings')}
             >
               <span className="mode-glyph" aria-hidden="true">
                 <Settings size={18} strokeWidth={1.75} />
               </span>
-              <span className="mode-label">Settings</span>
+              <span className="mode-label">{t('nav.settings.label')}</span>
             </button>
           </Tooltip>
         </div>

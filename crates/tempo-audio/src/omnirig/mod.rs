@@ -124,6 +124,13 @@ pub enum OmniError {
     NotInstalled,
     /// OmniRig is running, but this slot is not usable. Carries OmniRig's OWN status text.
     RigOffline(String),
+    /// Windows refused to LAUNCH the OmniRig server for us because it wants elevation
+    /// (`ERROR_ELEVATION_REQUIRED`, 0x800702E4). This is not a missing Nexus setting and it is
+    /// not a broken install — it is Windows declining to start one process at a higher
+    /// integrity level on behalf of a lower one, and COM cannot raise a UAC prompt to fix it.
+    /// It has its own arm because its cure has nothing in common with the other four: the
+    /// operator starts OmniRig themselves, or takes the elevation requirement off it.
+    NeedsElevation,
     /// A COM call failed, or answered something we cannot read.
     Com(String),
 }
@@ -143,6 +150,15 @@ impl std::fmt::Display for OmniError {
                  registers itself, then try again."
             ),
             OmniError::RigOffline(s) => write!(f, "OmniRig says: {s}"),
+            OmniError::NeedsElevation => write!(
+                f,
+                "Windows would not let Nexus start OmniRig — it is set to run as \
+                 administrator, and Nexus is not (0x800702E4). Start OmniRig yourself and \
+                 leave it running, then try again: Nexus attaches to the copy already up. \
+                 If it still refuses, right-click OmniRig.exe → Properties → Compatibility \
+                 and clear \"Run this program as an administrator\" — or run both as \
+                 administrator, so the two are at the same level."
+            ),
             OmniError::Com(s) => write!(f, "OmniRig COM call failed: {s}"),
         }
     }
@@ -980,6 +996,46 @@ mod tests {
         )
         .expect("a present OmniRig starts");
         assert!(d.is_alive());
+    }
+
+    /// Windows refusing to LAUNCH OmniRig for us is its own verdict with its own cure, and the
+    /// sentence has to carry that cure — the operator who hit this asked "are there missing
+    /// settings?", because `0x800702E4` on its own reads like one. There are none: the cure is
+    /// to start OmniRig yourself, or to take the run-as-administrator flag off it.
+    #[test]
+    fn an_elevation_refusal_says_what_to_do_about_it() {
+        let Err(e) = OmniDaemon::start_with(
+            Box::new(|| Err(OmniError::NeedsElevation)),
+            RigSlot::Rig1,
+            free_port(),
+        ) else {
+            panic!("an elevation refusal must not start a daemon")
+        };
+        let msg = e.to_string();
+        let lower = msg.to_ascii_lowercase();
+        assert!(lower.contains("administrator"), "names the cause: {msg}");
+        assert!(
+            msg.contains("0x800702E4"),
+            "keeps the code support asks for: {msg}"
+        );
+        assert!(
+            lower.contains("start omnirig yourself"),
+            "leads with the thing to try first: {msg}"
+        );
+        // It must NOT read as a broken install — that is the other arm, with the other cure.
+        assert!(
+            !lower.contains("install omnirig"),
+            "does not send them to reinstall: {msg}"
+        );
+        // Positive control: the not-installed arm DOES say install, so the check above is
+        // discriminating between the two arms rather than passing on any text at all.
+        assert!(
+            OmniError::NotInstalled
+                .to_string()
+                .to_ascii_lowercase()
+                .contains("install"),
+            "the control arm still says install"
+        );
     }
 
     /// An unexpected reply from the COM boundary is an error, never a guess: a mode param

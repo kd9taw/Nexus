@@ -1,3 +1,8 @@
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the meter's name
+// and its tooltip are in the catalog under `meters.*`. The READING is not: `NN dB` is a
+// measurement on WSJT-X's own scale and is built here, invariantly, then handed to the sentence.
+import { t } from '../i18n'
+
 interface Props {
   /** Backend RX RMS, normalized 0–1. Rendered as a dB level. */
   value: number
@@ -34,7 +39,9 @@ function zone(db: number): 'low' | 'good' | 'hot' {
  * Horizontal RX audio level meter on a WSJT-X-style dB scale. The fill colour
  * follows the zone (low / good / hot) so it's readable at a glance.
  */
-export function LevelMeter({ value, label = 'RX level', variant = 'compact' }: Props) {
+// The default name is resolved as a parameter default — evaluated on every render, so it
+// follows a locale change; a module-level constant would freeze the first locale loaded.
+export function LevelMeter({ value, label = t('meters.rx.label'), variant = 'compact' }: Props) {
   const db = rxLevelDb(value)
   const pct = Math.round((db / DB_MAX) * 100)
   const z = zone(db)
@@ -48,7 +55,7 @@ export function LevelMeter({ value, label = 'RX level', variant = 'compact' }: P
       aria-valuemax={DB_MAX}
       aria-valuenow={Math.round(db)}
       aria-valuetext={dbLabel}
-      title={`${label}: ${dbLabel} (aim ~30 dB, like WSJT-X)`}
+      title={t('meters.rx.title', { label, level: dbLabel })}
     >
       <div className="level-fill" style={{ width: `${pct}%` }} />
       {/* target marker at ~30 dB — the WSJT-X sweet spot */}

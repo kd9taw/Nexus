@@ -175,6 +175,14 @@ Tauri bundle resource so the installer ships CAT control offline) and
 - **Run `cargo fmt`** — formatting is non-negotiable so diffs stay small.
 - **UI:** the build runs `tsc -b`, so it must typecheck. Match the existing
   style in `ui/src`.
+- **User-visible strings.** Nexus ships in English, and a small part of the UI now reads its
+  text from a catalog so it can be translated later. If you touch one of the migrated files,
+  put your string in `ui/src/i18n/en.ts` and call `t()` — a test will tell you if you forget.
+  Everything else is still hardcoded English and that is fine; don't migrate a file you were
+  not otherwise changing. What must **never** be translated or locale-formatted is
+  frequencies, signal reports, callsigns, grids, band/mode names, ADIF fields and macro
+  tokens — see [`docs/i18n.md`](docs/i18n.md), which explains the rule and why a decimal comma
+  in a frequency is an operating fault rather than a cosmetic one.
 - Keep changes minimal and focused — touch only what the change requires.
 
 ---

@@ -1,3 +1,7 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT: the prefixes, grid squares and entity names the
+// placeholders offer as EXAMPLES — they are technical tokens, so they live below as
+// WATCH_EXAMPLES (the rule is in `i18n/index.ts`) — and `DXCC`, a programme's name.
 import { useState } from 'react'
 import {
   loadWatchlist,
@@ -6,6 +10,22 @@ import {
   type WatchFilter,
   type WatchKind,
 } from '../watchlist'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
+
+/** Example values, every one a token: two callsign wildcards, two grid wildcards, and a
+ * DXCC entity name. A locale may swap the entity for one its operators chase; the wildcards
+ * are syntax and never change. */
+const WATCH_EXAMPLES = {
+  callPrefix: 'VP8*',
+  call: '3Y0J',
+  grid: 'FN31',
+  gridPrefix: 'EM7*',
+  entity: 'Bouvet',
+}
+
+/** The award programme's name — three letters in every language. */
+const DXCC_PROGRAM = 'DXCC'
 
 /**
  * Manage the user watch list — "alert me loudly when THIS shows up." Self-contained: it
@@ -36,28 +56,29 @@ export function WatchlistPanel() {
   return (
     <div className="watchlist">
       <div className="watchlist-hint">
-        Get a loud alert when a matching station is decoded — a callsign or prefix (wildcards:{' '}
-        <code>VP8*</code>, <code>*ABC</code>), a whole DXCC entity, or a grid square (
-        <code>FN31</code>, <code>EM7*</code>). A grid you name here alerts on every band — the
-        HF grid-quiet default doesn&apos;t apply to squares you asked for.
+        <T k="watchlist.hint" tags={{ code: <code /> }} />
       </div>
       {list.length > 0 && (
         <ul className="watchlist-items">
           {list.map((f) => (
             <li key={f.id} className="watchlist-item">
               <span className={`watchlist-kind watchlist-kind-${f.kind}`}>
-                {f.kind === 'call' ? 'CALL' : f.kind === 'grid' ? 'GRID' : 'DXCC'}
+                {f.kind === 'call'
+                  ? t('watchlist.item.kind.call')
+                  : f.kind === 'grid'
+                    ? t('watchlist.item.kind.grid')
+                    : DXCC_PROGRAM}
               </span>
               <span className="watchlist-value">
                 {f.kind === 'dxcc' ? f.value : f.value.toUpperCase()}
               </span>
-              {f.cqOnly && <span className="watchlist-flag">CQ only</span>}
+              {f.cqOnly && <span className="watchlist-flag">{t('watchlist.item.cqOnly')}</span>}
               <button
                 type="button"
                 className="watchlist-remove"
                 onClick={() => remove(f.id)}
-                title="Remove from watch list"
-                aria-label={`Remove ${f.value}`}
+                title={t('watchlist.item.remove.title')}
+                aria-label={t('watchlist.item.remove.aria', { value: f.value })}
               >
                 ×
               </button>
@@ -70,31 +91,41 @@ export function WatchlistPanel() {
           className="settings-input watchlist-kind-select"
           value={kind}
           onChange={(e) => setKind(e.target.value as WatchKind)}
-          aria-label="Watch kind"
+          aria-label={t('watchlist.add.kind.aria')}
         >
-          <option value="call">Call / prefix</option>
-          <option value="dxcc">DXCC entity</option>
-          <option value="grid">Grid square</option>
+          <option value="call">{t('watchlist.add.kind.call')}</option>
+          <option value="dxcc">{t('watchlist.add.kind.dxcc')}</option>
+          <option value="grid">{t('watchlist.add.kind.grid')}</option>
         </select>
         <input
           className="settings-input"
           value={value}
           placeholder={
-            kind === 'call' ? 'e.g. VP8*  or  3Y0J' : kind === 'grid' ? 'e.g. FN31  or  EM7*' : 'e.g. Bouvet'
+            kind === 'call'
+              ? t('watchlist.add.value.placeholder.call', {
+                  first: WATCH_EXAMPLES.callPrefix,
+                  second: WATCH_EXAMPLES.call,
+                })
+              : kind === 'grid'
+                ? t('watchlist.add.value.placeholder.grid', {
+                    first: WATCH_EXAMPLES.grid,
+                    second: WATCH_EXAMPLES.gridPrefix,
+                  })
+                : t('watchlist.add.value.placeholder.dxcc', { entity: WATCH_EXAMPLES.entity })
           }
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') add()
           }}
           autoComplete="off"
-          aria-label="Watch value"
+          aria-label={t('watchlist.add.value.aria')}
         />
-        <label className="watchlist-cqonly" title="Only alert on a CQ call">
-          <input type="checkbox" checked={cqOnly} onChange={(e) => setCqOnly(e.target.checked)} /> CQ
-          only
+        <label className="watchlist-cqonly" title={t('watchlist.add.cqOnly.title')}>
+          <input type="checkbox" checked={cqOnly} onChange={(e) => setCqOnly(e.target.checked)} />{' '}
+          {t('watchlist.add.cqOnly.label')}
         </label>
         <button type="button" className="watchlist-add-btn" onClick={add} disabled={!value.trim()}>
-          Add
+          {t('watchlist.add.submit')}
         </button>
       </div>
     </div>

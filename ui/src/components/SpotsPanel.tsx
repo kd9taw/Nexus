@@ -2,12 +2,19 @@
 // NOT needs-gated. This is the SpotCollector/DXHeat-style firehose view: see everything,
 // filter client-side. The Needed board stays the curated "what to work" list; this is the
 // "what's on the air" list. Single-click a row to QSY/work the spot.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT come from it: every
+// value a row prints (callsign, spotter, entity, US state, band, mode/submode, frequency,
+// comment) and the age column below — all data and measurement, invariant in every locale.
 import { useEffect, useMemo, useState } from 'react'
 import type { BandChannel, SpotRow } from '../types'
 import { openQrzPage } from '../api'
 import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
+import { compileTerm, searchTerms } from '../searchQuery'
+import { t } from '../i18n'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 
@@ -15,7 +22,8 @@ type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 // in the current spots.
 const COMMON_BANDS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']
 
-/** Compact age string from seconds-since-received (−1 = unknown). */
+/** Compact age string from seconds-since-received (−1 = unknown). A number and its unit
+ * letter, with no prose in it at all — a measurement, so it is not a catalog string. */
 function ageLabel(secs: number): string {
   if (secs < 0) return '—'
   if (secs < 60) return `${secs}s`
@@ -78,6 +86,14 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
   // `licensed` flag is computed backend-side from the SAME tables as the TX lockout;
   // an Open-class (non-US) operator has every spot licensed, so the toggle is a no-op.
   const [licensedOnly, setLicensedOnly] = useSessionState('nexus.spots.licensedOnly', false)
+  // "Heard near me" — keep only spots at least one voice on the operator's OWN CONTINENT
+  // reported. The same question the Needed board asks; the panel had no locality test at all,
+  // so a US operator saw JA stations only Europe and Asia had heard, which says nothing about a
+  // path from here (operator, 2026-08-19).
+  //
+  // DEFAULT ON, and the count of what it hides is printed beside it — a filter that removes
+  // rows silently is how "my spots disappeared" becomes an unanswerable report.
+  const [localOnly, setLocalOnly] = useSessionState('nexus.spots.localOnly', true)
   // US-state (WAS) filter, from the roster-resolved state on each spot. Empty = all.
   const [states, setStates] = useSessionState<string[]>('nexus.spots.states', [])
 
@@ -116,19 +132,25 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
     setStates((prev) => (prev.includes(st) ? prev.filter((x) => x !== st) : [...prev, st]))
 
   const hasActiveFilters =
-    bands.length > 0 || hiddenModes.length > 0 || licensedOnly || states.length > 0
+    bands.length > 0 || hiddenModes.length > 0 || licensedOnly || localOnly || states.length > 0
 
   const rows = useMemo(() => {
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+    // Terms still narrow (AND), which is right here: a spot row is call + entity + spotter
+    // + mode + band + frequency flattened together, so "20m ft8" means both. What changed is
+    // that a term may now carry `*`/`?` and be matched as a whole-word pattern — `PA*` finds
+    // the PA prefix here exactly as it does in the Stations list. A term without a wildcard
+    // behaves as it always has, so nobody's saved habits move.
+    const terms = searchTerms(query).map(compileTerm)
     const filtered = spots.filter((s) => {
       if (licensedOnly && !s.licensed) return false
+      if (localOnly && s.spotterLocal === false) return false
       if (hiddenModes.includes(s.submode ?? s.mode)) return false
       if (bands.length > 0 && !bands.includes(s.band)) return false
       // A state filter hides spots whose state is unknown (cluster spots of unheard stations).
       if (states.length > 0 && (!s.state || !states.includes(s.state))) return false
       if (terms.length > 0) {
-        const hay = `${s.call} ${s.entity} ${s.spotter} ${s.mode} ${s.submode ?? ''} ${s.band} ${s.freqMhz.toFixed(4)}`.toLowerCase()
-        for (const t of terms) if (!hay.includes(t)) return false
+        const hay = `${s.call} ${s.entity} ${s.spotter} ${s.mode} ${s.submode ?? ''} ${s.band} ${s.freqMhz.toFixed(4)}`.toUpperCase()
+        for (const t of terms) if (!t(hay)) return false
       }
       return true
     })
@@ -163,7 +185,15 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
       return c * dir
     })
     return filtered
-  }, [spots, hiddenModes, bands, states, sort, query, licensedOnly])
+  }, [spots, hiddenModes, bands, states, sort, query, licensedOnly, localOnly])
+
+  // How many rows the locality filter is holding back RIGHT NOW — the honest half of a filter
+  // that is on by default. Counted against everything else the operator has chosen, so it says
+  // "hidden from what you asked for", not "hidden from the firehose".
+  const farHidden = useMemo(
+    () => (localOnly ? spots.filter((s) => s.spotterLocal === false).length : 0),
+    [spots, localOnly],
+  )
 
   const th = (key: SortKey, label: string) => (
     <button
@@ -183,23 +213,23 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
   return (
     <main className="layout single needed-panel spots-panel">
       <div className="np-head">
-        <h2>Spots</h2>
+        <h2>{t('spots.title')}</h2>
         <span className="np-count">{rows.length}</span>
-        {spots.length !== rows.length && <span className="np-count np-count-filtered">of {spots.length}</span>}
-        <span className="np-hint">every spot on the air — single-click to work it</span>
+        {spots.length !== rows.length && <span className="np-count np-count-filtered">{t('spots.countFiltered', { count: spots.length })}</span>}
+        <span className="np-hint">{t('spots.hint')}</span>
         <span className="np-search">
           <input
             type="search"
             value={query}
-            placeholder="Search call · entity · spotter · freq…"
+            placeholder={t('spots.search.placeholder')}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') setQuery('')
             }}
-            aria-label="Search spots"
+            aria-label={t('spots.search.label')}
           />
           {query && (
-            <button type="button" className="np-search-clear" onClick={() => setQuery('')} title="Clear search">
+            <button type="button" className="np-search-clear" onClick={() => setQuery('')} title={t('spots.search.clear')}>
               ✕
             </button>
           )}
@@ -208,23 +238,23 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           type="button"
           className={`np-filter-toggle${filtersOpen || hasActiveFilters ? ' active' : ''}`}
           onClick={() => setFiltersOpen((v) => !v)}
-          title="Filter spots by band, mode, state, or privileges"
+          title={t('spots.filter.toggle.title')}
           aria-expanded={filtersOpen}
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path d="M1 2.5A.5.5 0 0 1 1.5 2h13a.5.5 0 0 1 .354.854L10 8.707V14.5a.5.5 0 0 1-.724.447l-4-2A.5.5 0 0 1 5 12.5V8.707L1.146 2.854A.5.5 0 0 1 1 2.5z" />
-          </svg>
-          {hasActiveFilters ? ' Filtered' : ' Filter'}
+          </svg>{' '}
+          {hasActiveFilters ? t('spots.filter.toggle.active') : t('spots.filter.toggle.idle')}
         </button>
         {onPopOut && (
-          <button type="button" className="np-popout" onClick={onPopOut} title="Open in its own window">
-            ⧉ Pop out
+          <button type="button" className="np-popout" onClick={onPopOut} title={t('spots.popOut.title')}>
+            {t('spots.popOut.label')}
           </button>
         )}
       </div>
 
       {(filtersOpen || hasActiveFilters) && (
-        <div className="np-filters" role="group" aria-label="Filter spots">
+        <div className="np-filters" role="group" aria-label={t('spots.filters.aria')}>
           <div className="np-filter-group np-filter-bands">
             {availableBands.map((band) => (
               <button
@@ -240,7 +270,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           {availableModes.length > 1 && (
             <>
               <div className="np-filter-sep" aria-hidden="true" />
-              <div className="np-filter-group" role="group" aria-label="Modes shown">
+              <div className="np-filter-group" role="group" aria-label={t('spots.filters.modes.aria')}>
                 {availableModes.map((m) => {
                   const shown = !hiddenModes.includes(m)
                   return (
@@ -250,7 +280,11 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                       className={`np-chip${shown ? ' active' : ''}`}
                       aria-pressed={shown}
                       onClick={() => toggleMode(m)}
-                      title={`${shown ? 'Hide' : 'Show'} ${m} spots`}
+                      title={
+                        shown
+                          ? t('spots.filter.mode.hide.title', { mode: m })
+                          : t('spots.filter.mode.show.title', { mode: m })
+                      }
                     >
                       {m}
                     </button>
@@ -263,7 +297,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
           {availableStates.length > 0 && (
             <>
               <div className="np-filter-sep" aria-hidden="true" />
-              <div className="np-filter-group" role="group" aria-label="US states shown">
+              <div className="np-filter-group" role="group" aria-label={t('spots.filters.states.aria')}>
                 {availableStates.map((st) => (
                   <button
                     key={st}
@@ -271,7 +305,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                     className={`np-chip${states.includes(st) ? ' active' : ''}`}
                     aria-pressed={states.includes(st)}
                     onClick={() => toggleState(st)}
-                    title={`Show only ${st} spots (state resolved from stations you've heard before)`}
+                    title={t('spots.filter.state.title', { state: st })}
                   >
                     {st}
                   </button>
@@ -285,9 +319,22 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
             className={`np-chip${licensedOnly ? ' active' : ''}`}
             aria-pressed={licensedOnly}
             onClick={() => setLicensedOnly((v) => !v)}
-            title="Show only spots you may transmit to under your license class (Settings ▸ license). Open class sees everything either way."
+            title={t('spots.filter.privileges.title')}
           >
-            My privileges
+            {t('spots.filter.privileges.label')}
+          </button>
+          {/* Locality. The count of what it is hiding rides ON the chip, so the answer to
+              "where are my spots" is on screen rather than in a support thread. */}
+          <button
+            type="button"
+            className={`np-chip${localOnly ? ' active' : ''}`}
+            aria-pressed={localOnly}
+            onClick={() => setLocalOnly((v) => !v)}
+            title={t('spots.filter.local.title')}
+          >
+            {localOnly && farHidden > 0
+              ? t('spots.filter.local.hidden', { count: farHidden })
+              : t('spots.filter.local.label')}
           </button>
           {hasActiveFilters && (
             <button
@@ -298,10 +345,11 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                 setHiddenModes([])
                 setStates([])
                 setLicensedOnly(false)
+                setLocalOnly(false)
               }}
-              title="Clear all filters"
+              title={t('spots.filter.clear.title')}
             >
-              Clear
+              {t('spots.filter.clear.label')}
             </button>
           )}
         </div>
@@ -309,21 +357,19 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
 
       <div className="np-grid sp-grid" role="table">
         <div className="np-row np-header" role="row">
-          {th('age', 'Age')}
-          {th('call', 'Call')}
-          {th('entity', 'Entity')}
-          {th('state', 'St')}
-          {th('band', 'Band')}
-          {th('freq', 'Freq')}
-          {th('mode', 'Mode')}
-          <span className="np-th-static">Spotter</span>
-          <span className="np-th-static">Comment</span>
+          {th('age', t('spots.column.age'))}
+          {th('call', t('spots.column.call'))}
+          {th('entity', t('spots.column.entity'))}
+          {th('state', t('spots.column.state'))}
+          {th('band', t('spots.column.band'))}
+          {th('freq', t('spots.column.freq'))}
+          {th('mode', t('spots.column.mode'))}
+          <span className="np-th-static">{t('spots.column.spotter')}</span>
+          <span className="np-th-static">{t('spots.column.comment')}</span>
         </div>
         {rows.length === 0 ? (
           <div className="np-empty">
-            {hasActiveFilters
-              ? 'No spots match the current filters — clear to see all.'
-              : 'No spots yet — cluster/RBN spots appear here as they arrive.'}
+            {hasActiveFilters ? t('spots.empty.filtered') : t('spots.empty')}
           </div>
         ) : (
           rows.map((s) => {
@@ -335,8 +381,17 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                 className={`np-row sp-row${s.call === selectedCall ? ' selected' : ''}`}
                 title={
                   canQsy
-                    ? `Work ${s.call} — ${s.mode} @ ${s.freqMhz.toFixed(3)} MHz (spotted by ${s.spotter})`
-                    : `${s.call} @ ${s.freqMhz.toFixed(3)} MHz (spotted by ${s.spotter})`
+                    ? t('spots.row.work.title', {
+                        call: s.call,
+                        mode: s.mode,
+                        freq: s.freqMhz.toFixed(3),
+                        spotter: s.spotter,
+                      })
+                    : t('spots.row.title', {
+                        call: s.call,
+                        freq: s.freqMhz.toFixed(3),
+                        spotter: s.spotter,
+                      })
                 }
                 onClick={() => {
                   onSelect(s.call)
@@ -348,8 +403,8 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                   <button
                     type="button"
                     className="qrz-link-call"
-                    onClick={(e) => { e.stopPropagation(); void withErrorToast(() => openQrzPage(s.call), `Could not open ${s.call} on QRZ`) }}
-                    title={`${s.call} on QRZ.com (opens your browser)`}
+                    onClick={(e) => { e.stopPropagation(); void withErrorToast(() => openQrzPage(s.call), t('callbook.qrzPage.failed', { call: s.call })) }}
+                    title={t('callbook.qrzPage.title', { call: s.call })}
                   >
                     {s.call}
                   </button>
@@ -375,7 +430,11 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                 <span className="sp-freq">{s.freqMhz.toFixed(3)}</span>
                 <span
                   className={`np-mode-col np-mode-${s.mode.toLowerCase()}`}
-                  title={s.submode ? `${s.submode} spot (${s.mode})` : `${s.mode} spot`}
+                  title={
+                    s.submode
+                      ? t('spots.row.mode.submode.title', { submode: s.submode, mode: s.mode })
+                      : t('spots.row.mode.title', { mode: s.mode })
+                  }
                 >
                   {s.submode ?? s.mode}
                 </span>

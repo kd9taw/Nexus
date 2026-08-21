@@ -1,5 +1,10 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every reading on
+// this bar is DATA and stays in the code: the band and mode names, the entity, the callsign,
+// the likelihood and the bearing, the backend's own advisory `reason`, and the three FEED
+// NAMES (Cluster, Phone, PSKR — the services' own). What moved is the prose around them.
 import type { ReactNode } from 'react'
 import { Activity, Radio, SignalHigh, Target } from 'lucide-react'
+import { t, type MessageKey } from '../i18n'
 import type { AppSnapshot, FeedHealth, FeedStatus, PropagationSnapshot } from '../types'
 import type { View } from './ModeNav'
 import { azimuthLabel, backendAzimuth } from '../grid'
@@ -22,12 +27,13 @@ interface Props {
   emphasis?: 'qso' | 'needs' | 'rate' | 'openings' | 'activation'
 }
 
-/** Compact relative age, e.g. "12s" / "4m" / "2h". */
+/** Compact relative age, e.g. "12s" / "4m" / "2h". The unit letter rides inside the message
+ *  with its number, so a translation can never separate the two. */
 function agoText(secs: number | null): string {
   if (secs == null) return ''
-  if (secs < 60) return `${secs}s`
-  if (secs < 3600) return `${Math.round(secs / 60)}m`
-  return `${Math.round(secs / 3600)}h`
+  if (secs < 60) return t('nowbar.age.secs', { secs })
+  if (secs < 3600) return t('nowbar.age.mins', { mins: Math.round(secs / 60) })
+  return t('nowbar.age.hours', { hours: Math.round(secs / 3600) })
 }
 
 /** A connector-liveness pill (one per started feed). Hidden when the feed isn't
@@ -38,30 +44,45 @@ function agoText(secs: number | null): string {
 function FeedPill({ name, status, detail }: { name: string; status: FeedStatus; detail?: string }) {
   if (!status.enabled) return null
   const ago = agoText(status.lastEventSecs)
-  const suffix = detail ? ` (${detail})` : ''
+  // Each state is a WHOLE sentence, not a stem with a tail glued on: "retrying" and
+  // "retrying, last event 4m ago" are two statements, and a language that orders them
+  // differently must be able to.
   const [cls, val, title] =
     status.state === 'live'
-      ? ['good', ago ? `live ${ago}` : 'live', `${name}: receiving (last ${ago} ago)`]
+      ? [
+          'good',
+          ago ? t('nowbar.feed.live.value', { age: ago }) : t('nowbar.feed.live.value.noAge'),
+          t('nowbar.feed.live.title', { name, age: ago }),
+        ]
       : status.state === 'connected'
-        ? [
-            'good',
-            'connected',
-            `${name}: connected — no reports yet (normal until you transmit or the band stirs)`,
-          ]
+        ? ['good', t('nowbar.feed.connected.value'), t('nowbar.feed.connected.title', { name })]
         : status.state === 'connecting' || status.state === 'waiting'
-          ? ['weak', 'connecting…', `${name}: trying to reach the server`]
+          ? [
+              'weak',
+              t('nowbar.feed.connecting.value'),
+              t('nowbar.feed.connecting.title', { name }),
+            ]
           : status.state === 'reconnecting'
             ? [
                 'bad',
-                'reconnecting…',
-                `${name}: connection dropped — retrying${ago ? ` (last event ${ago} ago)` : ''}`,
+                t('nowbar.feed.reconnecting.value'),
+                ago
+                  ? t('nowbar.feed.reconnecting.title.age', { name, age: ago })
+                  : t('nowbar.feed.reconnecting.title', { name }),
               ]
             : status.state === 'idle'
-              ? ['ok', `idle ${ago}`, `${name}: connected, no data for ${ago} (a quiet band is normal)`]
+              ? [
+                  'ok',
+                  t('nowbar.feed.idle.value', { age: ago }),
+                  t('nowbar.feed.idle.title', { name, age: ago }),
+                ]
               : // Defensive: an unknown future backend state renders visibly, not as a fake idle.
-                ['weak', status.state, `${name}: ${status.state}`]
+                ['weak', status.state, t('nowbar.feed.unknown.title', { name, state: status.state })]
   return (
-    <span className={`nb-chip nb-feed ${cls}`} title={`${title}${suffix}`}>
+    <span
+      className={`nb-chip nb-feed ${cls}`}
+      title={detail ? t('nowbar.feed.title.detail', { title, detail }) : title}
+    >
       <Radio size={12} aria-hidden="true" />
       <span className="nb-k">{name}</span>
       <span className="nb-v">{val}</span>
@@ -107,12 +128,13 @@ function NbChip({
  * band or need chip drills into the propagation nowcast.
  */
 
-// ActivityTier → [verdict word, status class].
-const BAND_WORD: Record<string, [string, string]> = {
-  Active: ['open', 'good'],
-  Moderate: ['fair', 'ok'],
-  Quiet: ['quiet', 'weak'],
-  Closed: ['closed', 'bad'],
+// ActivityTier → the verdict word + its status class. The word resolves when it is READ, so
+// the table is not frozen to whichever locale loaded this module first.
+const BAND_WORD: Record<string, { wordKey: MessageKey; cls: string }> = {
+  Active: { wordKey: 'nowbar.band.open', cls: 'good' },
+  Moderate: { wordKey: 'nowbar.band.fair', cls: 'ok' },
+  Quiet: { wordKey: 'nowbar.band.quiet', cls: 'weak' },
+  Closed: { wordKey: 'nowbar.band.closed', cls: 'bad' },
 }
 
 export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis }: Props) {
@@ -125,14 +147,41 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
   // for width at the 1024 px floor, and this bar's job is "is there something to chase",
   // not "where do I point" — the board a click away answers that on its face.
   const needAz = need ? backendAzimuth(need.bearingDeg, need.distanceKm) : null
+  const needAzLabel = azimuthLabel(needAz)
+  // The chip's tooltip, as TWO whole sentences rather than one with a tail: "live-confirmed"
+  // is a claim about the expedition, and a language that puts it elsewhere must be able to.
+  // `where` is the entity with its bearing beside it — both data.
+  const needTitle = need
+    ? (() => {
+        const vals = {
+          call: need.call,
+          where: needAzLabel
+            ? t('nowbar.need.where', { entity: need.entity, azimuth: needAzLabel })
+            : need.entity,
+          need: need.need,
+          band: need.band,
+          likelihood: need.likelihood,
+        }
+        return need.liveConfirmed
+          ? t('nowbar.need.title.confirmed', vals)
+          : t('nowbar.need.title', vals)
+      })()
+    : ''
 
-  // Band open?
-  const [bandWord, bandCls] = report ? (BAND_WORD[report.tier] ?? ['—', 'weak']) : ['…', 'weak']
+  // Band open? An unrecognised tier prints an em dash and no data prints an ellipsis —
+  // glyphs, not words.
+  const verdict = report ? BAND_WORD[report.tier] : undefined
+  const bandWord = report ? (verdict ? t(verdict.wordKey) : '—') : '…'
+  const bandCls = report ? (verdict?.cls ?? 'weak') : 'weak'
 
   // Getting out? — PSK Reporter spots OF me on this band.
   const hearMe = report?.nHearMe ?? 0
   const iHear = report?.nIHear ?? 0
-  const outText = !report ? '—' : hearMe > 0 ? `${hearMe} hear you` : 'no spots of you yet'
+  const outText = !report
+    ? '—'
+    : hearMe > 0
+      ? t('nowbar.out.hearYou', { count: hearMe })
+      : t('nowbar.out.none')
   const outCls = !report ? 'weak' : hearMe > 0 ? 'good' : 'weak'
 
   // Emphasized chip leads (see Props.emphasis).
@@ -150,10 +199,15 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
         key="band"
         cls={bandCls}
         onClick={connectEnabled ? () => onNavigate('connect') : undefined}
-        title={report?.reason ?? (connectEnabled ? 'Open Connect — the map + nowcast' : 'Band activity')}
+        // `reason` is the backend's own sentence — interpolated as data, never translated
+        // (that half of the propagation surface moves in phase 3).
+        title={
+          report?.reason ??
+          (connectEnabled ? t('nowbar.band.title.connect') : t('nowbar.band.title.plain'))
+        }
       >
         <Activity size={13} aria-hidden="true" />
-        <span className="nb-k">Band</span>
+        <span className="nb-k">{t('nowbar.band.label')}</span>
         <span className="nb-v">
           {band} {bandWord}
         </span>
@@ -165,12 +219,12 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
         cls={outCls}
         title={
           report
-            ? `${hearMe} station(s) hear you · you hear ${iHear} (PSK Reporter, ${band})`
-            : 'No propagation data yet'
+            ? t('nowbar.out.title', { hear: hearMe, ihear: iHear, band })
+            : t('nowbar.out.title.none')
         }
       >
         <SignalHigh size={13} aria-hidden="true" />
-        <span className="nb-k">Out</span>
+        <span className="nb-k">{t('nowbar.out.label')}</span>
         <span className="nb-v">{outText}</span>
       </NbChip>
     ),
@@ -179,38 +233,40 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
         key="need"
         cls={`nb-need ${need ? 'good' : 'weak'}`}
         onClick={dxpedEnabled ? () => onNavigate('dxped') : undefined}
-        title={
-          need
-            ? `${need.call} (${need.entity}${needAz ? ` ${azimuthLabel(needAz)}` : ''}) — ${need.need} on ${need.band}, likelihood ${need.likelihood}${need.liveConfirmed ? ' (live-confirmed)' : ''}`
-            : 'No DXpedition needs workable right now'
-        }
+        title={need ? needTitle : t('nowbar.need.title.none')}
       >
         <Target size={13} aria-hidden="true" />
-        <span className="nb-k">Need</span>
+        <span className="nb-k">{t('nowbar.need.label')}</span>
         <span className="nb-v">
-          {need ? `${need.entity} ${need.band} · ${need.likelihood}` : 'nothing workable now'}
+          {need
+            ? t('nowbar.need.value', {
+                entity: need.entity,
+                band: need.band,
+                likelihood: need.likelihood,
+              })
+            : t('nowbar.need.none')}
         </span>
       </NbChip>
     ),
   }
 
   return (
-    <div className="now-bar" role="status" aria-label="Now: band, getting out, and top need">
-      <span className="nb-label">NOW</span>
+    <div className="now-bar" role="status" aria-label={t('nowbar.aria')}>
+      <span className="nb-label">{t('nowbar.label')}</span>
       {order.map((k) => chips[k])}
 
       {prop && (
         <span
           className={`nb-src ${prop.source}`}
-          title={`Propagation nowcast data is ${prop.source} — separate from the Cluster/PSKR connection pills`}
+          title={t('nowbar.prop.title', { source: prop.source })}
         >
           {prop.source === 'live'
-            ? 'PROP LIVE'
+            ? t('nowbar.prop.live')
             : prop.source === 'partial'
-              ? 'PROP PARTIAL'
+              ? t('nowbar.prop.partial')
               : prop.source === 'cached'
-                ? 'PROP CACHED'
-                : 'NO LIVE DATA'}
+                ? t('nowbar.prop.cached')
+                : t('nowbar.prop.offline')}
         </span>
       )}
 

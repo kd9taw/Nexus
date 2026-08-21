@@ -6,6 +6,13 @@
 // refresh toast, so two surfaces can never describe one catalog differently
 // (which is exactly how "TLE 26 days — STALE" survived beside a 0.2 d
 // catalog).
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
+// words come from the catalog; the COUNTS and the 14 d / 30 d thresholds are
+// the facts themselves and stay here. The two hand-rolled plurals below moved
+// to `Intl.PluralRules` forms — English has two, Polish four, and the ternary
+// is unrepresentable in most languages.
+import { t } from '../i18n'
 
 /** The three set-wide counters, carried identically by `TleStatus` (Settings +
  * the Now-Bar lane) and `SatView` (the Satellites chip + the Passes pane) —
@@ -32,7 +39,7 @@ const pastLine = (b: ElementBands) => b.agingCount + b.heldBackCount
 /** "89 of 140 past 14 d" — the degraded-set headline, identical on both loud
  * surfaces so an operator who sees it twice sees one fact, not two. */
 export const elementsPastLineLabel = (b: ElementBands) =>
-  `${pastLine(b)} of ${total(b)} past 14 d`
+  t('sat.elements.pastLine', { past: pastLine(b), total: total(b) })
 
 /** More than half the catalog past the 14 d line: the ONE threshold the loud
  * surfaces (the app-wide Now-Bar lane, the Connect planning pane) share.
@@ -50,9 +57,9 @@ export const elementsMostlyPastLine = (b: ElementBands) =>
  * every bird is current — a zero is not news. */
 export function elementBandParts(b: ElementBands): string[] {
   const parts: string[] = []
-  if (b.agingCount > 0) parts.push(`${b.agingCount} past 14 d`)
+  if (b.agingCount > 0) parts.push(t('sat.elements.parts.aging', { count: b.agingCount }))
   if (b.heldBackCount > 0) {
-    parts.push(`${b.heldBackCount} ${b.heldBackCount === 1 ? 'sits' : 'sit'} out past 30 d`)
+    parts.push(t('sat.elements.parts.heldBack', { count: b.heldBackCount }))
   }
   return parts
 }
@@ -60,20 +67,19 @@ export function elementBandParts(b: ElementBands): string[] {
 /** "367 birds · 30 sit out past 30 d" — the total first, so what follows reads
  * as a share of it rather than as a bare alarm. */
 export const elementBandSummary = (b: ElementBands) =>
-  [`${total(b)} birds`, ...elementBandParts(b)].join(' · ')
+  [t('sat.elements.summary.birds', { count: total(b) }), ...elementBandParts(b)].join(' · ')
 
 /** The same facts in prose, for the refresh toast and the Settings "Last
  * refresh" line: a leading space, appended after a headline; '' when there is
  * nothing to add. Same numbers as [`elementBandSummary`], different register —
  * that one labels a chip, this one finishes a sentence. */
 export function elementBandSentence(b: ElementBands): string {
+  // ZERO is not a plural form — it is silence, so the count gates the sentence
+  // and `Intl.PluralRules` only picks between the forms that do get spoken.
   let s = ''
-  if (b.agingCount === 1) s += ' 1 bird is past the 14-day line and drifting.'
-  else if (b.agingCount > 1) s += ` ${b.agingCount} birds are past the 14-day line and drifting.`
-  if (b.heldBackCount === 1) {
-    s += ' 1 bird is past 30 days and sits out until fresh elements arrive.'
-  } else if (b.heldBackCount > 1) {
-    s += ` ${b.heldBackCount} birds are past 30 days and sit out until fresh elements arrive.`
+  if (b.agingCount > 0) s += ' ' + t('sat.elements.sentence.aging', { count: b.agingCount })
+  if (b.heldBackCount > 0) {
+    s += ' ' + t('sat.elements.sentence.heldBack', { count: b.heldBackCount })
   }
   return s
 }

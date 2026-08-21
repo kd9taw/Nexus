@@ -22,8 +22,27 @@ import {
 import { pushToast, withErrorToast } from '../toast'
 import { bandFromKhz, spotModeClass } from '../otaHunt'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 
 type Program = 'POTA' | 'SOTA' | 'Both'
+
+/**
+ * ⚠️ INVARIANT TOKENS — never translated, never in the catalog.
+ *
+ * POTA and SOTA are the programmes' own names, so the view's title and the activation
+ * picker's two options print them as they are (a translated programme name names nothing).
+ * The two references are the FORMAT the operator types, and the sources are websites.
+ * Only "Both" — an English word, not a programme — is prose, and it has a catalog entry.
+ */
+const OTA_TITLE = 'POTA / SOTA'
+const ACT_PROGRAMS = ['POTA', 'SOTA'] as const
+const REF_EXAMPLES = { POTA: 'K-1234', SOTA: 'W7A/MN-001' } as const
+const SOURCES: Record<Program, string> = {
+  POTA: 'pota.app',
+  SOTA: 'SOTAwatch',
+  Both: 'pota.app + SOTAwatch',
+}
 
 /** kHz → "14.0740 MHz" display string (4 decimal places = 10 Hz resolution). */
 function fmtFreq(khz: number): string {
@@ -175,12 +194,18 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
     let loaded: OtaSpot[] = []
     if (p === 'Both') {
       const [pota, sota] = await Promise.all([
-        withErrorToast(() => getOtaSpots('POTA'), 'POTA spots failed').then((s) => s ?? []),
-        withErrorToast(() => getOtaSpots('SOTA'), 'SOTA spots failed').then((s) => s ?? []),
+        withErrorToast(
+          () => getOtaSpots('POTA'),
+          t('ota.spots.failed', { program: 'POTA' }),
+        ).then((s) => s ?? []),
+        withErrorToast(
+          () => getOtaSpots('SOTA'),
+          t('ota.spots.failed', { program: 'SOTA' }),
+        ).then((s) => s ?? []),
       ])
       loaded = [...pota, ...sota]
     } else {
-      const s = await withErrorToast(() => getOtaSpots(p), `${p} spots failed`)
+      const s = await withErrorToast(() => getOtaSpots(p), t('ota.spots.failed', { program: p }))
       loaded = s ?? []
     }
     setLoading(false)
@@ -257,18 +282,25 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
   const handleStartActivation = async () => {
     const ref = actRef.trim().toUpperCase()
     if (!ref) return
-    const a = await withErrorToast(() => setActivation(actProg, ref), 'Could not start activation')
+    const a = await withErrorToast(
+      () => setActivation(actProg, ref),
+      t('ota.activation.startFailed'),
+    )
     if (a) {
       setAct(a)
-      pushToast(`Activating ${a.program} ${a.reference} — QSOs will be park-tagged`, 'success')
+      pushToast(
+        // Both are non-null on a started activation; `?? ''` only keeps the types honest.
+        t('ota.activation.started', { program: a.program ?? '', reference: a.reference ?? '' }),
+        'success',
+      )
     }
   }
   const handleStopActivation = async () => {
-    const a = await withErrorToast(() => clearActivation(), 'Could not stop activation')
+    const a = await withErrorToast(() => clearActivation(), t('ota.activation.stopFailed'))
     if (a) {
       setAct(a)
       setActRef('')
-      pushToast('Activation ended', 'info', 2000)
+      pushToast(t('ota.activation.ended'), 'info', 2000)
     }
   }
 
@@ -291,11 +323,13 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
   }, [])
   const handleDownloadParks = async () => {
     setParkBusy(true)
-    const n = await withErrorToast(() => downloadParks(), 'Park-list download failed')
+    const n = await withErrorToast(() => downloadParks(), t('ota.parks.downloadFailed'))
     setParkBusy(false)
     if (n != null) {
       setParkN(n)
-      pushToast(`Downloaded ${n.toLocaleString()} parks — searchable in the log`, 'success')
+      // The count is grouped for display HERE, as it always was — `t()` never formats a
+      // number (see the invariant-token rule in i18n/index.ts).
+      pushToast(t('ota.parks.downloaded', { formatted: n.toLocaleString() }), 'success')
     }
   }
   const handleImportFile = async (file: File) => {
@@ -304,9 +338,9 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
       const csv = await file.text()
       const n = await importParksCsv(csv)
       setParkN(n)
-      pushToast(`Imported ${n.toLocaleString()} parks`, 'success')
+      pushToast(t('ota.parks.imported', { formatted: n.toLocaleString() }), 'success')
     } catch (e) {
-      pushToast(`Import failed: ${String(e)}`, 'error')
+      pushToast(t('ota.parks.importFailed', { detail: String(e) }), 'error')
     } finally {
       setParkBusy(false)
     }
@@ -318,20 +352,20 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
       const csv = await file.text()
       const n = await importHuntedParksCsv(csv)
       setHuntedN(n)
-      pushToast(`Imported ${n.toLocaleString()} hunted parks — new-park flags updated`, 'success')
+      pushToast(t('ota.hunted.imported', { formatted: n.toLocaleString() }), 'success')
       void loadSpots(program) // refresh NEW PARK badges against the new worked-set
     } catch (e) {
-      pushToast(`Hunted-parks import failed: ${String(e)}`, 'error')
+      pushToast(t('ota.hunted.importFailed', { detail: String(e) }), 'error')
     } finally {
       setParkBusy(false)
     }
   }
 
   const handleClearHunt = async () => {
-    const s = await withErrorToast(() => clearHuntTarget(), 'Could not clear hunt target')
+    const s = await withErrorToast(() => clearHuntTarget(), t('ota.hunt.clearFailed'))
     if (s) {
       onSnap(s)
-      pushToast('Hunt cleared', 'info', 2000)
+      pushToast(t('ota.hunt.cleared'), 'info', 2000)
     }
   }
 
@@ -343,7 +377,7 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
     // Tag the next QSO with this activator's park/summit.
     const snap2 = await withErrorToast(
       () => setHuntTarget(s.activator, s.program, s.reference),
-      `Could not set hunt target for ${s.activator}`,
+      t('ota.hunt.setFailed', { call: s.activator }),
     )
     if (snap2) onSnap(snap2)
 
@@ -358,14 +392,20 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
   }
 
   const lastUpdatedLabel = lastUpdated
-    ? `Updated ${lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+    ? t('ota.lastUpdated', {
+        time: lastUpdated.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+      })
     : ''
 
   return (
     <section className="panel pota-view pota-hunter">
       <div className="panel-header">
-        <h2>POTA / SOTA</h2>
-        <span className="awards-sub">Hunt activators on the air now</span>
+        <h2>{OTA_TITLE}</h2>
+        <span className="awards-sub">{t('ota.subtitle')}</span>
       </div>
 
       {/* Hunting banner — shown when a hunt target is active */}
@@ -373,15 +413,18 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
         <div className="pota-hunt-banner" role="status" aria-live="polite">
           <span className="pota-hunt-icon" aria-hidden="true">{progIcon(hunt.program as Program)}</span>
           <span className="pota-hunt-text">
-            Hunting <strong>{hunt.reference}</strong> &middot; <strong>{hunt.call}</strong>
-            <span className="pota-hunt-sub"> — next logged QSO with this call gets the park tagged</span>
+            <T
+              k="ota.hunt.banner"
+              tags={{ b: <strong />, note: <span className="pota-hunt-sub" /> }}
+              vals={{ reference: hunt.reference, call: hunt.call }}
+            />
           </span>
           <button
             type="button"
             className="pota-hunt-clear"
             onClick={() => void handleClearHunt()}
-            title="Clear hunt target"
-            aria-label="Clear hunt target"
+            title={t('ota.hunt.clear')}
+            aria-label={t('ota.hunt.clear')}
           >
             <X size={13} aria-hidden="true" />
           </button>
@@ -393,19 +436,30 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
         {activating ? (
           <>
             <span className="pota-act-text">
-              📻 Activating <strong>{act?.program} {act?.reference}</strong>
-              <span className="pota-act-sub"> · {act?.qsoCount ?? 0} logged — QSOs get your park tagged</span>
+              <T
+                k="ota.activation.active"
+                tags={{ b: <strong />, note: <span className="pota-act-sub" /> }}
+                vals={{
+                  program: act?.program ?? '',
+                  reference: act?.reference ?? '',
+                  count: act?.qsoCount ?? 0,
+                }}
+              />
             </span>
-            <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title="End activation">
-              <X size={13} aria-hidden="true" /> Stop
+            {/* Ends the ACTIVATION — the park stamp on what you log — never a transmission. */}
+            <button type="button" className="pota-hunt-clear" onClick={() => void handleStopActivation()} title={t('ota.activation.stop.title')}>
+              <X size={13} aria-hidden="true" /> {t('ota.activation.stop.label')}
             </button>
           </>
         ) : (
           <>
-            <span className="pota-act-label">I'm activating:</span>
+            <span className="pota-act-label">{t('ota.activation.label')}</span>
             <select className="settings-input pota-act-prog" value={actProg} onChange={(e) => setActProg(e.target.value)}>
-              <option value="POTA">POTA</option>
-              <option value="SOTA">SOTA</option>
+              {ACT_PROGRAMS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
             </select>
             <input
               className="settings-input mono pota-act-ref"
@@ -414,12 +468,12 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void handleStartActivation()
               }}
-              placeholder={actProg === 'SOTA' ? 'W7A/MN-001' : 'K-1234'}
+              placeholder={actProg === 'SOTA' ? REF_EXAMPLES.SOTA : REF_EXAMPLES.POTA}
               autoComplete="off"
               spellCheck={false}
             />
             <button type="button" className="pota-act-start" onClick={() => void handleStartActivation()} disabled={!actRef.trim()}>
-              Start
+              {t('ota.activation.start')}
             </button>
           </>
         )}
@@ -428,22 +482,26 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
       {/* Local park directory — download/import once, then search offline in the log form. */}
       <div className="pota-parklist">
         <span className="pota-parklist-status">
-          {parkN > 0 ? `📖 ${parkN.toLocaleString()} parks — searchable in the log` : '📖 No local park list yet'}
+          {parkN > 0
+            ? t('ota.parks.have', { formatted: parkN.toLocaleString() })
+            : t('ota.parks.none')}
         </span>
         <button type="button" className="pota-act-start" onClick={() => void handleDownloadParks()} disabled={parkBusy}>
-          {parkBusy ? '…' : parkN > 0 ? 'Update' : 'Download'}
+          {parkBusy ? '…' : parkN > 0 ? t('ota.parks.update') : t('ota.parks.download')}
         </button>
         <button type="button" className="pota-parklist-import" onClick={() => fileRef.current?.click()} disabled={parkBusy}>
-          Import CSV
+          {t('ota.parks.import')}
         </button>
         <button
           type="button"
           className="pota-parklist-import"
           onClick={() => huntedFileRef.current?.click()}
           disabled={parkBusy}
-          title="Import your POTA 'Hunted Parks.CSV' (from your POTA stats page) so worked parks show correctly — the park number isn't in a CW exchange, so your log alone can't know it"
+          title={t('ota.hunted.title')}
         >
-          {huntedN > 0 ? `Hunted ✓ (${huntedN.toLocaleString()})` : 'Import Hunted Parks'}
+          {huntedN > 0
+            ? t('ota.hunted.have', { formatted: huntedN.toLocaleString() })
+            : t('ota.hunted.import')}
         </button>
         <input
           ref={fileRef}
@@ -473,7 +531,7 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
       <div className="pota-controls">
         <div className="pota-controls-row">
           {/* Program tabs */}
-          <div className="filter-row" role="tablist" aria-label="Program">
+          <div className="filter-row" role="tablist" aria-label={t('ota.program.aria')}>
             {(['POTA', 'SOTA', 'Both'] as Program[]).map((p) => (
               <button
                 key={p}
@@ -483,7 +541,8 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
                 className={`filter-chip${program === p ? ' active' : ''}`}
                 onClick={() => setProgram(p)}
               >
-                {p}
+                {/* The tab VALUE is the programme (or 'Both'); only 'Both' is a word. */}
+                {p === 'Both' ? t('ota.program.both') : p}
               </button>
             ))}
           </div>
@@ -495,11 +554,11 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
               className="filter-chip pota-refresh-btn"
               onClick={() => void loadSpots(program)}
               disabled={loading}
-              title="Refresh spots"
-              aria-label="Refresh spots"
+              title={t('ota.refresh.title')}
+              aria-label={t('ota.refresh.title')}
             >
               <RefreshCw size={12} className={loading ? 'spin' : ''} aria-hidden="true" />
-              Refresh
+              {t('ota.refresh.label')}
             </button>
             {lastUpdatedLabel && (
               <span className="pota-last-updated">{lastUpdatedLabel}</span>
@@ -509,14 +568,14 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
 
         {/* Band filter chips */}
         {availableBands.length > 0 && (
-          <div className="pota-filter-row" role="group" aria-label="Band filter">
-            <span className="pota-filter-label">Band</span>
+          <div className="pota-filter-row" role="group" aria-label={t('ota.filter.band.aria')}>
+            <span className="pota-filter-label">{t('ota.filter.band.label')}</span>
             <button
               type="button"
               className={`filter-chip${bandFilter.length === 0 ? ' active' : ''}`}
               onClick={() => setBandFilter([])}
             >
-              All
+              {t('ota.filter.all')}
             </button>
             {availableBands.map((b) => (
               <button
@@ -537,14 +596,14 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
 
         {/* Mode filter chips */}
         {availableModes.length > 0 && (
-          <div className="pota-filter-row" role="group" aria-label="Mode filter">
-            <span className="pota-filter-label">Mode</span>
+          <div className="pota-filter-row" role="group" aria-label={t('ota.filter.mode.aria')}>
+            <span className="pota-filter-label">{t('ota.filter.mode.label')}</span>
             <button
               type="button"
               className={`filter-chip${modeFilter === 'All' ? ' active' : ''}`}
               onClick={() => setModeFilter('All')}
             >
-              All
+              {t('ota.filter.all')}
             </button>
             {availableModes.map((m) => (
               <button
@@ -561,26 +620,27 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
 
         {/* Sort (sortable-everywhere). Cards, not a column grid — so a picker rather
             than clickable headers; the arrow flips direction. */}
-        <div className="pota-filter-row" role="group" aria-label="Sort spots">
-          <span className="pota-filter-label">Sort</span>
+        <div className="pota-filter-row" role="group" aria-label={t('ota.sort.aria')}>
+          <span className="pota-filter-label">{t('ota.sort.label')}</span>
           <select
             className="pota-sort-pick"
             value={sortKey}
             onChange={(e) => setSortKey(e.target.value as OtaSort)}
-            title="How the spot list is ordered"
+            title={t('ota.sort.title')}
           >
-            <option value="value">Workable now</option>
-            <option value="activator">Activator</option>
-            <option value="reference">Reference</option>
-            <option value="band">Band / freq</option>
-            <option value="mode">Mode</option>
+            {/* The <option> VALUES are the persisted sort keys; only the labels are prose. */}
+            <option value="value">{t('ota.sort.value')}</option>
+            <option value="activator">{t('ota.sort.activator')}</option>
+            <option value="reference">{t('ota.sort.reference')}</option>
+            <option value="band">{t('ota.sort.band')}</option>
+            <option value="mode">{t('ota.sort.mode')}</option>
           </select>
           <button
             type="button"
             className="filter-chip"
             onClick={() => setSortAsc((v) => !v)}
-            title={sortAsc ? 'Ascending — click for descending' : 'Descending — click for ascending'}
-            aria-label={sortAsc ? 'Sort ascending' : 'Sort descending'}
+            title={sortAsc ? t('ota.sort.asc.title') : t('ota.sort.desc.title')}
+            aria-label={sortAsc ? t('ota.sort.asc.aria') : t('ota.sort.desc.aria')}
           >
             {sortAsc ? '▲' : '▼'}
           </button>
@@ -591,10 +651,12 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
       {filtered.length === 0 ? (
         <p className="aw-empty pota-empty">
           {loading
-            ? 'Loading…'
+            ? t('ota.loading')
             : bandFilter.length > 0 || modeFilter !== 'All'
-              ? 'No activators match the current filters.'
-              : `No ${program === 'Both' ? 'POTA or SOTA' : program} activators spotted right now.`}
+              ? t('ota.empty.filtered')
+              : t('ota.empty', {
+                  program: program === 'Both' ? t('ota.programs.both') : program,
+                })}
         </p>
       ) : (
         <ul className="pota-spot-list" role="list">
@@ -606,10 +668,9 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
               `${s.program} ${s.reference} — ${fullName}`,
               `${fmtFreq(s.freqKhz)} · ${displayMode} · ${band}`,
             ]
-            if (s.spotter) tooltipParts.push(`Spotted by ${s.spotter}`)
+            if (s.spotter) tooltipParts.push(t('ota.spot.spottedBy', { spotter: s.spotter }))
             if (s.comment) tooltipParts.push(s.comment)
-            if (s.bandOpen)
-              tooltipParts.push('BAND OPEN — your signal is being received on this band right now (workable)')
+            if (s.bandOpen) tooltipParts.push(t('ota.spot.bandOpen.tooltip'))
             const tooltip = tooltipParts.join('\n')
 
             return (
@@ -629,17 +690,17 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
                       {s.newPark && (
                         <span
                           className="pota-badge pota-badge-new"
-                          title="You have never logged this park/summit — a new one"
+                          title={t('ota.badge.newPark.title')}
                         >
-                          NEW PARK
+                          {t('ota.badge.newPark')}
                         </span>
                       )}
                       {s.bandOpen && (
                         <span
                           className="pota-badge pota-badge-open"
-                          title="Your signal is being received on this band right now — workable"
+                          title={t('ota.badge.bandOpen.title')}
                         >
-                          BAND OPEN
+                          {t('ota.badge.bandOpen')}
                         </span>
                       )}
                     </span>
@@ -662,10 +723,14 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
                   type="button"
                   className="pota-hunt-btn"
                   onClick={() => void handleHunt(s)}
-                  title={`Hunt ${s.activator} on ${s.reference} — QSY to ${fmtFreq(s.freqKhz)} and tag next QSO`}
-                  aria-label={`Hunt ${s.activator}`}
+                  title={t('ota.hunt.button.title', {
+                    call: s.activator,
+                    reference: s.reference,
+                    freq: fmtFreq(s.freqKhz),
+                  })}
+                  aria-label={t('ota.hunt.button.aria', { call: s.activator })}
                 >
-                  HUNT
+                  {t('ota.hunt.label')}
                 </button>
               </li>
             )
@@ -674,8 +739,7 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
       )}
 
       <p className="settings-hint pota-source-hint">
-        Live from {program === 'SOTA' ? 'SOTAwatch' : program === 'Both' ? 'pota.app + SOTAwatch' : 'pota.app'}.
-        Auto-refreshes every 60 s. Click HUNT to QSY and tag the next logged QSO.
+        {t('ota.source.hint', { source: SOURCES[program] })}
       </p>
     </section>
   )

@@ -3,11 +3,16 @@
 import { Zap } from 'lucide-react'
 import type { OpeningView } from '../../types'
 import { modeClass } from './OpeningsLogPane'
+import { t } from '../../i18n'
 
 function agoLabel(secs: number): string {
   if (secs <= 0) return ''
   const m = Math.round(secs / 60)
-  return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`
+  return m < 1
+    ? t('prop.opening.ago.justNow')
+    : m < 60
+      ? t('prop.opening.ago.mins', { mins: m })
+      : t('prop.opening.ago.hours', { hours: Math.round(m / 60) })
 }
 
 export function OpeningStrip({
@@ -29,18 +34,26 @@ export function OpeningStrip({
             key={i}
             onClick={onBandClick ? () => onBandClick(o.band) : undefined}
             role={onBandClick ? 'button' : undefined}
-            title={onBandClick ? `Focus ${o.band} on the map — where IS this opening?` : undefined}
+            title={onBandClick ? t('prop.opening.focus.title', { band: o.band }) : undefined}
           >
             <span className="opening-band">
               <Zap size={15} strokeWidth={2.25} aria-hidden="true" />
-              {o.band} OPEN
+              {t('prop.opening.bandOpen', { band: o.band })}
             </span>
-            {o.isNew && <span className="opening-new">NEW</span>}
+            {o.isNew && <span className="opening-new">{t('prop.opening.new')}</span>}
             <span className={`opening-mode opening-mode--${modeClass(o.mode)}`}>{o.mode}</span>
             <span className="opening-detail">
-              point {o.octant} · ~{Math.round(o.maxKm).toLocaleString()} km · {o.stations} stations
-              {o.reciprocalPairs > 0 && ` (${o.reciprocalPairs} 2-way)`} · {o.confidence}
-              {ago && ` · opened ${ago}`}
+              {t('prop.opening.detail', {
+                octant: o.octant,
+                km: Math.round(o.maxKm).toLocaleString(),
+                stations: o.stations,
+                reciprocal:
+                  o.reciprocalPairs > 0
+                    ? t('prop.opening.reciprocal', { count: o.reciprocalPairs })
+                    : '',
+                confidence: o.confidence,
+                opened: ago ? t('prop.opening.opened', { ago }) : '',
+              })}
             </span>
             {o.note && <span className="opening-note">{o.note}</span>}
           </div>

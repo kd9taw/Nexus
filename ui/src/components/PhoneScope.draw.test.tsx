@@ -29,6 +29,9 @@ const ROW = Array.from({ length: 512 }, (_, i) => (i === 200 ? 0.9 : 0.1))
 
 let rowsServed = 0
 let spanAsked: [number, number] | null = null
+/** What the served row claims to be. Default = the demodulated-audio row every existing
+ *  test here assumes; the native-panadapter tests swap in a real RF extent. */
+let rowShape: { loHz: number; hiHz: number; source: string } = { loHz: 0, hiHz: 4000, source: 'rx' }
 vi.mock('../api', () => ({
   getScopeRow: (_tx: boolean, loHz: number, hiHz: number) => {
     rowsServed++
@@ -36,7 +39,7 @@ vi.mock('../api', () => ({
     // Answer WIDER than asked — the real backend's refusal path (native RF live, span not a
     // sane audio window, narrow row not produced yet). The row states its own extent, and
     // that extent is what everything downstream must read.
-    return Promise.resolve({ row: ROW, loHz: 0, hiHz: 4000, source: 'rx' })
+    return Promise.resolve({ row: ROW, ...rowShape })
   },
 }))
 
@@ -88,6 +91,7 @@ let realCaf: typeof cancelAnimationFrame
 
 beforeEach(() => {
   rowsServed = 0
+  rowShape = { loHz: 0, hiHz: 4000, source: 'rx' }
   const rec = recordingCtx()
   calls = rec.calls
   ops = rec.ops
@@ -348,5 +352,93 @@ describe('carrier-centered Phone axis', () => {
       document.querySelector('.ph-scope-dyn')?.textContent,
       'peak-over-noise is measured where the voice actually is',
     ).toBe('▲96 dB')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// THE DIAL ON A NATIVE RF PANADAPTER (operator request, 2026-08-20, from an IC-7300 user:
+// "The RF Panadapter is now displayed! Is there a way to place a dial indicator on the freq
+// tuned?").
+//
+// The carrier line the block above tests is `!isRfScopeSource` by construction — it marks
+// audio axis 0, which a real RF row does not have — so a native panadapter drew a spectrum
+// with nothing marking the tuned frequency. These serve a REAL RF row (source 'civ', an
+// absolute-Hz extent) to the same component and assert where the mark lands.
+//
+// The geometry, stated so the numbers below are checkable rather than recorded: the row runs
+// 14.0000–14.2000 MHz over W=200 px, so 1 kHz per pixel.
+const RF_LO = 14_000_000
+const RF_HI = 14_200_000
+
+/** Serve a native CI-V panadapter row spanning RF_LO..RF_HI. */
+function rfRow() {
+  rowShape = { loHz: RF_LO, hiHz: RF_HI, source: 'civ' }
+}
+
+describe('the dial mark on a native RF panadapter', () => {
+  it('draws a labelled line at the tuned frequency', async () => {
+    stubRect()
+    rfRow()
+    // Dial a quarter of the way up the row: 14.05 MHz → x = (50_000/200_000)*200 = 50.
+    render(
+      <PhoneScope
+        transmitting={false}
+        theme="dark"
+        viewLoHz={0}
+        viewHiHz={4000}
+        dialHz={14_050_000}
+      />,
+    )
+    await runFrames(300)
+
+    expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
+    const rules = verticalRules()
+    expect(rules.length, 'control: no full-height rule was drawn at all').toBeGreaterThan(0)
+    // scopeView centres the RF window on the dial when the dial is inside the row, so the
+    // mark lands mid-canvas. What is asserted is that it lands ON THE DIAL, whatever the
+    // window arithmetic decides — the x is derived from the same lo/hi the row was painted
+    // with, so it cannot disagree with the picture.
+    const label = ops.filter((o) => o.op === 'fillText')
+    expect(label.length, 'the line is labelled, like a rig marks its dial').toBeGreaterThan(0)
+    const labelX = label[0].args[0]
+    expect(
+      rules.some((x) => Math.abs(x - labelX) < 12),
+      'the DIAL label sits at a full-height rule',
+    ).toBe(true)
+  })
+
+  it('CONTROL: an RF row with no dial known draws no dial mark', async () => {
+    // The same check against a scope that must NOT trip it. Without this, "a rule was drawn"
+    // would pass on a component that ruled every column — and, more to the point, on the
+    // OLD code, which drew nothing here and would have to be caught by this test failing.
+    stubRect()
+    rfRow()
+    render(<PhoneScope transmitting={false} theme="dark" viewLoHz={0} viewHiHz={4000} dialHz={null} />)
+    await runFrames(300)
+
+    expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
+    expect(ops.filter((o) => o.op === 'fillText'), 'nothing may be labelled DIAL').toHaveLength(0)
+  })
+
+  it('does not mark a dial that is outside the window', async () => {
+    // A dial off the edge is not clamped to the edge: a line pinned to the left of the
+    // panadapter saying DIAL, while the VFO is a megahertz further down, is worse than no
+    // line. scopeView falls back to the row centre when the dial is outside the row, and the
+    // draw refuses on that fallback rather than marking a frequency nobody is tuned to.
+    stubRect()
+    rfRow()
+    render(
+      <PhoneScope
+        transmitting={false}
+        theme="dark"
+        viewLoHz={0}
+        viewHiHz={4000}
+        dialHz={21_000_000}
+      />,
+    )
+    await runFrames(300)
+
+    expect(rowsServed, 'control: the draw loop never ran').toBeGreaterThanOrEqual(3)
+    expect(ops.filter((o) => o.op === 'fillText'), 'a dial off the row must not be drawn').toHaveLength(0)
   })
 })

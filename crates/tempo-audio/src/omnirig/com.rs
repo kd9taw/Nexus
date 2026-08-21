@@ -76,6 +76,17 @@ fn com_err(what: &str, e: &windows::core::Error) -> OmniError {
     OmniError::Com(format!("{what}: {} (0x{:08X})", e.message(), e.code().0))
 }
 
+/// `HRESULT_FROM_WIN32(ERROR_ELEVATION_REQUIRED)` — 0x800702E4. Written out as the literal
+/// rather than assembled from the Win32 code because that literal is what an operator reads
+/// off the screen and pastes into a bug report, and a grep for it should land here.
+const E_ELEVATION_REQUIRED: u32 = 0x8007_02E4;
+
+/// Pure, so the mapping is testable off Windows: does this HRESULT mean "that server needs
+/// to run elevated and you do not"?
+fn is_elevation_required(code: windows::core::HRESULT) -> bool {
+    code.0 as u32 == E_ELEVATION_REQUIRED
+}
+
 /// Resolve one property/method name on `disp` to its DISPID.
 fn dispid(disp: &IDispatch, name: &str) -> Result<i32, OmniError> {
     let w = wide(name);
@@ -214,6 +225,11 @@ impl OmniRigCom {
             unsafe { CoCreateInstance(&clsid, None, CLSCTX_ALL) }.map_err(|e| {
                 if e.code() == REGDB_E_CLASSNOTREG {
                     OmniError::NotInstalled
+                } else if is_elevation_required(e.code()) {
+                    // Reported by an operator 2026-08-20 as "are there missing settings?" —
+                    // which is exactly how the raw HRESULT reads. There is no setting; the
+                    // registered server wants a higher integrity level than this process has.
+                    OmniError::NeedsElevation
                 } else {
                     com_err("starting OmniRig", &e)
                 }

@@ -1,5 +1,13 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT come from it: the
+// callsign, grid, country, distance, bearing and SNR the card prints (data), the `B4` shorthand
+// and the `QRZ` button label (invariant tokens — see QRZ_LABEL below and the rule in
+// `i18n/index.ts`), and the need-chip words, which live in `features/needVisuals.ts` and are
+// migrated with that registry, not here.
+
 import type { NeedTag, Station, Tier } from '../types'
 import { openQrzPage } from '../api'
+import { t } from '../i18n'
 import { withErrorToast } from '../toast'
 import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
@@ -25,12 +33,17 @@ interface Props {
 }
 
 
+/** The callbook's name, printed on the button. A proper noun, not a word to translate. */
+const QRZ_LABEL = 'QRZ'
+
+/** Worked-before shorthand — the same two characters on every band and in every language. */
+const B4_LABEL = 'B4'
+
 function lastHeardLabel(lastHeardSlot: number, currentSlot: number): string {
   const slots = currentSlot - lastHeardSlot
-  if (slots <= 0) return 'now'
-  if (slots === 1) return '1 slot ago'
-  if (slots < 60) return `${slots} slots ago`
-  return `${Math.round(slots / 4)} min ago`
+  if (slots <= 0) return t('roster.card.heard.now')
+  if (slots < 60) return t('roster.card.heard.slots', { count: slots })
+  return t('roster.card.heard.minutes', { count: Math.round(slots / 4) })
 }
 
 export function StationCard({
@@ -59,13 +72,13 @@ export function StationCard({
         chip ? ` needed need-${chip.cls}` : ''
       }`}
       onDoubleClick={() => onCall(station.call, station.tier)}
-      title={`Double-click to work ${station.call}`}
+      title={t('roster.card.doubleClick', { call: station.call })}
     >
       <button
         type="button"
         className="station-open"
         onClick={() => onSelect(station.call)}
-        title={`Open ${station.call}`}
+        title={t('roster.card.open', { call: station.call })}
       >
         <span className={`presence-dot ${station.presence}`} aria-hidden />
         <span className="station-main">
@@ -84,9 +97,13 @@ export function StationCard({
             {station.worked && (
               <span
                 className={`b4-chip${station.workedBand ? ' b4-band' : ''}`}
-                title={station.workedBand ? 'Worked before on this band' : 'Worked before (another band)'}
+                title={
+                  station.workedBand
+                    ? t('roster.card.b4.sameBand')
+                    : t('roster.card.b4.otherBand')
+                }
               >
-                B4
+                {B4_LABEL}
               </span>
             )}
             {/* Loud on the PRIMARY line (with need/B4/unread) so an ultra-rare grid
@@ -114,20 +131,23 @@ export function StationCard({
         type="button"
         className="station-work"
         onClick={() => onCall(station.call, station.tier)}
-        title={`Work ${station.call}`}
+        title={t('roster.card.work.title', { call: station.call })}
       >
-        Work
+        {t('roster.card.work.label')}
       </button>
       <button
         type="button"
         className="station-qrz"
         onClick={(e) => {
           e.stopPropagation()
-          void withErrorToast(() => openQrzPage(station.call), `Could not open ${station.call} on QRZ`)
+          void withErrorToast(
+            () => openQrzPage(station.call),
+            t('callbook.qrzPage.failed', { call: station.call }),
+          )
         }}
-        title={`${station.call} on QRZ.com (opens your browser)`}
+        title={t('callbook.qrzPage.title', { call: station.call })}
       >
-        QRZ
+        {QRZ_LABEL}
       </button>
     </div>
   )

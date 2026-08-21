@@ -65,7 +65,11 @@ A prominent **band picker** in the cockpit header shows and selects your band. I
 | `Shift`+`PgUp` | +4 WPM |
 | `Shift`+`PgDn` | −4 WPM |
 
-Speed changes are applied immediately to the next character queued. On the CAT back-end, the new WPM value is also pushed to the rig via `KEYSPD`; on the WinKeyer back-end it is pushed to the keyer's Set-Speed command.
+Speed changes apply to the next word keyed, on every back-end.
+
+On the **WinKeyer** back-end the new speed is also sent to the keyer the moment you move the slider — while it is idle between overs, and part-way through a message too, because a WinKeyer holds a speed of its own and would otherwise keep sending at whatever its front-panel pot or power-on default gave it. Nexus opens the keyer's port on the first word you send, and re-sends the speed whenever that port opens, so a keyer plugged in late or power-cycled mid-session comes back at your speed rather than its own.
+
+On the **CAT** back-end the new WPM reaches the rig via `KEYSPD` at the start of the next send, not while you are idle. That is deliberate: the CAT link also carries dial, mode and meter traffic, and one drag of the slider is dozens of values.
 
 ---
 

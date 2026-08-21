@@ -2,9 +2,18 @@
 // PORTALED for the same reason CountryExcludePicker is (the chip bar's clip would swallow an
 // inline popover in the narrow rail) — with one text field. The list itself lives in
 // features/hideCalls.ts; every pane subscribes, so a pane and its control never disagree.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The prefixes the
+// placeholder offers are technical tokens and live below as HIDE_EXAMPLES; the ones quoted
+// inside the note stay in the sentence, as `ADIF OPERATOR` does in the Station hint.
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { useEffect, useState } from 'react'
 import { useHideCalls } from '../features/hideCalls'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
+
+/** Example entries — a callsign and two prefix wildcards. Syntax, not words. */
+const HIDE_EXAMPLES = 'VP8* R0* K1ABC'
 
 export function HideCallsPicker() {
   const { entries, setEntries } = useHideCalls()
@@ -19,21 +28,22 @@ export function HideCallsPicker() {
         <button
           type="button"
           className={`od-chip${entries.length > 0 ? ' active' : ''}`}
-          title="Hide callsigns (or VP8*-style prefixes) from this pane — a display filter only; decoding, logging, alerts and the auto-responder are untouched"
+          title={t('hideCalls.chip.title')}
         >
-          Hide calls{entries.length > 0 ? ` · ${entries.length}` : ''}
+          {t('hideCalls.chip.label')}
+          {entries.length > 0 ? ` · ${entries.length}` : ''}
         </button>
       </RM.Trigger>
       <RM.Portal>
         <RM.Content className="ui-menu country-menu" sideOffset={4} align="end" collisionPadding={8}>
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
-            <div className="country-menu-head">Hide these callsigns</div>
+            <div className="country-menu-head">{t('hideCalls.head')}</div>
             <div style={{ padding: '0.4rem 0.6rem' }}>
               <input
                 className="settings-input"
                 type="text"
                 value={text}
-                placeholder="e.g. VP8* R0* K1ABC"
+                placeholder={t('hideCalls.placeholder', { examples: HIDE_EXAMPLES })}
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(e) => setText(e.target.value)}
@@ -47,9 +57,7 @@ export function HideCallsPicker() {
               />
             </div>
             <div className="country-menu-note">
-              Space-separated. A trailing <code>*</code> is a prefix ("VP8*" hides every VP8).
-              A view filter only — the stations you are working and those calling you always
-              show. To stop your auto-CQ from answering a call, Alt-double-click it instead.
+              <T k="hideCalls.note" tags={{ code: <code /> }} />
             </div>
           </div>
         </RM.Content>

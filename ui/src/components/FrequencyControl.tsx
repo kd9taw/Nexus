@@ -1,7 +1,13 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT, and must not: the band-plan channel labels and
+// their dial frequencies, the HF/VHF/UHF group names, the band chip, and the USB/FM mode names —
+// `MODES` is both the button text and the value handed to `onSet`, so it is a token twice over.
+// The channel select's `title` is the plan's own note when it has one; only the fallback is prose.
 import { useMemo } from 'react'
 import type { BandChannel, RadioMode } from '../types'
 import { bandLabelForMhz } from '../band'
 import { bandColor } from '../bandColors'
+import { t } from '../i18n'
 import { FrequencyReadout } from './FrequencyReadout'
 
 interface Props {
@@ -80,19 +86,23 @@ export function FrequencyControl({
   const col = bandColor(band || bandLabelForMhz(dialMhz) || '')
 
   return (
-    <div className={`freq-control ${variant}`} role="group" aria-label="Frequency control">
+    <div className={`freq-control ${variant}`} role="group" aria-label={t('freq.control.aria')}>
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
       <label className="freq-channel-wrap">
-        {variant === 'full' && <span className="settings-label">Band / Channel</span>}
+        {variant === 'full' && <span className="settings-label">{t('freq.channel.label')}</span>}
         <select
           className="freq-channel"
           value={selectValue}
           onChange={(e) => selectChannel(e.target.value)}
-          title={active ? active.note : 'Pick a band-plan channel'}
-          aria-label="Band channel preset"
+          title={active ? active.note : t('freq.channel.title')}
+          aria-label={t('freq.channel.aria')}
           style={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
         >
-          <option value="">{active ? '— Presets —' : `${band || '—'} (custom)`}</option>
+          <option value="">
+            {active
+              ? t('freq.channel.presets')
+              : t('freq.channel.custom', { band: band || '—' })}
+          </option>
           {grouped.map((g) => (
             <optgroup key={g.group} label={g.group}>
               {g.items.map((c) => (
@@ -107,7 +117,7 @@ export function FrequencyControl({
 
       {showReadout && (
         <div className="freq-manual-wrap">
-          {variant === 'full' && <span className="settings-label">Dial (MHz)</span>}
+          {variant === 'full' && <span className="settings-label">{t('freq.dial.label')}</span>}
           <FrequencyReadout
             dialMhz={dialMhz}
             size="hero"
@@ -118,12 +128,12 @@ export function FrequencyControl({
         </div>
       )}
 
-      <div className="freq-band-tag" title={active ? active.note : 'Current band'}>
+      <div className="freq-band-tag" title={active ? active.note : t('freq.band.title')}>
         <span className={`band-chip${active ? ' active' : ''}`}>{band || bandLabelForMhz(dialMhz) || '—'}</span>
       </div>
 
       {showModeToggle && (
-        <div className="freq-mode-toggle" role="group" aria-label="Phone mode">
+        <div className="freq-mode-toggle" role="group" aria-label={t('freq.mode.aria')}>
           {MODES.map((md) => (
             <button
               key={md}

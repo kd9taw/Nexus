@@ -13,6 +13,7 @@
 import type { CalendarEntry, DxpedWindow } from '../../types'
 import { dxpedColorIndex } from './dxpedLanes'
 import { azimuthLabel, azimuthTitle, backendAzimuth } from '../../grid'
+import { t } from '../../i18n'
 
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -23,9 +24,9 @@ function isOnAir(e: CalendarEntry, now: number): boolean {
 
 function startsIn(e: CalendarEntry, now: number): string {
   const d = Math.round((e.startUnix - now) / 86_400)
-  if (d <= 0) return 'on the air now'
-  if (d === 1) return 'starts tomorrow'
-  return `starts in ${d} days`
+  if (d <= 0) return t('dxped.digest.onAirNow')
+  if (d === 1) return t('dxped.digest.startsTomorrow')
+  return t('dxped.digest.startsInDays', { days: d })
 }
 
 /** The best day(s) from the modelled week, named rather than numbered. A day only
@@ -81,8 +82,8 @@ export function DxpedDigest({
   if (ranked.length === 0) return null
 
   return (
-    <section className="dxd" aria-label="What to chase">
-      <h3 className="dxd-h">What to chase</h3>
+    <section className="dxd" aria-label={t('dxped.digest.aria')}>
+      <h3 className="dxd-h">{t('dxped.digest.head')}</h3>
       <ul className="dxd-list">
         {ranked.map((e) => {
           const call = e.call.toUpperCase()
@@ -110,9 +111,9 @@ export function DxpedDigest({
                   </span>
                 ) : null
               })()}
-              <span className="dxd-when">{live ? 'ON THE AIR' : startsIn(e, now)}</span>
+              <span className="dxd-when">{live ? t('dxped.digest.onAir') : startsIn(e, now)}</span>
               {headline && <span className="dxd-best">{headline}</span>}
-              {days && <span className="dxd-days">best {days}</span>}
+              {days && <span className="dxd-days">{t('dxped.digest.bestDays', { days })}</span>}
             </li>
           )
         })}

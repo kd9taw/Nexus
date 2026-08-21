@@ -1,9 +1,21 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The verdict words
+// and the row labels come from the catalog; every reading beside them is data, printed by an
+// invariant formatter (`toFixed`, `Math.round`) and never locale-aware.
+import { t } from '../i18n'
 import type { LinkState, RadioStatus } from '../types'
 
 interface Props {
   link: LinkState
   radio: RadioStatus
 }
+
+/**
+ * The invariant tokens this pill prints, gathered so the guard can prove they never became
+ * catalog entries. `RV` and `dT` are the link report's own FIELD NAMES — `dT` is WSJT-X's,
+ * and a translated one names nothing — and `MHz` / `Hz` are unit symbols: the same characters
+ * in every language (the rule is in `i18n/index.ts`).
+ */
+const LINK_TOKENS = { rv: 'RV', dt: 'dT', mhz: 'MHz', hz: 'Hz' } as const
 
 function quality(link: LinkState): 'solid' | 'marginal' | 'weak' {
   if (link.quality > 0.6) return 'solid'
@@ -15,10 +27,10 @@ export function LinkPill({ link, radio }: Props) {
   const q = quality(link)
   const label =
     q === 'solid'
-      ? `Solid ${fmt(link.snrDb)} dB`
+      ? t('link.quality.solid', { snr: fmt(link.snrDb) })
       : q === 'marginal'
-        ? `Marginal RV${link.rv}`
-        : `Weak ${fmt(link.snrDb)} dB`
+        ? t('link.quality.marginal', { rv: link.rv })
+        : t('link.quality.weak', { snr: fmt(link.snrDb) })
 
   return (
     <div className="telemetry">
@@ -28,28 +40,32 @@ export function LinkPill({ link, radio }: Props) {
       </div>
       <dl className="telemetry-grid">
         <div>
-          <dt>Dial</dt>
-          <dd>{radio.dialMhz.toFixed(3)} MHz</dd>
+          <dt>{t('link.dial.label')}</dt>
+          <dd>
+            {radio.dialMhz.toFixed(3)} {LINK_TOKENS.mhz}
+          </dd>
         </div>
         <div>
-          <dt>Band</dt>
+          <dt>{t('link.band.label')}</dt>
           <dd>{radio.band}</dd>
         </div>
         <div>
-          <dt>Tier</dt>
+          <dt>{t('link.tier.label')}</dt>
           <dd>{link.tier}</dd>
         </div>
         <div>
-          <dt>RV</dt>
+          <dt>{LINK_TOKENS.rv}</dt>
           <dd>{link.rv}</dd>
         </div>
         <div>
-          <dt>dT</dt>
+          <dt>{LINK_TOKENS.dt}</dt>
           <dd>{link.dtSec.toFixed(1)}s</dd>
         </div>
         <div>
-          <dt>Audio f</dt>
-          <dd>{Math.round(link.freqHz)} Hz</dd>
+          <dt>{t('link.audioFreq.label')}</dt>
+          <dd>
+            {Math.round(link.freqHz)} {LINK_TOKENS.hz}
+          </dd>
         </div>
       </dl>
     </div>
