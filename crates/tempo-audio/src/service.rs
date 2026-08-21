@@ -3171,6 +3171,14 @@ impl RadioLoop {
                     self.yaesu_wf_started = now;
                     e.set_scope_error(None);
                 }
+                // NO TRANSPORT IN THIS BUILD. Checked FIRST and answered on its own, because the
+                // SCU-LAN10 probe below is worse than useless here: it would tell an operator to
+                // go and change a menu setting on a build that could not have opened the bridge
+                // whatever that setting said. Name the library and where to get it instead —
+                // one download is a step someone can actually take, a silent panel is not.
+                None if !crate::yaesu_wf::TRANSPORT_COMPILED => {
+                    e.set_scope_error(Some(crate::yaesu_wf::YAESU_WF_NO_LIBRARY.to_string()));
+                }
                 None => {
                     // Say WHICH thing is wrong rather than listing what it might be. The menu is
                     // readable over CAT, so ask it: `1` = on, anything else (including a read we

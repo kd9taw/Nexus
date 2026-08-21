@@ -34,6 +34,7 @@ import {
   setNrLevel,
   setAgc,
   setScopeSpan,
+  setYaesuScopeMode,
   setScopeRef,
   setFlexPanSpan,
   setFlexPanRef,
@@ -293,6 +294,31 @@ const RF_SPANS = [
   },
 ] as const
 
+/** The FT-710's OWN span ladder (CAT reference, `SS` P2=5) — these command the RADIO, not a crop.
+ *
+ *  The operator's expectation, and it is the right one: the app's panadapter should reflect the
+ *  radio's, its settings and its width. Cropping the row client-side shows a narrower window of the
+ *  SAME sweep — ±5 kHz out of 200 kHz is ~42 of 850 bins stretched across the panel, which is why
+ *  it looked coarse. Asking the RADIO for a 10 kHz sweep puts all 850 bins across it: 12 Hz per bin
+ *  instead of 235.
+ *
+ *  `label` is the radio's own name for the rung (the FT-710 menu says "200 kHz", never "±100k").
+ *  `halfHz` is what goes on the wire, because `setScopeSpan` was written for Icom CI-V 27 15 and its
+ *  argument is ± half the sweep; the backend doubles it back. Every rung the rig has is offered —
+ *  a span it cannot sweep is refused rather than rounded, so the two ladders cannot drift apart. */
+const YAESU_SPANS = [
+  { label: '1k', halfHz: 500 },
+  { label: '2k', halfHz: 1_000 },
+  { label: '5k', halfHz: 2_500 },
+  { label: '10k', halfHz: 5_000 },
+  { label: '20k', halfHz: 10_000 },
+  { label: '50k', halfHz: 25_000 },
+  { label: '100k', halfHz: 50_000 },
+  { label: '200k', halfHz: 100_000 },
+  { label: '500k', halfHz: 250_000 },
+  { label: '1M', halfHz: 500_000 },
+] as const
+
 /** RIG scope-span presets (native Icom CI-V only) — these change the RADIO's real panadapter
  *  sweep width via CI-V 27 15 (± half-width in Hz), from the rig's own span table. Unlike the
  *  client-side RF zoom above, this commands the hardware. */
@@ -396,6 +422,37 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // framing (the "RX audio" label and the audio-Hz span chips) so the operator sees ONE unambiguous
   // display — the panadapter — instead of RF spectrum wrapped in audio-passband chrome.
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // The FT-710 is the one native scope whose SPAN this app can command over plain CAT, so its
+  // control row is the rig's own ladder rather than a client-side crop. Icom/Flex keep the crop:
+  // their hardware span already has its own row (RIG_SPANS / FLEX_SPANS) further down.
+  // TWO DIFFERENT QUESTIONS, and conflating them cost the operator the only way out of FIX.
+  //
+  // `yaesuScope` — does this radio have a scope Nexus is talking to? True as soon as the mode code
+  // has been read over CAT, which happens whether or not the sweep can be PLACED. The controls hang
+  // off this.
+  // `yaesuRf` — are RF rows arriving right now? The view bounds hang off this, because when the feed
+  // falls back to sound-card audio the axis really is audio.
+  //
+  // Gating the controls on the feed made them vanish exactly when they were needed: in FIX with no
+  // start stated, no rows flow, so the panadapter block unmounted — taking the "FIX starts here"
+  // button with it, and leaving no way to state the start that would bring the rows back.
+  const yaesuScope = snap.radio.scopeModeCode != null
+  const yaesuRf = scopeFeed?.source === 'yaesu'
+  // What the radio reports, so the two selects show the rig's state rather than a local guess.
+  // `scopeModeCode` is the `SS` P3 byte widened for JSON; an unknown code shows as Center, which is
+  // the only position this app can place anyway.
+  const yaesuPosition: 'center' | 'cursor' | 'fix' = (() => {
+    switch (snap.radio.scopeModeCode ?? 0x34) {
+      case 0x31: case 0x36: case 0x37: return 'cursor'
+      case 0x32: case 0x39: case 0x41: return 'fix'
+      default: return 'center'
+    }
+  })()
+  // The span the radio is sweeping, matched back onto the ladder for the <select>'s value.
+  const yaesuSpanLabel =
+    YAESU_SPANS.find((sp) => scopeFeed != null && Math.abs((scopeFeed.hiHz - scopeFeed.loHz) - sp.halfHz * 2) < sp.halfHz * 0.1)?.label ??
+    YAESU_SPANS[7].label
+
   // True only when the rig's own Icom scope is streaming (span/ref are Icom CI-V commands; the
   // Flex panadapter has a different control path, so gate on 'civ' specifically, not any RF feed).
   const civScope = scopeFeed?.source === 'civ'
@@ -1273,7 +1330,45 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           <PalettePicker />
         </div>
         <div className="ph-scope-wrap" ref={scopeRef} title={t('phone.scope.tuneHint')}>
-          {nativeRf ? (
+          {yaesuScope ? (
+            // The FT-710 sweeps its own span and owns where the sweep sits, so these command the RADIO
+            // and the app draws what comes back. Two compact <select>s rather than thirteen chips: the
+            // rig has ten span rungs and three positions, and a chip row that long crowds the scope it
+            // is supposed to serve.
+            <div className="ph-span" role="group" aria-label={t('phone.scope.yaesu.aria')}>
+              <select
+                className="theme-chip"
+                aria-label={t('phone.scope.yaesu.span.aria')}
+                title={t('phone.scope.yaesu.span.title')}
+                value={yaesuSpanLabel}
+                onChange={(e) => {
+                  const sp = YAESU_SPANS.find((x) => x.label === e.target.value)
+                  if (sp) void setScopeSpan(sp.halfHz).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+                }}
+              >
+                {YAESU_SPANS.map((sp) => (
+                  <option key={sp.label} value={sp.label}>
+                    {sp.label}Hz
+                  </option>
+                ))}
+              </select>
+              <select
+                className="theme-chip"
+                aria-label={t('phone.scope.yaesu.pos.aria')}
+                title={t('phone.scope.yaesu.pos.title')}
+                value={yaesuPosition}
+                onChange={(e) => {
+                  const pos = e.target.value as 'center' | 'cursor' | 'fix'
+                  void setYaesuScopeMode(pos).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+                }}
+              >
+                <option value="center">{t('phone.scope.yaesu.pos.center')}</option>
+                <option value="cursor">{t('phone.scope.yaesu.pos.cursor')}</option>
+                <option value="fix">{t('phone.scope.yaesu.pos.fix')}</option>
+              </select>
+            </div>
+          ) : nativeRf ? (
+
             // Native RF panadapter: RF-width zoom around the dial (not audio-passband slices).
             <div className="ph-span" role="group" aria-label={t('phone.rfZoom.aria')}>
               {RF_SPANS.map((sp) => (
@@ -1309,8 +1404,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             transmitting={snap.radio.transmitting}
             theme={theme}
             smeterDb={smeterDb}
-            viewLoHz={nativeRf ? rfSpan.lo : 0}
-            viewHiHz={nativeRf ? rfSpan.hi : (span.widthHz || Math.min(4000, Math.max(800, filterHz ?? 4000)))}
+            viewLoHz={yaesuRf ? -1e9 : nativeRf ? rfSpan.lo : 0}
+            viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : (span.widthHz || Math.min(4000, Math.max(800, filterHz ?? 4000)))}
             carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}

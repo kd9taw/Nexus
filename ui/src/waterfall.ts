@@ -895,10 +895,15 @@ export function zoomRange(centerHz: number, spanHz: number): { lo: number; hi: n
 }
 
 /** Scope feeds whose rows span ABSOLUTE RF Hz (a native panadapter retuned to the dial:
- * 'flex' = SmartSDR VITA, 'civ' = Icom CI-V scope). ''/'audio' = the soundcard FFT,
- * whose rows span demodulated audio-passband Hz. */
+ * 'flex' = SmartSDR VITA, 'civ' = Icom CI-V scope, 'yaesu' = the FT-710's FT4222 USB→SPI
+ * bridge). ''/'audio' = the soundcard FFT, whose rows span demodulated audio-passband Hz.
+ *
+ * ⚠️ A FEED LABEL THIS PREDICATE DOES NOT KNOW FALLS THROUGH TO THE AUDIO READING, and nothing
+ * errors: the row is drawn against a 0-4000 Hz axis with dB-scaled thresholds instead of its
+ * real RF span. The waterfall is simply wrong. So this list and the labels the backend publishes
+ * are one fact in two places — `yaesu_wf::SOURCE` names this function for the same reason. */
 export function isRfScopeSource(source: string): boolean {
-  return source === 'flex' || source === 'civ'
+  return source === 'flex' || source === 'civ' || source === 'yaesu'
 }
 
 /** Why a rig-scope control pane cannot appear when no native panadapter is streaming —
@@ -906,7 +911,8 @@ export function isRfScopeSource(source: string): boolean {
  *  that pane (Phone's Rig Scope Controls, CW's Scope Controls). Lives here so the reason
  *  and the rule it explains cannot drift apart. */
 export const NO_NATIVE_SCOPE_REASON =
-  'your radio is not streaming its own scope — these appear with an Icom CI-V or FlexRadio panadapter'
+  'your radio is not streaming its own scope — these appear with an Icom CI-V or FlexRadio ' +
+  'panadapter, or an FT-710 with SCU-LAN10 enabled in its menu'
 
 /** Carrier-symmetric modes (FM/AM): the signal straddles the carrier, so an RF scope
  * window should CENTER on the dial rather than hang off one side of it. */

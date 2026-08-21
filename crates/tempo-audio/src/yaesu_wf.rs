@@ -585,6 +585,31 @@ pub fn model_has_ft4222(model: u32) -> bool {
     model == 1049
 }
 
+/// Whether this build actually has the FT4222 transport compiled in.
+///
+/// Exists so the caller can tell the TWO reasons for a silent scope apart. Without it both look
+/// identical from `open_default_source`, and the operator gets told to check a menu setting on a
+/// build that could not have used the bridge whatever the menu said — which is the worst kind of
+/// wrong answer, because it is actionable and it does not work.
+pub const TRANSPORT_COMPILED: bool = cfg!(feature = "yaesu-wf");
+
+/// What to tell the operator when the transport is not in this build.
+///
+/// NAMES THE LIBRARY AND WHERE TO GET IT. The alternative — the feature quietly not appearing —
+/// leaves someone with the right radio and the right cable no way to discover that one download
+/// stands between them and a working panadapter.
+///
+/// It is not bundled, and that is a licence decision rather than an oversight: LibFT4222 and the
+/// D2XX driver under it are FTDI's closed-source binaries. Shipping them inside the .app would
+/// make the distributed whole a combined work with a GPL-incompatible part, and Nexus is
+/// GPL-3.0-only. macOS ships the DriverKit *serial* driver (`/dev/cu.usbserial-*`), which is a
+/// different thing entirely and does not provide the SPI interface this needs.
+pub const YAESU_WF_NO_LIBRARY: &str = "The FT-710 scope needs FTDI's LibFT4222, which macOS does \
+     not ship and which Nexus cannot redistribute (it is closed source; Nexus is GPL-3.0-only). \
+     Install it from https://ftdichip.com/software-examples/ft4222h-software-examples/ and run a \
+     build made with `--features yaesu-wf`. Everything else works without it — this affects the \
+     RF panadapter only.";
+
 /// Open the bridge, or `None` when it is not available for any reason.
 ///
 /// `None` is the ORDINARY answer, not an error path: without the `yaesu-wf` feature there is no
@@ -878,6 +903,42 @@ pub mod ft4222 {
 
 #[cfg(test)]
 mod tests {
+
+    /// The absent-library message must NAME the library and say where to get it.
+    ///
+    /// This is the whole difference between "the feature quietly did not appear" and an operator
+    /// who can act. Pinned by content rather than left to prose drift: someone with the right
+    /// radio and the right cable must be able to read this one string and know what to do.
+    #[test]
+    fn the_absent_library_message_names_the_library_and_where_to_get_it() {
+        let m = YAESU_WF_NO_LIBRARY;
+        assert!(m.contains("LibFT4222"), "names the library: {m}");
+        assert!(m.contains("https://"), "carries a link: {m}");
+        assert!(m.contains("ftdichip.com"), "and the link is FTDI's: {m}");
+        // Says what is NOT affected, so it does not read as "the app is broken".
+        assert!(
+            m.contains("panadapter") || m.contains("Everything else works"),
+            "scopes the impact: {m}"
+        );
+    }
+
+    /// A build without the feature must SAY it has no transport, not merely fail to open.
+    ///
+    /// `TRANSPORT_COMPILED` is what lets the caller answer the right question. If this ever
+    /// reported true on a default build, the operator would be sent to the radio's EX menu to fix
+    /// something the menu cannot fix.
+    #[test]
+    fn a_default_build_reports_no_transport_and_opens_nothing() {
+        if cfg!(feature = "yaesu-wf") {
+            assert!(TRANSPORT_COMPILED, "the feature is on, so the transport is compiled");
+            return;
+        }
+        assert!(!TRANSPORT_COMPILED, "no feature means no transport");
+        assert!(
+            open_default_source().is_none(),
+            "and nothing can be opened without one"
+        );
+    }
     use super::*;
 
     #[test]
