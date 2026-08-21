@@ -158,6 +158,23 @@ jobs:
           }
           floor_ok "deb payload" /tmp/dc/usr/bin/Nexus
           floor_ok "AppImage inner binary" "$appdir/squashfs-root/usr/bin/Nexus"
+          # THE WAYLAND CLIENT LIBRARY MUST NOT BE IN HERE (#138). It has to match the host's
+          # compositor, which is why it is on AppImage's own excludelist; linuxdeploy's GTK plugin
+          # copies it in anyway and build-linux.sh removes it again before signing. That removal is
+          # invisible if it ever stops happening — the AppImage still builds, still installs, and
+          # opens to a blank white window on a distro whose Wayland is newer than the build host's.
+          # So it is asserted on the SHIPPED artifact rather than trusted in the script.
+          if [ -e "$appdir/squashfs-root/usr/lib/libwayland-client.so.0" ]; then
+            echo "the AppImage bundles libwayland-client.so.0, which must come from the host."
+            echo "scripts/build-linux.sh strips it before signing — that step did not run, or ran"
+            echo "and the result was overwritten. See #138 (blank window on Fedora 44)."
+            exit 1
+          fi
+          # Positive control: the check above is a path test, and a path test against a tree that
+          # failed to extract passes for the wrong reason. Something we DO bundle must be present.
+          [ -e "$appdir/squashfs-root/usr/lib/libwebkit2gtk-4.1.so.0" ] \
+            || { echo "AppDir looks wrong: libwebkit2gtk is missing too — the check is broken, not the bundle"; exit 1; }
+          echo "AppImage: libwayland-client.so.0 absent, webkit present — ok"
           mkdir -p out && cp "$app" out/
           # NAME THE PC PACKAGE FOR THE MACHINE IT INSTALLS ON, not just its architecture
           # (operator ask, 1.0.0). Tauri emits Nexus_<ver>_amd64.deb; the Pi jobs emit
