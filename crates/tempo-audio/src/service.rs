@@ -1429,7 +1429,7 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
             rig.set_slow_transport(
                 network || native_civ_addr(t).is_some() || t.is_slow_serial_link(),
             );
-            let ok = probe_cat(&mut rig, t.rigctld_port).ok;
+            let ok = probe_cat(&mut rig, t).ok;
             (rig, Some(proc), ok)
         }
         Err(_) => (Rig::vox(), None, Some(false)),
@@ -9770,12 +9770,13 @@ fn finish_cat_open(rig: &mut Rig, t: &Transport) -> CatProbe {
     // app. The first genuine command happens when the operator enters a cockpit,
     // clicks a spot, or keys up (ensure_commanded / the retune paths). Do NOT re-add
     // a command here: launch_never_commands_the_rig pins this.
-    probe_cat(rig, t.rigctld_port)
+    probe_cat(rig, t)
 }
 
 /// Probe a CAT rig by reading its frequency, mapping failures to a concrete,
 /// operator-actionable message (rigctld unreachable vs. rig not answering).
-fn probe_cat(rig: &mut Rig, port: u16) -> CatProbe {
+fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
+    let port = t.rigctld_port;
     match rig.read_freq() {
         Ok(hz) => CatProbe {
             ok: Some(true),
@@ -9790,8 +9791,35 @@ fn probe_cat(rig: &mut Rig, port: u16) -> CatProbe {
             Some(false),
             format!("rigctld is not reachable on 127.0.0.1:{port}."),
         ),
+        // ⚠️ THE ADVICE MUST MATCH THE TRANSPORT (#144, vsboost, v1.7.5). `read_freq`'s
+        // message ends "check the serial port, baud rate, and that CAT/CI-V is enabled on the
+        // rig" — which is right for a serial rig and actively misleading on OmniRig, where
+        // Nexus opens no serial port and uses no baud AT ALL. His own Settings page says so
+        // two inches above the error: "the Rig Model, Serial Port and Baud above are not
+        // used." He was sent to check three things that do not exist in his setup, while the
+        // thing that does — which OmniRig slot, and whether OmniRig itself has that rig
+        // online — went unmentioned.
+        Err(e) if t.is_omnirig() => CatProbe::status(
+            Some(false),
+            format!(
+                "OmniRig answered, but {} is not reporting a frequency. Open OmniRig's own \
+                 window and check that {} is the radio you mean and that it shows ONLINE — a \
+                 slot that is configured but not talking to the rig reads exactly like this. \
+                 If your radio is on OmniRig's other slot, change OmniRig Radio in Settings ▸ \
+                 Radio. Nexus opens no serial port of its own on this connection, so the Serial \
+                 Port and Baud settings are not the cause. ({e})",
+                omnirig_slot_label(t),
+                omnirig_slot_label(t),
+            ),
+        ),
         Err(e) => CatProbe::status(Some(false), format!("CAT error: {e}")),
     }
+}
+
+/// "RIG 1" / "RIG 2" — what OmniRig's OWN window calls the slot, so the message names the
+/// thing the operator is being asked to look at rather than an internal number.
+fn omnirig_slot_label(t: &Transport) -> &'static str {
+    crate::omnirig::RigSlot::from_setting(t.omnirig_slot).label()
 }
 
 /// Build a serial-PTT rig and verify the control line opens (unkeyed = safe).
@@ -9816,7 +9844,7 @@ fn probe_serial(port: &str, line: SerialLine) -> RigOpen {
 /// doesn't fight the running rigctld for the serial port.
 fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
     match t.ptt_method.as_str() {
-        "cat" if t.cat_available() => probe_cat_or_explain(rig, t.rigctld_port),
+        "cat" if t.cat_available() => probe_cat_or_explain(rig, t),
         "cat" => (
             Some(false),
             "CAT selected but no rig model is set — pick your rig in Settings.".to_string(),
@@ -9824,7 +9852,7 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
         // Shared CAT+keying port: rigctld owns the port and there IS a live control channel, so
         // Test CAT must probe it. Reporting "Serial PTT on COM5" here would contradict what the
         // app is actually doing and hide a genuinely broken CAT link behind a green pill.
-        _ if keys_on_the_cat_port(t) => probe_cat_or_explain(rig, t.rigctld_port),
+        _ if keys_on_the_cat_port(t) => probe_cat_or_explain(rig, t),
         "rts" | "dtr" => {
             let shown = if t.ptt_port().is_empty() {
                 "(no port set)"
@@ -9851,7 +9879,7 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
         }
         // VOX with a CAT rig configured: keying is VOX, but CAT control is live, so the
         // Test-CAT button must probe the (real) control channel — not report "no CAT".
-        "vox" if t.cat_available() => probe_cat_or_explain(rig, t.rigctld_port),
+        "vox" if t.cat_available() => probe_cat_or_explain(rig, t),
         _ => (None, "VOX — no CAT.".to_string()),
     }
 }
@@ -9860,9 +9888,9 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
 /// back to a control-less rig: serial-port conflict, or rigctld failed to launch),
 /// `read_freq` would return a misleading "not a CAT rig" error. Detect that up front
 /// and explain the real cause instead.
-fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
+fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
     if rig.has_control() {
-        let p = probe_cat(rig, port);
+        let p = probe_cat(rig, t);
         (p.ok, p.detail)
     } else {
         (
@@ -11313,6 +11341,62 @@ mod tests {
             wire.windows(2).any(|w| w == crate::winkeyer::wpm_cmd(20)),
             "a configured keyer must be told the operator's speed without waiting to be sent \
              to — the paddle has no other way to learn it: {wire:02x?}"
+        );
+    }
+
+    /// #144 (vsboost, v1.7.5): OmniRig connected, Test CAT answered
+    /// `rig did not return a frequency (reply "0\n") — check the serial port, baud rate, and
+    /// that CAT/CI-V is enabled on the rig`.
+    ///
+    /// Every one of those three is meaningless on an OmniRig connection: Nexus opens no
+    /// serial port and uses no baud, and his own Settings page says so two inches above the
+    /// error. The advice must match the transport, and it must name the thing that IS the
+    /// likely cause — which OmniRig slot, and whether OmniRig has that rig online.
+    #[test]
+    fn an_omnirig_probe_failure_does_not_send_the_operator_to_a_serial_port() {
+        let mut t = Transport::from_settings(&test_settings());
+        t.rig_conn = "omnirig".into();
+        t.omnirig_slot = 1;
+        // The message the operator actually sees, built from a rig with no control channel so
+        // the read fails the way it did for him.
+        let mut rig = Rig::vox();
+        let detail = probe_cat(&mut rig, &t).detail;
+        let lower = detail.to_ascii_lowercase();
+        // NOT "contains the word baud" — the message mentions the Serial Port and Baud
+        // settings deliberately, to say they are NOT the cause, which is the correction. What
+        // must be gone is the ADVICE to go and check them, which is what he was given.
+        assert!(
+            !lower.contains("check the serial port, baud rate"),
+            "must not send an OmniRig operator to check a serial port: {detail}"
+        );
+        assert!(
+            lower.contains("not the cause") || lower.contains("are not"),
+            "and should say plainly that those settings are not it: {detail}"
+        );
+        assert!(
+            lower.contains("omnirig"),
+            "the message must name the transport it is about: {detail}"
+        );
+        assert!(
+            detail.contains("RIG 1"),
+            "and the SLOT, by the name OmniRig's own window uses: {detail}"
+        );
+
+        // CONTROL, and it is the discrimination that matters: a SERIAL rig must not be handed
+        // the OmniRig sentence. Without this, a branch that fired for every transport would
+        // pass all three assertions above.
+        //
+        // It deliberately does NOT assert the serial ADVICE is present: a rig with no control
+        // channel fails at "not a CAT rig" long before the zero-frequency message that carries
+        // it, and manufacturing a live rigctld here would be testing Hamlib rather than this
+        // branch. What is provable without one is that the OmniRig text is transport-gated.
+        let mut serial_t = Transport::from_settings(&test_settings());
+        serial_t.rig_conn = "serial".into();
+        let mut rig2 = Rig::vox();
+        let serial_detail = probe_cat(&mut rig2, &serial_t).detail;
+        assert!(
+            !serial_detail.to_ascii_lowercase().contains("omnirig"),
+            "a serial rig must not be told about OmniRig slots: {serial_detail}"
         );
     }
 
