@@ -129,6 +129,33 @@ describe('the manual covers what the app ships', () => {
     ).toEqual([])
   })
 
+  it('docs/shipped.json matches what the app actually exports', () => {
+    // shipped.json is what the WEBSITE checks its feature list against, and it is produced by
+    // a regex over the registry — the same technique that under-reported 8 of 22 sections
+    // twice in one afternoon, once in my analysis and once inside the generator written to
+    // prevent it. So the generated file is verified here against the imported module: the
+    // generator stays convenient, and this is what makes it trustworthy.
+    const shipped = JSON.parse(readFileSync(`${docsDir}shipped.json`, 'utf8'))
+    const fromModule = sectionFeatures()
+      .map((f) => `${f.id}=${f.label}`)
+      .sort()
+    const fromFile = shipped.sections
+      .map((s: { id: string; label: string }) => `${s.id}=${s.label}`)
+      .sort()
+    // IDS **AND LABELS**. Comparing ids alone is not enough, and that is not a theoretical
+    // tightening: the generator's first version stamped every one of the 21 sections with the
+    // label 'CW' — an unbounded backwards regex that found the first label in the file — and
+    // an id-only comparison passed it happily. The website then checked its features page for
+    // the word "CW", found it, and reported full coverage while PSK was absent. The LABEL is
+    // what downstream consumers actually search for, so the label is what has to be right.
+    expect(
+      fromFile,
+      'docs/shipped.json is stale or the generator mis-parsed — run: node scripts/gen-shipped.mjs',
+    ).toEqual(fromModule)
+    expect(shipped.tiers, 'shipped.json lost its tier list').toContain('FT8')
+    expect(shipped.platforms, 'shipped.json lost macOS again').toContain('macOS')
+  })
+
   it('every platform we publish an installer for is named in install.md', () => {
     // The macOS case: it shipped at 1.5.0 as a signed, notarised build in every release, and
     // the places that tell an operator it exists were written before it did. install.md is
