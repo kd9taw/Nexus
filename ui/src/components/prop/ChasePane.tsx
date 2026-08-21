@@ -7,19 +7,36 @@ import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
 import { buildChaseTargets, type ChaseTarget } from '../../features/chase'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../../grid'
+import { t } from '../../i18n'
 
 function ageLabel(secs: number | null): string {
   if (secs == null) return ''
-  return secs < 60 ? `${secs}s ago` : `${Math.round(secs / 60)}m ago`
+  return secs < 60
+    ? t('chase.age.secs', { secs })
+    : t('chase.age.mins', { mins: Math.round(secs / 60) })
 }
 
-/** openness → a short plain phrase + a css state class for the row's accent. */
-function openPhrase(t: ChaseTarget): { text: string; cls: string } {
-  if (t.openNow) return { text: `${t.band} is open (${t.workability}) — call now`, cls: 'open' }
-  if (t.workability === 'Marginal')
-    return { text: `${t.band} marginal${t.window ? ` · best ${t.window}` : ''}`, cls: 'marginal' }
-  if (t.window) return { text: `${t.band} closed now · best ${t.window}`, cls: 'closed' }
-  return { text: t.band, cls: 'unknown' }
+/** openness → a short plain phrase + a css state class for the row's accent. The
+ * workability word and the window are the backend's own, interpolated verbatim. */
+function openPhrase(target: ChaseTarget): { text: string; cls: string } {
+  if (target.openNow)
+    return {
+      text: t('chase.open.now', { band: target.band, workability: target.workability }),
+      cls: 'open',
+    }
+  if (target.workability === 'Marginal')
+    return {
+      text: `${t('chase.open.marginal', { band: target.band })}${
+        target.window ? t('chase.open.best', { window: target.window }) : ''
+      }`,
+      cls: 'marginal',
+    }
+  if (target.window)
+    return {
+      text: t('chase.open.closed', { band: target.band, window: target.window }),
+      cls: 'closed',
+    }
+  return { text: target.band, cls: 'unknown' }
 }
 
 export function ChasePane({ ctx }: { ctx: PaneContext }) {
@@ -30,48 +47,48 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
   return (
     <section className="chase-pane panel">
       <ul className="chase-list">
-        {targets.slice(0, 12).map((t) => {
-          const chip = t.tags[0] ? NEED_CHIP[t.tags[0]] : null
-          const op = openPhrase(t)
+        {targets.slice(0, 12).map((target) => {
+          const chip = target.tags[0] ? NEED_CHIP[target.tags[0]] : null
+          const op = openPhrase(target)
           return (
-            <li key={`${t.call}-${t.band}`} className={`chase-row is-${op.cls}`}>
+            <li key={`${target.call}-${target.band}`} className={`chase-row is-${op.cls}`}>
               <div
                 className="chase-main"
-                onClick={() => ctx.onSelectCall(t.call)}
-                title={`Show ${t.call} on the map`}
+                onClick={() => ctx.onSelectCall(target.call)}
+                title={t('chase.row.show.title', { call: target.call })}
               >
                 <div className="chase-head">
                   {chip && <span className={`need-chip need-${chip.cls}`}>{chip.label}</span>}
-                  <b className="chase-call">{t.call}</b>
+                  <b className="chase-call">{target.call}</b>
                   {ctx.onPoint && (
                     <button
                       type="button"
                       className="np-point"
-                      title={`Point the antenna at ${t.call}`}
+                      title={t('chase.row.point.title', { call: target.call })}
                       onClick={(e) => {
                         e.stopPropagation()
-                        ctx.onPoint!(t.call)
+                        ctx.onPoint!(target.call)
                       }}
                     >
                       ↗
                     </button>
                   )}
-                  <span className="chase-entity">{t.entity}</span>
+                  <span className="chase-entity">{target.entity}</span>
                   {/* The heading beside the entity — this is the pane with a
                       point-the-antenna button on the same row, so the number the
                       button is about should be readable without pressing it. */}
                   {(() => {
-                    const az = azimuthTo(ctx.myGrid, null, t.entity, ctx.entityCentroids)
+                    const az = azimuthTo(ctx.myGrid, null, target.entity, ctx.entityCentroids)
                     return az ? (
-                      <span className="chase-az" title={azimuthTitle(az, t.entity)}>
+                      <span className="chase-az" title={azimuthTitle(az, target.entity)}>
                         {azimuthLabel(az)}
                       </span>
                     ) : null
                   })()}
-                  {t.ageSecs != null && <span className="chase-age">{ageLabel(t.ageSecs)}</span>}
+                  {target.ageSecs != null && <span className="chase-age">{ageLabel(target.ageSecs)}</span>}
                 </div>
                 <div className={`chase-open o-${op.cls}`}>{op.text}</div>
-                {t.evidence && <div className="chase-evi">{t.evidence}</div>}
+                {target.evidence && <div className="chase-evi">{target.evidence}</div>}
               </div>
               {ctx.onWorkSpot && (
                 <button
@@ -79,15 +96,15 @@ export function ChasePane({ ctx }: { ctx: PaneContext }) {
                   className="chase-work"
                   onClick={() =>
                     ctx.onWorkSpot!({
-                      call: t.call,
-                      band: t.band,
-                      mode: t.mode,
-                      freqMhz: t.freqMhz,
+                      call: target.call,
+                      band: target.band,
+                      mode: target.mode,
+                      freqMhz: target.freqMhz,
                     })
                   }
-                  title="Rig jumps to this band/mode/frequency; the cockpit opens"
+                  title={t('chase.row.work.title')}
                 >
-                  ▶ Work
+                  {t('chase.row.work.label')}
                 </button>
               )}
             </li>

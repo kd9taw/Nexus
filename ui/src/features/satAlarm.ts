@@ -7,8 +7,15 @@
 // times (SGP4 geometry), so there's no window-walking or date gate: the pass
 // list handed to the tick is already bounded to the operator's grid + horizon.
 
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
+// two firing messages are WHOLE sentences in the catalog — the bird is up, or
+// it is about to rise — never one sentence with a clause dropped into the
+// middle of it. The bird's name, the clock times and the elevation are data.
+
 import { doubleBeep } from '../alerts'
 import { pushToast } from '../toast'
+import { t } from '../i18n'
 import type { SatPass } from '../types'
 
 const ALARMS_KEY = 'nexus.sats.alarms'
@@ -186,15 +193,21 @@ export function checkSatAlarms(passes: SatPass[] | null, nowMs: number): void {
     firedSession.add(key)
     markFired(key)
     startAlarmLoop()
-    const rises =
+    const maxEl = Math.round(p.maxElDeg)
+    const message =
       nowSecs >= p.aosUnix
-        ? `is UP now (LOS ${HHMM(p.losUnix)})`
-        : `rises ${HHMM(p.aosUnix)} (~${Math.max(1, Math.round((p.aosUnix - nowSecs) / 60))} min)`
+        ? t('sat.alarm.up', { name: p.name, los: HHMM(p.losUnix), maxEl })
+        : t('sat.alarm.rises', {
+            name: p.name,
+            aos: HHMM(p.aosUnix),
+            mins: Math.max(1, Math.round((p.aosUnix - nowSecs) / 60)),
+            maxEl,
+          })
     pushToast(
-      `⏰ ${p.name} ${rises} · max ${Math.round(p.maxElDeg)}°`,
+      message,
       'success',
       0, // persistent — stays until the operator dismisses it
-      { prominent: true, action: () => stopSatAlarmLoop(), actionLabel: 'Stop alarm' },
+      { prominent: true, action: () => stopSatAlarmLoop(), actionLabel: t('sat.alarm.stop') },
     )
   }
 }

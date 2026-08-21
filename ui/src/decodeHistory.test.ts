@@ -3,9 +3,12 @@ import {
   DECODE_FILTERS,
   DecodeHistory,
   fmtUtc,
+  MAX_HISTORY,
+  MAX_ROWS,
   orderEntries,
   passesFilter,
   periodStartMs,
+  renderWindow,
   RX_TOL_HZ,
   TIER_PERIOD_SECS,
 } from './decodeHistory'
@@ -72,8 +75,10 @@ describe('decode history — WSJT-X chronological flow', () => {
     const tx = row({ message: 'PD2BS KD9TAW EN52', freqHz: 1500, mine: true, txAt: 60 })
     h.ingest([tx], 100, 61_000)
     expect(h.entries()[0].slot).toBe(100)
-    // Fill past the cap so the own-TX row is evicted (insertion-oldest first).
-    for (let i = 0; i < 320; i++) {
+    // Fill past the cap so the own-TX row is evicted (insertion-oldest first). Driven off
+    // MAX_HISTORY, not a hardcoded 320: the store was resized once (300 → 3000) and a literal
+    // here silently stopped evicting, which turned this test green while testing nothing.
+    for (let i = 0; i < MAX_HISTORY + 20; i++) {
       h.ingest([row({ message: `CQ T${i}ABC EN${i % 90} X`, freqHz: 400 + i * 5 })], 101, 75_000)
     }
     expect(h.entries().some((d) => d.mine)).toBe(false) // premise: evicted
@@ -203,5 +208,70 @@ describe('period separator UTC', () => {
     expect(fmtUtc(periodStartMs(16, 'FT2'))).toBe('000100')
     // …and slot 17 lands on the 3.75 s grid, not a whole second.
     expect(periodStartMs(17, 'FT2')).toBe(63_750)
+  })
+})
+
+// THE LOOK-BACK PROPERTY (operator, 2026-08-18: "it's good to be able to look back").
+//
+// Both panes ingest the SAME full decode list and filter at render, so the Rx-Frequency
+// pane's history was spent almost entirely on band-wide rows it never displays. On a busy
+// band an 80-decode period filled the old 300-row store in under four minutes, and the two
+// or three rows on your own frequency — the ones the pane exists for — were evicted with
+// them. The store is now sized for what a pane KEEPS; what it RENDERS is capped separately,
+// so the DOM cost of a busy Band Activity pane is unchanged.
+describe('history depth — a filtered pane can still look back', () => {
+  const BUSY = 80
+
+  /** N periods of a busy band, one decode per period on the RX frequency. */
+  function busyBand(periods: number): DecodeHistory {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    for (let p = 0; p < periods; p++) {
+      const slot = 1000 + p
+      const batch = [
+        // The one row this pane exists to show, tagged with its period.
+        row({ message: `CQ ONFREQ${p} AA00`, freqHz: 1500, from: `ONFREQ${p}`, isCq: true }),
+        // …and the rest of the band, which it will filter out at render.
+        ...Array.from({ length: BUSY }, (_, i) =>
+          row({
+            message: `CQ FAR${p}_${i} BB11`,
+            freqHz: 300 + ((i * 137) % 2600),
+            from: `FAR${p}_${i}`,
+            isCq: true,
+          }),
+        ),
+      ]
+      h.ingest(batch, slot, 1_722_500_000_000 + p * 15_000)
+    }
+    return h
+  }
+
+  it('keeps 30 periods of RX-frequency rows through a busy band (7½ minutes)', () => {
+    const shown = busyBand(30)
+      .entries()
+      .filter((d) => passesFilter(d, 'rx', 1500))
+    // Every period's on-frequency row survives — including the first.
+    // EVERY period's own row, oldest included — not merely "some rows survived".
+    const kept = new Set(shown.map((d) => d.from))
+    const missing = Array.from({ length: 30 }, (_, p) => `ONFREQ${p}`).filter((c) => !kept.has(c))
+    expect(missing, 'on-frequency rows evicted by band-wide traffic').toEqual([])
+  })
+
+  it('still bounds the store — an unbounded feed is its own bug', () => {
+    const h = busyBand(120)
+    expect(h.entries().length).toBeLessThanOrEqual(MAX_HISTORY)
+  })
+
+  it('caps what a pane RENDERS independently of what it stores', () => {
+    // The DOM cost is the render cap, not the store: Band Activity sees every row.
+    const all = busyBand(120)
+      .entries()
+      .filter((d) => passesFilter(d, 'all', 1500))
+    const rendered = renderWindow(orderEntries(all, 'time'))
+    expect(rendered.length).toBe(MAX_ROWS)
+    // …and it is the NEWEST rows that survive the cap, never the oldest.
+    const last = rendered[rendered.length - 1]
+    expect(last).toEqual(all[all.length - 1] ?? last)
+    expect(rendered[0].slot).toBeGreaterThan(all[0].slot)
   })
 })

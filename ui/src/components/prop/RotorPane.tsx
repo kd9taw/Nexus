@@ -7,6 +7,14 @@
 // a needle with no rotctld behind it would be an ornament. A configured rotator
 // that does not report its position keeps the pane, with "—" where the needle
 // would be: pointing and STOP do not depend on the readback.
+//
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the prose is in
+// the catalog under `rotor.pane.*`. Its ■ STOP halts ROTATION, not a transmission — it is on no
+// cockpit's stop-line census and no sweep looks for it — so nothing here is deferred.
+//
+// The units rule lands on the COMPASS: every azimuth and elevation in degrees, the true/
+// magnetic `°T`/`°M` marks, the `az°` the entry field asks for and the four cardinal letters
+// are the vocabulary of the instrument and stay in the code.
 import { useEffect, useRef, useState } from 'react'
 import {
   getDeclination,
@@ -20,9 +28,15 @@ import {
 import type { SatTrackStatus } from '../../types'
 import { magneticDeg } from '../../grid'
 import { pushToast } from '../../toast'
+import { t } from '../../i18n'
 
 const SIZE = 148
 const R = SIZE / 2 - 10
+
+/** The instrument's own marks: the compass points, and the abbreviation the bearing field asks
+ *  for. Tokens, named so the catalog guard reads them as a decision. */
+const CARDINALS = ['N', 'E', 'S', 'W']
+const AZ_ENTRY = 'az°'
 
 function azFromClick(e: React.MouseEvent<SVGSVGElement>): number {
   const rect = e.currentTarget.getBoundingClientRect()
@@ -102,7 +116,12 @@ export function RotorPane() {
         setSatTrack(null)
         return pointRotator(d)
       })
-      .catch((e) => pushToast(`Rotator: ${e instanceof Error ? e.message : e}`, 'error'))
+      .catch((e) =>
+        pushToast(
+          t('rotor.pane.slew.failed', { error: e instanceof Error ? e.message : String(e) }),
+          'error',
+        ),
+      )
   }
 
   const needle = (deg: number, len: number) => {
@@ -124,12 +143,12 @@ export function RotorPane() {
           role="img"
           aria-label={
             az != null
-              ? `Rotator at ${Math.round(az)} degrees — click to slew`
-              : 'Rotator — position not reported; click to slew'
+              ? t('rotor.pane.rose.aria', { deg: Math.round(az) })
+              : t('rotor.pane.rose.aria.unknown')
           }
         >
           <circle cx={SIZE / 2} cy={SIZE / 2} r={R} className="rotor-ring" />
-          {['N', 'E', 'S', 'W'].map((c, i) => {
+          {CARDINALS.map((c, i) => {
             const p = needle(i * 90, R - 14)
             return (
               <text key={c} x={p.x} y={p.y + 4} textAnchor="middle" className="rotor-cardinal">
@@ -160,10 +179,10 @@ export function RotorPane() {
             className="rotor-az mono"
             title={
               az == null
-                ? 'This rotator does not report its position — pointing still works'
+                ? t('rotor.pane.az.title.unknown')
                 : mag != null
-                  ? `${Math.round(az)}° true · ${mag}° magnetic (WMM)`
-                  : 'True bearing'
+                  ? t('rotor.pane.az.title.magnetic', { deg: Math.round(az), mag })
+                  : t('rotor.pane.az.title')
             }
           >
             {az == null ? '—°T' : `${Math.round(az)}°T`}
@@ -172,13 +191,16 @@ export function RotorPane() {
           {satTrack && (
             <div
               className="rotor-slewing"
-              title={`Auto-tracking ${satTrack.name} (${satTrack.state}) — the Satellites section owns the rotor until LOS; a manual slew or STOP halts it`}
+              title={t('rotor.pane.track.title', {
+                bird: satTrack.name,
+                state: satTrack.state,
+              })}
             >
               ⟳ {satTrack.name}
             </div>
           )}
           {target != null && (az == null || Math.abs(((target - az + 540) % 360) - 180) > 2) && (
-            <div className="rotor-slewing" title="Commanded heading — the needle is on its way">
+            <div className="rotor-slewing" title={t('rotor.pane.commanded.title')}>
               → {target}°
             </div>
           )}
@@ -188,7 +210,7 @@ export function RotorPane() {
               type="number"
               min={0}
               max={359}
-              placeholder="az°"
+              placeholder={AZ_ENTRY}
               value={entry}
               onChange={(e) => setEntry(e.target.value)}
               onKeyDown={(e) => {
@@ -197,7 +219,7 @@ export function RotorPane() {
                   setEntry('')
                 }
               }}
-              aria-label="Azimuth to slew to (degrees true)"
+              aria-label={t('rotor.pane.entry.aria')}
             />
             <button
               type="button"
@@ -212,18 +234,21 @@ export function RotorPane() {
                     return stopRotator()
                   })
                   .catch((e) =>
-                    pushToast(`Rotator stop: ${e instanceof Error ? e.message : e}`, 'error'),
+                    pushToast(
+                      t('rotor.stop.failed', {
+                        error: e instanceof Error ? e.message : String(e),
+                      }),
+                      'error',
+                    ),
                   )
               }
-              title="Stop rotation NOW"
+              title={t('rotor.pane.stop.title')}
             >
-              ■ STOP
+              {t('rotor.pane.stop.label')}
             </button>
           </div>
           <p className="rotor-hint">
-            {az == null
-              ? 'no position from this rotator — pointing and STOP still work'
-              : 'click the rose or type a bearing · headings are TRUE'}
+            {az == null ? t('rotor.pane.hint.noPosition') : t('rotor.pane.hint')}
           </p>
         </div>
       </div>

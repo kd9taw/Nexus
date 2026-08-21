@@ -7,6 +7,10 @@
 // "no site announced, opens their QRZ page" — instead of promising a webpage and
 // silently delivering something else.
 import type { CalendarEntry } from '../../types'
+import { t } from '../../i18n'
+
+/** QRZ is the site's name, not a word — it is the same four letters in every language. */
+const QRZ_LABEL = 'QRZ'
 
 export type DxpedLinkKind = 'site' | 'qrz'
 
@@ -42,16 +46,16 @@ export function dxpedLink(
   entry: Pick<CalendarEntry, 'call'> & { website?: string | null },
 ): DxpedLink | null {
   const site = usableSite(entry.website)
-  if (site) return { kind: 'site', url: site, label: 'Website' }
+  if (site) return { kind: 'site', url: site, label: t('dxped.link.website') }
   const base = baseCall(entry.call)
   if (!base) return null
-  return { kind: 'qrz', url: `https://www.qrz.com/db/${base}`, label: 'QRZ' }
+  return { kind: 'qrz', url: `https://www.qrz.com/db/${base}`, label: QRZ_LABEL }
 }
 
 /** Tooltip text — always names the actual destination, and says plainly when it
  * is the fallback rather than the operation's own site. */
 export function dxpedLinkTitle(link: DxpedLink): string {
   return link.kind === 'site'
-    ? `Open the expedition's website — ${link.url}`
-    : `No website announced — open their QRZ page instead (${link.url})`
+    ? t('dxped.link.site.title', { url: link.url })
+    : t('dxped.link.qrz.title', { url: link.url })
 }

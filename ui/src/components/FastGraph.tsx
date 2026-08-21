@@ -1,6 +1,10 @@
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): its one
+// operator-visible string — the canvas's accessible name — is in the catalog. The callsigns
+// and the second ticks drawn into the bitmap are data and a measurement scale.
 import { useEffect, useRef } from 'react'
 import { getFastPower } from '../api'
 import type { DecodeRow } from '../types'
+import { t } from '../i18n'
 
 /**
  * The Fast Graph — MSK144's display, replacing the frequency waterfall while that tier is
@@ -166,7 +170,7 @@ export function FastGraph({ periodS, decodes, theme }: Props) {
     <div className="fastgraph-wrap" style={{ position: 'relative', width: '100%', height: '100%' }}>
       <canvas
         ref={canvasRef}
-        aria-label="Fast Graph — signal power across the T/R period; pings draw as spikes"
+        aria-label={t('fastGraph.aria')}
         style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
       />
     </div>

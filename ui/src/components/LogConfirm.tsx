@@ -1,5 +1,10 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT: the band and mode names
+// in the sub-heading and the `—` placeholders, which are data and a glyph, not prose.
+
 import { useState } from 'react'
 import type { LoggedQso } from '../types'
+import { t } from '../i18n'
 
 interface Props {
   /** The completed contact awaiting confirm-before-log. */
@@ -37,10 +42,10 @@ export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
   }
 
   return (
-    <div className="logconfirm-backdrop" role="dialog" aria-modal="true" aria-label="Log QSO">
+    <div className="logconfirm-backdrop" role="dialog" aria-modal="true" aria-label={t('logPrompt.aria')}>
       <div className="logconfirm">
         <div className="logconfirm-head">
-          <h2>Log this QSO?</h2>
+          <h2>{t('logPrompt.title')}</h2>
           <span className="logconfirm-sub">
             {record.band} · {record.mode}
           </span>
@@ -48,7 +53,7 @@ export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
 
         <div className="logconfirm-grid">
           <label>
-            <span>Call</span>
+            <span>{t('logPrompt.call.label')}</span>
             <input
               className="mono"
               value={call}
@@ -57,7 +62,7 @@ export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
             />
           </label>
           <label>
-            <span>Grid</span>
+            <span>{t('logPrompt.grid.label')}</span>
             <input
               className="mono"
               value={grid}
@@ -67,7 +72,7 @@ export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
             />
           </label>
           <label>
-            <span>RST sent</span>
+            <span>{t('logPrompt.rstSent.label')}</span>
             <input
               className="mono"
               value={rstSent}
@@ -76,7 +81,7 @@ export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
             />
           </label>
           <label>
-            <span>RST rcvd</span>
+            <span>{t('logPrompt.rstRcvd.label')}</span>
             <input
               className="mono"
               value={rstRcvd}
@@ -88,10 +93,10 @@ export function LogConfirm({ record, onConfirm, onDiscard }: Props) {
 
         <div className="logconfirm-actions">
           <button type="button" className="logconfirm-discard" onClick={onDiscard}>
-            Discard
+            {t('logPrompt.discard')}
           </button>
           <button type="button" className="logconfirm-log" onClick={confirm} disabled={!call.trim()}>
-            Log QSO
+            {t('logPrompt.log')}
           </button>
         </div>
       </div>

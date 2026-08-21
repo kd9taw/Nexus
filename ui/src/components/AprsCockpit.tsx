@@ -1,3 +1,14 @@
+// ⚠️ THIS FILE IS ON THE PARTIAL LIST (i18n/hardcoded-strings.test.ts), for ONE reason and
+// no other: the TX On/Off ARM LATCH below keeps its label and its two tooltips. They are a
+// transmit-path control's accessible name, and every one of those moves in its own batch
+// with the stop-line sweeps re-run. APRS is the sixth cockpit and renders NO stop control —
+// the latch only holds the queue — so nothing here is on a stop-line census. The file
+// graduates to MIGRATED the moment that batch lands.
+//
+// Everything else operator-visible comes from the catalog. What does NOT: callsign-SSIDs,
+// symbol codes and their table, digipeater paths, the channel list and every dial reading,
+// dBFS levels, positions, grids, distances, bearings, speeds, the packet kind, and the
+// region names the channel list carries — all data, interpolated as values.
 import { MapView } from './MapView'
 import { AprsStationCard } from './AprsStationCard'
 import type { NeedTag, Station } from '../types'
@@ -27,17 +38,36 @@ import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 // The channel list, the grid→channel derivation and the beaconable symbols — shared with the
 // Settings panel so the two surfaces cannot offer different channels or derive different ones.
 import { APRS_FREQS, BEACON_SYMBOLS, resolveAprsChannel } from '../aprsBeacon'
+import { parseOperatorNumber } from '../numInput'
+import { t } from '../i18n'
+
+/** The mode's own name — four letters, the same in every language. */
+const APRS_MODE = 'APRS'
+
+/** The North American APRS channel, named in the failed-checksum advice. A frequency is a
+ * token: it is interpolated into that sentence, never written inside it. */
+const APRS_NA_CHANNEL = '144.390'
+
+/** What a watched-calls entry looks like — callsign-SSIDs, which are wire identifiers. */
+const WATCH_EXAMPLES = 'W9XYZ-9, KD9ABC'
+
+/** Unit symbols printed beside a reading — a unit is a token, and the guard is told so by
+ * these constants. */
+const MHZ_UNIT = 'MHz'
+const KM_UNIT = 'km'
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 function compass(deg: number): string {
   return COMPASS[Math.round(deg / 45) % 8]
 }
 
+/** Compact age. The unit letter rides inside the message with its number, so a translation
+ * can never separate the two. */
 function ageLabel(atUnix: number, nowSec: number): string {
   const s = Math.max(0, nowSec - atUnix)
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m`
-  return `${Math.floor(s / 3600)}h`
+  if (s < 60) return t('aprs.age.secs', { secs: s })
+  if (s < 3600) return t('aprs.age.mins', { mins: Math.floor(s / 60) })
+  return t('aprs.age.hours', { hours: Math.floor(s / 3600) })
 }
 
 // ─── CALIBRATION SEAM ────────────────────────────────────────────────────────────────────────
@@ -68,8 +98,8 @@ function levelLabel(peak: number): string {
   // Say WHICH WINDOW the number measures. It is the peak sample of the most recent ~100 ms drain
   // the decoder consumed — an instantaneous reading, not a decaying meter — so a number that
   // looks alarmingly low may just be the gap between two packets.
-  if (!(peak > 0)) return 'input over the most recent 0.1 s: digital silence (exactly zero)'
-  return `input peak over the most recent 0.1 s: ${Math.round(20 * Math.log10(peak))} dBFS`
+  if (!(peak > 0)) return t('aprs.health.level.silence')
+  return t('aprs.health.level.peak', { db: Math.round(20 * Math.log10(peak)) })
 }
 
 /** How long the tap may go without any samples ARRIVING before the capture counts as dead.
@@ -107,7 +137,9 @@ const HISS_TARGET = '-30 to -25 dBFS'
 
 /** dBFS for a peak, as a bare number (no label). */
 function dbfs(peak: number): string {
-  return peak > 0 ? `${Math.round(20 * Math.log10(peak))} dBFS` : 'silence'
+  return peak > 0
+    ? `${Math.round(20 * Math.log10(peak))} dBFS`
+    : t('aprs.health.dbfs.silence')
 }
 
 /** Headroom advice for a burst, or '' when it sits in the healthy band.
@@ -117,21 +149,20 @@ function dbfs(peak: number): string {
 function burstLevelAdvice(health: AprsHealth): string {
   const peak = Math.max(health.framePeak, health.maxFramePeak)
   if (peak <= 0) return ''
+  // Each is a WHOLE sentence in the catalog; the separator that joins it to the sentence
+  // before belongs to the code, not to a translation.
   if (health.frameClippedSamples > 0 || peak >= CLIPPING_PEAK) {
-    return (
-      ` The burst is CLIPPING (peaked ${dbfs(peak)}, ${health.frameClippedSamples} sample(s) at the ` +
-      'rails) — lower the rig\'s USB AF output level, or the Windows input level for that device. ' +
-      'Packet survives a lot of clipping, so this costs headroom rather than decodes, but there is ' +
-      'no reason to run into the rails.'
-    )
+    return ` ${t('aprs.health.advice.clipping', {
+      peak: dbfs(peak),
+      samples: health.frameClippedSamples,
+    })}`
   }
   if (peak < HEALTHY_BURST_MIN) {
-    return (
-      ` The burst peaked ${dbfs(peak)}, well below the healthy ${dbfs(HEALTHY_BURST_MIN)} to ` +
-      `${dbfs(HEALTHY_BURST_MAX)} band — raise the rig's USB AF output level (IC-9700: SET > ` +
-      'Connectors > USB AF Output Level) or the Windows input level for that device. That buys ' +
-      'margin against noise; it is not by itself why a checksum fails.'
-    )
+    return ` ${t('aprs.health.advice.quiet', {
+      peak: dbfs(peak),
+      min: dbfs(HEALTHY_BURST_MIN),
+      max: dbfs(HEALTHY_BURST_MAX),
+    })}`
   }
   return ''
 }
@@ -256,18 +287,34 @@ function sameRoster(a: AprsStationsView, b: AprsStationsView): boolean {
   return true
 }
 
-/** Short tag shown in the station list's Via column. */
+/** Short tag shown in the station list's Via column.
+ *
+ * The WORDS resolve lazily, through getters: these are module constants the table reads
+ * during render, so resolving them at import time would freeze whichever locale loaded
+ * first. The stored source kind (`rf`/`inet`/`both`) is the token; these are its labels. */
 export const SOURCE_LABEL: Record<AprsSource, string> = {
-  rf: 'RF',
-  inet: 'net',
-  both: 'RF+net',
+  get rf() {
+    return t('aprs.source.rf.label')
+  },
+  get inet() {
+    return t('aprs.source.inet.label')
+  },
+  get both() {
+    return t('aprs.source.both.label')
+  },
 }
 
 /** Why the tag matters — an RF sighting is evidence about YOUR station, an internet one is not. */
 export const SOURCE_TITLE: Record<AprsSource, string> = {
-  rf: 'Your receiver decoded this station off the air',
-  inet: 'Reported by APRS-IS — your receiver has not heard this station',
-  both: 'Heard off the air by your receiver AND reported by APRS-IS',
+  get rf() {
+    return t('aprs.source.rf.title')
+  },
+  get inet() {
+    return t('aprs.source.inet.title')
+  },
+  get both() {
+    return t('aprs.source.both.title')
+  },
 }
 
 /** How long the APRS-IS feed may go quiet before we say so. Far longer than the RF equivalent:
@@ -287,16 +334,30 @@ export function aprsInetStatus(
   nowSec: number,
 ): { state: AprsInetState; label: string; detail: string } {
   if (!st || !st.enabled) {
-    return { state: 'off', label: 'Internet off', detail: 'The APRS-IS feed is switched off.' }
+    return {
+      state: 'off',
+      label: t('aprs.inet.off.label'),
+      detail: t('aprs.inet.off.detail'),
+    }
   }
-  const gate = st.uplinkEnabled
-    ? ` iGate on: ${st.uploaded} contributed${st.gateRejected ? `, ${st.gateRejected} held back${st.lastReject ? ` (last: ${st.lastReject})` : ''}` : ''}.`
-    : ''
+  // The iGate line is a WHOLE sentence of its own — three of them, one per how much it has
+  // to say — carrying the space that joins it to the state sentence it follows.
+  const gate = !st.uplinkEnabled
+    ? ''
+    : !st.gateRejected
+      ? ` ${t('aprs.inet.gate', { uploaded: st.uploaded })}`
+      : st.lastReject
+        ? ` ${t('aprs.inet.gate.held.reason', {
+            uploaded: st.uploaded,
+            held: st.gateRejected,
+            reason: st.lastReject,
+          })}`
+        : ` ${t('aprs.inet.gate.held', { uploaded: st.uploaded, held: st.gateRejected })}`
   if (!st.connected) {
     return {
       state: 'connecting',
-      label: 'Internet connecting',
-      detail: `Not connected to APRS-IS yet — retrying with backoff.${gate}`,
+      label: t('aprs.inet.connecting.label'),
+      detail: t('aprs.inet.connecting.detail', { gate }),
     }
   }
   // Connected but nothing arriving: a real state, and usually a filter that is too tight rather
@@ -305,14 +366,19 @@ export function aprsInetStatus(
   if (quiet) {
     return {
       state: 'quiet',
-      label: 'Internet quiet',
-      detail: `Connected, but no packets ${st.packets > 0 ? 'recently' : 'yet'} — nothing matches your filter. Widen the radius or add watched calls.${gate}`,
+      label: t('aprs.inet.quiet.label'),
+      detail:
+        st.packets > 0
+          ? t('aprs.inet.quiet.detail.recent', { gate })
+          : t('aprs.inet.quiet.detail.never', { gate }),
     }
   }
   return {
     state: 'live',
-    label: `Internet ${st.packets}`,
-    detail: `Connected${st.verified ? ' and verified' : ' read-only'} — ${st.packets} packets received.${gate}`,
+    label: t('aprs.inet.live.label', { count: st.packets }),
+    detail: st.verified
+      ? t('aprs.inet.live.detail.verified', { count: st.packets, gate })
+      : t('aprs.inet.live.detail.readOnly', { count: st.packets, gate }),
   }
 }
 
@@ -340,12 +406,8 @@ export function aprsRadioNote(
   const name = (health.radioName ?? '').trim()
   if (name === '') return null
   return {
-    label: `on ${name}`,
-    detail:
-      `${health.bandRadioCount} of your radios cover this band, so APRS had a choice to make. It ` +
-      `follows the active radio, currently ${name} — if that is not the rig your packet audio is ` +
-      'wired to, this is why nothing is decoding. Routing rules decide which radio a band goes ' +
-      'to: Settings → Radios.',
+    label: t('aprs.radioNote.label', { name }),
+    detail: t('aprs.radioNote.detail', { count, name }),
   }
 }
 
@@ -375,18 +437,15 @@ export function aprsDecodeStatus(
   if (radio && wantDialMhz != null && radioCoversMhz(radio.rxRangesMhz, wantDialMhz) === false) {
     return {
       state: 'norf',
-      label: 'No 2 m radio',
-      detail:
-        `This radio doesn't cover ${wantDialMhz.toFixed(3)} MHz, so it can't receive RF APRS. ` +
-        'RF APRS needs a VHF radio. The internet feed works without one — turn it on to see ' +
-        'APRS traffic reported by other stations.',
+      label: t('aprs.health.norf.label'),
+      detail: t('aprs.health.norf.detail', { freq: wantDialMhz.toFixed(3) }),
     }
   }
   if (!health || health.arm === 'off') {
     return {
       state: 'off',
-      label: 'Monitor off',
-      detail: 'The APRS decoder is not running. Arm Monitor to decode the RX audio.',
+      label: t('aprs.health.off.label'),
+      detail: t('aprs.health.off.detail'),
     }
   }
   // ⭐ TOP OF THE LADDER: what the radio is actually receiving.
@@ -410,18 +469,20 @@ export function aprsDecodeStatus(
       // Name the thing that is actually wrong. Restating a frequency the operator is already on
       // reads as noise; "you are in USB and this needs FM" is the answer to the question they
       // are really asking.
+      // Three WHOLE messages — each names a different thing as wrong, and the closing
+      // "tune to the channel" sentence belongs to all three rather than being glued on.
+      const dial = radio.dialMhz.toFixed(3)
       const detail = !offChannel
-        ? `The radio is on ${want} but in ${mode} — APRS needs FM. FM packet audio demodulated ` +
-          'as SSB is garbled, so nothing will decode however strong the signal is.'
+        ? t('aprs.health.wrongMode.detail', { want, mode })
         : notFm
-          ? `The radio is on ${radio.dialMhz.toFixed(3)} ${mode} — APRS needs ${want} FM. ` +
-            'Nothing on this channel can decode as APRS packet, whatever the audio level says.'
-          : `The radio is on ${radio.dialMhz.toFixed(3)} — APRS needs ${want}. Nothing on this ` +
-            'channel can decode as APRS packet, whatever the audio level says.'
+          ? t('aprs.health.wrongFreqMode.detail', { dial, mode, want })
+          : t('aprs.health.wrongFreq.detail', { dial, want })
       return {
         state: 'wrongfreq',
-        label: offChannel ? 'Wrong frequency' : 'Wrong mode',
-        detail: `${detail} Tune to the APRS channel to start hearing it.`,
+        label: offChannel
+          ? t('aprs.health.wrongFreq.label')
+          : t('aprs.health.wrongMode.label'),
+        detail,
       }
     }
   }
@@ -434,12 +495,8 @@ export function aprsDecodeStatus(
   if (noArrivals && health.drains >= MIN_DRAINS_BEFORE_CAPTURE_FAULT) {
     return {
       state: 'nocapture',
-      label: 'No input',
-      detail:
-        'Armed, but no audio samples are arriving at all — the capture device is not delivering ' +
-        'anything. Check that Input Device (RX) in Settings ▸ Radio ▸ Audio is the radio (not a ' +
-        'microphone or a disconnected device); what you hear on the speaker does not tell you ' +
-        'what the app is capturing.',
+      label: t('aprs.health.noCapture.label'),
+      detail: t('aprs.health.noCapture.detail'),
     }
   }
   // Decodes outrank everything below: once packets are landing, a squelched gap between them is
@@ -452,12 +509,15 @@ export function aprsDecodeStatus(
   if (health.framesDecoded > 0) {
     return {
       state: 'decoding',
-      label: `${health.framesDecoded} decoded`,
+      label: t('aprs.health.decoding.label', { count: health.framesDecoded }),
       detail:
-        (health.lastDecodeUnix == null
-          ? `${health.framesDecoded} packets decoded since arming.`
-          : `${health.framesDecoded} packets decoded since arming, last one ${ageLabel(health.lastDecodeUnix, nowSec)} ago.`) +
-        ` Live ${level}.`,
+        health.lastDecodeUnix == null
+          ? t('aprs.health.decoding.detail', { count: health.framesDecoded, level })
+          : t('aprs.health.decoding.detail.aged', {
+              count: health.framesDecoded,
+              age: ageLabel(health.lastDecodeUnix, nowSec),
+              level,
+            }),
     }
   }
   // ⚠️ PRESENT TENSE ONLY. This claim is about what the channel is doing NOW, so it needs a
@@ -469,15 +529,17 @@ export function aprsDecodeStatus(
   if (health.framesSeen > 0 && framesFresh) {
     return {
       state: 'unreadable',
-      label: `${health.framesSeen} failed CRC`,
-      detail:
-        `${health.framesSeen} bursts heard since arming, last one ` +
-        `${ageLabel(health.lastFrameSeenUnix as number, nowSec)} ago — none passed the checksum. ` +
-        'Some of that is normal: when the squelch opens partway through a burst the start of the ' +
-        'packet is lost, and a part-heard packet can never pass. It is only a fault if nothing ' +
-        'ever decodes — in which case check the rig is on 144.390 in FM.' +
-        burstLevelAdvice(health) +
-        ` Last burst peaked ${dbfs(Math.max(health.framePeak, health.maxFramePeak))}; live ${level}.`,
+      label: t('aprs.health.unreadable.label', { count: health.framesSeen }),
+      detail: t('aprs.health.unreadable.detail', {
+        count: health.framesSeen,
+        age: ageLabel(health.lastFrameSeenUnix as number, nowSec),
+        channel: APRS_NA_CHANNEL,
+        // A whole optional sentence, carrying the space that joins it — empty when the
+        // burst sits in the healthy band.
+        advice: burstLevelAdvice(health),
+        burst: dbfs(Math.max(health.framePeak, health.maxFramePeak)),
+        level,
+      }),
     }
   }
   // ARRIVING BUT SILENT. Overwhelmingly this is just a closed squelch, which is what an idle FM
@@ -485,21 +547,19 @@ export function aprsDecodeStatus(
   if (health.audioPeak < SILENT_PEAK) {
     return {
       state: 'silent',
-      label: 'Silent',
-      detail:
-        'The input is alive and delivering audio, but it is silent — normally that just means ' +
-        'the squelch is closed between packets, which is what an idle FM channel looks like. To ' +
-        'confirm the routing, open the squelch: hiss should show up here as a level. If it still ' +
-        `reads silent with the squelch open, the wrong input device is selected. Live ${level}.`,
+      label: t('aprs.health.silent.label'),
+      detail: t('aprs.health.silent.detail', { level }),
     }
   }
   return {
     state: 'listening',
-    label: 'Listening',
-    detail:
-      'Audio is reaching the decoder and no packets have been heard recently — a quiet channel. ' +
-      `Live ${level}. With the squelch open, hiss should sit around ${HISS_TARGET}; a packet burst ` +
-      `should peak ${dbfs(HEALTHY_BURST_MIN)} to ${dbfs(HEALTHY_BURST_MAX)}.`,
+    label: t('aprs.health.listening.label'),
+    detail: t('aprs.health.listening.detail', {
+      level,
+      hiss: HISS_TARGET,
+      min: dbfs(HEALTHY_BURST_MIN),
+      max: dbfs(HEALTHY_BURST_MAX),
+    }),
   }
 }
 
@@ -785,8 +845,8 @@ export function AprsCockpit({
     onTune(mhz)
     setStatus(
       radio?.transmitting
-        ? `Transmitting right now — the radio will move to ${mhz.toFixed(3)} when this over ends.`
-        : `Tuning to ${mhz.toFixed(3)} FM…`,
+        ? t('aprs.status.tune.deferred', { freq: mhz.toFixed(3) })
+        : t('aprs.status.tune.now', { freq: mhz.toFixed(3) }),
     )
   }
   const {
@@ -820,13 +880,19 @@ export function AprsCockpit({
   }
 
   const sendBeacon = () => {
-    const la = Number.parseFloat(lat)
-    const lo = Number.parseFloat(lon)
+    // ⚠️ THIS GOES ON THE AIR, so the parse is the one that matters most in the app.
+    // `parseFloat('37,98')` is 37 — it stops at the comma and reports success. On a Greek,
+    // German or French Windows (Greek-Windows report, 2026-08) that beaconed a position a
+    // hundred kilometres from the operator, with nothing on screen but "Beacon queued".
+    // `parseOperatorNumber` takes either separator and refuses anything it cannot read whole,
+    // so a typo is a refusal here rather than bad data radiated to everyone listening.
+    const la = parseOperatorNumber(lat)
+    const lo = parseOperatorNumber(lon)
     if (!Number.isFinite(la) || !Number.isFinite(lo)) {
-      setStatus('Enter a valid latitude and longitude first.')
+      setStatus(t('aprs.status.badPosition'))
       return
     }
-    setStatus('Sending beacon…')
+    setStatus(t('aprs.status.beacon.sending'))
     // Read the persisted identity, not a local copy — the same fields the Settings panel edits.
     // An empty path is a real choice (direct, no digipeaters), so it is never defaulted here.
     void aprsSendBeacon(
@@ -837,7 +903,7 @@ export function AprsCockpit({
       settings?.aprsComment ?? '',
       settings?.aprsPath ?? [],
     )
-      .then(() => setStatus('Beacon queued — keying now.'))
+      .then(() => setStatus(t('aprs.status.beacon.queued')))
       .catch((e) => setStatus(String(e)))
   }
 
@@ -845,13 +911,13 @@ export function AprsCockpit({
     const to = msgTo.trim()
     const text = msgText.trim()
     if (!to || !text) {
-      setStatus('Enter a callsign and a message first.')
+      setStatus(t('aprs.status.msg.missing'))
       return
     }
-    setStatus('Sending message…')
+    setStatus(t('aprs.status.msg.sending'))
     void aprsSendMessage(to, text)
       .then(() => {
-        setStatus(`Message to ${to.toUpperCase()} queued — keying now.`)
+        setStatus(t('aprs.status.msg.queued', { call: to.toUpperCase() }))
         setMsgText('')
       })
       .catch((e) => setStatus(String(e)))
@@ -907,12 +973,14 @@ export function AprsCockpit({
   return (
     <main className="layout single needed-panel aprs-cockpit">
       <div className="np-head">
-        <h2>APRS</h2>
+        <h2>{APRS_MODE}</h2>
         <span className="np-count">{rows.length}</span>
         {heard.length !== rows.length && (
-          <span className="np-count np-count-filtered">{heard.length} pkts</span>
+          <span className="np-count np-count-filtered">
+            {t('aprs.head.packets', { count: heard.length })}
+          </span>
         )}
-        <span className="np-hint">AFSK-1200 packet — decode positions/messages, send a beacon</span>
+        <span className="np-hint">{t('aprs.head.hint')}</span>
         {onTune && (
           <>
             <select
@@ -933,7 +1001,7 @@ export function AprsCockpit({
                 // it, so the pick still moves the radio even on the round trip that cannot save.
                 writeSettings({ aprsChannelMhz: f })
               }}
-              title="APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)"
+              title={t('aprs.channel.title')}
             >
               {APRS_FREQS.map(([f, region]) => (
                 <option key={f} value={f}>
@@ -952,24 +1020,28 @@ export function AprsCockpit({
               onClick={() => freq != null && tuneToAprs(freq)}
               title={
                 freq == null
-                  ? 'Reading your APRS channel…'
+                  ? t('aprs.retune.title.loading')
                   : canReachAprs
-                    ? 'Re-tune the rig to the selected APRS frequency (2 m FM simplex; switches to your 2 m radio)'
-                    : `This radio doesn't cover ${freq.toFixed(3)} MHz — RF APRS needs a VHF radio.`
+                    ? t('aprs.retune.title')
+                    : t('aprs.retune.title.noCoverage', { freq: freq.toFixed(3) })
               }
             >
-              Re-tune
+              {t('aprs.retune.label')}
             </button>
           </>
         )}
         {radio && (
           <span
             className="aprs-dial"
-            title="The rig's current dial / band / mode (this view hides the top bar's readout)"
+            title={t('aprs.dial.title')}
           >
-            {radio.dialMhz.toFixed(3)} MHz · {radio.band} · {radio.sideband || '—'}
+            {radio.dialMhz.toFixed(3)} {MHZ_UNIT} · {radio.band} · {radio.sideband || '—'}
           </span>
         )}
+        {/* ⚠️ NOT MIGRATED, DELIBERATELY. This is the TX-enable arm latch: its label and its
+            two tooltips are a transmit-path control's accessible name, and every one of those
+            moves in its own batch with the stop-line sweeps re-run. It stays English here
+            until then — see the file header. */}
         {onSetTxEnabled && radio && (
           <button
             type="button"
@@ -995,17 +1067,17 @@ export function AprsCockpit({
           onClick={toggleArm}
           title={
             arm === 'explicit'
-              ? 'You armed the decoder, so automatic acks are allowed — an incoming message ' +
-                'addressed to you is acked when TX is on. Click to stop.'
+              ? t('aprs.monitor.title.explicit')
               : arm === 'auto'
-                ? 'Armed automatically when you opened APRS: RECEIVE ONLY. It will never send ' +
-                  'an automatic ack. To allow those, stop it and arm it yourself, then turn TX ' +
-                  'on. Click to stop.'
-                : 'Arm the APRS decoder on the RX audio. Arming it yourself also allows ' +
-                  'automatic acks once TX is on.'
+                ? t('aprs.monitor.title.auto')
+                : t('aprs.monitor.title.off')
           }
         >
-          {arm === 'auto' ? '● Monitoring (auto)' : arm === 'explicit' ? '● Monitoring' : 'Monitor'}
+          {arm === 'auto'
+            ? t('aprs.monitor.label.auto')
+            : arm === 'explicit'
+              ? t('aprs.monitor.label.explicit')
+              : t('aprs.monitor.label.off')}
         </button>
         {/* Decode health, carrying the live input level. An empty APRS screen used to be one
             answer to several different questions — dead capture, squelched channel, unreadable
@@ -1032,9 +1104,9 @@ export function AprsCockpit({
             type="button"
             className="np-chip aprs-health-fix"
             onClick={() => tuneToAprs(freq)}
-            title={`Tune the radio to ${freq.toFixed(3)} FM for APRS`}
+            title={t('aprs.tuneFix.title', { freq: freq.toFixed(3) })}
           >
-            Tune to {freq.toFixed(3)}
+            {t('aprs.tuneFix.label', { freq: freq.toFixed(3) })}
           </button>
         )}
         {/* The OTHER inlet's health. Deliberately a second chip, not a merged one: the RF chain
@@ -1053,16 +1125,20 @@ export function AprsCockpit({
             aria-expanded={inetOpen}
             aria-haspopup="dialog"
             onClick={() => setInetOpen(!inetOpen)}
-            title={`${inetDetail}\n\nClick for internet feed controls.`}
+            title={t('aprs.inet.chip.title', { detail: inetDetail })}
           >
-            {isStatus?.enabled ? inetLabel : 'Internet off'}
+            {isStatus?.enabled ? inetLabel : t('aprs.inet.off.label')}
           </button>
           {inetOpen && (
-            <div className="aprs-inet-panel" role="dialog" aria-label="APRS-IS internet feed">
+            <div
+              className="aprs-inet-panel"
+              role="dialog"
+              aria-label={t('aprs.inet.panel.aria')}
+            >
               <p className="aprs-inet-detail">{inetDetail}</p>
 
               <label className="aprs-inet-row">
-                <span>Internet feed</span>
+                <span>{t('aprs.inet.enabled.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -1076,7 +1152,7 @@ export function AprsCockpit({
               </label>
 
               <label className="aprs-inet-row">
-                <span>Radius (km)</span>
+                <span>{t('aprs.inet.radius.label')}</span>
                 <input
                   type="number"
                   min={0}
@@ -1089,11 +1165,11 @@ export function AprsCockpit({
               </label>
 
               <label className="aprs-inet-row aprs-inet-row-wide">
-                <span>Watched calls</span>
+                <span>{t('aprs.inet.watch.label')}</span>
                 <input
                   type="text"
                   className="settings-input"
-                  placeholder="W9XYZ-9, KD9ABC"
+                  placeholder={WATCH_EXAMPLES}
                   spellCheck={false}
                   defaultValue={(settings?.aprsIsWatchCalls ?? []).join(', ')}
                   disabled={!settings || savingInet}
@@ -1111,16 +1187,14 @@ export function AprsCockpit({
               </label>
 
               <p className="aprs-inet-note">
-                Changing the radius or watched calls reconnects the feed — the server does the
-                filtering, so a new subscription has to be sent. Server, port, traffic types and the
-                iGate live in Settings ▸ APRS.{' '}
+                {t('aprs.inet.note')}{' '}
                 {onOpenSettings && (
                   <button
                     type="button"
                     className="settings-linkbtn"
                     onClick={() => onOpenSettings('aprs')}
                   >
-                    Open them
+                    {t('aprs.inet.note.open')}
                   </button>
                 )}
               </p>
@@ -1137,11 +1211,13 @@ export function AprsCockpit({
             onClick={() => setShowInet(!showInet)}
             title={
               showInet
-                ? `Hide the ${inetOnly} station${inetOnly === 1 ? '' : 's'} only the internet has reported, leaving what this radio actually hears`
-                : `Show the ${inetOnly} station${inetOnly === 1 ? '' : 's'} the internet feed reports`
+                ? t('aprs.showInet.title.hide', { count: inetOnly })
+                : t('aprs.showInet.title.show', { count: inetOnly })
             }
           >
-            {showInet ? `Internet ${inetOnly}` : `Internet ${inetOnly} hidden`}
+            {showInet
+              ? t('aprs.showInet.label.shown', { count: inetOnly })
+              : t('aprs.showInet.label.hidden', { count: inetOnly })}
           </button>
         )}
       </div>
@@ -1157,13 +1233,13 @@ export function AprsCockpit({
       <div className="aprs-body">
         <div className="aprs-rail">
       <div className="aprs-beacon">
-        <span className="aprs-beacon-title">Position beacon</span>
+        <span className="aprs-beacon-title">{t('aprs.beacon.title')}</span>
         <label>
-          Lat
+          {t('aprs.beacon.lat.label')}
           <input value={lat} onChange={(e) => setLat(e.target.value)} inputMode="decimal" size={9} />
         </label>
         <label>
-          Lon
+          {t('aprs.beacon.lon.label')}
           <input value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" size={9} />
         </label>
         {/* Symbol / Comment / Path are the operator's PERSISTED beacon identity (Settings ▸
@@ -1171,7 +1247,7 @@ export function AprsCockpit({
             The symbol writes on change; the two text fields write on BLUR — every write is a
             whole-settings round trip plus a disk save, so per-keystroke would thrash. */}
         <label>
-          Symbol
+          {t('aprs.beacon.symbol.label')}
           <select
             value={`${settings?.aprsSymbolTable ?? '/'}${settings?.aprsSymbolCode ?? '>'}`}
             onChange={(e) =>
@@ -1189,7 +1265,7 @@ export function AprsCockpit({
           </select>
         </label>
         <label className="aprs-beacon-comment">
-          Comment
+          {t('aprs.beacon.comment.label')}
           <input
             value={comment}
             onChange={(e) => setComment(e.target.value)}
@@ -1198,7 +1274,7 @@ export function AprsCockpit({
           />
         </label>
         <label>
-          Path
+          {t('aprs.beacon.path.label')}
           <input
             value={path}
             onChange={(e) => setPath(e.target.value)}
@@ -1214,41 +1290,41 @@ export function AprsCockpit({
           />
         </label>
         <button type="button" className="np-chip aprs-beacon-send" onClick={sendBeacon}>
-          Send beacon
+          {t('aprs.beacon.send')}
         </button>
         {status && <span className="aprs-status">{status}</span>}
       </div>
 
       <div className="aprs-beacon aprs-message-compose">
-        <span className="aprs-beacon-title">Message</span>
+        <span className="aprs-beacon-title">{t('aprs.msg.title')}</span>
         <label>
-          To
+          {t('aprs.msg.to.label')}
           <input
             value={msgTo}
             onChange={(e) => setMsgTo(e.target.value)}
-            placeholder="callsign"
+            placeholder={t('aprs.msg.to.placeholder')}
             size={9}
           />
         </label>
         <label className="aprs-beacon-comment">
-          Text
+          {t('aprs.msg.text.label')}
           <input
             value={msgText}
             onChange={(e) => setMsgText(e.target.value)}
             maxLength={67}
-            placeholder="up to 67 chars"
+            placeholder={t('aprs.msg.text.placeholder')}
             onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
           />
         </label>
         <span className="aprs-msg-count">{msgText.length}/67</span>
         <button type="button" className="np-chip aprs-beacon-send" onClick={sendMessage}>
-          Send message
+          {t('aprs.msg.send')}
         </button>
       </div>
 
       {messages.length > 0 && (
         <div className="aprs-messages">
-          <span className="aprs-beacon-title">Messages</span>
+          <span className="aprs-beacon-title">{t('aprs.messages.title')}</span>
           <ul className="aprs-msg-list">
             {messages.map((m, i) => (
               <li key={`${m.source}-${m.msgId ?? i}-${m.atUnix}`} className="aprs-msg-row">
@@ -1272,14 +1348,14 @@ export function AprsCockpit({
         <table className="aprs-table">
           <thead>
             <tr>
-              <th>Age</th>
-              <th aria-label="Symbol" />
-              <th>From</th>
-              <th>Via</th>
-              <th>Type</th>
-              <th>Position</th>
-              <th>Dist</th>
-              <th>Info</th>
+              <th>{t('aprs.table.age')}</th>
+              <th aria-label={t('aprs.table.symbol')} />
+              <th>{t('aprs.table.from')}</th>
+              <th>{t('aprs.table.via')}</th>
+              <th>{t('aprs.table.type')}</th>
+              <th>{t('aprs.table.position')}</th>
+              <th>{t('aprs.table.dist')}</th>
+              <th>{t('aprs.table.info')}</th>
             </tr>
           </thead>
           <tbody>
@@ -1297,8 +1373,8 @@ export function AprsCockpit({
                 onClick={() => setSelected(selected === st.call ? null : st.call)}
                 title={
                   st.lat != null && st.lon != null
-                    ? `Highlight ${st.call} on the map`
-                    : `${st.call} reported no position — nothing to highlight`
+                    ? t('aprs.row.title.highlight', { call: st.call })
+                    : t('aprs.row.title.noPosition', { call: st.call })
                 }
               >
                 <td className="aprs-age">{ageLabel(st.lastHeardUnix, now)}</td>
@@ -1321,7 +1397,9 @@ export function AprsCockpit({
                     : '—'}
                 </td>
                 <td className="aprs-dist">
-                  {dist != null ? `${Math.round(dist)} km ${brg != null ? compass(brg) : ''}` : ''}
+                  {dist != null
+                    ? `${Math.round(dist)} ${KM_UNIT} ${brg != null ? compass(brg) : ''}`
+                    : ''}
                 </td>
                 <td className="aprs-info">{st.text}</td>
               </tr>
@@ -1348,9 +1426,7 @@ export function AprsCockpit({
           />
           {positioned === 0 && (
             <div className="aprs-map-empty">
-              {decode.state === 'decoding'
-                ? 'No positions heard yet — status and message packets carry none.'
-                : decode.detail}
+              {decode.state === 'decoding' ? t('aprs.map.noPositions') : decode.detail}
             </div>
           )}
           {/* Selecting a station — from the map OR the list — opens its detail card over the map.

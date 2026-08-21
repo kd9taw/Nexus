@@ -18,11 +18,21 @@ pub fn available_ports() -> Vec<String> {
         // `mut` is only exercised by the Linux virtual-port union below; on other
         // targets that block compiles away (this was a warning in every Windows
         // cross-build — noise that trains eyes to skip warnings).
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        #[cfg_attr(not(any(target_os = "linux", windows)), allow(unused_mut))]
         let mut names: Vec<String> = match serialport::available_ports() {
             Ok(ports) => ports.into_iter().map(|p| p.port_name).collect(),
             Err(_) => Vec::new(),
         };
+        // On Windows, union in the registry's own list — SetupAPI cannot see com0com-family
+        // virtual pairs, and upstream's fallback is gated on a count comparison that discards
+        // them whenever real adapters outnumber them (#117). Dedup by name.
+        #[cfg(windows)]
+        {
+            names = union_ports(
+                names,
+                windows_registry_ports_in("HARDWARE\\DEVICEMAP\\SERIALCOMM"),
+            );
+        }
         // On Linux, union in the virtual ports udev structurally cannot report (see
         // `linux_virtual_ports`). Dedup by path — a node reported both ways must appear once.
         #[cfg(target_os = "linux")]
@@ -99,6 +109,123 @@ fn linux_virtual_ports(dev: &std::path::Path) -> Vec<String> {
         .collect();
     out.sort(); // stable order — the picker must not reshuffle between polls
     out
+}
+
+/// COM ports named in `HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM` — the Windows twin of
+/// [`linux_virtual_ports`], and for the same reason.
+///
+/// ⚠️ WHY THIS EXISTS. `serialport`'s Windows enumeration asks SetupAPI for the `Ports` and
+/// `Modem` setup classes only, and com0com-family virtual pairs install under their OWN class,
+/// so they are invisible to it. Upstream does read SERIALCOMM as a fallback — but gates it on
+/// `raw_ports_set.len() > ports.len()`, a COUNT comparison rather than a union: with three real
+/// FTDI adapters present, registry names are discarded unless SERIALCOMM holds strictly more
+/// than three. A station with three adapters and two virtual ports therefore sees the three and
+/// never the two (issue #117, SmartSDR CAT's virtual pair).
+///
+/// SERIALCOMM is where every serial driver publishes its port name, physical or virtual, so
+/// UNIONING it can only ever add a port that genuinely exists. Nexus does not filter what it
+/// finds: a name here is a name the operator can open.
+///
+/// Takes the key so it is testable without touching the real registry.
+#[cfg(all(feature = "serial", windows))]
+fn windows_registry_ports_in(key_path: &str) -> Vec<String> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    // Hand-rolled rather than adding a registry crate for one read: this is ~40 lines against a
+    // new dependency on the operator's serial path, and dependencies here are permanent.
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegOpenKeyExW(key: isize, sub: *const u16, opts: u32, sam: u32, out: *mut isize) -> i32;
+        fn RegEnumValueW(
+            key: isize,
+            index: u32,
+            name: *mut u16,
+            name_len: *mut u32,
+            reserved: *mut u32,
+            kind: *mut u32,
+            data: *mut u8,
+            data_len: *mut u32,
+        ) -> i32;
+        fn RegCloseKey(key: isize) -> i32;
+    }
+    const HKEY_LOCAL_MACHINE: isize = -2147483646; // 0x80000002 as isize
+    const KEY_READ: u32 = 0x2_0019;
+    const ERROR_SUCCESS: i32 = 0;
+
+    let wide: Vec<u16> = std::ffi::OsStr::new(key_path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut key: isize = 0;
+    // A missing key is the ordinary answer on a machine with no serial ports at all.
+    if unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, wide.as_ptr(), 0, KEY_READ, &mut key) }
+        != ERROR_SUCCESS
+    {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut i = 0u32;
+    loop {
+        let mut name = [0u16; 256];
+        let mut name_len = name.len() as u32;
+        let mut data = [0u8; 512];
+        let mut data_len = data.len() as u32;
+        let rc = unsafe {
+            RegEnumValueW(
+                key,
+                i,
+                name.as_mut_ptr(),
+                &mut name_len,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                data.as_mut_ptr(),
+                &mut data_len,
+            )
+        };
+        if rc != ERROR_SUCCESS {
+            break; // ERROR_NO_MORE_ITEMS, or anything else — stop rather than guess
+        }
+        // The VALUE is the port name ("COM6"); the value's NAME is the device path.
+        let bytes = &data[..data_len as usize];
+        let u16s: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .take_while(|&c| c != 0)
+            .collect();
+        let port = std::ffi::OsString::from_wide(&u16s)
+            .to_string_lossy()
+            .trim()
+            .to_string();
+        if !port.is_empty() {
+            out.push(port);
+        }
+        i += 1;
+    }
+    unsafe { RegCloseKey(key) };
+    out.sort(); // stable order — the picker must not reshuffle between polls
+    out
+}
+
+/// Add `extra` names that `have` does not already contain, case-insensitively.
+///
+/// ⚠️ THIS IS THE RULE UPSTREAM GOT WRONG, and the whole of issue #117. `serialport`'s Windows
+/// path compares COUNTS — it keeps the registry names only when there are strictly more of them
+/// than SetupAPI found — so a station with three real adapters and two virtual ports sees three
+/// and never the two. A union cannot do that: every name either enumeration knows about is
+/// offered exactly once.
+///
+/// Case-insensitive because Windows writes `COM6` and nothing guarantees the two sources agree
+/// on case; matching case-sensitively would list the same port twice.
+///
+/// Pure string logic, compiled everywhere so the test runs on every platform; only the Windows
+/// enumeration calls it.
+#[cfg_attr(not(all(feature = "serial", windows)), allow(dead_code))]
+fn union_ports(mut have: Vec<String>, extra: Vec<String>) -> Vec<String> {
+    for v in extra {
+        if !have.iter().any(|n| n.eq_ignore_ascii_case(&v)) {
+            have.push(v);
+        }
+    }
+    have
 }
 
 /// Names of the serial ports currently present.
@@ -194,29 +321,68 @@ pub struct UsbPort {
 
 /// USB serial ports currently present, with their USB descriptor fields. Non-USB
 /// ports (legacy RS-232, Bluetooth SPP, …) are omitted — zero-config only reasons
-/// about USB. Empty without the `serial` feature or if enumeration fails.
+/// about USB. Empty without the `serial` feature, or if enumeration fails or PANICS
+/// ([`guarded_usb_ports`] — this runs when the Settings tab opens; #132).
 #[cfg(feature = "serial")]
 pub fn available_usb_ports() -> Vec<UsbPort> {
-    use serialport::SerialPortType;
-    let ports = match serialport::available_ports() {
-        Ok(ports) => ports
-            .into_iter()
-            .filter_map(|p| match p.port_type {
-                SerialPortType::UsbPort(info) => Some(UsbPort {
-                    port_name: p.port_name,
-                    vid: info.vid,
-                    pid: info.pid,
-                    product: info.product.unwrap_or_default(),
-                    manufacturer: info.manufacturer.unwrap_or_default(),
-                }),
-                _ => None,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    #[cfg(target_os = "macos")]
-    let ports = collapse_tty_twins(ports);
-    ports
+    guarded_usb_ports(|| {
+        use serialport::SerialPortType;
+        let ports = match serialport::available_ports() {
+            Ok(ports) => ports
+                .into_iter()
+                .filter_map(|p| match p.port_type {
+                    SerialPortType::UsbPort(info) => Some(UsbPort {
+                        port_name: p.port_name,
+                        vid: info.vid,
+                        pid: info.pid,
+                        product: info.product.unwrap_or_default(),
+                        manufacturer: info.manufacturer.unwrap_or_default(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        #[cfg(target_os = "macos")]
+        let ports = collapse_tty_twins(ports);
+        ports
+    })
+}
+
+/// Panic containment for [`available_usb_ports`] — the same guard [`available_ports`] and
+/// `device::available_devices` carry, and for the same reason: a driver DLL that panics while
+/// enumerating must not take the window down when the operator opens Settings.
+///
+/// #132 (K4KCX) found this one UNGUARDED while both its siblings were wrapped, even though all
+/// three run on the Settings MOUNT path (`SettingsPanel` → `get_serial_ports_detailed`) — so
+/// the click that opened the gear ran two guarded enumerations and one bare one.
+///
+/// ⚠️ A native ACCESS VIOLATION inside a driver DLL is not a Rust panic and is NOT caught here
+/// (see `src-tauri/src/main.rs`); this closes a real hole but does not prove it was #132's.
+///
+/// The enumeration is an argument for the same reason [`linux_virtual_ports`] takes its
+/// directory and [`heal_tty_twin_with`] takes its existence check: the part that touches the
+/// machine is the untestable part, so it goes outside. That makes the guard exercisable on
+/// every platform without a broken driver to hand.
+#[cfg_attr(not(feature = "serial"), allow(dead_code))]
+fn guarded_usb_ports(
+    enumerate: impl FnOnce() -> Vec<UsbPort> + std::panic::UnwindSafe,
+) -> Vec<UsbPort> {
+    std::panic::catch_unwind(enumerate).unwrap_or_else(|_| {
+        // NEVER swallow silently: detection and the auto-test sweep poll this, so a per-poll
+        // panic is invisible but costs real CPU (unwind + panic hook every time) — the
+        // "sluggish laptop" failure mode. Rate-limited so a storm doesn't also flood stderr.
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static CAUGHT: AtomicU32 = AtomicU32::new(0);
+        let n = CAUGHT.fetch_add(1, Ordering::Relaxed) + 1;
+        if n == 1 || n.is_multiple_of(100) {
+            eprintln!(
+                "nexus: USB serial-port enumeration panicked (caught; occurrence {n}) — \
+                 a driver issue on this system; USB port list returned empty"
+            );
+        }
+        Vec::new()
+    })
 }
 
 /// macOS lists every serial port TWICE: `/dev/cu.X` and `/dev/tty.X` are the same hardware.
@@ -259,6 +425,46 @@ pub fn available_usb_ports() -> Vec<UsbPort> {
 
 #[cfg(test)]
 mod tests {
+
+    /// ISSUE #117: SmartSDR CAT's virtual COM ports never appeared in the rig picker.
+    ///
+    /// Nexus filters nothing — the gap is upstream. `serialport`'s Windows enumeration asks
+    /// SetupAPI for the Ports/Modem classes only, and com0com-family virtual pairs install under
+    /// their own class. Its SERIALCOMM fallback exists but is gated on a COUNT comparison, so
+    /// with three real FTDI adapters present the registry names are thrown away unless there are
+    /// strictly more than three of them. The reporter had exactly that: three adapters, and his
+    /// virtual pair invisible.
+    ///
+    /// The rule is a UNION, and this is it. (Nexus already does the same thing on Linux for the
+    /// same reason — `linux_virtual_ports` — and the Windows side was never mirrored.)
+    #[test]
+    fn the_registry_ports_are_unioned_not_count_compared() {
+        // The reporter's machine: three real ports, two virtual ones only the registry knows.
+        let setupapi = vec!["COM3".to_string(), "COM4".to_string(), "COM5".to_string()];
+        let registry = vec!["COM3".to_string(), "COM6".to_string(), "COM7".to_string()];
+        let got = union_ports(setupapi.clone(), registry);
+        assert_eq!(
+            got,
+            vec!["COM3", "COM4", "COM5", "COM6", "COM7"],
+            "every port either source knows about, exactly once — a COUNT test would have kept \
+             none of the virtual ones here"
+        );
+
+        // A port both sources report appears ONCE, whatever the case.
+        assert_eq!(
+            union_ports(vec!["COM6".to_string()], vec!["com6".to_string()]),
+            vec!["COM6"],
+            "Windows case must not duplicate a port"
+        );
+
+        // Nothing new to add is not an error, and order is preserved.
+        assert_eq!(union_ports(setupapi.clone(), Vec::new()), setupapi);
+        // …and with nothing enumerated at all, the registry IS the list.
+        assert_eq!(
+            union_ports(Vec::new(), vec!["COM9".to_string()]),
+            vec!["COM9"]
+        );
+    }
 
     /// macOS offers every serial port twice. `tty.*` blocks on carrier detect and HANGS rather
     /// than failing, so it is never the right node for a rig — but it sits beside its `cu.*` twin
@@ -415,6 +621,41 @@ mod tests {
         // A twin that does not exist (on any platform) is left alone.
         let lone = "/dev/tty.nexus-test-no-such-twin";
         assert_eq!(heal_stored_port(lone.to_string()), lone);
+    }
+
+    /// ⭐ FAILING-FIRST for #132 (K4KCX, "Settings gear crashes Nexus on Windows 10 and 11").
+    ///
+    /// [`available_usb_ports`] is on the Settings MOUNT path (`SettingsPanel` →
+    /// `get_serial_ports_detailed`) and was the ONE of the three enumerations there with no
+    /// `catch_unwind` — its two siblings, [`available_ports`] and `device::available_devices`,
+    /// both carry one, and both comments say the guard exists BECAUSE this runs when the
+    /// Settings tab opens. Unguarded, a driver that panics while enumerating unwinds out of a
+    /// Tauri command thread and takes the window down on the click of the gear.
+    ///
+    /// ⚠️ This does NOT prove #132's cause: a native access violation inside a driver DLL is
+    /// not a Rust panic and `catch_unwind` cannot see it.
+    #[test]
+    fn a_panicking_usb_enumeration_is_contained() {
+        let ports = guarded_usb_ports(|| panic!("driver DLL panicked while enumerating"));
+        assert!(
+            ports.is_empty(),
+            "a panicking enumerator must yield an empty list (the operator can still TYPE a \
+             COM port), never unwind into the caller: {ports:?}"
+        );
+        // The other direction — the guard must not be a blanket swallow. A normal enumeration
+        // reaches the picker unchanged, or "no crash" would be indistinguishable from "no ports".
+        let port = UsbPort {
+            port_name: "COM5".into(),
+            vid: 0x10c4,
+            pid: 0xea60,
+            product: "CP2102 USB to UART Bridge Controller".into(),
+            manufacturer: "Silicon Labs".into(),
+        };
+        assert_eq!(
+            guarded_usb_ports(|| vec![port.clone()]),
+            vec![port],
+            "a healthy enumeration must pass through the guard untouched"
+        );
     }
 
     #[test]

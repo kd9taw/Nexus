@@ -17,6 +17,10 @@
 // the globe's whole render loop (`pauseAnimation`) once the band scrolls out of view
 // inside the log's scroll container, so reading old QSOs at the bottom of a long log
 // costs nothing either.
+//
+// ⚠️ ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Band names are technical
+// tokens and stay here, in the <option> values AND in their labels; the prose is in the
+// catalog under `logbook.globe.*`.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import Globe, { type GlobeMethods } from 'react-globe.gl'
@@ -26,6 +30,7 @@ import { qsoGridPoints } from '../features/qsoPoints'
 import { BAND_COLOR, bandColor } from '../bandColors'
 import { subsolarPoint, usStateBorders } from '../mapGeo'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { t } from '../i18n'
 import type { LoggedQso } from '../types'
 
 /** Low→high band order = BAND_COLOR's key order (the app's canonical band list). */
@@ -250,9 +255,9 @@ export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
         type="button"
         className={`globe3d-spin${spin ? ' active' : ''}`}
         onClick={() => setSpin((s) => !s)}
-        title={spin ? 'Stop the slow rotation' : 'Start the slow rotation'}
+        title={spin ? t('logbook.globe.spin.stop.title') : t('logbook.globe.spin.start.title')}
       >
-        {spin ? '⏸ Spin' : '▶ Spin'}
+        {spin ? t('logbook.globe.spin.pause') : t('logbook.globe.spin.play')}
       </button>
       <div className="qso-globe-hud">
         <select
@@ -260,9 +265,10 @@ export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
           value={band}
           onChange={(e) => setBand(e.target.value)}
           style={band === 'all' ? undefined : { color: bandColor(band), borderColor: bandColor(band) }}
-          title="Grid squares are a per-band achievement (VUCC) — view one band's squares on their own"
+          title={t('logbook.globe.band.title')}
         >
-          <option value="all">All bands</option>
+          {/* The <option> VALUES are band tokens; only the "all" label is prose. */}
+          <option value="all">{t('logbook.globe.band.all')}</option>
           {bandsInLog.map((b) => (
             <option key={b} value={b}>
               {b}
@@ -270,8 +276,9 @@ export default function QsoGlobe({ qsos }: { qsos: LoggedQso[] }) {
           ))}
         </select>
         <span className="qso-globe-count">
-          {points.length} grid square{points.length === 1 ? '' : 's'}
-          {band === 'all' ? ' worked' : ` on ${band}`}
+          {band === 'all'
+            ? t('logbook.globe.count.all', { count: points.length })
+            : t('logbook.globe.count.band', { count: points.length, band })}
         </span>
       </div>
       {size.w > 0 && size.h > 0 && (

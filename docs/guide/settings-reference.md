@@ -755,13 +755,19 @@ a new one is genuinely an event.
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
 - **New DXCC** — Off / HF only / VHF+ (6 m and up) / All bands. "Loud alert on a
-  new DXCC entity — a 'new one'. **Does NOT alert on every decode.**"
+  new DXCC entity — a 'new one'. **Does NOT alert on every decode.** The band
+  choice also decides where the NEW ONE icon is shown."
 - **New grid** — same band scopes. "Quiet toast on a grid you haven't worked.
   Default VHF+ only — grid awards (VUCC/FFMA) start at 6 m; on HF nearly every
-  decode is an unworked grid."
+  decode is an unworked grid. The band choice also decides where the GRID icon is
+  shown, on the roster and the decode rows."
 - **Rare grid 💎** — same band scopes. "The loud 💎 alert for rare/water-only
   grids (rovers, maritime, DXpeditions) — separate from plain grids so silencing
-  HF chatter keeps the gems."
+  HF chatter keeps the gems. Covers their GRID icon too."
+
+Each band choice governs both halves of a need: whether it makes a sound and
+whether it paints an icon. Set **New grid** to VHF+ and an HF FT8 roster stops
+showing GRID chips — the icons follow the setting, not just the alerts.
 - **Watch list** — the calls you want flagged wherever they turn up.
 
 ---

@@ -279,6 +279,7 @@ type SharedOpeningTracker = Arc<Mutex<propagation::OpeningTracker>>;
 /// A NEWTYPE, not a `type` alias: Tauri keys managed state by `TypeId`, and an
 /// alias to `Arc<Mutex<LiveSpots>>` would collide with `SharedLivePaths` (same
 /// TypeId) → `.manage()` panics at startup and DI can't tell the buffers apart.
+#[derive(Clone)]
 struct SharedRegionPaths(Arc<Mutex<propagation::LiveSpots>>);
 
 /// Lifetime stop flag for the PSK Reporter MQTT daemon thread (see CLUSTER_STOP).
@@ -1944,14 +1945,20 @@ fn parks_cache_path() -> PathBuf {
         .join("parks.csv")
 }
 
-/// The WSJT-X-format decode log (`ALL.TXT`), in the app's LOCAL data dir
-/// (`%LOCALAPPDATA%\Nexus` on Windows — the same class of location WSJT-X uses for
-/// its own ALL.TXT; `$XDG_DATA_HOME`/`~/.local/share/Nexus` on Unix). Deliberately a
-/// findable, app-named folder rather than the Roaming `tempo` config dir, and NOT the
-/// install dir (Program Files isn't writable without elevation — a write there would
-/// fail silently). Written only when `settings.write_all_txt` is on; the Settings
-/// panel surfaces this path + a "Reveal" button (`all_txt_location`/`reveal_all_txt`).
-fn all_txt_path() -> PathBuf {
+/// The app's LOCAL data dir — `%LOCALAPPDATA%\Nexus` on Windows, `$XDG_DATA_HOME`/
+/// `~/.local/share/Nexus` on Unix. Deliberately a findable, app-named folder rather than the
+/// Roaming `tempo` config dir: everything here is something we may have to ask an operator to
+/// go and look at.
+///
+/// **On Windows this IS the install dir**, and the earlier comment here claiming otherwise
+/// ("NOT the install dir — Program Files isn't writable") was simply false: the NSIS bundle is
+/// `installMode: "currentUser"` (`tauri.conf.json`), so Nexus installs to
+/// `%LOCALAPPDATA%\Nexus` and the executable — and `nexus-crash.txt`, which the native crash
+/// handler writes beside it — live in this same folder. That coincidence is why the
+/// diagnostic log below can be "beside the crash log" and "in the app data dir" at once, and
+/// it is worth knowing before anyone moves either of them. (Splitting install from data is
+/// real work with a migration behind it; it is not this change.)
+fn local_data_dir() -> PathBuf {
     let base = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     } else {
@@ -1959,9 +1966,25 @@ fn all_txt_path() -> PathBuf {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
     };
-    base.unwrap_or_else(|| PathBuf::from("."))
-        .join("Nexus")
-        .join("ALL.TXT")
+    base.unwrap_or_else(|| PathBuf::from(".")).join("Nexus")
+}
+
+/// The WSJT-X-format decode log (`ALL.TXT`), in the app's LOCAL data dir — the same class of
+/// location WSJT-X uses for its own ALL.TXT. Written only when `settings.write_all_txt` is on;
+/// the Settings panel surfaces this path + a "Reveal" button
+/// (`all_txt_location`/`reveal_all_txt`).
+fn all_txt_path() -> PathBuf {
+    local_data_dir().join("ALL.TXT")
+}
+
+/// The application diagnostic log ([`tempo_core::applog`]) — the file an operator attaches to
+/// a bug report. Beside `ALL.TXT` and, on Windows, beside `nexus-crash.txt` too, so there is
+/// exactly ONE folder to send someone to. Rotates in place (two generations, ~8 MB worst
+/// case); see the module header for why that rotation is a rename and never a rewrite. No
+/// separate "reveal" command: it shares a folder with `ALL.TXT`, whose existing Settings
+/// Reveal button already opens exactly this directory.
+fn diag_log_path() -> PathBuf {
+    local_data_dir().join("nexus-diag.log")
 }
 
 /// Append the engine's buffered WSJT-X-format decode lines to `ALL.TXT` (best-effort:
@@ -1990,6 +2013,41 @@ fn flush_all_txt(lines: &[String]) {
 #[tauri::command]
 fn all_txt_location() -> String {
     all_txt_path().to_string_lossy().into_owned()
+}
+
+/// The resolved absolute `nexus-diag.log` path — the file an operator is asked to send when
+/// something goes wrong, and until now the only operator-facing artefact with nowhere in the
+/// interface that names it. It is written unconditionally from the first moments of startup
+/// (see the `applog::init` call in `run`), so unlike ALL.TXT there is no toggle beside it.
+#[tauri::command]
+fn diag_log_location() -> String {
+    diag_log_path().to_string_lossy().into_owned()
+}
+
+/// Reveal `nexus-diag.log` in the operator's file manager.
+///
+/// Mirrors `reveal_all_txt`, including its fallback: if the file is somehow absent, open the
+/// folder rather than failing — an operator sent looking for a log should always land
+/// somewhere useful, and everything else worth attaching (ALL.TXT, the crash report) is in
+/// that same folder anyway.
+#[tauri::command]
+fn reveal_diag_log(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = diag_log_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if path.exists() {
+        app.opener()
+            .reveal_item_in_dir(&path)
+            .map_err(|e| e.to_string())
+    } else if let Some(dir) = path.parent() {
+        app.opener()
+            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+            .map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// Where received SSTV images are saved — the same operator-findable local data
@@ -2087,9 +2145,18 @@ fn reconcile_gallery(dir: &std::path::Path, entries: Vec<tempo_app::dto::SstvGal
     if let Ok(rd) = std::fs::read_dir(dir) {
         for f in rd.flatten() {
             let path = f.path();
-            if path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase)
-                != Some("bmp".into())
-            {
+            // ⚠️ BOTH FORMATS. Received pictures became PNG on 2026-08-15 and this scan was
+            // never widened, so every picture taken since was invisible to the adopter: a
+            // gallery.json that lost an entry (a reset, a fresh profile, a hand-edit) could
+            // re-adopt only the OLD .bmp files — which is a gallery that fills up with last
+            // month's pictures and none of this week's. Reported as "received pictures are
+            // tagged 2026-08-01", which is exactly what a folder of re-adopted August BMPs
+            // looks like (2026-08-19).
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase);
+            if !matches!(ext.as_deref(), Some("bmp") | Some("png")) {
                 continue;
             }
             let p = path.to_string_lossy().into_owned();
@@ -7440,39 +7507,6 @@ fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
     Ok(s)
 }
 
-/// Reset the configuration to factory defaults, keeping the logbook and stored credentials.
-///
-/// There was no reset at all, so a clean start meant deleting files by hand — and doing THAT
-/// while the app runs does not reset anything: the engine holds the old configuration in memory
-/// and writes it straight back on the next save. So this goes through `apply_settings`, the same
-/// path a backup restore uses, which is what makes every side effect (the radio loop
-/// reconfiguring, the profile mirrors re-syncing) happen exactly as it would for any other
-/// settings change.
-///
-/// SCOPE, stated because "reset" is the word operators fear for their QSOs: this replaces the
-/// settings blob only. The logbook is not reachable from here — `log.adi` lives in
-/// `shared_data_dir()`, outside the settings entirely. Credentials live in the OS keychain and are
-/// NOT cleared; `clear_*_password` are the verbs for those, so forgetting them stays a separate,
-/// deliberate act rather than a surprise buried in a reset.
-#[tauri::command(async)]
-fn reset_settings(
-    state: State<'_, SharedEngine>,
-    spots: State<'_, SharedSpots>,
-    live_paths: State<'_, SharedLivePaths>,
-    region_paths: State<'_, SharedRegionPaths>,
-    health: State<'_, SharedHealth>,
-    cache: State<'_, PropCache>,
-) -> Result<AppSnapshot, String> {
-    // A default Settings has an empty roster, which is not a state `load` can ever produce and
-    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
-    let mut fresh = Settings::default();
-    fresh.ensure_radio_profiles();
-    fresh.ensure_distinct_radio_ports();
-    fresh.ensure_routing_targets();
-    // Reuse the ordinary save path in full rather than reimplementing its side effects.
-    set_settings(state, spots, live_paths, region_paths, health, cache, fresh)
-}
-
 /// Apply + persist new settings. Returns the refreshed snapshot.
 ///
 /// Also lazily starts the live network feeds: if this change supplies a real
@@ -7494,6 +7528,9 @@ fn set_settings(
     // empty), so clearing the node list to go RBN-only actually sticks — otherwise `load`'s
     // upgrade seed would re-inject the stale legacy host on the next launch.
     settings.cluster_host = settings.cluster_hosts.first().cloned().unwrap_or_default();
+    // Live, so an operator can start a diagnostic session mid-flight without restarting — the
+    // thing being chased is usually happening right now.
+    tempo_core::applog::set_debug(settings.diag_debug_log);
     // The LoTW-mark resolver reads its recency window from this atomic.
     LOTW_MAX_AGE_DAYS.store(
         settings.lotw_max_age_days,
@@ -11741,6 +11778,23 @@ struct SpotRow {
     /// panel's "my privileges" filter — computed here so the legal band data has ONE
     /// source of truth (the same tables as the TX lockout).
     licensed: bool,
+    /// True when at least one voice for this spot — the spotter or a corroborator — is on the
+    /// OPERATOR'S OWN CONTINENT.
+    ///
+    /// The same question the Needed board asks (`propagation::hf_admit_spotters`), asked here
+    /// so the Spots panel can offer the operator the same relief: a US station does not need a
+    /// row for a JA that only Europe and Asia heard, because that says nothing about a path
+    /// from Illinois. Computed in Rust because resolving a callsign to a continent needs
+    /// cty.dat, which the UI does not have.
+    ///
+    /// ⚠️ A FLAG, NOT A FILTER. The row is always sent; the panel decides. Filtering here
+    /// would make "where did my spots go" unanswerable from the UI, and the count of what is
+    /// being hidden is what keeps the feature honest.
+    ///
+    /// True when locality cannot be judged at all (an unresolvable operator callsign), which
+    /// is `hf_admit_spotters`'s own fail-open posture: an empty panel is a worse answer than
+    /// an unfiltered one.
+    spotter_local: bool,
     /// Set when this spot is a ONE-WAY transmission — an NCDXF/IARU beacon slot or a W1AW
     /// bulletin — and therefore not workable. The row is still shown (an audible beacon is
     /// real propagation evidence); the UI badges it and never paints a need colour on it.
@@ -11783,12 +11837,19 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
     //
     // Poison recovers (engine_lock), so the gate always sees real state; the Option
     // shape is kept for the chains below.
-    let (class, roster_grids) = {
+    let (class, my_call, roster_grids) = {
         let eng = Some(engine_lock(&state));
         let class = eng
             .as_ref()
             .map(|e| e.settings().license_class)
             .unwrap_or(LicenseClass::Open);
+        // The operator's own call decides "my continent" for the locality flag below. Read
+        // under the SAME lock as the class, so a settings save mid-build cannot give one row
+        // the old callsign and the next the new one.
+        let my_call = eng
+            .as_ref()
+            .map(|e| e.settings().mycall.clone())
+            .unwrap_or_default();
         let grids: std::collections::HashMap<String, String> = eng
             .as_ref()
             .map(|e| {
@@ -11801,7 +11862,7 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
                     .collect()
             })
             .unwrap_or_default();
-        (class, grids)
+        (class, my_call, grids)
     };
     let mut rows: Vec<SpotRow> = recent
         .into_iter()
@@ -11849,6 +11910,13 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
                 age_secs,
                 comment: cs.comment.clone(),
                 licensed,
+                spotter_local: {
+                    // Every voice for this spot, the spotter first — one on my continent is
+                    // enough, exactly as on the Needed board.
+                    let mut voices: Vec<&str> = vec![cs.spotter.as_str()];
+                    voices.extend(cs.corroborators.iter().map(String::as_str));
+                    propagation::hf_admit_spotters(&voices, &my_call).is_some()
+                },
                 beacon: propagation::beacons::classify(&cs.dx_call, freq),
             }
         })
@@ -15653,6 +15721,7 @@ fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>
 /// thread would skip those events entirely — its own docs say so.)
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) {
+    tempo_core::applog::info("updater", "install finished — restarting through quit_cleanup");
     app.request_restart();
 }
 
@@ -15727,6 +15796,16 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
     let update_available = latest
         .as_deref()
         .is_some_and(|l| tempo_app::update::version_is_newer(l, &current));
+    // One line per check. An operator stuck on an old build, or one whose update handoff went
+    // wrong, otherwise leaves no trace of what the app believed was available.
+    tempo_core::applog::info(
+        "updater",
+        &format!(
+            "checked: running {current}, feed says {}, update {}",
+            latest.as_deref().unwrap_or("<unknown>"),
+            if update_available { "available" } else { "not needed" }
+        ),
+    );
     Ok(UpdateInfo {
         current,
         latest,
@@ -15924,19 +16003,8 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     if QUIT_CLEANUP_RAN.swap(true, Ordering::SeqCst) {
         return;
     }
-    // Window geometry FIRST, while the windows still exist. On the Cmd+Q path (the reason
-    // this is here) every window is alive; on a window-close quit they are already destroyed
-    // and both captures no-op — `CloseRequested` snapshotted them before the teardown.
-    if !QUIT_SKIP_GEOMETRY.load(Ordering::SeqCst) {
-        window_state::capture_now(app_handle);
-        for (label, w) in app_handle.webview_windows() {
-            if label != "main" {
-                // No-op for anything that is not a band-map window, and skips minimized
-                // windows itself — safe to sweep the whole map.
-                capture_bandmap_window(&w);
-            }
-        }
-    }
+    // Window geometry FIRST, while the windows still exist.
+    capture_all_window_geometry(app_handle);
     // Unkey the transmitter before the process dies: signal the radio
     // loop to drop PTT and give it a brief window to flush the un-key
     // command to the rig. A stuck carrier on quit is a TX-safety
@@ -15963,13 +16031,285 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
         // ordinary case where the loop's drops already ran.
         tempo_audio::rigctld_proc::kill_leftover_daemons();
     }
+    persist_journals(app_handle);
+    // LAST: a clean exit is itself diagnostic — its absence in the file says the process
+    // died rather than quit. Bounded wait; a wedged writer can never hold up an exit.
+    tempo_core::applog::info("startup", "clean shutdown");
+    tempo_core::applog::flush();
+}
+
+/// Snapshot the main window's box and every band-map pop-out's, while they still exist.
+///
+/// On the Cmd+Q path (the reason this exists) every window is alive; on a window-close quit
+/// they are already destroyed and both captures no-op — `CloseRequested` snapshotted them
+/// before the teardown.
+fn capture_all_window_geometry(app_handle: &tauri::AppHandle) {
+    if QUIT_SKIP_GEOMETRY.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    window_state::capture_now(app_handle);
+    for (label, w) in app_handle.webview_windows() {
+        if label != "main" {
+            // No-op for anything that is not a band-map window, and skips minimized windows
+            // itself — safe to sweep the whole map.
+            capture_bandmap_window(&w);
+        }
+    }
+}
+
+/// Write out everything the engine is holding in memory: the conversations, the Field Day log,
+/// and any propagation opening still in progress (a 6m Es evening isn't lost because the app
+/// closed mid-opening).
+///
+/// Split out of [`quit_cleanup`] so the Windows self-update path can reach it — see
+/// [`prepare_update_install`]. Every call is a plain overwrite of the same files, so running it
+/// twice costs a second write and changes nothing.
+fn persist_journals(app_handle: &tauri::AppHandle) {
     persist_conversations(app_handle.state::<SharedEngine>().inner());
     persist_field_day_log(app_handle.state::<SharedEngine>().inner());
-    // An opening still in progress at quit becomes a journaled episode —
-    // a 6m Es evening isn't lost because the app closed mid-opening.
     if let Ok(mut tr) = app_handle.state::<SharedOpeningTracker>().lock() {
         record_opening_episodes(tr.close_all(now_unix()));
     }
+}
+
+/// Flush to disk before a self-update hands the machine to the installer.
+///
+/// **Windows exits without warning here, and nothing downstream of this call runs.**
+/// `tauri-plugin-updater` 2.10.1 ends its Windows arm with `ShellExecuteW(installer)` followed
+/// by `std::process::exit(0)` (`updater.rs:865`) — it does not even read the ShellExecute
+/// result, so reaching that line ends the process. `exit` unwinds nothing and delivers no
+/// `RunEvent`, and [`quit_cleanup`] hangs off `RunEvent::ExitRequested`/`Exit`; so a Windows
+/// self-update used to throw away the conversation history, the Field Day log, any open
+/// propagation episode, the window geometry, and the un-flushed tail of the diagnostic log —
+/// the log covering the update itself, which is exactly the part worth having when an operator
+/// reports that an upgrade broke their install. The plugin's own `on_before_exit` hook cannot
+/// be reached from the JS command path (its plugin `Builder` does not expose it), so the
+/// frontend asks for this immediately before it calls `install()`.
+///
+/// **The transmitter is deliberately NOT touched here.** `install_block_reason` already refuses
+/// the install outright while the radio is transmitting, tuning, in a QSO, running, or merely
+/// TX-armed, so there is nothing to unkey — and a failed install (a bad signature, a download
+/// that never verified) must leave a working app behind, not one whose radio loop has been shut
+/// down under it. Persisting is idempotent; shutting down is not.
+///
+/// A no-op off Windows: there `install()` returns to its caller, the frontend calls
+/// `restart_app`, and `quit_cleanup` runs in full on the ordinary exit path.
+#[tauri::command]
+fn prepare_update_install(app: tauri::AppHandle) {
+    #[cfg(windows)]
+    {
+        tempo_core::applog::info("updater", "flushing journals before the installer handoff");
+        capture_all_window_geometry(&app);
+        persist_journals(&app);
+        tempo_core::applog::flush();
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
+/// Everything the Tauri builder chain MOVES, in one clonable bundle.
+///
+/// It exists so [`build_app`] can be attempted twice. Every field is an `Arc` (or an
+/// `Arc`-backed handle), so a clone is a refcount bump and both attempts address the same
+/// live state — a retry must not hand the app a second, empty engine.
+#[derive(Clone)]
+struct BuildDeps {
+    engine: SharedEngine,
+    spectrum_feed: tempo_app::engine::SpectrumFeed,
+    meter_feed: tempo_app::engine::MeterFeed,
+    prop_cache: PropCache,
+    aurora_cache: AuroraCache,
+    kc2g_cache: Kc2gCache,
+    proton_cache: ProtonCache,
+    scales_cache: ScalesCache,
+    spots: SharedSpots,
+    live_paths: SharedLivePaths,
+    ota_spots: SharedOtaSpots,
+    parks: SharedParks,
+    region_paths: SharedRegionPaths,
+    health: SharedHealth,
+    /// The pounce detector's receiver — the one thing here that cannot be cloned. Shared as a
+    /// take-once cell; see where it is claimed in the setup hook.
+    pounce_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<pouncer::SpotHint>>>>,
+}
+
+/// Where Tauri puts the WebView2 user-data folder on Windows — and, when it is corrupt, the
+/// thing that stops Nexus opening a window at all.
+///
+/// **Verified against the tauri 2.11.2 source, not assumed** (`tauri/src/manager/webview.rs`,
+/// "in `windows`, we need to force a data_directory"): when a webview declares no
+/// `data_directory` of its own — Nexus declares none — Tauri sets it to
+/// `BaseDirectory::LocalData` joined with the bundle **identifier**. So it is
+/// `%LOCALAPPDATA%\com.kd9taw.tempo` (the identifier from `tauri.conf.json`), NOT
+/// `%LOCALAPPDATA%\Nexus`, which is the product-named folder the app's own data lives in. The
+/// folder holds nothing but WebView2's cache and profile, so losing it costs nothing an
+/// operator would notice.
+#[cfg(windows)]
+fn webview_data_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("com.kd9taw.tempo"))
+}
+
+/// A build failed. Set the WebView2 user-data folder aside and try **exactly once** more.
+///
+/// This mirrors the discipline `Settings::load` already uses for an unreadable settings.json:
+/// never delete the evidence, rename it out of the way (`.corrupt-<stamp>`) and carry on from
+/// a clean slate. A corrupt WebView2 profile is the same shape of problem — a cache that has
+/// gone bad and that nothing will ever repair on its own, because every launch re-reads it.
+///
+/// `None` means the launch is over: the message box has been shown and the reason logged.
+///
+/// # What this can and cannot reach (tauri 2.11.2)
+///
+/// `Builder::build()` creates the event loop, the plugins and the app manager. It does **not**
+/// create any window: `tauri::app::setup` — which builds the configured windows and then runs
+/// our `.setup` hook — is invoked later, from inside `App::run`'s `Ready` event, and it
+/// `panic!`s rather than returning an error. So a WebView2 failure most often arrives as a
+/// PANIC during `run`, not as an `Err` here; that path is covered by the panic hook, which
+/// shows the same message box while `STARTUP_REACHED_WINDOW` is still false. Both roads lead
+/// to the operator seeing a dialog that names WebView2 instead of nothing at all.
+fn rebuild_after_setting_webview_data_aside(
+    first: &tauri::Error,
+    deps: BuildDeps,
+) -> Option<tauri::App> {
+    tempo_core::applog::error("webview", &format!("build failed: {first}"));
+    #[cfg(windows)]
+    {
+        if let Some(dir) = webview_data_dir() {
+            if dir.exists() {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let aside = dir.with_file_name(format!("com.kd9taw.tempo.corrupt-{stamp}"));
+                match std::fs::rename(&dir, &aside) {
+                    Ok(()) => tempo_core::applog::warn(
+                        "webview",
+                        &format!("set the WebView2 user-data folder aside as {}", aside.display()),
+                    ),
+                    Err(e) => tempo_core::applog::warn(
+                        "webview",
+                        &format!("could not set {} aside: {e}", dir.display()),
+                    ),
+                }
+            }
+        }
+        // EXACTLY once. A loop here would be an infinite relaunch on a machine with no
+        // WebView2 at all, which is the commonest cause by far.
+        match build_app(deps) {
+            Ok(app) => {
+                tempo_core::applog::info("webview", "second build attempt succeeded");
+                return Some(app);
+            }
+            Err(second) => {
+                tempo_core::applog::error("webview", &format!("second build failed: {second}"));
+                show_startup_failure(&format!("{second}"));
+                return None;
+            }
+        }
+    }
+    // Non-Windows: there is no WebView2 and no user-data folder to set aside, so there is
+    // nothing a retry could change — but the failure is still logged and still said out loud,
+    // because a silent launch failure is the defect being fixed, not a Windows detail.
+    #[cfg(not(windows))]
+    {
+        let _ = deps;
+        show_startup_failure(&format!("{first}"));
+        None
+    }
+}
+
+/// True once the main window exists. Everything that can leave an operator with a
+/// window-less process happens before it is set, so a panic while it is false is a panic the
+/// operator will experience as "nothing happened" — and is the one worth interrupting them
+/// for.
+static STARTUP_REACHED_WINDOW: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// The dialog is shown at most once per process: a failing startup can panic on several
+/// threads, and a stack of identical message boxes is its own bug report.
+static STARTUP_FAILURE_SHOWN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Tell the operator, in a window, that the app could not start — and what to do about it.
+///
+/// The whole point of the exercise: with `windows_subsystem = "windows"` the alternative is
+/// literally nothing on screen. Native `MessageBoxW`, declared inline exactly as the crash
+/// reporter in `main.rs` declares its Win32 calls, so this adds no dependency and needs no
+/// window, no webview and no Tauri app — none of which exist when it is called.
+fn show_startup_failure(reason: &str) {
+    use std::sync::atomic::Ordering;
+    if STARTUP_FAILURE_SHOWN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let body = format!(
+        "Nexus could not start.\n\n\
+         {reason}\n\n\
+         This is almost always the Microsoft Edge WebView2 runtime, which Nexus uses to draw \
+         its window.\n\n\
+         To repair it:\n\
+         1. Open Settings \u{25b8} Apps \u{25b8} Installed apps\n\
+         2. Find \"Microsoft Edge WebView2 Runtime\"\n\
+         3. Choose Modify \u{25b8} Repair, then start Nexus again.\n\n\
+         If that does not help, check your antivirus quarantine (Windows Security \u{25b8} \
+         Protection history) — Nexus is unsigned, and some scanners remove parts of it.\n\n\
+         A diagnostic log has been written to:\n{}",
+        diag_log_path().display()
+    );
+    eprintln!("nexus: {body}");
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn MessageBoxW(
+                hwnd: *mut std::ffi::c_void,
+                text: *const u16,
+                caption: *const u16,
+                utype: u32,
+            ) -> i32;
+        }
+        const MB_ICONERROR: u32 = 0x0000_0010;
+        const MB_SETFOREGROUND: u32 = 0x0001_0000;
+        let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+        let text = wide(&body);
+        let caption = wide("Nexus — startup failed");
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_ICONERROR | MB_SETFOREGROUND,
+            );
+        }
+    }
+}
+
+/// Route Rust panics into the diagnostic log, keeping whatever hook was already installed.
+///
+/// Without this a panic in a release build goes to a stderr that `windows_subsystem =
+/// "windows"` has detached — the process dies leaving no trace whatsoever, since the native
+/// crash handler in `main.rs` only fires on ACCESS VIOLATIONS and a Rust panic is not one.
+/// The payload and location are exactly what turns "it just closed" into a bug report.
+fn install_panic_logger() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let where_ = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown location>".into());
+        // `info` renders payload + location; the applog redactor scrubs it either way.
+        tempo_core::applog::error("panic", &format!("at {where_}: {info}"));
+        // Error level flushes, but a panic can be followed immediately by an abort, so make
+        // the wait explicit rather than relying on the writer getting a slice first.
+        tempo_core::applog::flush();
+        // ★ THE STARTUP-SILENCE CATCH. A panic BEFORE the main window exists is the shape the
+        // operator experiences as "I double-click it and nothing happens" — and in tauri
+        // 2.11.2 that is exactly where a WebView2 failure lands, because windows are created
+        // in `tauri::app::setup` (inside `App::run`), which panics rather than returning an
+        // error. Say so in a dialog; after the window is up, a panic is visible by other
+        // means and a modal box on top of a working app would be noise.
+        if !STARTUP_REACHED_WINDOW.load(std::sync::atomic::Ordering::SeqCst) {
+            show_startup_failure(&format!("{info}"));
+        }
+        previous(info);
+    }));
 }
 
 /// Build and run the Tauri application.
@@ -15986,6 +16326,25 @@ pub fn run() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
+    // ── Diagnostic log ───────────────────────────────────────────────────────────────────
+    // Opened before anything else can fail, because the failures worth diagnosing are the
+    // EARLY ones: the binary is `windows_subsystem = "windows"`, so a startup death produces
+    // no window, no console and (unless it is an access violation) no file — which is exactly
+    // why the 2026-08 Greek-Windows "it will not launch" report arrived with nothing
+    // attachable. The milestones below are deliberately coarse: a truncated log whose last
+    // line is "settings loaded" says which step never finished, and that alone would have
+    // answered that report. See `tempo_core::applog`.
+    tempo_core::applog::init(diag_log_path());
+    tempo_core::applog::info(
+        "startup",
+        &format!(
+            "Nexus {} starting on {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    );
+    install_panic_logger();
 
     // Take this profile's advisory lock (named profiles only — the default single-instance is a
     // no-op). Lets the launch picker grey out a radio already open in another window, and marks
@@ -16014,6 +16373,24 @@ pub fn run() {
     }
 
     let mut settings = Settings::load(&settings_path());
+    // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
+    // the startup it was turned on for, not just what came after.
+    tempo_core::applog::set_debug(settings.diag_debug_log);
+    if settings.diag_debug_log {
+        // Said out loud, because a reader months from now must never mistake the extra
+        // traffic for a fault, nor a QUIET log for a healthy one when the level was simply low.
+        tempo_core::applog::info("diag", "DEBUG tier is ON for this session (operator setting)");
+    }
+    // A milestone, not the settings themselves — this file is designed to be emailed to a
+    // stranger, and `Settings` is where the operator's callsign and connector accounts live.
+    tempo_core::applog::info(
+        "startup",
+        &format!(
+            "settings loaded from {} ({} radio(s) configured)",
+            settings_path().display(),
+            settings.radios.len()
+        ),
+    );
 
     let bound_radio = bound_radio_id();
 
@@ -16141,7 +16518,33 @@ pub fn run() {
         rx_tap: std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
         meter_feed: meter_feed.clone(),
         ptt_method: settings.ptt_method.clone(),
+        // The operator's D1/D2/D3 choice, from the ACTIVE radio's profile. Without this the
+        // picker is decorative: the setting saved, the UI moved, the CI-V command supported it,
+        // and nothing carried the value into the backend (found by issue triage, same day).
+        icom_data_mode: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| r.icom_data_mode)
+            .unwrap_or(settings.icom_data_mode),
         rig_model: settings.rig_model,
+        // The operator's name for the active radio, so the STARTUP CAT line names it. Without
+        // this the first line of every log said "model 1042" while every later line said
+        // "Yeasu" — the same radio under two names, in the file we hand to a stranger.
+        radio_label: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| {
+                if r.name.trim().is_empty() {
+                    r.rig_model_name.clone()
+                } else if r.rig_model_name.trim().is_empty() {
+                    r.name.clone()
+                } else {
+                    format!("{} — {} (model {})", r.name, r.rig_model_name, r.rig_model)
+                }
+            })
+            .unwrap_or_default(),
         // Seeded here rather than waiting for the first settings tick: the launch of rigctld is
         // itself what keys an undeclared RTS-wired cable, so a tick later is too late (#44).
         cat_rts_keys_ptt: settings.cat_rts_keys_ptt,
@@ -16836,6 +17239,7 @@ pub fn run() {
                 }
             };
             eprintln!("tempo: {msg}");
+            tempo_core::applog::error("radio", &msg);
             // `unwrap_or_else(into_inner)`, NOT `.map` on the Result: the one case
             // this banner exists for — the loop died from a panic under the engine
             // guard — is exactly the case where the lock is POISONED, and the old
@@ -16937,30 +17341,96 @@ pub fn run() {
     let (pounce_tx, pounce_rx) = pouncer::channel();
     let _ = POUNCE_TX.set(pounce_tx);
 
+    // Everything the builder chain moves, bundled so a retry can be handed an identical set.
+    let deps = BuildDeps {
+        engine,
+        spectrum_feed,
+        meter_feed,
+        prop_cache,
+        aurora_cache,
+        kc2g_cache,
+        proton_cache,
+        scales_cache,
+        spots,
+        live_paths,
+        ota_spots,
+        parks,
+        region_paths,
+        health,
+        // The pounce receiver is the one non-clonable thing the chain takes. Shared as a
+        // take-once cell so both attempts can hold the bundle: whichever setup runs first
+        // gets the receiver, and a retry whose predecessor already consumed it skips the
+        // detector rather than failing the launch over an alerting nicety.
+        pounce_rx: Arc::new(Mutex::new(Some(pounce_rx))),
+    };
+
+    let app = match build_app(deps.clone()) {
+        Ok(app) => app,
+        Err(e) => match rebuild_after_setting_webview_data_aside(&e, deps) {
+            Some(app) => app,
+            None => return,
+        },
+    };
+    app.run(|app_handle, event| {
+        // Flush conversation history, Field Day log, opening episodes and window
+        // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
+        //
+        // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
+        // deliver different events and neither is a superset of the other:
+        //  - window close (all platforms) and `app.exit()`/`request_restart()`:
+        //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
+        //    exactly as it always did, and the second arm no-ops on the guard;
+        //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
+        //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
+        //    is never emitted on that path, which is how Cmd+Q used to skip the
+        //    whole cleanup. `Exit` arrives synchronously inside the terminate
+        //    callback, so the unkey wait still completes before the process dies.
+        match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                quit_cleanup(app_handle);
+            }
+            _ => {}
+        }
+    });
+}
+
+/// One attempt at building the Tauri application.
+///
+/// Split out of [`run`] for exactly one reason: it has to be callable TWICE. `build()` used to
+/// end in `.expect(...)`, one of only two panic sites in `run`, and under
+/// `windows_subsystem = "windows"` a panic there produces nothing at all — no window, no
+/// dialog, no console, no crash file, because the native handler in `main.rs` only fires on
+/// access violations. That is the shape of the 2026-08 Greek-Windows report: the app simply
+/// does not start, and there is nothing to send.
+///
+/// Everything the chain MOVES arrives in [`BuildDeps`], which clones, so the caller can hand a
+/// second identical set to a retry after setting a corrupt WebView2 user-data folder aside.
+fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(engine)
-        .manage(spectrum_feed)
-        .manage(meter_feed)
-        .manage(prop_cache)
-        .manage(aurora_cache)
-        .manage(kc2g_cache)
-        .manage(proton_cache)
-        .manage(scales_cache)
-        .manage(spots)
-        .manage(live_paths)
-        .manage(ota_spots)
-        .manage(parks)
-        .manage(region_paths)
-        .manage(health)
+        .manage(d.engine)
+        .manage(d.spectrum_feed)
+        .manage(d.meter_feed)
+        .manage(d.prop_cache)
+        .manage(d.aurora_cache)
+        .manage(d.kc2g_cache)
+        .manage(d.proton_cache)
+        .manage(d.scales_cache)
+        .manage(d.spots)
+        .manage(d.live_paths)
+        .manage(d.ota_spots)
+        .manage(d.parks)
+        .manage(d.region_paths)
+        .manage(d.health)
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
             update_install_block,
+            prepare_update_install,
             restart_app,
             log_operators,
             export_settings_bundle,
@@ -16982,13 +17452,14 @@ pub fn run() {
             set_mode,
             get_settings,
             set_settings,
-            reset_settings,
             export_log,
             export_general_log,
             save_text_to_downloads,
             save_png_to_downloads,
             civ_diagnostic_log,
             all_txt_location,
+            diag_log_location,
+            reveal_diag_log,
             recordings_location,
             sstv_delete_image,
             reveal_recordings,
@@ -17261,7 +17732,9 @@ pub fn run() {
             qsy_pause,
             qsy_stop
         ])
-        .setup(|app| {
+        // `move`: the hook claims the pounce receiver out of the shared bundle, so it owns
+        // its half of `d` rather than borrowing a local that is about to go out of scope.
+        .setup(move |app| {
             // Classic startup splash: the borderless `splashscreen` window shows on top for ~3s
             // while the `main` window (declared hidden) loads behind it; then reveal main and
             // close the splash. A plain thread timer — no dependency on the frontend being ready.
@@ -17297,22 +17770,41 @@ pub fn run() {
             // an unreferenced module: bug #10, the 4K operator who re-dragged the same corner
             // every session.
             window_state::install(app.handle());
+            // ★ THE MILESTONE THAT MATTERS MOST. Everything that can leave an operator with a
+            // window-less process — the WebView2 runtime, a corrupt user-data folder, a
+            // quarantined DLL — happens BEFORE this line, inside Tauri's own window creation.
+            // A diagnostic log that stops short of it says "the webview never came up", which
+            // is the answer the Greek-Windows report needed and could not get.
+            tempo_core::applog::info("startup", "main window created; app setup running");
+            STARTUP_REACHED_WINDOW.store(true, std::sync::atomic::Ordering::SeqCst);
             // Pounce detector. Emits `pounce` to every window when a rare one appears — the
             // app's ONLY push; everything else polls. `emit` (not `emit_to`) so the pop-out
             // panel windows get it too without tracking listener lifetimes.
             {
                 use tauri::Emitter;
-                let eng = app.state::<SharedEngine>().inner().clone();
-                let emit_handle = app.handle().clone();
-                let rx = pounce_rx;
-                std::thread::Builder::new()
-                    .name("nexus-pounce".into())
-                    .spawn(move || {
-                        pouncer::run(eng, rx, move |p| {
-                            let _ = emit_handle.emit("pounce", &p);
-                        });
-                    })
-                    .expect("spawn pounce detector");
+                // Take-once: the dependency bundle is cloned for a possible retry, so the
+                // receiver is shared and whichever setup runs first claims it. `None` on a
+                // retry whose predecessor already took it — the detector is an alerting
+                // nicety, and going without it is strictly better than failing a launch that
+                // has just healed itself.
+                let claimed = d.pounce_rx.lock().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some(rx) = claimed {
+                    let eng = app.state::<SharedEngine>().inner().clone();
+                    let emit_handle = app.handle().clone();
+                    std::thread::Builder::new()
+                        .name("nexus-pounce".into())
+                        .spawn(move || {
+                            pouncer::run(eng, rx, move |p| {
+                                let _ = emit_handle.emit("pounce", &p);
+                            });
+                        })
+                        .expect("spawn pounce detector");
+                } else {
+                    tempo_core::applog::warn(
+                        "startup",
+                        "pounce detector not started (receiver already claimed by a prior build attempt)",
+                    );
+                }
             }
 
             let handle = app.handle().clone();
@@ -17413,28 +17905,6 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building the Nexus application")
-        .run(|app_handle, event| {
-            // Flush conversation history, Field Day log, opening episodes and window
-            // geometry, and unkey the transmitter, on app exit (`quit_cleanup`).
-            //
-            // BOTH events, deliberately (mac QA audit, 2026-08-17). The two quit shapes
-            // deliver different events and neither is a superset of the other:
-            //  - window close (all platforms) and `app.exit()`/`request_restart()`:
-            //    `ExitRequested` first, then `Exit` — cleanup runs at `ExitRequested`,
-            //    exactly as it always did, and the second arm no-ops on the guard;
-            //  - macOS Cmd+Q (the default menu's Quit): NSApp `terminate:` → tao's
-            //    `applicationWillTerminate` → `RunEvent::Exit` ONLY — `ExitRequested`
-            //    is never emitted on that path, which is how Cmd+Q used to skip the
-            //    whole cleanup. `Exit` arrives synchronously inside the terminate
-            //    callback, so the unkey wait still completes before the process dies.
-            match event {
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                    quit_cleanup(app_handle);
-                }
-                _ => {}
-            }
-        });
 }
 
 #[cfg(test)]
@@ -17661,6 +18131,53 @@ mod tests {
     /// `gallery.json` lives inside the folder and every entry holds an absolute path, so pointing
     /// the decoder somewhere new without migrating reads a fresh empty index — to the operator
     /// their whole received-picture history has vanished, though every file is still on disk.
+    /// THE ADOPTER WENT BLIND WHEN PICTURES BECAME PNG.
+    ///
+    /// `reconcile_gallery` re-adopts image files sitting in the folder that gallery.json does
+    /// not know about — a record lost to a reset, a fresh profile, a hand-edit. It scanned for
+    /// `.bmp` only, and received pictures became PNG on 2026-08-15, so everything taken since
+    /// was invisible to it: the gallery could refill itself with last month's BMPs and none of
+    /// this week's pictures. Reported as "received pictures are tagged 2026-08-01", which is
+    /// what a folder of re-adopted August BMPs looks like from the operator's chair.
+    #[test]
+    fn the_gallery_adopts_png_files_as_well_as_bmp() {
+        let dir = scratch("sstv-adopt");
+        std::fs::create_dir_all(&dir).unwrap();
+        // One of each, named the way the decoder names them.
+        std::fs::write(dir.join("20260819T101500Z_s1.png"), b"x").unwrap();
+        std::fs::write(dir.join("20260801T090000Z_r36.bmp"), b"x").unwrap();
+        // …and something that is not a picture at all.
+        std::fs::write(dir.join("gallery.json"), b"[]").unwrap();
+
+        let got = reconcile_gallery(&dir, Vec::new());
+        let names: Vec<String> = got
+            .iter()
+            .map(|e| {
+                std::path::Path::new(&e.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with(".png")),
+            "a PNG in the folder must be adopted: {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.ends_with(".bmp")),
+            "control: the BMP that always worked still is: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.ends_with(".json")),
+            "and nothing that is not a picture: {names:?}"
+        );
+        // Each carries the date from its OWN filename, oldest first.
+        assert_eq!(got[0].finished_utc, "2026-08-01T09:00:00Z");
+        assert_eq!(got[1].finished_utc, "2026-08-19T10:15:00Z");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn migrating_the_sstv_gallery_moves_the_files_and_rewrites_their_paths() {
         let from = scratch("sstv-from");

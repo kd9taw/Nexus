@@ -6,6 +6,7 @@ import { useScopeTune } from '../useScopeTune'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
+import { t } from '../i18n'
 
 /** Fallback track height (px) before the real one is measured — the track flex-fills its window. */
 const TRACK_H = 460
@@ -62,15 +63,21 @@ interface Props {
   onSnap?: (s: AppSnapshot) => void
 }
 
-/** Compact "how long ago" for a spot tooltip. */
+/** Compact "how long ago" for a spot tooltip. The unit letter rides inside the message with
+ * its number, so a translation can never separate the two. */
 function ageLabel(secs: number): string {
   if (secs < 0) return ''
-  if (secs < 60) return `${secs}s ago`
+  if (secs < 60) return t('bandMap.age.secs', { secs })
   const m = Math.floor(secs / 60)
-  return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`
+  return m < 60 ? t('bandMap.age.mins', { mins: m }) : t('bandMap.age.hours', { hours: Math.floor(m / 60) })
 }
 
 /**
+ * ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+ * string comes from the catalog. What does NOT: the band and mode names, the gridline and dial
+ * frequencies, and every value in a spot's tooltip — `modeLabel` is CW/SSB, `detail` is the
+ * spot line assembled from data, and `de <spotter>` is the cluster's own shorthand.
+ *
  * Vertical N1MM-style band map — the same live cluster spots as `BandStrip`, on a vertical
  * frequency axis (high freq at top) with a labeled gridline scale, COLORED by need/worked exactly
  * like the operating roster (a marker carries `need-${cls}` from `needByCall`, struck through when
@@ -258,21 +265,23 @@ export function BandMap({
     return (
       <div className="bandmap">
         <div className="bandstrip-head">
-          <span className="bandstrip-title">Band map</span>
-          <span className="bandstrip-count">{band || '—'} — off the band plan</span>
+          <span className="bandstrip-title">{t('bandMap.title')}</span>
+          <span className="bandstrip-count">{t('bandMap.offPlan', { band: band || '—' })}</span>
           {onDock && (
             <span className="bandmap-dock">
-              <button type="button" className="bandmap-dock-btn" onClick={() => onDock('left')} title="Dock to the left screen edge">
+              <button type="button" className="bandmap-dock-btn" onClick={() => onDock('left')} title={t('bandMap.dock.left.title')}>
                 ◧
               </button>
-              <button type="button" className="bandmap-dock-btn" onClick={() => onDock('right')} title="Dock to the right screen edge">
+              <button type="button" className="bandmap-dock-btn" onClick={() => onDock('right')} title={t('bandMap.dock.right.title')}>
                 ◨
               </button>
             </span>
           )}
         </div>
         <div className="bandmap-track">
-          <div className="bandmap-empty">no band-plan data for {band || 'this frequency'}</div>
+          <div className="bandmap-empty">
+            {t('bandMap.empty.noPlan', { band: band || t('bandMap.empty.thisFrequency') })}
+          </div>
         </div>
       </div>
     )
@@ -287,29 +296,28 @@ export function BandMap({
   return (
     <div className="bandmap">
       <div className="bandstrip-head">
-        <span className="bandstrip-title">Band map</span>
+        <span className="bandstrip-title">{t('bandMap.title')}</span>
         <span className="bandstrip-count">
           {inBand.length > 0
-            ? `${inBand.length} ${modeLabel} spot${inBand.length === 1 ? '' : 's'} · ${band}${
-                hidden > 0 ? ` · ${hidden} more` : ''
-              }`
-            : `no ${modeLabel} spots on ${band} yet`}
+            ? t('bandMap.count', { count: inBand.length, mode: modeLabel, band }) +
+              (hidden > 0 ? t('bandMap.count.more', { count: hidden }) : '')
+            : t('bandMap.empty.none', { mode: modeLabel, band })}
         </span>
         <button
           type="button"
           className={`bandstrip-legend-toggle${showLegend ? ' on' : ''}`}
           onClick={toggleLegend}
-          title="Show/hide the colour + type key"
+          title={t('bandMap.legend.title')}
           aria-pressed={showLegend}
         >
-          Legend
+          {t('bandMap.legend.label')}
         </button>
         {onDock && (
           <span className="bandmap-dock">
-            <button type="button" className="bandmap-dock-btn" onClick={() => onDock('left')} title="Dock this window to the left screen edge (full-height strip, remembered)">
+            <button type="button" className="bandmap-dock-btn" onClick={() => onDock('left')} title={t('bandMap.dock.left.titleRemembered')}>
               ◧
             </button>
-            <button type="button" className="bandmap-dock-btn" onClick={() => onDock('right')} title="Dock this window to the right screen edge (full-height strip, remembered)">
+            <button type="button" className="bandmap-dock-btn" onClick={() => onDock('right')} title={t('bandMap.dock.right.titleRemembered')}>
               ◨
             </button>
           </span>
@@ -322,8 +330,8 @@ export function BandMap({
         className={`bandmap-track${tuneEnabled === true ? ' tunable' : ''}`}
         title={
           tuneEnabled === true
-            ? `${band} — high at top, low at bottom (MHz). Click to tune here; scroll to tune.`
-            : `${band} — high at top, low at bottom (MHz)`
+            ? t('bandMap.track.title.tunable', { band })
+            : t('bandMap.track.title', { band })
         }
       >
         {grid.map((g, k) => (
@@ -335,7 +343,7 @@ export function BandMap({
           <div
             className="bandmap-shade"
             style={{ top: `${shade.top}%`, height: `${shade.height}%` }}
-            title="Your licensed phone segment on this band"
+            title={t('bandMap.shade.title')}
           />
         )}
         {rows.map(({ s, freqY, labelY }, i) => {
@@ -372,7 +380,7 @@ export function BandMap({
                 type="button"
                 className={`bandmap-spot${needCls}${worked ? ' worked' : ''}`}
                 style={{ top: `${labelY}%`, opacity }}
-                title={`${detail} — click to work`}
+                title={t('bandMap.spot.title', { detail })}
                 onClick={() => onWorkSpot(s)}
               >
                 {beacon && <span className={`spot-type-badge ${beacon.cls}`}>{beacon.ch}</span>}
@@ -386,13 +394,17 @@ export function BandMap({
           <div
             className={`bandmap-dial${txAllowed ? '' : ' blocked'}`}
             style={{ top: `${yOf(dialMhz)}%` }}
-            title={`You: ${dialMhz.toFixed(3)} MHz${txAllowed ? '' : ' — transmit blocked (outside your privileges)'}`}
+            title={
+              txAllowed
+                ? t('bandMap.dial.title', { freq: dialMhz.toFixed(3) })
+                : t('bandMap.dial.title.blocked', { freq: dialMhz.toFixed(3) })
+            }
           >
             <span className="bandmap-dial-lbl mono">{dialMhz.toFixed(3)}</span>
           </div>
         )}
         {rows.length === 0 && (
-          <div className="bandmap-empty">no {modeLabel} spots on {band} yet</div>
+          <div className="bandmap-empty">{t('bandMap.empty.none', { mode: modeLabel, band })}</div>
         )}
       </div>
     </div>

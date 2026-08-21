@@ -9,9 +9,17 @@
 //
 // Each unique decode (from + message + freq) alerts at most once.
 
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every word an alert
+// says comes from the catalog. What does NOT: the callsign, the DXCC entity name, the grid
+// square and the watch filter's own label — they are interpolated as they arrive. The two
+// optional clauses (` — <entity>` and the grid after "grid") are assembled here as WHOLE
+// clauses and handed in, so a toast with neither never carries a dangling separator.
+
 import type { DecodeRow, Settings } from './types'
 import { pushToast } from './toast'
 import { announce } from './announce'
+import { t } from './i18n'
 import { matchWatchlist, watchLabel, type WatchFilter } from './watchlist'
 
 // ⭐ TWO SETS, DELIBERATELY. The "once ever" dedups (a new DXCC, a new grid, a
@@ -227,9 +235,11 @@ export function processDecodes(
     if (settings.announceVerbosity === 'all') {
       const cqs = fresh.filter((d) => d.isCq && d.from).slice(0, 3)
       const cqPart = cqs.length
-        ? ` CQ from ${cqs.map((d) => `${d.from}${d.country ? ` (${d.country})` : ''}`).join(', ')}.`
+        ? t('alerts.batch.cq', {
+            calls: cqs.map((d) => `${d.from}${d.country ? ` (${d.country})` : ''}`).join(', '),
+          })
         : ''
-      announce(`${fresh.length} new decode${fresh.length === 1 ? '' : 's'}.${cqPart}`)
+      announce(t('alerts.batch.decodes', { count: fresh.length }) + cqPart)
     }
   }
 
@@ -257,13 +267,22 @@ export function processDecodes(
         const wkey = `watch:${hit.id}:${call ?? '?'}`
         if (!alertedOnce.has(wkey)) {
           alertedOnce.add(wkey)
-          const where = d.country ? ` — ${d.country}` : ''
+          const where = d.country ? t('alerts.where', { entity: d.country }) : ''
           doubleBeep(BEEP_HZ.newdxcc)
-          pushToast(`⭐ Watch ${watchLabel(hit)}: ${call ?? 'station'}${where}`, 'success', 15000, {
-            prominent: true,
-            action: onWork && d.from ? () => onWork(d) : undefined,
-            actionLabel: 'Work',
-          })
+          pushToast(
+            t('alerts.watch', {
+              what: watchLabel(hit),
+              call: call ?? t('alerts.station'),
+              where,
+            }),
+            'success',
+            15000,
+            {
+              prominent: true,
+              action: onWork && d.from ? () => onWork(d) : undefined,
+              actionLabel: t('alerts.action.work'),
+            },
+          )
         }
         continue // don't ALSO fire a generic new/CQ alert for the same decode
       }
@@ -306,18 +325,18 @@ export function processDecodes(
     if (seen.has(key)) continue
     seen.add(key)
 
-    const who = call ?? 'station'
-    const where = d.country ? ` — ${d.country}` : ''
+    const who = call ?? t('alerts.station')
+    const where = d.country ? t('alerts.where', { entity: d.country }) : ''
     // Every decode alert is "here's a station worth working" — wire the toast's action to
     // work it (same as double-clicking the decode). Only when we know who (from is set).
     const workAction = onWork && d.from ? () => onWork(d) : undefined
     if (kind === 'newdxcc') {
       // Aggressive: double tone + a prominent, long-lived toast.
       doubleBeep(BEEP_HZ.newdxcc)
-      pushToast(`🎯 NEW DXCC: ${who}${where}`, 'success', 15000, {
+      pushToast(t('alerts.newDxcc', { call: who, where }), 'success', 15000, {
         prominent: true,
         action: workAction,
-        actionLabel: 'Work',
+        actionLabel: t('alerts.action.work'),
       })
       continue
     }
@@ -329,32 +348,37 @@ export function processDecodes(
     // it linger (the beep was firing but the toast vanished before you could
     // find it). An opt-in CQ stays a quieter, shorter info toast.
     if (kind === 'mycall') {
-      pushToast(`📢 ${who} is calling you`, 'success', 20000, {
+      pushToast(t('alerts.myCall', { call: who }), 'success', 20000, {
         prominent: true,
         action: workAction,
-        actionLabel: 'Answer',
+        actionLabel: t('alerts.action.answer'),
       })
     } else if (kind === 'newgrid') {
       if (rareGrid) {
         // The gem earns its keep: rare = islet/sliver, ultra = water-only
         // (rover/maritime/DXpedition) — aggressive like a new one.
-        const tier = d.gridRarity === 'ultraRare' ? 'ULTRA-RARE' : 'RARE'
+        const tier = d.gridRarity === 'ultraRare' ? t('alerts.tier.ultraRare') : t('alerts.tier.rare')
         doubleBeep(BEEP_HZ.newgrid)
-        pushToast(`💎 ${tier} grid${d.grid ? ` ${d.grid}` : ''}: ${who}${where}`, 'success', 15000, {
-          prominent: true,
-          action: workAction,
-          actionLabel: 'Work',
-        })
+        pushToast(
+          t('alerts.rareGrid', { tier, grid: d.grid ? ` ${d.grid}` : '', call: who, where }),
+          'success',
+          15000,
+          {
+            prominent: true,
+            action: workAction,
+            actionLabel: t('alerts.action.work'),
+          },
+        )
       } else {
-        pushToast(`New grid: ${who}${where}`, 'info', 6000, {
+        pushToast(t('alerts.newGrid', { call: who, where }), 'info', 6000, {
           action: workAction,
-          actionLabel: 'Work',
+          actionLabel: t('alerts.action.work'),
         })
       }
     } else {
-      pushToast(`CQ from ${who}${where}`, 'info', 6000, {
+      pushToast(t('alerts.cq', { call: who, where }), 'info', 6000, {
         action: workAction,
-        actionLabel: 'Answer',
+        actionLabel: t('alerts.action.answer'),
       })
     }
   }

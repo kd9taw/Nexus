@@ -1,6 +1,10 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every toast below
+// comes from the catalog; the version strings interpolated into them are invariant.
+
 import type { UpdateInfo } from '../types'
 import { checkForUpdate, openDownloadPage } from '../api'
 import { pushToast } from '../toast'
+import { t } from '../i18n'
 
 // The dismissal lives client-side so a check never routes through the heavyweight set_settings
 // path (which restarts feeds). The backend just fetches + compares.
@@ -31,13 +35,13 @@ export async function maybeCheckForUpdate(): Promise<void> {
 function promptDownload(info: UpdateInfo): void {
   const latest = info.latest
   if (!latest) return
-  pushToast(`Nexus ${latest} is available — you're on ${info.current}`, 'info', 0, {
+  pushToast(t('update.available', { latest, current: info.current }), 'info', 0, {
     prominent: true,
-    actionLabel: 'Download',
+    actionLabel: t('update.download'),
     action: () => {
       openDownloadPage()
         .then(() => localStorage.setItem(LS_DISMISSED, latest))
-        .catch(() => pushToast('Could not open the download page', 'error'))
+        .catch(() => pushToast(t('update.downloadFailed'), 'error'))
     },
   })
 }
@@ -51,16 +55,16 @@ function promptDownload(info: UpdateInfo): void {
 export async function checkForUpdateManual(): Promise<void> {
   const info = await checkForUpdate().catch(() => null)
   if (!info) {
-    pushToast('Could not reach the update server to check for updates', 'error')
+    pushToast(t('update.checkFailed'), 'error')
     return
   }
   if (info.updateAvailable && info.latest) {
     localStorage.removeItem(LS_DISMISSED) // they asked — show it even if previously dismissed
     promptDownload(info)
   } else if (info.latest) {
-    pushToast(`You're on the latest Nexus (${info.current})`, 'success')
+    pushToast(t('update.upToDate', { current: info.current }), 'success')
   } else {
     // Fetch worked but no recognizable version — don't claim up-to-date.
-    pushToast("Couldn't read the latest release info", 'info')
+    pushToast(t('update.unreadable'), 'info')
   }
 }

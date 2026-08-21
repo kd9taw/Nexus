@@ -3,7 +3,13 @@
 // frequency); these gate them by the operator's enabled modes and resolve a click into
 // a concrete QSY + cockpit target.
 
-import type { BandChannel, NeedAlert, NeedTag } from '../types'
+import type { BandChannel, GridRarity, NeedAlert, NeedTag } from '../types'
+// ONE definition of what 'vhf' means (≥ 50 MHz), shared with the sound/toast path. The
+// alert module owns it; a second copy here is exactly how the icons and the alerts drifted
+// apart in the first place. (alerts.ts touches WebAudio only inside its functions, so this
+// stays node-testable.)
+import { bandScopeOk } from '../alerts'
+import { bandRangeForLabel } from '../band'
 
 /**
  * Chase-importance weight per need tag — the UI mirror of the backend's `NeedTag::tier()`
@@ -132,18 +138,104 @@ export function chaseRank(
   return tag ? NEED_TIER[tag] : 0
 }
 
-/** Which need rows are visible given the enabled operating-mode features. Digital needs
- * always show; CW/Phone needs only when that mode is enabled — so a pure-digital op's
- * board is unchanged even though the backend sends voice/CW needs too. */
+/**
+ * The operator's per-type alert BAND SCOPES (Settings ▸ Spots & Alerts), as the need
+ * VISUALS read them. Each is 'off' | 'hf' | 'vhf' | 'all'; absent = use that type's default.
+ *
+ * ⭐ These settings gated the sound and the toast (alerts.ts) and NOTHING ELSE, so a grid
+ * scope of VHF+ left the GRID icon painting HF rows on the roster and the decode feed —
+ * reported twice ("its still showing the grid icons in ft8 in both roster and classic mode
+ * when on hf bands"). The scope is one operator intent — "grid chasing is a VHF thing" —
+ * and it governs both halves through the SAME `bandScopeOk`.
+ */
+export interface NeedBandScopes {
+  /** `settings.alertDxccBands` — the new-entity (ATNO) scope. Default 'all'. */
+  dxcc?: string
+  /** `settings.alertGridBands` — a plain new grid. Default 'vhf'. */
+  grid?: string
+  /** `settings.alertRareGridBands` — a rare/ultra-rare 💎 grid. Default 'vhf'. */
+  rareGrid?: string
+}
+
+/** The three need kinds a band scope has anything to say about. Everything else — a new
+ * band-slot, a zone, a state, a mode, a watch-list hit — is unscoped and never withheld. */
+export type ScopedNeedKind = 'dxcc' | 'grid' | 'rareGrid'
+
+/** A grid rare enough to follow the SEPARATE 💎 scope — the same two tiers the alert path
+ * tests inline (alerts.ts `isRareGrid`); it cannot import this module without a cycle. */
+export function isRareGrid(rarity: GridRarity | null | undefined): boolean {
+  return rarity === 'rare' || rarity === 'ultraRare'
+}
+
+/**
+ * The MHz a need should be judged at: the spot's own frequency when it carried one, else
+ * the bottom edge of its band label (`band.ts` owns that table — no second copy). Returns
+ * undefined when neither resolves, which `bandScopeOk` reads as "band unknown" and passes.
+ *
+ * The alert's OWN band, not the dial, because the roster and the band map show stations
+ * heard on other bands; a 6 m grid need must keep its icon while the rig sits on 20 m. No
+ * band straddles the 50 MHz line, so the band's bottom edge decides HF-vs-VHF exactly as
+ * the live dial would.
+ */
+export function needScopeMhz(band: string, freqMhz?: number | null): number | undefined {
+  if (freqMhz != null && freqMhz > 0) return freqMhz
+  return bandRangeForLabel((band ?? '').trim().toLowerCase())?.lo
+}
+
+/**
+ * Does the operator's band scope admit this need kind at `mhz`? No scopes supplied (a host
+ * that has not loaded settings yet) = permissive: a missing icon is worse than an extra one,
+ * and that is the stance `bandScopeOk` already takes for an unknown dial.
+ *
+ * A rare grid is admitted when EITHER grid scope opens — the same rule the toast tier uses,
+ * so silencing plain HF grids keeps the gems and vice versa.
+ */
+export function needScopeOk(
+  kind: ScopedNeedKind,
+  mhz: number | undefined,
+  scopes: NeedBandScopes | undefined,
+): boolean {
+  if (!scopes) return true
+  if (kind === 'dxcc') return bandScopeOk(scopes.dxcc, mhz, 'all')
+  const plain = bandScopeOk(scopes.grid, mhz, 'vhf')
+  if (kind === 'grid') return plain
+  return bandScopeOk(scopes.rareGrid, mhz, 'vhf') || plain
+}
+
+/** Which need rows are visible given the enabled operating-mode features, with each row
+ * narrowed to the tags the operator's band scopes admit on ITS band.
+ *
+ * Digital needs always show; CW/Phone needs only when that mode is enabled — so a
+ * pure-digital op's board is unchanged even though the backend sends voice/CW needs too.
+ *
+ * The band scope filters TAGS, not alerts: one station can be a new BAND (unscoped) and a
+ * new GRID (scoped out on HF) at once, and dropping the whole alert would take its band
+ * icon and its roster row with it. An alert left with no tag at all carries no reason to
+ * work anyone, so it goes. Omit `scopes` and only the mode gate applies. */
 export function visibleNeeds(
   alerts: NeedAlert[],
   enabled: { cw: boolean; phone: boolean },
+  scopes?: NeedBandScopes,
 ): NeedAlert[] {
-  return alerts.filter((a) => {
-    if (a.mode === 'CW') return enabled.cw
-    if (a.mode === 'Phone') return enabled.phone
-    return true // Digital (and any unknown class) always visible
-  })
+  const out: NeedAlert[] = []
+  for (const a of alerts) {
+    if (a.mode === 'CW' && !enabled.cw) continue
+    if (a.mode === 'Phone' && !enabled.phone) continue // Digital/unknown always visible
+    if (!scopes) {
+      out.push(a)
+      continue
+    }
+    const mhz = needScopeMhz(a.band, a.freqMhz)
+    const rare = isRareGrid(a.gridRarity)
+    const tags = a.tags.filter((t) => {
+      if (t === 'NewEntity') return needScopeOk('dxcc', mhz, scopes)
+      if (t === 'NewGrid') return needScopeOk(rare ? 'rareGrid' : 'grid', mhz, scopes)
+      return true
+    })
+    if (tags.length === 0) continue
+    out.push(retag(a, tags))
+  }
+  return out
 }
 
 /** A resolved click-to-work target: where to QSY and the cockpit to open. The CALLER
@@ -270,9 +362,16 @@ export function alertsForSurface(
   for (const a of alerts ?? []) {
     const tags = tagsForSurface(a, band, feedMode)
     if (tags.length === 0) continue
-    out.push(tags[0] === a.tags[0] ? { ...a, tags } : { ...a, tags, priority: NEED_TIER[tags[0]] })
+    out.push(retag(a, tags))
   }
   return out
+}
+
+/** Rewrite an alert to a NARROWED tag set, repairing `priority` when the gate removed the
+ * lead tag (see [`alertsForSurface`] for why). Shared by both gates — the surface gate and
+ * the band-scope gate — so a withheld tag can never leave its number behind. */
+function retag(a: NeedAlert, tags: NeedTag[]): NeedAlert {
+  return tags[0] === a.tags[0] ? { ...a, tags } : { ...a, tags, priority: NEED_TIER[tags[0]] }
 }
 
 /** Resolve ANY need (CW / Phone / Digital) into a work target — N1MM-style: a single click

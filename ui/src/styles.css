@@ -4619,6 +4619,70 @@ select optgroup {
   color: var(--text);
 }
 
+/* The Stations filter row: chips left, search right. `.filter-row` (shared with the
+   POTA/SOTA view) still supplies the padding and the rule; these three rules only say how
+   the row divides, and they are scoped so nothing else that uses .filter-row moves.
+   It WRAPS: at the 1024 floor with a narrow chat column the four chips and a usable box
+   do not fit on one line, and a search field squeezed to 40px is worse than a second row. */
+.station-filter-row {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.station-filter-tabs {
+  display: flex;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.station-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 120px;
+  min-width: 0;
+  margin-left: auto;
+}
+.station-search input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  /* 26px right, not 24: it clears the ✕ AND stays off the --space-* ladder, which is
+     what the spacing-token guard is checking for. The shipped .np-search input does the
+     same thing for the same reason. */
+  padding: var(--space-1) 26px var(--space-1) var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  transition: var(--transition);
+}
+.station-search input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.station-search-clear {
+  position: absolute;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.station-search-clear:hover {
+  color: var(--text);
+}
+/* The total beside the on-screen count — quieter than the count itself, because the
+   number that matters is the one naming what you are looking at. */
+.count-badge-total {
+  background: transparent;
+  color: var(--text-faint);
+  font-weight: 600;
+  padding-left: 0;
+}
+
 .station-scroll {
   overflow-y: auto;
   flex: 1;

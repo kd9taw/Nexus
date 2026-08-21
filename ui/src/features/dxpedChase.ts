@@ -10,6 +10,7 @@ import { doubleBeep } from '../alerts'
 import { pushToast } from '../toast'
 import type { DxpedWindow, WorkableCard } from '../types'
 import { durableGet, durableSet } from './durableStore'
+import { t } from '../i18n'
 
 const KEY = 'nexus.dxped.chasing'
 const CHASE_BEEP_HZ = 590
@@ -84,10 +85,12 @@ export function processDxpedAlerts(
       alerted.add(`quiet|${call}|${day}`) // a loud alert covers the quiet one
       doubleBeep(CHASE_BEEP_HZ)
       pushToast(
-        `🎯 ${call} window open NOW — ${hot.band}, spotted on the air`,
+        t('dxped.chase.open.loud', { call, band: hot.band }),
         'success',
         20000,
-        onWork ? { prominent: true, action: () => onWork(hot), actionLabel: 'Work' } : { prominent: true },
+        onWork
+          ? { prominent: true, action: () => onWork(hot), actionLabel: t('dxped.chase.work') }
+          : { prominent: true },
       )
       continue
     }
@@ -99,7 +102,7 @@ export function processDxpedAlerts(
       const key = `quiet|${call}|${day}`
       if (alerted.has(key)) continue
       alerted.add(key)
-      pushToast(`${call}: modelled window open (${w.best}) — not yet spotted`, 'info', 8000)
+      pushToast(t('dxped.chase.open.quiet', { call, best: w.best }), 'info', 8000)
     }
   }
 }

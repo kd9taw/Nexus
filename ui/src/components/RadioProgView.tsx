@@ -1,3 +1,18 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT, and this screen is dense with it: every repeater
+// callsign, output frequency, offset, CTCSS tone and DTCS code, the band chips, the mode badges
+// the directory supplies (DMR / D-STAR / Fusion), the distance and octant `units.ts` formats, the
+// city and state of a machine, the channel names as the radio will display them, and the
+// per-radio name caps in `features/radioprog.ts` — those name RIG MODELS (FT-60, Baofeng, Yaesu,
+// Anytone), which are tokens exactly as a callsign is.
+//
+// Four more things stay in the code as named constants, each for its own reason:
+//   • the DIRECTORY NAMES (`RepeaterBook`, `hearham`) — proper nouns;
+//   • the ATTRIBUTION lines the two directories require, which are also written verbatim into
+//     the exported CSV, so they cannot be locale-dependent;
+//   • the example grid and frequency the origin field and the by-hand prompt offer;
+//   • `My channels`, the persisted project's name inside radioprog.json — a stored value, not a
+//     string on screen.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { confirmDialog } from '../confirm'
 import type {
@@ -44,11 +59,30 @@ import { gridToLatLon, isValidGrid } from '../grid'
 import { fmtDistanceKm, useUnits } from '../units'
 import { Dialog } from './ui/Dialog'
 import { pushToast } from '../toast'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 import { parseChirpCsv, type Memory } from '../features/memories'
 
 /** The single auto-saved working project in radioprog.json (named projects can
  * layer on later — the file format already holds many). */
 const WORKING_PROJECT_ID = 'working'
+
+/** The two directories' own names, and the attribution each requires. The attribution is not
+ * only shown here — `exportChannels` writes it into the CSV — so it is one invariant string in
+ * both places, never a translated one in the interface and a different one in the file. */
+const SOURCE_REPEATERBOOK = 'RepeaterBook'
+const SOURCE_HEARHAM = 'hearham'
+const ATTRIB_REPEATERBOOK = 'Data courtesy of RepeaterBook.com'
+const ATTRIB_HEARHAM = 'Repeater data from hearham.com'
+/** The geocoder's required credit, for the same reason. */
+const ATTRIB_OSM = 'Geocoding © OpenStreetMap contributors'
+
+/** Example values drawn from a technical namespace — a locator and a dial frequency. */
+const EXAMPLE_GRID = 'FN31'
+const EXAMPLE_FREQ_MHZ = '146.940'
+
+/** The mode every programmable channel here is, and the filter chip that names it. */
+const MODE_FM = 'FM'
 
 /** localStorage for the last 5 successful query origins (chips). */
 const RECENTS_KEY = 'nexus.program.recents.v1'
@@ -213,7 +247,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     geocodeCity(q)
       .then((cands) => {
         setCityCands(cands)
-        if (cands.length === 0) pushToast('No places matched — try "City, State"', 'info', 3000)
+        if (cands.length === 0) pushToast(t('program.city.noMatch'), 'info', 3000)
         if (cands.length === 1) setCityPick(cands[0])
       })
       .catch((e) => pushToast(String(e), 'error'))
@@ -288,13 +322,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
    * it has wrong or missing must be enterable by hand — HearHam's coverage is thin in places
    * and the shared RepeaterBook path is still pending approval. */
   const addManual = () => {
-    const freq = window.prompt('Frequency (MHz), e.g. 146.940')
+    const freq = window.prompt(t('program.manual.freq', { example: EXAMPLE_FREQ_MHZ }))
     if (!freq) return
     const rxMhz = Number(freq)
     if (!Number.isFinite(rxMhz) || rxMhz <= 0) return
-    const name = window.prompt('Name (blank = frequency)') ?? ''
-    const off = window.prompt('Offset: + / - / blank for simplex') ?? ''
-    const tone = window.prompt('CTCSS tone Hz (blank = none)') ?? ''
+    const name = window.prompt(t('program.manual.name')) ?? ''
+    const off = window.prompt(t('program.manual.offset')) ?? ''
+    const tone = window.prompt(t('program.manual.tone')) ?? ''
     const toneHz = Number(tone)
     const ch: ProgChannel = {
       id: `manual:${rxMhz.toFixed(4)}:${name || 'manual'}`,
@@ -320,7 +354,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     const text = await file.text()
     const mems = parseChirpCsv(text)
     if (mems.length === 0) {
-      pushToast('Not a CHIRP CSV — need a header row with Frequency and Mode', 'error')
+      pushToast(t('program.import.notChirp'), 'error')
       return
     }
     setRows((rs) => {
@@ -328,7 +362,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       const add = mems.map(memoryToChannel).filter((c) => !have.has(c.id))
       return [...rs, ...add.map((channel) => ({ channel, nameEdited: true }))]
     })
-    pushToast(`Imported ${mems.length} channels from CHIRP CSV`, 'success')
+    pushToast(t('program.import.done', { count: mems.length }), 'success')
   }
 
   const addRow = (row: RepeaterSearchRow) => {
@@ -346,8 +380,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     if (
       candidates.length > 50 &&
       !(await confirmDialog({
-        title: `Add ${candidates.length} channels?`,
-        confirmLabel: 'Add channels',
+        title: t('program.addAll.confirm.title', { count: candidates.length }),
+        confirmLabel: t('program.addAll.confirm.ok'),
       }))
     )
       return
@@ -396,15 +430,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     return new Set([...seen.entries()].filter(([, c]) => c > 1).map(([n]) => n))
   }, [displayRows, nameCap])
 
-  const attribution = result?.source === 'repeaterbook'
-    ? 'Data courtesy of RepeaterBook.com'
-    : 'Repeater data from hearham.com'
+  const attribution = result?.source === 'repeaterbook' ? ATTRIB_REPEATERBOOK : ATTRIB_HEARHAM
 
   const exportList = (format: 'chirp' | 'csv') => {
     const channels = displayRows.map((r) => ({ ...r.channel, name: r.displayName }))
     const analog = channels.filter((c) => c.mode === 'fm' || c.mode === 'nfm' || c.mode === 'am')
     if (format === 'chirp' && analog.length === 0) {
-      pushToast('No FM channels in the list — digital channels export in a later version', 'info')
+      pushToast(t('program.export.noFm'), 'info')
       return
     }
     void exportChannels(channels, format, nameCap, attribution)
@@ -414,8 +446,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         return saveTextToDownloads(name, text).then((path) => {
           pushToast(
             format === 'chirp'
-              ? `Saved ${path} — open CHIRP ▸ File ▸ Import, then upload to your radio`
-              : `Saved ${path}`,
+              ? t('program.export.saved.chirp', { path })
+              : t('program.export.saved', { path }),
             'success',
             6000,
           )
@@ -436,12 +468,19 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
     const { shift, offsetHz, toneHz } = rigRepeaterParams(c)
     void repeaterTune(c.rxMhz, shift, offsetHz, toneHz)
       .then(() => {
+        // The shift is a sign and a number of MHz — a token, assembled here; only the word
+        // "simplex" and the tone clause are prose.
         const shiftLabel =
           shift === 'simplex'
-            ? 'simplex'
+            ? t('program.tune.simplex')
             : `${shift === 'plus' ? '+' : '−'}${(offsetHz / 1e6).toFixed(2)} MHz`
         pushToast(
-          `Tuned ${c.rxMhz.toFixed(4)} FM — ${shiftLabel}${toneHz ? ` · tone ${toneHz.toFixed(1)}` : ''}`,
+          t('program.tune.done', {
+            freq: c.rxMhz.toFixed(4),
+            mode: MODE_FM,
+            shift: shiftLabel,
+            tone: toneHz ? t('program.tune.tone', { hz: toneHz.toFixed(1) }) : '',
+          }),
           'success',
           4000,
         )
@@ -455,7 +494,10 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
    * channel the bank already holds stars THAT row rather than duplicating it
    * (memoryKey identity), and the star toggles back off. */
   const toggleStar = (row: RepeaterSearchRow) => {
-    const input = repeaterMemory(row.channel, favoriteName(row.channel), {
+    // The name is bound here rather than read back off `input`, whose type makes every
+    // Memory field optional — it is `input.name` by construction, and a string.
+    const favName = favoriteName(row.channel)
+    const input = repeaterMemory(row.channel, favName, {
       lat: row.record.lat,
       lon: row.record.lon,
     })
@@ -467,14 +509,14 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         ctcssEncHz: input.ctcssEncHz,
       })
       if (existing?.favorite) {
-        msg = `${existing.name} unstarred — still in Memories`
+        msg = t('program.star.unstarred', { name: existing.name })
         return updateMemory(bank, existing.id, { favorite: false })
       }
       const res = saveFavoriteFromDial(bank, input)
       msg =
         res.result === 'starred'
-          ? `${existing?.name ?? input.name} starred — already in Memories`
-          : `${input.name} ★ — on the cockpit MEM strip and in Memories`
+          ? t('program.star.starred', { name: existing?.name ?? favName })
+          : t('program.star.saved', { name: favName })
       return res.bank
     })
     pushToast(msg, 'success', 4000)
@@ -506,22 +548,30 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       }
       return next
     })
+    // The already-there clause is interpolated INTO the sentence rather than glued onto it: it
+    // carries the second count, which one message cannot pluralise alongside the first, and a
+    // language that words the pair differently can still place it.
     pushToast(
       n
-        ? `${n} channel${n === 1 ? '' : 's'} saved to Memories${dup ? ` (${dup} already there)` : ''} — star ★ the ones you want on the cockpit MEM strip`
+        ? t('program.saveBank.done', {
+            count: n,
+            dupes: dup ? t('program.saveBank.dupes', { count: dup }) : '',
+          })
         : dup
-          ? 'All of these are already in Memories'
-          : 'No FM channels to save',
+          ? t('program.saveBank.allDupes')
+          : t('program.saveBank.noFm'),
       n ? 'success' : 'info',
       5000,
     )
   }
 
+  // The unit letter rides inside the message with its number, so a translation can never
+  // separate the two.
   const fmtAge = (unix: number): string => {
     const mins = Math.max(0, Math.round((Date.now() / 1000 - unix) / 60))
-    if (mins < 60) return `${mins}m ago`
-    if (mins < 60 * 48) return `${Math.round(mins / 60)}h ago`
-    return `${Math.round(mins / 1440)}d ago`
+    if (mins < 60) return t('program.age.mins', { mins })
+    if (mins < 60 * 48) return t('program.age.hours', { hours: Math.round(mins / 60) })
+    return t('program.age.days', { days: Math.round(mins / 1440) })
   }
 
   const offsetLabel = (c: ProgChannel): string => {
@@ -538,39 +588,38 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
   return (
     <section className="radioprog panel">
       <div className="panel-header">
-        <h2>Program</h2>
-        <span className="awards-sub">
-          Build channel lists for your radios — repeaters near a location, exported for CHIRP or
-          tuned on your rig
-        </span>
+        <h2>{t('program.title')}</h2>
+        <span className="awards-sub">{t('program.sub')}</span>
       </div>
 
       <div className="rp-body">
         {/* ── SOURCE pane: the query tool ── */}
         <div className="rp-source">
-          <div className="rp-origin" role="group" aria-label="Search origin">
-            <span className="rp-lbl">Near</span>
+          <div className="rp-origin" role="group" aria-label={t('program.origin.aria')}>
+            <span className="rp-lbl">{t('program.origin.label')}</span>
             <button
               type="button"
               className={`filter-chip${originKind === 'station' ? ' active' : ''}`}
               onClick={() => setOriginKind('station')}
-              title="Your station grid from Settings"
+              title={t('program.origin.station.title')}
             >
-              My station {myGrid ? `· ${myGrid.toUpperCase()}` : ''}
+              {t('program.origin.station.label', {
+                grid: myGrid ? `· ${myGrid.toUpperCase()}` : '',
+              })}
             </button>
             <button
               type="button"
               className={`filter-chip${originKind === 'grid' ? ' active' : ''}`}
               onClick={() => setOriginKind('grid')}
             >
-              Grid
+              {t('program.origin.grid.label')}
             </button>
             <button
               type="button"
               className={`filter-chip${originKind === 'city' ? ' active' : ''}`}
               onClick={() => setOriginKind('city')}
             >
-              City
+              {t('program.origin.city.label')}
             </button>
             {originKind === 'grid' && (
               <input
@@ -578,8 +627,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 className={`settings-input mono rp-grid${gridInput && !isValidGrid(gridInput.trim()) ? ' invalid' : ''}`}
                 value={gridInput}
                 maxLength={6}
-                placeholder="FN31"
-                aria-label="Grid square"
+                placeholder={EXAMPLE_GRID}
+                aria-label={t('program.origin.grid.aria')}
                 onChange={(e) => setGridInput(e.target.value.toUpperCase())}
               />
             )}
@@ -589,8 +638,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   type="text"
                   className="settings-input rp-city-input"
                   value={cityInput}
-                  placeholder="Gatlinburg, TN"
-                  aria-label="City"
+                  placeholder={t('program.origin.city.placeholder')}
+                  aria-label={t('program.origin.city.aria')}
                   onChange={(e) => {
                     setCityInput(e.target.value)
                     setCityPick(null)
@@ -605,13 +654,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   onClick={searchCity}
                   disabled={geoBusy || !cityInput.trim()}
                 >
-                  {geoBusy ? 'Searching…' : 'Search'}
+                  {geoBusy ? t('program.city.searching') : t('program.city.search')}
                 </button>
               </span>
             )}
           </div>
           {originKind === 'city' && cityCands.length > 1 && !cityPick && (
-            <div className="rp-city-cands" role="listbox" aria-label="Matching places">
+            <div className="rp-city-cands" role="listbox" aria-label={t('program.city.matches.aria')}>
               {cityCands.map((c) => (
                 <button
                   key={c.displayName}
@@ -625,15 +674,15 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             </div>
           )}
           {recents.length > 0 && (
-            <div className="rp-recents" role="group" aria-label="Recent searches">
-              <span className="rp-lbl">Recent</span>
+            <div className="rp-recents" role="group" aria-label={t('program.recent.aria')}>
+              <span className="rp-lbl">{t('program.recent.label')}</span>
               {recents.map((r) => (
                 <button
                   key={r.label}
                   type="button"
                   className="filter-chip rp-recent"
                   onClick={() => useRecent(r)}
-                  title="Reuse this search origin"
+                  title={t('program.recent.chip.title')}
                 >
                   {r.label}
                 </button>
@@ -641,8 +690,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             </div>
           )}
 
-          <div className="rp-radius" role="group" aria-label="Search radius">
-            <span className="rp-lbl">Radius</span>
+          <div className="rp-radius" role="group" aria-label={t('program.radius.aria')}>
+            <span className="rp-lbl">{t('program.radius.label')}</span>
             {RADIUS_CHIPS_MI.map((mi) => (
               <button
                 key={mi}
@@ -657,13 +706,16 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               type="button"
               className={`filter-chip${radiusMi === 'auto' ? ' active' : ''}`}
               onClick={() => setRadiusMi('auto')}
-              title="Radius from the selected bands' realistic repeater reach"
+              title={t('program.radius.auto.title')}
             >
-              Auto
+              {t('program.radius.auto.label')}
             </button>
             {radiusMi === 'auto' && (
               <span className="rp-hint">
-                = {fmtDistanceKm(effRadiusMi * 1.609344, units)} ({bands.length ? bands.join('+') : 'all bands'})
+                {t('program.radius.auto.hint', {
+                  radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                  bands: bands.length ? bands.join('+') : t('program.radius.auto.allBands'),
+                })}
               </span>
             )}
           </div>
@@ -676,17 +728,19 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               disabled={!origin || fetching}
               title={
                 origin
-                  ? `Fetch repeaters within ${fmtDistanceKm(effRadiusMi * 1.609344, units)}`
-                  : 'Pick a valid origin first (grid or city)'
+                  ? t('program.fetch.title', {
+                      radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                    })
+                  : t('program.fetch.title.noOrigin')
               }
             >
-              {fetching ? '⟳ Fetching…' : '⟳ Fetch repeaters'}
+              {fetching ? t('program.fetch.busy') : t('program.fetch.label')}
             </button>
             {result && (
-              <span className="rp-stamp" title="Directory data age (cached per source, weekly)">
-                {result.source === 'repeaterbook' ? 'RepeaterBook' : 'hearham'} ·{' '}
+              <span className="rp-stamp" title={t('program.stamp.title')}>
+                {result.source === 'repeaterbook' ? SOURCE_REPEATERBOOK : SOURCE_HEARHAM} ·{' '}
                 {fmtAge(result.fetchedUtc)}
-                {result.stale ? ' · stale (fetch failed, cached data shown)' : ''}
+                {result.stale ? t('program.stamp.stale') : ''}
               </span>
             )}
           </div>
@@ -694,26 +748,27 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
             <div className="rp-error" role="alert">
               {fetchErr}{' '}
               <button type="button" className="filter-chip" onClick={doFetch}>
-                Retry
+                {t('program.fetch.retry')}
               </button>
             </div>
           )}
           {result?.coverageGap && (
             <div className="rp-note" role="status">
-              hearham lists no <strong>{result.coverageGap}</strong> repeaters here, which is
-              unusual for an area that has any — its rural coverage is patchy, so this list is
-              probably missing machines. Adding a RepeaterBook API token in{' '}
-              <strong>Settings ▸ Integrations</strong> fills the gap.
+              <T
+                k="program.coverageGap"
+                tags={{ b: <strong /> }}
+                vals={{ source: SOURCE_HEARHAM, band: result.coverageGap }}
+              />
             </div>
           )}
 
-          <div className="rp-filters" role="group" aria-label="Result filters">
+          <div className="rp-filters" role="group" aria-label={t('program.filters.aria')}>
             <button
               type="button"
               className={`filter-chip${bands.length === 0 ? ' active' : ''}`}
               onClick={() => setBands([])}
             >
-              All
+              {t('program.filters.allBands')}
             </button>
             {BAND_CHIPS.map((b) => (
               <button
@@ -732,69 +787,78 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               type="button"
               className={`filter-chip${!showDigital ? ' active' : ''}`}
               onClick={() => setShowDigital(false)}
-              title="FM repeaters only — what v1 programs"
+              title={t('program.filters.fm.title')}
             >
-              FM
+              {MODE_FM}
             </button>
             <button
               type="button"
               className={`filter-chip${showDigital ? ' active' : ''}`}
               onClick={() => setShowDigital(true)}
-              title="Also list DMR / D-STAR / Fusion machines (badged; programming them comes later)"
+              title={t('program.filters.digital.title')}
             >
-              +Digital
+              {t('program.filters.digital.label')}
             </button>
             <button
               type="button"
               className={`filter-chip${onAirOnly ? ' active' : ''}`}
               onClick={() => setOnAirOnly((v) => !v)}
-              title="Hide machines the directory marks off-air"
+              title={t('program.filters.onAir.title')}
             >
-              On-air only
+              {t('program.filters.onAir.label')}
             </button>
             <input
               type="search"
               className="settings-input rp-search"
               value={search}
-              placeholder="Filter call / city…"
-              aria-label="Filter results"
+              placeholder={t('program.filters.search.placeholder')}
+              aria-label={t('program.filters.search.aria')}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
 
           {result && (
             <div className="rp-count">
-              {shown.length} of {result.rows.length} shown · nearest first
+              {t('program.count', { shown: shown.length, total: result.rows.length })}
               {shown.some((r) => isProgrammable(r.record) && !inList.has(r.channel.id)) && (
                 <button type="button" className="filter-chip" onClick={addAllShown}>
-                  ＋ Add all shown
+                  {t('program.addAll.label')}
                 </button>
               )}
             </div>
           )}
 
-          <div className="rp-results" role="table" aria-label="Repeaters">
+          <div className="rp-results" role="table" aria-label={t('program.results.aria')}>
             {!result && !fetching && (
               <p className="aw-empty">
-                Pick a location and press <strong>Fetch repeaters</strong> — results land here;
-                ADD the machines you want on your radio.
+                <T k="program.results.prompt" tags={{ b: <strong /> }} />
               </p>
             )}
             {result && shown.length === 0 && (
               <p className="aw-empty">
-                No {showDigital ? '' : 'FM '}repeaters within {fmtDistanceKm(effRadiusMi * 1.609344, units)}.
+                {/* Two whole sentences, not one with an "FM " fragment spliced in: where the
+                    mode word sits in the sentence is the translator's to decide. */}
+                {showDigital
+                  ? t('program.results.none', {
+                      radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                    })
+                  : t('program.results.none.fm', {
+                      radius: fmtDistanceKm(effRadiusMi * 1.609344, units),
+                    })}
                 {radiusMi !== 200 && (
                   <button
                     type="button"
                     className="filter-chip"
                     onClick={() => setRadiusMi(radiusMi === 'auto' ? 100 : 200)}
                   >
-                    Try {fmtDistanceKm((radiusMi === 'auto' ? 100 : 200) * 1.609344, units)}
+                    {t('program.results.tryWider', {
+                      radius: fmtDistanceKm((radiusMi === 'auto' ? 100 : 200) * 1.609344, units),
+                    })}
                   </button>
                 )}
                 {!showDigital && (
                   <button type="button" className="filter-chip" onClick={() => setShowDigital(true)}>
-                    Show digital
+                    {t('program.results.showDigital')}
                   </button>
                 )}
               </p>
@@ -828,7 +892,9 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   </span>
                   <span className="rp-badges" role="cell">
                     {badge && <span className="pota-badge rp-mode-badge">{badge}</span>}
-                    {!r.operational && <span className="pota-badge rp-offair-badge">OFF-AIR</span>}
+                    {!r.operational && (
+                      <span className="pota-badge rp-offair-badge">{t('program.row.offAir')}</span>
+                    )}
                   </span>
                   <span className="rp-actions" role="cell">
                     {programmable && (
@@ -839,8 +905,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                         aria-pressed={starredIds.has(c.id)}
                         title={
                           starredIds.has(c.id)
-                            ? 'Unstar — keeps the channel in Memories, drops it off the cockpit strip'
-                            : 'Star this repeater — saves it to Memories and the cockpit MEM strip for one-click tuning'
+                            ? t('program.row.unstar.title')
+                            : t('program.row.star.title')
                         }
                       >
                         {starredIds.has(c.id) ? '★' : '☆'}
@@ -851,9 +917,9 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                         type="button"
                         className="pota-hunt-btn rp-tune"
                         onClick={() => tuneTo(c)}
-                        title="Tune your CAT rig to this repeater now (FM + shift + offset + tone)"
+                        title={t('program.row.tune.title')}
                       >
-                        Tune
+                        {t('program.row.tune.label')}
                       </button>
                     )}
                     <button
@@ -864,12 +930,12 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                       title={
                         programmable
                           ? added
-                            ? 'Remove from the channel list'
-                            : 'Add to the channel list'
-                          : 'Digital repeater — programming DMR/D-STAR/Fusion comes in a later version'
+                            ? t('program.row.remove.title')
+                            : t('program.row.add.title')
+                          : t('program.row.add.digital.title')
                       }
                     >
-                      {added ? '✓ Added' : '＋ Add'}
+                      {added ? t('program.row.added.label') : t('program.row.add.label')}
                     </button>
                   </span>
                 </div>
@@ -880,16 +946,14 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           <div className="settings-hint rp-attribution">
             {result?.source === 'hearham' || !result ? (
               <a href="https://hearham.com" target="_blank" rel="noreferrer">
-                Repeater data from hearham.com
+                {ATTRIB_HEARHAM}
               </a>
             ) : (
               <a href="https://www.repeaterbook.com" target="_blank" rel="noreferrer">
-                Data courtesy of RepeaterBook.com
+                {ATTRIB_REPEATERBOOK}
               </a>
             )}
-            {originKind === 'city' && (
-              <span> · Geocoding © OpenStreetMap contributors</span>
-            )}
+            {originKind === 'city' && <span> · {ATTRIB_OSM}</span>}
           </div>
         </div>
 
@@ -897,15 +961,16 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
         <aside className="rp-builder">
           <div className="rp-builder-head">
             <span className="rp-builder-title">
-              Channel list <span className="np-count">{rows.length}</span>
+              {t('program.builder.title')} <span className="np-count">{rows.length}</span>
             </span>
             <label className="rp-cap">
-              Max name
+              {t('program.builder.nameCap.label')}
+              {/* The option labels name RIG MODELS (`features/radioprog.ts`) — tokens. */}
               <select
                 className="settings-input"
                 value={nameCap}
                 onChange={(e) => setNameCap(Number(e.target.value))}
-                title="Your radio's channel-name length — auto names re-derive to fit (hand-edited names are kept)"
+                title={t('program.builder.nameCap.title')}
               >
                 {NAME_CAPS.map((c) => (
                   <option key={c.cap} value={c.cap}>
@@ -914,8 +979,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 ))}
               </select>
             </label>
-            <label className="rp-startat" title="First memory slot number (keep your existing channels)">
-              Start at
+            <label className="rp-startat" title={t('program.builder.startAt.title')}>
+              {t('program.builder.startAt.label')}
               <input
                 type="number"
                 className="settings-input"
@@ -928,12 +993,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
           </div>
 
           <div className="rp-chan-rows">
-            {displayRows.length === 0 && (
-              <p className="aw-empty">
-                No channels yet — fetch repeaters on the left and ADD the ones you want on your
-                radio.
-              </p>
-            )}
+            {displayRows.length === 0 && <p className="aw-empty">{t('program.builder.empty')}</p>}
             {displayRows.map((r, i) => {
               const clean = sanitizeName(r.displayName, nameCap)
               const dup = dupNames.has(clean)
@@ -946,13 +1006,13 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                     className={`settings-input mono rp-chan-name${dup || over ? ' invalid' : ''}`}
                     value={r.displayName}
                     maxLength={24}
-                    aria-label={`Channel ${startAt + i} name`}
+                    aria-label={t('program.chan.name.aria', { n: startAt + i })}
                     onChange={(e) => rename(i, e.target.value)}
                     title={
                       dup
-                        ? 'Duplicate name — the radio will show two identical channels'
+                        ? t('program.chan.dup.title')
                         : over
-                          ? `Longer than ${nameCap} — exports as "${clean}"`
+                          ? t('program.chan.over.title', { cap: nameCap, name: clean })
                           : undefined
                     }
                   />
@@ -960,18 +1020,23 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                   <span className="rp-chan-off mono">{offsetLabel(r.channel)}</span>
                   <span className="rp-chan-tone mono">{toneLabel(r.channel)}</span>
                   <span className="rp-chan-btns">
-                    <button type="button" onClick={() => move(i, -1)} disabled={i === 0} aria-label="Move up">
+                    <button
+                      type="button"
+                      onClick={() => move(i, -1)}
+                      disabled={i === 0}
+                      aria-label={t('program.chan.moveUp.aria')}
+                    >
                       ▲
                     </button>
                     <button
                       type="button"
                       onClick={() => move(i, 1)}
                       disabled={i === displayRows.length - 1}
-                      aria-label="Move down"
+                      aria-label={t('program.chan.moveDown.aria')}
                     >
                       ▼
                     </button>
-                    <button type="button" onClick={() => remove(i)} aria-label="Remove">
+                    <button type="button" onClick={() => remove(i)} aria-label={t('program.chan.remove.aria')}>
                       ✕
                     </button>
                   </span>
@@ -985,17 +1050,17 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               type="button"
               className="settings-refresh"
               onClick={addManual}
-              title="Type in a repeater or simplex channel the directory doesn't have (or has wrong)"
+              title={t('program.deliver.byHand.title')}
             >
-              Add by hand…
+              {t('program.deliver.byHand.label')}
             </button>
             <button
               type="button"
               className="settings-refresh"
               onClick={() => importInputRef.current?.click()}
-              title="Import a CHIRP CSV — the same format Export for CHIRP writes, and what CHIRP itself saves"
+              title={t('program.deliver.import.title')}
             >
-              Import CHIRP CSV…
+              {t('program.deliver.import.label')}
             </button>
             <input
               ref={importInputRef}
@@ -1013,27 +1078,27 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               className="settings-save rp-export-chirp"
               disabled={rows.length === 0}
               onClick={onExportChirp}
-              title="Save a CHIRP-ready CSV — CHIRP (free) flashes nearly every radio from it"
+              title={t('program.deliver.exportChirp.title')}
             >
-              Export for CHIRP…
+              {t('program.deliver.exportChirp.label')}
             </button>
             <button
               type="button"
               className="settings-refresh"
               disabled={rows.length === 0}
               onClick={() => exportList('csv')}
-              title="Plain CSV — spreadsheets, Anytone CPS, RT Systems"
+              title={t('program.deliver.exportCsv.title')}
             >
-              Export CSV
+              {t('program.deliver.exportCsv.label')}
             </button>
             <button
               type="button"
               className="settings-refresh"
               disabled={rows.length === 0}
               onClick={saveToBank}
-              title="Save these channels into Nexus's own memory bank (the Phone cockpit's MEMORY recall list) — recall retunes the rig with shift + tone"
+              title={t('program.deliver.saveBank.title')}
             >
-              Save to Memory Bank
+              {t('program.deliver.saveBank.label')}
             </button>
             <button
               type="button"
@@ -1043,8 +1108,8 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 void (async () => {
                   if (
                     await confirmDialog({
-                      title: 'Clear the whole channel list?',
-                      confirmLabel: 'Clear list',
+                      title: t('program.clear.confirm.title'),
+                      confirmLabel: t('program.clear.confirm.ok'),
                       danger: true,
                     })
                   )
@@ -1052,7 +1117,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 })()
               }}
             >
-              Clear
+              {t('program.deliver.clear.label')}
             </button>
           </div>
         </aside>
@@ -1061,19 +1126,22 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
       <Dialog
         open={chirpDialog}
         onOpenChange={setChirpDialog}
-        title="Flash with CHIRP"
-        description="Nexus builds the list; CHIRP drives the cable. One list, every radio you own."
+        title={t('program.chirp.title')}
+        description={t('program.chirp.description')}
       >
+        {/* CHIRP's own menu path stays inside the sentence, marked but not translated apart. */}
         <ol className="rp-chirp-steps">
-          <li>Nexus saves a CHIRP-ready CSV to your Downloads.</li>
+          <li>{t('program.chirp.step.save')}</li>
           <li>
-            Open CHIRP (free, ~1,000 radios) → <strong>File ▸ Import</strong> and pick the file.
+            <T k="program.chirp.step.import" tags={{ b: <strong /> }} />
           </li>
-          <li>Connect your programming cable → <strong>Radio ▸ Upload To Radio</strong>.</li>
+          <li>
+            <T k="program.chirp.step.upload" tags={{ b: <strong /> }} />
+          </li>
         </ol>
         <p className="settings-hint">
           <a href="https://chirpmyradio.com" target="_blank" rel="noreferrer">
-            Get CHIRP ↗
+            {t('program.chirp.link')}
           </a>
         </p>
         <div className="rp-chirp-actions">
@@ -1085,7 +1153,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
                 else localStorage.removeItem(CHIRP_HOWTO_SEEN)
               }}
             />
-            Don't show this again — just save the file
+            {t('program.chirp.dontShow')}
           </label>
           <button
             type="button"
@@ -1095,7 +1163,7 @@ export function RadioProgView({ myGrid, catOk = false }: Props) {
               exportList('chirp')
             }}
           >
-            Save the CSV
+            {t('program.chirp.save')}
           </button>
         </div>
       </Dialog>

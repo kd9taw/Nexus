@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { EN, type MessageKey } from './i18n'
 
 // DOCS-MATCH-CODE — published tables are checked against the code they describe.
 //
@@ -264,13 +265,22 @@ const rel = (abs: string) => abs.slice(repo('').length).replace(/\\/g, '/')
 describe('CW F-key macros match CwCockpit.tsx', () => {
   const CW_TSX = read(uiSrc('components/CwCockpit.tsx'))
 
+  // A CAPTION IS EITHER WRITTEN IN THE SOURCE OR NAMED BY A CATALOG KEY (i18n phase 2): the
+  // macro captions that are on-air shorthand — CQ, 73, AGN, TU, CQ FD, ? — are invariant and
+  // stay written as `label`, and the ones that are words moved into `ui/src/i18n/en.ts` and
+  // are named by `labelKey`. What the doc's Label column has to match is what the cockpit
+  // SHOWS, so the key is resolved through the English catalog rather than compared as a key.
   const sourceSet = (name: string) =>
     objectsIn(declValue(CW_TSX, name)).map((span, i) => {
       const o = parseObjectLiteral(span)
-      for (const f of ['key', 'label', 'text']) {
+      for (const f of ['key', 'text']) {
         if (!(f in o)) throw new Error(`CwCockpit.tsx ${name}[${i}] has no ${f}: ${span}`)
       }
-      return { key: o.key, label: o.label, text: o.text }
+      const label = 'labelKey' in o ? EN[o.labelKey as MessageKey] : o.label
+      if (typeof label !== 'string') {
+        throw new Error(`CwCockpit.tsx ${name}[${i}] has no label (nor a catalog one): ${span}`)
+      }
+      return { key: o.key, label, text: o.text }
     })
 
   const SETS = {

@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { beaconsNow, beaconHeard } from '../../features/beacons'
 import type { MapSpot } from '../../types'
+import { t } from '../../i18n'
 
 function ago(secs: number): string {
   return secs < 60 ? `${Math.round(secs)}s` : `${Math.round(secs / 60)}m`
@@ -23,7 +24,7 @@ export function BeaconMonitor({ spots }: { spots: MapSpot[] | null }) {
         return (
           <li key={s.band} className={`bcn-row${heard ? ' is-heard' : ''}`}>
             <span className="bcn-band">{s.band}</span>
-            <span className="bcn-call" title={`${s.qth} · ${s.freqMhz} MHz`}>
+            <span className="bcn-call" title={t('prop.beacons.title', { qth: s.qth, freq: s.freqMhz })}>
               {s.call}
             </span>
             <span className="bcn-qth">{s.qth}</span>

@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
 import { postSpot } from '../api'
 import { pushToast } from '../toast'
+import { t } from '../i18n'
+import { parseOperatorNumber } from '../numInput'
 
 // Compose + post a DX-cluster spot. The backend `post_spot` command validates the callsign,
 // checks a cluster is connected, and sanitizes the line — this is just the reviewable popup the
 // operator asked for: call + freq + comment, editable, one button to send. Reuses the shared
 // `.logconfirm` modal styling.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The callsign and the
+// frequency the operator types are wire values that go to the cluster untouched — the dialog
+// never formats either, and `.toFixed(3)` is the only thing it does to the dial.
 export function SpotDialog({
   open,
   onClose,
@@ -35,7 +41,11 @@ export function SpotDialog({
 
   if (!open) return null
 
-  const freqNum = parseFloat(freq)
+  // `parseFloat('14,074')` is 14 — a comma-decimal operator (Greek-Windows report, 2026-08)
+  // spotted the whole cluster onto 14 MHz, out of band, and the Spot button looked perfectly
+  // happy about it. The `canSpot` guard below is what turns an unreadable entry into a
+  // greyed-out button instead of a wrong spot in front of everyone.
+  const freqNum = parseOperatorNumber(freq)
   const canSpot = call.trim().length > 0 && Number.isFinite(freqNum) && freqNum > 0
 
   const submit = async () => {
@@ -44,10 +54,10 @@ export function SpotDialog({
     try {
       const c = call.trim().toUpperCase()
       await postSpot(freqNum, c, comment.trim())
-      pushToast(`Spotted ${c} on the cluster`, 'success', 2500)
+      pushToast(t('spots.post.done', { call: c }), 'success', 2500)
       onClose()
     } catch (e) {
-      pushToast(typeof e === 'string' ? e : 'Spot failed', 'error', 3500)
+      pushToast(typeof e === 'string' ? e : t('spots.post.failed'), 'error', 3500)
     } finally {
       setBusy(false)
     }
@@ -63,15 +73,15 @@ export function SpotDialog({
       className="logconfirm-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label="Spot a callsign"
+      aria-label={t('spots.post.aria')}
       onClick={onClose}
     >
       <div className="logconfirm spot-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="logconfirm-head">
-          <h2>Spot to the DX cluster</h2>
+          <h2>{t('spots.post.title')}</h2>
         </div>
         <label className="settings-field">
-          <span className="settings-label">Callsign</span>
+          <span className="settings-label">{t('spots.post.call.label')}</span>
           <input
             className="settings-input"
             value={call}
@@ -83,7 +93,7 @@ export function SpotDialog({
           />
         </label>
         <label className="settings-field">
-          <span className="settings-label">Frequency (MHz)</span>
+          <span className="settings-label">{t('spots.post.freq.label')}</span>
           <input
             className="settings-input"
             value={freq}
@@ -94,12 +104,12 @@ export function SpotDialog({
           />
         </label>
         <label className="settings-field">
-          <span className="settings-label">Comment</span>
+          <span className="settings-label">{t('spots.post.comment.label')}</span>
           <input
             className="settings-input"
             value={comment}
             maxLength={30}
-            placeholder="e.g. FT8 up 2 · loud · 599"
+            placeholder={t('spots.post.comment.placeholder')}
             onChange={(e) => setComment(e.target.value)}
             onKeyDown={onKey}
             autoComplete="off"
@@ -107,10 +117,10 @@ export function SpotDialog({
         </label>
         <div className="logconfirm-actions">
           <button type="button" className="logconfirm-discard" onClick={onClose}>
-            Cancel
+            {t('spots.post.cancel')}
           </button>
           <button type="button" className="logconfirm-log" onClick={submit} disabled={!canSpot || busy}>
-            {busy ? 'Spotting…' : 'Spot'}
+            {busy ? t('spots.post.busy') : t('spots.post.submit')}
           </button>
         </div>
       </div>

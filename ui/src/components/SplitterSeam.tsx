@@ -16,6 +16,10 @@
 // - grid columns (`columnsOn` set): the share lands as an `fr` TOKEN in `${varName}-a`
 //   / `${varName}-b` on the grid CONTAINER — a grid template cannot read a variable off
 //   its children, so painting the panes would be a silently dead drag.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It shares the drag
+// handle's tooltip with Splitter.tsx — one gesture, one sentence.
+import { t } from '../i18n'
 import { seamShares } from '../features/panelState'
 
 interface Props {
@@ -82,7 +86,7 @@ export function SplitterSeam({ above, below, varName, onCommit, label, axis = 'y
       role="separator"
       aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
       aria-label={label}
-      title={`Drag to resize (${label})`}
+      title={t('splitter.title', { label })}
       onPointerDown={start}
     />
   )

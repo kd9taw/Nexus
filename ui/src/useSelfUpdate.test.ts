@@ -136,6 +136,38 @@ describe('install and restart', () => {
     expect(result.current.phase, 'still installing while the restart is in flight').toBe('installing')
   })
 
+  // Windows loses everything a quit would have flushed unless we flush it OURSELVES, first.
+  // `tauri-plugin-updater` 2.10.1 ends its Windows arm with `ShellExecuteW(installer)` then
+  // `std::process::exit(0)` (updater.rs:865) — the return value is not even read, so once that
+  // line is reached the process is gone. `exit` delivers no `RunEvent`, and `quit_cleanup`
+  // hangs off `ExitRequested`/`Exit`, so on a Windows self-update the conversation history,
+  // the Field Day log, the open propagation episodes, the window geometry and the tail of the
+  // diagnostic log all die unwritten. The plugin's own `on_before_exit` hook is not reachable
+  // from the JS command path (the plugin `Builder` does not expose it), so the flush has to be
+  // asked for from here, BEFORE install() — after it, there is no "after".
+  it('install() flushes the journals BEFORE handing off to the installer', async () => {
+    nextCheck = () =>
+      Promise.resolve({
+        available: true,
+        version: '9.9.9',
+        download: () => Promise.resolve(),
+        install: () => {
+          invoked.push('plugin:install')
+          return Promise.resolve()
+        },
+      })
+    const { result } = renderHook(() => useSelfUpdate())
+    await settle()
+
+    act(() => result.current.install())
+    await settle()
+    const flush = invoked.indexOf('prepare_update_install')
+    const handoff = invoked.indexOf('plugin:install')
+    expect(handoff, 'control: the plugin install itself ran').toBeGreaterThanOrEqual(0)
+    expect(flush, 'the backend was never asked to flush').toBeGreaterThanOrEqual(0)
+    expect(flush, 'the flush must precede the handoff — the process may not survive it').toBeLessThan(handoff)
+  })
+
   it('a failing plugin install surfaces the error and never restarts', async () => {
     nextCheck = () =>
       Promise.resolve({

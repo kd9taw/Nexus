@@ -325,7 +325,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'logging',
     keywords: ['wsjt-x', 'udp', 'gridtracker', 'jtalert', 'hrd', 'ham radio deluxe', 'psk',
       'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'all.txt', 'wav',
-      'recording', 'propagation'],
+      'recording', 'propagation', 'diagnostic log', 'nexus-diag.log', 'log file', 'debug log',
+      'troubleshooting', 'bug report', 'crash'],
   },
   {
     id: 'antenna-gain',
