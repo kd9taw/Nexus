@@ -9003,10 +9003,66 @@ fn retry_passband(md: &str, prior_fails: u32) -> i32 {
 /// are cleared and `last_mode` already holds `md`, so a refusal here changes no state and the
 /// next tick sees no mode change and sends nothing — one extra command, once, on the one tick
 /// the escalation fired.
+/// Is the width the rig actually took close enough to the one we asked for?
+///
+/// PURE, because it is the whole judgement in [`width_reassert_after_default_rung`]'s
+/// accepted-but-ignored path and the rest of that function is a socket. A quarter either way:
+/// rigs own a discrete set of filters and pick the nearest, so 2700 Hz for a requested 3000 is
+/// the radio doing its job and must never be "corrected" into a warning the operator cannot
+/// act on. 6000 for 3000 is the Flex defect of #82/#114. Narrower counts too — a filter well
+/// under the mode's passband clips the audio the decoder is counting on, which is the same
+/// harm arriving from the other side.
+fn width_is_close_enough(got: i32, want: i32) -> bool {
+    (got - want).abs() <= want / 4
+}
+
 fn width_reassert_after_default_rung(rig: &mut Rig, md: &str, sent_pb: i32) -> Option<String> {
     let want = passband_for(md);
-    if sent_pb != 0 || want <= 0 {
-        return None; // not the default-width rung — the operator's filter was never overridden
+    if want <= 0 {
+        return None; // non-DATA: we sent NOCHANGE and have no width opinion to enforce
+    }
+    if sent_pb != 0 {
+        // ── THE ACCEPTED-BUT-IGNORED CASE (ve3wej again, #114 on 1.7.0, AFTER the rung fix
+        // below shipped in 1.4.0). The escalation rung is not the only way to end up on the
+        // rig's own filter: a backend can answer `M PKTUSB 3000` with RPRT 0 and simply not
+        // apply the width. The command SUCCEEDED, so nothing below runs, nothing reads the
+        // width back, and FT8 sits on a 6 kHz SSB filter with the app cheerfully reporting
+        // the mode was set. His report says exactly this — the filter is wrong on arrival,
+        // and once he sets 3 k by hand the later mode changes keep it.
+        //
+        // So on a mode change that ASKED for a specific width, read back what the rig
+        // actually took. Cost is one `m` per mode CHANGE (not per poll, and never for a
+        // non-DATA mode); mode changes are a band/section event, not a loop.
+        //
+        // ⚠️ NEEDS BENCH — a Flex 6400 over SmartSDR CAT (model 2036, IP:5002) is the
+        // reported case and nothing here has been on that hardware. What is proven is the
+        // arithmetic and that the read is issued; whether the Flex then TAKES the second
+        // width is exactly what a bench pass has to answer.
+        let (_, got) = rig.read_mode_passband();
+        let got = got? as i32; // a rig that will not report its width is not evidence of a fault
+                               // A quarter either way. Rigs pick the nearest filter they own, so 2700 for a
+                               // requested 3000 is the rig doing its job and must not be "corrected" into a note;
+                               // 6000 for 3000 is the defect. Both directions, because a filter far NARROWER than
+                               // the mode needs clips the passband the decoder is counting on.
+        if width_is_close_enough(got, want) {
+            return None;
+        }
+        if rig.set_mode(md, want).is_ok() {
+            // Believe the write only if the rig now agrees; a second RPRT 0 from a backend
+            // that ignores the width would otherwise read as success and say nothing.
+            let (_, after) = rig.read_mode_passband();
+            if after
+                .map(|a| width_is_close_enough(a as i32, want))
+                .unwrap_or(true)
+            {
+                return None;
+            }
+        }
+        return Some(format!(
+            "set {md} but the rig is on a {got} Hz filter, not the {want} Hz asked for — set \
+             the rig's DATA filter to about {} kHz by hand (FT8 needs the full audio passband)",
+            want / 1000
+        ));
     }
     if rig.set_mode(md, want).is_ok() {
         return None;
@@ -10067,6 +10123,45 @@ mod tests {
         assert!(
             note.contains("rig rejected PKTUSB"),
             "rejection note: {note}"
+        );
+    }
+
+    /// The accepted-but-ignored width (ve3wej, #114 on 1.7.0 — AFTER the rung fix shipped).
+    /// A backend can answer `M PKTUSB 3000` with RPRT 0 and leave the filter at 6 kHz; the
+    /// command succeeded, so the escalation path never runs. This is the judgement that
+    /// decides whether the read-back is a defect or the radio picking its nearest filter.
+    #[test]
+    fn a_rig_that_ignored_the_width_is_told_apart_from_one_that_rounded_it() {
+        // THE DEFECT: the Flex 6400 of #82/#114 — FT8 on an SSB filter.
+        assert!(
+            !width_is_close_enough(6000, 3000),
+            "6 kHz for a 3 kHz ask is the bug"
+        );
+        // THE RADIO DOING ITS JOB: discrete filters, nearest wins. Must stay silent, because
+        // re-asserting buys nothing and a warning here is one the operator cannot act on.
+        assert!(
+            width_is_close_enough(2700, 3000),
+            "2.7 kHz is the nearest filter, not a fault"
+        );
+        assert!(width_is_close_enough(3000, 3000), "exact");
+        assert!(
+            width_is_close_enough(2400, 3000),
+            "2.4 kHz is 20% under — inside the slack"
+        );
+        // NARROWER COUNTS TOO: a filter well under the mode's passband clips the audio the
+        // decoder needs. Same harm, arriving from the other side.
+        assert!(
+            !width_is_close_enough(1800, 3000),
+            "1.8 kHz clips FT8's passband"
+        );
+        // Boundaries, stated so a later change to the slack has to move them deliberately.
+        assert!(
+            width_is_close_enough(3750, 3000),
+            "exactly a quarter over is still close"
+        );
+        assert!(
+            !width_is_close_enough(3751, 3000),
+            "one Hz past the quarter is not"
         );
     }
 
