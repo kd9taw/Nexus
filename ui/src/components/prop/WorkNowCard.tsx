@@ -8,6 +8,10 @@ import type { DxpedWindow, WorkableCard } from '../../types'
 import { needMeta, workabilityVar, bandTiming } from '../../propViz'
 import { azimuthLabel, azimuthTitle, backendAzimuth } from '../../grid'
 import { LikelihoodHeatmap } from './LikelihoodHeatmap'
+import { t } from '../../i18n'
+
+/** The ITU recommendation's number — a citation, not a word. */
+const ENGINE_P533 = 'P.533'
 
 export function WorkNowCard({
   card,
@@ -53,9 +57,7 @@ export function WorkNowCard({
             className={`wn-chase${chasing ? ' active' : ''}`}
             onClick={() => onToggleChase(card.call)}
             title={
-              chasing
-                ? 'Chasing — you get an alert when your window opens and they are spotted. Click to stop.'
-                : 'Chase this expedition — alert me when my modelled window opens and live spots confirm them'
+              chasing ? t('dxped.chase.toggle.on.title') : t('dxped.chase.toggle.off.title')
             }
             aria-pressed={chasing}
           >
@@ -69,30 +71,39 @@ export function WorkNowCard({
           {card.likelihood}
         </span>
         {card.liveConfirmed && (
-          <span className="wn-live" title="Live PSK Reporter spots confirm this band toward the DX region">
-            <Check size={12} strokeWidth={3} aria-hidden="true" /> live spots
+          <span className="wn-live" title={t('dxped.card.live.title')}>
+            <Check size={12} strokeWidth={3} aria-hidden="true" /> {t('dxped.card.live.label')}
           </span>
         )}
         {/* The octant alone ("NE") was never a beam heading. The degrees were already
             in this payload — measured backend-side from the operator's grid to the
             announced one — and simply never rendered. */}
         <span className="wn-geo" title={az ? azimuthTitle(az, card.entity) : undefined}>
-          {card.octant}
-          {az ? ` ${azimuthLabel(az)}` : ''} · {Math.round(card.distanceKm).toLocaleString()} km
+          {t('dxped.card.geo', {
+            octant: card.octant,
+            az: az ? ` ${azimuthLabel(az)}` : '',
+            km: Math.round(card.distanceKm).toLocaleString(),
+          })}
         </span>
       </div>
       {win && own ? (
         <div className="wn-window">
-          Best shot: {own.band} {own.workability} {own.window}
+          {t('dxped.card.bestShot', {
+            band: own.band,
+            workability: own.workability,
+            window: own.window,
+          })}
           {timing ? ` · ${timing}` : ''}
-          <span className="cp-engine">{win.engine === 'p533' ? 'P.533' : 'modelled'}</span>
+          <span className="cp-engine">
+            {win.engine === 'p533' ? ENGINE_P533 : t('dxped.engine.modelled')}
+          </span>
           <button
             type="button"
             className="wn-details"
             onClick={() => setDetails((d) => !d)}
-            title="The full 24h × band reliability grid for this path"
+            title={t('dxped.card.details.title')}
           >
-            {details ? '▾ details' : '▸ details'}
+            {details ? t('dxped.card.details.hide') : t('dxped.card.details.show')}
           </button>
         </div>
       ) : (
@@ -105,9 +116,9 @@ export function WorkNowCard({
           type="button"
           className="wn-work"
           onClick={() => onWork(card)}
-          title={`Jump the rig to ${card.band} and open the right cockpit`}
+          title={t('dxped.card.work.title', { band: card.band })}
         >
-          ▶ Work {card.band}
+          {t('dxped.card.work.label', { band: card.band })}
         </button>
       )}
     </div>

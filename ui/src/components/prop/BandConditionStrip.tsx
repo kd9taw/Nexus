@@ -4,6 +4,7 @@
 // "open per model, just no spots heard" — never a dead band.
 import type { BandReport } from '../../types'
 import { modeledVar, tierVar, dualStateLabel } from '../../propViz'
+import { t } from '../../i18n'
 
 // Fixed band order (low→high) so the strip reads like a rig's band stack, not the
 // advisor's best-first ranking.
@@ -28,7 +29,7 @@ export function BandConditionStrip({
   if (rows.length === 0) return null
 
   return (
-    <div className="band-cond" role="list" aria-label="Band conditions">
+    <div className="band-cond" role="list" aria-label={t('prop.bandConditions.aria')}>
       {rows.map((b) => {
         const ds = dualStateLabel(b.modeled, b.tier)
         const color = b.modeled ? modeledVar(b.modeled) : tierVar(b.tier)
@@ -41,7 +42,12 @@ export function BandConditionStrip({
             key={b.band}
             className={`bc-cell${activeBand === b.band ? ' is-active' : ''}`}
             onClick={onBandClick ? () => onBandClick(b.band) : undefined}
-            title={`${b.band}: ${ds.word}${ds.sub ? ` · ${ds.sub}` : ''} — ${b.reason}`}
+            title={t('prop.bandConditions.cell.title', {
+              band: b.band,
+              state: ds.word,
+              sub: ds.sub ? ` · ${ds.sub}` : '',
+              reason: b.reason,
+            })}
           >
             <span className="bc-band">{b.band}</span>
             <span

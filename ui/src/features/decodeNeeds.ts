@@ -1,6 +1,12 @@
 import type { DecodeRow, NeedAlert, NeedTag } from '../types'
 import { NEED_PRECEDENCE, NEED_VISUALS, type NeedCat } from './needVisuals'
-import { tagsForSurface } from './needs'
+import {
+  isRareGrid,
+  needScopeMhz,
+  needScopeOk,
+  tagsForSurface,
+  type NeedBandScopes,
+} from './needs'
 
 const TAG_TO_CAT: Record<NeedTag, NeedCat> = {
   NewEntity: 'entity',
@@ -30,17 +36,26 @@ export interface DecodeNeeds {
  * NeedAlerts for that callsign. Pure + side-effect-free; returns empty needs when no
  * alerts are supplied (the Tempo rail / detached panel pass none), so tagging degrades
  * gracefully.
+ *
+ * `scopes` are the operator's per-type band scopes (Settings ▸ Spots & Alerts). They are
+ * needed HERE and not only on the alert set because this feed's entity/grid icons come from
+ * the decode's OWN flags — gating the NeedAlerts alone left the GRID icon exactly where the
+ * operator reported it. Omit them and nothing is withheld.
  */
 export function resolveDecodeNeeds(
   d: DecodeRow,
   band: string,
   alerts: NeedAlert[],
   feedMode = 'Digital',
+  scopes?: NeedBandScopes,
 ): DecodeNeeds {
   const set = new Set<NeedCat>()
-  // Decode-native flags (engine-computed against the worked-entity/grid indices).
-  if (d.newDxcc) set.add('entity')
-  if (d.newGrid) set.add('grid')
+  // Decode-native flags (engine-computed against the worked-entity/grid indices). Every
+  // decode here is on the surface's own band, so that band answers the scope.
+  const mhz = needScopeMhz(band)
+  if (d.newDxcc && needScopeOk('dxcc', mhz, scopes)) set.add('entity')
+  if (d.newGrid && needScopeOk(isRareGrid(d.gridRarity) ? 'rareGrid' : 'grid', mhz, scopes))
+    set.add('grid')
   // Alert-derived tags: `tagsForSurface` owns the band/mode policy (band-agnostic tags
   // apply anywhere; per-band claims need a band match; NewMode/Confirm additionally need
   // the feed's mode class, so a CW need can't be closed on the FT8 feed). It lives in

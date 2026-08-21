@@ -11,7 +11,7 @@
 // it at press time rather than caching means the answer cannot be stale.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { restartApp, updateInstallBlock } from './api'
+import { prepareUpdateInstall, restartApp, updateInstallBlock } from './api'
 
 type Phase = 'idle' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
 
@@ -146,6 +146,16 @@ export function useSelfUpdate(): SelfUpdate {
         }
         setPhase('installing')
         try {
+          // FLUSH FIRST — on Windows there is no "after". The plugin's install() runs the
+          // NSIS installer and calls exit(0) without unwinding, so nothing below this line
+          // executes there and no exit event ever reaches the backend's quit cleanup: the
+          // conversations, the Field Day log, an open propagation episode and the tail of the
+          // diagnostic log would all go unwritten. A no-op on macOS/Linux, where install()
+          // returns and restartApp() takes the ordinary path.
+          // Best-effort, deliberately: the operator pressed Install, and a bookkeeping step
+          // that could not complete must not be what stops the update. Every write behind it
+          // is best-effort on the Rust side too.
+          await prepareUpdateInstall().catch(() => {})
           await handle.current?.install?.()
           // The plugin does NOT restart the app on macOS or the Linux AppImage — install()
           // swaps the bundle on disk and resolves with the OLD build still running, so

@@ -20,10 +20,18 @@
 //
 // HONESTY. Values start at rest ({0, null}) and RETURN to rest if `get_meters` stops
 // succeeding for METER_STALE_MS — a needle may never freeze at a reading nobody is measuring.
+//
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts). The only word in
+// it is the meter's default name, which comes from the catalog; `dB` is a unit symbol and stays
+// in the code, and the reading beside it is a measurement this module formats invariantly.
 import { useEffect, useRef, useState } from 'react'
 import { getMeters } from '../api'
 import type { MeterReadout } from '../types'
 import { LevelMeter, rxLevelDb } from './LevelMeter'
+import { t } from '../i18n'
+
+/** The unit symbol on the text readout — a unit, not a word. */
+const DB = 'dB'
 
 /** Meter poll cadence (ms). The RX level is produced every 20 ms and the fast CAT S-meter
  * every ~360 ms (every other fast-dial interval — see service.rs SMETER_FAST_POLL_MS), so
@@ -130,7 +138,7 @@ export function useSmeterDb(active = true): number | null {
  * 10 Hz update re-renders THIS tiny component, never the host (TopBar / cockpit /
  * Settings). Pass `active={false}` from a kept-alive hidden host. */
 export function LiveLevelMeter({
-  label = 'RX level',
+  label = t('meters.rx.label'),
   variant = 'compact',
   active = true,
 }: {
@@ -146,5 +154,9 @@ export function LiveLevelMeter({
  * same containment reasoning as [`LiveLevelMeter`]. */
 export function LiveRxLevelDb({ active = true }: { active?: boolean }) {
   const rxLevel = useMeterValue((m) => m.rxLevel, active)
-  return <>{Math.round(rxLevelDb(rxLevel))} dB</>
+  return (
+    <>
+      {Math.round(rxLevelDb(rxLevel))} {DB}
+    </>
+  )
 }

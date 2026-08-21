@@ -8,11 +8,17 @@
 // It does NOT auto-dismiss. A DX alert that vanishes while you are turning the rotator is worse
 // than no alert; the operator closes it, or works it.
 
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The callsign, the
+// entity, the frequency, the band and the mode it shouts are data and stay as they arrive; the
+// need word comes from `features/needVisuals.ts` with the rest of that vocabulary.
+
 import type { PounceAlert } from '../usePounce'
 import { NEED_VISUALS } from '../features/needVisuals'
 import type { NeedCat } from '../features/needVisuals'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
+import { t } from '../i18n'
 
 /** Backend NeedTag → the shared chip vocabulary, so the banner reads like the rest of the app. */
 const TAG_TO_CAT: Record<string, NeedCat> = {
@@ -47,7 +53,7 @@ export function PounceBanner({ alert, onDismiss, onWork, myGrid = '' }: Props) {
   return (
     // `alert` (not `status`): this is assertive by design — it interrupts, which is the feature.
     <div className="pounce-banner" role="alert" aria-live="assertive">
-      <span className="pounce-tag">{vis?.label ?? 'NEW'}</span>
+      <span className="pounce-tag">{vis?.label ?? t('pounce.tag.fallback')}</span>
       <span className="pounce-what">
         <strong>{alert.call}</strong>
         {alert.entity ? <span className="pounce-entity">{alert.entity}</span> : null}
@@ -67,16 +73,16 @@ export function PounceBanner({ alert, onDismiss, onWork, myGrid = '' }: Props) {
         type="button"
         className="pounce-work"
         onClick={() => onWork(alert)}
-        title={`QSY to ${alert.call} and start the QSO`}
+        title={t('pounce.work.title', { call: alert.call })}
       >
-        Work it
+        {t('pounce.work.label')}
       </button>
       <button
         type="button"
         className="pounce-close"
         onClick={onDismiss}
-        aria-label="Dismiss alert"
-        title="Dismiss"
+        aria-label={t('pounce.dismiss.aria')}
+        title={t('common.dismiss')}
       >
         ✕
       </button>

@@ -38,6 +38,13 @@
 // *multi-channel* decoders and defines that as software showing several decoded signals at
 // once. Nexus decodes one signal at a time. We state what each ruleset says and stop there —
 // we never tell the operator which category they are in.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The wording now lives
+// in `i18n/en.ts` under `assist.*` — including the rule quotations, which carry a ⚠️ there
+// telling a translator to leave the quoted text, the rule numbers and the category names alone.
+
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 
 /** UTC HH:MMZ for a unix stamp — the stamp format the rest of the app uses in status lines. */
 function utcHm(unix: number): string {
@@ -65,73 +72,55 @@ interface Props {
  * in a collapsed details block so the footer stays one line for an operator who already knows.
  */
 export function AssistanceNote({ unassisted, sinceUnix, onToggle, compact }: Props) {
-  const since = sinceUnix ? ` since ${utcHm(sinceUnix)}` : ''
+  // The stamp is a VALUE, not a sentence fragment: each of the four postures below is one whole
+  // catalog sentence, so a language that puts "since 14:02Z" first still reads correctly.
+  const since = sinceUnix ? utcHm(sinceUnix) : ''
+  const line = unassisted
+    ? since
+      ? t('assist.sources.offSince', { since })
+      : t('assist.sources.off')
+    : since
+      ? t('assist.sources.onSince', { since })
+      : t('assist.sources.on')
   return (
     <div className={`assist-note${unassisted ? ' unassisted' : ''}${compact ? ' compact' : ''}`}>
       <div className="assist-note-head">
-        <span className="assist-note-state mono">{unassisted ? 'UNASSISTED' : 'ASSISTED'}</span>
-        <span className="assist-note-line">
-          {unassisted ? (
-            <>
-              Assistance sources off{since}: AI CW decoder, DX cluster / RBN, PSK Reporter needs.
-            </>
-          ) : (
-            <>
-              AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign
-              identification{since}.
-            </>
-          )}
+        <span className="assist-note-state mono">
+          {unassisted ? t('assist.state.unassisted') : t('assist.state.assisted')}
         </span>
+        <span className="assist-note-line">{line}</span>
         {onToggle && (
           <button
             type="button"
             className={`btn assist-note-btn${unassisted ? '' : ' primary'}`}
             onClick={() => onToggle(!unassisted)}
           >
-            {unassisted ? 'End unassisted entry' : 'Declare unassisted entry'}
+            {unassisted ? t('assist.toggle.end') : t('assist.toggle.declare')}
           </button>
         )}
       </div>
       <details className="assist-note-why">
-        <summary>What this means for your contest category</summary>
+        <summary>{t('assist.why.summary')}</summary>
         <ul>
+          {/* The emphasis sits mid-sentence in every one of these, so each is ONE key with a
+              `<b>` marker; the element comes from here, never from the catalog. */}
           <li>
-            <b>CQ WW</b> rule VIII.2 counts “a CW decoder, DX cluster, DX spotting Web sites …
-            local or remote call sign and frequency decoding technology (e.g., CW Skimmer or
-            Reverse Beacon Network)” as QSO-finding assistance. Using any of them places the entry
-            in <b>Single Operator Assisted</b> (V.A.2) instead of Single Operator (V.A.1).
+            <T k="assist.why.cqww" tags={{ b: <b /> }} />
           </li>
           <li>
-            <b>ARRL</b> contests call it spotting assistance and name “PSKReporter, Telnet, DX
-            spotting websites or bulletin board systems, automated multi-channel decoders”.
-            Single Operator may not use it (HCAT.1.1: “Use of spotting assistance is not
-            permitted.”). <b>Single Operator Unlimited</b> may (HCAT.2.1). ARRL’s glossary
-            defines a multi-channel decoder as software that “displays multiple decoded signals at
-            the same time”. Nexus decodes one signal at a time, so that definition does not
-            describe its CW decoder. It does describe the cluster, RBN and PSK Reporter feeds.
+            <T k="assist.why.arrl" tags={{ b: <b /> }} />
           </li>
           <li>
-            Your <b>own radio’s decodes</b> are not assistance under either ruleset, so they keep
-            feeding the Needed board in unassisted mode. Your outbound PSK Reporter uploads also
-            keep running, because ARRL says “Generating spotting information for use by other
-            stations is not considered to be spotting assistance.”
+            <T k="assist.why.ownDecodes" tags={{ b: <b /> }} />
           </li>
           <li>
-            <b>What this switch does not cover:</b> POTA and SOTA activator spots still arrive.
-            Neither ruleset names those feeds, but both define assistance broadly enough to
-            include them, so switch off the POTA/SOTA features by hand if you are entering a
-            contest that counts them.
+            <T k="assist.why.notCovered" tags={{ b: <b /> }} />
           </li>
           <li>
-            Rules differ by contest and change between years, so{' '}
-            <b>check the rules of the contest you are entering</b>. This note reports what CQ WW
-            and ARRL currently publish. It is not a category ruling.
+            <T k="assist.why.checkRules" tags={{ b: <b /> }} />
           </li>
         </ul>
-        <p className="assist-note-keep">
-          Your own settings are never rewritten. Ending unassisted mode restores the decoder and
-          feeds exactly as you had them.
-        </p>
+        <p className="assist-note-keep">{t('assist.keep')}</p>
       </details>
     </div>
   )

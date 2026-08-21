@@ -6,7 +6,14 @@
 // independent client of the one shared Rust engine (snapshot at 300 ms; the Waterfall
 // self-fetches its spectrum), and its action callbacks drive the same engine, so state
 // stays consistent across every window.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is a router: the
+// panels it mounts own their own prose. What is here is the three states the router itself
+// can be in — connecting, Field Day off, and a panel name it does not know — plus the
+// conversation-delete guard, which it deliberately raises in the SAME words as the main
+// window (the two mirrors drifting apart is what put the guard here).
 import { useEffect, useMemo, useState } from 'react'
+import { t } from './i18n'
 import { confirmDialog, ConfirmHost } from './confirm'
 import type {
   AppSnapshot,
@@ -233,9 +240,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   const onArchive = async (peer: string) => {
     if (
       !(await confirmDialog({
-        title: `Delete the conversation with ${peer}?`,
-        body: "Any messages still waiting to send will be cancelled. This can't be undone.",
-        confirmLabel: 'Delete conversation',
+        title: t('shell.conversation.delete.title', { peer }),
+        body: t('shell.conversation.delete.body'),
+        confirmLabel: t('shell.conversation.delete.action'),
         danger: true,
       }))
     )
@@ -263,11 +270,22 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     surfaceSet('nexus.operate.layout', m)
   }
 
+  // The per-type alert band scopes, exactly as App builds them — a torn-off surface must
+  // not disagree with the docked one about which need icons this band earns.
+  const needScopes = useMemo(
+    () => ({
+      dxcc: settings?.alertDxccBands,
+      grid: settings?.alertGridBands,
+      rareGrid: settings?.alertRareGridBands,
+    }),
+    [settings?.alertDxccBands, settings?.alertGridBands, settings?.alertRareGridBands],
+  )
   // Connect's map colours stations by need the SAME way the docked map does — gated by the
-  // operator's enabled modes (the Needed board has its own per-mode toggles separately).
+  // operator's enabled modes (the Needed board has its own per-mode toggles separately) and
+  // by the band scopes, which govern the icons as well as the alerts.
   const gatedAlerts = useMemo(
-    () => visibleNeeds(needAlerts, readEnabledModes()),
-    [needAlerts],
+    () => visibleNeeds(needAlerts, readEnabledModes(), needScopes),
+    [needAlerts, needScopes],
   )
   // The SHARED chain, same as App.tsx — the hand-rolled loop this replaces was
   // the pre-fix last-tag-wins map (backend orders alerts priority-DESCENDING,
@@ -491,7 +509,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           />
         ) : (
           <div className="app loading">
-            <span>Field Day isn’t active.</span>
+            <span>{t('detached.fieldDay.inactive')}</span>
           </div>
         )}
       </div>
@@ -503,7 +521,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       return (
         <div className="app detached">
           <div className="app loading">
-            <span>Connecting to the radio…</span>
+            <span>{t('detached.connecting')}</span>
           </div>
         </div>
       )
@@ -565,6 +583,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           roster={roster}
           needByCall={needByCall}
           needAlertsByCall={needAlertsByCall}
+          needScopes={needScopes}
           selectedCall={selected}
           onSelect={onSelect}
           layoutMode={operateLayout}
@@ -579,7 +598,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   return (
     <div className="app detached">
       <div className="app loading">
-        <span>Panel “{panel}” isn’t available as a standalone window yet.</span>
+        <span>{t('detached.unavailable', { panel })}</span>
       </div>
     </div>
   )

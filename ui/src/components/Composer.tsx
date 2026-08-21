@@ -1,6 +1,11 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The quick-reply
+// chips are the operator's own macros and the Field Day exchange is `<class> <section>` —
+// both go on the air exactly as they read, so neither is prose. `RR73` and `73` are the
+// closers themselves, and `DE <MYCALL>` is the on-air framing prefix.
 import { useState } from 'react'
 import type { FieldDayStatus, OpMode, Settings } from '../types'
 import { clampToFrames } from '../freetext'
+import { t } from '../i18n'
 import { FreetextMeter } from './FreetextMeter'
 
 interface Props {
@@ -74,7 +79,7 @@ export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = fal
 
   return (
     <div className="composer">
-      <div className="quick-replies" aria-label="Quick replies">
+      <div className="quick-replies" aria-label={t('tempo.composer.quickReplies.aria')}>
         {quickReplies.map((q, i) => {
           const isFdExchange = q === fdExchange
           return (
@@ -93,11 +98,7 @@ export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = fal
                     }
                   : undefined
               }
-              title={
-                isFdExchange
-                  ? 'Send your Winter Field Day exchange (class + section)'
-                  : undefined
-              }
+              title={isFdExchange ? t('tempo.composer.fdExchange.title') : undefined}
               onClick={() => submit(q)}
             >
               {q}
@@ -117,13 +118,21 @@ export function Composer({ peer, mode, fieldDay, macros, onSend, broadcast = fal
           type="text"
           value={text}
           onChange={(e) => setText(clampToFrames(e.target.value, prefix))}
-          placeholder={broadcast ? `Broadcast to all (DE ${mycall ?? ''}…)` : `Message ${peer}…`}
-          aria-label={broadcast ? 'Broadcast to all on frequency' : `Message ${peer}`}
+          placeholder={
+            broadcast
+              ? t('tempo.composer.placeholder.broadcast', { call: mycall ?? '' })
+              : t('tempo.composer.placeholder.direct', { peer })
+          }
+          aria-label={
+            broadcast
+              ? t('tempo.composer.aria.broadcast')
+              : t('tempo.composer.aria.direct', { peer })
+          }
           autoComplete="off"
         />
         <FreetextMeter text={text} prefix={prefix} />
         <button type="submit" className="send-btn" disabled={!text.trim()}>
-          Send
+          {t('tempo.composer.send')}
         </button>
       </form>
     </div>

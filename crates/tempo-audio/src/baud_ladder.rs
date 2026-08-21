@@ -1122,6 +1122,7 @@ fn rigctl_read(
     keying: Option<crate::rig::SerialLine>,
     commands: &[&str],
 ) -> Result<RigctlOutput, std::io::Error> {
+    tempo_core::applog::info("proc", "run rigctl (baud probe)");
     let mut cmd = std::process::Command::new(crate::rigctld_proc::resolve_rigctl());
     cmd.args(probe_args(port, baud, rig_model, keying, commands));
     cmd.stdin(std::process::Stdio::null());

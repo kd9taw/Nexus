@@ -5,6 +5,7 @@
 import type { BandOutlook } from '../../types'
 import { heatColor, fmtZ, nowUtcHour, workabilityVar } from '../../propViz'
 import { Tooltip, TooltipProvider } from '../ui/Tooltip'
+import { t } from '../../i18n'
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 const TICKS = [0, 6, 12, 18]
@@ -22,7 +23,7 @@ export function LikelihoodHeatmap({
   const nowH = nowUtcHour()
   return (
     <TooltipProvider>
-      <div className="heatmap" role="img" aria-label="Band by UTC-hour contact-likelihood heatmap">
+      <div className="heatmap" role="img" aria-label={t('prop.heatmap.aria')}>
         <div className="heatmap-axis" aria-hidden="true">
           <span className="heatmap-corner" />
           {HOURS.map((h) => (
@@ -36,7 +37,11 @@ export function LikelihoodHeatmap({
             <span
               className="heatmap-band"
               style={{ color: workabilityVar(o.workability) }}
-              title={`${o.band} — ${o.workability} · ${Math.round(o.reliability)}% of the day usable (modelled)`}
+              title={t('prop.heatmap.band.title', {
+                band: o.band,
+                workability: o.workability,
+                pct: Math.round(o.reliability),
+              })}
             >
               {o.band}
               <span className="heatmap-rel">{Math.round(o.reliability)}%</span>
@@ -57,7 +62,7 @@ export function LikelihoodHeatmap({
         <div className="heatmap-legend" aria-hidden="true">
           <span>00Z</span>
           <span className="heatmap-scale" />
-          <span>less likely → more likely</span>
+          <span>{t('prop.heatmap.legend')}</span>
           <span>23Z</span>
         </div>
       </div>

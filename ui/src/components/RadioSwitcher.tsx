@@ -1,4 +1,11 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT: the radio's own profile name, its band label and
+// its dial frequency — all three are interpolated as the tokens they are.
+//
+// The peg lock pins which radio band selection may move. It is not a transmit control and is on
+// no cockpit's stop-line census; `transmitting` is read here only to colour the pill.
 import type { RadioSummary } from '../types'
+import { t } from '../i18n'
 
 interface Props {
   radios: RadioSummary[]
@@ -14,7 +21,7 @@ interface Props {
 export function RadioSwitcher({ radios, pegged, onSwitch, onTogglePeg }: Props) {
   if (radios.length < 2) return null
   return (
-    <div className="radio-switcher" role="group" aria-label="Active radio">
+    <div className="radio-switcher" role="group" aria-label={t('radios.switcher.aria')}>
       {radios.map((r) => {
         const freq = r.dialMhz > 0 ? `${r.dialMhz.toFixed(3)}` : '—'
         // A background (monitored) radio whose CAT probe is failing: surface it on the pill so a dead
@@ -30,17 +37,28 @@ export function RadioSwitcher({ radios, pegged, onSwitch, onTogglePeg }: Props) 
             onClick={() => !r.isActive && onSwitch(r.id)}
             title={
               r.isActive
-                ? `${r.name} — active radio (${r.band} · ${freq} MHz)`
+                ? t('radios.switcher.active.title', { name: r.name, band: r.band, freq })
                 : catDead
-                  ? `Switch to ${r.name} — ⚠ CAT not responding (check its rig, cable, and COM port)`
-                  : `Switch to ${r.name} (last on ${r.band || '—'} · ${freq} MHz)`
+                  ? t('radios.switcher.catDead.title', { name: r.name })
+                  : t('radios.switcher.switch.title', {
+                      name: r.name,
+                      band: r.band || '—',
+                      freq,
+                    })
             }
           >
             <span className="radio-pill-name">
               {r.name}
-              {catDead && <span className="radio-pill-warn" aria-label="CAT not responding"> ⚠</span>}
+              {catDead && (
+                <span className="radio-pill-warn" aria-label={t('radios.switcher.catDead.aria')}>
+                  {' '}
+                  ⚠
+                </span>
+              )}
             </span>
-            <span className="radio-pill-band">{catDead ? 'no CAT' : r.band || '—'}</span>
+            <span className="radio-pill-band">
+              {catDead ? t('radios.switcher.catDead.band') : r.band || '—'}
+            </span>
           </button>
         )
       })}
@@ -49,13 +67,9 @@ export function RadioSwitcher({ radios, pegged, onSwitch, onTogglePeg }: Props) 
         className={`radio-peg${pegged ? ' on' : ''}`}
         aria-pressed={pegged}
         onClick={() => onTogglePeg(!pegged)}
-        title={
-          pegged
-            ? 'Peg-lock ON — the active radio stays put; selecting a band won’t auto-switch radios. Click to unlock.'
-            : 'Peg-lock OFF — selecting a band may auto-switch to the radio that covers it. Click to pin the active radio.'
-        }
+        title={pegged ? t('radios.peg.on.title') : t('radios.peg.off.title')}
       >
-        {pegged ? '🔒 Pegged' : '🔓 Peg'}
+        {pegged ? t('radios.peg.on.label') : t('radios.peg.off.label')}
       </button>
     </div>
   )

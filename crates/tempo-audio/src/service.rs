@@ -169,13 +169,31 @@ fn spawn_cat_daemon(
     let mut native_fallback: Option<String> = None;
     #[cfg(feature = "serial")]
     if let Some(addr) = native_civ_addr(t).filter(|_| ptt_line.is_none()) {
-        match crate::civ::broker::CivDaemon::start(&t.serial_port, t.baud, addr, t.rigctld_port) {
+        match crate::civ::broker::CivDaemon::start(
+            &t.serial_port,
+            t.baud,
+            addr,
+            t.rigctld_port,
+            t.icom_data_mode,
+        ) {
             Ok(d) => return Ok((CatDaemon::Native(d), None)),
             Err(e) => {
                 // Fall through to rigctld — CAT keeps working, just without the scope.
                 // Recorded, not just printed: the probe detail must SAY the tested
                 // backend was the fallback, or the operator debugs the wrong daemon.
                 eprintln!("tempo-audio: native CI-V daemon failed ({e}); falling back to rigctld");
+                // NAME THE SUBJECT. On Windows "The system cannot find the file specified" from
+                // a serial open means the COM PORT IS NOT THERE — the radio is off, or the USB
+                // adapter enumerated somewhere else. Without the port and the radio in the
+                // line, a three-radio station gets a failure it has to guess the owner of
+                // (operator, 2026-08-19).
+                tempo_core::applog::warn(
+                    "cat",
+                    &format!(
+                        "{}: native CI-V on {} @ {} baud failed ({e}); falling back to rigctld",
+                        t.radio_label, t.serial_port, t.baud
+                    ),
+                );
                 native_fallback = Some(e.to_string());
             }
         }
@@ -940,6 +958,13 @@ pub struct RadioConfig {
     /// PTT method: `"cat"` (launch + use rigctld), `"rts"`, `"dtr"`, or `"vox"`.
     pub ptt_method: String,
     /// Hamlib rig model number for `rigctld -m` (0 = none / VOX).
+    /// The operator's own name for this radio (and its model name), for the diagnostic log.
+    /// Display only — see `Transport::radio_label`. Empty is fine: the label falls back to the
+    /// model number, which is what the startup line showed before this existed.
+    pub radio_label: String,
+    /// The operator's Icom DATA-mode choice (D1/D2/D3) for this radio. 1 = today's
+    /// behaviour; see `RadioProfile::icom_data_mode`.
+    pub icom_data_mode: u8,
     pub rig_model: u32,
     /// The operator's "my interface keys PTT on the CAT port's RTS line" declaration
     /// (`Settings::cat_rts_keys_ptt`). Carried in the STARTUP SEED, not left to the first
@@ -994,6 +1019,8 @@ impl Default for RadioConfig {
             rx_tap: Arc::new(crate::rxtap::RxTap::new()),
             meter_feed: tempo_app::engine::MeterFeed::default(),
             ptt_method: "vox".to_string(),
+            radio_label: String::new(),
+            icom_data_mode: 1,
             rig_model: 0,
             cat_rts_keys_ptt: false,
             serial_port: String::new(),
@@ -1076,9 +1103,22 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
 pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(), String> {
     let in_name = (!cfg.audio_in.is_empty()).then(|| cfg.audio_in.clone());
     let out_name = (!cfg.audio_out.is_empty()).then(|| cfg.audio_out.clone());
+    // Diagnostic log (see `tempo_core::applog`): the radio loop's OPEN is the single most
+    // asked-about failure in the tracker, and until now it left no trace an operator could
+    // send. Only the open/failure edges are logged here — never a per-tick or per-decode
+    // line, which would defeat the file's size bound and bury exactly this.
+    tempo_core::applog::info(
+        "audio",
+        &format!(
+            "radio loop starting (in {:?}, out {:?})",
+            in_name.as_deref().unwrap_or("<system default>"),
+            out_name.as_deref().unwrap_or("<system default>")
+        ),
+    );
     let mut backend = match CpalBackend::open(in_name.as_deref(), out_name.as_deref()) {
         Ok(b) => b,
         Err(e) => {
+            tempo_core::applog::error("audio", &format!("sound card failed to open: {e}"));
             // Surface a sound-card open failure to the UI (which would otherwise
             // see only a silent, blank waterfall).
             {
@@ -1130,6 +1170,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // itself and clears the banner, with no restart and no re-picking.
             cfg.audio_in.clear();
             cfg.audio_out.clear();
+            tempo_core::applog::warn(
+                "audio",
+                "opened the system default sound card instead of the configured one",
+            );
             b
         }
     };
@@ -1155,6 +1199,22 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // Initial open: allow coexisting onto a pre-existing EXTERNAL rigctld (e.g. WSJT-X already sharing
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
     let (mut rig, rigctld_proc, init_probe) = open_rig(&applied, true);
+    // The CAT open, once, with the same detail string the UI shows. A launch that dies later
+    // leaves this as the last line in the file, which is the whole point of the milestone.
+    // `ok` is `None` for VOX (no control channel to be healthy or not) — that is not a failure
+    // and must not read as one in the file.
+    let who = applied.log_subject();
+    match init_probe.ok {
+        Some(true) => tempo_core::applog::info("cat", &format!("{who}: {}", init_probe.detail)),
+        Some(false) => tempo_core::applog::error(
+            "cat",
+            &format!("{who}: NOT connected: {}", init_probe.detail),
+        ),
+        None => tempo_core::applog::info(
+            "cat",
+            &format!("{who}: no CAT channel: {}", init_probe.detail),
+        ),
+    }
     let init_freq = init_probe.freq_hz;
     {
         let mut eng = engine_lock(&engine);
@@ -1384,6 +1444,8 @@ impl Transport {
     /// CAT-only) and the broker port dropped (only the active radio talks to the broker).
     fn from_profile(p: &RadioProfile) -> Self {
         Self {
+            radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
+            icom_data_mode: p.icom_data_mode,
             ptt_method: p.ptt_method.clone(),
             rig_model: p.rig_model,
             serial_port: p.serial_port.clone(),
@@ -2309,8 +2371,19 @@ struct RadioLoop {
     /// faults mean the CAT link is too slow or mute — claiming "rig has no mode" there
     /// sent an IC-7610 @ 19200 baud operator chasing a mode the rig has always had.
     mode_saw_reject: bool,
-    /// Last CW keyer speed (WPM) pushed to the rig, so we only `set_keyspd` on change.
-    last_cw_wpm: u32,
+    /// Last CW keyer speed (WPM) pushed to the RIG over CAT (`set_keyspd`), so the command
+    /// only fires on change.
+    ///
+    /// ISSUE #135: this used to be the ONE cache for both keyer backends. Two devices with
+    /// independent speed state cannot share one "what have we already told it" — switching
+    /// CAT→WinKeyer at the same WPM found the cache already holding that number and pushed
+    /// nothing, so the hardware keyer never heard a speed at all. One cache per device.
+    last_cat_wpm: u32,
+    /// Last CW keyer speed (WPM) pushed to the open WinKeyer (WK Set Speed, `02 nn`).
+    /// Reset to 0 whenever the port is (re)opened: a keyer that just came up is back on its
+    /// own pot / power-on speed and knows nothing of what we told the last one.
+    #[cfg(feature = "serial")]
+    last_winkeyer_wpm: u32,
     /// Unix-ms until which the current CW word is still keying — the next queued word is
     /// held until then, so at most one word sits in the rig's keyer buffer (Stop TX drops
     /// the rest). 0.0 = idle / ready to send now.
@@ -2737,7 +2810,9 @@ impl RadioLoop {
             mode_fail_count: 0,
             mode_giveup: None,
             mode_saw_reject: false,
-            last_cw_wpm: 0, // 0 = unset → first send pushes the speed
+            last_cat_wpm: 0, // 0 = unset → first send pushes the speed
+            #[cfg(feature = "serial")]
+            last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
             last_fm: None,
             #[cfg(feature = "serial")]
@@ -3448,7 +3523,14 @@ impl RadioLoop {
         self.mode_fail_count = 0;
         self.mode_giveup = None;
         self.mode_saw_reject = false;
-        self.last_cw_wpm = 0;
+        self.last_cat_wpm = 0;
+        // The WinKeyer is not the thing being handed off (it is its own box on its own
+        // port), but the handoff resets every "already told it" cache and this one costs
+        // two bytes to be wrong about, so it goes with the rest.
+        #[cfg(feature = "serial")]
+        {
+            self.last_winkeyer_wpm = 0;
+        }
         self.cw_busy_until = 0.0;
         self.rtty_busy_until = 0.0;
         // The latched stream belongs to the radio it was keying. `halt_tx_for_context_change`
@@ -3804,7 +3886,7 @@ impl RadioLoop {
                         // channel, and `Rig::ptt` on a Vox rig sets `keyed` and answers Ok.
                         // `cat_hold_active` is therefore part of `may_key`, so no key-up runs
                         // until the transport is rebuilt.
-                        eng.halt_tx_for_context_change();
+                        eng.halt_tx_for_context_change("CAT probe hold");
                     }
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     *rig = Rig::vox();
@@ -3839,7 +3921,7 @@ impl RadioLoop {
                         // or a CAT-config save, never an operator Stop TX. A plain `halt_tx`
                         // here silently undid the engine-side re-arm a switch had just made,
                         // and the operator's next PTT press went nowhere.
-                        eng.halt_tx_for_context_change();
+                        eng.halt_tx_for_context_change("CAT daemon rebuild");
                     }
                 }
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
@@ -3996,11 +4078,22 @@ impl RadioLoop {
                                  input's level.{mac_hint}"
                             )));
                         }
+                        // The receive side finally says something. This condition was detected
+                        // and surfaced in the UI but never written down, so a log from a
+                        // station that "stopped decoding" showed a healthy audio open and
+                        // nothing after it. A TRANSITION, logged once on the way in and once on
+                        // the way out — never on a timer.
+                        tempo_core::applog::warn(
+                            "audio",
+                            "capture is open but every sample is zero — check the rig's USB \
+                             audio cable and the input level",
+                        );
                         self.err_owner = ErrOwner::SilentCapture;
                     }
                 } else {
                     self.silent_capture_since = None;
                     if self.err_owner == ErrOwner::SilentCapture {
+                        tempo_core::applog::info("audio", "capture has audio again");
                         {
                             let mut eng = engine_lock(engine);
                             eng.set_audio_error(None);
@@ -4055,7 +4148,7 @@ impl RadioLoop {
                         let mut eng = engine_lock(engine);
                         // CONTEXT halt, same as the rig rebuild above: swapping the sound card
                         // to the newly active radio must not disarm the operator's mic.
-                        eng.halt_tx_for_context_change();
+                        eng.halt_tx_for_context_change("audio backend rebuild");
                     }
                 }
                 // ⚠️ RELEASE THE OLD CARD FIRST — see `AudioBackend::release_device`.
@@ -5542,6 +5635,48 @@ impl RadioLoop {
                 }
                 self.cw_busy_until = 0.0; // a fresh macro after Stop keys immediately
             }
+            // ISSUE #135 (swinn, on 1.6.1) — "CW slider does not change speed". The speed
+            // used to reach the WinKeyer ONLY from inside the `if let Some(text) = word`
+            // block below, so a hardware keyer was told the operator's speed at the instant
+            // a word was dequeued and at no other time. Move the slider between overs and
+            // nothing went down the wire: WK kept keying at whatever its own pot /
+            // power-on default gave it, because `WinKeyer::open` sends Host Open and no
+            // speed setup either. Push it HERE, on the tick the number changes, so an open
+            // keyer always carries the speed the cockpit is showing — including mid-message,
+            // which is exactly what WK's Set Speed is for and what an operator reaching for
+            // the slider during a long macro is asking for.
+            //
+            // Two things this deliberately does NOT widen, both because this is the keying
+            // wire and a fix is not a licence to put new bytes on it:
+            //   * only to an ALREADY-OPEN keyer, never opening one — the port stays opened
+            //     on demand by the first word, so Host Open reaches the wire no earlier
+            //     than today and no COM port is held for a keyer never sent with;
+            //   * behind [`Self::may_key`], the same gate the words below sit behind — a
+            //     loop that does not own the operator's radio speaks to nothing, and it
+            //     loses nothing by waiting, because the cache still differs and the push
+            //     lands on the first tick after the hold lifts.
+            //
+            // The word pacing (`cw_busy_until`) is still computed from the WPM in force when
+            // the word was dequeued, so a speed changed mid-word leaves the inter-word gap
+            // estimated at the old speed for that one word. Left alone: it costs a fraction
+            // of a word space once per change, and the alternative is re-deriving a
+            // deadline for CW already sitting in WK's buffer.
+            //
+            // ⚠️ NEEDS-BENCH — no WinKeyer/WKmini on this machine. What is proven here is
+            // that the two Set Speed bytes leave Nexus on the tick the slider moves and
+            // land on the port (a pty stands in for the keyer in the test below). What is
+            // NOT proven is a real WK's behaviour on receiving them mid-message, and
+            // whether a unit with its speed POT enabled honours a host speed at all — on
+            // WK2/WK3 the pot can own the speed, in which case the fix is correct and the
+            // keyer still ignores it. Bench a real keyer both idle and mid-macro.
+            #[cfg(feature = "serial")]
+            if self.may_key() {
+                if let Some((_, wk)) = self.winkeyer.as_mut() {
+                    if wpm != self.last_winkeyer_wpm && wk.set_wpm(wpm).is_ok() {
+                        self.last_winkeyer_wpm = wpm;
+                    }
+                }
+            }
             if let Some(text) = word {
                 // Hold the next word until this one finishes keying + a word space (7 dits),
                 // so only ONE word is buffered in the rig at a time.
@@ -5565,6 +5700,13 @@ impl RadioLoop {
                         .unwrap_or(true);
                     let mut open_err = None;
                     if reopen {
+                        // ISSUE #135: a keyer we are about to open knows nothing of the
+                        // speed we sent the LAST one — it is back on its own pot /
+                        // power-on default, because `WinKeyer::open` sends Host Open and
+                        // no speed setup. Forget what we think it has been told, so the
+                        // push below always fires on a fresh port. Reset before the open,
+                        // so a FAILED open leaves the cache clear for the retry too.
+                        self.last_winkeyer_wpm = 0;
                         match crate::winkeyer::WinKeyer::open(port) {
                             Ok((wk, _rev)) => self.winkeyer = Some((port.clone(), wk)),
                             // What the SYSTEM said, verbatim. `self.winkeyer` stays None, so
@@ -5581,8 +5723,12 @@ impl RadioLoop {
                         }
                     }
                     if let Some((_, wk)) = self.winkeyer.as_mut() {
-                        if wpm != self.last_cw_wpm && wk.set_wpm(wpm).is_ok() {
-                            self.last_cw_wpm = wpm;
+                        // Still here after the per-tick push above, and NOT redundant with
+                        // it: on the tick that OPENS the port there was no keyer for that
+                        // push to talk to, so this is what gets the speed onto a
+                        // freshly-opened keyer — before its first character, not after.
+                        if wpm != self.last_winkeyer_wpm && wk.set_wpm(wpm).is_ok() {
+                            self.last_winkeyer_wpm = wpm;
                         }
                         let _ = wk.send(&text);
                     }
@@ -5673,8 +5819,18 @@ impl RadioLoop {
                         // Hamlib backends accept freq/mode/PTT but NOT send_morse (`b`), so
                         // capture the result and SURFACE a failure instead of keying into
                         // the void — point the operator at the Soundcard keyer.
-                        if wpm != self.last_cw_wpm && rig.set_keyspd(wpm).is_ok() {
-                            self.last_cw_wpm = wpm;
+                        //
+                        // ISSUE #135 deliberately did NOT move this one to a per-tick push
+                        // the way the WinKeyer's moved. The rig's keyer speed is only
+                        // observable while the rig is keying, and this shares the CAT link
+                        // with the dial/mode/meter traffic that a slow serial rig already
+                        // struggles to keep up with (`reference-cat-slow-serial-deadline`)
+                        // — one slider drag is ~45 distinct values, which is 45 `KEYSPD`
+                        // commands queued ahead of the next poll for no visible gain. At
+                        // send time is soon enough here; the hardware keyer, which HOLDS a
+                        // speed of its own between overs, is the one that could not wait.
+                        if wpm != self.last_cat_wpm && rig.set_keyspd(wpm).is_ok() {
+                            self.last_cat_wpm = wpm;
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         let cw_err = rig.send_morse(&text).is_err();
@@ -8516,8 +8672,82 @@ fn clock_probe_loop(engine: Arc<Mutex<Engine>>) {
 /// (from the engine's settings) against the one it has `applied` and rebuilds
 /// the rig / re-opens the sound card when these change — so a Settings "Save"
 /// reconnects CAT without an app restart.
+/// A radio's name for the log when only the Hamlib model is known.
+fn radio_label(model_name: &str, model: u32) -> String {
+    match model_name.trim() {
+        "" if model == 0 => "no rig (VOX)".to_string(),
+        "" => format!("model {model}"),
+        n => format!("{n} (model {model})"),
+    }
+}
+
+/// A radio's name for the log when the operator has given it one — theirs first, because that
+/// is the name they will use when they report a problem.
+fn radio_label_named(name: &str, model_name: &str, model: u32) -> String {
+    match name.trim() {
+        "" => radio_label(model_name, model),
+        n => format!("{n} — {}", radio_label(model_name, model)),
+    }
+}
+
+impl Transport {
+    /// How this radio names itself in the log: the operator's name and model, plus HOW it is
+    /// reached — a serial port, a host, or an OmniRig slot. One string, so every subsystem
+    /// writes the same subject and a reader can grep one name through a whole session.
+    fn log_subject(&self) -> String {
+        let via = match self.rig_conn.as_str() {
+            "network" if !self.rig_addr.is_empty() => format!(" via {}", self.rig_addr),
+            "omnirig" => format!(" via OmniRig RIG {}", self.omnirig_slot.max(1)),
+            _ if !self.serial_port.is_empty() => {
+                format!(" on {} @ {} baud", self.serial_port, self.baud)
+            }
+            _ => String::new(),
+        };
+        format!("{}{via}", self.radio_label)
+    }
+}
+
+/// Display text that is deliberately NOT part of transport identity.
+///
+/// ⚠️ WHY A TYPE AND NOT A HAND-WRITTEN `PartialEq`. The transport comparison decides whether
+/// to tear down and relaunch CAT, so a radio's display name must not count — renaming a radio
+/// in Settings would otherwise drop the operator's connection for a cosmetic edit. The first
+/// attempt at that was a hand-written `impl PartialEq for Transport` listing the fields to
+/// compare, and it silently OMITTED SIX of them (`voice_mic_device`, `tx_level`, `rx_gain`, and
+/// the three monitor fields) — so changing the voice mic compared EQUAL, no rebuild happened,
+/// and the mic never opened. Three shipped tests caught it; nothing else would have, and the
+/// next field anyone added would have been dropped the same way.
+///
+/// This makes the mistake unrepresentable: `Transport` derives `PartialEq` again, so every
+/// field — present and future — is compared by default, and exactly one type opts out.
+#[derive(Clone, Debug, Default)]
+struct LogLabel(String);
+
+impl PartialEq for LogLabel {
+    fn eq(&self, _: &Self) -> bool {
+        true // display text, never identity
+    }
+}
+
+impl std::fmt::Display for LogLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct Transport {
+    /// WHO THIS IS, for the diagnostic log — the operator's own radio name where they gave
+    /// one, else the Hamlib model name, else the bare model number.
+    ///
+    /// ⚠️ NOT part of transport IDENTITY: it is display text, and two transports that differ
+    /// only by label are the same transport. Every `PartialEq`/rebuild comparison must skip it,
+    /// or renaming a radio in Settings would tear down and relaunch CAT.
+    ///
+    /// It exists because a three-radio station's log said `native CI-V daemon failed` and
+    /// `Connected — 7.074 MHz` without ever naming which radio either line was about, and the
+    /// operator had to guess (2026-08-19).
+    radio_label: LogLabel,
     ptt_method: String,
     rig_model: u32,
     serial_port: String,
@@ -8545,6 +8775,10 @@ struct Transport {
     /// Native Icom CI-V opt-in for this radio (see `RadioProfile::icom_native_cat`) —
     /// selects Nexus's own CI-V daemon instead of rigctld at the spawn sites.
     icom_native_cat: bool,
+    /// The operator's D1/D2/D3 choice (`RadioProfile::icom_data_mode`), handed to the CI-V
+    /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
+    /// relaunch the daemon, because the value is applied when the backend is built.
+    icom_data_mode: u8,
     /// The port our OWN CAT broker is serving on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     broker_self_port: Option<u16>,
@@ -8566,6 +8800,12 @@ struct Transport {
 impl Transport {
     fn from_cfg(c: &RadioConfig) -> Self {
         Self {
+            icom_data_mode: c.icom_data_mode,
+            radio_label: LogLabel(if c.radio_label.is_empty() {
+                radio_label("", c.rig_model)
+            } else {
+                c.radio_label.clone()
+            }),
             ptt_method: c.ptt_method.clone(),
             rig_model: c.rig_model,
             // The upgrade heal for a stored mac /dev/tty.* twin (hangs CAT on carrier
@@ -8607,6 +8847,14 @@ impl Transport {
 
     fn from_settings(s: &Settings) -> Self {
         Self {
+            icom_data_mode: s.icom_data_mode,
+            radio_label: LogLabel(
+                s.radios
+                    .iter()
+                    .find(|r| r.id == s.active_radio)
+                    .map(|r| radio_label_named(&r.name, &r.rig_model_name, r.rig_model))
+                    .unwrap_or_else(|| radio_label(&s.rig_model_name, s.rig_model)),
+            ),
             ptt_method: s.ptt_method.clone(),
             rig_model: s.rig_model,
             // Same tty.*→cu.* heal as `from_cfg`, and on BOTH port fields here (a dedicated
@@ -8859,10 +9107,66 @@ fn retry_passband(md: &str, prior_fails: u32) -> i32 {
 /// are cleared and `last_mode` already holds `md`, so a refusal here changes no state and the
 /// next tick sees no mode change and sends nothing — one extra command, once, on the one tick
 /// the escalation fired.
+/// Is the width the rig actually took close enough to the one we asked for?
+///
+/// PURE, because it is the whole judgement in [`width_reassert_after_default_rung`]'s
+/// accepted-but-ignored path and the rest of that function is a socket. A quarter either way:
+/// rigs own a discrete set of filters and pick the nearest, so 2700 Hz for a requested 3000 is
+/// the radio doing its job and must never be "corrected" into a warning the operator cannot
+/// act on. 6000 for 3000 is the Flex defect of #82/#114. Narrower counts too — a filter well
+/// under the mode's passband clips the audio the decoder is counting on, which is the same
+/// harm arriving from the other side.
+fn width_is_close_enough(got: i32, want: i32) -> bool {
+    (got - want).abs() <= want / 4
+}
+
 fn width_reassert_after_default_rung(rig: &mut Rig, md: &str, sent_pb: i32) -> Option<String> {
     let want = passband_for(md);
-    if sent_pb != 0 || want <= 0 {
-        return None; // not the default-width rung — the operator's filter was never overridden
+    if want <= 0 {
+        return None; // non-DATA: we sent NOCHANGE and have no width opinion to enforce
+    }
+    if sent_pb != 0 {
+        // ── THE ACCEPTED-BUT-IGNORED CASE (ve3wej again, #114 on 1.7.0, AFTER the rung fix
+        // below shipped in 1.4.0). The escalation rung is not the only way to end up on the
+        // rig's own filter: a backend can answer `M PKTUSB 3000` with RPRT 0 and simply not
+        // apply the width. The command SUCCEEDED, so nothing below runs, nothing reads the
+        // width back, and FT8 sits on a 6 kHz SSB filter with the app cheerfully reporting
+        // the mode was set. His report says exactly this — the filter is wrong on arrival,
+        // and once he sets 3 k by hand the later mode changes keep it.
+        //
+        // So on a mode change that ASKED for a specific width, read back what the rig
+        // actually took. Cost is one `m` per mode CHANGE (not per poll, and never for a
+        // non-DATA mode); mode changes are a band/section event, not a loop.
+        //
+        // ⚠️ NEEDS BENCH — a Flex 6400 over SmartSDR CAT (model 2036, IP:5002) is the
+        // reported case and nothing here has been on that hardware. What is proven is the
+        // arithmetic and that the read is issued; whether the Flex then TAKES the second
+        // width is exactly what a bench pass has to answer.
+        let (_, got) = rig.read_mode_passband();
+        let got = got? as i32; // a rig that will not report its width is not evidence of a fault
+                               // A quarter either way. Rigs pick the nearest filter they own, so 2700 for a
+                               // requested 3000 is the rig doing its job and must not be "corrected" into a note;
+                               // 6000 for 3000 is the defect. Both directions, because a filter far NARROWER than
+                               // the mode needs clips the passband the decoder is counting on.
+        if width_is_close_enough(got, want) {
+            return None;
+        }
+        if rig.set_mode(md, want).is_ok() {
+            // Believe the write only if the rig now agrees; a second RPRT 0 from a backend
+            // that ignores the width would otherwise read as success and say nothing.
+            let (_, after) = rig.read_mode_passband();
+            if after
+                .map(|a| width_is_close_enough(a as i32, want))
+                .unwrap_or(true)
+            {
+                return None;
+            }
+        }
+        return Some(format!(
+            "set {md} but the rig is on a {got} Hz filter, not the {want} Hz asked for — set \
+             the rig's DATA filter to about {} kHz by hand (FT8 needs the full audio passband)",
+            want / 1000
+        ));
     }
     if rig.set_mode(md, want).is_ok() {
         return None;
@@ -9541,6 +9845,41 @@ fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
 
 #[cfg(test)]
 mod tests {
+
+    /// THE LINK THAT DID NOT EXIST. The D1/D2/D3 picker shipped inert: the setting saved, the
+    /// UI wrote it, `set_data_mode_n` built the right CI-V frame — and nothing carried the
+    /// operator's choice from `Settings` into the audio side at all. `icom_data_mode` appeared
+    /// in tempo-app and nowhere else; the backend's setter had zero callers. Every test passed,
+    /// because every test checked one PIECE of the chain.
+    ///
+    /// This pins the missing link itself: the transport the daemon is built from must carry the
+    /// operator's number. Downstream of here it cannot be dropped — `CivDaemon::start` and
+    /// `CivBackend::new` take it as a REQUIRED argument rather than a setter someone remembers.
+    #[test]
+    fn the_transport_carries_the_operators_icom_data_mode() {
+        let s = Settings {
+            icom_data_mode: 2,
+            ..Settings::default()
+        };
+        assert_eq!(
+            Transport::from_settings(&s).icom_data_mode,
+            2,
+            "the flat mirror must reach the transport"
+        );
+
+        // …and from the ACTIVE radio's own profile, which is where the UI writes it.
+        let prof = tempo_app::settings::RadioProfile {
+            icom_data_mode: 3,
+            ..Default::default()
+        };
+        assert_eq!(Transport::from_profile(&prof).icom_data_mode, 3);
+
+        // Control: the default is D1 — today's behaviour, and what every radio has.
+        assert_eq!(
+            Transport::from_settings(&Settings::default()).icom_data_mode,
+            1
+        );
+    }
     use super::*;
     use crate::backend::MockBackend;
 
@@ -9893,6 +10232,45 @@ mod tests {
         assert!(
             note.contains("rig rejected PKTUSB"),
             "rejection note: {note}"
+        );
+    }
+
+    /// The accepted-but-ignored width (ve3wej, #114 on 1.7.0 — AFTER the rung fix shipped).
+    /// A backend can answer `M PKTUSB 3000` with RPRT 0 and leave the filter at 6 kHz; the
+    /// command succeeded, so the escalation path never runs. This is the judgement that
+    /// decides whether the read-back is a defect or the radio picking its nearest filter.
+    #[test]
+    fn a_rig_that_ignored_the_width_is_told_apart_from_one_that_rounded_it() {
+        // THE DEFECT: the Flex 6400 of #82/#114 — FT8 on an SSB filter.
+        assert!(
+            !width_is_close_enough(6000, 3000),
+            "6 kHz for a 3 kHz ask is the bug"
+        );
+        // THE RADIO DOING ITS JOB: discrete filters, nearest wins. Must stay silent, because
+        // re-asserting buys nothing and a warning here is one the operator cannot act on.
+        assert!(
+            width_is_close_enough(2700, 3000),
+            "2.7 kHz is the nearest filter, not a fault"
+        );
+        assert!(width_is_close_enough(3000, 3000), "exact");
+        assert!(
+            width_is_close_enough(2400, 3000),
+            "2.4 kHz is 20% under — inside the slack"
+        );
+        // NARROWER COUNTS TOO: a filter well under the mode's passband clips the audio the
+        // decoder needs. Same harm, arriving from the other side.
+        assert!(
+            !width_is_close_enough(1800, 3000),
+            "1.8 kHz clips FT8's passband"
+        );
+        // Boundaries, stated so a later change to the slack has to move them deliberately.
+        assert!(
+            width_is_close_enough(3750, 3000),
+            "exactly a quarter over is still close"
+        );
+        assert!(
+            !width_is_close_enough(3751, 3000),
+            "one Hz past the quarter is not"
         );
     }
 
@@ -10632,6 +11010,144 @@ mod tests {
             !rig.keyed,
             "the failed backend owns the word — it must not be re-keyed through the CAT \
              keyer, whose own error would then misdiagnose this: {err}"
+        );
+    }
+
+    /// ISSUE #135 (swinn, on 1.6.1): "CW slider does not change speed."
+    ///
+    /// The slider reached the ENGINE fine — `set_cw_wpm` stores it and every cockpit read
+    /// shows it — but the only `set_wpm` in the tree lived INSIDE the `if let Some(text) =
+    /// word` block, so the WinKeyer learned the operator's speed at the instant a word was
+    /// DEQUEUED and at no other time. Move the slider between overs and nothing went down
+    /// the wire, so the hardware keyer stayed on whatever speed its own pot / power-on
+    /// default gave it (`WinKeyer::open` sends Host Open and nothing else — there is no
+    /// speed setup at open either).
+    ///
+    /// The scene is the reporter's: key one word so the port is open the way it opens in
+    /// the field, then move the slider with NOTHING queued. It reads the ACTUAL BYTES off
+    /// a pty standing in for the keyer rather than a flag saying bytes were meant — the
+    /// whole bug was a speed the app believed it had already sent.
+    #[cfg(all(unix, feature = "serial"))]
+    #[test]
+    fn a_speed_change_with_nothing_queued_still_reaches_the_winkeyer() {
+        use serialport::SerialPort;
+        use std::io::{Read, Write};
+
+        // `slave` is the port Nexus opens by name; `keyer` is the wire we listen on. The
+        // slave handle is held for the whole test on purpose: when the last slave fd
+        // closes, reads on the master fail with EIO, and the failure would then look like
+        // "the speed never arrived" for entirely the wrong reason.
+        let (mut keyer, slave) = serialport::TTYPort::pair().expect("a pty pair");
+        let port = slave
+            .name()
+            .expect("the pts side has a path to open by name");
+        keyer
+            .set_timeout(Duration::from_millis(250))
+            .expect("a bounded read, so a silent wire ends the test instead of hanging it");
+        // A real WK answers Host Open with its firmware-revision byte, and the host BLOCKS
+        // on that byte before it will send anything else (`WinKeyer::open`). Answer it on a
+        // cloned handle, driven by the handshake rather than by a timer: a primed byte can
+        // be flushed by the termios setup inside the open, and a sleeping answer races that
+        // setup on a loaded machine. Reading EXACTLY the two Host Open bytes also leaves
+        // everything sent after them on the wire for the assertions below.
+        let mut responder = keyer
+            .try_clone()
+            .expect("clone the pty master to answer on");
+        responder
+            .set_timeout(Duration::from_millis(3000))
+            .expect("bound the answering read too, so a mute open ends this thread");
+        std::thread::spawn(move || {
+            let mut host_open = [0u8; 2];
+            if responder.read_exact(&mut host_open).is_ok() {
+                let _ = responder.write_all(&[0x17]); // WK2, revision 23
+                let _ = responder.flush();
+            }
+        });
+        // Read until the wire goes quiet: one read can hand back a partial chunk, and
+        // "the speed never arrived" must never actually be a short read.
+        fn drain(k: &mut serialport::TTYPort) -> Vec<u8> {
+            let mut out = Vec::new();
+            let mut buf = [0u8; 64];
+            while let Ok(n) = k.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
+            out
+        }
+
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.winkeyer_port = port.clone();
+            e.apply_settings(s);
+            e.set_cw_keyer("winkeyer", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW"); // a CW segment we hold privileges on
+            e.set_cw_wpm(20);
+            e.send_cw("TEST"); // the F-key that opens the port, as in the field
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        // POSITIVE CONTROL, and the scene is worthless without it: if the pty keyer did
+        // not open, or these bytes are not the ones the app writes, the assertion below
+        // would "fail" no matter what the fix does.
+        assert_eq!(
+            engine.lock().unwrap().cw_keyer_error(),
+            None,
+            "the stand-in keyer must open cleanly, or this scene proves nothing"
+        );
+        let opening = drain(&mut keyer);
+        assert!(
+            opening
+                .windows(2)
+                .any(|w| w == crate::winkeyer::wpm_cmd(20)),
+            "the first word must carry the speed the operator is on: {opening:02x?}"
+        );
+        assert!(
+            opening.windows(4).any(|w| w == b"TEST"),
+            "…and the word itself, so this is really reading the keyer's wire: {opening:02x?}"
+        );
+
+        // THE REPORT. The operator moves the slider between overs — the queue is empty and
+        // stays empty, so nothing is dequeued to carry the speed along with it.
+        engine.lock().unwrap().set_cw_wpm(35);
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                200.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        let after = drain(&mut keyer);
+        assert!(
+            after.windows(2).any(|w| w == crate::winkeyer::wpm_cmd(35)),
+            "issue #135: a speed change with nothing queued must reach the keyer — the \
+             wire carried {after:02x?}"
         );
     }
 
@@ -12132,7 +12648,7 @@ mod tests {
         drop(probe);
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.dead = true;
-        let daemon = crate::civ::broker::CivDaemon::start_with_io(Box::new(radio), 0xA2, port)
+        let daemon = crate::civ::broker::CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1)
             .expect("daemon starts (TCP binds) even though the radio I/O is dead");
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let mut cat = CatDaemon::Native(daemon);
@@ -16264,6 +16780,8 @@ mod tests {
 
     fn cat_transport(rigctld_port: u16, broker_self_port: Option<u16>) -> Transport {
         Transport {
+            radio_label: LogLabel(radio_label("", 1035)),
+            icom_data_mode: 1,
             ptt_method: "cat".to_string(),
             rig_model: 1035,
             serial_port: "/dev/ttyUSB0".to_string(),
@@ -17722,7 +18240,7 @@ mod tests {
         let (mut radio, _push) = FakeRadio::new(0xA2);
         radio.mute = mute;
         let regs = radio.regs();
-        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port).unwrap();
+        let d = CivDaemon::start_with_io(Box::new(radio), 0xA2, port, 1).unwrap();
         (d, Rig::rigctld(&format!("127.0.0.1:{port}")), regs)
     }
 

@@ -702,9 +702,18 @@ impl StationCore {
         // A FAILED read records nothing: stamping the fingerprint here would
         // make the gate treat the failure as "reconciled", and the next full
         // rewrite would drop whatever the other instance wrote. Retry instead.
-        let Ok(disk) = std::fs::read_to_string(&path) else {
+        //
+        // BYTES, then a lossy decode — never `read_to_string`. A `log.adi` carrying CP1253 /
+        // CP1252 text (Greek/German/French Windows write it into NAME/QTH/COMMENT routinely,
+        // and it is what the 2026-08 Greek-Windows report turned up) is not valid UTF-8, so
+        // `read_to_string` returns Err on a file that is perfectly present and readable. This
+        // arm would then fire on EVERY call, and the other instance's QSOs would never be
+        // reconciled in — permanently, for those operators. Same reasoning as
+        // `Logbook::load`; the ADIF structure is ASCII, so the records still parse.
+        let Ok(bytes) = std::fs::read(&path) else {
             return false;
         };
+        let disk = String::from_utf8_lossy(&bytes);
         if !disk.is_empty() {
             // Field-level MERGE, not an additive import: fold in another instance's appends AND
             // upgrade shared records' confirmation/upload/QSL-sent state from disk, so this

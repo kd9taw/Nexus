@@ -15,6 +15,13 @@
 //
 // The rule both halves share: report what was measured, say nothing when
 // nothing was. A silent bird and an unknown bird are different facts.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
+// chip words come from the catalog and are resolved when the chip is BUILT (a
+// fresh object per call, so nothing freezes a locale). The one thing that never
+// moves is the upstream `status` value in the default branch — that is the
+// source's own word, printed as it arrived.
+import { t } from '../i18n'
 import type { SatExcluded } from '../types'
 
 /** Which chip species to draw. `dead` = there is nothing to work here
@@ -49,39 +56,36 @@ export function satBirdHealth(
     case 'alive':
       return amateur === false
         ? {
-            label: 'silent',
-            title:
-              'In orbit, but the catalog lists no live amateur transmitter — the pass geometry is real, there is nothing to work on it.',
+            label: t('sat.health.silent.label'),
+            title: t('sat.health.silent.title'),
             tone: 'dead',
           }
         : null
     case 'dead':
       return {
-        label: 'dead',
-        title:
-          'SatNOGS reports this bird silent. Its passes are still computed from real elements; working it is not expected.',
+        label: t('sat.health.dead.label'),
+        title: t('sat.health.dead.title'),
         tone: 'dead',
       }
     case 're-entered':
       return {
-        label: 're-entered',
-        title:
-          'SatNOGS reports this bird has re-entered — it is gone. Any pass shown is modelled from the last elements on file.',
+        label: t('sat.health.reentered.label'),
+        title: t('sat.health.reentered.title'),
         tone: 'dead',
       }
     case 'future':
       return {
-        label: 'pre-launch',
-        title:
-          'SatNOGS has this bird on record but not yet deployed — nothing to work until it launches.',
+        label: t('sat.health.preLaunch.label'),
+        title: t('sat.health.preLaunch.title'),
         tone: 'stale',
       }
     default:
       // An unseen upstream value degrades to a label rather than being
-      // dropped — the same reason SatStatus keeps the source string.
+      // dropped — the same reason SatStatus keeps the source string. The label
+      // IS that value, so it is printed verbatim; only the sentence moves.
       return {
         label: status,
-        title: `SatNOGS reports this bird's status as "${status}".`,
+        title: t('sat.health.unknown.title', { status }),
         tone: 'stale',
       }
   }
@@ -96,23 +100,20 @@ export function satExcludedHealth(reason: SatExcluded['reason']): SatHealth {
   switch (reason) {
     case 'noElements':
       return {
-        label: 'no elements',
-        title:
-          'No source carries orbital elements for this bird right now, so its passes cannot be computed. It stays starred; rows return when elements do.',
+        label: t('sat.health.noElements.label'),
+        title: t('sat.health.noElements.title'),
         tone: 'stale',
       }
     case 'staleElements':
       return {
-        label: 'stale elements',
-        title:
-          'The newest elements on file are past the 30-day ceiling where SGP4 accuracy is gone. Refresh elements, or wait for the next automatic refresh.',
+        label: t('sat.health.staleElements.label'),
+        title: t('sat.health.staleElements.title'),
         tone: 'stale',
       }
     case 'noPosition':
       return {
-        label: 'no position',
-        title:
-          'Current elements, but the propagator refused a position for them — a decaying orbit does this. Nothing is being hidden; there is genuinely no place to draw.',
+        label: t('sat.health.noPosition.label'),
+        title: t('sat.health.noPosition.title'),
         tone: 'stale',
       }
   }

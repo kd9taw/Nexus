@@ -12,10 +12,17 @@
  *
  * Reads only the station record it is handed — no fetching, no state of its own beyond what is
  * expanded — so the same card serves a click on the map and a click in the list.
+ *
+ * ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The callsign, the
+ * symbol table and code, the digipeater path, the position and grid, the distance, bearing,
+ * speed, altitude and every weather reading are data and stay in the code — as do the two
+ * service names below, which those services spell for themselves. `units.ts` still chooses
+ * metric or imperial for the readings; that is a DISPLAY conversion, not a translation.
  */
 import { useEffect, useRef, useState } from 'react'
 import { openQrzPage, type AprsStation } from '../api'
 import { withErrorToast } from '../toast'
+import { t } from '../i18n'
 import { fmtTempF, fmtSpeedMph, fmtRainIn, fmtDistanceKm, useUnits, type Units } from '../units'
 import { latLonToGrid, bearingDeg, haversineKm, type LatLon } from '../grid'
 import {
@@ -24,6 +31,15 @@ import {
   resolveSymbol,
   symbolCategory,
 } from '../aprsSymbols'
+
+/** The two services' own names — a name is a token, not prose. */
+const QRZ = 'QRZ'
+const APRS_FI = 'aprs.fi'
+
+/** Unit symbols printed beside a reading — knots on the wire, feet from the /A= extension.
+ * A unit is a token, and the guard is told so by these constants. */
+const KNOTS_UNIT = 'kn'
+const FEET_UNIT = 'ft'
 
 /** Compass point for a bearing, for the distance line. */
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
@@ -49,10 +65,12 @@ export function altitudeFt(comment: string): number | null {
 /** "4 min", "20 s", "2 h" — the compact age used throughout the card. */
 export function ageText(fromUnix: number, nowSec: number): string {
   const s = Math.max(0, nowSec - fromUnix)
-  if (s < 60) return `${s} s`
-  if (s < 3600) return `${Math.round(s / 60)} min`
-  if (s < 86400) return `${Math.round(s / 3600)} h`
-  return `${Math.round(s / 86400)} d`
+  // The unit rides inside the message with its number, so a translation can never separate
+  // the two.
+  if (s < 60) return t('aprs.card.age.secs', { secs: s })
+  if (s < 3600) return t('aprs.card.age.mins', { mins: Math.round(s / 60) })
+  if (s < 86400) return t('aprs.card.age.hours', { hours: Math.round(s / 3600) })
+  return t('aprs.card.age.days', { days: Math.round(s / 86400) })
 }
 
 /**
@@ -68,18 +86,21 @@ export function sourceLines(
   const out: { label: string; detail: string }[] = []
   if (st.lastRfUnix != null) {
     out.push({
-      label: 'Heard on RF',
-      detail: `your receiver decoded this station ${ageText(st.lastRfUnix, nowSec)} ago`,
+      label: t('aprs.card.source.rf.label'),
+      detail: t('aprs.card.source.rf.detail', { age: ageText(st.lastRfUnix, nowSec) }),
     })
   }
   if (st.lastInetUnix != null) {
     out.push({
-      label: 'Via APRS-IS',
-      detail: `the internet feed reported it ${ageText(st.lastInetUnix, nowSec)} ago`,
+      label: t('aprs.card.source.inet.label'),
+      detail: t('aprs.card.source.inet.detail', { age: ageText(st.lastInetUnix, nowSec) }),
     })
   }
   if (out.length === 0) {
-    out.push({ label: 'Source unknown', detail: 'no reception recorded for this station' })
+    out.push({
+      label: t('aprs.card.source.unknown.label'),
+      detail: t('aprs.card.source.unknown.detail'),
+    })
   }
   return out
 }
@@ -87,9 +108,9 @@ export function sourceLines(
 /** Was the packet digipeated, or did it arrive direct? The `*` marks a token that repeated it. */
 export function pathSummary(path: string[]): string {
   const repeated = path.filter((p) => p.trim().endsWith('*'))
-  if (path.length === 0) return 'direct — no digipeaters in the path'
-  if (repeated.length === 0) return `direct — requested ${path.join(', ')}, none used`
-  return `digipeated via ${repeated.join(', ')}`
+  if (path.length === 0) return t('aprs.card.path.direct')
+  if (repeated.length === 0) return t('aprs.card.path.requested', { path: path.join(', ') })
+  return t('aprs.card.path.digipeated', { path: repeated.join(', ') })
 }
 
 /** Weather readings as label/value rows, omitting anything the station has no sensor for.
@@ -100,19 +121,29 @@ export function wxRows(
   units: Units = 'imperial',
 ): [string, string][] {
   const rows: [string, string][] = []
-  if (wx.tempF != null) rows.push(['Temperature', fmtTempF(wx.tempF, units)])
+  if (wx.tempF != null) rows.push([t('aprs.card.wx.temperature'), fmtTempF(wx.tempF, units)])
   if (wx.windDirDeg != null || wx.windMph != null) {
-    const dir = wx.windDirDeg != null ? `${compass(wx.windDirDeg)} ${wx.windDirDeg}°` : 'unknown'
+    const dir =
+      wx.windDirDeg != null
+        ? `${compass(wx.windDirDeg)} ${wx.windDirDeg}°`
+        : t('aprs.card.wx.wind.dirUnknown')
     const spd = wx.windMph != null ? fmtSpeedMph(wx.windMph, units) : ''
-    rows.push(['Wind', `${dir}${spd ? ` at ${spd}` : ''}`])
+    rows.push([
+      t('aprs.card.wx.wind'),
+      spd ? t('aprs.card.wx.wind.atSpeed', { dir, speed: spd }) : dir,
+    ])
   }
-  if (wx.gustMph != null) rows.push(['Gust', fmtSpeedMph(wx.gustMph, units)])
-  if (wx.humidityPct != null) rows.push(['Humidity', `${wx.humidityPct}%`])
+  if (wx.gustMph != null) rows.push([t('aprs.card.wx.gust'), fmtSpeedMph(wx.gustMph, units)])
+  if (wx.humidityPct != null) rows.push([t('aprs.card.wx.humidity'), `${wx.humidityPct}%`])
   if (wx.pressureTenthHpa != null) {
-    rows.push(['Pressure', `${(wx.pressureTenthHpa / 10).toFixed(1)} hPa`])
+    rows.push([t('aprs.card.wx.pressure'), `${(wx.pressureTenthHpa / 10).toFixed(1)} hPa`])
   }
-  if (wx.rain1hIn100 != null) rows.push(['Rain, last hour', fmtRainIn(wx.rain1hIn100 / 100, units)])
-  if (wx.rain24hIn100 != null) rows.push(['Rain, 24 h', fmtRainIn(wx.rain24hIn100 / 100, units)])
+  if (wx.rain1hIn100 != null) {
+    rows.push([t('aprs.card.wx.rain1h'), fmtRainIn(wx.rain1hIn100 / 100, units)])
+  }
+  if (wx.rain24hIn100 != null) {
+    rows.push([t('aprs.card.wx.rain24h'), fmtRainIn(wx.rain24hIn100 / 100, units)])
+  }
   return rows
 }
 
@@ -174,7 +205,7 @@ export function AprsStationCard({
     <div
       className="aprs-card"
       role="dialog"
-      aria-label={`Station ${st.call}`}
+      aria-label={t('aprs.card.aria', { call: st.call })}
       tabIndex={-1}
       ref={cardRef}
     >
@@ -188,10 +219,15 @@ export function AprsStationCard({
         <span className="aprs-card-id">
           <strong>{st.call}</strong>
           <span className="aprs-card-symname" style={{ color: colour }}>
-            {sym.known ? sym.label : 'Unrecognised symbol'}
+            {sym.known ? sym.label : t('aprs.card.symbol.unknown')}
           </span>
         </span>
-        <button type="button" className="aprs-card-close" onClick={onClose} aria-label="Close">
+        <button
+          type="button"
+          className="aprs-card-close"
+          onClick={onClose}
+          aria-label={t('aprs.card.close')}
+        >
           ✕
         </button>
       </div>
@@ -208,14 +244,14 @@ export function AprsStationCard({
         {there ? (
           <>
             <div className="aprs-card-row">
-              <dt>Position</dt>
+              <dt>{t('aprs.card.position.label')}</dt>
               <dd>
                 {there.lat.toFixed(4)}, {there.lon.toFixed(4)} · {latLonToGrid(there.lat, there.lon)}
               </dd>
             </div>
             {me && (
               <div className="aprs-card-row">
-                <dt>From you</dt>
+                <dt>{t('aprs.card.fromYou.label')}</dt>
                 <dd>
                   {fmtDistanceKm(haversineKm(me, there), units)} {compass(bearingDeg(me, there))} ·{' '}
                   {Math.round(bearingDeg(me, there))}°
@@ -225,48 +261,49 @@ export function AprsStationCard({
           </>
         ) : (
           <div className="aprs-card-row">
-            <dt>Position</dt>
-            <dd className="aprs-card-none">
-              none reported — heard, but nothing to plot
-            </dd>
+            <dt>{t('aprs.card.position.label')}</dt>
+            <dd className="aprs-card-none">{t('aprs.card.position.none')}</dd>
           </div>
         )}
 
         {(st.speedKnots != null || alt != null) && (
           <div className="aprs-card-row">
-            <dt>Motion</dt>
+            <dt>{t('aprs.card.motion.label')}</dt>
             <dd>
               {st.speedKnots != null
-                ? `${st.speedKnots} kn${st.courseDeg != null ? ` ${compass(st.courseDeg)} ${st.courseDeg}°` : ''}`
-                : 'stationary'}
-              {alt != null && ` · ${alt.toLocaleString()} ft`}
+                ? `${st.speedKnots} ${KNOTS_UNIT}${st.courseDeg != null ? ` ${compass(st.courseDeg)} ${st.courseDeg}°` : ''}`
+                : t('aprs.card.motion.stationary')}
+              {alt != null && ` · ${alt.toLocaleString()} ${FEET_UNIT}`}
             </dd>
           </div>
         )}
 
         {st.text && (
           <div className="aprs-card-row">
-            <dt>Comment</dt>
+            <dt>{t('aprs.card.comment.label')}</dt>
             <dd className="aprs-card-comment">{st.text}</dd>
           </div>
         )}
 
         <div className="aprs-card-row">
-          <dt>Path</dt>
+          <dt>{t('aprs.card.path.label')}</dt>
           <dd>{pathSummary(st.path)}</dd>
         </div>
 
         <div className="aprs-card-row">
-          <dt>Packets</dt>
+          <dt>{t('aprs.card.packets.label')}</dt>
           <dd>
-            {st.packets} since {ageText(st.firstHeardUnix, nowSec)} ago
+            {t('aprs.card.packets.value', {
+              count: st.packets,
+              age: ageText(st.firstHeardUnix, nowSec),
+            })}
           </dd>
         </div>
       </dl>
 
       {st.wx && wxRows(st.wx, units).length > 0 && (
         <div className="aprs-card-wx">
-          <span className="aprs-card-section">Weather</span>
+          <span className="aprs-card-section">{t('aprs.card.wx.title')}</span>
           <dl className="aprs-card-rows">
             {wxRows(st.wx, units).map(([k, v]) => (
               <div key={k} className="aprs-card-row">
@@ -286,15 +323,23 @@ export function AprsStationCard({
             aria-expanded={rawOpen}
             onClick={() => setRawOpen(!rawOpen)}
           >
-            {rawOpen ? '▾' : '▸'} Raw packet
+            {rawOpen ? t('aprs.card.raw.hide') : t('aprs.card.raw.show')}
           </button>
           {rawOpen && <pre className="aprs-card-rawtext">{st.raw}</pre>}
         </div>
       )}
 
       <div className="aprs-card-actions">
-        <button type="button" onClick={() => void withErrorToast(() => openQrzPage(st.call), `Could not open ${st.call} on QRZ`)}>
-          QRZ
+        <button
+          type="button"
+          onClick={() =>
+            void withErrorToast(
+              () => openQrzPage(st.call),
+              t('aprs.card.qrz.error', { call: st.call }),
+            )
+          }
+        >
+          {QRZ}
         </button>
         {/* aprs.fi is a third-party site (Heikki Hannikainen, OH7LZB); this only opens its page for
             the callsign in the operator's browser — nothing is sent to it from here. */}
@@ -302,9 +347,9 @@ export function AprsStationCard({
           href={`https://aprs.fi/#!call=${encodeURIComponent(st.call)}`}
           target="_blank"
           rel="noreferrer noopener"
-          title="Open this station on aprs.fi (third-party site) in your browser"
+          title={t('aprs.card.aprsfi.title')}
         >
-          aprs.fi
+          {APRS_FI}
         </a>
       </div>
     </div>

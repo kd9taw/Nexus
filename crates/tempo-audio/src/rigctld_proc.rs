@@ -1346,7 +1346,16 @@ pub fn spawn_rotctld(
     tcp_port: u16,
 ) -> std::io::Result<RigctldProc> {
     let args = rotctld_args(model, port, baud, tcp_port);
-    let mut cmd = Command::new(resolve_rotctld());
+    let rot_bin = resolve_rotctld();
+    tempo_core::applog::info(
+        "proc",
+        &format!(
+            "rotctld for model {model} on {} @ {baud} baud (tcp {tcp_port}) — {}",
+            if port.is_empty() { "(NO PORT)" } else { port },
+            rot_bin.to_string_lossy()
+        ),
+    );
+    let mut cmd = Command::new(rot_bin);
     cmd.args(&args);
     // ⭐ CAPTURE THE ROTATOR DAEMON'S STDERR, which used to be thrown away. rotctld EXITS when
     // it cannot open the port (measured on the bundled 4.7.1: `-r COM99` → "serial_open: serial
@@ -1496,6 +1505,7 @@ fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> S
 /// which is the whole lesson of the baud-entry rounds. `None` on a missing binary, a non-zero
 /// exit, or output we cannot read; every caller turns that into "claim nothing".
 pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
+    tempo_core::applog::info("proc", &format!("run rigctld {}", args.join(" ")));
     let mut cmd = Command::new(resolve_rigctld());
     cmd.args(args);
     cmd.stdin(Stdio::null());
@@ -1772,7 +1782,15 @@ pub fn spawn_rigctld(
         resolve_lines(settable_lines_for(model, ptt_line), want, deliberate)
     };
     let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, lines);
-    let mut cmd = Command::new(resolve_rigctld());
+    let bin = resolve_rigctld();
+    // EVERY CHILD PROCESS SAYS SO. Operator report 2026-08-19: "moving to cw, I saw an ultra
+    // quick flash of what looked like a terminal screen". Every spawn Nexus makes on Windows
+    // already carries CREATE_NO_WINDOW — verified site by site — so reading the code cannot
+    // name the flash, and it does not reproduce on the build machine. A line per spawn turns
+    // the next flash into a timestamp with a binary beside it; a flash with NO line beside it
+    // is just as useful, because it rules the child processes out and points at the webview.
+    tempo_core::applog::info("proc", &format!("spawn rigctld: {}", bin.to_string_lossy()));
+    let mut cmd = Command::new(bin);
     cmd.args(&args);
     // Capture the daemon's own stderr so Hamlib's connection errors (port open failed, read
     // timeout, wrong model) land IN the CI-V diagnostic — for a Hamlib/Icom rig the byte-level

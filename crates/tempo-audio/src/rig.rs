@@ -569,6 +569,22 @@ impl Rig {
                 std::panic::Location::caller()
             ));
         }
+        // The DEBUG tier's keying trace. Guarded on the tier being ON before the format!, since
+        // this runs twice per over — the atomic load is the cheap part, the string is not.
+        if tempo_core::applog::debug_enabled() {
+            tempo_core::applog::debug(
+                "ptt",
+                &format!(
+                    "{} via {}",
+                    if on { "KEY" } else { "unkey" },
+                    match &self.ptt_mode {
+                        PttMode::Vox => "VOX".to_string(),
+                        PttMode::Serial { .. } => "serial line".to_string(),
+                        PttMode::Cat => "CAT".to_string(),
+                    }
+                ),
+            );
+        }
         if on {
             self.keyed = true;
         }

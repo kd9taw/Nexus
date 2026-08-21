@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 import type { FeatureDef } from '../features/registry'
 import type { Achievement } from '../types'
 
@@ -22,14 +24,21 @@ export function RevealNudge({ feature, achievement, onEnable, onDismiss }: Props
         ✨
       </span>
       <span className="reveal-text">
-        <strong>{achievement.title}</strong> — turn on <strong>{feature.label}</strong>?{' '}
+        {/* One sentence, one key: the emphasis sits mid-sentence and the two values are the
+            reason the sentence exists, so neither may be split off into its own string — a
+            language that orders them differently could not be translated. */}
+        <T
+          k="reveal.prompt"
+          tags={{ b: <strong /> }}
+          vals={{ achievement: achievement.title, feature: feature.label }}
+        />{' '}
         <span className="reveal-sub">{feature.oneLine}</span>
       </span>
       <button type="button" className="reveal-enable" onClick={onEnable}>
-        Enable
+        {t('reveal.enable')}
       </button>
       <button type="button" className="reveal-dismiss" onClick={onDismiss}>
-        Not now
+        {t('reveal.notNow')}
       </button>
     </div>
   )

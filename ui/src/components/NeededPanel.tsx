@@ -3,6 +3,13 @@
 // ranked by priority and boldly colored by the shared need palette. Single-click a
 // row to QSY the radio to that band and listen. The same stations light up on the
 // Connect map (shared needByCall), so this is the list half of "list + map".
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT come from it: the
+// callsigns, DXCC entity names, band names, CQ zones, frequencies, headings and evidence lines
+// the rows print (data), the MODE_OPTS labels (mode-class names), and the POTA/SOTA filter
+// chips (the programmes' own names) — all invariant tokens, see `i18n/index.ts`. The need
+// chips' words live in `features/needVisuals.ts`, which is migrated with that registry.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRovingList } from '../useRovingList'
 import type { BandChannel, FeedStatus, NeedAlert, NeedTag } from '../types'
@@ -19,6 +26,8 @@ import {
   NEED_TYPE_VALUES,
 } from '../neededFilters'
 import { pointRotator, readRotator, openQrzPage } from '../api'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 import { pushToast, withErrorToast } from '../toast'
 import { RarityChip } from './RarityChip'
 import { NEED_CHIP } from '../features/needVisuals'
@@ -27,8 +36,10 @@ import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 
 /** Defensive chip lookup — an unknown future tag renders visibly, never throws. */
-function chipFor(t: NeedTag): { label: string; cls: string; title: string } {
-  return NEED_CHIP[t] ?? { label: String(t).toUpperCase(), cls: 'confirm', title: String(t) }
+function chipFor(tag: NeedTag): { label: string; cls: string; title: string } {
+  return (
+    NEED_CHIP[tag] ?? { label: String(tag).toUpperCase(), cls: 'confirm', title: String(tag) }
+  )
 }
 
 /** Manual rotator control: live heading readout + point-at-azimuth. Rendered only
@@ -61,15 +72,15 @@ function RotatorWidget() {
     setBusy(true)
     try {
       await pointRotator(norm)
-      pushToast(`↗ Rotator → ${Math.round(norm)}°`, 'success', 2500)
+      pushToast(t('needed.rotator.pointed', { deg: Math.round(norm) }), 'success', 2500)
     } catch (e) {
-      pushToast(typeof e === 'string' ? e : 'Rotator command failed', 'error', 4000)
+      pushToast(typeof e === 'string' ? e : t('needed.rotator.failed'), 'error', 4000)
     } finally {
       setBusy(false)
     }
   }
   return (
-    <span className="np-rotator" title="Antenna rotator — live heading + manual point (via rotctld)">
+    <span className="np-rotator" title={t('needed.rotator.title')}>
       <span className="np-rotator-az mono">{az != null ? `${Math.round(az)}°` : '—°'}</span>
       <input
         type="number"
@@ -77,8 +88,8 @@ function RotatorWidget() {
         value={input}
         min={0}
         max={360}
-        placeholder="az"
-        aria-label="Rotator azimuth (degrees)"
+        placeholder={t('needed.rotator.azimuth.placeholder')}
+        aria-label={t('needed.rotator.azimuth.label')}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') void point()
@@ -89,7 +100,7 @@ function RotatorWidget() {
         className="np-rotator-go"
         disabled={busy || input.trim() === ''}
         onClick={() => void point()}
-        title="Turn the rotator to this azimuth"
+        title={t('needed.rotator.go.title')}
       >
         ↗
       </button>
@@ -149,24 +160,60 @@ function saveFilters(f: NeededFilters): void {
 // In the rendered bar these are augmented with bands from current alerts.
 const COMMON_BANDS = ['160m', '80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m']
 
-const NEED_TYPE_OPTS: { value: NeedTypeFilter; label: string }[] = [
+/** The need-type chips, in the order they are shown. Each VALUE is a persisted token. */
+const NEED_TYPE_OPTS: NeedTypeFilter[] = [
   // (DXped restores the old "DXped only" toggle as a need-type chip.)
-  { value: 'all', label: 'All' },
+  'all',
   // Watch-list first: Wanted is the TOP tier (120) — the bucket existed
   // without a chip, so the rows it filters could be hidden but never asked for.
-  { value: 'wanted', label: 'Watch list' },
-  { value: 'atno', label: 'ATNO' },
-  { value: 'newBand', label: 'New band' },
-  { value: 'newMode', label: 'New mode' },
-  { value: 'newZone', label: 'New zone' },
-  { value: 'newGrid', label: 'New grid' },
-  { value: 'newState', label: 'New state' },
-  { value: 'confirm', label: 'Needs confirm' },
-  { value: 'dxped', label: 'DXped' },
-  { value: 'pota', label: 'POTA' },
-  { value: 'sota', label: 'SOTA' },
+  'wanted',
+  'atno',
+  'newBand',
+  'newMode',
+  'newZone',
+  'newGrid',
+  'newState',
+  'confirm',
+  'dxped',
+  'pota',
+  'sota',
 ]
 
+/** The programmes' own names — the same four letters in every language. */
+const POTA_PROGRAM = 'POTA'
+const SOTA_PROGRAM = 'SOTA'
+
+/** The chip's word. A switch rather than a table so each key is a literal at its use. */
+function needTypeLabel(value: NeedTypeFilter): string {
+  switch (value) {
+    case 'all':
+      return t('needed.filter.all')
+    case 'wanted':
+      return t('needed.filter.wanted')
+    case 'atno':
+      return t('needed.filter.atno')
+    case 'newBand':
+      return t('needed.filter.newBand')
+    case 'newMode':
+      return t('needed.filter.newMode')
+    case 'newZone':
+      return t('needed.filter.newZone')
+    case 'newGrid':
+      return t('needed.filter.newGrid')
+    case 'newState':
+      return t('needed.filter.newState')
+    case 'confirm':
+      return t('needed.filter.confirm')
+    case 'dxped':
+      return t('needed.filter.dxped')
+    case 'pota':
+      return POTA_PROGRAM
+    case 'sota':
+      return SOTA_PROGRAM
+  }
+}
+
+// Mode classes: the label IS the mode-class name, an invariant token in every language.
 const MODE_OPTS: { value: ModeClass; label: string }[] = [
   { value: 'Digital', label: 'Digital' },
   { value: 'CW', label: 'CW' },
@@ -206,23 +253,36 @@ interface Props {
   onOpenSettings?: (target: string) => void
 }
 
-/** Compact phone-source descriptor for the board header: [css class, short text, tooltip]. */
+/** Compact phone-source descriptor for the board header: [css class, short text, tooltip].
+ * The css class is a token; the other two are prose about the host, which is data. */
 function phoneSourceLabel(src: { status: FeedStatus; host: string | null }): [string, string, string] {
   const host = src.host ?? 'cluster'
   switch (src.status.state) {
     case 'live':
-      return ['good', `Phone source: ${host} · live`, `SSB/phone spots are flowing from ${host}.`]
+      return ['good', t('needed.phone.live.text', { host }), t('needed.phone.live.title', { host })]
     case 'connected':
-      return ['good', `Phone source: ${host} · connected`, `Connected to ${host} — no phone spot yet (an empty Phone board just means nothing you need is on SSB right now).`]
+      return [
+        'good',
+        t('needed.phone.connected.text', { host }),
+        t('needed.phone.connected.title', { host }),
+      ]
     case 'connecting':
     case 'waiting':
-      return ['weak', `Phone source: ${host} · connecting…`, `Reaching the SSB cluster node ${host}.`]
+      return [
+        'weak',
+        t('needed.phone.connecting.text', { host }),
+        t('needed.phone.connecting.title', { host }),
+      ]
     case 'reconnecting':
-      return ['bad', `Phone source: ${host} · down`, `Lost the connection to ${host} — no SSB/phone needs until it reconnects.`]
+      return ['bad', t('needed.phone.down.text', { host }), t('needed.phone.down.title', { host })]
     case 'idle':
-      return ['ok', `Phone source: ${host} · idle`, `Connected to ${host} but quiet — a lull in human SSB spots.`]
+      return ['ok', t('needed.phone.idle.text', { host }), t('needed.phone.idle.title', { host })]
     default:
-      return ['weak', `Phone source: ${host} · ${src.status.state}`, `${host}: ${src.status.state}`]
+      return [
+        'weak',
+        t('needed.phone.unknown.text', { host, state: src.status.state }),
+        t('needed.phone.unknown.title', { host, state: src.status.state }),
+      ]
   }
 }
 
@@ -383,25 +443,27 @@ export function NeededPanel({
   return (
     <main className="layout single needed-panel">
       <div className="np-head">
-        <h2>Needed now</h2>
+        <h2>{t('needed.title')}</h2>
         <span className="np-count">{rows.length}</span>
         {alerts.length !== rows.length && (
-          <span className="np-count np-count-filtered">of {alerts.length}</span>
+          <span className="np-count np-count-filtered">
+            {t('needed.countFiltered', { count: alerts.length })}
+          </span>
         )}
-        <span className="np-hint">single-click a row to QSY the radio to that band and listen</span>
+        <span className="np-hint">{t('needed.hint')}</span>
         {/* Filter toggle button */}
         <button
           type="button"
           className={`np-filter-toggle${filtersOpen || hasActiveFilters ? ' active' : ''}`}
           onClick={() => setFiltersOpen((v) => !v)}
-          title="Filter the board by need type, band, or mode"
+          title={t('needed.filter.toggle.title')}
           aria-expanded={filtersOpen}
         >
           {/* funnel icon as inline SVG */}
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path d="M1 2.5A.5.5 0 0 1 1.5 2h13a.5.5 0 0 1 .354.854L10 8.707V14.5a.5.5 0 0 1-.724.447l-4-2A.5.5 0 0 1 5 12.5V8.707L1.146 2.854A.5.5 0 0 1 1 2.5z"/>
-          </svg>
-          {hasActiveFilters ? ' Filtered' : ' Filter'}
+          </svg>{' '}
+          {hasActiveFilters ? t('needed.filter.toggle.active') : t('needed.filter.toggle.idle')}
         </button>
         {onPoint && <RotatorWidget />}
         {onPopOut && (
@@ -409,15 +471,12 @@ export function NeededPanel({
             type="button"
             className="np-popout"
             onClick={onPopOut}
-            title="Open this board in its own window (for a second monitor)"
+            title={t('needed.popOut.title')}
           >
-            ⧉ Pop out
+            {t('needed.popOut.label')}
           </button>
         )}
-        <label
-          className="np-autopop"
-          title="Open this board in its own window automatically when the app starts"
-        >
+        <label className="np-autopop" title={t('needed.autoPop.title')}>
           <input
             type="checkbox"
             checked={autopop}
@@ -430,7 +489,7 @@ export function NeededPanel({
               }
             }}
           />
-          <span>open at launch</span>
+          <span>{t('needed.autoPop.label')}</span>
         </label>
       </div>
 
@@ -447,51 +506,54 @@ export function NeededPanel({
             const phoneNeeds = alerts.filter((a) => a.mode === 'Phone').length
             return (
               <div className={`np-phone-src ${cls}`} title={title}>
-                {text} · {ssb} SSB spot{ssb === 1 ? '' : 's'} → {phoneNeeds} need{phoneNeeds === 1 ? '' : 's'}
+                {text}
+                {t('needed.phone.spots', { count: ssb })}
+                {t('needed.phone.needs', { count: phoneNeeds })}
               </div>
             )
           })()
         ) : (
-          <div
-            className="np-phone-src weak"
-            title="Phone/SSB needs come only from a human DX-cluster node. This shows when the DX Cluster feed is disabled OR no human host is set — turn on “DX Cluster / RBN spots” and add a host (e.g. ve7cc.net:23) in Settings ▸ Integrations & Feeds. RBN carries only CW + digital, never SSB."
-          >
+          <div className="np-phone-src weak" title={t('needed.phone.off.title')}>
             {/* The toggle and the host field live in Integrations & Feeds; this line used to
                 send the operator to "Settings ▸ Connections", which is the connectivity LOG
-                (and was written as a tab, which it has never been). Now it takes them there. */}
-            Phone source off —{' '}
+                (and was written as a tab, which it has never been). Now it takes them there.
+                One sentence with the link as a MARKER — the button comes from here, never
+                from the catalog. */}
             {onOpenSettings ? (
-              <button
-                type="button"
-                className="settings-linkbtn"
-                onClick={() => onOpenSettings('integrations-feeds')}
-              >
-                turn on “DX Cluster / RBN spots”
-              </button>
+              <T
+                k="needed.phone.off.link"
+                tags={{
+                  a: (
+                    <button
+                      type="button"
+                      className="settings-linkbtn"
+                      onClick={() => onOpenSettings('integrations-feeds')}
+                    />
+                  ),
+                }}
+              />
             ) : (
-              'turn on “DX Cluster / RBN spots” in Settings ▸ Integrations & Feeds'
+              t('needed.phone.off.plain')
             )}
           </div>
         ))}
 
       {/* Filter bar — visible when toggled open or when any filter is active */}
       {(filtersOpen || hasActiveFilters) && (
-        <div className="np-filters" role="group" aria-label="Filter needed alerts">
+        <div className="np-filters" role="group" aria-label={t('needed.filters.aria')}>
           {/* Need type chips */}
           <div className="np-filter-group">
-            {NEED_TYPE_OPTS.map((opt) => {
+            {NEED_TYPE_OPTS.map((value) => {
               const active =
-                opt.value === 'all'
-                  ? filters.needTypes.length === 0
-                  : filters.needTypes.includes(opt.value)
+                value === 'all' ? filters.needTypes.length === 0 : filters.needTypes.includes(value)
               return (
                 <button
-                  key={opt.value}
+                  key={value}
                   type="button"
                   className={`np-chip${active ? ' active' : ''}`}
-                  onClick={() => toggleNeedType(opt.value)}
+                  onClick={() => toggleNeedType(value)}
                 >
-                  {opt.label}
+                  {needTypeLabel(value)}
                 </button>
               )
             })}
@@ -517,7 +579,7 @@ export function NeededPanel({
 
           {/* Mode chips — multi-select: tick the modes you operate (a non-CW op hides CW).
               Independent toggles, not exclusive; an "off" mode is dimmed. */}
-          <div className="np-filter-group" role="group" aria-label="Modes shown">
+          <div className="np-filter-group" role="group" aria-label={t('needed.filters.modes.aria')}>
             {MODE_OPTS.map((opt) => (
               <button
                 key={opt.value}
@@ -525,7 +587,11 @@ export function NeededPanel({
                 className={`np-chip${filters.modes[opt.value] ? ' active' : ''}`}
                 aria-pressed={filters.modes[opt.value]}
                 onClick={() => toggleMode(opt.value)}
-                title={`${filters.modes[opt.value] ? 'Hide' : 'Show'} ${opt.label} needs`}
+                title={
+                  filters.modes[opt.value]
+                    ? t('needed.filter.mode.hide.title', { mode: opt.label })
+                    : t('needed.filter.mode.show.title', { mode: opt.label })
+                }
               >
                 {opt.label}
               </button>
@@ -537,9 +603,9 @@ export function NeededPanel({
               type="button"
               className="np-chip np-chip-clear"
               onClick={clearFilters}
-              title="Clear all filters"
+              title={t('needed.filter.clear.title')}
             >
-              Clear
+              {t('needed.filter.clear.label')}
             </button>
           )}
         </div>
@@ -548,23 +614,21 @@ export function NeededPanel({
       <div
         className="np-grid"
         role="grid"
-        aria-label="Needed now — arrow to move, Enter to work or QSY"
+        aria-label={t('needed.grid.aria')}
         onKeyDown={roving.containerProps.onKeyDown}
       >
         <div className="np-row np-header" role="row">
-          {th('priority', 'Need')}
-          {th('call', 'Call')}
-          {th('entity', 'Entity')}
-          {th('band', 'Band')}
-          {th('mode', 'Mode')}
-          {th('zone', 'Zone')}
-          <span className="np-th-static">Why</span>
+          {th('priority', t('needed.column.need'))}
+          {th('call', t('needed.column.call'))}
+          {th('entity', t('needed.column.entity'))}
+          {th('band', t('needed.column.band'))}
+          {th('mode', t('needed.column.mode'))}
+          {th('zone', t('needed.column.zone'))}
+          <span className="np-th-static">{t('needed.column.why')}</span>
         </div>
         {rows.length === 0 ? (
           <div className="np-empty">
-            {hasActiveFilters
-              ? 'No alerts match the current filters — clear to see all.'
-              : 'Nothing needed on the air right now — needed stations (new ones, band-slots, modes, grids, POTA/SOTA) appear here as they\'re heard or spotted.'}
+            {hasActiveFilters ? t('needed.empty.filtered') : t('needed.empty')}
           </div>
         ) : (
           rows.map((a, i) => {
@@ -580,14 +644,24 @@ export function NeededPanel({
             const evidenceLine = a.evidence
               ? (age ? `${a.evidence} · ${age}` : a.evidence)
               : null
+            // A whole sentence per state, never a stem plus a tail: the dial frequency lands
+            // in a different place in different languages. `toFixed(3)` is the invariant
+            // frequency formatter — the string it makes is passed through untouched.
             const tooltipBody = workable
-              ? `Work ${a.call} — ${a.mode} on ${a.band}${
-                  a.freqMhz ? ` @ ${a.freqMhz.toFixed(3)} MHz` : ''
-                }`
+              ? a.freqMhz
+                ? t('needed.row.work.titleFreq', {
+                    call: a.call,
+                    mode: a.mode,
+                    band: a.band,
+                    freq: a.freqMhz.toFixed(3),
+                  })
+                : t('needed.row.work.title', { call: a.call, mode: a.mode, band: a.band })
               : isVoiceCw
-                ? `${a.call} (${a.mode}) — open the main window to work this (pop-out only QSYs the band)`
+                ? t('needed.row.mainWindow.title', { call: a.call, mode: a.mode })
                 : canQsy
-                  ? `QSY to ${a.freqMhz ? `${a.freqMhz.toFixed(3)} MHz` : a.band} and listen for ${a.call}`
+                  ? a.freqMhz
+                    ? t('needed.row.qsy.titleFreq', { freq: a.freqMhz.toFixed(3), call: a.call })
+                    : t('needed.row.qsy.titleBand', { band: a.band, call: a.call })
                   : a.headline
             const fullTooltip = evidenceLine
               ? `${tooltipBody}\n${evidenceLine}`
@@ -599,7 +673,24 @@ export function NeededPanel({
                 key={`${a.call}|${a.band}|${a.mode}`}
                 role="row"
                 aria-selected={a.call === selectedCall}
-                aria-label={`${a.call}, ${a.entity}${az ? `, about ${az.deg} degrees` : ''}, ${a.band} ${a.mode}, needed ${a.tags.join(' ')}`}
+                aria-label={
+                  az
+                    ? t('needed.row.ariaAzimuth', {
+                        call: a.call,
+                        entity: a.entity,
+                        deg: az.deg,
+                        band: a.band,
+                        mode: a.mode,
+                        tags: a.tags.join(' '),
+                      })
+                    : t('needed.row.aria', {
+                        call: a.call,
+                        entity: a.entity,
+                        band: a.band,
+                        mode: a.mode,
+                        tags: a.tags.join(' '),
+                      })
+                }
                 tabIndex={roving.rowProps(i).tabIndex}
                 ref={roving.rowProps(i).ref as (el: HTMLDivElement | null) => void}
                 onFocus={roving.rowProps(i).onFocus}
@@ -615,9 +706,13 @@ export function NeededPanel({
                 }}
               >
                 <span className="np-need">
-                  {a.tags.map((t) => (
-                    <span key={t} className={`need-chip need-${chipFor(t).cls}`} title={chipFor(t).title}>
-                      {chipFor(t).label}
+                  {a.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className={`need-chip need-${chipFor(tag).cls}`}
+                      title={chipFor(tag).title}
+                    >
+                      {chipFor(tag).label}
                     </span>
                   ))}
                 </span>
@@ -625,8 +720,8 @@ export function NeededPanel({
                   <button
                     type="button"
                     className="qrz-link-call"
-                    onClick={(e) => { e.stopPropagation(); void withErrorToast(() => openQrzPage(a.call), `Could not open ${a.call} on QRZ`) }}
-                    title={`${a.call} on QRZ.com (opens your browser)`}
+                    onClick={(e) => { e.stopPropagation(); void withErrorToast(() => openQrzPage(a.call), t('callbook.qrzPage.failed', { call: a.call })) }}
+                    title={t('callbook.qrzPage.title', { call: a.call })}
                   >
                     {a.call}
                   </button>
@@ -635,7 +730,7 @@ export function NeededPanel({
                     <button
                       type="button"
                       className="np-point"
-                      title={`Point the antenna at ${a.call}`}
+                      title={t('needed.row.point.title', { call: a.call })}
                       onClick={(e) => {
                         e.stopPropagation()
                         onPoint(a.call)
@@ -659,7 +754,7 @@ export function NeededPanel({
                 <span className="np-band">{a.band}</span>
                 <span
                   className={`np-mode-col np-mode-${a.mode.toLowerCase()}`}
-                  title={`Needed on ${a.mode}`}
+                  title={t('needed.row.mode.title', { mode: a.mode })}
                 >
                   {a.mode}
                 </span>

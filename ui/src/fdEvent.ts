@@ -12,7 +12,22 @@
  *   = the last Saturday in January.
  */
 
+import { t } from './i18n'
+
 export type FdKind = 'arrlfd' | 'wfd'
+
+/**
+ * ⚠️ INVARIANT — the events' own names, never translated.
+ *
+ * These are what the ARRL and the WFDA call their events: an operator enters "ARRL Field Day",
+ * submits a Cabrillo log to it and reads the same words on the sponsor's site. A translated
+ * event name names nothing, exactly as a translated award name would. Shared by the header,
+ * the export summary and the Settings event picker so the three cannot drift.
+ */
+export const FD_EVENT_NAMES: Record<FdKind, string> = {
+  arrlfd: 'ARRL Field Day',
+  wfd: 'Winter Field Day',
+}
 
 export interface FdEvent {
   kind: FdKind
@@ -103,7 +118,7 @@ export function fdNextEvent(now: Date, kind: FdKind): FdEvent {
         startUnix,
         // 24-hour event: ends Sunday at 1800 UTC
         endUnix: startUnix + 24 * 3600,
-        label: 'ARRL Field Day',
+        label: FD_EVENT_NAMES.arrlfd,
         year: y,
       }
     } else {
@@ -113,7 +128,7 @@ export function fdNextEvent(now: Date, kind: FdKind): FdEvent {
         startUnix,
         // 24-hour event: ends Sunday at 1600 UTC
         endUnix: startUnix + 24 * 3600,
-        label: 'Winter Field Day',
+        label: FD_EVENT_NAMES.wfd,
         year: y,
       }
     }
@@ -142,10 +157,10 @@ export function fdCountdownLabel(now: Date, event: FdEvent): string | null {
   const days = Math.floor(secsUntil / 86400)
   const hours = Math.floor((secsUntil % 86400) / 3600)
 
-  if (days >= 2) return `starts in ${days} days`
-  if (days === 1) return `starts tomorrow`
-  if (hours >= 1) return `starts in ${hours}h`
-  return 'starting soon'
+  if (days >= 2) return t('fieldDay.countdown.days', { count: days })
+  if (days === 1) return t('fieldDay.countdown.tomorrow')
+  if (hours >= 1) return t('fieldDay.countdown.hours', { count: hours })
+  return t('fieldDay.countdown.soon')
 }
 
 /**
@@ -157,6 +172,8 @@ export function fdHeaderSubtitle(now: Date, event: FdEvent): string {
   const start = new Date(event.startUnix * 1000)
   const end = new Date(event.endUnix * 1000)
 
+  // Month abbreviations are date formatting, not catalog prose — they stay here with the rest
+  // of the date handling (the same line the DXpedition calendar draws).
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const sm = months[start.getUTCMonth()]
   const sd = start.getUTCDate()
@@ -167,8 +184,12 @@ export function fdHeaderSubtitle(now: Date, event: FdEvent): string {
     ? `${sm} ${sd}–${ed}`
     : `${sm} ${sd}–${em} ${ed}`
 
-  const countdown = fdCountdownLabel(now, event)
-  const suffix = countdown ? ` · ${countdown}` : ' · active'
-
-  return `${event.label}: ${dateRange}${suffix}`
+  // ONE sentence with three slots rather than a label plus a glued-on suffix: the countdown
+  // was a fragment in the middle of it, and a language that leads with the status has nowhere
+  // to put a fragment.
+  return t('fieldDay.subtitle', {
+    event: event.label,
+    dates: dateRange,
+    status: fdCountdownLabel(now, event) ?? t('fieldDay.status.active'),
+  })
 }

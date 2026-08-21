@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Switching from CW to the FT screen left the rig on the CW frequency.** FT8 came up on
+  wherever CW had been — the mode changed to DIGU correctly, the dial did not. It only
+  happened if you passed through Tempo on the way, which is why it looked intermittent:
+  Tempo is a digital mode and asserts the rig mode, but it keeps its own band picker's
+  frequency, and it was being counted as though it had already moved the dial for you. The
+  FT screen then thought there was nothing to do.
+
+- **The filter width the radio actually took is now checked, not assumed.** Some rigs accept
+  a mode change with a filter width, answer "done", and quietly keep their own filter — so
+  FT8 ended up on a 6 kHz SSB filter with nothing saying so. Nexus now reads the width back
+  after a mode change and re-asserts it once if the radio kept its own, and if the second
+  attempt is ignored too it tells you the actual width instead of implying success. Rigs
+  that round to the nearest filter they own are left alone: asking for 3 kHz and getting
+  2.7 is the radio doing its job, not a fault.
+
 - **Nexus no longer adopts a rigctld that is driving a different radio.** When a rigctld was already
   listening on a radio's CAT port, Nexus connected through it — which is the right thing, and is how
   it shares a rig with WSJT-X — but it never checked WHICH radio that daemon was attached to. On a
@@ -20,6 +35,209 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which radio that daemon is actually driving, and tells you how to fix it — stop the daemon, or
   give this radio its own rigctld port. Sharing a daemon that IS this radio's is unchanged, and so
   is coexisting with an external NET-rigctl station.
+
+### Added
+
+- **The dial is marked on a native RF panadapter.** If your radio streams its own spectrum
+  (Icom CI-V, FlexRadio), the tuned frequency now has a line and a DIAL label on it. It is
+  drawn only where the dial genuinely is: on a rig in FIXED scope mode, where the span is a
+  band segment and the VFO sits wherever you tuned it, the line lands off-centre — and if
+  the dial is outside the displayed window it is not drawn at all rather than pinned to the
+  edge, which would say something untrue.
+
+- **PSK and Tempo chapters in the manual.** PSK31/QPSK31 shipped four releases ago with no
+  chapter and Tempo never had one. Both now cover the tour, the workflows and the honest
+  limits — and a test now fails the build if a shipped section has no chapter, so the next
+  mode cannot reach a release undocumented.
+
+## [1.7.5] — 2026-08-20
+
+### Added
+
+- **Deutsch.** Nexus can now run in German — the first language it has ever offered. Pick it in
+  Settings ▸ Appearance ▸ Language, or just run it on a German Windows and it starts in German
+  by itself. Anything not yet translated appears in English rather than blank, so nothing can
+  break by being missing.
+
+  **Nothing technical is translated, and that is deliberate:** frequencies, signal reports,
+  callsigns, grid squares, band and mode names, Q-codes, RST, POTA/SOTA references and ADIF
+  field names read the same in every language. In particular a frequency never picks up a German
+  decimal comma — 14.074 is 14.074, and a test fails the build if a comma ever appears in a
+  translated number. Every screen is covered — about 4,600 phrases — except the transmit
+  controls themselves (Stop TX, Tune, the TX arm switch, ATU and the TX/RX indicator), which
+  stay in English until they can be changed as their own reviewed step. Those are the controls
+  that stop a transmission, and they are not something to get wrong in a language nobody here
+  reads.
+
+- **Find a station in a crowded list.** The Stations panel has a search box beside its
+  filter chips, and it takes wildcards: type `PA*` for every PA prefix, `ON4*` for every
+  ON4, or both at once — several terms mean "any of these". `?` fills in exactly one
+  character, and a plain word like `4FD` still matches anywhere in a call. It narrows
+  whatever the chips are already showing rather than replacing them, the count beside the
+  title tells you how many of the total you are looking at, and **Esc** clears it. The same
+  wildcards now work in the Spots panel's search.
+
+- **Tune, ATU and RF power in the PSK and RTTY headers.** Both cockpits were missing the
+  controls every other one puts in the same place, so an operator who tuned up in Phone and
+  switched to PSK found the button gone. In PSK this is the mode's one real hazard: set the
+  drive against a Tune carrier, below where ALC starts to move, and your signal stays clean —
+  overdriven PSK31 splatters, and it looks fine on your own waterfall while it does it. RTTY
+  keys the carrier for the whole over, so it wants running well under the rig's SSB rating.
+  The ATU button appears only if your rig actually reports a tuner.
+
+- **Periodic logbook backups, in a `backups/` folder beside your log.** Nexus now keeps dated
+  snapshots of `log.adi`: at most one a day, only when the log has actually changed, **plus**
+  an immediate copy any time a save is about to make the log *smaller* — the one shape of
+  failure that has ever cost QSOs here. The folder is bounded three ways so it cannot creep:
+  the ten most recent snapshots, a 64 MB ceiling over the whole folder, and the one-a-day
+  rule. Oldest go first. The original `log.adi.bak` anchor is separate and is never rotated or
+  deleted. Snapshots are taken when the log is **saved**, never when it is opened, so however
+  large your log gets, launching Nexus does no extra disk work for this.
+
+- **A diagnostic log you can send us.** Nexus now keeps a plain-text record of what it did:
+  `nexus-diag.log`, in the same folder as `ALL.TXT` and the crash report
+  (`%LOCALAPPDATA%\Nexus` on Windows) — the Reveal button beside the ALL.TXT path in Settings
+  opens it. Timestamped, human-readable lines covering the startup steps, the CAT and audio
+  device open and any failure, updater checks, and crashes. Until now Nexus wrote nothing at
+  all about its own health, so "it won't start" reports arrived with nothing to look at. It
+  bounds itself: two files, about 8 MB in total worst case, and the older one is simply
+  renamed aside rather than rewritten, so a big log never slows a launch down. Passwords, API
+  keys and tokens are masked before anything is written — the file is meant to be attachable
+  to a public bug report. Settings ▸ Logging & Connectors ▸ Integrations & Feeds names it and
+  has its own Reveal button, and the settings search finds it under "diagnostic log", "log
+  file" or "troubleshooting".
+
+### Fixed
+
+- **OmniRig failing with "requires elevation" now says what to do about it.** If Windows
+  refuses to start OmniRig for Nexus (`0x800702E4`), it is because OmniRig is set to run as
+  administrator and Nexus is not — nothing in Nexus is missing or misconfigured. The message
+  now says that, and tells you the fix: start OmniRig yourself and leave it running (Nexus
+  attaches to the copy already up), or clear "Run this program as an administrator" on
+  OmniRig.exe, or run both as administrator.
+
+- **The Connection help now says how a LAN-connected Icom gets in.** Icom's network protocol
+  is its own, so the route is wfview (or RS-BA1) against the radio and Nexus pointed at
+  wfview's rigctld server with Rig Model **NET rigctl** — which has always worked, and was
+  written down nowhere.
+
+- **Virtual COM ports show up in the rig picker on Windows.** If you run SmartSDR CAT, com0com,
+  or any virtual serial pair, its ports were missing from the port list while your real USB
+  adapters showed up fine — so the only way to use one was to type the name in by hand. The
+  Windows port scan asks for two device categories that virtual pairs do not belong to, and its
+  backup lookup was discarded whenever you had more real adapters than virtual ports. Both lists
+  are now merged, so every port either one knows about is offered, once. (#117)
+
+- **Saving in Settings no longer ends the contact you are working.** Pressing **Save** while a
+  QSO was in flight threw the contact away — the sequencer that owns it was reset back to Chat,
+  so the QSO never completed, nothing auto-logged, and the **Log** button then did nothing at
+  all: no logbook entry, no QRZ upload. A save now leaves a contact in progress exactly where
+  it was, and it still logs. The mode is only reset where that was ever the point — turning the
+  Field Day master switch on or off, which still enters and leaves Field Day as before. A save
+  is still a heavyweight act in every other respect: queued transmissions are dropped and the
+  transmit cycle is re-derived, so it is still not the way to change one setting mid-QSO.
+  Reported by kr4fqg ([#100](https://github.com/kd9taw/Nexus/issues/100)).
+
+- **CW speed slider now reaches a WinKeyer.** Moving the speed slider between overs did
+  nothing on the WinKeyer back-end: the speed was only ever sent to the keyer at the
+  moment a word left the queue, so a hardware keyer sat on its own front-panel pot or
+  power-on speed and the number in the cockpit was a number Nexus alone believed. The
+  speed now goes to the keyer as soon as you move the slider — idle, or part-way through
+  a message — and is re-sent whenever the keyer's port opens, so one plugged in late or
+  power-cycled comes back at your speed. Switching from the CAT keyer to a WinKeyer at
+  the same speed pushes it too; the two back-ends no longer share one "already told it"
+  record. The CAT keyer is unchanged and still sends `KEYSPD` at the start of a send.
+  Thanks to **swinn** for the report (#135).
+
+- **The waterfall's frequency scale follows the RX marker when you are zoomed in.** On any
+  zoom level other than Std or Full, the numbers along the bottom of the waterfall were set
+  once, when the screen opened, and never moved again — so a display that came up before the
+  radio said where you were listening kept labelling a 600 Hz zoom 200–800 Hz however far you
+  tuned, and the picture no longer agreed with the scale under it. A zoom is meant to be that
+  many Hz wide, centred on the green RX marker: it now re-centres whenever you move the
+  marker — a waterfall click, a double-clicked decode, netting RTTY or PSK — and the labels
+  travel with it. Std and Full are fixed views of the whole passband and are unchanged.
+  (#115, reported by akhepcat)
+
+- **The alert band scope now governs the need ICONS, not just the sound.** Set
+  Settings ▸ Spots & Alerts ▸ **New grid** to *VHF+ (6 m and up)* and 20 m went quiet — but
+  every FT8 row on the Call Roster and in Band Activity still wore a GRID chip, in both
+  Roster and Classic layouts. The scope only ever reached the beep and the toast; the icons
+  were painted from a different path that never saw the setting. It does now, and the same
+  goes for **New DXCC** and **Rare grid 💎** — one choice per need type, covering both what
+  you hear and what you see, on the docked window and on a torn-off Operate panel alike.
+  Nothing else about the row changes: a station that is a new band-slot *and* a new grid
+  keeps its BAND chip on HF and loses only GRID, a call on your watch list still flags
+  everywhere you hear it, and a need is judged by the band it was heard on — so a 6 m grid
+  stays marked on a roster you are reading while parked on 20 m. Where the band cannot be
+  worked out at all, the icon is shown: a missing chip is worse than an extra one.
+
+- **A logbook with accented or non-English text in it could load as EMPTY — and the next save
+  wrote that empty log to disk.** If your `log.adi` held a single byte that wasn't plain
+  English — a Greek name, a German umlaut, a French accent in NAME, QTH or COMMENT, which is
+  exactly what a Greek, German or French Windows writes — Nexus failed to read the file,
+  treated it as an empty logbook, skipped its own safety copy *because* it looked empty, and
+  the next save rewrote `log.adi` from zero records. Every QSO, gone, silently, with no
+  backup. Nexus now reads the log as raw bytes and never fails a load over an encoding: the
+  contacts all load, and the one-time safety copy is taken from the original bytes. Found
+  while investigating a Greek-Windows launch report. If this bit you, `log.adi.bak` beside
+  your log holds the original.
+
+- **The decode panes remember ten times as much, so you can actually scroll back.** Both panes
+  kept 300 rows — but they keep the WHOLE band and filter at display time, so on a busy evening
+  the Rx Frequency pane spent all 300 on signals it never shows and could only look back about
+  four minutes. The two or three rows on your own frequency, which is the entire point of that
+  pane, were thrown away with the rest. The store is now 3,000 rows: roughly ten minutes of a
+  packed band in Band Activity, and hours of your own frequency in the Rx pane. What gets drawn
+  at once is unchanged, so nothing renders slower — measured at 0.12 ms per redraw with the
+  store completely full.
+
+- **The Hold Tx button's tooltip described the wrong thing.** It said Hold keeps your TX offset
+  fixed "when you click the waterfall to set RX" — but a plain waterfall click has not moved TX
+  since 1.0, Hold or no Hold. What Hold actually governs is the double-click: work a station with
+  Hold off and your TX moves onto their frequency, which is WSJT-X's behaviour and is what you
+  want most of the time; turn Hold on and your TX stays exactly where you set it with a
+  right-click. The tooltip now says that, in the Operate strip and in the top bar. No behaviour
+  changed.
+
+- **The QSL chip now says which confirmations count.** The chip on a worked-but-unconfirmed
+  station read "a QSL from this station would close it", which left you to guess whether eQSL or
+  QRZ would clear it. They will not: Nexus counts a LoTW match or a paper card — the same grade
+  the awards screens count, so the chip and your award progress can never disagree — and the
+  tooltip now says exactly that. (Asked on air: the chip is easy to read as QSO at pill size,
+  and relabelling it LoTW would have been wrong for the card half.)
+
+- **Nexus could arrive in FT8 with the transmitter already armed.** Entering PSK31, CW, Phone or
+  RTTY arms transmit — correct for those modes, which are a live key or mic, and arming by
+  itself sends nothing. But nothing disarmed on the way back, so returning to FT8 left the
+  transmitter armed from the previous mode, and in FT8 an armed transmitter is what turns
+  selecting a station into an immediate call. Reported on air: PSK31 → FT8 → pick 20 m → "it
+  started transmitting on its own." Leaving a manual mode now lowers the arm switch, so FT8 is
+  armed only by Monitor, a double-click, or Call CQ — the three gates it always claimed to have.
+  A queued CW or RTTY over waiting for you to come back is still held, exactly as before.
+
+- **A Windows update no longer throws away what Nexus was holding in memory.** Installing an
+  update on Windows hands off to the installer and ends the app then and there — so the
+  conversation history, the Field Day log, a propagation opening still in progress and your
+  window positions were never written, and the diagnostic log lost the lines covering the
+  update itself. All of it is now flushed to disk immediately before the handoff. The
+  transmitter is untouched by this: installing is already refused while you are transmitting,
+  tuning, in a QSO, running or merely TX-armed. macOS and Linux were never affected — there
+  the app restarts through its normal shutdown.
+
+- **Nexus could fail to start with no window, no error and nothing to send.** If the Microsoft
+  Edge WebView2 runtime — the component Nexus uses to draw its window — was missing, damaged or
+  had a corrupt cache, the app exited without a trace: no window, no message, no crash file.
+  That is the Greek-Windows report, and it is why reinstalling did not help. Nexus now says so
+  in a dialog that names WebView2 and gives the repair steps, writes the reason to the new
+  diagnostic log, and repairs the commonest case itself: the WebView2 cache folder is set aside
+  and startup is retried once before giving up.
+
+- **Frequencies and coordinates typed with a comma decimal separator were read wrong.** On a
+  Greek, German, French or any other comma-decimal Windows, typing `14,074` into the cluster
+  spot box, a memory channel or the APRS beacon latitude produced a wrong number — the APRS
+  case put bad position data on the air. Every place Nexus takes a typed number now accepts
+  both `14,074` and `14.074`, and rejects what is not a number instead of storing it.
 
 ## [1.7.0] — 2026-08-18
 

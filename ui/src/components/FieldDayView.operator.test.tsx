@@ -3,7 +3,9 @@
 // The seat swap is a MID-QSO act — that is what the operator field is for, handing the key
 // over while the station keeps running. Writing it through the whole-settings save ran the
 // engine's heavyweight apply (#54): mode back to Chat, TX queue cleared, TX cycle re-derived
-// from whatever settings snapshot this component was holding. The write has to stay narrow.
+// from whatever settings snapshot this component was holding. #100 has since narrowed the
+// mode reset to Field Day transitions only, but the other two remain — the write has to stay
+// narrow.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { FieldDayView } from './FieldDayView'

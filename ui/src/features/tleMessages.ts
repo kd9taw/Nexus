@@ -6,9 +6,17 @@
 // error text is passed through as tooltip material and is NEVER the
 // headline (an operator mid-pass needs "what now", not an HTTP code).
 
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Each
+// headline is ONE catalog entry with its numbers interpolated — never a
+// sentence assembled from fragments. The band sentence appended by `bands()`
+// below is a separate WHOLE sentence (elementBands.ts owns its wording), which
+// is a different thing from gluing clauses together mid-sentence.
+
 import type { TleStatus } from '../api'
 import type { ToastKind } from '../toast'
 import { elementBandSentence } from './elementBands'
+import { t } from '../i18n'
 
 export interface TleRefreshMessage {
   /** The headline — operator-voiced, never HTTP. */
@@ -49,11 +57,11 @@ export function tleRefreshMessage(s: TleStatus): TleRefreshMessage {
     // the operator the pipe healed itself.
     return s.source === 'celestrak'
       ? {
-          text: bands(`Mirror unreachable — fetched from Celestrak: ${s.count} birds`, s),
+          text: bands(t('sat.refresh.mirrorDown', { count: s.count }), s),
           kind: 'success',
         }
       : {
-          text: bands(`Orbital elements updated — ${s.count} birds (${s.source})`, s),
+          text: bands(t('sat.refresh.ok', { count: s.count, source: s.source }), s),
           kind: 'success',
         }
   }
@@ -62,10 +70,7 @@ export function tleRefreshMessage(s: TleStatus): TleRefreshMessage {
     // The established blocked message (the satLane chip says the same) —
     // the HTTP code that triggered it lives in the tooltip.
     return {
-      text: bands(
-        'Celestrak refused direct element fetches — direct attempts are stopped for 24 h; the mirror keeps retrying.',
-        s,
-      ),
+      text: bands(t('sat.refresh.blocked'), s),
       kind: 'error',
       raw,
     }
@@ -80,7 +85,7 @@ export function tleRefreshMessage(s: TleStatus): TleRefreshMessage {
       // was a max over the usable set, so a fine catalog got the error line.)
       return {
         text: bands(
-          `The element mirror isn't reachable (it goes live with the next release); your elements are ${s.elementAgeDays!.toFixed(1)} d old — current.`,
+          t('sat.refresh.mirrorUnreachableCurrent', { age: s.elementAgeDays!.toFixed(1) }),
           s,
         ),
         kind: 'info',
@@ -90,27 +95,21 @@ export function tleRefreshMessage(s: TleStatus): TleRefreshMessage {
     return s.usableCount > 0 && s.elementAgeDays != null
       ? {
           text: bands(
-            `The element mirror is unreachable and your elements are ${Math.round(s.elementAgeDays)} d old — import a fresh element file or retry later.`,
+            t('sat.refresh.mirrorUnreachableStale', { days: Math.round(s.elementAgeDays) }),
             s,
           ),
           kind: 'error',
           raw,
         }
       : {
-          text: bands(
-            'The element mirror is unreachable and no usable elements are cached — import an element file to get the satellite surfaces running.',
-            s,
-          ),
+          text: bands(t('sat.refresh.mirrorUnreachableEmpty'), s),
           kind: 'error',
           raw,
         }
   }
   // 'failed' — and, defensively, any kind this build doesn't know.
   return {
-    text: bands(
-      'Element update failed — no source delivered a usable set; retry shortly or import an element file.',
-      s,
-    ),
+    text: bands(t('sat.refresh.failed'), s),
     kind: 'error',
     raw,
   }
