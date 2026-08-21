@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Call Roster shows the full CQ, not just "CQ".** A station calling `CQ DX` looked
+  exactly like one calling a general CQ, so you could click to work him and only find out
+  from the Band Activity pane that he wants DX and will ignore you. The roster now shows
+  `CQ DX`, `CQ POTA`, `CQ NA` and the rest, in a colour that stands out while you are
+  scanning, with a note on hover about what it means for answering.
+
+- **A failed OmniRig connection stops telling you to check a serial port.** If Test CAT
+  could not read a frequency over OmniRig, the message advised checking the serial port,
+  baud rate and CI-V — none of which Nexus uses on an OmniRig connection, as that same
+  Settings page says. It now points at what actually matters: which OmniRig slot, and
+  whether OmniRig's own window shows that radio online.
+
 - **Special-event callsigns are recognised as CQs again, so double-click works on them.**
   A call like `II7MGBR` or `EN3SUKR` does not fit the standard callsign shape, so FT8 sends
   it in a form that carries no grid — and Nexus was only treating the *compound* kind (the
