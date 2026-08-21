@@ -200,10 +200,33 @@ pub const EX_EXT_DISPLAY: ExItem = ExItem {
     p2: 4,
     p3: 1,
 };
-/// `0: FILTER  1: CARRIER POINT`. Which point the sweep is centred on, and therefore whether this
-/// module's centred placement is right: on FILTER the centre sits at the filter's centre, offset
-/// from the carrier by roughly half the passband — about 1.5 kHz on SSB, invisible across a 200 kHz
-/// span and gross across a 5 kHz one.
+/// `0: FILTER  1: CARRIER POINT`. Which point the sweep is centred on — and therefore whether this
+/// module's centred placement is right.
+///
+/// ⚠️ NOTHING ACTS ON THIS YET, and the reading below is NOT MEASURED. Taken from the menu's own
+/// name, it says the FILTER setting centres the sweep on the filter rather than the carrier, which
+/// would offset it by the filter's centre — `low_cut + width/2` from the carrier, so upward in USB,
+/// downward in LSB, not at all in AM/FM where the filter is symmetric, and by the sidetone pitch in
+/// CW. On a 2.4 kHz SSB filter with a 300 Hz low cut that is about 1.5 kHz: 0.75 % of a 200 kHz
+/// span and invisible, 30 % of a 5 kHz one and gross.
+///
+/// It is stated as a reading rather than a fact because its siblings in this file are held to a
+/// higher standard — `EX_EXT_DISPLAY` names the station it was measured on, `YAESU_WF_SETTLE_MS`
+/// names the bench, the rig and the date — and nobody has yet watched a signal move when this
+/// setting changed.
+///
+/// TWO things block acting on it, and the second is why no code reads it. The premise is unproven.
+/// And even granting it, the offset is not computable from what this application knows: it has the
+/// filter WIDTH and the sideband, and no model of the low cut at all — Hamlib carries one passband
+/// number, and `--dump-caps` on 4.7.0~rc leaves Extra levels empty for both 1049 and 1051. So
+/// "about 1.5 kHz" is a convention, not a reading, and a test written against it would pin the
+/// guess and pass.
+///
+/// What settles it is fifteen minutes at the radio: a steady carrier mid-sweep on the narrowest
+/// span, toggled between `EX0402021;` and `EX0402020;`, with the shift read off the rig's own
+/// scale in USB, LSB and CW and at two SSB filter widths. That says whether the premise holds, what
+/// the offset is, and whether it tracks filter width — which would mean the low cut can be inferred
+/// rather than tabulated.
 pub const EX_SCOPE_CTR: ExItem = ExItem {
     p1: 4,
     p2: 2,
