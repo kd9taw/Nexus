@@ -133,7 +133,14 @@ function checkGenerators() {
 // 2. The doc gates that live in vitest
 // ---------------------------------------------------------------------------
 
-const DOC_TESTS = ['src/docs-match-code.test.ts', 'src/docs-settings-pointers.test.ts']
+// docs-coverage is the one that asks whether a shipped capability is documented AT ALL —
+// the other two only check that documentation which exists is correct, and were green
+// through four releases in which PSK had no chapter.
+const DOC_TESTS = [
+  'src/docs-match-code.test.ts',
+  'src/docs-settings-pointers.test.ts',
+  'src/docs-coverage.test.ts',
+]
 
 function checkDocGates() {
   if (flag('--no-tests')) return SKIP('doc gates (vitest)', '--no-tests was passed')

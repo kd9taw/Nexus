@@ -42,6 +42,8 @@ multi-monitor shack.
 - **[CW](cw.md)** — a casual/ragchew keyboard CW station with F-key macros.
 - **[RTTY](rtty.md)** — a 45.45 baud Baudot teleprinter: per-character decode
   confidence, a click-to-net waterfall, macros, and AFSK or true FSK keying.
+- **[PSK](psk.md)** — PSK31 and QPSK31 keyboard ragchewing at 31.25 baud: click a
+  warble on the waterfall and it prints, type into a live transmission, four macros.
 - **[SSTV](sstv.md)** — receive-first slow-scan; pictures decode themselves into
   a local gallery, and transmit is always an explicit **Send**.
 - **[APRS](aprs.md)** — a 2 m AFSK-1200 packet monitor with its own map, plus
