@@ -18479,6 +18479,7 @@ mod tests {
             lotw_user: false,
             freq_hz: None,
             calling: None,
+            cq_dir: None,
             state: None,
         };
         let spots = |stations: &[tempo_app::dto::Station], clock: &SlotClock, period: f64| {
@@ -18569,6 +18570,7 @@ mod tests {
             lotw_user: false,
             freq_hz: None,
             calling: None,
+            cq_dir: None,
             state: None,
         };
         // The renumbering, measured rather than asserted from memory: the FT4 index of
