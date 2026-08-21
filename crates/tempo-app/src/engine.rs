@@ -3935,7 +3935,31 @@ impl Engine {
     /// generation bumps and the TX/broadcast queues are cleared, so a save is
     /// never the way to persist one field (see [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
     /// and the other narrow setters — #54).
+    ///
+    /// A FORM SAVE keeps the live roster, routing, sat consent, blocked calls and the active
+    /// radio from the engine — see `apply_settings_inner`. A RESTORE does the opposite and takes
+    /// the bundle's; that is `apply_restored_settings`, and the two must never be the same call.
     pub fn apply_settings(&mut self, s: Settings) {
+        self.apply_settings_inner(s, true);
+    }
+
+    /// Apply a RESTORED BACKUP. The bundle is the authority for everything in it, including the
+    /// roster.
+    ///
+    /// A restore has the OPPOSITE contract from a form save. `apply_settings` deliberately keeps
+    /// the engine's roster so a stale Settings form cannot revert a rig you just added — exactly
+    /// right there, and exactly wrong here: on the case this feature exists for, a backup carried
+    /// to a new machine, keeping the live roster silently discards radios 2..n, the routing rules
+    /// and the blocked-call list from the bundle. And if the bundle's active-radio id happens to
+    /// exist locally, its CAT settings get stamped onto a different physical rig.
+    ///
+    /// So the restore keeps nothing. `ensure_radio_profiles` / `ensure_routing_targets` still run,
+    /// so a bundle with an empty or inconsistent roster lands in a state the loop can drive.
+    pub fn apply_restored_settings(&mut self, s: Settings) {
+        self.apply_settings_inner(s, false);
+    }
+
+    fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         // A settings save can rewrite anything the TX gate reads (dial, mode,
         // offsets, license class) — an over planned before it must not key
         // (commit_tx checks the generation).
@@ -4017,14 +4041,28 @@ impl Engine {
         // Implicit-ACK toggle lives app-side (the observe loop consumes it).
         self.app.set_implicit_ack(self.settings.chat_implicit_ack);
         self.settings.source = live_source;
-        self.settings.radios = live_source_radios;
-        self.settings.radio_pegged = live_pegged;
-        self.settings.routing_rules = live_rules;
-        self.settings.default_radio = live_default_radio;
-        self.settings.sat_vfo_map = live_sat_vfo_map;
-        self.settings.sat_uplink_radios = live_sat_uplink_radios;
+        if keep_live_roster {
+            self.settings.radios = live_source_radios;
+        }
+        if keep_live_roster {
+            self.settings.radio_pegged = live_pegged;
+        }
+        if keep_live_roster {
+            self.settings.routing_rules = live_rules;
+        }
+        if keep_live_roster {
+            self.settings.default_radio = live_default_radio;
+        }
+        if keep_live_roster {
+            self.settings.sat_vfo_map = live_sat_vfo_map;
+        }
+        if keep_live_roster {
+            self.settings.sat_uplink_radios = live_sat_uplink_radios;
+        }
         self.settings.operating_mode = live_op_mode;
-        self.settings.blocked_calls = live_blocked;
+        if keep_live_roster {
+            self.settings.blocked_calls = live_blocked;
+        }
         self.settings.ensure_radio_profiles();
         // Fold the form's flat rig/audio edits into the profile the FORM was editing — the flat fields
         // describe the radio SHOWN in the form, which may differ from the live active radio if a
@@ -4049,7 +4087,13 @@ impl Engine {
         // wrong hardware on the next `Transport::from_settings` rebuild). Common case (form edited the
         // live radio) keeps the form's tune; a diverged switch pins the mirror + tune back to the live
         // rig — the form's tune already went to form_active's profile above.
-        self.settings.active_radio = live_active;
+        // A RESTORE keeps the bundle's active radio instead: pinning the live one here would point
+        // the mirror at a rig the bundle may not even contain, and on a bundle carried to another
+        // machine the ids need not describe the same hardware at all. `ensure_radio_profiles`
+        // below still guarantees the id resolves to a real profile.
+        if keep_live_roster {
+            self.settings.active_radio = live_active;
+        }
         self.settings.ensure_radio_profiles();
         // Two live rigctld daemons need distinct ports — de-conflict on EVERY save, not just at load,
         // else an in-session config (e.g. a flat-form port edit, or loading a pre-P2 profile) can
@@ -16759,6 +16803,132 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// A RESTORE takes the bundle's roster; a form save keeps the engine's. Getting these the same
+    /// way round loses radios.
+    ///
+    /// `apply_settings` deliberately preserves the live roster so a stale Settings form cannot
+    /// revert a rig you just added. Routing a restore through it discards the bundle's roster
+    /// instead — and on the case the feature exists for, a backup carried to another machine, that
+    /// is radios 2..n, the routing rules and the blocked-call list gone, written durably, under a
+    /// dialog that says "This cannot be undone".
+    #[test]
+    fn a_restored_bundle_brings_its_own_roster_and_a_form_save_does_not() {
+        // A station with ONE radio, live.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        // A fresh Engine has an empty roster, which no running app has: the first add also seeds
+        // the base profile. Take the count rather than assuming it.
+        let live_only = eng.settings().radios.len();
+        assert!(live_only >= 1, "fixture: a live roster exists");
+
+        // A bundle from another machine carrying THREE, and blocked calls of its own.
+        let mut bundle = eng.settings().clone();
+        let second = bundle.add_radio_profile();
+        let third = bundle.add_radio_profile();
+        bundle.active_radio = third;
+        bundle.blocked_calls = vec!["N0CALL".to_string()];
+
+        // A FORM save of the same document keeps the live roster — the stale-form guard.
+        let mut form_engine = Engine::new("W9XYZ", "EN37", 0);
+        form_engine.add_radio();
+        form_engine.apply_settings(bundle.clone());
+        assert_eq!(
+            form_engine.settings().radios.len(),
+            live_only,
+            "a form save must NOT import a roster — that is the stale-form guard working"
+        );
+
+        // The RESTORE takes the bundle's.
+        eng.apply_restored_settings(bundle);
+        assert_eq!(
+            eng.settings().radios.len(),
+            live_only + 2,
+            "a restore must bring the bundle's whole roster: {:?}",
+            eng.settings()
+                .radios
+                .iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            eng.settings().radios.iter().any(|p| p.id == second)
+                && eng.settings().radios.iter().any(|p| p.id == third),
+            "including the radios that exist only in the bundle"
+        );
+        assert_eq!(
+            eng.settings().active_radio,
+            third,
+            "and the bundle's active radio, not the live one"
+        );
+        assert_eq!(
+            eng.settings().blocked_calls,
+            vec!["N0CALL".to_string()],
+            "and its blocked-call list"
+        );
+    }
+    /// AND IT HAS TO SURVIVE A RELAUNCH — the persistence half, which the test above does not
+    /// touch and which was the headline of the bug.
+    ///
+    /// `apply_restored_settings` fixes what the running engine holds. But the operator's report was
+    /// that a restore "did nothing": the bundle was applied in memory and NEVER WRITTEN, so the
+    /// next launch read the old file back and every restored radio was gone again. Proving the
+    /// apply without proving the write leaves exactly that bug uncovered — an in-memory success
+    /// that evaporates, under a dialog that promised it could not be undone.
+    ///
+    /// So this goes through a real file: apply, save, load, and assert the roster came back.
+    #[test]
+    fn a_restored_roster_survives_a_relaunch() {
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        let live_only = eng.settings().radios.len();
+
+        // A bundle from another machine: the live roster plus two radios this station has never
+        // seen, and a different active radio.
+        let mut bundle = eng.settings().clone();
+        let second = 41;
+        let third = 42;
+        for id in [second, third] {
+            let mut p = bundle.radios[0].clone();
+            p.id = id;
+            p.name = format!("imported-{id}");
+            bundle.radios.push(p);
+        }
+        bundle.active_radio = third;
+
+        eng.apply_restored_settings(bundle);
+
+        // THE WRITE. A temp path per run so a parallel test never reads another's file.
+        let path = std::env::temp_dir().join(format!(
+            "nexus-restore-persist-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        eng.settings()
+            .save(&path)
+            .expect("a restore must reach the disk");
+
+        // THE RELAUNCH: a fresh read of that file is what the next start sees.
+        let reloaded = crate::settings::Settings::load(&path);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            reloaded.radios.len(),
+            live_only + 2,
+            "the bundle's whole roster must come back after a relaunch: {:?}",
+            reloaded.radios.iter().map(|p| p.id).collect::<Vec<_>>()
+        );
+        for id in [second, third] {
+            assert!(
+                reloaded.radios.iter().any(|p| p.id == id),
+                "radio {id} existed only in the bundle and must have been written"
+            );
+        }
+        assert_eq!(
+            reloaded.active_radio, third,
+            "and the bundle's active radio, not the pre-restore one"
+        );
+    }
 
     /// A CONTEXT CHANGE IS ONE EVENT AND MUST LOG AS ONE LINE.
     ///
