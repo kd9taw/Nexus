@@ -36,12 +36,43 @@ export type Units = 'metric' | 'imperial'
 /** localStorage key the setting is mirrored to (App writes it on load/save). */
 export const UNITS_KEY = 'nexus.units'
 
+/**
+ * A BCP-47 tag `Intl.Locale` will actually accept, from whatever the OS handed the webview.
+ *
+ * ⚠️ `Intl.Locale` THROWS on a tag it cannot parse, and the shapes a Linux desktop produces are
+ * exactly the ones it rejects: `C`, `C.UTF-8` and the POSIX underscore form `en_US` all raise
+ * `RangeError`. Only an EMPTY string reached the `|| 'en-US'` fallback, so a non-empty invalid
+ * tag went straight into the constructor — and since this runs while the units hook renders, the
+ * throw took the whole Operate view down with it ("OPERATE HIT AN ERROR — invalid language tag").
+ * Found 2026-08-21 running the app under `LANG=C.UTF-8`.
+ *
+ * Normalising rather than only catching, because the difference is a WRONG ANSWER, not a crash:
+ * `en_US` carries a real region, and swallowing it would quietly hand a US operator metric units.
+ */
+function usableLocaleTag(raw: string | undefined): string {
+  const tag = (raw ?? '').trim()
+  // `C`/`POSIX` describe the absence of a locale, not a place — there is no region to find.
+  if (!tag || /^(C|POSIX)(\.|@|$)/i.test(tag)) return 'en-US'
+  // `en_US.UTF-8@euro` → `en-US`: underscores are the POSIX separator, and the charset and
+  // modifier suffixes are not part of a language tag at all.
+  return tag.split(/[.@]/)[0].replace(/_/g, '-')
+}
+
+/** Exported for the test only — the normaliser is the whole of the fix and deserves pinning. */
+export const __test_usableLocaleTag = usableLocaleTag
+
 /** Countries whose OS locale implies imperial display; everyone else is metric. */
 function localeIsImperial(): boolean {
-  const region =
-    typeof navigator !== 'undefined'
-      ? new Intl.Locale(navigator.language || 'en-US').maximize().region
-      : 'US'
+  if (typeof navigator === 'undefined') return true // SSR/tests: the historical default
+  let region: string | undefined
+  try {
+    region = new Intl.Locale(usableLocaleTag(navigator.language)).maximize().region
+  } catch {
+    // Still unparseable after normalising: an unknown locale is far more likely to be one of
+    // the ~190 metric countries than one of the three that are not. Never throw from here —
+    // deciding between miles and kilometres must not be able to take a screen down.
+    return false
+  }
   return region === 'US' || region === 'LR' || region === 'MM'
 }
 
