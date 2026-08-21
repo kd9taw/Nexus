@@ -5,6 +5,7 @@ import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeC
 import {
   confirmSatUplink,
   exportSettingsBundle,
+  resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
   setBlockedCalls as apiSetBlockedCalls,
@@ -818,6 +819,40 @@ export function SettingsPanel({
       await importSettingsBundle(await f.text())
       pushToast(t('settings.backup.restore.done'), 'success')
     }, t('settings.backup.restore.failed'))
+  }
+
+  // Reset everything to factory defaults. Destructive, immediate, and the one control in this
+  // block an operator can reach by accident, so it confirms through the same danger dialog the
+  // restore uses — and the wording points AT the backup beside it, because the machinery that
+  // makes this reversible is one button away and there is no excuse not to name it.
+  //
+  // Reloads the form from the backend rather than trusting the returned snapshot: `reset_settings`
+  // runs `ensure_radio_profiles` and friends, so what LANDED is not the bare `Settings::default()`
+  // this asked for, and a form seeded from anything else would show a roster the engine is not
+  // driving.
+  const handleResetConfig = async () => {
+    if (
+      !(await confirmDialog({
+        title: t('settings.backup.reset.confirm.title'),
+        body: t('settings.backup.reset.confirm.body'),
+        confirmLabel: t('settings.backup.reset.confirm.action'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
+    const snap = await withErrorToast(
+      () => resetSettings(),
+      t('settings.backup.reset.failed'),
+    )
+    if (snap) {
+      const fresh = await getSettings()
+      setForm(fresh)
+      setEditingRadioId(fresh.activeRadio)
+      dirtyRef.current = false
+      onSaved?.()
+      pushToast(t('settings.backup.reset.done'), 'success')
+    }
   }
   const [form, setForm] = useState<Settings | null>(null)
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
@@ -4990,6 +5025,25 @@ export function SettingsPanel({
               </div>
               <span className="settings-hint">
                 <T k="settings.transmit.backup.hint" tags={{ b: <strong /> }} />
+              </span>
+            </div>
+
+            {/* Start over. Deliberately the LAST thing in this block: an operator who arrives
+                here wanting a clean slate reads the backup affordance on the way past. */}
+            <div className="settings-field">
+              <span className="settings-label">{t('settings.transmit.reset.label')}</span>
+              <div className="rig-share-row">
+                <button
+                  type="button"
+                  className="settings-linkbtn danger"
+                  onClick={handleResetConfig}
+                  title={t('settings.transmit.reset.title')}
+                >
+                  {t('settings.transmit.reset.action')}
+                </button>
+              </div>
+              <span className="settings-hint">
+                <T k="settings.transmit.reset.hint" tags={{ b: <strong /> }} />
               </span>
             </div>
 

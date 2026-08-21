@@ -3693,6 +3693,15 @@ export const EN = {
   'settings.backup.restore.confirm.action': 'Restore',
   'settings.backup.restore.done': 'Settings restored — check your radio and Test CAT',
   'settings.backup.restore.failed': 'Restore failed',
+  // Reset's dialog says what SURVIVES as well as what goes: "reset" reads as total, and the two
+  // things operators fear for — the log and their stored passwords — are exactly the two this
+  // does not touch. Saying so in the dialog is what makes the confirm answerable.
+  'settings.backup.reset.confirm.title': 'Reset all settings to factory defaults?',
+  'settings.backup.reset.confirm.body':
+    'Your radios, audio devices, callsign and preferences will be erased. Your contact log is not affected, and stored passwords stay in your keychain. This cannot be undone — back up first if you have not.',
+  'settings.backup.reset.confirm.action': 'Reset',
+  'settings.backup.reset.done': 'Settings reset to defaults',
+  'settings.backup.reset.failed': 'Could not reset the configuration',
 
   'settings.audio.rxGain.failed': 'Could not apply RX gain',
   'settings.audio.txPower.failed': 'Could not set TX power',
@@ -4543,6 +4552,14 @@ export const EN = {
   'settings.transmit.backup.failed': 'Backup failed',
   'settings.transmit.restore.action': 'Restore…',
   'settings.transmit.restore.title': 'Replace your current setup with a saved backup',
+
+  // Reset sits beside Backup because its confirm points AT the backup: the machinery that makes
+  // this reversible is one control away, so the wording names it rather than just warning.
+  'settings.transmit.reset.label': 'Start over',
+  'settings.transmit.reset.action': 'Reset all settings…',
+  'settings.transmit.reset.title': 'Erase all settings and return to factory defaults',
+  'settings.transmit.reset.hint':
+    'Erases your radios, audio devices, callsign and preferences. Your <b>logbook is not touched</b>, and stored passwords stay in your keychain (clear those individually under Logging & Connectors). Back up first — this cannot be undone.',
 
   'settings.transmit.share.label': 'Share this radio with other programs',
   'settings.transmit.share.copy.action': 'Copy',

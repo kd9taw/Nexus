@@ -7507,6 +7507,39 @@ fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
     Ok(s)
 }
 
+
+/// Reset the configuration to factory defaults, keeping the logbook and stored credentials.
+///
+/// There was no reset at all, so a clean start meant deleting files by hand — and doing THAT
+/// while the app runs does not reset anything: the engine holds the old configuration in memory
+/// and writes it straight back on the next save. So this goes through the ordinary save path, the
+/// same one a backup restore uses, which is what makes every side effect (the radio loop
+/// reconfiguring, the profile mirrors re-syncing) happen exactly as it would for any other
+/// settings change.
+///
+/// SCOPE, stated because "reset" is the word operators fear for their QSOs: this replaces the
+/// settings blob only. The logbook is not reachable from here — `log.adi` lives in
+/// `shared_data_dir()`, outside the settings entirely. Credentials live in the OS keychain and are
+/// NOT cleared; `clear_*_password` are the verbs for those, so forgetting them stays a separate,
+/// deliberate act rather than a surprise buried in a reset.
+#[tauri::command(async)]
+fn reset_settings(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+) -> Result<AppSnapshot, String> {
+    // A default Settings has an empty roster, which is not a state `load` can ever produce and
+    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
+    let mut fresh = Settings::default();
+    fresh.ensure_radio_profiles();
+    fresh.ensure_distinct_radio_ports();
+    fresh.ensure_routing_targets();
+    // Reuse the ordinary save path in full rather than reimplementing its side effects.
+    set_settings(state, spots, live_paths, region_paths, health, cache, fresh)
+}
 /// Apply + persist new settings. Returns the refreshed snapshot.
 ///
 /// Also lazily starts the live network feeds: if this change supplies a real
@@ -17452,6 +17485,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_mode,
             get_settings,
             set_settings,
+            reset_settings,
             export_log,
             export_general_log,
             save_text_to_downloads,
