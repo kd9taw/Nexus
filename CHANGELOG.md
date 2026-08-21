@@ -9,12 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Special-event callsigns are recognised as CQs again, so double-click works on them.**
+  A call like `II7MGBR` or `EN3SUKR` does not fit the standard callsign shape, so FT8 sends
+  it in a form that carries no grid — and Nexus was only treating the *compound* kind (the
+  ones with a `/`) as real CQs. The rest were read as free text: no CQ chip, and
+  double-clicking them did nothing, while the Work button in the Stations list started a QSO
+  perfectly well. Both now behave the same way.
+
+- **Your hidden panes and disabled modes survive an upgrade.** If you had turned off modes
+  you do not use, or hidden panels with the ⊞ menu, an upgrade could put them all back —
+  those two choices were kept in browser storage rather than beside your settings, so
+  anything that cleared it took them with it. They now live with your settings, per profile,
+  and are included in the backup. A popped-out panel's own layout stays per-window, as it
+  should.
+
 - **Switching from CW to the FT screen left the rig on the CW frequency.** FT8 came up on
   wherever CW had been — the mode changed to DIGU correctly, the dial did not. It only
   happened if you passed through Tempo on the way, which is why it looked intermittent:
   Tempo is a digital mode and asserts the rig mode, but it keeps its own band picker's
   frequency, and it was being counted as though it had already moved the dial for you. The
   FT screen then thought there was nothing to do.
+
+- **A hardware CW keyer learns your speed before you send anything.** With a WinKeyer, the
+  speed slider only reached the keyer once you had sent something — so after launch the
+  paddle ran at whatever speed the keyer itself was set to, and moving the slider did
+  nothing until you typed a character. The keyer is now opened and told your speed as soon
+  as it can key.
 
 - **The filter width the radio actually took is now checked, not assumed.** Some rigs accept
   a mode change with a filter width, answer "done", and quietly keep their own filter — so
