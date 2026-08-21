@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A manual notch you can actually place, and a depth for the speech processor.** The Notch
+  button was driving the radio's *automatic* notch — the one that hunts a carrier down by
+  itself — which is not what most operators mean by the word. The manual notch, the one you
+  park on a whistle by ear, is now there too, with a frequency slider to put it where the
+  whistle is. COMP gained the control it was missing: how hard the compressor works. Each
+  appears only if your radio reports it, so nothing grows a slider with nothing behind it.
+
 - **The dial is marked on a native RF panadapter.** If your radio streams its own spectrum
   (Icom CI-V, FlexRadio), the tuned frequency now has a line and a DIAL label on it. It is
   drawn only where the dial genuinely is: on a rig in FIXED scope mode, where the span is a
