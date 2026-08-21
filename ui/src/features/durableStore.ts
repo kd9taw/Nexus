@@ -58,7 +58,29 @@ export const DURABLE_KEYS: readonly string[] = [
   // scoping and its guard. The audit in #28 named both; the codebase has since split them, and
   // the split wins. The cap is the station-wide ceiling and is global.
   'nexus-ui-scale-cap',
+  // WHICH MODES THE OPERATOR RUNS. Turning CW, SSTV, RTTY and the rest off is a deliberate
+  // setup of the station, not a preference — an operator who has pruned the rail to the four
+  // things he actually uses should not find all fifteen back after an upgrade. Reported
+  // 2026-08-21 against 1.7.5, alongside the panel layout below: settings.json survived and
+  // these did not, which is exactly the split this file exists to correct.
+  'nexus.features.v1',
 ]
+
+/** The MAIN window's pane layout is durable; a detached panel's is not.
+ *
+ *  Panel keys are `nexus.panels.<view>.<instance>` ([`panelStorageKey`]), and the instance is
+ *  what decides. Which panes you have hidden in the main window is a deliberate arrangement
+ *  that takes real time to rebuild — the same operator report that moved `nexus.features.v1`
+ *  above lost it on an upgrade. A POPPED-OUT panel's layout is genuinely per-surface chrome,
+ *  which is what this file's header means by "the right home for a collapsed-panel flag", and
+ *  it stays in localStorage where a second window's arrangement cannot fight the first's.
+ *
+ *  A prefix rule rather than an entry per view, because the alternative is a list that must be
+ *  edited every time a cockpit is added — and the cockpit that gets forgotten is the one whose
+ *  operator loses their layout. */
+function isMainWindowPanelLayout(key: string): boolean {
+  return key.startsWith('nexus.panels.') && key.endsWith('.main')
+}
 
 const durable = new Set(DURABLE_KEYS)
 
@@ -70,7 +92,7 @@ let flushing = false
 
 /** Is this a key we promise to keep? */
 export function isDurable(key: string): boolean {
-  return durable.has(key)
+  return durable.has(key) || isMainWindowPanelLayout(key)
 }
 
 /**
@@ -101,8 +123,31 @@ export async function loadDurable(): Promise<void> {
       migrated = true
     }
   }
+  // The panel layouts cannot be walked from DURABLE_KEYS — they are matched by PREFIX, and
+  // the set of views is not known here. So the migration walks localStorage itself for them.
+  // Without this the promotion would be worthless to every EXISTING operator: their layout is
+  // sitting in localStorage right now, and a rule that only protects future writes protects
+  // nobody who already has one.
+  for (const key of safeLocalKeys()) {
+    if (!isMainWindowPanelLayout(key) || key in loaded) continue
+    const local = safeLocalGet(key)
+    if (local !== null) {
+      loaded[key] = local
+      migrated = true
+    }
+  }
   cache = loaded
   if (migrated) scheduleFlush()
+}
+
+/** Every `localStorage` key, or an empty list where storage is unavailable (private modes
+ *  throw on access — the same guard `safeLocalGet` carries). */
+function safeLocalKeys(): string[] {
+  try {
+    return Object.keys(window.localStorage)
+  } catch {
+    return []
+  }
 }
 
 /** Read a durable key: the store first, then `localStorage`. */
@@ -118,6 +163,13 @@ export function durableSet(key: string, value: string): void {
   } catch {
     // Quota or a disabled store — the durable copy below is then the only one, which is fine.
   }
+  // ⚠️ NON-DURABLE KEYS STOP HERE, and that check belongs in this function rather than at the
+  // call sites. Since the panel layouts became durable BY PREFIX, one module now calls this
+  // with keys that are durable (the main window) and keys that are deliberately not (a
+  // detached panel). Without this line, `durableSet` would quietly promote whatever it was
+  // handed — which is how per-surface chrome ends up in a per-profile store, fighting the
+  // scoping it was given on purpose. `isDurable` is the single authority; callers just call.
+  if (!isDurable(key)) return
   if (cache) {
     cache[key] = value
     scheduleFlush()

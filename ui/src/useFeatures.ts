@@ -11,6 +11,7 @@ import {
   type FeatureState,
 } from './features/state'
 import type { ProfileId } from './features/profiles'
+import { durableGet, durableSet } from './features/durableStore'
 
 const STORAGE_KEY = 'nexus.features.v1'
 
@@ -18,7 +19,7 @@ const STORAGE_KEY = 'nexus.features.v1'
  * access can throw in some private modes (matches the useTheme pattern). */
 function readInitial(): FeatureState {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = durableGet(STORAGE_KEY)
     if (raw != null) return normalizeState(JSON.parse(raw))
   } catch {
     /* unreadable / malformed — fall through to default */
@@ -32,7 +33,7 @@ function readInitial(): FeatureState {
  * back to the default state (everything-except-Field-Day → CW/Phone on) if unreadable. */
 export function readEnabledModes(): { cw: boolean; phone: boolean } {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = durableGet(STORAGE_KEY)
     const state = raw != null ? normalizeState(JSON.parse(raw)) : defaultState()
     return { cw: state.enabled.cw !== false, phone: state.enabled.phone !== false }
   } catch {
@@ -43,7 +44,7 @@ export function readEnabledModes(): { cw: boolean; phone: boolean } {
 
 function persist(state: FeatureState): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    durableSet(STORAGE_KEY, JSON.stringify(state))
   } catch {
     /* full / unavailable — in-memory state still applies this session */
   }
@@ -85,8 +86,12 @@ export function useFeatures(): FeaturesApi {
   // genuinely fresh install. Lazy so the storage read happens exactly once.
   const firstRunRef = useRef<boolean | null>(null)
   if (firstRunRef.current === null) {
+    // ⚠️ THROUGH THE DURABLE LAYER, not localStorage directly. Once this key became durable
+    // its whole purpose is to survive a localStorage wipe — and an operator who has just
+    // survived one would otherwise be told they are a fresh install and shown the first-run
+    // wizard, which is a worse version of the bug this promotion fixes.
     try {
-      firstRunRef.current = window.localStorage.getItem(STORAGE_KEY) == null
+      firstRunRef.current = durableGet(STORAGE_KEY) == null
     } catch {
       firstRunRef.current = false
     }
