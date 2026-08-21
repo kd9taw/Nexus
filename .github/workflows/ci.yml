@@ -222,6 +222,13 @@ jobs:
       - name: docs/launch/wiki/ is generated from docs/
         run: node scripts/gen-wiki.mjs --check
 
+      # docs/shipped.json is read by the WEBSITE, in another repo, to check that its
+      # features page still lists everything Nexus ships. A stale manifest there is a
+      # website that quietly under-claims — which is how PSK31 went four releases and
+      # FT2 two without appearing on the page whose job is listing them.
+      - name: docs/shipped.json is generated from the app's own lists
+        run: node scripts/gen-shipped.mjs --check
+
   # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
   # (Cargo.toml [workspace.package] rust-version = "1.91"). Build-only check,
   # incl. the propagation `live` feature (the heaviest dep set).
