@@ -62,10 +62,10 @@ const CHAPTER_ALIASES: Record<string, string> = {
  *  the point. FILL the gap without removing the entry and the test ALSO fails, because the
  *  chapter now exists and this list says it does not. So the list can only be correct. */
 const KNOWN_GAPS: Record<string, string> = {
-  // Tempo's chat section. `docs/Tempo-Protocol.md` and the product brief describe the
-  // protocol and the product; neither is an operator chapter about using the screen. Found
-  // 2026-08-20 by this guard, alongside the PSK gap that prompted it.
-  chat: 'Tempo chat has protocol docs but no operator chapter — owed.',
+  // Empty, and that is the state to keep it in. The one entry it ever held — Tempo chat,
+  // found by this guard the day it was written — was paid off on 2026-08-20 with
+  // docs/guide/chat.md, and the "a recorded gap disappears the moment somebody fills it"
+  // test below is what forced this line to be deleted rather than left lying.
 }
 
 const chapters = () =>

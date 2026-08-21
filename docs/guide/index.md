@@ -42,6 +42,8 @@ multi-monitor shack.
 - **[CW](cw.md)** — a casual/ragchew keyboard CW station with F-key macros.
 - **[RTTY](rtty.md)** — a 45.45 baud Baudot teleprinter: per-character decode
   confidence, a click-to-net waterfall, macros, and AFSK or true FSK keying.
+- **[Chat (Tempo)](chat.md)** — Nexus's own weak-signal text mode: a roster, threaded
+  conversations, and messages that queue until the other station is actually heard.
 - **[PSK](psk.md)** — PSK31 and QPSK31 keyboard ragchewing at 31.25 baud: click a
   warble on the waterfall and it prints, type into a live transmission, four macros.
 - **[SSTV](sstv.md)** — receive-first slow-scan; pictures decode themselves into
