@@ -311,12 +311,36 @@ impl SpectrumFeed {
     /// and opens the next window; freshness is still judged on the most recent PUBLISH, so a
     /// dead capture goes quiet on exactly the schedule it always did.
     pub fn row(&self) -> Option<Spectrum> {
-        let mut g = self.rows.lock().ok()?;
-        if let Some((spec, at)) = &g.rf {
-            if at.elapsed() < std::time::Duration::from_secs(1) && !spec.row.is_empty() {
-                return Some(spec.clone());
+        {
+            let g = self.rows.lock().ok()?;
+            if let Some((spec, at)) = &g.rf {
+                if at.elapsed() < std::time::Duration::from_secs(1) && !spec.row.is_empty() {
+                    return Some(spec.clone());
+                }
             }
         }
+        self.audio_row()
+    }
+
+    /// The AUDIO row, never the RF one — for the displays that are about the DECODER's passband
+    /// rather than about the band.
+    ///
+    /// WHY THIS IS SEPARATE. `row()` prefers a native RF panadapter, and every backend publishes
+    /// one continuously while it streams — Flex, Icom above 115200 baud, and the FT-710 scope.
+    /// So a rig with a scope silently replaced the audio waterfall EVERYWHERE, including the FT8,
+    /// RTTY, PSK and SSTV displays, where 0-4000 Hz is the whole point: a 500 kHz RF sweep cannot
+    /// show a 50 Hz FT8 tone, and clicking it cannot set an audio offset. Reported on an FT-710
+    /// (2026-08-20) as "the audio spectrum is broken in all cases", and confirmed by turning that
+    /// radio's scope off — the audio waterfall came straight back.
+    ///
+    /// It was invisible until now only because the FT-710's RF path kept going unplaceable, and
+    /// audio showed through the gaps; closing those gaps removed the audio entirely. The same
+    /// displacement has always applied to Icom and Flex.
+    ///
+    /// The freshness rule and the empty-row-when-stale behaviour are exactly `row()`'s: this is
+    /// that branch, not a second opinion about it.
+    pub fn audio_row(&self) -> Option<Spectrum> {
+        let mut g = self.rows.lock().ok()?;
         let audio = g.audio.as_mut()?;
         if audio.at.elapsed() < std::time::Duration::from_secs(2) {
             return Some(audio.take());
@@ -1997,6 +2021,8 @@ pub struct Engine {
     /// (± half-width), reference level in tenths of a dB, and center(false)/fixed(true) mode. The
     /// radio loop drains each and calls the CivDaemon while not keyed.
     pending_scope_span: Option<u32>,
+    /// Queued Yaesu scope position as an `SS` P3 code — see `request_yaesu_scope_mode`.
+    pending_yaesu_scope_mode: Option<u8>,
     pending_scope_ref: Option<i32>,
     pending_scope_fixed: Option<bool>,
     /// FlexRadio native-panadapter controls (read continuously by the FlexSpectrum worker, which
@@ -2092,6 +2118,11 @@ pub struct Engine {
     /// Set by the radio loop when the sound card failed to open, so the UI can
     /// explain a blank waterfall instead of failing silently.
     audio_error: Option<String>,
+    scope_error: Option<String>,
+    /// See `RadioStatus::scope_mode_code`.
+    scope_mode_code: Option<u32>,
+    /// See `RadioStatus::scope_fix_start_mhz`.
+    scope_fix_start_mhz: Option<f64>,
     /// The last per-QSO recording that failed, with the path. Set by the shell (which owns the
     /// file write), carried out in the snapshot, cleared by the next recording that succeeds.
     recording_warning: Option<String>,
@@ -3680,6 +3711,7 @@ impl Engine {
             rig_passband: None,
             pending_passband: None,
             pending_scope_span: None,
+            pending_yaesu_scope_mode: None,
             pending_scope_ref: None,
             flex_pan_span_hz: 200_000.0,
             flex_pan_ref_dbm: None,
@@ -3706,6 +3738,9 @@ impl Engine {
             radio_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
+            scope_error: None,
+            scope_mode_code: None,
+            scope_fix_start_mhz: None,
             recording_warning: None,
             qsy,
             rtty_armed: false,
@@ -6561,10 +6596,23 @@ impl Engine {
         }
     }
 
-    /// Set desired AGC speed ("fast"|"mid"|"slow") — an OPERATOR PICK, which the radio loop
+    /// The AGC time constants Nexus offers, in the order the cockpit shows them.
+    ///
+    /// AUTO and OFF joined the original three on 2026-08-17. They were missing while the radios
+    /// have them — an FT-710 offers both on the front panel — and worse, they read back as "mid"
+    /// (see `service::agc_from_hamlib`), so the cockpit misreported the rig's actual setting.
+    ///
+    /// Offered for every rig rather than gated on capability, deliberately: Hamlib does not
+    /// enumerate which AGC constants a backend accepts (`--dump-caps` reports `AGC(0..0/0)` on both
+    /// Yaesus tested), so there is nothing to gate on. A rig that refuses one answers the SET with an
+    /// error, which `agc_refused` already surfaces, and the next read-back shows what the radio
+    /// actually did — an honest failure the operator can see, rather than a chip we hid on a guess.
+    pub const AGC_SPEEDS: [&str; 5] = ["auto", "fast", "mid", "slow", "off"];
+
+    /// Set desired AGC speed — an OPERATOR PICK, which the radio loop
     /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
-        if matches!(speed, "fast" | "mid" | "slow") {
+        if Self::AGC_SPEEDS.contains(&speed) {
             self.agc = Some(speed.to_string());
             self.agc_picked = true;
         }
@@ -6847,6 +6895,31 @@ impl Engine {
     /// Queue a native-scope REFERENCE-level change (tenths of a dB, −200..+200) from the UI.
     pub fn request_scope_ref(&mut self, ref_tenths_db: i32) {
         self.pending_scope_ref = Some(ref_tenths_db);
+    }
+    /// Record where the rig's FIX sweep starts on a given BAND, in MHz — persisted with the radio.
+    ///
+    /// Replaces a transient request: settings are the single source of truth, so the radio loop reads
+    /// this rather than being handed it, and a restart keeps it. The operator states it once per band
+    /// because that is how the radio itself keeps it.
+    pub fn set_yaesu_fix_start(&mut self, band: &str, mhz: f64) {
+        let id = self.settings.active_radio;
+        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
+            p.yaesu_fix_starts.insert(band.to_string(), mhz);
+        }
+    }
+
+    /// Queue a Yaesu scope POSITION change from the UI — CENTER, CURSOR or FIX.
+    ///
+    /// Separate from `request_scope_fixed`, which is Icom's two-valued center/fixed. The FT-710 has
+    /// three positions and, within each, three display families (3DSS / W-F EXPAND / W-F NORMAL),
+    /// so what travels here is the READY-MADE `SS` P3 code: the family is resolved next to the
+    /// radio, from what the rig currently reports, rather than guessed in the UI.
+    pub fn request_yaesu_scope_mode(&mut self, code: u8) {
+        self.pending_yaesu_scope_mode = Some(code);
+    }
+    /// Take the queued Yaesu scope position, if any.
+    pub fn take_yaesu_scope_mode_request(&mut self) -> Option<u8> {
+        self.pending_yaesu_scope_mode.take()
     }
     /// Queue a native-scope CENTER/FIXED mode change from the UI (`true` = fixed).
     pub fn request_scope_fixed(&mut self, fixed: bool) {
@@ -13207,6 +13280,22 @@ impl Engine {
         self.recording_warning = warning;
     }
 
+    /// Say (or stop saying) what is wrong with the RF SCOPE source. Separate from
+    /// [`Self::set_audio_error`]: a scope that says nothing and an audio device that failed are
+    /// different problems with different cures, and hiding one behind the other is how an operator
+    /// ends up checking their sound card because their radio's EX menu is off.
+    /// Record the rig scope's MODE code as read back over CAT — see `RadioStatus::scope_mode_code`.
+    pub fn set_scope_mode_code(&mut self, code: Option<u32>) {
+        self.scope_mode_code = code;
+    }
+    /// Record the FIX start now in force — see `RadioStatus::scope_fix_start_mhz`.
+    pub fn set_scope_fix_start(&mut self, mhz: Option<f64>) {
+        self.scope_fix_start_mhz = mhz;
+    }
+    pub fn set_scope_error(&mut self, err: Option<String>) {
+        self.scope_error = err;
+    }
+
     pub fn set_audio_error(&mut self, err: Option<String>) {
         self.audio_error = err;
     }
@@ -13713,6 +13802,9 @@ impl Engine {
         }
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
+        s.radio.scope_error = self.scope_error.clone();
+        s.radio.scope_mode_code = self.scope_mode_code;
+        s.radio.scope_fix_start_mhz = self.scope_fix_start_mhz;
         s.radio.recording_warning = self.recording_warning.clone();
         s.radio.radio_config_warning =
             crate::settings::serial_port_conflicts(&self.settings.radios)
@@ -26360,6 +26452,36 @@ mod tests {
     /// slot boundary, so a stall starved the audio row AND the Flex/CI-V panadapter together
     /// (operator report, 2026-07-25: the waterfall "hangs and stops moving"). The rule is
     /// unchanged; it moved to where the writers converge without a lock anyone else contends.
+    /// A NATIVE SCOPE MUST NOT REPLACE THE DECODER'S PASSBAND.
+    ///
+    /// `row()` prefers RF, and that is right for the rig-scope view. But the FT8/RTTY/PSK/SSTV
+    /// waterfalls are about 0-4000 Hz — a 500 kHz sweep cannot show a 50 Hz tone and cannot be
+    /// clicked to set an audio offset. Reported on an FT-710 (2026-08-20): with the rig scope
+    /// streaming, "the audio spectrum is broken in all cases"; turning the scope off brought it
+    /// straight back.
+    #[test]
+    fn audio_row_ignores_a_fresh_rf_row_while_row_still_prefers_it() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(Spectrum {
+            row: vec![1.0, 2.0],
+            lo_hz: 0.0,
+            hi_hz: 4000.0,
+            source: "audio".into(),
+        });
+        feed.publish_rf(Spectrum {
+            row: vec![9.0, 9.0],
+            lo_hz: 14_000_000.0,
+            hi_hz: 14_500_000.0,
+            source: "yaesu".into(),
+        });
+        // The rig-scope path still gets the panadapter...
+        assert_eq!(feed.row().expect("a row").source, "yaesu");
+        // ...and the decoder path gets the passband, with the RF row sitting right there.
+        let a = feed.audio_row().expect("an audio row");
+        assert_eq!(a.source, "audio");
+        assert_eq!((a.lo_hz, a.hi_hz), (0.0, 4000.0), "0-4000 Hz, not the band");
+    }
+
     #[test]
     fn a_fresh_native_row_wins_over_audio_and_falls_back_when_cleared() {
         let feed = SpectrumFeed::default();
@@ -27896,6 +28018,8 @@ mod tests {
             native_scope: p.native_scope.clone(),
             flex_radio_ip: p.flex_radio_ip.clone(),
             flex_native_pan: p.flex_native_pan,
+            yaesu_rf_scope: None,
+            yaesu_fix_starts: None,
             flex_native_audio: p.flex_native_audio,
         };
 
