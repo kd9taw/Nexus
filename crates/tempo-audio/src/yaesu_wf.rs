@@ -939,18 +939,22 @@ mod tests {
     /// something the menu cannot fix.
     #[test]
     fn a_default_build_reports_no_transport_and_opens_nothing() {
-        if cfg!(feature = "yaesu-wf") {
-            assert!(
-                TRANSPORT_COMPILED,
-                "the feature is on, so the transport is compiled"
-            );
-            return;
-        }
-        assert!(!TRANSPORT_COMPILED, "no feature means no transport");
-        assert!(
-            open_default_source().is_none(),
-            "and nothing can be opened without one"
+        // The FLAG is a compile-time fact, so it is pinned at compile time. Asserting it at
+        // runtime is a tautology — the value cannot differ by the time the test runs — and
+        // clippy's `assertions_on_constants` says so, correctly.
+        const _: () = assert!(
+            TRANSPORT_COMPILED == cfg!(feature = "yaesu-wf"),
+            "the flag must track the feature, or the caller answers the wrong question"
         );
+        // The RUNTIME half is what a test can actually establish: with no transport compiled,
+        // nothing opens — so the caller reaches the branch that names the missing library
+        // instead of sending the operator to an EX menu that cannot fix it.
+        if !TRANSPORT_COMPILED {
+            assert!(
+                open_default_source().is_none(),
+                "no transport means nothing can be opened"
+            );
+        }
     }
     use super::*;
 
