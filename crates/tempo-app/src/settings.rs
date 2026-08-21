@@ -786,6 +786,16 @@ pub struct Settings {
     /// [`RadioProfile::icom_native_cat`]). Default off.
     #[serde(default)]
     pub icom_native_cat: bool,
+    /// FT-710 RF scope for the active radio (flat mirror of the profile field — see
+    /// [`RadioProfile::yaesu_rf_scope`]). Default off.
+    ///
+    /// ⚠️ THE MIRROR IS LOAD-BEARING, not decoration. Saving the radio you are currently
+    /// USING goes through the flat form, so a per-profile field with no flat twin is dropped
+    /// in silence: the operator ticks the box, saves, reopens Settings and finds it off, with
+    /// nothing reporting a failure. That made the whole scope feature unreachable in the
+    /// normal case — it persisted only while editing a NON-active radio.
+    #[serde(default)]
+    pub yaesu_rf_scope: bool,
     /// Which Icom DATA mode the active radio uses (flat mirror — see
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
@@ -2829,6 +2839,7 @@ impl Default for Settings {
             rig_addr: String::new(),
             omnirig_slot: 1,
             icom_native_cat: false,
+            yaesu_rf_scope: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
@@ -3458,6 +3469,7 @@ impl Settings {
         self.omnirig_slot = p.omnirig_slot;
         self.rigctld_port = p.rigctld_port;
         self.icom_native_cat = p.icom_native_cat;
+        self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
@@ -3494,6 +3506,7 @@ impl Settings {
             omnirig_slot,
             rigctld_port,
             icom_native_cat,
+            yaesu_rf_scope,
             data_modes_plain_ssb,
             audio_in,
             audio_out,
@@ -3518,6 +3531,7 @@ impl Settings {
             self.omnirig_slot,
             self.rigctld_port,
             self.icom_native_cat,
+            self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
             self.audio_in.clone(),
             self.audio_out.clone(),
@@ -3543,6 +3557,7 @@ impl Settings {
             p.omnirig_slot = omnirig_slot;
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
+            p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
@@ -6971,6 +6986,44 @@ mod tests {
     /// else entirely, and unlike most errors here it would persist, because a FIX window has no
     /// reason to change. Operator asked for persistence (2026-08-20) after paying the click on every
     /// band change.
+    /// The FT-710 scope opt-in must survive a save of the ACTIVE radio.
+    ///
+    /// REPRO for the defect that made the whole feature unreachable. The toggle lives on
+    /// `RadioProfile`, but saving the radio you are currently USING goes through the flat form
+    /// (`set_settings`), not `update_radio_profile` — and a per-profile field with no flat mirror
+    /// is silently dropped by that path: serde never sees it, `sync_active_from_flat` has nothing
+    /// to copy, and the profile keeps its old value. The operator ticks the box, saves, reopens
+    /// Settings and finds it off again, with nothing reporting a failure.
+    ///
+    /// It only ever worked while editing a NON-active radio, which is the rarer case — so the
+    /// feature looked implemented and was not.
+    #[test]
+    fn the_yaesu_scope_optin_survives_a_flat_save_of_the_active_radio() {
+        let mut s = Settings::default();
+        s.radios = vec![RadioProfile {
+            id: 0,
+            rig_model: 1049,
+            ..RadioProfile::default()
+        }];
+        s.active_radio = 0;
+        s.sync_flat_from_active();
+
+        // The operator ticks the box on the ACTIVE radio: the UI writes the FLAT field.
+        s.yaesu_rf_scope = true;
+        // Which is what `set_settings` folds into the profile.
+        s.sync_active_from_flat();
+        assert!(
+            s.radios[0].yaesu_rf_scope,
+            "the flat opt-in must reach the active radio's profile"
+        );
+
+        // And a reload (profile -> flat) must show it still on, or the panel reopens unticked.
+        let json = serde_json::to_string(&s).expect("settings serialize");
+        let mut back: Settings = serde_json::from_str(&json).expect("settings parse");
+        back.sync_flat_from_active();
+        assert!(back.yaesu_rf_scope, "and survive a round trip through settings.json");
+    }
+
     #[test]
     fn a_fix_start_is_kept_per_band_and_survives_a_round_trip() {
         let mut s = Settings::default();
