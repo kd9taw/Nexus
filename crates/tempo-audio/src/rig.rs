@@ -1418,7 +1418,10 @@ mod tests {
             let _ = sock.write_all(b"14074000\n");
         });
         let mut rig = Rig::rigctld(&addr.to_string());
-        assert_eq!(rig.read_freq().expect("newline reply still read"), 14_074_000);
+        assert_eq!(
+            rig.read_freq().expect("newline reply still read"),
+            14_074_000
+        );
     }
 
     #[test]

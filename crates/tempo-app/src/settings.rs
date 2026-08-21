@@ -4061,9 +4061,10 @@ mod tests {
             // the comparison calls that a dropped field, and the failure names `apply_to` — which
             // copies it correctly. A guard whose fixture leaves a field unset is testing its own
             // serialisation, not the assignment it exists to check.
-            yaesu_fix_starts: Some(std::collections::BTreeMap::from([
-                ("20m".to_string(), 14.150_f64),
-            ])),
+            yaesu_fix_starts: Some(std::collections::BTreeMap::from([(
+                "20m".to_string(),
+                14.150_f64,
+            )])),
             flex_native_audio: true,
         };
 
@@ -4195,8 +4196,12 @@ mod tests {
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
             "flexNativePan": false, "flexNativeAudio": false
         }"#;
-        let patch: RadioProfilePatch = serde_json::from_str(json).expect("the form's payload parses");
-        assert_eq!(patch.yaesu_rf_scope, None, "an absent field is UNKNOWN, not false");
+        let patch: RadioProfilePatch =
+            serde_json::from_str(json).expect("the form's payload parses");
+        assert_eq!(
+            patch.yaesu_rf_scope, None,
+            "an absent field is UNKNOWN, not false"
+        );
         patch.apply_to(&mut p);
         assert!(
             p.yaesu_rf_scope,
@@ -4220,7 +4225,6 @@ mod tests {
         .apply_to(&mut p);
         assert!(!p.yaesu_rf_scope);
     }
-
 
     /// THE FIELD-SPECIFIC HALF for OmniRig, written because yesterday's bug was exactly this
     /// and the generic guards above are only as good as the day they were remembered: a
@@ -7021,7 +7025,10 @@ mod tests {
         let json = serde_json::to_string(&s).expect("settings serialize");
         let mut back: Settings = serde_json::from_str(&json).expect("settings parse");
         back.sync_flat_from_active();
-        assert!(back.yaesu_rf_scope, "and survive a round trip through settings.json");
+        assert!(
+            back.yaesu_rf_scope,
+            "and survive a round trip through settings.json"
+        );
     }
 
     #[test]
@@ -7050,5 +7057,4 @@ mod tests {
                 .expect("an older per-radio block still parses");
         assert!(profile.yaesu_fix_starts.is_empty());
     }
-
 }

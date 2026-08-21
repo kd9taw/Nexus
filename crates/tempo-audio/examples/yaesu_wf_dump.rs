@@ -41,7 +41,10 @@ fn main() {
         }
         std::thread::sleep(std::time::Duration::from_millis(12));
         if pause_ms > 0 && out.len() % (100 * FRAME_BYTES) == 0 {
-            eprintln!("pausing {pause_ms} ms after {} frames", out.len() / FRAME_BYTES);
+            eprintln!(
+                "pausing {pause_ms} ms after {} frames",
+                out.len() / FRAME_BYTES
+            );
             std::thread::sleep(std::time::Duration::from_millis(pause_ms));
         }
     }

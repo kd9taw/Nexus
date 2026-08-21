@@ -188,15 +188,27 @@ pub struct ExItem {
 }
 
 /// `0: OFF  1: ON`. What makes the FT4222 spectrum bridge appear on USB at all.
-pub const EX_SCU_LAN10: ExItem = ExItem { p1: 3, p2: 1, p3: 26 };
+pub const EX_SCU_LAN10: ExItem = ExItem {
+    p1: 3,
+    p2: 1,
+    p3: 26,
+};
 /// `0: OFF  1: ON`. NOT required for the bridge: measured OFF on a station whose waterfall was
 /// working, which is why the "turn the external display on" advice was withdrawn.
-pub const EX_EXT_DISPLAY: ExItem = ExItem { p1: 4, p2: 4, p3: 1 };
+pub const EX_EXT_DISPLAY: ExItem = ExItem {
+    p1: 4,
+    p2: 4,
+    p3: 1,
+};
 /// `0: FILTER  1: CARRIER POINT`. Which point the sweep is centred on, and therefore whether this
 /// module's centred placement is right: on FILTER the centre sits at the filter's centre, offset
 /// from the carrier by roughly half the passband — about 1.5 kHz on SSB, invisible across a 200 kHz
 /// span and gross across a 5 kHz one.
-pub const EX_SCOPE_CTR: ExItem = ExItem { p1: 4, p2: 2, p3: 2 };
+pub const EX_SCOPE_CTR: ExItem = ExItem {
+    p1: 4,
+    p2: 2,
+    p3: 2,
+};
 
 /// The CAT string that READS a menu item: `EX030126;` for SCU-LAN10.
 pub fn ex_read_command(item: ExItem) -> String {
@@ -514,15 +526,13 @@ pub fn pump(
     feed: &tempo_app::engine::SpectrumFeed,
     meta: SweepMeta,
 ) -> Pumped {
-    let Some((lo_hz, hi_hz)) =
-        sweep_edges_anchored(
-            meta.dial_hz,
-            meta.span_code,
-            meta.mode_code,
-            meta.center_hz,
-            meta.fix_start_hz,
-        )
-    else {
+    let Some((lo_hz, hi_hz)) = sweep_edges_anchored(
+        meta.dial_hz,
+        meta.span_code,
+        meta.mode_code,
+        meta.center_hz,
+        meta.fix_start_hz,
+    ) else {
         return Pumped::Unavailable;
     };
     let Ok(raw) = src.read_frame() else {
@@ -930,7 +940,10 @@ mod tests {
     #[test]
     fn a_default_build_reports_no_transport_and_opens_nothing() {
         if cfg!(feature = "yaesu-wf") {
-            assert!(TRANSPORT_COMPILED, "the feature is on, so the transport is compiled");
+            assert!(
+                TRANSPORT_COMPILED,
+                "the feature is on, so the transport is compiled"
+            );
             return;
         }
         assert!(!TRANSPORT_COMPILED, "no feature means no transport");
@@ -1268,9 +1281,12 @@ mod tests {
         w.extend_from_slice(&framed(0x77));
         let end = frame_end(&w).expect("the complete frame is found");
         assert_eq!(end, 1_234 + FRAME_BYTES);
-        assert_eq!(w[end - FRAME_BYTES], 0x77, "cut starts at the frame, not in the tail");
+        assert_eq!(
+            w[end - FRAME_BYTES],
+            0x77,
+            "cut starts at the frame, not in the tail"
+        );
     }
-
 
     // ── Commanding the radio's own span ─────────────────────────────────────────────────────────
     //
@@ -1301,8 +1317,16 @@ mod tests {
         assert_eq!(span_code_for_hz(50_000), Some(b'5'));
         // And the doubling the caller does: the engine's span request is a ± HALF-width (Icom
         // CI-V 27 15), while `SS` P2=5 names the full span. A UI chip labelled 200k sends 100k.
-        assert_eq!(span_code_for_hz(100_000u32 * 2), Some(b'7'), "±100k is the 200 kHz rung");
-        assert_eq!(span_code_for_hz(5_000u32 * 2), Some(b'3'), "±5k is the 10 kHz rung");
+        assert_eq!(
+            span_code_for_hz(100_000u32 * 2),
+            Some(b'7'),
+            "±100k is the 200 kHz rung"
+        );
+        assert_eq!(
+            span_code_for_hz(5_000u32 * 2),
+            Some(b'3'),
+            "±5k is the 10 kHz rung"
+        );
     }
 
     #[test]
@@ -1320,7 +1344,6 @@ mod tests {
         assert_eq!(parse_ss_reply(&set_mode_command(b'4'), b'6'), Some(b'4'));
     }
 
-
     // ── Placing a CURSOR sweep ──────────────────────────────────────────────────────────────────
 
     #[test]
@@ -1337,7 +1360,10 @@ mod tests {
     fn a_cursor_sweep_with_no_anchor_is_refused() {
         // Before the transition is seen — e.g. Nexus started with the rig already in CURSOR — the
         // window is unknown, and unknown must not be drawn.
-        assert_eq!(sweep_edges_anchored(14_150_000.0, b'7', b'7', None, None), None);
+        assert_eq!(
+            sweep_edges_anchored(14_150_000.0, b'7', b'7', None, None),
+            None
+        );
     }
 
     #[test]
@@ -1345,7 +1371,10 @@ mod tests {
         // At the edge the radio does something — shift, re-centre, stop — and nothing tells us
         // which. Half of 200 kHz is 100 kHz, so 100.1 kHz away is outside.
         assert!(sweep_edges_anchored(14_249_000.0, b'7', b'7', Some(14_150_000.0), None).is_some());
-        assert_eq!(sweep_edges_anchored(14_251_000.0, b'7', b'7', Some(14_150_000.0), None), None);
+        assert_eq!(
+            sweep_edges_anchored(14_251_000.0, b'7', b'7', Some(14_150_000.0), None),
+            None
+        );
     }
 
     #[test]
@@ -1353,7 +1382,10 @@ mod tests {
         // A cursor ANCHOR is not a FIX start — they are a centre and a left edge. Handing the
         // anchor in must not make FIX placeable; only a stated start does that.
         for code in [b'2', b'9', b'A'] {
-            assert_eq!(sweep_edges_anchored(14_150_000.0, b'7', code, Some(14_150_000.0), None), None);
+            assert_eq!(
+                sweep_edges_anchored(14_150_000.0, b'7', code, Some(14_150_000.0), None),
+                None
+            );
         }
     }
 
@@ -1364,7 +1396,6 @@ mod tests {
         assert_eq!(with, without);
         assert_eq!(with, Some((14_050_000.0, 14_250_000.0)));
     }
-
 
     // ── The EX menu, which turned out to be reachable over CAT ──────────────────────────────────
     //
@@ -1391,9 +1422,18 @@ mod tests {
     fn a_reply_yields_its_value_and_survives_the_nul_the_radio_sends() {
         // The raw-CAT path is NUL-terminated, so the parser has to tolerate it — that terminator is
         // what broke every raw read in this app until 2026-08-20.
-        assert_eq!(parse_ex_reply("EX0301261;", EX_SCU_LAN10).as_deref(), Some("1"));
-        assert_eq!(parse_ex_reply("EX0301261;\0", EX_SCU_LAN10).as_deref(), Some("1"));
-        assert_eq!(parse_ex_reply("EX0404010;", EX_EXT_DISPLAY).as_deref(), Some("0"));
+        assert_eq!(
+            parse_ex_reply("EX0301261;", EX_SCU_LAN10).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            parse_ex_reply("EX0301261;\0", EX_SCU_LAN10).as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            parse_ex_reply("EX0404010;", EX_EXT_DISPLAY).as_deref(),
+            Some("0")
+        );
     }
 
     #[test]
@@ -1405,11 +1445,14 @@ mod tests {
         assert_eq!(parse_ex_reply("EX0404010;", EX_SCU_LAN10), None);
         assert_eq!(parse_ex_reply("EX0402021;", EX_EXT_DISPLAY), None);
         // And malformed answers yield nothing rather than a guess.
-        assert_eq!(parse_ex_reply("EX030126;", EX_SCU_LAN10), None, "no value at all");
+        assert_eq!(
+            parse_ex_reply("EX030126;", EX_SCU_LAN10),
+            None,
+            "no value at all"
+        );
         assert_eq!(parse_ex_reply("?;", EX_SCU_LAN10), None);
         assert_eq!(parse_ex_reply("", EX_SCU_LAN10), None);
     }
-
 
     // ── Placing a FIX sweep ─────────────────────────────────────────────────────────────────────
     //
@@ -1443,7 +1486,8 @@ mod tests {
             assert_eq!(
                 sweep_edges_anchored(7_100_000.0, b'2', code, None, Some(7_050_000.0)),
                 Some((7_050_000.0, 7_055_000.0)),
-                "code {}", code as char
+                "code {}",
+                code as char
             );
         }
     }
@@ -1452,9 +1496,11 @@ mod tests {
     fn a_cursor_anchor_is_never_read_as_a_fix_start() {
         // The half-span trap, pinned. If FIX read the anchor as a centre, this would come back
         // 14.145–14.155 instead of nothing.
-        assert_eq!(sweep_edges_anchored(14_150_000.0, b'3', b'A', Some(14_150_000.0), None), None);
+        assert_eq!(
+            sweep_edges_anchored(14_150_000.0, b'3', b'A', Some(14_150_000.0), None),
+            None
+        );
     }
-
 
     #[test]
     fn a_fix_sweep_with_a_stated_start_actually_publishes_a_row() {
@@ -1491,7 +1537,6 @@ mod tests {
         assert_eq!(pump(&mut src, &feed, meta), Pumped::Unavailable);
     }
 
-
     // ── The FIX window, derived with no operator interaction ────────────────────────────────────
     //
     // Operator, 2026-08-20: "I do not want any user interaction/clicking to get the spectrum working
@@ -1506,7 +1551,10 @@ mod tests {
         // And at that span the window starts at the BAND EDGE, as the radio does: 14.000-14.500.
         let start = auto_fix_start(14_074_000.0, b'8').expect("placeable");
         assert_eq!(start, 14_000_000.0, "the radio starts FIX at the band edge");
-        assert!(start <= 14_000_000.0 && start + 500_000.0 >= 14_350_000.0, "band inside");
+        assert!(
+            start <= 14_000_000.0 && start + 500_000.0 >= 14_350_000.0,
+            "band inside"
+        );
     }
 
     #[test]
@@ -1537,7 +1585,14 @@ mod tests {
 
     #[test]
     fn every_band_in_the_table_is_coverable_from_its_edge() {
-        for dial in [1_850_000.0, 3_600_000.0, 7_100_000.0, 14_074_000.0, 21_074_000.0, 24_915_000.0] {
+        for dial in [
+            1_850_000.0,
+            3_600_000.0,
+            7_100_000.0,
+            14_074_000.0,
+            21_074_000.0,
+            24_915_000.0,
+        ] {
             let (lo, hi) = band_edges_hz(dial).expect("a band");
             let code = auto_fix_span_code(dial).expect("coverable");
             let start = auto_fix_start(dial, code).expect("placeable");
@@ -1547,15 +1602,26 @@ mod tests {
         }
         // 10 m (1.7 MHz) and 6 m (2 MHz) exceed the 1 MHz top rung: no window covers them, and
         // saying so beats drawing a third of the band as though it were all of it.
-        assert_eq!(auto_fix_span_code(28_074_000.0), None, "10 m exceeds every rung");
-        assert_eq!(auto_fix_span_code(50_313_000.0), None, "6 m exceeds every rung");
+        assert_eq!(
+            auto_fix_span_code(28_074_000.0),
+            None,
+            "10 m exceeds every rung"
+        );
+        assert_eq!(
+            auto_fix_span_code(50_313_000.0),
+            None,
+            "6 m exceeds every rung"
+        );
     }
 
     #[test]
     fn a_dial_outside_every_ham_band_yields_no_window() {
-        assert_eq!(band_edges_hz(9_410_000.0), None, "a broadcast station is not a band");
+        assert_eq!(
+            band_edges_hz(9_410_000.0),
+            None,
+            "a broadcast station is not a band"
+        );
         assert_eq!(auto_fix_span_code(9_410_000.0), None);
         assert_eq!(auto_fix_start(9_410_000.0, b'7'), None);
     }
-
 }
