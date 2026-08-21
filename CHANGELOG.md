@@ -5,6 +5,39 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Switching from CW to the FT screen left the rig on the CW frequency.** FT8 came up on
+  wherever CW had been — the mode changed to DIGU correctly, the dial did not. It only
+  happened if you passed through Tempo on the way, which is why it looked intermittent:
+  Tempo is a digital mode and asserts the rig mode, but it keeps its own band picker's
+  frequency, and it was being counted as though it had already moved the dial for you. The
+  FT screen then thought there was nothing to do.
+
+- **The filter width the radio actually took is now checked, not assumed.** Some rigs accept
+  a mode change with a filter width, answer "done", and quietly keep their own filter — so
+  FT8 ended up on a 6 kHz SSB filter with nothing saying so. Nexus now reads the width back
+  after a mode change and re-asserts it once if the radio kept its own, and if the second
+  attempt is ignored too it tells you the actual width instead of implying success. Rigs
+  that round to the nearest filter they own are left alone: asking for 3 kHz and getting
+  2.7 is the radio doing its job, not a fault.
+
+### Added
+
+- **The dial is marked on a native RF panadapter.** If your radio streams its own spectrum
+  (Icom CI-V, FlexRadio), the tuned frequency now has a line and a DIAL label on it. It is
+  drawn only where the dial genuinely is: on a rig in FIXED scope mode, where the span is a
+  band segment and the VFO sits wherever you tuned it, the line lands off-centre — and if
+  the dial is outside the displayed window it is not drawn at all rather than pinned to the
+  edge, which would say something untrue.
+
+- **PSK and Tempo chapters in the manual.** PSK31/QPSK31 shipped four releases ago with no
+  chapter and Tempo never had one. Both now cover the tour, the workflows and the honest
+  limits — and a test now fails the build if a shipped section has no chapter, so the next
+  mode cannot reach a release undocumented.
+
 ## [1.7.5] — 2026-08-20
 
 ### Added
