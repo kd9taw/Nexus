@@ -9,6 +9,7 @@
 
 import { pushToast } from '../toast'
 import { savePngToDownloads } from '../api'
+import { t } from '../i18n'
 
 export interface ShareCardData {
   /** The operator's callsign — the card's identity line. */
@@ -95,7 +96,7 @@ export function shareCard(d: ShareCardData): void {
     })
     clip
       .write([new CI({ 'image/png': blobPromise })])
-      .then(() => pushToast('Share card copied — paste it anywhere', 'success', 5000))
+      .then(() => pushToast(t('share.copied'), 'success', 5000))
       .catch(() => savePng(canvas, d))
   } else {
     void savePng(canvas, d)
@@ -110,8 +111,11 @@ async function savePng(canvas: HTMLCanvasElement, d: ShareCardData): Promise<voi
     const dataUrl = canvas.toDataURL('image/png')
     const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
     const path = await savePngToDownloads(name, base64)
-    pushToast(`Share card saved → ${path}`, 'success', 5000)
+    pushToast(t('share.saved', { path }), 'success', 5000)
   } catch (e) {
-    pushToast(`Could not save the share card: ${e instanceof Error ? e.message : e}`, 'error')
+    pushToast(
+      t('share.saveFailed', { detail: e instanceof Error ? e.message : String(e) }),
+      'error',
+    )
   }
 }

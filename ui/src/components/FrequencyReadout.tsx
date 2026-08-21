@@ -1,5 +1,17 @@
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the readout's
+// name, its three tooltips and the two screen-reader announcements are in the catalog under
+// `freq.readout.*`. Nothing here transmits.
+//
+// The units rule lands on the DIAL itself: the formatted MHz, every digit's decade, the step
+// labels (`100 Hz`, `1 MHz`) and the `MHz` unit are measurements and stay in the code — a
+// decimal comma in any of them would be an operating fault, not a wording one.
 import { useEffect, useRef, useState } from 'react'
 import { announce } from '../announce'
+import { parseOperatorNumber } from '../numInput'
+import { t } from '../i18n'
+
+/** The unit printed beside the dial. A unit symbol, not a word. */
+const MHZ = 'MHz'
 
 /** Format a dial frequency (MHz) for DISPLAY — 4 decimals (100 Hz resolution). */
 export function formatDialMhz(mhz: number): string {
@@ -111,7 +123,7 @@ export function FrequencyReadout({
   useEffect(() => {
     if (!kbTunedRef.current) return
     kbTunedRef.current = false
-    announce(`${formatDialMhz(dialMhz)} megahertz`)
+    announce(t('freq.readout.announce.dial', { dial: formatDialMhz(dialMhz) }))
   }, [dialMhz])
 
   const startEdit = () => {
@@ -122,7 +134,12 @@ export function FrequencyReadout({
     setEditing(true)
   }
   const commit = () => {
-    const v = parseFloat(draft.trim().replace(',', '.'))
+    // The comma-decimal handling used to live HERE and only here, as a bare
+    // `.replace(',', '.')` — correct, undocumented, and unshared, so the three other numeric
+    // input sites in the tree each got it wrong (see `numInput.ts`). Same behaviour, one
+    // implementation, and now stricter: a valid PREFIX like `14.0.74` is refused instead of
+    // silently tuning the rig to 14 MHz.
+    const v = parseOperatorNumber(draft)
     setEditing(false)
     // Skip a no-op commit (opened + Enter/blur without changing) so it never fires a spurious QSY.
     if (Number.isFinite(v) && v > 0 && Math.abs(v - dialMhz) >= UNCHANGED_EPS) onCommit?.(v)
@@ -146,7 +163,7 @@ export function FrequencyReadout({
       const next =
         selDecade == null ? cur : Math.min(hi, Math.max(lo, cur + (key === 'ArrowLeft' ? 1 : -1)))
       setSelDecade(next)
-      announce(`${stepLabel(next)} digit`)
+      announce(t('freq.readout.announce.digit', { step: stepLabel(next) }))
       return
     }
     setSelDecade(cur)
@@ -177,9 +194,9 @@ export function FrequencyReadout({
             }
           }}
           onBlur={() => (commitOnBlur ? commit() : setEditing(false))}
-          aria-label="Dial frequency (MHz)"
+          aria-label={t('freq.readout.dial.label')}
         />
-        <span className="readout-unit">MHz</span>
+        <span className="readout-unit">{MHZ}</span>
       </span>
     )
   }
@@ -190,10 +207,10 @@ export function FrequencyReadout({
       title={
         title ??
         (canTuneDigits
-          ? 'Scroll a digit to tune it (100 Hz … 10 MHz) · ←/→ pick a digit, ↑/↓ spin it · click to type a frequency (MHz)'
+          ? t('freq.readout.title.digitTune')
           : canEdit
-            ? 'Click to enter a frequency (MHz)'
-            : 'Dial frequency (MHz)')
+            ? t('freq.readout.title.editable')
+            : t('freq.readout.dial.label'))
       }
       role={canEdit ? 'button' : undefined}
       tabIndex={canEdit ? 0 : undefined}
@@ -239,7 +256,7 @@ export function FrequencyReadout({
             )
           : text}
       </span>
-      <span className="readout-unit">MHz</span>
+      <span className="readout-unit">{MHZ}</span>
       {band && <span className="band-chip active">{band}</span>}
     </span>
   )

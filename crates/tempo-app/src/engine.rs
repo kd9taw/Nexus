@@ -1429,6 +1429,12 @@ pub struct Engine {
     rx_offset_hz: f32,
     /// Keep TX offset fixed when RX changes (WSJT-X "Hold Tx Freq").
     hold_tx_freq: bool,
+    /// Consecutive boundary periods with no decode — see DECODE_DROUGHT_PERIODS.
+    quiet_periods: u32,
+    /// Suppress the per-step transmit log lines while a COMPOSITE operation runs, so the
+    /// operation logs once with its cause instead of narrating its own internals. Set only by
+    /// `halt_tx_for_context_change`, and cleared in the same function — never a mode.
+    quiet_tx_log: bool,
     tx_parity: u64,
     /// When true (default), answering a heard station in chat auto-picks the OPPOSITE
     /// T/R cycle (FT8-style); an explicit 1st/2nd selection clears it. A CQ run holds
@@ -3530,6 +3536,8 @@ impl Engine {
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
+            quiet_periods: 0,
+            quiet_tx_log: false,
             tx_parity,
             tx_cycle_auto: true,
             beacon_every: 8,
@@ -3894,8 +3902,14 @@ impl Engine {
 
     /// Apply new settings. A change of callsign/grid rebinds identity IN PLACE
     /// (preserving roster + conversations + the `*` band feed — see
-    /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place. The
-    /// operating mode returns to Chat.
+    /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place.
+    ///
+    /// The operating mode is touched ONLY to reconcile Field Day with the
+    /// `fd_active` master switch — a contact in flight survives a save and stays
+    /// loggable (#100). Still heavyweight in every other respect: the TX gate
+    /// generation bumps and the TX/broadcast queues are cleared, so a save is
+    /// never the way to persist one field (see [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
+    /// and the other narrow setters — #54).
     pub fn apply_settings(&mut self, s: Settings) {
         // A settings save can rewrite anything the TX gate reads (dial, mode,
         // offsets, license class) — an over planned before it must not key
@@ -4050,10 +4064,23 @@ impl Engine {
         self.hold_tx_freq = self.settings.hold_tx_freq;
         // A settings save reconciles the operating mode with the Field Day
         // master switch `fd_active`, which is authoritative over whether the
-        // engine operates in Field Day (spec §1). apply_settings is heavyweight
-        // — it resets the mode to Chat and clears the TX queue — so this is the
-        // one place a save re-enters (or leaves) FD to keep it in step with the
-        // master.
+        // engine operates in Field Day (spec §1). This is the one place a save
+        // re-enters (or leaves) FD to keep it in step with the master.
+        //
+        // ⭐ #100 (kr4fqg, "Lost logging when in Settings and FT8 completes a
+        // call"): this reconcile is the ONLY reason `apply_settings` touches the
+        // operating mode, and it used to write `mode = Mode::Chat` on EVERY save
+        // — on the stated belief that "a QSO is transient". It is not. The
+        // `Mode::Qso` variant OWNS the contact: the sequencer, the DX call, the
+        // received report. Throwing it away mid-contact meant the completion
+        // never fired (no auto-log, no `pending_log`) and the manual Log button
+        // then fell through `log_current_qso`'s `_ => return false` — so a save
+        // pressed while a contact was on the air lost it three ways at once.
+        // The distinction is now explicit: this reset fires when Field Day is
+        // being ENTERED or LEFT, and never as collateral on a live contact. It
+        // is deliberately NOT the whole of the heavyweight save — the TX gate
+        // generation still bumps and the TX/broadcast queues are still cleared
+        // below, so no over planned before the save can key after it.
         if self.settings.fd_active {
             // Master ON. PRESERVE an already-active FD session in place: the
             // Mode::FieldDay variant carries the whole dupe-checked contest log
@@ -4062,28 +4089,34 @@ impl Engine {
             // other live copy). The FD panel saves settings on every bonus-
             // checkbox toggle, so this preservation is load-bearing. If NOT yet
             // in FD, this save turned the master on (or followed a mode change):
-            // reset the heavyweight state, then enter passive S&P so every
-            // cockpit goes FD-aware — but only once class + section are set
-            // (else `restore_field_day_if_enabled` leaves Chat so the UI can
-            // prompt for them; the exchange goes on the air and `set_mode`
-            // refuses a blank one).
-            if !matches!(self.mode, Mode::FieldDay { .. }) {
-                self.mode = Mode::Chat;
-                self.cq_running = false;
-                self.restore_field_day_if_enabled();
-            }
-        } else {
-            // Master OFF. Field Day must be fully EXITED — reset to Chat
-            // regardless of the current mode. This closes the gap (spec §1.3)
-            // where flipping the master off left a lingering Mode::FieldDay, so
-            // the operator was stranded in FD with the nav hidden. The durable
-            // journal (written per contact) restores the log on the next
-            // re-enable. Every non-FD mode is likewise safe to reset — Chat
-            // holds nothing, a QSO is transient.
+            // enter passive S&P so every cockpit goes FD-aware — but only once
+            // class + section are set (the exchange goes on the air and
+            // `set_mode` refuses a blank one).
+            //
+            // `set_mode("fieldday-sp")` REPLACES the mode wholesale and clears
+            // cq_running/the queues itself, so the old `mode = Mode::Chat` here
+            // was redundant on the success path — and on the failure path (blank
+            // class/section) it reset the operator to Chat for an entry that
+            // never happened. That is the #100 teardown again, on a save that
+            // changed nothing about Field Day: with the master left on and no
+            // exchange filled in, EVERY save killed the contact in flight.
+            self.restore_field_day_if_enabled();
+        } else if matches!(self.mode, Mode::FieldDay { .. }) {
+            // Master OFF while IN Field Day. FD must be fully EXITED — reset to
+            // Chat. This closes the gap (spec §1.3) where flipping the master
+            // off left a lingering Mode::FieldDay, so the operator was stranded
+            // in FD with the nav hidden. The durable journal (written per
+            // contact) restores the log on the next re-enable.
+            //
+            // Gated on actually being in FD (#100): a save made in Chat wrote
+            // Chat — a no-op — and a save made mid-QSO wrote away the contact.
+            // Only the FD exit ever needed this line.
             self.mode = Mode::Chat;
-            // Clear the CQ-run flag alongside the mode reset — otherwise a save
-            // that drops out of a QSO run leaves `cq_running` stale-true, which
-            // suppresses the smart auto-cycle on the next chat answer.
+            // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
+            // sets it, and leaving it stale-true after the exit suppresses the
+            // smart auto-cycle on the next chat answer. Scoped to the reset for
+            // the same reason: outside an FD exit the flag belongs to the run
+            // that is still going.
             self.cq_running = false;
         }
         // A save carries a `band` field; now that the Field Day log survives a
@@ -4145,6 +4178,10 @@ impl Engine {
     /// non-blank class + section (the exchange goes on the air; `set_mode`
     /// refuses a blank one) and the engine is not already in FD (never rebuild a
     /// live in-memory FD log).
+    ///
+    /// A no-op leaves the operating mode EXACTLY as it was — load-bearing since
+    /// #100: `apply_settings` calls this on every save with the master on, so a
+    /// master left on with a blank exchange must not disturb a contact in flight.
     pub fn restore_field_day_if_enabled(&mut self) {
         if self.settings.fd_active
             && !self.settings.fd_class.trim().is_empty()
@@ -4276,6 +4313,23 @@ impl Engine {
         if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
             return;
         }
+        // THE CONTEXT EVERY OTHER LINE IS READ AGAINST. Past the no-op guard above, so this is
+        // a real transition and fires once per operator action — never on a timer.
+        let from = self
+            .settings
+            .radios
+            .iter()
+            .find(|p| p.id == self.settings.active_radio)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("radio {}", self.settings.active_radio));
+        let to = self
+            .settings
+            .radios
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("radio {id}"));
+        tempo_core::applog::info("radio", &format!("active radio {from} → {to}"));
         // Switching rigs leaves the APRS FM-simplex context (the new radio has its own band/mode).
         // The band-gate in `rig_mode_effective` already prevents an FM leak onto a non-2 m band;
         // this clears the flag outright so it never lingers pointed at a different radio.
@@ -4318,7 +4372,7 @@ impl Engine {
         // (see `halt_tx_for_context_change`). EVERY path that changes the active radio — band
         // routing, satellite routing, the coverage fallback, the operator's own radio button —
         // arrives here, so this one line covers all of them.
-        self.halt_tx_for_context_change();
+        self.halt_tx_for_context_change("radio handoff");
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
         // A pending split was authorized against the OUTGOING radio — for the
@@ -4518,6 +4572,22 @@ impl Engine {
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
+        // Band transitions only. The dial itself moves constantly (RIT, a click on the
+        // waterfall, Doppler on a pass) and logging THAT would be per-tick noise; the band is
+        // what a reader needs to make sense of the lines under it.
+        if !band.is_empty() && band != self.settings.band {
+            tempo_core::applog::info(
+                "band",
+                &format!(
+                    "{} → {band} ({dial_mhz:.6} MHz {mode}, {origin:?})",
+                    if self.settings.band.is_empty() {
+                        "off-band"
+                    } else {
+                        &self.settings.band
+                    }
+                ),
+            );
+        }
         // #35 instrumentation: every dial REQUEST with its provenance (stderr; the
         // operator-visible half is the service loop's dial→rig Connections-log notes).
         eprintln!("tempo: dial request: {dial_mhz:.4} MHz ({band} {mode}, {origin:?})");
@@ -4651,9 +4721,9 @@ impl Engine {
             // and no in-section control to re-arm with, so the operator keeps the mic
             // they were already holding (see `halt_tx_for_context_change`) — Digital
             // is untouched, which is what the paragraph above is about.
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("band change");
         } else if leaving_the_bands {
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("tuned off the ham bands");
         }
         // A band change drops the transient mode override, so a QSY re-asserts the auto sideband
         // (LSB <10 MHz / USB above) — "manual mode, but don't impede band auto-select".
@@ -4817,7 +4887,7 @@ impl Engine {
                 modes::reset_ft8_a7();
                 // Context halt, exactly like the app-commanded band change above: spinning
                 // the rig's own VFO across a band edge must not take the operator's mic away.
-                self.halt_tx_for_context_change();
+                self.halt_tx_for_context_change("band change at the rig");
                 self.clear_cw_decode(); // stale CW copy across a cross-band knob QSY
                                         // A knob QSY across bands drops the transient mode override too, exactly like an
                                         // app-commanded band change (set_frequency) — so the tooltip's "until you change
@@ -4861,7 +4931,7 @@ impl Engine {
             // paired check. (`context_band_changed` above has already banked the band being
             // left; all that remains here is to blank the label and cut transmit.)
             self.settings.band = String::new();
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("tuned off the ham bands at the rig");
         }
         // Declare the knob's provenance after the band write, so whichever answer it is
         // names the cell the dial landed in. The hand on the knob is always the operator's,
@@ -5357,6 +5427,23 @@ impl Engine {
         self.drop_rtty_latch();
         // …and PSK's, for the identical reason.
         self.drop_psk_latch();
+        // The other half of the context pair (see the tier line): which section the operator is
+        // in decides what every transmit, CAT and audio line beneath it means. Logged only when
+        // it CHANGES — this method is re-asserted on every view entry, and a line per re-assert
+        // would be exactly the timer-driven noise the strategy forbids.
+        if self.settings.operating_mode != om {
+            tempo_core::applog::info(
+                "mode",
+                &format!("section {:?} → {:?}", self.settings.operating_mode, om),
+            );
+        }
+        let left_a_manual_mode = matches!(
+            self.settings.operating_mode,
+            OperatingMode::Phone
+                | OperatingMode::Cw
+                | OperatingMode::Rtty
+                | OperatingMode::Keyboard
+        );
         self.settings.operating_mode = om;
         // SAFETY re-clamp: entering a mode with a lower power ceiling (SSB → FT8) must bring the
         // rig DOWN to the cap now, not wait for the operator to touch the power slider. If a cap
@@ -5387,6 +5474,7 @@ impl Engine {
         // side, the new section names the form (Digital → PKTUSB/PKTLSB, CW → CW/CWR,
         // Phone → the bird's sideband) via `rig_mode_effective`'s existing arms. This is
         // exactly the behavior the same-mode re-entry (`follow_freq = false`) always had.
+        let mut re_homed = false;
         if follow_freq && self.sat_dial_owner.is_none() {
             let band = self.settings.band.clone();
             if let Some((dial, sideband)) = self
@@ -5394,7 +5482,53 @@ impl Engine {
                 .or_else(|| self.mode_home(om))
             {
                 self.set_frequency(dial, &band, &sideband); // also flags immediate_retune
+                re_homed = true;
             }
+        }
+        // ⭐ THE DIGITAL SECTION RE-DERIVES ITS SIDE EVEN WHEN IT DOES NOT QSY —
+        // ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
+        //
+        // `settings.sideband` is written VERBATIM by every QSY (`tune_dial`), so it names
+        // the channel of whichever section wrote it last — and the RTTY and SSTV plans are
+        // LSB on every HF band. Digital is the ONE section whose policy reads that field
+        // DIRECTLY (`Settings::rig_mode`: an FT dial's side is a property of the CHANNEL,
+        // not of the band convention, so 40 m FT8 is USB where the band would say LSB), so
+        // a stale LSB commands PKTLSB — Yaesu DATA-L, Flex DIGL — on a USB-side channel.
+        // It is the same class as the 20 m DATA-L report that `sstv_tune` exists for: a
+        // section entry that asserts nothing leaves the section being LEFT in charge.
+        //
+        // The re-home above was the only thing that ever corrected it, and it is gated on
+        // `follow_freq` — which BOTH clicks on the reported path leave false. The UI's
+        // Tempo (chat) view maps to this section but is not one of the views it re-homes
+        // for, and entering it still records the section as entered, so the later click
+        // into the FT cockpit is not a mode CHANGE either. The DOUBLE-click is only what
+        // makes it visible: `set_tx_enabled(true)` arms `immediate_retune`, which re-pushes
+        // the commanded mode over the operator's manual DIGU correction.
+        //
+        // LSB is the only value that can be wrong here, and the only one corrected: the
+        // Digital arm already maps every non-LSB word (including empty/garbled) to PKTUSB,
+        // no tier's band plan has an LSB channel (pinned in `bandplan.rs`), and leaving the
+        // others alone keeps `tune_dial`'s FM-family hop test reading the channel word it
+        // was actually written from. A HELD PASS keeps its side for the same reason the QSY
+        // above stands down: the BIRD names it, from the transponder record, and
+        // `rig_mode_effective`'s linear arm answers without ever reading this field.
+        //
+        // ⚠️ NEEDS-BENCH — this changes the MODE word commanded over CAT for the FT modes.
+        // Its blast radius is bounded by never widening a privilege: the corrected side
+        // moves the judged emission from `dial - offset` to `dial + offset`
+        // (`emission_allowed`), which is the passband the operator is actually keying, and
+        // the same field feeds the logged on-air frequency and the TX-gate stamp — all
+        // three now agree with the DATA submode being commanded instead of contradicting it.
+        if om == OperatingMode::Digital
+            && !re_homed
+            && self.sat_dial_owner.is_none()
+            && self.settings.sideband.eq_ignore_ascii_case("LSB")
+        {
+            self.settings.sideband = "USB".to_string();
+            // Keep the app's mirror in step, as every other writer of this field does — the
+            // two copies feeding one display is how a cockpit comes to disagree with the rig.
+            let (dial, band) = (self.settings.dial_mhz, self.settings.band.clone());
+            self.app.set_radio(dial, &band, "USB");
         }
         // Re-assert the rig mode now even if the dial didn't change (e.g. picking CW while
         // already on a CW freq must still command CW, not wait for a dial change).
@@ -5414,6 +5548,33 @@ impl Engine {
                 | OperatingMode::Keyboard
         ) {
             self.set_tx_enabled(true);
+        } else if left_a_manual_mode {
+            // …AND DISARM ON THE WAY BACK. Field incident 2026-08-19: PSK31 → FT8 → pick 20 m
+            // → "it started transmitting on its own". Arming above had no counterpart, so an
+            // operator who used a manual mode arrived in the FT8 cockpit with the transmitter
+            // still armed from it — and in FT8 an armed latch is what turns a station
+            // selection into an immediate over. The invariant the comment above claims ("the
+            // app never auto-keys FT8") held at LAUNCH and nowhere else.
+            //
+            // Deliberately narrow: only the transition OUT of a manual mode disarms. A
+            // digital → digital re-assert (the FT8/FT4 sub-mode click, which routes through
+            // here with follow_freq=false) must not drop the latch under an operator who
+            // armed it here and is working someone. Nothing else in this method turns TX ON,
+            // so this is the only arm that needs undoing.
+            //
+            // ⚠️ NOT through `set_tx_enabled(false)`, and that is not a shortcut skipped. That
+            // path carries TX-OFF's semantics — it clears the CW, RTTY and PSK queues and arms
+            // their aborts — and a section change is not an operator pressing TX Off. A manual
+            // mode's queued over is HELD across a section change and keys when the operator
+            // returns to it; `rtty_and_ft8_sequencers_never_key_together` pins exactly that,
+            // and it went red when this was first written the blunt way. So: lower the latch,
+            // bump the gate generation (an over planned while armed must not commit), and
+            // nothing else. One bit changes, and it is the operator's.
+            if self.tx_enabled {
+                tempo_core::applog::info("tx", "transmit disarmed by leaving a manual mode");
+            }
+            self.tx_enabled = false;
+            self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         }
     }
 
@@ -6082,6 +6243,7 @@ impl Engine {
             // the operator re-enters the mode (a band/contact switch). CW is manual keying: hitting
             // the key must always transmit (privilege permitting — tx_allowed still gates). FT8 is
             // unaffected: it never calls send_cw and keeps its Monitor/double-click keying gate.
+            tempo_core::applog::info("tx", &format!("CW over queued: {expanded:?}"));
             self.tx_enabled = true;
             // A fresh send supersedes BOTH pending one-shot aborts: the CW abort, and the
             // radio loop's mid-over cut. `send_cw` is the only self-re-arming transmit
@@ -6727,6 +6889,10 @@ impl Engine {
     /// any still-pending message (one voice over at a time).
     pub fn send_voice(&mut self, samples: Vec<f32>) {
         if self.tx_enabled && self.tx_allowed() && !samples.is_empty() {
+            tempo_core::applog::info(
+                "tx",
+                &format!("voice-keyer over queued: {} samples", samples.len()),
+            );
             self.voice_tx = Some(samples);
         }
     }
@@ -7189,6 +7355,23 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // One line per contact — the event behind "my log is missing a QSO". Bounded by
+        // contacts, which is bounded by the operator: a busy hour is a few dozen lines, and a
+        // quiet one is none. Nothing here is on a timer.
+        tempo_core::applog::info(
+            "logbook",
+            &format!(
+                "QSO logged: {} on {} {} at {:.6} MHz",
+                if rec.call.trim().is_empty() {
+                    "(no call)"
+                } else {
+                    rec.call.trim()
+                },
+                rec.band,
+                rec.mode,
+                rec.freq_mhz
+            ),
+        );
         // THE SATELLITE STAMP, rebuilt (2026-08-10) with the three guards whose absence
         // got the 0.24-era stamp removed — the removal notice that used to live here was
         // this block's design brief:
@@ -8148,6 +8331,20 @@ impl Engine {
     /// free-text frames so they don't double / show "A13DE KD9TAW".)
     fn record_own_tx(&mut self, text: String) {
         const OWN_TX_RING: usize = 30;
+        // Diagnostic trace. An operator reported (2026-08-18) their own calls not appearing in
+        // the Rx-Frequency pane on one band and appearing after a QSY — an intermittent nobody
+        // can reproduce from the code, and the pane's own filters were cleared of it (`mine`
+        // rows bypass the frequency test and every optional hide). This line and the two
+        // `cleared` ones below are the pair that settles it from a log: an over that was
+        // recorded and never rendered is a UI fault; an over that was recorded and then wiped
+        // names the wiper.
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "over recorded: {:?} at {} Hz",
+                text, self.tx_offset_hz as i32
+            ),
+        );
         self.own_tx.push_back(OwnTx {
             text,
             freq_hz: self.tx_offset_hz,
@@ -8280,6 +8477,9 @@ impl Engine {
         self.app.inbox.roster.clear();
         // Captured BEFORE the swap: the halt below asks what we are LEAVING.
         let from = self.app.tier();
+        // A real transition (the no-op guard above already returned). State TRANSITIONS are
+        // logged; current state never is, and nothing here is on a timer.
+        tempo_core::applog::info("mode", &format!("tier {:?} → {:?}", self.app.tier(), tier));
         self.app.set_tier(tier);
         // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
         //
@@ -8538,6 +8738,13 @@ impl Engine {
         // Stop transmitting AND stay stopped: disable TX so the auto-sequencer
         // doesn't immediately re-arm on the next slot (WSJT-X "Halt Tx" also
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
+        //
+        // Logged here rather than through `set_tx_enabled` because this writes the latch
+        // directly — and a halt that does not stick is exactly the shape under investigation,
+        // so the trace must show the halt as well as whatever re-arms after it.
+        if self.tx_enabled && !self.quiet_tx_log {
+            tempo_core::applog::info("tx", "transmit disarmed by halt");
+        }
         self.tx_enabled = false;
         // Halt is the IMMEDIATE kill: arm the one-shot the radio loop consumes to
         // cut a slot over in flight (drop PTT + flush). A plain TX-disable
@@ -8635,8 +8842,14 @@ impl Engine {
     /// engine now says "key" during windows where the radio loop is holding a `Rig` that is
     /// not the operator's radio — a deferred dual-radio handoff, the Test-CAT port hold. The
     /// cleared latch used to mask those; `RadioLoop::may_key` is what stops them now.
-    pub fn halt_tx_for_context_change(&mut self) {
+    pub fn halt_tx_for_context_change(&mut self, why: &str) {
         use crate::settings::OperatingMode;
+        // ONE EVENT, ONE LINE. This method halts and then puts the operator's arm switch back,
+        // and logging those two steps separately made a routine QSY read as a fight in the file
+        // — "transmit disarmed by halt" and "transmit ARMED by …:8713" in the same second, with
+        // nothing saying what changed (operator, 2026-08-19). The steps below stay silent (see
+        // the `quiet` guard) and this says what actually happened, with its cause.
+        let was = self.tx_enabled;
         let restore = self.tx_enabled
             && matches!(
                 self.settings.operating_mode,
@@ -8646,7 +8859,21 @@ impl Engine {
                     | OperatingMode::Keyboard
             );
         let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
+        // ⚠️ QUIET THROUGH THE RESTORE TOO, not just the halt. The first version cleared this
+        // before the `if restore` below, so a context change still printed TWO lines — the
+        // collapsed one and then `transmit ARMED by …:8798` from the restore's own
+        // `set_tx_enabled`. Visible in an operator's DEBUG-mode log, 2026-08-19, which is the
+        // second time this same pair has been logged as its steps.
+        self.quiet_tx_log = true;
         self.halt_tx();
+        tempo_core::applog::info(
+            "tx",
+            &match (was, restore) {
+                (false, _) => format!("{why}: transmit was already off"),
+                (true, true) => format!("{why}: transmit halted and re-armed (manual mode)"),
+                (true, false) => format!("{why}: transmit halted and left off"),
+            },
+        );
         if restore {
             self.set_tx_enabled(true);
             self.immediate_retune = retune;
@@ -8655,6 +8882,7 @@ impl Engine {
             // the arm above, which clears it.
             self.broker_context_hold = true;
         }
+        self.quiet_tx_log = false;
     }
 
     /// Enable/disable normal slot TX. `false` = Monitor-off (transmit muted):
@@ -8789,7 +9017,27 @@ impl Engine {
         }
     }
 
+    #[track_caller]
     pub fn set_tx_enabled(&mut self, on: bool) {
+        // WHO ARMED IT. Field incident 2026-08-19: the operator halted twice and an over went
+        // out 45 s later, so something re-armed — and no amount of reading named it, because
+        // every arm path funnels through here from a dozen call sites. `#[track_caller]` makes
+        // the LOG name it: one line per transition, carrying the file:line of whoever asked.
+        // Transitions only (an idempotent re-arm is silent), so this is a handful of lines a
+        // session, and the whole point is that the next report arrives with its cause attached.
+        let was = self.tx_enabled;
+        if was != on && !self.quiet_tx_log {
+            let at = std::panic::Location::caller();
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "transmit {} by {}:{}",
+                    if on { "ARMED" } else { "disarmed" },
+                    at.file(),
+                    at.line()
+                ),
+            );
+        }
         // BACKSTOP for the receive-only tiers. Every arm path funnels here, so this
         // is where "armed but unable to transmit" is made unrepresentable — the UI
         // reads `tx_enabled`, so letting it latch true is exactly what made the app
@@ -11630,6 +11878,12 @@ impl Engine {
                 Self::PSK_MAX_SEND_CHARS
             ));
         }
+        // Manual-mode overs reach the diagnostic log too. Only the FT path recorded, so an
+        // operator who sent a PSK CQ and then reported an FT8 problem sent a log with a hole
+        // exactly where their own transmissions were ("it didnt actually log the psk move and
+        // the cq I sent on that mode", 2026-08-19). The trace is the same shape as the FT one:
+        // what went out, and on which mode.
+        tempo_core::applog::info("tx", &format!("PSK over queued: {filtered:?}"));
         // An explicit operator send restarts the TX-watchdog clock.
         self.reset_tx_watchdog();
         self.psk_queue.push_back(filtered);
@@ -11989,6 +12243,7 @@ impl Engine {
                  per over"
             ));
         }
+        tempo_core::applog::info("tx", &format!("RTTY over queued: {up:?}"));
         // An explicit operator send restarts the TX-watchdog clock (see poll_rtty_one).
         if reset_watchdog {
             self.reset_tx_watchdog();
@@ -15015,7 +15270,57 @@ impl Engine {
 
     /// Fold a slot's decodes into the app/sequencer state (the shared back half
     /// of [`Engine::ingest`] / [`Engine::ingest_early`]).
+    /// How many consecutive boundary periods produced no decode at all.
+    ///
+    /// Eight periods is two minutes on FT8. On a live band that is a fault worth a line — the
+    /// dial is wrong, the mode is wrong, the passband is squelched, the audio is silent. On a
+    /// dead band it is one line and then silence, because this logs the TRANSITION in and the
+    /// transition out, never the state.
+    const DECODE_DROUGHT_PERIODS: u32 = 8;
+
     fn process_decodes(&mut self, frame: &[f32], decodes: Vec<modes::Decode>, slot: u64) -> usize {
+        if tempo_core::applog::debug_enabled() {
+            tempo_core::applog::debug(
+                "decode",
+                &format!(
+                    "slot {slot}: {} decode(s) on {} {}",
+                    decodes.len(),
+                    if self.settings.band.is_empty() {
+                        "off-band"
+                    } else {
+                        &self.settings.band
+                    },
+                    self.app.tier().label()
+                ),
+            );
+        }
+        if decodes.is_empty() {
+            self.quiet_periods = self.quiet_periods.saturating_add(1);
+            if self.quiet_periods == Self::DECODE_DROUGHT_PERIODS {
+                tempo_core::applog::warn(
+                    "decode",
+                    &format!(
+                        "no decodes for {} periods on {} {} at {:.6} MHz",
+                        Self::DECODE_DROUGHT_PERIODS,
+                        if self.settings.band.is_empty() {
+                            "off-band"
+                        } else {
+                            &self.settings.band
+                        },
+                        self.app.tier().label(),
+                        self.settings.dial_mhz
+                    ),
+                );
+            }
+        } else {
+            if self.quiet_periods >= Self::DECODE_DROUGHT_PERIODS {
+                tempo_core::applog::info(
+                    "decode",
+                    &format!("decoding again after {} quiet periods", self.quiet_periods),
+                );
+            }
+            self.quiet_periods = 0;
+        }
         // Keep the ON-AIR text for UDP consumers BEFORE any hound rewriting —
         // JTAlert/GridTracker must never receive a message the Fox didn't send.
         let hound_active = matches!(
@@ -16398,6 +16703,41 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// A CONTEXT CHANGE IS ONE EVENT AND MUST LOG AS ONE LINE.
+    ///
+    /// It halts and then puts the operator's arm switch back, and both steps used to write
+    /// their own line: "transmit disarmed by halt" and "transmit ARMED by …:8798", in the same
+    /// second, with nothing saying what changed. Collapsed once — and the first collapse still
+    /// leaked the restore's line, which showed up in an operator's DEBUG log. Pinned here
+    /// because the file is read by people deciding whether their radio misbehaved.
+    #[test]
+    fn a_context_change_leaves_the_arm_state_it_found() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        // In a MANUAL mode an armed operator keeps their key across a QSY.
+        e.set_operating_mode("cw", false);
+        assert!(e.tx_enabled(), "control: entering CW arms");
+        e.halt_tx_for_context_change("band change");
+        assert!(
+            e.tx_enabled(),
+            "a QSY must not take the operator's key away"
+        );
+
+        // Disarmed stays disarmed — a context change never turns TX ON.
+        e.set_tx_enabled(false);
+        e.halt_tx_for_context_change("band change");
+        assert!(!e.tx_enabled(), "a context change must never arm");
+
+        // In DIGITAL there is nothing to restore: FT8 is armed only by its own three gates.
+        let mut d = Engine::new("W9XYZ", "EN37", 0);
+        d.set_operating_mode("digital", false);
+        d.set_tx_enabled(true);
+        d.halt_tx_for_context_change("radio handoff");
+        assert!(
+            !d.tx_enabled(),
+            "digital is left disarmed after a context change"
+        );
+    }
 
     /// Adding a radio must NOT move the station onto it. It used to call set_active_radio one line
     /// after add_radio_profile, whose own doc comment says it does not change the active radio.
@@ -18932,6 +19272,50 @@ mod tests {
     }
 
     #[test]
+    fn the_digital_section_never_inherits_another_plans_lsb() {
+        // ⭐ ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
+        //
+        // `settings.sideband` is written VERBATIM by every QSY, the RTTY band plan is LSB
+        // on every HF band, and `Settings::rig_mode`'s Digital arm reads that field
+        // DIRECTLY — so an FT dial reached from the RTTY section commanded PKTLSB, which
+        // is Yaesu DATA-L and Flex DIGL, on a channel that is USB-side.
+        //
+        // The section-entry re-home was the only thing that ever corrected it, and it is
+        // gated on `follow_freq` — which BOTH clicks on this path leave false: the UI's
+        // Tempo (chat) view maps to the Digital section but is not one of the views it
+        // re-homes for, and entering it still sets `lastOpModeRef = 'digital'`, so the
+        // later click into the FT cockpit is not a mode CHANGE either.
+        use crate::settings::OperatingMode;
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        // The RTTY cockpit — its own section entry DOES re-home, to 20 m RTTY, LSB.
+        e.set_operating_mode("rtty", true);
+        assert_eq!(
+            e.settings().sideband,
+            "LSB",
+            "precondition: the RTTY band plan is LSB"
+        );
+        // …Tempo (chat): the Digital policy, no re-home…
+        e.set_operating_mode("digital", false);
+        // …then the FT cockpit, which is no longer a mode change.
+        e.set_operating_mode("digital", false);
+        assert_eq!(e.settings().operating_mode, OperatingMode::Digital);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTUSB",
+            "the Digital section commands the USB-side DATA submode, never the LSB the \
+             RTTY plan left in `settings.sideband`"
+        );
+        // …and it is the SIDE that is re-derived, never the dial: a section entry with
+        // `follow_freq = false` must still leave the VFO exactly where it was.
+        assert!(
+            (e.settings().dial_mhz - 14.083).abs() < 1e-9,
+            "the dial is untouched, got {}",
+            e.settings().dial_mhz
+        );
+    }
+
+    #[test]
     fn phone_lsb_home_clears_the_band_edge_so_tx_is_legal() {
         // On LSB bands the SSB passband sits BELOW the dial; parking at the segment edge would
         // push 2.8 kHz out of band and lock TX out at the very home freq. The Phone home must
@@ -21164,6 +21548,63 @@ mod tests {
     ///
     /// The defect was that the Hold test lived in `set_rx_offset`, one level too low, so it
     /// applied to every caller including the click that must never move Tx.
+    /// FIELD INCIDENT 2026-08-19 (KD9TAW, 1.7.1-test1): "I was on psk31, then moved to ft,
+    /// selected the 20m band and almost immediately it tried to call XE1IHD, it started
+    /// transmitting on its own."
+    ///
+    /// `set_operating_mode` ARMED transmit for the manual modes (Phone/CW/RTTY/Keyboard —
+    /// correct: they are a live mic and key, and arming keys nothing by itself) and then never
+    /// disarmed on the way back. So an operator who used PSK31 and returned to FT8 arrived with
+    /// the transmitter already armed, and the comment two lines above the arm — "Digital is NOT
+    /// auto-armed … so the app never auto-keys FT8 on launch — the safety invariant" — was true
+    /// of LAUNCH and false of every mode transition. In FT8 an armed latch is what turns a
+    /// station selection into an immediate over, and the operator has no reason to think they
+    /// armed anything.
+    ///
+    /// Digital now disarms on entry, so FT8 is armed only by its own three gates: Monitor,
+    /// a double-click, or Call CQ.
+    #[test]
+    fn returning_to_digital_from_a_manual_mode_disarms_transmit() {
+        use crate::settings::OperatingMode;
+        for (wire, manual) in [
+            ("phone", OperatingMode::Phone),
+            ("cw", OperatingMode::Cw),
+            ("rtty", OperatingMode::Rtty),
+            ("keyboard", OperatingMode::Keyboard),
+        ] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_operating_mode(wire, false);
+            assert!(
+                e.tx_enabled(),
+                "{manual:?}: control — a manual mode still arms on entry (it is a live key)"
+            );
+            e.set_operating_mode("digital", false);
+            assert!(
+                !e.tx_enabled(),
+                "{manual:?} → digital left TX ARMED: the FT8 cockpit must be armed only by \
+                 Monitor, a double-click or Call CQ"
+            );
+        }
+    }
+
+    /// The disarm must not undo an arm that the SAME action is about to make: the Needed /
+    /// spot click sets the operating mode and then works the station, and the working half is
+    /// what arms. Order, not absence, is what keeps both true.
+    #[test]
+    fn a_needed_click_into_digital_still_ends_up_armed() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.work_spot("digital", 14.074, "20m");
+        assert!(
+            !e.tx_enabled(),
+            "the QSY alone must not arm — it is not a transmit action"
+        );
+        let _ = e.call_station_ctx("K2DEF", None, None, None, Some(1200.0));
+        assert!(
+            e.tx_enabled(),
+            "working the station is the transmit action, and it arms (double_click_sets_tx)"
+        );
+    }
+
     #[test]
     fn a_waterfall_click_moves_only_rx_whatever_hold_tx_freq_says() {
         for hold in [false, true] {
@@ -21722,31 +22163,42 @@ mod tests {
     }
 
     /// The hourly QRZ auto-sync persists ONE field. Persisting it through apply_settings
-    /// tore down the whole session (#54): CONTROL — apply_settings really does reset the
-    /// mode and drop the TX queue (that is why the narrow setter exists); then the narrow
-    /// setter advances the cursor and touches neither.
+    /// tore down the whole session (#54): CONTROL — apply_settings really is heavyweight
+    /// (that is why the narrow setter exists); then the narrow setter advances the cursor
+    /// and touches none of it.
+    ///
+    /// The control asserts the QUEUE drop, not a mode reset: since #100 a save no longer
+    /// evaporates a contact in flight (only a Field Day master transition moves the mode).
+    /// A background thread firing this path once an hour would still drop the operator's
+    /// queued over and re-derive the TX cycle from a snapshot, so the narrow setter is as
+    /// load-bearing as it ever was.
     #[test]
     fn the_qrz_sync_cursor_advances_without_the_heavyweight_reset() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
         e.call_station("PJ4DX");
         assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
-        // Control: the heavyweight path kills it.
+        e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
+        // Control: the heavyweight path drops the queued over.
         let s = e.settings().clone();
         e.apply_settings(s);
         assert!(
-            e.snapshot().qso.is_none(),
-            "control: apply_settings must reset the mode, or the narrow setter is pointless"
+            e.tx_queue.is_empty(),
+            "control: apply_settings must drop the TX queue, or the narrow setter is pointless"
         );
-        // Re-arm, then the narrow path: cursor moves, QSO survives.
-        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
-        e.call_station("PJ4DX");
-        assert!(e.snapshot().qso.is_some(), "harness: re-armed");
+        // Re-arm, then the narrow path: cursor moves, QSO and queue survive.
+        e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
+        assert!(e.snapshot().qso.is_some(), "harness: the QSO is still up");
         e.set_qrz_sync_cursor(1_754_700_000);
         assert_eq!(e.settings().qrz_last_sync_unix, 1_754_700_000);
         assert!(
             e.snapshot().qso.is_some(),
             "advancing the sync cursor must not evaporate an in-flight QSO"
+        );
+        assert_eq!(
+            e.tx_queue.len(),
+            1,
+            "…nor drop the over already queued for it"
         );
     }
 
@@ -21756,8 +22208,13 @@ mod tests {
     /// (#54): mode back to Chat, TX queue dropped, and the TX parity re-derived from the
     /// form's `tx_even` — which, on a struct the panel loaded before the answer picked a
     /// cycle, puts the next over on the DX's own period. CONTROL first (the old path must
-    /// still tear all three down, or this test cannot tell the fix from the bug), then the
+    /// still tear the rest down, or this test cannot tell the fix from the bug), then the
     /// narrow setter, which touches none of them.
+    ///
+    /// TWO of the three, since #100: a save no longer resets the mode (only a Field Day
+    /// master transition does), so the QSO survives the control too. The queue drop and
+    /// the cycle re-derive are untouched — and the cycle one is why a seat swap must never
+    /// take this path, stale form or not.
     #[test]
     fn the_fd_operator_swap_keeps_the_qso_the_queue_and_the_cycle() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
@@ -21774,14 +22231,10 @@ mod tests {
             "harness: answering a slot-5 decode took the odd cycle"
         );
 
-        // Control: the old path really does tear all three down.
+        // Control: the old path really does tear the queue and the cycle down.
         let mut patched = stale_form.clone();
         patched.fd_operator = "W1ABC".into();
         e.apply_settings(patched);
-        assert!(
-            e.snapshot().qso.is_none(),
-            "control: apply_settings resets the mode"
-        );
         assert!(
             e.tx_queue.is_empty(),
             "control: apply_settings drops the TX queue"
@@ -21790,8 +22243,16 @@ mod tests {
             e.tx_parity, 0,
             "control: apply_settings re-derives the cycle from the stale form"
         );
+        // …and since #100 it leaves the contact itself alone. Asserted, not assumed: this
+        // is the seam the narrowing moved, so it goes red if a save starts killing QSOs
+        // again — from either direction.
+        assert!(
+            e.snapshot().qso.is_some(),
+            "a save must not tear down the contact in flight (#100)"
+        );
 
-        // Re-arm, then the narrow path: the operator changes, nothing else does.
+        // Re-arm the two it DID tear down (a fresh call re-derives the cycle from the
+        // DX's own period), then the narrow path: the operator changes, nothing else does.
         e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
         e.call_station("PJ4DX");
         assert!(e.snapshot().qso.is_some(), "harness: re-armed");
@@ -21813,6 +22274,80 @@ mod tests {
             e.tx_parity, 1,
             "the answering cycle must survive the swap — a flip transmits on the DX's period"
         );
+    }
+
+    /// #100 (kr4fqg, "Lost logging when in Settings and FT8 completes a call"): pressing
+    /// SAVE in Settings mid-QSO tore the contact down. `apply_settings` reset the mode to
+    /// Chat unconditionally, so the sequencer that owns the contact was thrown away — the
+    /// completion never fired (no auto-log, no `pending_log`), and the manual Log button
+    /// then fell through `log_current_qso`'s `_ => return false` because there was no
+    /// `Mode::Qso` left to read a call out of. One cause, all three of his symptoms.
+    ///
+    /// The save must be narrow enough that a live contact survives it AND still logs.
+    #[test]
+    fn a_settings_save_mid_qso_keeps_the_contact_and_it_still_logs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        // Their report comes back — the contact is now loggable (a report was exchanged).
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("W9XYZ"),
+            "harness: a QSO with a report exchanged is in flight"
+        );
+
+        // The operator is sitting in Settings and presses SAVE. The panel sends the whole
+        // struct back, unchanged — this is the ordinary save, not a Field Day toggle.
+        let form = e.settings().clone();
+        e.apply_settings(form);
+
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("W9XYZ"),
+            "a settings save must not tear down the contact in flight (#100)"
+        );
+        // …and the Log button still reaches the logbook, which is what he lost.
+        assert!(
+            e.log_current_qso(),
+            "the Log button must still log the contact after a save (#100)"
+        );
+        assert_eq!(e.get_log().len(), 1, "the contact reached the logbook");
+        assert_eq!(e.get_log()[0].call, "W9XYZ");
+    }
+
+    /// The other half of #100: the mode reset is a FIELD DAY reconcile, so it must still
+    /// happen for Field Day. Master OFF with a live FD session → the engine truly leaves
+    /// `Mode::FieldDay` even though a QSO-bearing mode now survives a save (spec §1.3 —
+    /// a lingering `Mode::FieldDay` strands the operator with the nav hidden). Guards the
+    /// narrowing above from being widened into "a save never touches the mode".
+    #[test]
+    fn the_field_day_master_still_forces_the_exit_after_the_100_narrowing() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        assert!(
+            matches!(e.mode, Mode::FieldDay { .. }),
+            "harness: the master put the engine in Field Day"
+        );
+        // A Field Day RUN, so `cq_running` is genuinely true going in — otherwise the
+        // flag assertion below passes on a flag that was never set.
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.cq_running, "harness: an FD run is calling CQ");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = false;
+            e.apply_settings(s);
+        }
+        assert!(
+            matches!(e.mode, Mode::Chat),
+            "master off must still force the FD exit — not merely hide the chrome"
+        );
+        assert!(!e.cq_running, "and clear the CQ-run flag it left behind");
     }
 
     /// Mode-matrix audit (2026-08-10): apply_settings adopted the form's operating_mode
@@ -24027,9 +24562,18 @@ mod tests {
     /// Master ON but the exchange is incomplete: `apply_settings` must NOT enter
     /// FD on a blank class/section (the exchange goes on the air) — it leaves the
     /// engine non-FD so the setup screen (spec §1.2 #1) can prompt for them.
+    ///
+    /// …and it must leave the operator where they ARE while it declines (#100). This
+    /// is a sticky state — the master stays on until someone turns it off — so the
+    /// old unconditional `mode = Mode::Chat` before the attempt meant EVERY save made
+    /// with FD armed but unconfigured tore down whatever contact was in flight, for a
+    /// Field Day entry that then did not happen.
     #[test]
     fn apply_settings_master_on_without_exchange_stays_out_of_field_day() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // A contact in flight when the save lands.
+        e.call_station("K1ABC");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
         {
             let mut s = e.settings().clone();
             s.fd_active = true; // master flipped on, but class/section still blank
@@ -24038,6 +24582,11 @@ mod tests {
         assert!(
             e.snapshot().field_day.is_none(),
             "no FD entry without a class/section to transmit"
+        );
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("K1ABC"),
+            "an FD entry that DECLINED must not have reset the operator to Chat (#100)"
         );
     }
 
@@ -27333,6 +27882,7 @@ mod tests {
             omnirig_slot: p.omnirig_slot,
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
+            icom_data_mode: p.icom_data_mode,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),

@@ -1824,6 +1824,13 @@ export interface SpotRow {
   comment: string
   /** Operator may transmit at this freq+mode (license privileges; Open class ⇒ true). */
   licensed: boolean
+  /** At least one voice for this spot — the spotter or a corroborator — is on the operator's
+   *  own continent. True when locality cannot be judged (fail open).
+   *
+   *  OPTIONAL on purpose: a row from an older backend, or any fixture that predates the flag,
+   *  is "not judged" and must be KEPT rather than silently filtered out. The panel tests
+   *  `=== false`, never falsiness, for exactly that reason. */
+  spotterLocal?: boolean
   /** Set when this spot is a ONE-WAY transmission and so not workable: an NCDXF/IARU beacon
    * slot or a W1AW bulletin. Still displayed (an audible beacon is real propagation evidence)
    * but badged, and never painted with a need colour. Score suppression happens in the
@@ -2449,6 +2456,8 @@ export interface Settings {
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */
   icomNativeCat: boolean
+  /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
+  icomDataMode: number
   /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
    * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
    *
@@ -2587,6 +2596,9 @@ export interface Settings {
   wsjtxUdpAddr: string
   /** Append every decode to a WSJT-X-format ALL.TXT decode log (loggers/GridTracker tail it). */
   writeAllTxt: boolean
+  /** Write the DEBUG tier to the diagnostic log. Off by default; a session switch, not a
+   *  better log. */
+  diagDebugLog: boolean
   /** Auto-save a WAV of the recent RX audio when a QSO is logged (per-contact recording). */
   saveQsoWav: boolean
   /** Log each QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP port. */
@@ -2903,6 +2915,8 @@ export interface RadioProfile {
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */
   icomNativeCat: boolean
+  /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
+  icomDataMode: number
   /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
    * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
    *

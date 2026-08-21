@@ -8,6 +8,12 @@
 // On a tracked satellite pass it ALSO becomes the "this pass" view (satellite visual
 // design §3.3): the orbit arc ahead/behind, the bird's footprint, and a line-of-sight
 // ray from the QTH to the bird — the 2-D map stays the "everything at once" view.
+//
+// ⚠️ ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Satellite names, bands, grids,
+// bearings, elevations, km and the layer ids are technical tokens and stay here; `MUF` is
+// the acronym itself and is a named constant below. The prose is in the catalog under
+// `globe.*`, and the two legends + the ★-filter hint come from `map.*` because the 2-D map
+// and this globe are deliberately identical there.
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { heatPulse, sectorPulse } from '../features/pulse'
 import {
@@ -38,6 +44,7 @@ import {
 import { getAurora, getPca, getSatellites, getSatTrackStatus, getLog } from '../api'
 import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
+import { t, type MessageKey } from '../i18n'
 import { MapInsightRail } from './prop/MapInsightRail'
 import { MapLegend, MufLegend } from './MapLegend'
 import type {
@@ -315,6 +322,57 @@ function textSprite(text: string, color: string): THREE.Sprite {
   sp.scale.set(22, 4.1, 1)
   return sp
 }
+
+/** `MUF` is the acronym for Maximum Usable Frequency — a technical token that reads the
+ * same in every language, so it is a constant rather than a catalog entry. It is the one
+ * layer in the list below whose whole name is a token. */
+const MUF_LABEL = 'MUF'
+
+type GlobeLayerKey =
+  | 'spots'
+  | 'decodes'
+  | 'arcs'
+  | 'dxped'
+  | 'heat'
+  | 'openings'
+  | 'flare'
+  | 'aurora'
+  | 'muf'
+  | 'pca'
+  | 'greyline'
+  | 'sats'
+  | 'pass'
+  | 'rings'
+  | 'cqzones'
+  | 'coverage'
+  | 'states'
+  | 'grid'
+  | 'lights'
+
+/** The layer rows in panel order. Each name is looked up when the panel RENDERS, never at
+ * import — this is module state, and resolving it here would freeze the load-time locale. */
+type GlobeLayerRow = { k: GlobeLayerKey } & ({ labelKey: MessageKey } | { label: string })
+const LAYER_ROWS: readonly GlobeLayerRow[] = [
+  { k: 'spots', labelKey: 'globe.layer.spots' },
+  { k: 'decodes', labelKey: 'globe.layer.decodes' },
+  { k: 'arcs', labelKey: 'globe.layer.arcs' },
+  { k: 'dxped', labelKey: 'globe.layer.dxped' },
+  { k: 'heat', labelKey: 'globe.layer.heat' },
+  { k: 'openings', labelKey: 'globe.layer.openings' },
+  { k: 'flare', labelKey: 'globe.layer.flare' },
+  { k: 'aurora', labelKey: 'globe.layer.aurora' },
+  { k: 'muf', label: MUF_LABEL },
+  { k: 'pca', labelKey: 'globe.layer.pca' },
+  { k: 'greyline', labelKey: 'globe.layer.greyline' },
+  { k: 'sats', labelKey: 'globe.layer.sats' },
+  { k: 'pass', labelKey: 'globe.layer.pass' },
+  { k: 'rings', labelKey: 'globe.layer.rings' },
+  { k: 'cqzones', labelKey: 'globe.layer.cqzones' },
+  { k: 'coverage', labelKey: 'globe.layer.coverage' },
+  { k: 'states', labelKey: 'globe.layer.states' },
+  { k: 'grid', labelKey: 'globe.layer.grid' },
+  { k: 'lights', labelKey: 'globe.layer.lights' },
+]
 
 /** Is a WebGL context creatable? Guards against a low-end GPU that flipped the toggle. */
 function webglOk(): boolean {
@@ -1343,11 +1401,7 @@ export default function Globe3D({
   }, [show.sats, satFav, sats, satChaseRev])
 
   if (!ok) {
-    return (
-      <div className="globe3d-fallback">
-        This machine's graphics can't run the 3-D globe. Switch back to the 2-D map (🌐 button) — it works everywhere.
-      </div>
-    )
+    return <div className="globe3d-fallback">{t('globe.unsupported')}</div>
   }
 
   return (
@@ -1356,64 +1410,38 @@ export default function Globe3D({
         type="button"
         className={`globe3d-spin${spin ? ' active' : ''}`}
         onClick={() => setSpin((s) => !s)}
-        title={spin ? 'Stop the globe spinning' : 'Spin the globe'}
+        title={spin ? t('globe.spin.stop.title') : t('globe.spin.start.title')}
       >
-        {spin ? '⏸ Spin' : '▶ Spin'}
+        {spin ? t('globe.spin.pause') : t('globe.spin.play')}
       </button>
       {/* Layers panel, matching the 2-D map. Grows as Phase B adds layers. (Was gated on the
           Expert detail level, removed 2026-07-26 — the layer list is now always available.) */}
       {(
         <div className="globe3d-layers">
-          <span className="globe3d-layers-h">Layers</span>
-          {(
-            [
-              ['spots', 'Spots'],
-              ['decodes', 'My decodes'],
-              ['arcs', 'Heard-me arcs'],
-              ['dxped', 'DXpeditions'],
-              ['heat', 'Band heat'],
-              ['openings', 'Opening sectors'],
-              ['flare', 'Flare blackout'],
-              ['aurora', 'Aurora'],
-              ['muf', 'MUF'],
-              ['pca', 'Polar cap (PCA)'],
-              ['greyline', 'Greyline'],
-              ['sats', 'Satellites'],
-              ['pass', 'Tracked pass'],
-              ['rings', 'Range rings'],
-              ['cqzones', 'CQ zones'],
-              ['coverage', 'My coverage'],
-              ['states', 'US states'],
-              ['grid', 'Graticule'],
-              ['lights', 'City lights'],
-            ] as const
-          ).map(([k, label]) => (
-            <Fragment key={k}>
+          <span className="globe3d-layers-h">{t('globe.layers.head')}</span>
+          {LAYER_ROWS.map((row) => (
+            <Fragment key={row.k}>
               <label>
                 <input
                   type="checkbox"
-                  checked={show[k]}
-                  onChange={(e) => setShow((s) => ({ ...s, [k]: e.target.checked }))}
+                  checked={show[row.k]}
+                  onChange={(e) => setShow((s) => ({ ...s, [row.k]: e.target.checked }))}
                 />
-                {label}
+                {'labelKey' in row ? t(row.labelKey) : row.label}
               </label>
-              {k === 'sats' && show.sats && (
+              {row.k === 'sats' && show.sats && (
                 // The ★/All chip on the 3-D surface too — same reachability
                 // argument as the 2-D Layers panel (the Passes pane that also
                 // carries it may not be placed in the layout at all).
                 <button
                   type="button"
                   className={`sat-fav-toggle${satFav ? ' on' : ''}`}
-                  aria-label="Filter satellites to ★ birds"
+                  aria-label={t('globe.sats.filter.aria')}
                   aria-pressed={satFav}
-                  title={
-                    satFav
-                      ? 'Showing your ★ birds (Passes pane + 2-D map follow) — click to show all satellites'
-                      : 'Showing all satellites — click to show only your ★ birds (Passes pane + 2-D map follow)'
-                  }
+                  title={satFav ? t('globe.sats.filter.on.title') : t('globe.sats.filter.off.title')}
                   onClick={() => setSatFavOnly(!satFav)}
                 >
-                  {satFav ? '★' : 'All'}
+                  {satFav ? '★' : t('globe.sats.filter.all')}
                 </button>
               )}
             </Fragment>
@@ -1421,10 +1449,8 @@ export default function Globe3D({
         </div>
       )}
       {satAllHidden > 0 && (
-        <div className="map-empty-hint sats">
-          None of your ★ birds are in the current elements — the ★ filter is
-          hiding all {satAllHidden} satellites (Layers ▸ Satellites ▸ All).
-        </div>
+        // The 2-D map renders this same hint word for word — one key, deliberately.
+        <div className="map-empty-hint sats">{t('map.sats.allHidden', { count: satAllHidden })}</div>
       )}
       {/* The same on-map insight rail (openings / band advisor / MUF) the 2-D map shows —
           overlaid on the right, so the 3-D globe has the same operating windows. */}
@@ -1449,13 +1475,16 @@ export default function Globe3D({
           WebGL scene accessible — not to interrupt. (The sky dome's own text
           equivalent follows the same rule.) */}
       {livePass && (
-        <div className="globe3d-pass" role="group" aria-label={`Tracked pass: ${livePass.name}`}>
+        <div className="globe3d-pass" role="group" aria-label={t('globe.pass.aria', { name: livePass.name })}>
           <b>{livePass.name}</b>
           <span>
-            El {Math.round(livePass.satElDeg)}° · Az {Math.round(livePass.satAzDeg)}°
+            {t('globe.pass.elAz', {
+              el: Math.round(livePass.satElDeg),
+              az: Math.round(livePass.satAzDeg),
+            })}
           </span>
-          <span>{Math.round(livePass.rangeKm).toLocaleString()} km</span>
-          <span>LOS in {mmss(livePass.losUnix - Date.now() / 1000)}</span>
+          <span>{t('globe.pass.range', { km: Math.round(livePass.rangeKm).toLocaleString() })}</span>
+          <span>{t('globe.pass.losIn', { mmss: mmss(livePass.losUnix - Date.now() / 1000) })}</span>
         </div>
       )}
       {/* The same legends the 2-D map shows (shared component) — the globe was

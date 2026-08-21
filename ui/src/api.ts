@@ -833,6 +833,17 @@ export async function allTxtLocation(): Promise<string> {
   return invoke<string>('all_txt_location')
 }
 
+/** Where `nexus-diag.log` lives — the file we ask an operator to send when something goes
+ * wrong. Always written, no toggle. */
+export async function diagLogLocation(): Promise<string> {
+  return invoke<string>('diag_log_location')
+}
+
+/** Reveal `nexus-diag.log` in the file manager (falls back to opening its folder). */
+export async function revealDiagLog(): Promise<void> {
+  return invoke<void>('reveal_diag_log')
+}
+
 /** The absolute folder where per-QSO recordings land (to show in Settings). Per-PROFILE: a second
  * radio records under its own config dir, which is the whole of why "it is not writing the file"
  * gets reported when nothing has failed. */
@@ -850,6 +861,15 @@ export async function appVersion(): Promise<string> {
  * click, and installing restarts the app. */
 export async function updateInstallBlock(): Promise<string | null> {
   return invoke<string | null>('update_install_block')
+}
+
+/** Flush the conversations, the Field Day log, the open propagation episodes and the window
+ * geometry to disk before a self-update hands off to the installer. Called immediately BEFORE
+ * the plugin's `install()`, because on Windows that call ends the process outright
+ * (`ShellExecuteW` then `exit(0)`) and the ordinary quit cleanup never runs. A no-op on
+ * macOS/Linux, where `restartApp()` takes the normal exit path. */
+export async function prepareUpdateInstall(): Promise<void> {
+  return invoke<void>('prepare_update_install')
 }
 
 /** Restart Nexus after a self-update install — through the backend's ordinary quit cleanup
@@ -1968,9 +1988,10 @@ export async function setBlockedCalls(calls: string[]): Promise<AppSnapshot> {
 
 /** Set (or clear, with '') who is at the key — the ONE write path for the seat-swap chip,
  * the Field Day panel's Operator field and the pop-out scoreboard. Narrow write: never the
- * heavyweight settings save, which resets the mode, clears the TX queue and re-derives the
- * TX cycle from the struct the caller happened to be holding (#54). A seat swap is a
- * mid-QSO act by definition. The engine trims + uppercases. */
+ * heavyweight settings save, which clears the TX queue and re-derives the TX cycle from the
+ * struct the caller happened to be holding (#54). A seat swap is a mid-QSO act by
+ * definition. (Since #100 that save no longer resets the operating mode — the other two
+ * effects are reason enough.) The engine trims + uppercases. */
 export async function setFdOperator(call: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_fd_operator', { call })
 }
@@ -2233,7 +2254,8 @@ export async function getScopeRow(
 export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
 
 /** Set the MSK144 T/R period (5/10/15/30 s) — the cockpit's narrow write. Deliberately not a
- * full settings save, which resets the mode and clears the TX queue (#54). */
+ * full settings save, which clears the TX queue and re-derives the TX cycle (#54; the mode
+ * reset it also used to do was narrowed to Field Day by #100). */
 export async function setMsk144Period(secs: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_msk144_period', { secs })
 }

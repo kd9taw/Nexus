@@ -7,9 +7,14 @@
 // calm), and a lane with nothing the operator can act on is null (the chip
 // clears).
 
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
+// chip and its detail come from the catalog; the 14 d / 30 d lines and the age
+// itself are the facts the lane exists to report and stay here.
+
 import type { TleStatus } from '../api'
 import type { StatusItem } from '../status'
 import { elementsMostlyPastLine, elementsPastLineLabel } from './elementBands'
+import { t } from '../i18n'
 
 /**
  * The `sat` status-lane entry for the polled element-currency status, or null
@@ -30,9 +35,8 @@ export function satElementsLane(s: TleStatus, nowSecs: number): Omit<StatusItem,
   if (s.blockedUntil > nowSecs && !healthy) {
     return {
       tier: 'warning',
-      message: 'Sat: Celestrak blocked',
-      detail:
-        'Celestrak refused direct element fetches (HTTP 403/404) — direct attempts are stopped for 24 h. The hamradiotools.io mirror keeps retrying; elements may age until it lands.',
+      message: t('sat.lane.blocked.message'),
+      detail: t('sat.lane.blocked.detail'),
     }
   }
   // A COUNT test, not an age test — "not one bird is usable" is exactly what
@@ -42,9 +46,8 @@ export function satElementsLane(s: TleStatus, nowSecs: number): Omit<StatusItem,
   if (s.count > 0 && s.usableCount === 0) {
     return {
       tier: 'warning',
-      message: 'Sat: elements unusable',
-      detail:
-        'Every cached element set is over 30 days old — satellite surfaces refuse to point or tune on them. Refresh in Settings ▸ Radio ▸ Orbital elements, or import a fresh file.',
+      message: t('sat.lane.unusable.message'),
+      detail: t('sat.lane.unusable.detail'),
     }
   }
   // The 14 d line, on the MEDIAN of the usable sets — a persistent chip on
@@ -53,9 +56,8 @@ export function satElementsLane(s: TleStatus, nowSecs: number): Omit<StatusItem,
   if (s.elementAgeDays != null && s.elementAgeDays > 14) {
     return {
       tier: 'warning',
-      message: `Sat: elements ${Math.round(s.elementAgeDays)} d old`,
-      detail:
-        'Orbital elements are past the 14-day stale line — pass times, pointing and Doppler drift with age. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.',
+      message: t('sat.lane.stale.message', { days: Math.round(s.elementAgeDays) }),
+      detail: t('sat.lane.stale.detail'),
     }
   }
   // The one shape the median above cannot see: it stays calm until half the
@@ -69,8 +71,8 @@ export function satElementsLane(s: TleStatus, nowSecs: number): Omit<StatusItem,
   if (elementsMostlyPastLine(s)) {
     return {
       tier: 'warning',
-      message: `Sat: ${elementsPastLineLabel(s)}`,
-      detail: `Most of the element sets you hold are past the 14-day stale line — ${elementsPastLineLabel(s)}. The typical bird is still current, so the age reads calm; the rest of the catalog's pass times, pointing and Doppler are drifting. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.`,
+      message: t('sat.lane.mostlyStale.message', { label: elementsPastLineLabel(s) }),
+      detail: t('sat.lane.mostlyStale.detail', { label: elementsPastLineLabel(s) }),
     }
   }
   return null

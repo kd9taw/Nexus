@@ -420,6 +420,7 @@ const rtty: Case<(typeof RTTY_PANEL_IDS)[number]> = {
   stopControls: [
     ['Stop TX', /^stop tx$/i],
     ['Stop (RTTY abort)', /^esc\s*stop$/i],
+    ['Tune', /^tune$|^tuning…$/i],
     TX_LATCH,
   ],
   // onSetTxEnabled exactly as App passes it (the .rtty-host block). Without it CockpitHeader
@@ -438,6 +439,10 @@ const psk: Case<(typeof PSK_PANEL_IDS)[number]> = {
   stopControls: [
     ['Stop TX', /^stop tx$/i],
     ['Stop (PSK abort)', /^esc\s*stop$/i],
+    // Tune stops the carrier it started, exactly as it does in Phone, CW, Operate and
+    // RTTY. It arrived in this header with the drive control it exists to set (PSK's
+    // one operating hazard is overdrive), and it is swept here the day it arrived.
+    ['Tune', /^tune$|^tuning…$/i],
     TX_LATCH,
   ],
   // onSetTxEnabled exactly as App passes it (the .psk-host block). Without it

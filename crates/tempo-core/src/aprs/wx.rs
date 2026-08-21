@@ -180,7 +180,16 @@ pub fn parse_position_comment(comment: &str) -> Option<AprsWx> {
     // 36 knots. So require at least one field that only a weather station sends — temperature,
     // rain, humidity, barometer, gust. Without this every mobile on the map becomes a weather
     // station reporting a mysterious wind.
-    let mut wx = parse_fields(&comment[7..]);
+    // ⚠️ `comment[7..]` PANICS on a multi-byte character inside the wind slot. The slot is
+    // `ddd/sss` — seven ASCII bytes by the spec — but a tracker is free to send anything, and
+    // one in the wild put a 3-byte thin space at bytes 6..9 (`248/04\u{2009}) 000059Vin:…`),
+    // which made byte 7 land mid-character and took the thread down. The direction had parsed
+    // cleanly, so the shape gate above let it through. `get` returns None on a non-boundary,
+    // which is exactly the right answer: a slot that is not seven ASCII bytes is not a weather
+    // comment, and an ordinary station's free text must never be mined for readings anyway.
+    // (Found in an operator's diagnostic log, 2026-08-19 — the log's first catch.)
+    let rest = comment.get(7..)?;
+    let mut wx = parse_fields(rest);
     if wx.is_empty() {
         return None;
     }
@@ -191,6 +200,35 @@ pub fn parse_position_comment(comment: &str) -> Option<AprsWx> {
 
 #[cfg(test)]
 mod tests {
+
+    /// FIELD CRASH 2026-08-19, found in an operator's diagnostic log — the log's first catch.
+    ///
+    /// `byte index 7 is not a char boundary; it is inside ' ' (bytes 6..9) of
+    /// `248/04 ) 000059Vin:15.21V.SAT:29Topspeed:77kmh DX:2km``
+    ///
+    /// The wind slot is `ddd/sss` — seven ASCII bytes by the APRS spec — and the parser sliced
+    /// `comment[7..]` on that assumption. A tracker sending a MULTI-BYTE character inside the
+    /// slot (this one puts a 3-byte space at bytes 6..9) makes byte 7 land mid-character, and
+    /// Rust panics rather than truncating. The direction parsed fine, which is why the earlier
+    /// guard let it through.
+    #[test]
+    fn a_multibyte_char_in_the_wind_slot_is_refused_not_a_panic() {
+        // The exact comment from the operator's log.
+        let real = "248/04\u{2009}) 000059Vin:15.21V.SAT:29Topspeed:77kmh DX:2km";
+        assert_eq!(
+            parse_position_comment(real),
+            None,
+            "malformed slot ⇒ not a weather report"
+        );
+
+        // The control: the SAME packet with an ASCII space still parses, so the fix refuses the
+        // malformed shape rather than refusing everything.
+        let ascii = "248/004t072r000p000h50b10130";
+        assert!(
+            parse_position_comment(ascii).is_some(),
+            "control: a well-formed weather comment still parses"
+        );
+    }
     use super::*;
 
     // Every fixture is a real captured APRS-IS weather packet's payload (javAPRSlib's aprs.txt and

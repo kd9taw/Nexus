@@ -66,11 +66,38 @@ fn parse_triple(v: &str) -> Option<(u32, u32, u32)> {
     Some((a, b, c))
 }
 
+/// A comparable version: the numeric triple, then RELEASE-BEATS-PRERELEASE, then the
+/// prerelease tag itself so `-test2` follows `-test1`.
+///
+/// ⚠️ WHY THE PRERELEASE ARM EXISTS AT ALL. Tester builds take a suffix (`1.7.1-test1`) rather
+/// than eating a public patch number, so a tester is never left holding a version whose number
+/// a later public build reuses with different contents. Without this arm the rule backfired:
+/// `parse_triple` rejected the suffixed string, and an unparseable CURRENT version makes
+/// `version_is_newer` answer false for every candidate — the tester would be offered nothing,
+/// ever. A rule the comparator cannot read is not a rule.
+///
+/// This is semver's precedence for the shapes we ship, not a semver implementation: build
+/// metadata (`+sha`) is not handled because nothing here produces it, and prerelease tags are
+/// compared as plain strings rather than as dot-separated identifiers.
+fn parse_version(v: &str) -> Option<(u32, u32, u32, u8, String)> {
+    let (core, pre) = match v.split_once('-') {
+        Some((core, pre)) if !pre.is_empty() => (core, Some(pre)),
+        Some(_) => return None, // "1.7.1-" — a truncated tag, not a version
+        None => (v, None),
+    };
+    let (a, b, c) = parse_triple(core)?;
+    // 0 sorts a prerelease BELOW the release of the same number; 1 is the release itself.
+    Some(match pre {
+        Some(tag) => (a, b, c, 0, tag.to_string()),
+        None => (a, b, c, 1, String::new()),
+    })
+}
+
 /// True only when `latest` is a strictly newer version than `current`, compared NUMERICALLY
 /// (so 0.10.0 > 0.9.0, which a lexical string compare gets wrong). Either side being unparseable
 /// yields false — never nag the operator over a version string we don't understand.
 pub fn version_is_newer(latest: &str, current: &str) -> bool {
-    match (parse_triple(latest), parse_triple(current)) {
+    match (parse_version(latest), parse_version(current)) {
         (Some(l), Some(c)) => l > c,
         _ => false,
     }
@@ -89,6 +116,40 @@ mod tests {
             "linux": null
         }
     }"#;
+
+    // A TESTER BUILD MUST STILL BE OFFERED THE PUBLIC RELEASE THAT SUPERSEDES IT.
+    //
+    // The versioning rule says tester builds take a prerelease suffix (1.7.1-test1) rather
+    // than eating a public patch number, precisely so the holder is never stranded on a
+    // version that shares a number with different content. But `parse_triple` split on '.'
+    // and parsed each part as a u32, so "1.7.1-test1" failed on its third part, and an
+    // unparseable CURRENT version makes `version_is_newer` false for EVERYTHING — the tester
+    // would never be offered another build again. The rule and the comparator disagreed, and
+    // the comparator wins on the operator's machine.
+    #[test]
+    fn a_prerelease_is_older_than_its_release_and_newer_than_the_patch_below() {
+        assert!(
+            version_is_newer("1.7.1", "1.7.1-test1"),
+            "the public release supersedes it"
+        );
+        assert!(version_is_newer("1.7.2", "1.7.1-test1"));
+        assert!(version_is_newer("1.8.0", "1.7.1-test1"));
+        assert!(
+            !version_is_newer("1.7.0", "1.7.1-test1"),
+            "an older public build is not an update"
+        );
+        assert!(
+            !version_is_newer("1.7.1-test1", "1.7.1"),
+            "a tester build never supersedes a release"
+        );
+        // Successive tester builds on the same machine.
+        assert!(version_is_newer("1.7.1-test2", "1.7.1-test1"));
+        assert!(!version_is_newer("1.7.1-test1", "1.7.1-test2"));
+        // Control: the ordinary cases still hold, including the numeric one this exists for.
+        assert!(version_is_newer("0.10.0", "0.9.0"));
+        assert!(!version_is_newer("1.7.0", "1.7.0"));
+        assert!(!version_is_newer("garbage", "1.7.0"));
+    }
 
     #[test]
     fn parses_the_windows_installer_version() {

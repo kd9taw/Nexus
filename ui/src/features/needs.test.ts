@@ -56,6 +56,78 @@ describe('visibleNeeds', () => {
   })
 })
 
+// ── The band scopes govern the ICONS, not only the sound/toast (operator, twice:
+// "I selected grids, vhf/uhf 6m and up in the settings and its still showing the grid
+// icons in ft8 in both roster and classic mode when on hf bands").
+describe('visibleNeeds applies the per-type band scopes', () => {
+  const MODES = { cw: true, phone: true }
+  /** The shipped defaults: DXCC everywhere, plain + rare grids on VHF+ only. */
+  const DEFAULTS = { dxcc: 'all', grid: 'vhf', rareGrid: 'vhf' }
+
+  function need(tags: NeedTag[], band: string, over: Partial<NeedAlert> = {}): NeedAlert {
+    return { ...alert('K1GRID', 'Digital', band), tags, priority: NEED_TIER[tags[0]], ...over }
+  }
+
+  it('no scopes passed → every tag survives (the mode gate alone, unchanged)', () => {
+    const v = visibleNeeds([need(['NewGrid'], '20m')], MODES)
+    expect(v[0].tags).toEqual(['NewGrid'])
+  })
+
+  it('drops a grid-only need on HF when the grid scope is VHF+', () => {
+    expect(visibleNeeds([need(['NewGrid'], '20m')], MODES, DEFAULTS)).toEqual([])
+  })
+
+  it('POSITIVE CONTROL — the same need on 6 m survives', () => {
+    const v = visibleNeeds([need(['NewGrid'], '6m')], MODES, DEFAULTS)
+    expect(v.map((a) => a.tags)).toEqual([['NewGrid']])
+  })
+
+  it('scopes by the ALERT’s own band, not the surface: a 6 m need survives while HF-tuned', () => {
+    // The roster and band map show stations heard on other bands; each alert answers for
+    // the band it was heard on.
+    const v = visibleNeeds([need(['NewGrid'], '6m', { freqMhz: 50.313 })], MODES, DEFAULTS)
+    expect(v.length).toBe(1)
+  })
+
+  it('drops only the OUT-OF-SCOPE tag — a new BAND keeps its icon on HF', () => {
+    const v = visibleNeeds([need(['NewGrid', 'NewBand'], '20m')], MODES, DEFAULTS)
+    expect(v.map((a) => a.tags)).toEqual([['NewBand']])
+    // Priority is re-stated from the surviving lead — the grid's number described a claim
+    // this row is no longer making.
+    expect(v[0].priority).toBe(NEED_TIER.NewBand)
+  })
+
+  it('rare grids follow the RARE scope, and are admitted when EITHER grid scope opens', () => {
+    const gem = need(['NewGrid'], '20m', { gridRarity: 'ultraRare' })
+    expect(visibleNeeds([gem], MODES, DEFAULTS)).toEqual([])
+    expect(visibleNeeds([gem], MODES, { ...DEFAULTS, rareGrid: 'all' }).length).toBe(1)
+    expect(visibleNeeds([gem], MODES, { ...DEFAULTS, grid: 'all' }).length).toBe(1)
+  })
+
+  it('the DXCC scope governs NEW ONE the same way (default all, so set it explicitly)', () => {
+    const atno = need(['NewEntity'], '20m')
+    expect(visibleNeeds([atno], MODES, DEFAULTS).length, 'default all → still shown').toBe(1)
+    expect(visibleNeeds([atno], MODES, { ...DEFAULTS, dxcc: 'vhf' })).toEqual([])
+    expect(visibleNeeds([need(['NewEntity'], '6m')], MODES, { ...DEFAULTS, dxcc: 'vhf' }).length).toBe(1)
+  })
+
+  it('a WANTED watch-list entry keeps tagging on HF — it sits above the band scopes', () => {
+    const watched = need(['Wanted', 'NewGrid'], '20m')
+    const v = visibleNeeds([watched], MODES, { dxcc: 'off', grid: 'off', rareGrid: 'off' })
+    expect(v.map((a) => a.tags)).toEqual([['Wanted']])
+  })
+
+  it('an unresolvable band is PERMISSIVE — a missing icon is worse than an extra one', () => {
+    expect(visibleNeeds([need(['NewGrid'], '')], MODES, DEFAULTS).length).toBe(1)
+    expect(visibleNeeds([need(['NewGrid'], '11m')], MODES, DEFAULTS).length).toBe(1)
+  })
+
+  it('the mode gate still applies alongside the scopes', () => {
+    const cw = { ...need(['NewGrid'], '6m'), mode: 'CW' }
+    expect(visibleNeeds([cw], { cw: false, phone: true }, DEFAULTS)).toEqual([])
+  })
+})
+
 describe('workTarget', () => {
   it('CW need with an exact spot freq → QSY there, cw view', () => {
     const t = workTarget(alert('3Y0J', 'CW', '20m', 14.025), BAND_PLAN)

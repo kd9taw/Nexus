@@ -1,3 +1,13 @@
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the prose of the
+// rig scope — the S-meter's three states, the feed chips, the Δ readout's explanation, the
+// gain/zero knobs, the resolution/3D/pause/scroll buttons and the canvas — is in the catalog
+// under `scope.*`. This is an INSTRUMENT, not a transmit surface: it draws, and its one
+// gesture tunes the RX dial.
+//
+// The units rule lands on the PASSBAND: the three window widths in Hz, every S-unit and dB
+// reading, the audio and RF spans, and the two feed names below are measurements and product
+// names, so they stay in the code — as does the DIAL plate drawn into the bitmap, which is an
+// instrument mark placed by canvas arithmetic rather than a sentence.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { getScopeRow, type ScopeWindow } from '../api'
 import { sampleLut } from '../colormaps'
@@ -28,6 +38,16 @@ import { useWaterfallPalette } from '../waterfallPalette'
 import { WaterfallHistory } from '../waterfallHistory'
 import { drawDss } from '../dss'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
+
+/** The scope's own vocabulary: the unit on the Δ readout, the two native-panadapter feed
+ *  names (a product and a protocol), and the plate drawn beside the carrier line. Tokens,
+ *  named so the catalog guard reads them as the deliberate constants they are. */
+const DB = 'dB'
+const FLEX_RF = 'FLEX RF'
+const CIV_RF = 'CI-V RF'
+const DIAL_PLATE = 'DIAL'
 
 /** Persisted 3D-view toggle for the rig scope (shared by the Phone + CW cockpits; per-surface
  * so a popped-out cockpit keeps its own choice). Static literal — the storage-scope test
@@ -56,23 +76,14 @@ const PHSCOPE_FLOW_KEY = 'nexus.phonescope.flow'
  *
  * The LABEL is the Hann main-lobe width, because that is the thing the operator is buying and it
  * is legible at a glance on a rig display. The title carries the cost.
+ *
+ * The label is a MEASUREMENT and stays written here; the title is prose and resolves through
+ * the catalog when the button renders (a resolved constant would freeze the first locale).
  */
-const SCOPE_WINDOWS: ReadonlyArray<{ id: ScopeWindow; label: string; title: string }> = [
-  {
-    id: 'balanced',
-    label: '23 Hz',
-    title: 'Resolution: Balanced — 2048-point window, 171 ms. The default. A 25 WPM dit is shorter than this window, so CW keying reads as a solid bar. Click for sharper.',
-  },
-  {
-    id: 'sharp',
-    label: '12 Hz',
-    title: 'Resolution: Sharp — 4096-point window, 341 ms. Half the carrier width, at double the time smear. Best for picking a weak carrier out of a crowded passband. Click for faster.',
-  },
-  {
-    id: 'fast',
-    label: '47 Hz',
-    title: 'Resolution: Fast — 1024-point window, 85 ms. Carriers read twice as wide, but keying and speech onsets actually resolve. Click to return to the default.',
-  },
+const SCOPE_WINDOWS: ReadonlyArray<{ id: ScopeWindow; label: string; titleKey: MessageKey }> = [
+  { id: 'balanced', label: '23 Hz', titleKey: 'scope.window.balanced.title' },
+  { id: 'sharp', label: '12 Hz', titleKey: 'scope.window.sharp.title' },
+  { id: 'fast', label: '47 Hz', titleKey: 'scope.window.fast.title' },
 ]
 
 /** A stored value is only honoured if it is one we still ship — anything else is the default,
@@ -805,7 +816,55 @@ export function PhoneScope({
         ctx.font = `${Math.max(8, Math.round(10 * scaleY))}px system-ui, sans-serif`
         ctx.textAlign = 'left'
         ctx.textBaseline = 'top'
-        ctx.fillText('DIAL', cx + 3 * scaleY, 2 * scaleY)
+        ctx.fillText(DIAL_PLATE, cx + 3 * scaleY, 2 * scaleY)
+      }
+
+      // ---- Dial line (native RF panadapter): where the VFO actually is ----
+      //
+      // Operator request from an IC-7300 user, 2026-08-20: "The RF Panadapter is now
+      // displayed! Is there a way to place a dial indicator on the freq tuned?" There was
+      // not. The carrier line above is explicitly `!isRfScopeSource`, because it marks audio
+      // axis 0 — a coordinate a real RF row does not have — so a native panadapter drew a
+      // spectrum with nothing saying which part of it you were listening to. Every other
+      // panadapter in the hobby marks the dial, and the rig's own screen does.
+      //
+      // The dial is an ABSOLUTE RF frequency here and so are lo/hi, which is what makes this
+      // three lines: the same projection the row itself was painted with. It is NOT assumed
+      // to be the middle. scopeView centres the window on the dial only when the dial is
+      // inside the row and no marker moves it, so on a rig in FIXED scope mode — where the
+      // span is a band segment and the VFO sits wherever you tuned it — the line lands where
+      // the VFO really is, off-centre, which is the whole point of that mode.
+      //
+      // DRAWN ONLY WHEN IT IS GENUINELY IN VIEW. A dial outside the window is not clamped to
+      // an edge: a line pinned to the left of a panadapter saying DIAL, while the dial is a
+      // megahertz further down, is worse than no line. scopeView already falls back to the
+      // row centre when the dial is outside the row, and this refuses to draw on that
+      // fallback rather than marking a frequency nobody is tuned to.
+      if (isRfScopeSource(src) && dialRef.current != null) {
+        const dialHz = dialRef.current
+        const dx = Math.round(((dialHz - lo) / (hi - lo)) * Wd)
+        // The CW pitch marker below lands EXACTLY here on an RF row (scopeView maps the
+        // marker through the dial), so drawing both would stack a solid line under a dashed
+        // one. Where they coincide the marker wins: it carries the extra meaning.
+        const mAt = view.markerAtHz
+        const mx = mAt == null ? null : Math.round(((mAt - lo) / (hi - lo)) * Wd)
+        // INCLUSIVE bounds, and that is not a rounding detail. On USB a plain audio window
+        // projects onto RF as dial → dial+span, so the dial IS the window's left edge (its
+        // right edge on LSB); only the symmetric modes (FM/AM) centre it. An exclusive test
+        // would therefore refuse to draw in exactly the case an SSB operator is in.
+        if (dialHz >= lo && dialHz <= hi && (mx == null || Math.abs(mx - dx) > 1)) {
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'
+          ctx.lineWidth = Math.max(1, scaleY)
+          ctx.beginPath()
+          ctx.moveTo(dx, 0)
+          ctx.lineTo(dx, devH)
+          ctx.stroke()
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
+          ctx.font = `${Math.max(8, Math.round(10 * scaleY))}px system-ui, sans-serif`
+          ctx.textAlign = 'left'
+          ctx.textBaseline = 'top'
+          ctx.fillText(DIAL_PLATE, dx + 3 * scaleY, 2 * scaleY)
+        }
       }
 
       // ---- Pitch marker (CW): tune a carrier onto the hairline = zero-beat ----
@@ -1120,6 +1179,8 @@ export function PhoneScope({
     onTuneRef.current?.({ dialHz: Math.round(r.dialHz), kind: 'click' })
   }
 
+  /** The analysis window in force — its width plate and its tooltip key. */
+  const win = SCOPE_WINDOWS.find((w) => w.id === scopeWin)
   // Real CAT S-meter (dB rel S9). Absent when the rig doesn't report STRENGTH, or during
   // TX (STRENGTH is RX-only) → the meter reads "—" rather than faking a level.
   const sm = smeterDb != null && !transmitting ? sMeterDisplay(smeterDb) : null
@@ -1137,10 +1198,10 @@ export function PhoneScope({
         className="ph-scope-smeter"
         title={
           sm
-            ? `S-meter ${sm.label} (${smeterDb} dB rel S9, via CAT)`
+            ? t('scope.smeter.title', { reading: sm.label, db: smeterDb ?? 0 })
             : transmitting
-              ? 'S-meter paused during transmit'
-              : 'No CAT S-meter reported by this rig'
+              ? t('scope.smeter.title.tx')
+              : t('scope.smeter.title.none')
         }
       >
         <span className="ph-scope-smeter-label">S</span>
@@ -1155,23 +1216,21 @@ export function PhoneScope({
           <span
             className="ph-scope-src"
             title={
-              source === 'flex'
-                ? 'Native FlexRadio panadapter (SmartSDR) — real RF spectrum, not the soundcard FFT'
-                : 'Native Icom CI-V scope — real RF spectrum, not the soundcard FFT'
+              source === 'flex' ? t('scope.source.flex.title') : t('scope.source.civ.title')
             }
           >
-            {source === 'flex' ? 'FLEX RF' : 'CI-V RF'}
+            {source === 'flex' ? FLEX_RF : CIV_RF}
           </span>
         )}
         {spanDb != null && (
           <span
             className="ph-scope-dyn"
-            title="How far the strongest signal in this view stands above the noise floor. The scope's vertical scale is FIXED at 50 dB above the noise, so a louder signal really does draw a taller spike — use G to widen or tighten that window."
+            title={t('scope.dynamic.title')}
           >
-            ▲{spanDb} dB
+            ▲{spanDb} {DB}
           </span>
         )}
-        <label className="ph-scope-gz" title="Visual gain — stretch (right) or flatten (left) the color contrast">
+        <label className="ph-scope-gz" title={t('scope.gain.title')}>
           G
           <input
             type="range"
@@ -1180,10 +1239,10 @@ export function PhoneScope({
             step={0.05}
             value={gain}
             onChange={(e) => setGain(Number(e.target.value))}
-            aria-label="Scope visual gain"
+            aria-label={t('scope.gain.aria')}
           />
         </label>
-        <label className="ph-scope-gz" title="Visual zero — raise (right) to darken the noise floor, lower (left) to reveal weak texture">
+        <label className="ph-scope-gz" title={t('scope.zero.title')}>
           Z
           <input
             type="range"
@@ -1192,14 +1251,14 @@ export function PhoneScope({
             step={0.05}
             value={zero}
             onChange={(e) => setZero(Number(e.target.value))}
-            aria-label="Scope visual zero (floor)"
+            aria-label={t('scope.zero.aria')}
           />
         </label>
         <button
           type="button"
           className={`ph-scope-btn${scopeWin !== 'balanced' ? ' on' : ''}`}
-          aria-label={`Scope resolution ${SCOPE_WINDOWS.find((w) => w.id === scopeWin)?.label} — click to change`}
-          title={SCOPE_WINDOWS.find((w) => w.id === scopeWin)?.title}
+          aria-label={t('scope.resolution.aria', { width: win?.label ?? '' })}
+          title={win ? t(win.titleKey) : undefined}
           onClick={() => {
             const i = SCOPE_WINDOWS.findIndex((w) => w.id === scopeWin)
             const next = SCOPE_WINDOWS[(i + 1) % SCOPE_WINDOWS.length].id
@@ -1208,17 +1267,13 @@ export function PhoneScope({
             surfaceSet(PHSCOPE_WIN_KEY, next)
           }}
         >
-          {SCOPE_WINDOWS.find((w) => w.id === scopeWin)?.label}
+          {win?.label}
         </button>
         <button
           type="button"
           className={`ph-scope-btn${dss ? ' on' : ''}`}
           aria-pressed={dss}
-          title={
-            dss
-              ? 'Back to the flat trace + waterfall'
-              : 'Switch to the 3D stacked-spectrum view (fills the panel; hides the trace)'
-          }
+          title={dss ? t('scope.dss.on.title') : t('scope.dss.off.title')}
           onClick={() => {
             const next = !dss
             setDss(next)
@@ -1233,11 +1288,7 @@ export function PhoneScope({
           type="button"
           className={`ph-scope-btn${paused ? ' on' : ''}`}
           aria-pressed={paused}
-          title={
-            paused
-              ? 'Resume the live scope (history kept filling while paused)'
-              : 'Pause the waterfall — then scroll back through it with the mouse wheel'
-          }
+          title={paused ? t('scope.pause.resume.title') : t('scope.pause.title')}
           onClick={() => {
             const next = !paused
             setPaused(next)
@@ -1252,11 +1303,7 @@ export function PhoneScope({
           type="button"
           className={`ph-scope-btn${!newestAtTop ? ' on' : ''}`}
           aria-pressed={!newestAtTop}
-          title={
-            newestAtTop
-              ? 'Scrolls down — the newest row appears at the TOP and history travels downward. Click for newest at the bottom.'
-              : 'Scrolls up — the newest row appears at the BOTTOM and history travels upward. Click for newest at the top.'
-          }
+          title={newestAtTop ? t('scope.flow.down.title') : t('scope.flow.up.title')}
           onClick={() => {
             const next = !newestAtTop
             setNewestAtTop(next)
@@ -1265,18 +1312,14 @@ export function PhoneScope({
             rebuildRef.current?.()
           }}
         >
-          {newestAtTop ? 'Scrolls down' : 'Scrolls up'}
+          {newestAtTop ? t('scope.flow.down.label') : t('scope.flow.up.label')}
         </button>
       </div>
       <div className="ph-scope-canvas-wrap">
         <canvas
           ref={canvasRef}
           className={`ph-scope-canvas${tunable ? ' tunable' : ''}`}
-          title={
-            tunable
-              ? 'Click a signal to tune it · press and drag to slide the passband'
-              : undefined
-          }
+          title={tunable ? t('scope.canvas.title') : undefined}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -1296,7 +1339,7 @@ export function PhoneScope({
             }
           }}
         />
-        {paused && <div className="ph-scope-paused">⏸ paused · wheel to rewind</div>}
+        {paused && <div className="ph-scope-paused">{t('scope.paused.badge')}</div>}
         {/* The drag passband box — imperatively positioned (60 fps), never intercepts events. */}
         <div ref={boxRef} className="ph-scope-box" aria-hidden="true" />
       </div>

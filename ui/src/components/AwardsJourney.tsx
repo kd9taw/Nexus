@@ -1,6 +1,10 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI.
+
 import { useState } from 'react'
 import { AwardsView } from './AwardsView'
 import { JourneyView } from './JourneyView'
+import { t } from '../i18n'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 
 /** PER-SURFACE: which tab this window is parked on is "where I am", not "what I like". */
@@ -43,7 +47,7 @@ export function AwardsJourney({
 
   return (
     <main className="awards-journey">
-      <div className="aj-tabs" role="tablist" aria-label="Awards and Journey">
+      <div className="aj-tabs" role="tablist" aria-label={t('awards.tabs.aria')}>
         <button
           type="button"
           role="tab"
@@ -51,7 +55,7 @@ export function AwardsJourney({
           className={`aj-tab${tab === 'journey' ? ' active' : ''}`}
           onClick={() => choose('journey')}
         >
-          Journey
+          {t('awards.tab.journey')}
         </button>
         <button
           type="button"
@@ -60,7 +64,7 @@ export function AwardsJourney({
           className={`aj-tab${tab === 'official' ? ' active' : ''}`}
           onClick={() => choose('official')}
         >
-          Official Awards
+          {t('awards.tab.official')}
         </button>
       </div>
       <div className="aj-scroll">

@@ -1,7 +1,14 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT: the band names, which are both the option LABEL
+// and the option VALUE here — the value is what `pickBand` sends the engine, so neither may move.
+//
+// The 🔒 chip is a READOUT of `txAllowed`, not a transmit control: it says the engine is already
+// blocking transmit here. Nothing on this surface keys, unkeys or stops a transmission.
 import { useEffect, useState } from 'react'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, pickBand } from '../api'
 import { bandColor } from '../bandColors'
+import { t } from '../i18n'
 
 interface Props {
   snap: AppSnapshot
@@ -51,7 +58,7 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
         className="band-picker-select"
         value={snap.radio.band}
         onChange={(e) => onPick(e.target.value)}
-        title="Band — your last frequency on this band in this mode this session, else the start of your licensed segment"
+        title={t('bandPicker.select.title')}
         style={{ color: col, borderColor: col, boxShadow: `0 0 0 1px ${col}55, 0 0 10px ${col}33` }}
       >
         {!known && <option value={snap.radio.band}>{snap.radio.band}</option>}
@@ -62,11 +69,8 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
         ))}
       </select>
       {!snap.radio.txAllowed && (
-        <span
-          className="tx-lock"
-          title="This frequency/mode is outside your license privileges — transmit is blocked. Pick a band above, or change your license class in Settings."
-        >
-          🔒 TX locked
+        <span className="tx-lock" title={t('bandPicker.txLock.title')}>
+          {t('bandPicker.txLock.label')}
         </span>
       )}
     </div>

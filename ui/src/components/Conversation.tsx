@@ -1,3 +1,13 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). What does NOT come
+// from the catalog: the CQ line itself (`CQ <MYCALL> <MYGRID>` is what goes on the air, and
+// the two stand-ins below are what fills it before a callsign or grid is set), the band
+// macros the operator typed, the peer's callsign, and the Winter Field Day chip — an event
+// name, invariant exactly as it is in `FieldDayView.tsx`. The ⇄/⚙/💓/🤍 marks are glyphs.
+//
+// The Call CQ button and the heartbeat toggle put a signal on the air, but neither is a
+// TX-enable latch and this cockpit renders no stop control (it has none — Tempo's stop line
+// is the TopBar's, and APRS-style arming does not exist here), so nothing on this surface is
+// on a stop-line census.
 import type {
   ChatMessage,
   Conversation as Conv,
@@ -9,6 +19,14 @@ import type {
 import { MessageBubble, type DeliveryStage } from './MessageBubble'
 import { Composer } from './Composer'
 import { usePinnedScroll } from '../usePinnedScroll'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
+
+/** What a CQ says before the station is set up. Both are on-air stand-ins, not prose. */
+const CQ_PLACEHOLDER = { call: 'YOURCALL', grid: '----' }
+
+/** Winter Field Day's own name, as the operator submits it — an event name, never translated. */
+const WFD_CHIP = '🏕 Field Day · Winter'
 
 interface Props {
   conversation: Conv | null
@@ -122,37 +140,42 @@ export function Conversation({
   // No peer selected → the Call CQ launchpad: call CQ (a broadcast) to be heard
   // on the band without first picking a station, plus the editable band macros.
   if (!peer) {
-    const cqText = `CQ ${mycall || 'YOURCALL'} ${mygrid || '----'}`.trim()
+    const cqText = `CQ ${mycall || CQ_PLACEHOLDER.call} ${mygrid || CQ_PLACEHOLDER.grid}`.trim()
     return (
       <section className="conversation panel empty-conv">
         <div className="empty-conv-inner">
-          <h2>No conversation selected</h2>
-          <p>Pick a station from the roster, or call CQ to be heard on the band.</p>
+          <h2>{t('tempo.empty.heading')}</h2>
+          <p>{t('tempo.empty.body')}</p>
           {wfdFd && (
             <p className="conv-sub" style={{ marginBottom: 'var(--space-2)' }}>
-              <span
-                className="fd-state-chip"
-                style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
-              >
-                🏕 Field Day · Winter
-              </span>{' '}
-              active — call CQ, then send your exchange from the chat box.
+              <T
+                k="tempo.empty.fdActive"
+                vals={{ event: WFD_CHIP }}
+                tags={{
+                  chip: (
+                    <span
+                      className="fd-state-chip"
+                      style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                    />
+                  ),
+                }}
+              />
             </p>
           )}
           <button type="button" className="cq-btn" onClick={onCallCq}>
-            📣 Call CQ
+            {t('tempo.cq.button')}
           </button>
           <p className="cq-onair">
-            Transmits the standard <strong>{cqText}</strong> and arms TX.
+            <T k="tempo.cq.onAir" vals={{ cq: cqText }} tags={{ b: <strong /> }} />
           </p>
           <button
             type="button"
             className={`heartbeat-btn${beaconOn ? ' on' : ''}`}
             onClick={onToggleBeacon}
             aria-pressed={beaconOn}
-            title="Periodically beacon your presence so other Tempo stations can hear you and deliver queued messages — turn off to stay silent"
+            title={t('tempo.heartbeat.launch.title')}
           >
-            {beaconOn ? '💓 Heartbeat on' : '🤍 Heartbeat off'}
+            {beaconOn ? t('tempo.heartbeat.launch.on') : t('tempo.heartbeat.launch.off')}
           </button>
           {/* Roam must be reachable from the launchpad too — the conversation
               header (which also carries these chips) only exists once a peer is
@@ -164,23 +187,28 @@ export function Conversation({
                 className={`heartbeat-btn roam-toggle${roamEnabled ? ' on' : ''}`}
                 onClick={onToggleRoam}
                 aria-pressed={roamEnabled}
-                title="Roam — coordinated QSY: you and your partner move channels together, announced in the clear (never private). Click to enable/disable."
+                title={t('roam.chip.title')}
               >
-                ⇄ Roam {roamEnabled ? `on${roamStatus ? ` · ${roamStatus}` : ''}` : 'off'}
+                ⇄{' '}
+                {roamEnabled
+                  ? roamStatus
+                    ? t('roam.chip.launch.on.status', { status: roamStatus })
+                    : t('roam.chip.launch.on')
+                  : t('roam.chip.launch.off')}
               </button>
               {onRoamSettings && (
                 <button
                   type="button"
                   className="heartbeat-btn roam-gear"
                   onClick={onRoamSettings}
-                  title="Roam settings — channel set, hop cadence, move/pause/stop"
+                  title={t('roam.chip.settings.title')}
                 >
-                  ⚙ Roam settings
+                  {t('roam.chip.settings.label')}
                 </button>
               )}
             </div>
           )}
-          <div className="quick-replies band-quickbar" aria-label="Band broadcasts">
+          <div className="quick-replies band-quickbar" aria-label={t('tempo.band.quickbar.aria')}>
             {macros.band.map((q, i) => (
               <button
                 key={`${q}-${i}`}
@@ -203,18 +231,20 @@ export function Conversation({
   return (
     <section className="conversation panel">
       <div className="panel-header conv-header">
-        <h2 className="conv-peer">{isBand ? 'Band — open calls' : peer}</h2>
+        <h2 className="conv-peer">{isBand ? t('tempo.header.band') : peer}</h2>
         <span className="conv-sub">
-          {isBand ? `You broadcast as DE ${mycall || 'YOURCALL'}` : `${messages.length} messages`}
+          {isBand
+            ? t('tempo.header.broadcastAs', { call: mycall || CQ_PLACEHOLDER.call })
+            : t('tempo.header.messages', { count: messages.length })}
         </span>
         <button
           type="button"
           className={`heartbeat-chip${beaconOn ? ' on' : ''}`}
           onClick={onToggleBeacon}
           aria-pressed={beaconOn}
-          title="Presence heartbeat — periodically beacon so other Tempo stations can hear you and deliver queued messages"
+          title={t('tempo.heartbeat.chip.title')}
         >
-          {beaconOn ? '💓 Heartbeat' : '🤍 Heartbeat'}
+          {beaconOn ? t('tempo.heartbeat.chip.on') : t('tempo.heartbeat.chip.off')}
         </button>
         {onToggleRoam && (
           <button
@@ -222,9 +252,14 @@ export function Conversation({
             className={`heartbeat-chip roam-toggle${roamEnabled ? ' on' : ''}`}
             onClick={onToggleRoam}
             aria-pressed={roamEnabled}
-            title="Roam — coordinated QSY: you and your partner move channels together, announced in the clear (never private). Click to enable/disable."
+            title={t('roam.chip.title')}
           >
-            ⇄ Roam{roamEnabled ? ` · ${roamStatus ?? 'on'}` : ''}
+            ⇄{' '}
+            {roamEnabled
+              ? roamStatus
+                ? t('roam.chip.label.status', { status: roamStatus })
+                : t('roam.chip.label.on')
+              : t('roam.chip.label')}
           </button>
         )}
         {onRoamSettings && (
@@ -232,8 +267,8 @@ export function Conversation({
             type="button"
             className="heartbeat-chip roam-gear"
             onClick={onRoamSettings}
-            title="Roam settings — channel set, hop cadence, move/pause/stop"
-            aria-label="Roam settings"
+            title={t('roam.chip.settings.title')}
+            aria-label={t('roam.chip.settings.aria')}
           >
             ⚙
           </button>
@@ -243,25 +278,23 @@ export function Conversation({
             <span
               className="fd-state-chip"
               style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
-              title="Winter Field Day is active — Tempo is a first-class Field Day contact surface"
+              title={t('tempo.header.fd.title')}
             >
-              🏕 Field Day · Winter
+              {WFD_CHIP}
             </span>
             <span className="conv-sub" title={wfdFd.state || undefined}>
               {wfdFd.dxcall
-                ? `Working ${wfdFd.dxcall}`
+                ? t('tempo.header.fd.working', { call: wfdFd.dxcall })
                 : wfdFd.running
-                  ? 'Running (calling CQ)'
-                  : 'Search & pounce'}
+                  ? t('tempo.header.fd.running')
+                  : t('tempo.header.fd.searchPounce')}
             </span>
           </>
         )}
       </div>
 
       <div className="message-scroll" ref={pin.ref} onScroll={pin.onScroll}>
-        {messages.length === 0 && (
-          <p className="empty">No messages yet — say hello.</p>
-        )}
+        {messages.length === 0 && <p className="empty">{t('tempo.messages.empty')}</p>}
         {messages.map((m, i) => (
           <MessageBubble
             key={`${m.slot}-${i}`}

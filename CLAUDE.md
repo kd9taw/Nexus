@@ -167,9 +167,14 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   Stop TX (`.op-btn.stop` in `.cockpit-qso` → `halt_tx`, the only control here that cuts an over in
   flight), Tune, Esc; RTTY — Stop TX (never disabled), the dock's Esc/Stop macro
   (`disabled={!(sending || latched)}`, live exactly while an over is on the air **or** continuous TX
-  is latched), Esc (a window `keydown` bound only while RTTY is the visible view), the TX-enable
-  latch and the sequencer's Abort (rendered only while auto runs); SSTV — Stop (`.sstv-tx-bar`) +
-  the TX-enable latch.
+  is latched), Tune, Esc (a window `keydown` bound only while RTTY is the visible view), the TX-enable
+  latch and the sequencer's Abort (rendered only while auto runs); PSK — Stop TX, the dock's Esc/Stop
+  macro (RTTY's shape and predicate), Tune, Esc (bound only while PSK is visible), the TX-enable
+  latch; SSTV — Stop (`.sstv-tx-bar`) + the TX-enable latch.
+  **Tune reached RTTY and PSK on 2026-08-20**, with the RF-power slider it exists to set — the two
+  keyboard cockpits had been shipping without the header's own declared base controls (power, Tune,
+  ATU), which is the discoverability defect the triage found in a different form ("the ATU button is
+  in the header in three cockpits and in the TX strip in the fourth"). Both are swept.
   **RTTY's continuous-TX ("TX") button is a SENDER, not a stop** — clicking it off stops accepting
   characters and lets what was already typed finish keying, so it must never be added to the sweep's
   `stopControls`. It is also the one transmission in the app with no precomputed end, so it carries
@@ -186,12 +191,13 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   **The latch is a stop in RTTY and SSTV only:** there `set_tx_enabled(false)` arms `rtty_abort` /
   `sstv_abort`, which the audio loop turns into flush + unkey while an over is keying, and it stays a
   *button* through those overs because `radio.transmitting` is the slot-TX indicator alone. APRS is a
-  sixth cockpit with no vocabulary at all, so the rule holds by construction — and it renders no stop
+  seventh cockpit with no vocabulary at all, so the rule holds by construction — and it renders no stop
   control; its TX On/Off is an arm latch that only holds the queue. The TopBar's TX cluster backstops
-  none of them — App hides it in Operate and in Phone/CW/RTTY/SSTV/APRS — so each cockpit stands on
+  none of them — App hides it in Operate and in Phone/CW/RTTY/PSK/SSTV/APRS — so each cockpit stands on
   its own. **The sweeps do not match this census one for one** (the claim that they did was false for
   four of the five swept cockpits): swept are Phone's PTT/Stop TX/Tune, CW's Stop TX/Tune, RTTY's Stop
-  TX/Esc-Stop macro/latch and SSTV's Stop/latch (the one exact match); Operate's guard list is the
+  TX/Esc-Stop macro/Tune/latch, PSK's Stop TX/Esc-Stop macro/Tune/latch and SSTV's Stop/latch (the one
+  exact match); Operate's guard list is the
   whole TX/sequencer surface of the strip, not a stop-control list. Census-only, and outside both
   sweeps by construction: Phone's Space and CW's/Operate's Esc (keyboard-only) and RTTY's sequencer
   Abort (conditionally rendered).
@@ -229,7 +235,7 @@ add a regex-presence CSS test, that is how dead fixes shipped twice).
   screen that remains**.
   Two guards, and neither is the rule alone: `panelState.test.ts` checks **names** across every
   vocabulary (`ALL_PANEL_VOCABULARIES`, itself checked against every vocabulary the module
-  exports); `components/stop-line.test.tsx` checks **wiring** for Phone/CW/RTTY/SSTV — with every id
+  exports); `components/stop-line.test.tsx` checks **wiring** for Phone/CW/RTTY/PSK/SSTV — with every id
   in a cockpit's vocabulary removed, singly and all at once, every stop control **on that cockpit's
   list** must still be in the document, found by accessible name, and no more disabled than it was.
   Operate is swept in `OperateCockpit.structure.test.tsx`, and that sweep is **presence-only** (see

@@ -3,6 +3,7 @@
 // modeledVar / tierVar the Band Advisor uses, so it never disagrees with the ladder.
 import { dualStateLabel, modeledVar, tierVar } from '../../propViz'
 import type { RegionBest } from '../../types'
+import { t } from '../../i18n'
 
 export function BestBandTable({
   rows,
@@ -23,7 +24,7 @@ export function BestBandTable({
             key={r.region}
             className={`bbt-row${onBandClick ? ' is-clickable' : ''}${activeBand === r.band ? ' is-active' : ''}`}
             onClick={onBandClick ? () => onBandClick(r.band) : undefined}
-            title={onBandClick ? `Focus ${r.band} on the map` : undefined}
+            title={onBandClick ? t('prop.focusBand.title', { band: r.band }) : undefined}
           >
             <span className="bbt-region">
               {r.octant} {r.region}
@@ -32,7 +33,7 @@ export function BestBandTable({
               {r.band}
             </span>
             <span className="bbt-state">{ds.word}</span>
-            <span className="bbt-stns" title="anchored stations (⇄ = both directions)">
+            <span className="bbt-stns" title={t('prop.bestBand.stations.title')}>
               {r.stations}
               {r.bidirectional ? ' ⇄' : ''}
             </span>

@@ -1,5 +1,13 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from
+// the catalog is LOG_EXAMPLES and PARK_PROGRAMS below, plus everything this strip prints about a
+// contact — the callsign, RST, grid, band, mode and frequency are wire values, and a locale that
+// "translated" one would have broken an example of a wire format. See the invariant-token rule in
+// `i18n/index.ts`.
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, LoggedQso } from '../types'
+import { t } from '../i18n'
 import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
@@ -52,6 +60,28 @@ function bandForMhz(mhz: number): string {
  * logbook.rs adif_submode). SSB is the generic phone Mode; FM/AM cover the rest of phone. The
  * cockpits only ever pass SSB/FM/CW as the default, all present here. */
 const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'FT8', 'FT4'] as const
+
+/**
+ * The invariant example values this strip shows in empty fields, gathered so the guard can prove
+ * they never became catalog entries. Every one is drawn from a technical namespace — a callsign,
+ * a Field Day class, an ARRL section code, the signal-report format's name, a unit, a POTA park
+ * and a SOTA summit reference — so it is the same characters in every language.
+ */
+const LOG_EXAMPLES = {
+  call: 'W1AW',
+  fdClass: '1D',
+  fdSection: 'WI',
+  rst: 'RST',
+  freqUnit: 'MHz',
+  potaRef: 'K-1234',
+  sotaRef: 'W7A/MN-001',
+} as const
+
+/**
+ * On-the-air programs for the park/summit picker. The ADIF SIG value and the label the operator
+ * reads are the SAME token here, which is why this is one list and not a value/label pair.
+ */
+const PARK_PROGRAMS = ['POTA', 'SOTA'] as const
 
 /** Now, split into a UTC date (YYYY-MM-DD) + time (HH:MM) for the override's inputs. */
 function utcNowParts(): { date: string; time: string } {
@@ -536,7 +566,7 @@ export function LogEntry({
     setQrzBusy(true)
     const r = silent
       ? await qrzLookup(call).catch(() => null)
-      : await withErrorToast(() => qrzLookup(call), 'QRZ lookup failed')
+      : await withErrorToast(() => qrzLookup(call), t('callbook.lookupFailed'))
     qrzBusyRef.current = false
     setQrzBusy(false)
     if (!r) return
@@ -572,9 +602,11 @@ export function LogEntry({
     // tokens (keyed to the call so a stale lookup can't key the wrong name).
     void setCwPeerInfo(call, preferredName ?? '', r.state ?? '')
     if (!silent) {
-      const detail = [r.name, r.grid && `grid ${r.grid}`, r.state].filter(Boolean).join(' · ')
-      const note = r.grid ? '' : ' · grid/state need a QRZ subscription'
-      pushToast(`QRZ ${r.call}: ${detail || r.country || 'found'}${note}`, 'info')
+      const detail = [r.name, r.grid && t('callbook.detail.grid', { grid: r.grid }), r.state]
+        .filter(Boolean)
+        .join(' · ')
+      const vals = { call: r.call, detail: detail || r.country || t('callbook.detail.found') }
+      pushToast(r.grid ? t('callbook.result', vals) : t('callbook.resultNoGrid', vals), 'info')
     }
   }
 
@@ -704,14 +736,11 @@ export function LogEntry({
     const call = logCall.trim().toUpperCase()
     if (!call) return
     if (overrideBlocked) {
-      pushToast('Enter a valid frequency for the override, or close it', 'error')
+      pushToast(t('logEntry.override.blocked'), 'error')
       return
     }
     if (gridBlocked) {
-      pushToast(
-        `“${logGrid.trim()}” isn’t a grid square — enter EN52, EN52XA or EN52XA25, or clear it`,
-        'error',
-      )
+      pushToast(t('logEntry.grid.blockedToast', { grid: logGrid.trim() }), 'error')
       return
     }
 
@@ -725,10 +754,13 @@ export function LogEntry({
       const fmode = fdMode ?? 'PH'
       const r = await withErrorToast(
         () => fdLogManual(call, cls, sec, fmode),
-        'FD log failed',
+        t('logEntry.fd.failed'),
       )
       if (r) {
-        pushToast(`FD: logged ${call} ${cls}/${sec} (${fmode})`, 'success')
+        pushToast(
+          t('logEntry.fd.logged', { call, class: cls, section: sec, mode: fmode }),
+          'success',
+        )
         reset()
       }
       return
@@ -777,9 +809,9 @@ export function LogEntry({
           ? { theirProgram: logParkProgram, theirRef: logParkRef.trim().toUpperCase() }
           : undefined,
     }
-    const r = await withErrorToast(() => logQso(rec), 'Could not log the QSO')
+    const r = await withErrorToast(() => logQso(rec), t('logEntry.logFailed'))
     if (r) {
-      pushToast(`Logged ${call} (${effMode})`, 'success')
+      pushToast(t('logEntry.logged', { call, mode: effMode }), 'success')
       reset()
       refreshLog()
     }
@@ -819,49 +851,49 @@ export function LogEntry({
     return (
       <div className="log-entry log-entry-fd">
         <div className="le-fd-header">
-          <span className="le-fd-chip">FD LOG</span>
+          <span className="le-fd-chip">{t('logEntry.fd.chip')}</span>
           <span className="le-fd-mode">{fdMode ?? 'PH'}</span>
-          <span className="le-fd-hint">{snap.radio.band} · contacts go to the Field Day log</span>
+          <span className="le-fd-hint">{t('logEntry.fd.hint', { band: snap.radio.band })}</span>
         </div>
 
         <div className="le-fd-big">
           <label className="le-fd-field le-fd-field-call">
-            <span className="le-fd-cap">Call</span>
+            <span className="le-fd-cap">{t('logEntry.fd.call.label')}</span>
             <input
               ref={callInputRef}
               className="settings-input mono le-fd-input le-fd-input-call"
               value={logCall}
               onChange={(e) => setLogCall(e.target.value.toUpperCase())}
               onKeyDown={onEnter}
-              placeholder="W1AW"
+              placeholder={LOG_EXAMPLES.call}
               autoComplete="off"
               spellCheck={false}
             />
           </label>
           <label className="le-fd-field">
-            <span className="le-fd-cap">Class</span>
+            <span className="le-fd-cap">{t('logEntry.fd.class.label')}</span>
             <input
               className="settings-input mono le-fd-input le-fd-input-code"
               value={fdClass}
               onChange={(e) => setFdClass(e.target.value.toUpperCase())}
               onKeyDown={onEnter}
-              placeholder="1D"
+              placeholder={LOG_EXAMPLES.fdClass}
               autoComplete="off"
               spellCheck={false}
-              title="Their Field Day class"
+              title={t('logEntry.fd.class.title')}
             />
           </label>
           <label className="le-fd-field">
-            <span className="le-fd-cap">Section</span>
+            <span className="le-fd-cap">{t('logEntry.fd.section.label')}</span>
             <input
               className="settings-input mono le-fd-input le-fd-input-code"
               value={fdSection}
               onChange={(e) => setFdSection(e.target.value.toUpperCase())}
               onKeyDown={onEnter}
-              placeholder="WI"
+              placeholder={LOG_EXAMPLES.fdSection}
               autoComplete="off"
               spellCheck={false}
-              title="Their ARRL section"
+              title={t('logEntry.fd.section.title')}
             />
           </label>
           {/* No `gridBlocked` term, and that is not an omission: `asksForGrid`
@@ -874,18 +906,23 @@ export function LogEntry({
             onClick={logIt}
             disabled={!logCall.trim() || !fdExchangeOk}
           >
-            Log FD
+            {t('logEntry.fd.log')}
           </button>
-          <button type="button" className="le-qrz" onClick={reset} title="Clear the log fields">
-            Clear
+          <button
+            type="button"
+            className="le-qrz"
+            onClick={reset}
+            title={t('logEntry.clear.title')}
+          >
+            {t('logEntry.clear.label')}
           </button>
         </div>
 
         {logCall.trim() !== '' && !fdExchangeOk && (
           <div className="le-fd-hint" role="alert">
             {fdClass.trim() === ''
-              ? 'Enter their Field Day class to log.'
-              : `Section "${fdSection.trim() || '—'}" isn't a known ARRL/RAC section — required to log.`}
+              ? t('logEntry.fd.needClass')
+              : t('logEntry.fd.badSection', { section: fdSection.trim() || '—' })}
           </div>
         )}
       </div>
@@ -904,13 +941,15 @@ export function LogEntry({
 
   return (
     <div className="log-entry">
-      {titled && <h2>Log this QSO</h2>}
+      {titled && <h2>{t('logEntry.title')}</h2>}
 
       {hunt && (
-        <div className={`le-hunt-chip${huntMatches ? ' match' : ''}`} title="This QSO will be tagged with the hunted park reference when you log it (matched by callsign).">
+        <div className={`le-hunt-chip${huntMatches ? ' match' : ''}`} title={t('logEntry.hunt.title')}>
           🌲 {hunt.program} {hunt.reference}
           <span className="le-hunt-for"> · {hunt.call}</span>
-          {!huntMatches && logCall.trim() !== '' && <span className="le-hunt-warn"> (call ≠ hunt)</span>}
+          {!huntMatches && logCall.trim() !== '' && (
+            <span className="le-hunt-warn"> {t('logEntry.hunt.mismatch')}</span>
+          )}
         </div>
       )}
 
@@ -925,7 +964,7 @@ export function LogEntry({
           }}
           onBlur={onCallBlur}
           onKeyDown={onCallEnter}
-          placeholder="Call"
+          placeholder={t('logEntry.call.placeholder')}
           autoComplete="off"
           spellCheck={false}
         />
@@ -937,30 +976,30 @@ export function LogEntry({
           className="le-qrz le-lookup"
           onClick={() => void lookup(false)}
           disabled={qrzBusy || !logCall.trim()}
-          title="Look up name + QTH in the callbook — QRZ first, then HamQTH (grid/state need a QRZ subscription)"
+          title={t('logEntry.lookup.title')}
         >
-          {qrzBusy ? '…' : 'Lookup'}
+          {qrzBusy ? '…' : t('logEntry.lookup.label')}
         </button>
-        <label className="le-rst-field" title="Signal report you SENT them">
-          <span className="le-rst-cap">Sent</span>
+        <label className="le-rst-field" title={t('logEntry.rstSent.title')}>
+          <span className="le-rst-cap">{t('logEntry.rstSent.label')}</span>
           <input
             ref={rstRef}
             className="settings-input mono le-rst"
             value={logRstSent}
             onChange={(e) => setLogRstSent(e.target.value)}
             onKeyDown={onEnter}
-            placeholder="RST"
+            placeholder={LOG_EXAMPLES.rst}
             autoComplete="off"
           />
         </label>
-        <label className="le-rst-field" title="Signal report you RECEIVED from them">
-          <span className="le-rst-cap">Rcvd</span>
+        <label className="le-rst-field" title={t('logEntry.rstRcvd.title')}>
+          <span className="le-rst-cap">{t('logEntry.rstRcvd.label')}</span>
           <input
             className="settings-input mono le-rst"
             value={logRstRcvd}
             onChange={(e) => setLogRstRcvd(e.target.value)}
             onKeyDown={onEnter}
-            placeholder="RST"
+            placeholder={LOG_EXAMPLES.rst}
             autoComplete="off"
           />
         </label>
@@ -989,11 +1028,11 @@ export function LogEntry({
             value={logGrid}
             onChange={(e) => setLogGrid(e.target.value.toUpperCase())}
             onKeyDown={onEnter}
-            placeholder="Grid"
+            placeholder={t('logEntry.grid.placeholder')}
             autoComplete="off"
             spellCheck={false}
             aria-invalid={gridBlocked}
-            title="Their Maidenhead locator — the satellite exchange. 4, 6 or 8 characters (EN52, EN52XA or EN52XA25); auto-filled by the callbook lookup only while it is blank"
+            title={t('logEntry.grid.title')}
           />
         )}
         <input
@@ -1001,11 +1040,11 @@ export function LogEntry({
           value={logName}
           onChange={(e) => setLogName(e.target.value)}
           onKeyDown={onEnter}
-          placeholder="Name"
+          placeholder={t('logEntry.name.placeholder')}
           autoComplete="off"
         />
-        <button type="button" className="le-qrz" onClick={reset} title="Clear the log fields">
-          Clear
+        <button type="button" className="le-qrz" onClick={reset} title={t('logEntry.clear.title')}>
+          {t('logEntry.clear.label')}
         </button>
       </div>
 
@@ -1015,7 +1054,7 @@ export function LogEntry({
           value={logQth}
           onChange={(e) => setLogQth(e.target.value)}
           onKeyDown={onEnter}
-          placeholder="QTH (city)"
+          placeholder={t('logEntry.qth.placeholder')}
           autoComplete="off"
         />
         {/* State + Country are auto-filled from the QRZ lookup / cty.dat country resolve and
@@ -1028,25 +1067,25 @@ export function LogEntry({
           value={logState}
           onChange={(e) => setLogState(e.target.value)}
           onKeyDown={onEnter}
-          placeholder="State"
+          placeholder={t('logEntry.state.placeholder')}
           autoComplete="off"
-          title="State / province — auto-filled by the QRZ lookup when available"
+          title={t('logEntry.state.title')}
         />
         <input
           className="settings-input le-country"
           value={logCountry}
           onChange={(e) => setLogCountry(e.target.value)}
           onKeyDown={onEnter}
-          placeholder="Country"
+          placeholder={t('logEntry.country.placeholder')}
           autoComplete="off"
-          title="DXCC entity — auto-filled from the callsign when available"
+          title={t('logEntry.country.title')}
         />
         <input
           className="settings-input le-comment"
           value={logComment}
           onChange={(e) => setLogComment(e.target.value)}
           onKeyDown={onEnter}
-          placeholder="Comment (sharable)"
+          placeholder={t('logEntry.comment.placeholder')}
           autoComplete="off"
         />
       </div>
@@ -1067,10 +1106,13 @@ export function LogEntry({
           className="settings-input le-park-prog"
           value={logParkProgram}
           onChange={(e) => setLogParkProgram(e.target.value)}
-          title="On-the-air program for the park/summit you worked"
+          title={t('logEntry.park.program.title')}
         >
-          <option value="POTA">POTA</option>
-          <option value="SOTA">SOTA</option>
+          {PARK_PROGRAMS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
         </select>
         <div className="le-park-search">
           <input
@@ -1079,8 +1121,12 @@ export function LogEntry({
             onChange={(e) => setLogParkRef(e.target.value.toUpperCase())}
             onKeyDown={onEnter}
             onBlur={() => window.setTimeout(() => setParkHits([]), 150)}
-            placeholder={logParkProgram === 'SOTA' ? 'Summit (W7A/MN-001)' : 'Park (K-1234 or name)'}
-            title="Park/summit reference of the station you worked — logged to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF)"
+            placeholder={
+              logParkProgram === 'SOTA'
+                ? t('logEntry.park.ref.placeholderSota', { example: LOG_EXAMPLES.sotaRef })
+                : t('logEntry.park.ref.placeholderPota', { example: LOG_EXAMPLES.potaRef })
+            }
+            title={t('logEntry.park.ref.title')}
             autoComplete="off"
             spellCheck={false}
           />
@@ -1123,8 +1169,8 @@ export function LogEntry({
           {parkDetail.location && <span className="le-park-detail-loc">{parkDetail.location}</span>}
           {parkDetail.grid && <span className="mono le-park-detail-grid">{parkDetail.grid}</span>}
           {parkDetailLive && (
-            <span className="le-park-detail-src" title="Fetched live from the POTA directory">
-              live
+            <span className="le-park-detail-src" title={t('logEntry.park.live.title')}>
+              {t('logEntry.park.live.label')}
             </span>
           )}
         </div>
@@ -1134,7 +1180,7 @@ export function LogEntry({
         className="settings-input le-notes"
         value={logNotes}
         onChange={(e) => setLogNotes(e.target.value)}
-        placeholder="Notes (private, multi-line)…"
+        placeholder={t('logEntry.notes.placeholder')}
         rows={2}
         spellCheck
       />
@@ -1148,19 +1194,19 @@ export function LogEntry({
           className="le-override-toggle"
           aria-expanded={overrideOpen}
           onClick={() => (overrideOpen ? setOverrideOpen(false) : openOverride())}
-          title="Log a contact you made on another radio that isn't connected to Nexus — set the band, frequency, mode, and UTC time by hand"
+          title={t('logEntry.override.title')}
         >
           <span className="le-override-caret" aria-hidden="true">
             {overrideOpen ? '▾' : '▸'}
           </span>
-          Log a contact from another radio
-          <span className="le-override-sub"> · adjust band · freq · mode · time (UTC)</span>
+          {t('logEntry.override.toggle')}
+          <span className="le-override-sub"> {t('logEntry.override.toggleSub')}</span>
         </button>
 
         {overrideOpen && (
           <div className="le-override-fields">
             <label className="le-ov-field">
-              <span className="le-rst-cap">Date (UTC)</span>
+              <span className="le-rst-cap">{t('logEntry.override.date.label')}</span>
               <input
                 type="date"
                 className="settings-input le-ov-date"
@@ -1169,7 +1215,7 @@ export function LogEntry({
               />
             </label>
             <label className="le-ov-field">
-              <span className="le-rst-cap">Time (UTC)</span>
+              <span className="le-rst-cap">{t('logEntry.override.time.label')}</span>
               <input
                 type="time"
                 className="settings-input le-ov-time"
@@ -1178,7 +1224,7 @@ export function LogEntry({
               />
             </label>
             <label className="le-ov-field">
-              <span className="le-rst-cap">Band</span>
+              <span className="le-rst-cap">{t('logEntry.override.band.label')}</span>
               <select
                 className="settings-input le-ov-band"
                 value={ovBand}
@@ -1192,20 +1238,20 @@ export function LogEntry({
               </select>
             </label>
             <label className="le-ov-field">
-              <span className="le-rst-cap">Freq (MHz)</span>
+              <span className="le-rst-cap">{t('logEntry.override.freq.label')}</span>
               <input
                 type="text"
                 inputMode="decimal"
                 className="settings-input mono le-ov-freq"
                 value={ovFreq}
                 onChange={(e) => onEditOvFreq(e.target.value)}
-                placeholder="MHz"
+                placeholder={LOG_EXAMPLES.freqUnit}
                 autoComplete="off"
                 spellCheck={false}
               />
             </label>
             <label className="le-ov-field">
-              <span className="le-rst-cap">Mode</span>
+              <span className="le-rst-cap">{t('logEntry.override.mode.label')}</span>
               <select
                 className="settings-input le-ov-mode"
                 value={ovMode}
@@ -1221,8 +1267,8 @@ export function LogEntry({
             {ovFreq.trim() !== '' && bandForMhz(ovFreqNum) !== ovBand && (
               <span className="le-ov-warn" role="alert">
                 {Number.isFinite(ovFreqNum) && ovFreqNum > 0
-                  ? `${ovFreq} MHz is outside ${ovBand} — logged as entered`
-                  : 'Enter a numeric frequency'}
+                  ? t('logEntry.override.offBand', { freq: ovFreq, band: ovBand })
+                  : t('logEntry.override.needFreq')}
               </span>
             )}
           </div>
@@ -1231,24 +1277,30 @@ export function LogEntry({
 
       <span className="le-hint">
         {overrideBlocked ? (
-          <span className="le-ov-warn">Enter a frequency for the override to log</span>
+          <span className="le-ov-warn">{t('logEntry.override.blockedHint')}</span>
         ) : gridBlocked ? (
           // Why Log went dead, in the place that otherwise states what will be
           // written. `role="alert"` because it is the only explanation of a
           // disabled primary action, and a screen-reader operator gets no other.
           <span className="le-ov-warn le-grid-warn" role="alert">
-            “{logGrid.trim()}” isn’t a grid square — Nexus logs 4, 6 or 8 characters (EN52,
-            EN52XA or EN52XA25). Fix it or clear it to log.
+            {t('logEntry.grid.blocked', { grid: logGrid.trim() })}
           </span>
         ) : (
           <>
             {/* The band slot is EMPTY for a dial the band plan cannot name (QO-100 at
                 10.489 GHz, the microwave birds) — printing it anyway left a doubled
-                separator with a hole in it, "as SSB ·  · 10489.550 MHz". Drop the slot,
-                the way the satellite rail drops its band chip: the frequency is the truth
-                either way, and ADIF's BAND field is optional. */}
-            Logs to the shared logbook as {effMode} ·{effBand ? ` ${effBand} ·` : ''}{' '}
-            {effFreqMhz.toFixed(3)} MHz
+                separator with a hole in it, "as SSB ·  · 10489.550 MHz". Two whole
+                messages rather than one with an optional slot, for the same reason the
+                satellite rail drops its band chip: a sentence built around an empty slot
+                reads as a hole, and ADIF's BAND field is optional anyway.
+                The grid and country tails are separator + token — nothing to translate. */}
+            {effBand
+              ? t('logEntry.summaryBand', {
+                  mode: effMode,
+                  band: effBand,
+                  freq: effFreqMhz.toFixed(3),
+                })
+              : t('logEntry.summary', { mode: effMode, freq: effFreqMhz.toFixed(3) })}
             {logGrid ? ` · ${logGrid}` : ''}
             {logCountry ? ` · ${logCountry}` : ''}
           </>
@@ -1281,13 +1333,13 @@ export function LogEntry({
           disabled={!logCall.trim() || overrideBlocked || gridBlocked}
           title={
             overrideBlocked
-              ? 'Enter a valid frequency for the override, or close it'
+              ? t('logEntry.override.blocked')
               : gridBlocked
-                ? 'Enter a 4-, 6- or 8-character grid square (EN52, EN52XA or EN52XA25), or clear it'
+                ? t('logEntry.grid.blockedTitle')
                 : undefined
           }
         >
-          Log
+          {t('logEntry.log')}
         </button>
         {onSpot && (
           <button
@@ -1295,9 +1347,9 @@ export function LogEntry({
             className="le-spot-btn"
             onClick={() => onSpot(logCall.trim().toUpperCase())}
             disabled={!logCall.trim()}
-            title="Spot this call to the DX cluster (pre-fills the call + your frequency)"
+            title={t('logEntry.spot.title')}
           >
-            📢 Spot
+            {t('logEntry.spot.label')}
           </button>
         )}
       </div>

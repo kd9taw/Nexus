@@ -14,6 +14,11 @@
 // one place they can be re-ranked. ＋ therefore saves at rank 1: appended, a new
 // star with a full strip would be saved and invisible — the same silent "＋ did
 // nothing" the star-the-existing branch below exists to prevent.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT: the memory's own name, its dial frequency, its
+// mode, its CTCSS tone and the keyboard chord `modChord` prints — the chord is a key name, and a
+// tone is a number that must never pick up a decimal comma.
 import {
   memoriesStore,
   saveFavoriteFromDial,
@@ -22,6 +27,7 @@ import {
   type Memory,
   type MemoryKind,
 } from '../features/memories'
+import { t } from '../i18n'
 import { modChord } from '../platform'
 
 export interface MemoryStripProps {
@@ -64,15 +70,15 @@ export function MemoryStrip({ dialMhz, mode, onRecall, onManage }: MemoryStripPr
   }
 
   return (
-    <div className="mem-strip" role="group" aria-label="Memory quick recall">
-      <span className="mem-strip-label" title="Memory quick recall — your ★-starred memories">
-        MEM
+    <div className="mem-strip" role="group" aria-label={t('memories.strip.aria')}>
+      <span className="mem-strip-label" title={t('memories.strip.label.title')}>
+        {t('memories.strip.label')}
       </span>
       <button
         type="button"
         className="mem-strip-save"
         onClick={saveCurrent}
-        title={`Save ${dialMhz.toFixed(3)} ${mode} as a favorite memory`}
+        title={t('memories.strip.save.title', { freq: dialMhz.toFixed(3), mode })}
       >
         ＋
       </button>
@@ -88,9 +94,15 @@ export function MemoryStrip({ dialMhz, mode, onRecall, onManage }: MemoryStripPr
             type="button"
             className={`mem-chip${active ? ' active' : ''}`}
             onClick={() => onRecall?.(m)}
-            title={`${m.name} — ${m.rxMhz.toFixed(4)} MHz ${m.mode}${
-              m.ctcssEncHz ? ` · tone ${m.ctcssEncHz.toFixed(1)}` : ''
-            } (click to tune${hotkey})`}
+            title={t('memories.strip.chip.title', {
+              name: m.name,
+              freq: m.rxMhz.toFixed(4),
+              mode: m.mode,
+              tone: m.ctcssEncHz
+                ? t('memories.strip.chip.tone', { hz: m.ctcssEncHz.toFixed(1) })
+                : '',
+              hotkey,
+            })}
           >
             {m.name}
           </button>
@@ -103,8 +115,11 @@ export function MemoryStrip({ dialMhz, mode, onRecall, onManage }: MemoryStripPr
           onClick={onManage}
           title={
             overflow > 0
-              ? `Open Memories — ${overflow} more favorite${overflow === 1 ? '' : 's'} past the ${STRIP_FAVORITE_LIMIT} this strip shows. Re-rank them with ▲▼ under ★ Favorites.`
-              : 'Open Memories — manage channels, groups, nets, and CHIRP import/export'
+              ? t('memories.strip.manage.title.overflow', {
+                  count: overflow,
+                  limit: STRIP_FAVORITE_LIMIT,
+                })
+              : t('memories.strip.manage.title')
           }
         >
           ≡{overflow > 0 && <span className="mem-strip-more">{overflow}</span>}

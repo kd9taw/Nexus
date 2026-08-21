@@ -4,6 +4,7 @@
 // out that direction. Reads only HeardMe reports (no network); re-renders on the snapshot.
 import { octantCoverage, OCTANT_DEG, type Octant } from '../../features/getout'
 import type { HeardMe } from '../../types'
+import { t } from '../../i18n'
 
 const SIZE = 132
 const C = SIZE / 2
@@ -19,7 +20,7 @@ export function GetoutCompass({ reports, maxKm }: { reports: HeardMe[]; maxKm: n
       className="getout-rose"
       viewBox={`0 0 ${SIZE} ${SIZE}`}
       role="img"
-      aria-label="Compass rose of where your signal is reaching"
+      aria-label={t('prop.getout.aria')}
     >
       {/* reference rings */}
       <circle cx={C} cy={C} r={R} className="rose-ring" />
@@ -46,7 +47,13 @@ export function GetoutCompass({ reports, maxKm }: { reports: HeardMe[]; maxKm: n
                 style={{ opacity }}
                 strokeWidth={3}
               >
-                <title>{`${c.octant}: ${c.count} station${c.count === 1 ? '' : 's'}, out to ${Math.round(c.maxKm).toLocaleString()} km`}</title>
+                <title>
+                  {t('prop.getout.spoke', {
+                    octant: c.octant,
+                    count: c.count,
+                    km: Math.round(c.maxKm).toLocaleString(),
+                  })}
+                </title>
               </line>
             )}
             <text

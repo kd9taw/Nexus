@@ -22,7 +22,11 @@
 // keyer; Operate's Tx messages and its decode/roster panes, which use raw .panel divs but
 // answer to the same rule): being a sender has no bearing on whether a pane may be hidden.
 // See cockpit-panes.css, "THE STOP LINE".
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The pane's own NAME
+// arrives from the cockpit and is interpolated as data; the two head buttons' words are here.
 import type { ReactNode } from 'react'
+import { t } from '../../i18n'
 
 export function CockpitPaneFrame({
   title,
@@ -90,8 +94,8 @@ export function CockpitPaneFrame({
               type="button"
               className="cockpit-popout"
               onClick={onPopOut}
-              aria-label={`Open ${title} in its own window`}
-              title="Open this pane in its own window (for a second monitor)"
+              aria-label={t('pane.popOut.aria', { title })}
+              title={t('pane.popOut.title')}
             >
               ⧉
             </button>
@@ -101,8 +105,8 @@ export function CockpitPaneFrame({
               type="button"
               className="cockpit-popout"
               onClick={onRemove}
-              aria-label={`Hide ${title}`}
-              title="Hide this pane (restore it from the ⊞ Panels menu)"
+              aria-label={t('pane.hide.aria', { title })}
+              title={t('pane.hide.title')}
             >
               ✕
             </button>

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import type { Insight, InsightKind } from '../../types'
 import { sortInsights, insightLevelVar } from '../../propViz'
+import { t } from '../../i18n'
 
 const KIND_ICON: Record<InsightKind, LucideIcon> = {
   mufTrend: TrendingUp,
@@ -41,7 +42,7 @@ export function InsightFeed({
   const rows = sortInsights(insights)
   if (rows.length === 0) return null
   return (
-    <div className="insight-feed" role="list" aria-label="Predictive insights">
+    <div className="insight-feed" role="list" aria-label={t('prop.insightFeed.aria')}>
       {rows.map((ins, i) => (
         <InsightRow key={`${ins.kind}-${i}`} ins={ins} onBandClick={onBandClick} />
       ))}
@@ -64,7 +65,7 @@ function InsightRow({
       role="listitem"
       style={{ borderLeftColor: insightLevelVar(ins.level) }}
       onClick={clickable ? () => onBandClick!(ins.band!) : undefined}
-      title={clickable ? `Focus ${ins.band} on the map` : undefined}
+      title={clickable ? t('prop.focusBand.title', { band: ins.band! }) : undefined}
     >
       <span className="if-icon" style={{ color: insightLevelVar(ins.level) }}>
         <Icon size={14} />

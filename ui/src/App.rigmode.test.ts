@@ -25,12 +25,19 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const APP = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8')
+/** ⚠️ THE MAP MOVED (#143). `RIG_MODE_BY_VIEW` and the home-on-entry rule now live in
+ *  `rigModeForView.ts` — extracted so the SEQUENCE of views could be tested, which is what
+ *  #143 turned out to be. This guard still owns the #80/#81 rules and now reads the map where
+ *  it lives and the WIRING from App.tsx. If the map moves again, move this line, do not
+ *  weaken the assertions: they are why a hunting board cannot acquire the power to retune
+ *  somebody's radio. */
+const MODEMAP = readFileSync(resolve(process.cwd(), 'src/rigModeForView.ts'), 'utf8')
 
 /** The `RIG_MODE_BY_VIEW` object literal, as view → mode pairs. */
 function rigModeMap(): Record<string, string> {
-  const start = APP.indexOf('const RIG_MODE_BY_VIEW')
+  const start = MODEMAP.indexOf('RIG_MODE_BY_VIEW')
   expect(start, 'RIG_MODE_BY_VIEW must exist — it is the allowlist this whole test is about').toBeGreaterThan(-1)
-  const body = APP.slice(start, APP.indexOf('}', start))
+  const body = MODEMAP.slice(start, MODEMAP.indexOf('}', start))
   const out: Record<string, string> = {}
   for (const m of body.matchAll(/^\s*([a-z]+):\s*'(cw|phone|rtty|keyboard|digital)'/gm)) out[m[1]] = m[2]
   return out
@@ -53,13 +60,16 @@ describe('which views may command the rig mode', () => {
 
   it('has no else-branch that could hand an unlisted view a mode', () => {
     // The shape that caused #80: `… : 'digital'` as a fallthrough on the view name.
-    const start = APP.indexOf('const RIG_MODE_BY_VIEW')
-    const region = APP.slice(start, start + 1400)
+    const start = MODEMAP.indexOf('RIG_MODE_BY_VIEW')
+    const region = MODEMAP.slice(start, start + 1400)
     expect(
       /:\s*'digital'\s*$/m.test(region.split('const mode =')[1] ?? ''),
       "the mode must be LOOKED UP, never defaulted — a default is how a hunting board got DATA-USB",
     ).toBe(false)
-    expect(region).toContain('if (!mode) return')
+    // The refusal for an unlisted view now lives in `rigModeTransition`: no mode, no assert,
+    // and — added by #143 — the home guard is handed back untouched so a later operating
+    // view still homes.
+    expect(MODEMAP).toContain('if (!mode) return { followFreq: false, nextHomed: lastHomed }')
   })
 
   it('does not treat "has a workspace" as "is an operating mode"', () => {
@@ -70,10 +80,10 @@ describe('which views may command the rig mode', () => {
     // guard was reading prose as if it were code. A check that cannot tell an explanation of a
     // bug from the bug is worse than no check: it would have been "fixed" by deleting the
     // comment. Same trap the wiki generator hit today from the other side.
-    const effect = APP.slice(
-      APP.indexOf('opModeSeeded.current = true'),
-      APP.indexOf('lastOpModeRef.current = mode'),
-    ).replace(/^\s*\/\/.*$/gm, '')
+    const effect = (
+      APP.slice(APP.indexOf('opModeSeeded.current = true'), APP.indexOf('void setOperatingMode(mode')) +
+      MODEMAP
+    ).replace(/^\s*\/\/.*$/gm, '').replace(/^\s*\*.*$/gm, '')
     expect(
       /featureById\([^)]*\)\?\.workspace/.test(effect),
       'the rig-mode decision must not read `workspace` — that conflation is exactly #80',

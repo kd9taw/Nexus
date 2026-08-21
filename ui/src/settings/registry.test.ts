@@ -21,6 +21,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { EN } from '../i18n/en'
 import {
   searchSettings,
   SETTINGS_TABS,
@@ -33,18 +34,39 @@ import {
 } from './registry'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const panelSrc = readFileSync(resolve(here, '../components/SettingsPanel.tsx'), 'utf8')
+
+/**
+ * The panel's source, plus every component a section has been extracted INTO.
+ *
+ * ⚠️ ADD A FILE HERE WHEN YOU EXTRACT A SECTION. This guard reads legends out of the source
+ * text, so a `<fieldset>` that moves to its own component vanishes from the guard's view and
+ * its registry entry looks orphaned. `SettingsStation.tsx` was the first (2026-08-18, the i18n
+ * pilot); the failure it would otherwise have produced named the registry, not the move.
+ */
+const PANEL_SOURCES = ['../components/SettingsPanel.tsx', '../components/SettingsStation.tsx']
+const panelSrc = PANEL_SOURCES.map((rel) => readFileSync(resolve(here, rel), 'utf8')).join('\n')
 
 /** The panel writes legends as JSX with HTML entities (`&amp;`, `&mdash;`); the registry holds
- * plain text. Decode the handful the panel actually uses so the two can be compared. */
-const decode = (s: string) =>
-  s
+ * plain text. Decode the handful the panel actually uses so the two can be compared.
+ *
+ * A MIGRATED section writes its legend as `{t('key')}` instead of literal English, so resolve
+ * that through the English catalog — which is what the panel actually renders. Doing it here
+ * rather than loosening the guard keeps the doc headings and deep-link anchors checked against
+ * the real text, in either form. */
+const decode = (s: string) => {
+  const key = /^\{t\('([^']+)'\)\}$/.exec(s.trim())?.[1]
+  const raw = key ? (EN as Record<string, unknown>)[key] : s
+  if (key && typeof raw !== 'string') {
+    throw new Error(`legend key ${key} is not a plain English catalog entry`)
+  }
+  return String(raw)
     .replace(/&amp;/g, '&')
     .replace(/&mdash;/g, '—')
     .replace(/&rarr;/g, '→')
     .replace(/&apos;/g, "'")
     .replace(/&quot;/g, '"')
     .trim()
+}
 
 /** Every `<legend>` in the panel, in source order. */
 function panelLegends(): string[] {
@@ -54,10 +76,19 @@ function panelLegends(): string[] {
 }
 
 /** Every collapsible `SettingsGroup` title in the panel. Attribute order is not fixed — the
- * anchor `id` may precede `title` — so match the tag and pull `title` out of it. */
+ * anchor `id` may precede `title` — so match the tag and pull `title` out of it.
+ *
+ * A MIGRATED group writes `title={t('key')}` instead of a literal, exactly as a migrated
+ * section writes its legend; `decode` resolves either form through the English catalog, so the
+ * doc headings and deep-link anchors stay checked against the text that really renders. */
 function panelGroups(): string[] {
   return [...panelSrc.matchAll(/<SettingsGroup\s+([^>]*?)>/g)]
-    .map((m) => m[1].match(/title="([^"]+)"/)?.[1])
+    .map((m) =>
+      m[1]
+        .match(/title=(?:"([^"]+)"|(\{t\('[^']+'\)\}))/)
+        ?.slice(1)
+        .find(Boolean),
+    )
     .filter((t): t is string => Boolean(t))
     .map(decode)
 }
