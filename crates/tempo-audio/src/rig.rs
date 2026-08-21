@@ -989,6 +989,15 @@ impl Rig {
     pub fn set_rx_level(&mut self, name: &str, frac: f32) -> std::io::Result<()> {
         self.cat(&level_line(name, &format!("{:.3}", frac.clamp(0.0, 1.0))))
     }
+    /// Set the MANUAL-NOTCH FREQUENCY in Hz (Hamlib `NOTCHF`). Not a 0.0–1.0 level: this one
+    /// is an absolute frequency in the audio passband, which is why it does not go through
+    /// [`Rig::set_rx_level`] — that clamps to a fraction and would command a notch at 1 Hz.
+    pub fn set_notch_freq_hz(&mut self, hz: f32) -> std::io::Result<()> {
+        self.cat(&level_line(
+            "NOTCHF",
+            &format!("{}", hz.max(0.0).round() as i32),
+        ))
+    }
     /// Set the AGC time constant by Hamlib enum int (FAST=2, MEDIUM=5, SLOW=3, OFF=0).
     pub fn set_agc(&mut self, hamlib_val: u8) -> std::io::Result<()> {
         self.cat(&level_line("AGC", &hamlib_val.to_string()))

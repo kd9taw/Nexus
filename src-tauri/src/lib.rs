@@ -10605,6 +10605,23 @@ fn set_nr_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapsho
     Ok(eng.snapshot())
 }
 
+/// Set the speech-processor depth as a 0.0–1.0 fraction (#95 — the COMP toggle had no level).
+#[tauri::command(async)]
+fn set_comp_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_comp_level(level);
+    Ok(eng.snapshot())
+}
+
+/// Set the MANUAL-NOTCH frequency in Hz (#95 — a notch you cannot place is not a notch).
+/// Clamped by the engine to the audio passband a notch can usefully sit in.
+#[tauri::command(async)]
+fn set_notch_freq(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_notch_freq_hz(hz);
+    Ok(eng.snapshot())
+}
+
 /// Set the AGC speed ("fast"|"mid"|"slow"); the radio loop applies it to the rig.
 #[tauri::command(async)]
 fn set_agc(state: State<'_, SharedEngine>, speed: String) -> Result<AppSnapshot, String> {
@@ -17569,6 +17586,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_rf_power,
             set_mic_gain,
             set_nr_level,
+            set_comp_level,
+            set_notch_freq,
             set_agc,
             set_split,
             set_rig_func,

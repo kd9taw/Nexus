@@ -778,6 +778,14 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// back silently) or something else may own the port — the three stations
 /// [`SatCatBackend::Hamlib`] cannot tell apart. "Here is the control, and here
 /// is where its live state is read" is true in all three; "turn it on" is not.
+/// The audio passband a MANUAL NOTCH can usefully sit in (#95). Not the rig's own limits —
+/// those vary by model and Hamlib does not report them — but the range an operator can
+/// actually hear a heterodyne in. A notch parked outside it is one you cannot hear and
+/// cannot find your way back from. 300 Hz is below any voice energy worth keeping; 3400 is
+/// the top of a wide SSB filter.
+const NOTCH_MIN_HZ: f32 = 300.0;
+const NOTCH_MAX_HZ: f32 = 3400.0;
+
 const MAIN_SUB_NATIVE_CIV_SWITCH: &str =
     "This radio can run that backend: Settings ▸ Radio ▸ Rig Control ▸ Native Icom CI-V is its \
      switch, and Test CAT names what is serving now.";
@@ -1929,6 +1937,15 @@ pub struct Engine {
     /// Desired / read-back NOISE-REDUCTION level (0.0–1.0), same commanded-vs-observed split.
     nr_level: Option<f32>,
     rig_nr_level: Option<f32>,
+    /// #95, the two halves of a control that shipped with only its switch: the speech
+    /// processor's DEPTH and the manual notch's FREQUENCY. Same desired/read-back pair as
+    /// nr_level above — the rig's own value wins when it reports one, so the slider shows
+    /// where the knob really is rather than where we last asked for it.
+    comp_level: Option<f32>,
+    rig_comp_level: Option<f32>,
+    /// HZ, not a 0..1 fraction.
+    notch_freq_hz: Option<f32>,
+    rig_notch_freq_hz: Option<f32>,
     /// Desired / read-back AGC time constant as "fast"|"mid"|"slow" (the loop maps it to the
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
@@ -1961,10 +1978,10 @@ pub struct Engine {
     /// Rig CAT DSP-function states, per `[nb, nr, notch(ANF), comp, vox]`, from the radio-loop
     /// poll. `None` = the rig doesn't support that func (hide the toggle); `Some(bool)` =
     /// supported + current on/off. Observed-only, same `None = can't do it` idiom as `rig_smeter_db`.
-    rig_funcs: [Option<bool>; 5],
+    rig_funcs: [Option<bool>; 6],
     /// Pending func toggles from the UI, per the same `[nb, nr, notch, comp, vox]` order; the
     /// radio loop drains + applies them next cycle (mirrors the split-request seam). Off the TCP path.
-    pending_func: [Option<bool>; 5],
+    pending_func: [Option<bool>; 6],
     /// Whether the radio reports a built-in antenna tuner (Hamlib `RIG_FUNC_TUNER`) and, if so,
     /// whether it is currently switched in-line. `None` = the rig never answered the func, so no
     /// ATU control is offered at all — an ATU button on a radio that has no ATU is worse than no
@@ -3177,6 +3194,10 @@ fn func_index(func: &str) -> Option<usize> {
         "notch" => Some(2),
         "comp" => Some(3),
         "vox" => Some(4),
+        // #95. The UI key matches the RadioStatus field, so it is `manualnotch` here and
+        // `manualNotch` there — deliberately NOT "notch", which is index 2, the AUTOMATIC
+        // notch. Two notches, two indices; mixing them would toggle the wrong one silently.
+        "manualnotch" => Some(5),
         _ => None,
     }
 }
@@ -3660,6 +3681,10 @@ impl Engine {
             rig_mic_gain: None,
             nr_level: None,
             rig_nr_level: None,
+            comp_level: None,
+            rig_comp_level: None,
+            notch_freq_hz: None,
+            rig_notch_freq_hz: None,
             agc: None,
             rig_agc: None,
             agc_picked: false,
@@ -3671,10 +3696,10 @@ impl Engine {
             rig_tx_po_w: None,
             rig_tx_comp_db: None,
             rig_mode: None,
-            rig_funcs: [None; 5],
+            rig_funcs: [None; 6],
             rig_rx_ranges: None,
             rig_refused_dial_mhz: None,
-            pending_func: [None; 5],
+            pending_func: [None; 6],
             rig_tuner: None,
             pending_atu_tune: None,
             rig_passband: None,
@@ -6561,6 +6586,33 @@ impl Engine {
         }
     }
 
+    /// Speech-processor depth (0..1). #95 — the COMP toggle had no level behind it.
+    pub fn set_comp_level(&mut self, frac: f32) {
+        self.comp_level = Some(frac.clamp(0.0, 1.0));
+    }
+    pub fn comp_level(&self) -> Option<f32> {
+        self.comp_level
+    }
+    pub fn observe_rig_comp_level(&mut self, frac: f32) {
+        if frac.is_finite() {
+            self.rig_comp_level = Some(frac.clamp(0.0, 1.0));
+        }
+    }
+
+    /// Manual-notch frequency in HZ. Clamped to the audio passband a notch can live in: a
+    /// notch commanded outside it is one the operator cannot hear and cannot find again.
+    pub fn set_notch_freq_hz(&mut self, hz: f32) {
+        self.notch_freq_hz = Some(hz.clamp(NOTCH_MIN_HZ, NOTCH_MAX_HZ));
+    }
+    pub fn notch_freq_hz(&self) -> Option<f32> {
+        self.notch_freq_hz
+    }
+    pub fn observe_rig_notch_freq_hz(&mut self, hz: f32) {
+        if hz.is_finite() {
+            self.rig_notch_freq_hz = Some(hz.clamp(NOTCH_MIN_HZ, NOTCH_MAX_HZ));
+        }
+    }
+
     /// Set desired AGC speed ("fast"|"mid"|"slow") — an OPERATOR PICK, which the radio loop
     /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
@@ -6673,7 +6725,7 @@ impl Engine {
 
     /// Adopt the rig's CAT DSP-function states `[nb, nr, notch, comp, vox]` from the radio-loop
     /// poll. A `None` slot = the rig doesn't support that func (its toggle hides). Observed-only.
-    pub fn observe_rig_funcs(&mut self, funcs: [Option<bool>; 5]) {
+    pub fn observe_rig_funcs(&mut self, funcs: [Option<bool>; 6]) {
         self.rig_funcs = funcs;
     }
 
@@ -6719,7 +6771,7 @@ impl Engine {
     /// Drop all rig func states (→ the toggles hide) — called on a breaker trip so a half-open
     /// CAT link never freezes stale NB/NR/… states in the cockpit.
     pub fn clear_rig_funcs(&mut self) {
-        self.rig_funcs = [None; 5];
+        self.rig_funcs = [None; 6];
     }
 
     /// Queue a func toggle from the UI (`func` = "nb"|"nr"|"notch"|"comp"|"vox"); the radio loop
@@ -6733,9 +6785,10 @@ impl Engine {
         }
     }
 
-    /// Drain the pending func requests for the radio loop to apply — `[nb, nr, notch, comp, vox]`,
+    /// Drain the pending func requests for the radio loop to apply —
+    /// `[nb, nr, notch(auto), comp, vox, manual_notch]`,
     /// each `Some(on)` to apply then cleared. Mirrors `take_split_request`.
-    pub fn take_func_requests(&mut self) -> [Option<bool>; 5] {
+    pub fn take_func_requests(&mut self) -> [Option<bool>; 6] {
         std::mem::take(&mut self.pending_func)
     }
 
@@ -13739,6 +13792,8 @@ impl Engine {
         s.radio.rf_power = self.rig_rf_power.or(self.rf_power);
         s.radio.mic_gain = self.rig_mic_gain.or(self.mic_gain);
         s.radio.nr_level = self.rig_nr_level.or(self.nr_level);
+        s.radio.comp_level = self.rig_comp_level.or(self.comp_level);
+        s.radio.notch_freq_hz = self.rig_notch_freq_hz.or(self.notch_freq_hz);
         s.radio.agc = self.rig_agc.clone().or_else(|| self.agc.clone());
         s.radio.refused_agc = self.rig_refused_agc.clone();
         s.radio.smeter_db = self.rig_smeter_db;
@@ -13761,6 +13816,7 @@ impl Engine {
         s.radio.notch = self.rig_funcs[2];
         s.radio.comp = self.rig_funcs[3];
         s.radio.vox = self.rig_funcs[4];
+        s.radio.manual_notch = self.rig_funcs[5];
         // The rig's own ATU: None = no tuner reported → the UI offers no ATU control at all.
         s.radio.atu = self.rig_tuner;
         s.radio.filter_width_hz = self.rig_passband;

@@ -1039,6 +1039,13 @@ export interface RadioStatus {
   micGain?: number | null
   /** Noise-reduction level 0.0–1.0 (rig read-back or commanded); absent when unsupported. */
   nrLevel?: number | null
+  /** Speech-processor depth 0..1 (#95 — the COMP toggle had no level behind it). */
+  compLevel?: number | null
+  /** MANUAL-notch frequency in HZ — not a 0..1 level. Null when the rig has no NOTCHF. */
+  notchFreqHz?: number | null
+  /** MANUAL notch (Hamlib MN), distinct from `notch` which is the AUTOMATIC notch (ANF).
+   *  A radio may report either, both or neither; each toggle renders only when non-null. */
+  manualNotch?: boolean | null
   /** AGC time constant: "fast" | "mid" | "slow"; absent when the rig doesn't report it. */
   agc?: string | null
   /** CAT S-meter in dB relative to S9 (S9 = 0, S1 ≈ -48, S9+20 = +20). Absent when

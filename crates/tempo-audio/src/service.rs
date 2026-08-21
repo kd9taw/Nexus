@@ -769,10 +769,20 @@ const CAT_RETRY_MAX_MS: f64 = 30_000.0;
 /// whereas a rejected FREQUENCY is nearly always a hard fact about the radio's range — and each
 /// retry costs a full CAT round-trip on a link that is already unhappy.
 const DIAL_SET_MAX_TRIES: u32 = 3;
-/// Hamlib func tokens for the Expert DSP toggles, in the engine's `[nb, nr, notch, comp, vox]`
-/// order. `ANF` (auto-notch) is the notch we expose — it works as a bare on/off toggle, unlike
-/// `MN` (manual notch) which needs a separate NOTCHF frequency level.
-const RIG_FUNCS: [&str; 5] = ["NB", "NR", "ANF", "COMP", "VOX"];
+/// Hamlib func tokens for the Expert DSP toggles, in the engine's
+/// `[nb, nr, notch, comp, vox, manual_notch]` order.
+///
+/// TWO NOTCHES, BECAUSE THEY ARE TWO DIFFERENT CONTROLS and a radio may have either, both or
+/// neither. `ANF` is the AUTOMATIC notch: it hunts a carrier down on its own and is a bare
+/// on/off. `MN` is the MANUAL notch, the one an operator parks on a heterodyne by ear, and it
+/// is useless without a frequency to park it at — which is why it arrives here together with
+/// the `NOTCHF` level (see [`LVL_NOTCHF`]).
+///
+/// Only `ANF` was exposed, under the label "Notch", and #95 is what that cost: an FT-991A
+/// operator found a Notch button that did nothing he could hear and no way at all to place a
+/// notch, which is what "notch" means to most operators. Each renders only when the rig
+/// reports it, so a radio with one of the two still shows one button rather than a dead pair.
+const RIG_FUNCS: [&str; 6] = ["NB", "NR", "ANF", "COMP", "VOX", "MN"];
 /// First re-probe delay for a DSP func that latched unsupported, in heavy polls (40 × 750 ms
 /// ≈ 30 s — the old fixed cadence, now only the FIRST retry).
 const FUNC_RETRY_BACKOFF_BASE: u32 = 40;
@@ -791,6 +801,12 @@ const LVL_RFPOWER: usize = 0;
 const LVL_MICGAIN: usize = 1;
 const LVL_NR: usize = 2;
 const LVL_AGC: usize = 3;
+/// Speech-processor depth. #95: COMP toggled the rig's PROC and there was no way to set how
+/// hard it worked, which is the half of a compressor that matters.
+const LVL_COMP: usize = 4;
+/// MANUAL-NOTCH FREQUENCY (Hz, not a 0..1 fraction — see `read_level_hz`). The other half of
+/// `MN` above: a notch you cannot place is not a notch.
+const LVL_NOTCHF: usize = 5;
 
 /// Record one extended-level read outcome into its `supported`/`misses` slot, with the same
 /// miss-tolerance as the S-meter: a hit resets the counter and confirms support; three consecutive
@@ -2326,6 +2342,10 @@ struct RadioLoop {
     last_mic_gain: Option<f32>,
     /// Last NR level / AGC speed we pushed to the rig — only set on change.
     last_nr_level: Option<f32>,
+    /// #95: the last COMP depth and manual-notch frequency actually accepted, and the
+    /// value each rig refused — same give-up idiom as `nr_level_giveup`.
+    last_comp_level: Option<f32>,
+    last_notch_freq_hz: Option<f32>,
     last_agc: Option<String>,
     /// The AGC speed this rig REFUSED, so it stops being re-sent. Hamlib carries AGC as an
     /// enum (OFF/SUPERFAST/FAST/SLOW/USER/MEDIUM/AUTO) and backends do not all implement every
@@ -2356,6 +2376,8 @@ struct RadioLoop {
     rf_power_giveup: Option<f32>,
     mic_gain_giveup: Option<f32>,
     nr_level_giveup: Option<f32>,
+    comp_level_giveup: Option<f32>,
+    notch_freq_giveup: Option<f32>,
     /// Open WAV sink while a QSO recording is streaming live RX capture to disk (audio
     /// bridge). The loop owns the file handle so the audio never has to live in RAM.
     qso_sink: Option<crate::voice::WavSink>,
@@ -2585,12 +2607,12 @@ struct RadioLoop {
     /// Per-func DSP capability ([nb, nr, notch, comp, vox], same as [`RIG_FUNCS`]), mirroring
     /// `smeter_supported`: `None` = unprobed, `Some(true)` = rig reports the func, `Some(false)`
     /// = confirmed absent (stop polling → toggle hidden). Reset on CAT re-confirm / breaker trip.
-    func_supported: [Option<bool>; 5],
+    func_supported: [Option<bool>; 6],
     /// Consecutive get-miss counters per func — the same miss-tolerance as `smeter_misses`.
-    func_misses: [u8; 5],
+    func_misses: [u8; 6],
     /// Last-known func states, mirrored to the engine each sub-cadence poll; a read miss on a
     /// supported func keeps the last value so the toggle never flickers.
-    func_state: [Option<bool>; 5],
+    func_state: [Option<bool>; 6],
     /// Earliest `rig_poll_ticks` at which a func latched `Some(false)` may be re-probed, and the
     /// backoff (in heavy polls) applied when it fails again.
     ///
@@ -2608,7 +2630,7 @@ struct RadioLoop {
     /// repeat. That is the operator's "then it might be fine again, then we get a small lag".
     /// Transient-hiccup recovery is still worth having, so the retry is kept but BACKED OFF
     /// (40 → 80 → 160 … heavy polls, capped), and reset on a successful read.
-    func_retry_at: [u32; 5],
+    func_retry_at: [u32; 6],
     func_retry_backoff: [u32; 5],
     /// Whether the rig's BUILT-IN ATU (Hamlib `TUNER`) has been probed for the current CAT
     /// confirmation. Probed ONCE per confirmation like [`Self::rx_ranges`] rather than round-robin
@@ -2631,9 +2653,9 @@ struct RadioLoop {
     /// same miss-tolerant caching as `func_supported`: `Some(false)` after 3 get-misses → stop
     /// issuing that read, so a rig slow/silent on it doesn't churn the CAT socket every poll
     /// (the K4/QK4 "hangs up every 5 s" bug). Reset on CAT re-confirm / rig rebuild.
-    level_supported: [Option<bool>; 4],
+    level_supported: [Option<bool>; 6],
     /// Consecutive get-miss counters per extended level — same tolerance as `smeter_misses`.
-    level_misses: [u8; 4],
+    level_misses: [u8; 6],
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -2726,11 +2748,15 @@ impl RadioLoop {
             last_rf_power: None,
             last_mic_gain: None,
             last_nr_level: None,
+            last_comp_level: None,
+            last_notch_freq_hz: None,
             last_agc: None,
             agc_giveup: None,
             rf_power_giveup: None,
             mic_gain_giveup: None,
             nr_level_giveup: None,
+            comp_level_giveup: None,
+            notch_freq_giveup: None,
             qso_sink: None,
             qso_started_ms: None,
             voice_mic_open: false,
@@ -2784,17 +2810,17 @@ impl RadioLoop {
             smeter_retry_at: 0,
             smeter_retry_backoff: FUNC_RETRY_BACKOFF_BASE,
             rig_poll_ticks: 0,
-            func_supported: [None; 5],
-            func_misses: [0; 5],
-            func_state: [None; 5],
-            func_retry_at: [0; 5],
+            func_supported: [None; 6],
+            func_misses: [0; 6],
+            func_state: [None; 6],
+            func_retry_at: [0; 6],
             func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; 5],
             tuner_probed: false,
             spectrum_feed: cfg.spectrum_feed.clone(),
             rx_tap: cfg.rx_tap.clone(),
             meter_feed: cfg.meter_feed.clone(),
-            level_supported: [None; 4],
-            level_misses: [0; 4],
+            level_supported: [None; 6],
+            level_misses: [0; 6],
 
             clock_offset_ms: 0,
             decode: DecodeWorker::spawn(),
@@ -3442,11 +3468,15 @@ impl RadioLoop {
         self.last_rf_power = None;
         self.last_mic_gain = None;
         self.last_nr_level = None;
+        self.last_comp_level = None;
+        self.last_notch_freq_hz = None;
         self.last_agc = None;
         self.agc_giveup = None; // a fresh rig may well take the step the old one refused
         self.rf_power_giveup = None; // …and so may it take the level this one refused
         self.mic_gain_giveup = None;
         self.nr_level_giveup = None;
+        self.comp_level_giveup = None;
+        self.notch_freq_giveup = None;
         self.fake_it_restore = None;
         self.audio_rig_split = false;
         self.rig_split_restore = None; // the OLD radio's split is not the new one's to restore
@@ -3474,12 +3504,12 @@ impl RadioLoop {
         self.smeter_retry_at = 0;
         // The NEW radio hasn't reported STRENGTH yet — show "—", not the old rig's needle.
         self.meter_feed.set_smeter_db(None);
-        self.func_supported = [None; 5];
-        self.func_misses = [0; 5];
-        self.func_state = [None; 5];
+        self.func_supported = [None; 6];
+        self.func_misses = [0; 6];
+        self.func_state = [None; 6];
         self.tuner_probed = false;
-        self.level_supported = [None; 4];
-        self.level_misses = [0; 4];
+        self.level_supported = [None; 6];
+        self.level_misses = [0; 6];
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -4605,17 +4635,19 @@ impl RadioLoop {
                     self.smeter_misses = 0;
                     self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
                     self.smeter_retry_at = 0;
-                    self.func_supported = [None; 5];
-                    self.func_misses = [0; 5];
-                    self.func_state = [None; 5];
+                    self.func_supported = [None; 6];
+                    self.func_misses = [0; 6];
+                    self.func_state = [None; 6];
                     self.tuner_probed = false;
-                    self.level_supported = [None; 4];
-                    self.level_misses = [0; 4];
+                    self.level_supported = [None; 6];
+                    self.level_misses = [0; 6];
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
                     self.mic_gain_giveup = None;
                     self.nr_level_giveup = None;
+                    self.comp_level_giveup = None;
+                    self.notch_freq_giveup = None;
                     {
                         let mut eng = engine_lock(engine);
                         eng.set_cat_status(
@@ -4710,12 +4742,12 @@ impl RadioLoop {
                             self.smeter_misses = 0;
                             self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
                             self.smeter_retry_at = 0;
-                            self.func_supported = [None; 5];
-                            self.func_misses = [0; 5];
-                            self.func_state = [None; 5];
+                            self.func_supported = [None; 6];
+                            self.func_misses = [0; 6];
+                            self.func_state = [None; 6];
                             self.tuner_probed = false;
-                            self.level_supported = [None; 4];
-                            self.level_misses = [0; 4];
+                            self.level_supported = [None; 6];
+                            self.level_misses = [0; 6];
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -4815,6 +4847,46 @@ impl RadioLoop {
                             note_ext_read(
                                 &mut self.level_supported[LVL_MICGAIN],
                                 &mut self.level_misses[LVL_MICGAIN],
+                                ok,
+                            );
+                        }
+                        // #95's two new reads, gated by the same capability cache as the rest:
+                        // three consecutive misses and the loop stops issuing them, so a rig
+                        // that has neither never pays a CAT timeout for asking.
+                        if self.level_supported[LVL_COMP] != Some(false) && have_budget() {
+                            let ok = match rig.read_level("COMP") {
+                                Ok(frac) => {
+                                    let mut eng = engine_lock(engine);
+                                    eng.observe_rig_comp_level(frac);
+                                    true
+                                }
+                                Err(_) => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_COMP],
+                                &mut self.level_misses[LVL_COMP],
+                                ok,
+                            );
+                        }
+                        if self.level_supported[LVL_NOTCHF] != Some(false) && have_budget() {
+                            // NOTCHF is HZ, not a 0..1 fraction — `read_level` normalises the
+                            // fractional levels, so this one goes through the raw reader or the
+                            // number comes back meaningless. Getting that wrong would put the
+                            // notch marker at 0.4 Hz and look like a rig fault.
+                            // `read_meter_f32` is the RAW reader (it is what read_agc uses);
+                            // `read_level` would reject this outright, since it filters to
+                            // 0.0..=1.0 and a notch frequency is hundreds of Hz.
+                            let ok = match rig.read_meter_f32("NOTCHF") {
+                                Some(hz) => {
+                                    let mut eng = engine_lock(engine);
+                                    eng.observe_rig_notch_freq_hz(hz);
+                                    true
+                                }
+                                None => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_NOTCHF],
+                                &mut self.level_misses[LVL_NOTCHF],
                                 ok,
                             );
                         }
@@ -5119,9 +5191,9 @@ impl RadioLoop {
                             }
                             self.cat_retry_at = now + self.cat_retry_ms;
                             // Re-probe funcs on recovery; don't leave stale toggle states shown.
-                            self.func_supported = [None; 5];
-                            self.func_misses = [0; 5];
-                            self.func_state = [None; 5];
+                            self.func_supported = [None; 6];
+                            self.func_misses = [0; 6];
+                            self.func_state = [None; 6];
                             self.tuner_probed = false;
                             // Name the rig config in the diagnostic too, so a capture taken while
                             // the fault is ongoing records model/port/baud (the spawn note may
@@ -6797,10 +6869,40 @@ impl RadioLoop {
                 }
             }
             // RX DSP levels: NR level (0..1) + AGC speed — applied on change like mic gain.
-            let (nr, agc) = {
+            let (nr, agc, comp, notchf) = {
                 let mut e = engine_lock(engine);
-                (e.nr_level(), e.agc_to_command())
+                (
+                    e.nr_level(),
+                    e.agc_to_command(),
+                    e.comp_level(),
+                    e.notch_freq_hz(),
+                )
             };
+            // #95's two writes. Same shape as NR below — a refusal is remembered against THAT
+            // value so a rig that will not take it is asked once, not on every pass, and a
+            // different value from the operator is still tried.
+            if let Some(c) = comp {
+                if Some(c) != self.last_comp_level && self.comp_level_giveup != Some(c) {
+                    match rig.set_rx_level("COMP", c) {
+                        Ok(()) => {
+                            self.last_comp_level = Some(c);
+                            self.comp_level_giveup = None;
+                        }
+                        Err(_) => self.comp_level_giveup = Some(c),
+                    }
+                }
+            }
+            if let Some(hz) = notchf {
+                if Some(hz) != self.last_notch_freq_hz && self.notch_freq_giveup != Some(hz) {
+                    match rig.set_notch_freq_hz(hz) {
+                        Ok(()) => {
+                            self.last_notch_freq_hz = Some(hz);
+                            self.notch_freq_giveup = None;
+                        }
+                        Err(_) => self.notch_freq_giveup = Some(hz),
+                    }
+                }
+            }
             if let Some(n) = nr {
                 // Same give-up, same reason — see the RF-power leg above. NR is the one of the
                 // three a Flex on model 2036 is most likely to refuse outright.

@@ -275,6 +275,9 @@ impl AppState {
                 notch: None,
                 comp: None,
                 vox: None,
+                manual_notch: None,
+                comp_level: None,
+                notch_freq_hz: None,
                 atu: None, // engine fills from the CAT TUNER probe (None = no ATU on this rig)
                 filter_width_hz: None, // engine fills from the CAT `m` passband read-back
                 rit_hz: 0,
