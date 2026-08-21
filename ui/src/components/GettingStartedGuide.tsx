@@ -1,4 +1,7 @@
 import { useRef, useState } from 'react'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
+import { T } from '../i18n/T'
 import { Dialog } from './ui/Dialog'
 
 /**
@@ -25,27 +28,90 @@ import { Dialog } from './ui/Dialog'
  *
  * The same four steps are published at hamradiotools.io/getting-started, one
  * source of copy for both.
+ *
+ * ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every
+ * sentence lives in `i18n/en.ts` under `gettingStarted.*`; the emphasised ones
+ * are `<T>` with markers, because a guide sentence with the control name bolded
+ * in the middle of it cannot be split into three keys and still be translated.
+ * What stays HERE is GUIDE_EXAMPLES — the invariant values the recreated wizard
+ * panels display.
  */
 
 interface Props {
   onClose: () => void
 }
 
-const STEPS = [
-  { num: '01', label: 'Callsign & grid', blurb: 'Who and where you are' },
-  { num: '02', label: 'Your radio', blurb: 'Detect, pair audio, Test CAT' },
-  { num: '03', label: 'License class', blurb: 'A real transmit lockout' },
-  { num: '04', label: 'Your ADIF log', blurb: 'Where the magic happens' },
+/** The wordmark in the breadcrumb strip. A brand, not prose — invariant in every language. */
+const APP_WORDMARK = 'NEXUS'
+
+/**
+ * The invariant technical values this guide shows: a callsign, two grid squares, hardware
+ * identifiers reported by the OS, and three dial frequencies. They are the same characters in
+ * every language — `14.074 MHz` is not `14,074 MHz`, and a decimal comma reaching a dial reading
+ * is an operating fault. Gathered here (rather than inlined) so the guard can prove they never
+ * became catalog entries, exactly as STATION_EXAMPLES does for Settings ▸ Station.
+ */
+const GUIDE_EXAMPLES = {
+  callsign: 'KD9TAW',
+  grid: 'EN52xa',
+  gridShort: 'EN52',
+  rig: 'Icom IC-7300',
+  portCiv: 'COM7',
+  portSecond: 'COM8',
+  chip: 'CP210x',
+  audioDevice: 'USB Audio CODEC',
+  /** What Test CAT reports back — a dial reading, formatted by the radio layer. */
+  dialRead: '14.074.000 MHz',
+  /** The FT8 calling frequency the Digital cockpit opens on. */
+  ft8Dial: '14.074 MHz',
+  /** A 40 m phone frequency a General may not use — the lockout's worked example. */
+  blockedDial: '7.150 MHz',
+  /** An example import result. Already grouped; never re-formatted by a locale. */
+  importedQsos: '4,812',
+  importedDupes: '36',
+} as const
+
+interface Step {
+  num: string
+  labelKey: MessageKey
+  blurbKey: MessageKey
+  /** The forward button's wording on this step. Step 4's is unused — it closes instead. */
+  nextKey: MessageKey
+}
+
+const STEPS: Step[] = [
+  {
+    num: '01',
+    labelKey: 'gettingStarted.rail.station.label',
+    blurbKey: 'gettingStarted.rail.station.blurb',
+    nextKey: 'gettingStarted.next.station',
+  },
+  {
+    num: '02',
+    labelKey: 'gettingStarted.rail.radio.label',
+    blurbKey: 'gettingStarted.rail.radio.blurb',
+    nextKey: 'gettingStarted.next.radio',
+  },
+  {
+    num: '03',
+    labelKey: 'gettingStarted.rail.license.label',
+    blurbKey: 'gettingStarted.rail.license.blurb',
+    nextKey: 'gettingStarted.next.license',
+  },
+  {
+    num: '04',
+    labelKey: 'gettingStarted.rail.log.label',
+    blurbKey: 'gettingStarted.rail.log.blurb',
+    nextKey: 'gettingStarted.next.log',
+  },
 ]
 
 /** The real wizard's step titles, for the dot row inside the recreated panels. */
-const WIZ = ['Your station', 'Your rig', 'Your log', 'Finish']
-
-const NEXT_LABEL = [
-  'Next — set up the radio →',
-  'Next — your license →',
-  'Next — the log (the important one) →',
-  "That's all four",
+const WIZ: { titleKey: MessageKey }[] = [
+  { titleKey: 'gettingStarted.wizard.station' },
+  { titleKey: 'gettingStarted.wizard.rig' },
+  { titleKey: 'gettingStarted.wizard.log' },
+  { titleKey: 'gettingStarted.wizard.finish' },
 ]
 
 /** The dot row of a recreated wizard panel. `cur` is the REAL wizard step
@@ -53,12 +119,12 @@ const NEXT_LABEL = [
 function WizardDots({ cur }: { cur: number }) {
   return (
     <div className="wizard-dots">
-      {WIZ.map((t, i) => (
+      {WIZ.map((w, i) => (
         <span
-          key={t}
+          key={w.titleKey}
           className={`wizard-dot${i === cur - 1 ? ' cur' : ''}${i < cur - 1 ? ' done' : ''}`}
         >
-          <span className="wizard-dot-n">{i + 1}</span> {t}
+          <span className="wizard-dot-n">{i + 1}</span> {t(w.titleKey)}
         </span>
       ))}
     </div>
@@ -69,7 +135,7 @@ function WizardDots({ cur }: { cur: number }) {
 function WizardShot({ caption, children }: { caption: string; children: React.ReactNode }) {
   return (
     <div>
-      <p className="gsg-shot-label">In Nexus</p>
+      <p className="gsg-shot-label">{t('gettingStarted.shot.label')}</p>
       <div className="gsg-shot">{children}</div>
       <p className="gsg-shot-cap">{caption}</p>
     </div>
@@ -92,7 +158,8 @@ export function GettingStartedGuide({ onClose }: Props) {
     box?.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' })
   }
 
-  const progress = `Step ${step + 1} of ${STEPS.length}`
+  const progress = t('gettingStarted.progress', { step: step + 1, total: STEPS.length })
+  const isMac = navigator.userAgent.includes('Mac')
 
   return (
     <Dialog
@@ -100,7 +167,7 @@ export function GettingStartedGuide({ onClose }: Props) {
       onOpenChange={(o) => {
         if (!o) onClose()
       }}
-      title="Getting started"
+      title={t('gettingStarted.title')}
       hideTitle
       className="gsg-dialog"
     >
@@ -108,19 +175,18 @@ export function GettingStartedGuide({ onClose }: Props) {
         {/* Breadcrumb strip — this guide's whole chrome inside the app. */}
         <div className="gsg-crumb">
           <span className="gsg-crumb-mark" aria-hidden="true" />
-          <span className="gsg-crumb-app">NEXUS</span>
+          {/* The product name, not prose — invariant in every language. */}
+          <span className="gsg-crumb-app">{APP_WORDMARK}</span>
           <span className="gsg-crumb-dot" aria-hidden="true">
             ●
           </span>
-          <span>Help ▸ Getting started</span>
-          <span className="gsg-crumb-note">
-            Opened from the Help menu · also offered at the end of the setup wizard
-          </span>
+          <span>{t('gettingStarted.crumb.path')}</span>
+          <span className="gsg-crumb-note">{t('gettingStarted.crumb.note')}</span>
         </div>
 
         <div className="gsg-body">
-          <nav className="gsg-rail" aria-label="Guide steps">
-            <p className="gsg-rail-head">The order matters</p>
+          <nav className="gsg-rail" aria-label={t('gettingStarted.rail.label')}>
+            <p className="gsg-rail-head">{t('gettingStarted.rail.head')}</p>
             {STEPS.map((s, i) => (
               <button
                 key={s.num}
@@ -133,8 +199,8 @@ export function GettingStartedGuide({ onClose }: Props) {
               >
                 <span className="gsg-rail-num">{s.num}</span>
                 <span className="gsg-rail-text">
-                  <span className="gsg-rail-label">{s.label}</span>
-                  <span className="gsg-rail-blurb">{s.blurb}</span>
+                  <span className="gsg-rail-label">{t(s.labelKey)}</span>
+                  <span className="gsg-rail-blurb">{t(s.blurbKey)}</span>
                 </span>
               </button>
             ))}
@@ -149,70 +215,68 @@ export function GettingStartedGuide({ onClose }: Props) {
 
           <div className="gsg-content">
             {step === 0 && (
-              <section aria-label="Step 1 of 4: Callsign and grid">
-                <p className="gsg-eyebrow">Step 1 of 4 · Your station</p>
-                <h2 className="gsg-h2">Who&rsquo;s on the air?</h2>
-                <p className="gsg-lede">
-                  Your callsign and your grid square. Everything location-shaped in Nexus — the
-                  propagation map, satellite passes, distances, bearings, DXpedition windows, VHF
-                  opening locality — is computed from these two fields.
-                </p>
+              <section aria-label={t('gettingStarted.station.aria')}>
+                <p className="gsg-eyebrow">{t('gettingStarted.station.eyebrow')}</p>
+                <h2 className="gsg-h2">{t('gettingStarted.station.heading')}</h2>
+                <p className="gsg-lede">{t('gettingStarted.station.lede')}</p>
 
                 <div className="gsg-split">
                   <div className="gsg-prose">
                     <p>
-                      Open the first-run wizard (it appears on first launch) or{' '}
-                      <strong>Settings ▸ Station</strong> at any time.
+                      <T k="gettingStarted.station.where" tags={{ b: <strong /> }} />
                     </p>
                     <ul>
                       <li>
-                        <strong>Callsign</strong> — stored uppercase. Nexus will not start PSK
-                        Reporter or the RBN/cluster feed until a valid one is set: 3–10 characters,
-                        at least one letter and one digit.
+                        <T k="gettingStarted.station.callsign" tags={{ b: <strong /> }} />
                       </li>
                       <li>
-                        <strong>Grid square</strong> — your Maidenhead locator. QRZ shows yours.
+                        <T k="gettingStarted.station.grid" tags={{ b: <strong /> }} />
                       </li>
                       <li>
-                        <strong>Name</strong> — optional, in Settings ▸ Station. Feeds the CW{' '}
-                        <code>{'{NAME}'}</code> macro and logbook autofill.
+                        {/* `{NAME}` is a CW macro token inside the catalog string; it survives
+                            because interpolation is `{{double}}`. */}
+                        <T
+                          k="gettingStarted.station.name"
+                          tags={{ b: <strong />, code: <code /> }}
+                        />
                       </li>
                     </ul>
                     <div className="gsg-callout accent">
-                      <p className="gsg-callout-label">Give all six characters</p>
+                      <p className="gsg-callout-label">
+                        {t('gettingStarted.station.callout.label')}
+                      </p>
                       <p className="gsg-callout-body">
-                        Four characters pins you to the middle of a ~100-mile square, and every
-                        distance and bearing you will ever read is measured from that point.{' '}
-                        <code>EN52xa</code> beats <code>EN52</code>. A malformed locator is refused
-                        outright — the wizard will not let you past it.
+                        <T
+                          k="gettingStarted.station.callout.body"
+                          tags={{ code: <code /> }}
+                          vals={{ full: GUIDE_EXAMPLES.grid, short: GUIDE_EXAMPLES.gridShort }}
+                        />
                       </p>
                     </div>
                   </div>
 
-                  <WizardShot caption="Setup wizard ▸ step 1 · re-run any time from Settings ▸ Appearance ▸ Features">
+                  <WizardShot caption={t('gettingStarted.station.shot.caption')}>
                     <WizardDots cur={1} />
-                    <p className="wizard-title">Who&rsquo;s on the air?</p>
-                    <p className="wizard-sub">
-                      Your grid square is the anchor for everything location-based — satellite
-                      passes, propagation, the map, and DXpedition windows are all computed from it.
-                    </p>
+                    <p className="wizard-title">{t('gettingStarted.station.shot.title')}</p>
+                    <p className="wizard-sub">{t('gettingStarted.station.shot.sub')}</p>
                     <div className="wizard-fields">
                       <span className="wizard-field">
-                        <span>Callsign</span>
-                        <span className="gsg-shot-input">KD9TAW</span>
+                        <span>{t('gettingStarted.station.shot.callsignLabel')}</span>
+                        <span className="gsg-shot-input">{GUIDE_EXAMPLES.callsign}</span>
                       </span>
                       <span className="wizard-field">
-                        <span>Grid square</span>
-                        <span className="gsg-shot-input">EN52xa</span>
+                        <span>{t('gettingStarted.station.shot.gridLabel')}</span>
+                        <span className="gsg-shot-input">{GUIDE_EXAMPLES.grid}</span>
                         <span className="wizard-field-hint">
-                          Maidenhead locator (qrz.com shows yours). Give all 6 — 4 characters pins
-                          you to the middle of a ~100-mile square.
+                          {t('gettingStarted.station.shot.gridHint')}
                         </span>
                       </span>
                     </div>
                     <div className="gsg-shot-actions">
-                      <span className="wizard-skip">I&rsquo;ll set it up myself</span>
-                      <span className="wizard-go">Next →</span>
+                      <span className="wizard-skip">
+                        {t('gettingStarted.station.shot.skip')}
+                      </span>
+                      <span className="wizard-go">{t('gettingStarted.station.shot.next')}</span>
                     </div>
                   </WizardShot>
                 </div>
@@ -220,99 +284,127 @@ export function GettingStartedGuide({ onClose }: Props) {
             )}
 
             {step === 1 && (
-              <section aria-label="Step 2 of 4: Your radio">
-                <p className="gsg-eyebrow">Step 2 of 4 · Your rig</p>
-                <h2 className="gsg-h2">How does the radio connect?</h2>
-                <p className="gsg-lede">
-                  One button does the archaeology. Nexus reads the USB descriptors, matches the rig
-                  model, pairs the audio CODEC, and looks for FlexRadios on your network — in a
-                  single scan.
-                </p>
+              <section aria-label={t('gettingStarted.radio.aria')}>
+                <p className="gsg-eyebrow">{t('gettingStarted.radio.eyebrow')}</p>
+                <h2 className="gsg-h2">{t('gettingStarted.radio.heading')}</h2>
+                <p className="gsg-lede">{t('gettingStarted.radio.lede')}</p>
 
                 <div className="gsg-split">
                   <div className="gsg-prose">
                     <p>
-                      In the wizard, or in <strong>Settings ▸ Radio ▸ Rig &amp; CAT</strong>, click{' '}
-                      <strong>Detect my radio</strong>.
+                      <T k="gettingStarted.radio.where" tags={{ b: <strong /> }} />
                     </p>
                     <ul>
                       <li>
-                        <strong>Pick the row that is your radio.</strong> It fills the port, the
-                        Hamlib model and both audio devices at once. On a dual-UART Icom two rows
-                        describe the same rig — take the one tagged <em>CI-V port — use this one</em>
-                        .
+                        <T
+                          k="gettingStarted.radio.pickRow"
+                          tags={{ b: <strong />, em: <em /> }}
+                        />
                       </li>
                       <li>
-                        <strong>Generic cable?</strong> A CH340 reporting only &ldquo;USB
-                        Serial&rdquo; fills the port and audio but leaves the model blank — choose it
-                        from the dropdown.
+                        <T k="gettingStarted.radio.genericCable" tags={{ b: <strong /> }} />
                       </li>
                       <li>
-                        <strong>FlexRadio</strong> is found on the network and configured the
-                        WSJT-X-proven way: CAT through the SmartSDR CAT app at{' '}
-                        <code>127.0.0.1:5002</code>, audio through DAX.
+                        <T
+                          k="gettingStarted.radio.flex"
+                          tags={{ b: <strong />, code: <code /> }}
+                        />
                       </li>
                       <li>
-                        <strong>Then press Test CAT.</strong> Nexus saves what you entered, starts{' '}
-                        <code>rigctld</code> for the radio, and reports the dial frequency it read
-                        back — or the specific error. Other programs share the radio through the
-                        address in Settings ▸ Radio ▸ <em>Transmit limits &amp; sharing</em>.
+                        <T
+                          k="gettingStarted.radio.testCat"
+                          tags={{ b: <strong />, code: <code />, em: <em /> }}
+                        />
                       </li>
                     </ul>
                     <div className="gsg-callout neutral">
-                      <p className="gsg-callout-label">Nothing found?</p>
+                      <p className="gsg-callout-label">{t('gettingStarted.radio.callout.label')}</p>
                       <p className="gsg-callout-body">
-                        USB: plug it in and power it on. Flex: it has to be on this network. Either
-                        way you can skip and set it up later — the wizard never blocks on hardware.
-                        Set <strong>Tx&nbsp;Level</strong> (default 0.9) down until your rig&rsquo;s
-                        ALC reads zero before you transmit.
+                        <T k="gettingStarted.radio.callout.body" tags={{ b: <strong /> }} />
                       </p>
                     </div>
                   </div>
 
-                  <WizardShot caption="Setup wizard ▸ step 2 · Hamlib ships inside the installer">
+                  <WizardShot
+                    // "Ships inside the installer" is true on Windows only (the .deb declares it;
+                    // a Mac gets it from Homebrew) — a Mac field report followed this caption to a
+                    // dead end, so the claim is platform-aware now. Two whole captions, not a stem
+                    // plus two tails: a fragment cannot be re-ordered by a translator.
+                    caption={
+                      isMac
+                        ? t('gettingStarted.radio.shot.captionMac')
+                        : t('gettingStarted.radio.shot.caption')
+                    }
+                  >
                     <WizardDots cur={2} />
-                    <p className="wizard-title">How does the radio connect?</p>
-                    <p className="wizard-sub">
-                      One detect finds everything — USB rigs and FlexRadios on the network.
-                      Skippable; Settings ▸ Radio ▸ Rig &amp; CAT has all of this later.
-                    </p>
+                    <p className="wizard-title">{t('gettingStarted.radio.shot.title')}</p>
+                    <p className="wizard-sub">{t('gettingStarted.radio.shot.sub')}</p>
                     <div className="wizard-detect">
-                      <span className="wizard-btn">🔍 Detect my radio</span>
+                      <span className="wizard-btn">{t('gettingStarted.radio.shot.detect')}</span>
                       <span className="wizard-detect-row sel">
-                        <b>Icom IC-7300</b> on COM7
-                        <span className="wizard-field-hint"> · CP210x · CI-V port — use this one</span>
+                        <T
+                          k="gettingStarted.radio.shot.row"
+                          tags={{ b: <b /> }}
+                          vals={{ rig: GUIDE_EXAMPLES.rig, port: GUIDE_EXAMPLES.portCiv }}
+                        />
+                        <span className="wizard-field-hint">
+                          {' '}
+                          {t('gettingStarted.radio.shot.rowCiv', { chip: GUIDE_EXAMPLES.chip })}
+                        </span>
                       </span>
                       <span className="wizard-detect-row">
-                        <b>Icom IC-7300</b> on COM8
-                        <span className="wizard-field-hint"> · CP210x · second port, not CI-V</span>
+                        <T
+                          k="gettingStarted.radio.shot.row"
+                          tags={{ b: <b /> }}
+                          vals={{ rig: GUIDE_EXAMPLES.rig, port: GUIDE_EXAMPLES.portSecond }}
+                        />
+                        <span className="wizard-field-hint">
+                          {' '}
+                          {t('gettingStarted.radio.shot.rowSecond', { chip: GUIDE_EXAMPLES.chip })}
+                        </span>
                       </span>
-                      <span className="wizard-field-hint">Selected: Icom IC-7300 on COM7</span>
+                      <span className="wizard-field-hint">
+                        {t('gettingStarted.radio.shot.selected', {
+                          rig: GUIDE_EXAMPLES.rig,
+                          port: GUIDE_EXAMPLES.portCiv,
+                        })}
+                      </span>
                     </div>
                     <div className="wizard-rigconn">
                       <span className="wizard-mode sel">
-                        <span className="wizard-mode-label">USB / Serial</span>
-                        <span className="wizard-mode-blurb">Most rigs — one cable</span>
+                        <span className="wizard-mode-label">
+                          {t('gettingStarted.radio.shot.usbLabel')}
+                        </span>
+                        <span className="wizard-mode-blurb">
+                          {t('gettingStarted.radio.shot.usbBlurb')}
+                        </span>
                       </span>
                       <span className="wizard-mode">
-                        <span className="wizard-mode-label">Network</span>
-                        <span className="wizard-mode-blurb">FlexRadio / remote rigctld</span>
+                        <span className="wizard-mode-label">
+                          {t('gettingStarted.radio.shot.netLabel')}
+                        </span>
+                        <span className="wizard-mode-blurb">
+                          {t('gettingStarted.radio.shot.netBlurb')}
+                        </span>
                       </span>
                     </div>
                     <div className="wizard-fields">
                       <span className="wizard-field">
-                        <span>Audio in</span>
-                        <span className="gsg-shot-input">USB Audio CODEC</span>
+                        <span>{t('gettingStarted.radio.shot.audioIn')}</span>
+                        <span className="gsg-shot-input">{GUIDE_EXAMPLES.audioDevice}</span>
                       </span>
                       <span className="wizard-field">
-                        <span>Audio out</span>
-                        <span className="gsg-shot-input">USB Audio CODEC</span>
+                        <span>{t('gettingStarted.radio.shot.audioOut')}</span>
+                        <span className="gsg-shot-input">{GUIDE_EXAMPLES.audioDevice}</span>
                       </span>
                     </div>
                     <div className="wizard-detect">
-                      <span className="wizard-btn">⚡ Test CAT</span>
+                      <span className="wizard-btn">{t('gettingStarted.radio.shot.testCatBtn')}</span>
                       <span className="wizard-field-hint">
-                        ✓ Radio answered on COM7 — dial reads 14.074.000 MHz
+                        {t('gettingStarted.radio.shot.testCatResult', {
+                          port: GUIDE_EXAMPLES.portCiv,
+                          dial: GUIDE_EXAMPLES.dialRead,
+                        })}
                       </span>
                     </div>
                   </WizardShot>
@@ -321,77 +413,85 @@ export function GettingStartedGuide({ onClose }: Props) {
             )}
 
             {step === 2 && (
-              <section aria-label="Step 3 of 4: License class">
-                <p className="gsg-eyebrow">Step 3 of 4 · Your license</p>
-                <h2 className="gsg-h2">Declare your class, get a real lockout</h2>
+              <section aria-label={t('gettingStarted.license.aria')}>
+                <p className="gsg-eyebrow">{t('gettingStarted.license.eyebrow')}</p>
+                <h2 className="gsg-h2">{t('gettingStarted.license.heading')}</h2>
                 <p className="gsg-lede">
-                  This one field becomes a software guard in <em>every</em> transmit path in the app.
-                  Nexus parks the dial in your licensed segments and refuses to key up outside them,
-                  with a toast that says why.
+                  <T k="gettingStarted.license.lede" tags={{ em: <em /> }} />
                 </p>
 
                 <div className="gsg-split">
                   <div className="gsg-prose">
                     <p>
-                      On the wizard&rsquo;s last step, under <strong>What&rsquo;s your license?</strong>
-                      . It is persisted the moment you click it.
+                      <T k="gettingStarted.license.where" tags={{ b: <strong /> }} />
                     </p>
                     <ul>
                       <li>
-                        A <strong>Technician</strong> on 40&nbsp;m is held to the CW segment — phone
-                        and FT8 TX outside it are blocked.
+                        <T k="gettingStarted.license.technician" tags={{ b: <strong /> }} />
                       </li>
                       <li>
-                        A <strong>General</strong> on 20&nbsp;m cannot transmit in the Extra-only
-                        portion at the low end.
+                        <T k="gettingStarted.license.general" tags={{ b: <strong /> }} />
                       </li>
                       <li>
-                        The channelized <strong>60&nbsp;m</strong> segments are included.
+                        <T k="gettingStarted.license.sixty" tags={{ b: <strong /> }} />
                       </li>
                       <li>
-                        Outside the US? Pick <strong>Outside the US</strong>. The lockout models US
-                        FCC Part 97 / ITU Region 2 only, so it is off rather than wrong.
+                        <T k="gettingStarted.license.outsideUs" tags={{ b: <strong /> }} />
                       </li>
                     </ul>
                     <div className="gsg-callout accent">
-                      <p className="gsg-callout-label">It is a safety net</p>
+                      <p className="gsg-callout-label">
+                        {t('gettingStarted.license.callout.label')}
+                      </p>
                       <p className="gsg-callout-body">
-                        You are responsible for knowing your privileges. The lockout catches the
-                        slip; it does not replace the knowledge. A fresh install defaults to{' '}
-                        <strong>Open</strong>, so nothing is silently restricted before you say so.
+                        <T k="gettingStarted.license.callout.body" tags={{ b: <strong /> }} />
                       </p>
                     </div>
                   </div>
 
-                  <WizardShot caption="Setup wizard ▸ step 4 · everything starts on — this is the one question">
-                    <p className="gsg-shot-h3">What&rsquo;s your license?</p>
-                    <p className="wizard-license-sub">
-                      Sets your transmit privileges — the app parks the dial in your licensed band
-                      segments and won&rsquo;t let you transmit outside them. Pick &ldquo;Outside the
-                      US&rdquo; for no limits.
-                    </p>
+                  <WizardShot caption={t('gettingStarted.license.shot.caption')}>
+                    <p className="gsg-shot-h3">{t('gettingStarted.license.shot.title')}</p>
+                    <p className="wizard-license-sub">{t('gettingStarted.license.shot.sub')}</p>
                     <div className="wizard-modes">
                       <span className="wizard-mode">
-                        <span className="wizard-mode-label">Technician</span>
-                        <span className="wizard-mode-blurb">US — limited HF + full VHF/UHF</span>
+                        <span className="wizard-mode-label">
+                          {t('gettingStarted.license.shot.technician')}
+                        </span>
+                        <span className="wizard-mode-blurb">
+                          {t('gettingStarted.license.shot.technicianBlurb')}
+                        </span>
                       </span>
                       <span className="wizard-mode sel">
-                        <span className="wizard-mode-label">General</span>
-                        <span className="wizard-mode-blurb">US — most HF privileges</span>
+                        <span className="wizard-mode-label">
+                          {t('gettingStarted.license.shot.general')}
+                        </span>
+                        <span className="wizard-mode-blurb">
+                          {t('gettingStarted.license.shot.generalBlurb')}
+                        </span>
                       </span>
                       <span className="wizard-mode">
-                        <span className="wizard-mode-label">Amateur Extra</span>
-                        <span className="wizard-mode-blurb">US — full privileges</span>
+                        <span className="wizard-mode-label">
+                          {t('gettingStarted.license.shot.extra')}
+                        </span>
+                        <span className="wizard-mode-blurb">
+                          {t('gettingStarted.license.shot.extraBlurb')}
+                        </span>
                       </span>
                       <span className="wizard-mode">
-                        <span className="wizard-mode-label">Outside the US</span>
-                        <span className="wizard-mode-blurb">No transmit limits</span>
+                        <span className="wizard-mode-label">
+                          {t('gettingStarted.license.shot.outside')}
+                        </span>
+                        <span className="wizard-mode-blurb">
+                          {t('gettingStarted.license.shot.outsideBlurb')}
+                        </span>
                       </span>
                     </div>
                     <div className="gsg-shot-toast">
                       <span className="gsg-shot-toast-dot" aria-hidden="true" />
                       <span className="gsg-shot-toast-msg">
-                        TX blocked — 7.150 MHz is outside your General phone privileges on 40 m.
+                        {t('gettingStarted.license.shot.toast', {
+                          freq: GUIDE_EXAMPLES.blockedDial,
+                        })}
                       </span>
                     </div>
                   </WizardShot>
@@ -400,48 +500,36 @@ export function GettingStartedGuide({ onClose }: Props) {
             )}
 
             {step === 3 && (
-              <section aria-label="Step 4 of 4: Your ADIF log">
+              <section aria-label={t('gettingStarted.log.aria')}>
                 <div className="gsg-hero-card">
                   <div className="gsg-hero-card-glow" aria-hidden="true" />
                   <div className="gsg-hero-card-inner">
-                    <p className="gsg-eyebrow">Step 4 of 4 · The one that matters</p>
-                    <h2 className="gsg-h2 big">Bring in your existing log</h2>
-                    <p className="gsg-lede wide">
-                      One log, every mode. Import one ADIF file and the app knows every station you
-                      have already worked, every entity you still need, and exactly how far you are
-                      from your next award — on digital, phone and CW alike, computed offline from
-                      your own history.
-                    </p>
+                    <p className="gsg-eyebrow">{t('gettingStarted.log.eyebrow')}</p>
+                    <h2 className="gsg-h2 big">{t('gettingStarted.log.heading')}</h2>
+                    <p className="gsg-lede wide">{t('gettingStarted.log.lede')}</p>
 
                     <div className="gsg-compare">
                       <div className="gsg-compare-cell">
-                        <p className="gsg-compare-label faint">Without a log</p>
-                        <p className="gsg-compare-body">
-                          Every callsign looks the same, whether it arrives as a decode, a cluster
-                          spot or a voice on the band. Every station is new. The Needed board has
-                          nothing to say.
+                        <p className="gsg-compare-label faint">
+                          {t('gettingStarted.log.without.label')}
                         </p>
+                        <p className="gsg-compare-body">{t('gettingStarted.log.without.body')}</p>
                       </div>
                       <div className="gsg-compare-cell">
-                        <p className="gsg-compare-label ok">With it — worked before</p>
-                        <p className="gsg-compare-body">
-                          B4 chips wherever a callsign appears — digital decodes, the Call Roster,
-                          spots, and the recall card in the Phone and CW cockpits.
-                        </p>
+                        <p className="gsg-compare-label ok">{t('gettingStarted.log.b4.label')}</p>
+                        <p className="gsg-compare-body">{t('gettingStarted.log.b4.body')}</p>
                       </div>
                       <div className="gsg-compare-cell">
-                        <p className="gsg-compare-label ok">With it — the Needed board</p>
-                        <p className="gsg-compare-body">
-                          New DXCC, new state, new grid, new band slot — ranked across every band and
-                          mode at once, with the evidence that says it is workable now.
+                        <p className="gsg-compare-label ok">
+                          {t('gettingStarted.log.needed.label')}
                         </p>
+                        <p className="gsg-compare-body">{t('gettingStarted.log.needed.body')}</p>
                       </div>
                       <div className="gsg-compare-cell">
-                        <p className="gsg-compare-label ok">With it — awards</p>
-                        <p className="gsg-compare-body">
-                          DXCC, Challenge, Honor Roll, WAS, WAZ, VUCC and IOTA — mode-agnostic and
-                          per-mode alike — the moment the import finishes.
+                        <p className="gsg-compare-label ok">
+                          {t('gettingStarted.log.awards.label')}
                         </p>
+                        <p className="gsg-compare-body">{t('gettingStarted.log.awards.body')}</p>
                       </div>
                     </div>
                   </div>
@@ -449,87 +537,84 @@ export function GettingStartedGuide({ onClose }: Props) {
 
                 <div className="gsg-split wide">
                   <div className="gsg-prose">
-                    <p className="gsg-prose-h3">Where your ADIF comes from</p>
+                    <p className="gsg-prose-h3">{t('gettingStarted.log.sources.head')}</p>
                     <p>
-                      Any standard ADIF export — <code>.adi</code> or <code>.adif</code>. If you have
-                      been operating, you already have one.
+                      <T k="gettingStarted.log.sources.intro" tags={{ code: <code /> }} />
                     </p>
                     <ul className="tight">
                       <li>
-                        <strong>WSJT-X</strong> — <code>wsjtx_log.adi</code> in your log directory.
+                        <T
+                          k="gettingStarted.log.sources.wsjtx"
+                          tags={{ b: <strong />, code: <code /> }}
+                        />
                       </li>
                       <li>
-                        <strong>QRZ Logbook</strong> or <strong>LoTW</strong> — download your full
-                        ADIF export.
+                        <T k="gettingStarted.log.sources.qrz" tags={{ b: <strong /> }} />
                       </li>
                       <li>
-                        <strong>N1MM+, Log4OM, HRD, ClubLog</strong> — export ADIF from the logbook.
+                        <T k="gettingStarted.log.sources.others" tags={{ b: <strong /> }} />
                       </li>
                     </ul>
-                    <p className="gsg-prose-h3">Then import it</p>
+                    <p className="gsg-prose-h3">{t('gettingStarted.log.import.head')}</p>
                     <p>
-                      Wizard step 3, or <strong>Logbook ▸ Import ADIF</strong> at any time. Import as
-                      many files as you like — duplicates are detected and skipped, so a second pass
-                      costs you nothing.
+                      <T k="gettingStarted.log.import.body" tags={{ b: <strong /> }} />
                     </p>
                     <div className="gsg-callout ok">
-                      <p className="gsg-callout-label">Nothing leaves your computer</p>
+                      <p className="gsg-callout-label">{t('gettingStarted.log.callout.label')}</p>
                       <p className="gsg-callout-body">
-                        The import is local. Your log lives in <code>log.adi</code> on your own
-                        machine, and the awards engine computes against it offline. Uploading to
-                        LoTW, QRZ, ClubLog or eQSL is a separate, opt-in connector.
+                        <T k="gettingStarted.log.callout.body" tags={{ code: <code /> }} />
                       </p>
                     </div>
                   </div>
 
-                  <WizardShot caption="Setup wizard ▸ step 3 · or Logbook ▸ Import ADIF, any time">
+                  <WizardShot caption={t('gettingStarted.log.shot.caption')}>
                     <WizardDots cur={3} />
-                    <p className="wizard-title">Bring in your existing log</p>
+                    <p className="wizard-title">{t('gettingStarted.log.shot.title')}</p>
                     <p className="wizard-sub">
-                      Nexus works best when it knows your history. Importing your ADIF log is what
-                      powers <strong>worked-before</strong> flags, the <strong>Needed</strong> board,
-                      and your <strong>awards</strong> progress — without it, the app starts blind
-                      and treats every station as new.
+                      <T k="gettingStarted.log.shot.sub" tags={{ b: <strong /> }} />
                     </p>
                     <div className="gsg-shot-log">
-                      <span className="wizard-go">Import my ADIF log…</span>
+                      <span className="wizard-go">{t('gettingStarted.log.shot.import')}</span>
                       <p className="wizard-log-result">
-                        ✓ Imported <strong>4,812</strong> QSOs · 36 already present. Your
-                        worked-before and Needed board are now seeded.
+                        <T
+                          k="gettingStarted.log.shot.result"
+                          tags={{ b: <strong /> }}
+                          vals={{
+                            count: GUIDE_EXAMPLES.importedQsos,
+                            present: GUIDE_EXAMPLES.importedDupes,
+                          }}
+                        />
                       </p>
                       <p className="wizard-license-sub">
-                        From WSJT-X, N1MM, Log4OM, HRD, QRZ, LoTW, ClubLog — any standard ADIF
-                        (.adi/.adif) export. Nothing leaves your computer; duplicates are detected
-                        and skipped.
+                        {t('gettingStarted.log.shot.formats')}
                       </p>
                     </div>
                   </WizardShot>
                 </div>
 
                 <div className="gsg-closing">
-                  <p className="gsg-eyebrow ok">You&rsquo;re set — now go work someone</p>
+                  <p className="gsg-eyebrow ok">{t('gettingStarted.log.closing.eyebrow')}</p>
                   <div className="gsg-closing-grid">
                     <div className="gsg-closing-card">
                       <p className="gsg-closing-num">01</p>
                       <p className="gsg-closing-body">
-                        Open <strong>Digital</strong>. The dial starts on 14.074 MHz and the decoder
-                        runs every 15-second slot — there is no Monitor toggle to forget.
+                        <T
+                          k="gettingStarted.log.closing.digital"
+                          tags={{ b: <strong /> }}
+                          vals={{ freq: GUIDE_EXAMPLES.ft8Dial }}
+                        />
                       </p>
                     </div>
                     <div className="gsg-closing-card">
                       <p className="gsg-closing-num">02</p>
                       <p className="gsg-closing-body">
-                        Within a period or two, decodes fill Band Activity — now annotated with
-                        country, B4 and <strong>New / DXCC</strong> badges, because you imported the
-                        log.
+                        <T k="gettingStarted.log.closing.decodes" tags={{ b: <strong /> }} />
                       </p>
                     </div>
                     <div className="gsg-closing-card">
                       <p className="gsg-closing-num">03</p>
                       <p className="gsg-closing-body">
-                        <strong>Double-click</strong> a station calling CQ. The sequencer runs the
-                        whole exchange and logs it. The same log feeds the Phone and CW cockpits, so
-                        a familiar call shows their name and your history there too.
+                        <T k="gettingStarted.log.closing.doubleClick" tags={{ b: <strong /> }} />
                       </p>
                     </div>
                   </div>
@@ -544,31 +629,35 @@ export function GettingStartedGuide({ onClose }: Props) {
                 disabled={step === 0}
                 onClick={() => go(step - 1)}
               >
-                ← Back
+                {t('gettingStarted.back')}
               </button>
               <span className="gsg-nav-label">{progress}</span>
               {step === STEPS.length - 1 ? (
                 // The last step's forward action is the way out: there is nothing
                 // after "that's all four" but the app itself.
                 <button type="button" className="gsg-btn next" onClick={onClose}>
-                  That&rsquo;s all four — close
+                  {t('gettingStarted.close')}
                 </button>
               ) : (
                 <button type="button" className="gsg-btn next" onClick={() => go(step + 1)}>
-                  {NEXT_LABEL[step]}
+                  {t(STEPS[step].nextKey)}
                 </button>
               )}
             </div>
 
             <aside className="gsg-wsjtx">
-              <p className="gsg-wsjtx-label">Coming from WSJT-X? The short path</p>
+              <p className="gsg-wsjtx-label">{t('gettingStarted.wsjtx.label')}</p>
               <p className="gsg-wsjtx-body">
-                Your muscle memory transfers — double-click semantics, <code>Esc</code> /{' '}
-                <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity
-                bottom-pinned, early decodes at 11.8&nbsp;s, Fake-It split, Hound auto-move. So do
-                your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand
-                step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working — Nexus
-                speaks the full WSJT-X UDP protocol and they see it as a WSJT-X.
+                <T k="gettingStarted.wsjtx.body" tags={{ code: <code /> }} />
+                {/* Default Mac keyboards eat bare F-keys as media keys — same OS constraint
+                    WSJT-X's own mac docs call out; say it where the F-keys are advertised.
+                    A whole sentence of its own, so a translator may place it freely. */}
+                {isMac && (
+                  <>
+                    {' '}
+                    {t('gettingStarted.wsjtx.mac')}
+                  </>
+                )}
               </p>
             </aside>
           </div>

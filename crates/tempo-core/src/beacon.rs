@@ -135,8 +135,15 @@ impl BeaconScheduler {
 ///
 /// `utc_secs_of_day` is seconds since UTC midnight; `period_s` the T/R period.
 /// Returns false for a nonsensical configuration rather than transmitting.
+///
+/// ⭐ `slots < 2` IS NONSENSICAL TOO (#101b). A one-station "rotation" makes
+/// `j = (… % ntr)/ntr = 0` on every interval, so `slot 0 of 1` transmitted
+/// EVERY interval — a beacon that hears nothing, silently violating the
+/// listening convention the mode is built on. The engine treats `slots < 2` as
+/// Round-Robin-off (the transmit-% schedule applies); this refusal is the
+/// defense in depth behind it.
 pub fn fst4w_round_robin_is_tx(utc_secs_of_day: u32, period_s: u16, slot: u8, slots: u8) -> bool {
-    if slots == 0 || period_s == 0 || slot >= slots {
+    if slots < 2 || period_s == 0 || slot >= slots {
         return false;
     }
     let ntr = u32::from(period_s);
@@ -264,6 +271,14 @@ mod tests {
             !fst4w_round_robin_is_tx(0, 120, 5, 3),
             "slot 5 of 3 does not exist — refuse rather than transmit"
         );
+        // #101b: slot 0 of 1 used to satisfy `j == 0` on EVERY interval —
+        // transmit-every-interval sold as a rotation. Refused at every phase.
+        for t in (0..600).step_by(120) {
+            assert!(
+                !fst4w_round_robin_is_tx(t, 120, 0, 1),
+                "a one-station rotation is no rotation (t={t})"
+            );
+        }
     }
 
     #[test]

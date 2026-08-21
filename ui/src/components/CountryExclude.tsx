@@ -7,10 +7,15 @@
 // choice: `.cockpit-side` and `.cockpit-panes` clip overflow rather than scroll it — see
 // the `.od-filters` note in styles.css — so an absolutely-positioned popover anchored in
 // the chip bar would be painted outside the clip and be unreachable in the narrow rail.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Its own prose comes
+// from the catalog; the country NAMES it lists do not — those are DXCC entity names, data that
+// arrives from `features/countryExclude.ts` and the backend's entity table.
 import * as RM from '@radix-ui/react-dropdown-menu'
 import { useState } from 'react'
 import { EXCLUDABLE_COUNTRIES, countryLabel } from '../features/countryExclude'
 import { getDxccEntityNames } from '../api'
+import { t } from '../i18n'
 
 interface PickerProps {
   /** The ticked catalog keys. */
@@ -65,9 +70,10 @@ export function CountryExcludePicker({
         <button
           type="button"
           className={`od-chip${active ? ' active' : ''}`}
-          title="Hide chosen countries from this pane (a display filter — decoding, logging and alerts are untouched)"
+          title={t('hideCountries.chip.title')}
         >
-          Countries{n > 0 ? ` · ${paused ? 'paused' : n}` : ''}
+          {t('hideCountries.chip.label')}
+          {n > 0 ? ` · ${paused ? t('hideCountries.chip.paused') : n}` : ''}
         </button>
       </RM.Trigger>
       <RM.Portal>
@@ -75,7 +81,7 @@ export function CountryExcludePicker({
           {/* Same portal-zoom re-application as Menu/Dialog/Tooltip: the portal escapes
               `.app`'s zoom:var(--ui-zoom), so the content must re-apply it. */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
-            <div className="country-menu-head">Hide these countries</div>
+            <div className="country-menu-head">{t('hideCountries.head')}</div>
             {onPauseChange && n > 0 && (
               <RM.CheckboxItem
                 className="ui-menu-item country-item"
@@ -83,7 +89,7 @@ export function CountryExcludePicker({
                 onSelect={(e) => e.preventDefault()}
                 onCheckedChange={() => onPauseChange(!paused)}
               >
-                Pause (keep my ticks, show everything)
+                {t('hideCountries.pause')}
               </RM.CheckboxItem>
             )}
             {EXCLUDABLE_COUNTRIES.map((c) => (
@@ -115,13 +121,13 @@ export function CountryExcludePicker({
                     {e}
                   </RM.CheckboxItem>
                 ))}
-                <div className="country-menu-head">Other country…</div>
+                <div className="country-menu-head">{t('hideCountries.other.head')}</div>
                 <div style={{ padding: '0.3rem 0.6rem' }}>
                   <input
                     className="settings-input"
                     type="text"
                     value={q}
-                    placeholder="search all entities…"
+                    placeholder={t('hideCountries.search.placeholder')}
                     autoComplete="off"
                     spellCheck={false}
                     onFocus={loadAll}
@@ -143,11 +149,7 @@ export function CountryExcludePicker({
                 ))}
               </>
             )}
-            <div className="country-menu-note">
-              A view filter only — decoding, logging and alerts are untouched. Stations
-              calling you, the one you are working, and new entities or band slots still
-              show.
-            </div>
+            <div className="country-menu-note">{t('hideCountries.note')}</div>
           </div>
         </RM.Content>
       </RM.Portal>
@@ -173,15 +175,15 @@ export function CountryHiddenChip({ count, onClear, testId }: ChipProps) {
   if (count === 0) return null
   return (
     <span className="country-hidden-chip" data-testid={testId}>
-      {count} {count === 1 ? 'country' : 'countries'} hidden
+      {t('hideCountries.hidden', { count })}
       <button
         type="button"
         className="country-hidden-clear"
-        aria-label="Clear country filter"
-        title="Show every country again"
+        aria-label={t('hideCountries.clear.aria')}
+        title={t('hideCountries.clear.title')}
         onClick={onClear}
       >
-        Clear
+        {t('hideCountries.clear.label')}
       </button>
     </span>
   )

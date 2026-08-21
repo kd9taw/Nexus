@@ -1,3 +1,11 @@
+// ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
+// reason only: the transmit dock's STOP button — SSTV's stop-line census, found by
+// accessible name by components/stop-line.test.tsx — is still written in English here, with
+// its tooltip, the sentence it announces, and the bar's own accessible name. Those move in
+// the transmit-path batch, with the stop-line sweeps re-run. Everything else is in the
+// catalog under `sstv.*`; the mode names, rasters, key-down seconds, VIS codes, dial
+// readings, callsigns, FSK IDs and the picture's own painted text are invariant tokens and
+// stay in the code.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { confirmDialog } from '../confirm'
 import type { AppSnapshot, BandChannel, SstvGalleryEntry, SstvHealth, SstvState } from '../types'
@@ -55,6 +63,7 @@ import {
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { announce } from '../announce'
 import { pushToast, withErrorToast } from '../toast'
+import { t } from '../i18n'
 // The 15 transmittable modes, their rasters and their exact key-down seconds. A pure
 // module because Settings ▸ Digital ▸ SSTV picks the DEFAULT mode from the same rows —
 // see its header for why that is not a second hand-written table.
@@ -65,6 +74,20 @@ import { MODE_BY_SLUG, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
  *  not show the operator files it is going to refuse. */
 const TX_ACCEPT =
   'image/jpeg,image/png,image/webp,image/bmp,image/gif,.jpg,.jpeg,.png,.webp,.bmp,.gif'
+
+/** The words this view PAINTS INTO the picture, and the callsign stand-in it uses before the
+ *  operator has set one. They go on the air and the crisp ident font has to be able to draw
+ *  them, so they are invariant tokens, not prose. */
+const CQ_PRESET = 'CQ'
+const SEVENTY_THREE_PRESET = '73'
+const MYCALL = 'MYCALL'
+const DEFAULT_OVERLAY_TEXT = 'TEXT'
+
+/** The mode's own name, the direction plate the badge prints while transmitting, and the
+ *  unit the gallery stamps a dial reading with — technical tokens, all three. */
+const SSTV = 'SSTV'
+const TX_PLATE = 'TX'
+const MHZ = 'MHz'
 
 /** Refuse above this many megapixels. The limit is the DECODED buffer, not the file:
  *  80 MP is ~320 MB of RGBA, which is what actually exhausts the webview. A 100 MB
@@ -89,22 +112,17 @@ const HEADER_BYTES = 262_144
 function refusalFor(kind: ImageKind): string | null {
   switch (kind) {
     case 'heic':
-      return (
-        "iPhone HEIC photos can't be read here — Nexus has no HEVC decoder. On the " +
-        'iPhone: Settings → Camera → Formats → Most Compatible (new photos are JPEG), ' +
-        'or Settings → Photos → Transfer to Mac or PC → Automatic (converts on send). ' +
-        'Then re-send this picture.'
-      )
+      return t('sstv.refuse.heic')
     case 'avif':
-      return 'That is an AVIF file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.'
+      return t('sstv.refuse.avif')
     case 'tiff':
-      return 'That is a TIFF file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.'
+      return t('sstv.refuse.tiff')
     case 'raw':
-      return 'That is a camera RAW file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export a JPEG from it first.'
+      return t('sstv.refuse.raw')
     case 'psd':
-      return 'That is a Photoshop file. SSTV sends JPEG, PNG, WebP, BMP or GIF — export or save-as one of those.'
+      return t('sstv.refuse.psd')
     case 'svg':
-      return 'That is an SVG drawing, not a photo. SSTV sends JPEG, PNG, WebP, BMP or GIF — export it as one of those.'
+      return t('sstv.refuse.svg')
     default:
       return null
   }
@@ -177,14 +195,41 @@ interface Props {
   onOpenSettings?: (target: string) => void
 }
 
-/** Display labels for the SSTV removable panels (the ⊞ Panels menu). */
-const SSTV_PANEL_LABELS: Record<SstvPanelId, string> = {
+/** Display labels for the SSTV removable panels (the ⊞ Panels menu). Resolved when the menu
+ *  is BUILT — a module constant would freeze the first locale loaded. */
+const sstvPanelLabels = (): Record<SstvPanelId, string> => ({
   // The BAND waterfall — the half of the RX stage that stands in for a picture when nothing is
   // decoding. Named for what the tick removes: an arriving picture still takes the stage
   // whatever this box says, because the decode is not a panel. See the gate at the stage.
-  scope: 'Waterfall',
-  txcompose: 'Transmit',
-  gallery: 'Gallery',
+  scope: t('sstv.panel.waterfall'),
+  txcompose: t('sstv.panel.txcompose'),
+  gallery: t('sstv.panel.gallery'),
+})
+
+/** The word a screen reader reads off an overlay colour swatch. The palette id in
+ *  `sstvOverlay.ts` is the STORED VALUE and never moves; only the word does. An id with no
+ *  word falls back to the id, which is what it read before. */
+function overlayColorLabel(id: string): string {
+  switch (id) {
+    case 'white':
+      return t('sstv.tx.overlay.color.white')
+    case 'black':
+      return t('sstv.tx.overlay.color.black')
+    case 'yellow':
+      return t('sstv.tx.overlay.color.yellow')
+    case 'orange':
+      return t('sstv.tx.overlay.color.orange')
+    case 'red':
+      return t('sstv.tx.overlay.color.red')
+    case 'green':
+      return t('sstv.tx.overlay.color.green')
+    case 'cyan':
+      return t('sstv.tx.overlay.color.cyan')
+    case 'blue':
+      return t('sstv.tx.overlay.color.blue')
+    default:
+      return id
+  }
 }
 
 /** Tauri v2 convertFileSrc without the npm package (this app talks to the
@@ -289,6 +334,9 @@ const UNKNOWN_VIS_RECENT_SEC = 300
  * and `Engine::rig_mode_effective` (`fm_does_not_follow_the_operator_down_to_hf`); it is a
  * documented bug fix, so this only DECIDES WHAT TO SHOW and never changes what is commanded. */
 const FM_FLOOR_MHZ = 29.0
+/** The ISS SSTV downlink. A dial reading, so it lives here and is interpolated into the
+ *  soft-guard prompt rather than written inside it. */
+const ISS_SSTV_MHZ = 145.8
 /** How far from a band-plan SSTV channel the "images appear at …" pointer still describes where
  * the operator is. Two figures, because a channel means different things either side of the FM
  * floor: on HF the calling frequency is the band's single activity centre and naming it is
@@ -339,16 +387,15 @@ export function sstvDecodeStatus(
   nowSec: number,
   channel: BandChannel | null,
 ): { state: SstvRxState; text: string } {
-  // Where to point the radio — appended wherever it helps, and derived from the
-  // band plan rather than frozen into a sentence.
+  // Where to point the radio — an appositive the caller either has or has not, interpolated
+  // WHOLE (with its own leading space) into each state's sentence rather than glued onto the
+  // end of one. Derived from the band plan rather than frozen into a sentence; the dial
+  // reading and the mode name are values.
   const where = channel
-    ? ` Images on this band appear at ${channel.dialMhz.toFixed(3)} ${channel.mode}.`
+    ? t('sstv.rx.where', { freq: channel.dialMhz.toFixed(3), mode: channel.mode })
     : ''
   if (!health || !health.armed) {
-    return {
-      state: 'off',
-      text: `The receiver is stopped — nothing is being decoded. Press Arm to start it.${where}`,
-    }
+    return { state: 'off', text: t('sstv.rx.off', { where }) }
   }
   // NOTHING ARRIVING — the only genuine capture fault, and held apart from a zero
   // LEVEL below because the two have opposite fixes. What you hear on the speaker
@@ -361,13 +408,7 @@ export function sstvDecodeStatus(
   // the section beside this text, so the sentence no longer has to carry a path.
   const noArrivals = health.lastAudioUnix == null || nowSec - health.lastAudioUnix > AUDIO_STALE_SEC
   if (noArrivals && health.drains >= MIN_DRAINS_BEFORE_CAPTURE_FAULT) {
-    return {
-      state: 'nocapture',
-      text:
-        'Listening, but no audio is reaching the decoder at all — the capture device is not ' +
-        'delivering anything. Check that Input Device (RX) is the radio; hearing the ' +
-        'signal on the speaker does not mean the app is capturing it.',
-    }
+    return { state: 'nocapture', text: t('sstv.rx.nocapture') }
   }
   // ⚠️ NO READING YET — and it must not be dressed up as one. Arming resets the
   // health and the view re-reads it in the same breath, so for the first couple of
@@ -378,10 +419,7 @@ export function sstvDecodeStatus(
   // it never drains (a decoder that fails to construct). Absence of evidence is its
   // own state; saying so costs nothing and blames nobody.
   if (health.lastAudioUnix == null) {
-    return {
-      state: 'starting',
-      text: `Receiver started — no audio has reached the decoder yet.${where}`,
-    }
+    return { state: 'starting', text: t('sstv.rx.starting', { where }) }
   }
   // ⭐ AN UNSUPPORTED MODE OUTRANKS EVERYTHING BELOW. A clean header arrived and was
   // thrown away — the single most misleading way SSTV can fail, because the screen
@@ -392,12 +430,15 @@ export function sstvDecodeStatus(
     nowSec - health.lastUnknownVisUnix <= UNKNOWN_VIS_RECENT_SEC
   ) {
     const code = health.lastUnknownVisCode
+    // The VIS clause is a hex identifier off the wire — a token, built here and interpolated
+    // whole, never written into a translatable sentence.
+    const vis = code != null ? ` (VIS 0x${code.toString(16).toUpperCase()})` : ''
     return {
       state: 'unsupported',
-      text:
-        `Heard an SSTV header ${ageLabel(health.lastUnknownVisUnix, nowSec)} ago in a mode this ` +
-        `build cannot decode${code != null ? ` (VIS 0x${code.toString(16).toUpperCase()})` : ''}. ` +
-        'The signal and the audio path are fine — Scottie, Martin, Robot and PD images all decode.',
+      text: t('sstv.rx.unsupported', {
+        age: ageLabel(health.lastUnknownVisUnix, nowSec),
+        vis,
+      }),
     }
   }
   // A decode LATCHES: a completed picture is a durable fact about the whole chain,
@@ -405,25 +446,21 @@ export function sstvDecodeStatus(
   if (health.images > 0 && health.lastImageUnix != null) {
     return {
       state: 'decoded',
-      text: `${health.images} image${health.images === 1 ? '' : 's'} decoded since arming, last one ${ageLabel(health.lastImageUnix, nowSec)} ago. Listening for the next header.`,
+      // `{{count}}` picks the plural form — never a hand-rolled `s`, which is
+      // unrepresentable in most languages.
+      text: t('sstv.rx.decoded', {
+        count: health.images,
+        age: ageLabel(health.lastImageUnix, nowSec),
+      }),
     }
   }
   // ARRIVING BUT SILENT — a routing or level problem, not a band problem.
   if (health.audioPeak < SILENT_PEAK) {
-    return {
-      state: 'silent',
-      text:
-        'Audio is arriving but it is silent. If you can hear the signal on the speaker, the app ' +
-        'is on a different input — check Input Device (RX), and RX Gain if the level is ' +
-        `just low.${where}`,
-    }
+    return { state: 'silent', text: t('sstv.rx.silent', { where }) }
   }
   // THE HEALTHY IDLE STATE. It says the audio is being heard, which is the one thing
   // the old hint could never say.
-  return {
-    state: 'listening',
-    text: `Hearing audio, no SSTV header yet — a picture decodes automatically when one starts.${where}`,
-  }
+  return { state: 'listening', text: t('sstv.rx.listening', { where }) }
 }
 
 /** "2026-07-17 15:30Z" from the gallery's ISO stamp (raw string if unexpected). */
@@ -460,7 +497,7 @@ function GalleryThumb({ entry }: { entry: SstvGalleryEntry }) {
       alive = false
     }
   }, [fallback, src])
-  const alt = `${entry.mode} image received ${fmtUtc(entry.finishedUtc)}`
+  const alt = t('sstv.gallery.thumb.alt', { mode: entry.mode, when: fmtUtc(entry.finishedUtc) })
   if (!src) return null
   return fallback ? (
     <canvas ref={canvasRef} className="sstv-thumb-img" role="img" aria-label={alt} />
@@ -489,7 +526,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // CockpitPaneFrame with ROLES — the composer is fit="content" (a drop zone cannot use
   // surplus height), the gallery fills — so the old seam/share machinery is meaningless
   // here and was removed with the 50/50 `.sstv-lower` split (census #10).
-  const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: SSTV_PANEL_LABELS }) : null
+  const host = panels ? panelHost(panels, { menu: SSTV_PANEL_IDS, side: [], main: 'gallery', labels: sstvPanelLabels() }) : null
   const shown = (id: SstvPanelId) => (host ? host.shown(id) : true)
   // Live decoder state — polled at 1 Hz while this is the visible view (the
   // backend keeps decoding while hidden; the first tick catches the display up).
@@ -561,7 +598,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const toggleArm = () => {
     void sstvArm(!armed)
       .then(setSstv)
-      .catch(() => pushToast('Could not switch the SSTV receiver', 'error'))
+      .catch(() => pushToast(t('sstv.arm.failed'), 'error'))
   }
 
   // Licensed SSTV calling frequencies (built-in band plan — 14.230, the 20 m
@@ -692,20 +729,24 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const caption =
     inFlight && sstv
       ? sstv.linesDone > 0
-        ? `${sstv.mode} — ${sstv.linesDone}/${sstv.linesTotal} lines`
+        ? t('sstv.caption.lines', {
+            mode: sstv.mode as string,
+            done: sstv.linesDone,
+            total: sstv.linesTotal,
+          })
         : txSecs != null
-          ? `decoding ${sstv.mode}… the picture lands when the transmission ends (≈${fmtClock(txSecs)})`
-          : `decoding ${sstv.mode}…`
+          ? t('sstv.caption.decoding.airtime', {
+              mode: sstv.mode as string,
+              clock: fmtClock(txSecs),
+            })
+          : t('sstv.caption.decoding', { mode: sstv.mode as string })
       : ''
 
   // What the receiver is hearing while no picture is coming in — the four states the
   // old one-line hint collapsed into one.
   const sstvChannel = sstvChannelForDial(plan, snap?.radio.dialMhz)
   const rx = pollError
-    ? {
-        state: 'off' as SstvRxState,
-        text: 'Cannot read the receiver state — the app is not answering. The decoder may still be running.',
-      }
+    ? { state: 'off' as SstvRxState, text: t('sstv.rx.unreachable') }
     : sstvDecodeStatus(sstv?.health, now, sstvChannel)
 
   // ⚠️ SPEAK THE CHANGE, DON'T LIVE-REGION THE SENTENCE. The caption restates the
@@ -739,12 +780,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // "are you sure", so the operator can tell which one they are about to lose — the tiles are
   // small and several look alike.
   const deleteImage = async (g: { path: string; mode: string; finishedUtc: string }) => {
-    const what = `${g.mode} received ${fmtUtc(g.finishedUtc)}`
     if (
       !(await confirmDialog({
-        title: `Delete the ${what}?`,
-        body: 'The image file is removed and cannot be recovered.',
-        confirmLabel: 'Delete image',
+        title: t('sstv.gallery.delete.confirm.title', {
+          mode: g.mode,
+          when: fmtUtc(g.finishedUtc),
+        }),
+        body: t('sstv.gallery.delete.confirm.body'),
+        confirmLabel: t('sstv.gallery.delete.confirm.label'),
         danger: true,
       }))
     )
@@ -752,7 +795,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     await withErrorToast(async () => {
       await sstvDeleteImage(g.path)
       setSstv(await getSstvState())
-    }, 'Could not delete the image')
+    }, t('sstv.gallery.delete.failed'))
   }
 
   /** Gallery → composer: fetch the received file over the asset protocol (the bridge
@@ -763,10 +806,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     if (!src) return
     await withErrorToast(async () => {
       const buf = await (await fetch(src)).arrayBuffer()
+      // A FILE NAME is never built from a translated word (the batch-8 ruling).
       const name = g.path.split(/[\\/]/).pop() ?? 'received-image'
       await loadImage(new File([buf], name))
-      announce(`Loaded ${g.mode} image into the composer`)
-    }, 'Could not load that image into the composer')
+      announce(t('sstv.gallery.edit.loaded', { mode: g.mode }))
+    }, t('sstv.gallery.edit.failed'))
   }
 
   // ---------------------------------------------------------------------------
@@ -946,7 +990,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       const data = ctx.getImageData(0, 0, m.width, m.height).data
       setPacked({ slug, width: m.width, height: m.height, b64: rgbToBase64(data, m.width * m.height) })
     } catch {
-      pushToast('Could not read the image pixels', 'error')
+      pushToast(t('sstv.tx.pixels.failed'), 'error')
     }
   }
 
@@ -1043,8 +1087,30 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // card is a workflow, not an accident. They do NOT survive a remount — template
   // save/recall is the planned v2, not a side effect.
   const [overlays, setOverlays] = useState<OverlayItem[]>([])
-  const overlaysRef = useRef<OverlayItem[]>([])
-  overlaysRef.current = overlays
+  // Seeded FROM the state, not with a second `[]`: the sync below is identity-based, so the
+  // two must start as the same array or the first render would leave them out of step.
+  const overlaysRef = useRef<OverlayItem[]>(overlays)
+  // ⚠️ SYNC ON A REAL STATE CHANGE, NEVER ON EVERY RENDER — a bare
+  // `overlaysRef.current = overlays` here silently broke dragging (operator report,
+  // 2026-08-18: "it continues to snap back to the centre after dragging").
+  //
+  // This ref is the ONE of the three here that is also written IMPERATIVELY: the pointer-move
+  // handler rewrites it per frame and only lands it in state on release, deliberately, so a
+  // drag costs no React render per frame. But this component re-renders on every `snap` poll,
+  // and an unconditional assignment during render then threw the in-flight drag away and put
+  // the item back where the last committed state had it — its birth position, i.e. the centre.
+  // Releasing committed that clobbered ref, so the snap-back was permanent, not visual.
+  //
+  // Comparing identity makes the sync respond to an actual state change instead of to the
+  // render count, so an unrelated re-render cannot outrun the drag. `idInImageRef` and
+  // `selectedOvRef` below keep the plain form on purpose: they are only ever written through
+  // setState, so re-assigning them every render is always a no-op. The keyboard nudge is safe
+  // for the same reason — it goes through `commitOverlays`, which writes state every press.
+  const overlaysSynced = useRef<OverlayItem[]>(overlays)
+  if (overlaysSynced.current !== overlays) {
+    overlaysRef.current = overlays
+    overlaysSynced.current = overlays
+  }
   const [selectedOv, setSelectedOv] = useState<string | null>(null)
   const selectedOvRef = useRef<string | null>(null)
   selectedOvRef.current = selectedOv
@@ -1097,8 +1163,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         kind: 'error',
         text:
           kind === 'unknown' && head.length >= 4
-            ? `That file isn't an image Nexus can read (it starts with ${magicHex(head)}).`
-            : "That image is damaged and only decoded partly — Nexus won't transmit half a picture. Try re-exporting it.",
+            ? t('sstv.tx.notice.notImage', { magic: magicHex(head) })
+            : t('sstv.tx.notice.damaged'),
       })
       return
     }
@@ -1106,10 +1172,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     if (mp > MAX_MEGAPIXELS) {
       setNotice({
         kind: 'error',
-        text:
-          `That's a ${decoded.w}×${decoded.h} image (${mp.toFixed(0)} megapixels) — too large to ` +
-          'work with. Export a smaller copy; anything over about 4000 px wide is already far ' +
-          'more than SSTV can send.',
+        text: t('sstv.tx.notice.tooLarge', {
+          w: decoded.w,
+          h: decoded.h,
+          mp: mp.toFixed(0),
+        }),
       })
       return
     }
@@ -1122,7 +1189,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     setSrcSize({ w: srcRef.current.w, h: srcRef.current.h })
     setImageName(file.name)
     if (kind === 'gif') {
-      setNotice({ kind: 'warn', text: 'Sending the first frame — SSTV transmits one still picture.' })
+      setNotice({ kind: 'warn', text: t('sstv.tx.notice.gif') })
     }
     renderTx(modeSlugRef.current, true)
   }
@@ -1289,23 +1356,26 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       // The refusal carries its own fix: this fires on the Send click, so a path to read and
       // navigate by hand is a worse answer than the button the toast bus already supports.
       pushToast(
-        'Set your callsign — SSTV identifies by burning it into the picture',
+        t('sstv.tx.send.noCallsign'),
         'error',
         6000,
         onOpenSettings
-          ? { action: () => onOpenSettings('operator-radio'), actionLabel: 'Set callsign' }
+          ? {
+              action: () => onOpenSettings('operator-radio'),
+              actionLabel: t('sstv.tx.send.noCallsign.action'),
+            }
           : {},
       )
       return
     }
     const m = MODE_BY_SLUG[packed.slug]
     // Soft ISS guard: 145.800 is the ISS SSTV DOWNLINK — transmit there only for a
-    // sanctioned ARISS uplink event, never by accident.
+    // sanctioned ARISS uplink event, never by accident. The frequency is a CONSTANT and is
+    // interpolated into the prompt: a dial reading written inside a translatable sentence is
+    // one decimal comma away from naming a different channel.
     const dial = snapRef.current?.radio.dialMhz
-    if (dial != null && Math.abs(dial - 145.8) <= 0.01) {
-      const ok = window.confirm(
-        '145.800 MHz is the ISS SSTV downlink. Transmit only during a sanctioned ARISS uplink event. Send anyway?',
-      )
+    if (dial != null && Math.abs(dial - ISS_SSTV_MHZ) <= 0.01) {
+      const ok = window.confirm(t('sstv.tx.iss.confirm', { freq: ISS_SSTV_MHZ.toFixed(3) }))
       if (!ok) return
     }
     void withErrorToast(async () => {
@@ -1352,10 +1422,13 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         packed.slug,
         idInImageRef.current || overlayCarriesId(),
       )
-    }, 'SSTV send refused').then((s) => {
+    }, t('sstv.tx.send.failed')).then((s) => {
       if (s) {
         setSstv(s)
-        if (s.sending) announce(`Transmitting SSTV ${m?.name ?? packed.slug}`, { assertive: true })
+        if (s.sending)
+          announce(t('sstv.tx.announce.sending', { mode: m?.name ?? packed.slug }), {
+            assertive: true,
+          })
       }
     })
   }
@@ -1364,6 +1437,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     void sstvStop()
       .then((s) => {
         setSstv(s)
+        // ⚠️ NOT MIGRATED — this is what the STOP control says when it fires, and Stop is
+        // SSTV's stop-line census. It moves with the button, in the transmit-path batch.
         announce('SSTV transmit stopped', { assertive: true })
       })
       .catch(() => {})
@@ -1372,13 +1447,46 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   // Announce natural completion (sending true → false without an explicit Stop).
   const wasSending = useRef(false)
   useEffect(() => {
-    if (wasSending.current && !sending) announce('SSTV transmit finished')
+    if (wasSending.current && !sending) announce(t('sstv.tx.announce.finished'))
     wasSending.current = sending
   }, [sending])
 
   const txProgressPct = Math.round((sstv?.txProgress ?? 0) * 100)
   const txRemaining = Math.max(0, (sstv?.txTotalSecs ?? 0) - (sstv?.txElapsedSecs ?? 0))
-  const txStatus = `TX — ${sstv?.txMode ?? txMode?.name ?? 'SSTV'} · ${fmtClock(txRemaining)} remaining`
+  // `SSTV` is the mode's own name — the fallback when neither the engine nor the picker has
+  // one yet — and stays in the code.
+  const txStatus = t('sstv.tx.progress', {
+    mode: sstv?.txMode ?? txMode?.name ?? SSTV,
+    clock: fmtClock(txRemaining),
+  })
+  // The header badge: the mode's name, plus whichever SSTV mode is on the air or arriving.
+  // Tokens throughout, assembled here rather than in the JSX.
+  const modeBadge =
+    sending && sstv?.txMode
+      ? `${SSTV} · ${TX_PLATE} ${sstv.txMode}`
+      : inFlight && sstv?.mode
+        ? `${SSTV} · ${sstv.mode}`
+        : SSTV
+  // The header shift readout, when the arriving picture says the dial is off frequency.
+  const hedrShiftHz = Math.round(sstv?.hedrShiftHz ?? 0)
+  const tuneOff = `${hedrShiftHz > 0 ? '+' : ''}${hedrShiftHz}`
+
+  // The transmit preview's accessible name: ONE WHOLE SENTENCE PER FRAMING STATE, never a
+  // stem plus three tails — the crop instruction names the axis that is actually free, and
+  // a language that orders that clause differently needs the whole sentence to move. The
+  // overlay clause is its own statement and is interpolated whole, carrying its separator.
+  const previewVals = {
+    w: packed?.width ?? 0,
+    h: packed?.height ?? 0,
+    overlays: overlays.length ? t('sstv.tx.preview.aria.overlays') : '',
+  }
+  const previewAria = !packed
+    ? t('sstv.tx.preview.aria.empty')
+    : axis === 'none'
+      ? t('sstv.tx.preview.aria.fits', previewVals)
+      : axis === 'x'
+        ? t('sstv.tx.preview.aria.cropX', previewVals)
+        : t('sstv.tx.preview.aria.cropY', previewVals)
 
   return (
     <main className="layout single sstv-view">
@@ -1404,8 +1512,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               setTxPower(pct)
               void setRfPower(pct / 100)
             },
-            label: 'Power',
-            title: 'RF output power — set it against a Tune carrier, below ALC',
+            label: t('sstv.header.power.label'),
+            title: t('sstv.header.power.title'),
           }}
           onTune={(on) => void setTune(on).then((st) => onSnap?.(st))}
           onAtuTune={() =>
@@ -1415,15 +1523,8 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           }
           onStopTx={() => void haltTx()}
           modeIndicator={
-            <span
-              className="cw-mode-badge"
-              title="Detected SSTV mode — fills in (Martin / Scottie / Robot / PD) when the receiver hears a VIS header"
-            >
-              {sending && sstv?.txMode
-                ? `SSTV · TX ${sstv.txMode}`
-                : inFlight && sstv?.mode
-                  ? `SSTV · ${sstv.mode}`
-                  : 'SSTV'}
+            <span className="cw-mode-badge" title={t('sstv.header.mode.title')}>
+              {modeBadge}
             </span>
           }
           bandControl={
@@ -1452,10 +1553,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 onSet={onSetFrequency}
               />
             ) : (
-              <span
-                className="cockpit-ph-pill"
-                title="Showing the rig's current band — SSTV decodes wherever you're tuned"
-              >
+              <span className="cockpit-ph-pill" title={t('sstv.header.band.title')}>
                 {bandLabelForMhz(snap.radio.dialMhz) || '— band —'}
               </span>
             )
@@ -1475,18 +1573,15 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             ) : undefined
           }
         >
-          <label
-            className="cw-wpm"
-            title="Slant trim — fine sample-clock correction. Auto-corrected by the decoder; the manual trim comes in a later build."
-          >
-            <span>Slant</span>
+          <label className="cw-wpm" title={t('sstv.header.slant.title')}>
+            <span>{t('sstv.header.slant.label')}</span>
             <input
               type="range"
               min={-50}
               max={50}
               defaultValue={0}
               disabled
-              aria-label="SSTV slant trim (disabled — decoder not wired yet)"
+              aria-label={t('sstv.header.slant.aria')}
             />
           </label>
           <button
@@ -1494,13 +1589,9 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             className={`sstv-arm${armed ? ' on' : ''}`}
             aria-pressed={armed}
             onClick={toggleArm}
-            title={
-              armed
-                ? 'Armed — any VIS header heard auto-decodes and auto-saves to the gallery (RX only). Click to disarm.'
-                : 'Arm — auto-decode any VIS header heard on the receive audio (RX only, never transmits)'
-            }
+            title={armed ? t('sstv.arm.on.title') : t('sstv.arm.off.title')}
           >
-            {armed ? 'Armed' : 'Arm'}
+            {armed ? t('sstv.arm.on.label') : t('sstv.arm.off.label')}
           </button>
         </CockpitHeader>
       )}
@@ -1522,7 +1613,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           all in this cockpit. Stop lives in `.sstv-tx-bar` and the TX-enable latch in the
           header, neither with a ⊞ id (THE STOP LINE). */}
       {(inFlight || shown('scope')) && (
-      <section className="sstv-canvas" aria-label="SSTV image" ref={setStageEl}>
+      <section className="sstv-canvas" aria-label={t('sstv.stage.aria')} ref={setStageEl}>
         {inFlight ? (
           <div className="sstv-live">
             {preview && (
@@ -1549,9 +1640,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   diagnostics. Hidden below ±10 Hz, which is not worth a glance. */}
               {Math.abs(sstv?.hedrShiftHz ?? 0) >= 10 && (
                 <span className="sstv-tuneoff">
-                  {' · tuning '}
-                  {(sstv?.hedrShiftHz ?? 0) > 0 ? '+' : ''}
-                  {Math.round(sstv?.hedrShiftHz ?? 0)} Hz
+                  {t('sstv.caption.tuneOff', { hz: tuneOff })}
                 </span>
               )}
             </div>
@@ -1579,7 +1668,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               transmitting={snap?.radio.transmitting ?? false}
               rxOffsetHz={0}
               txOffsetHz={0}
-              hint="the band — a picture takes this space when one arrives"
+              hint={t('sstv.waterfall.hint')}
             />
             {/* The guidance stays on screen. A waterfall shows you the band but
                 does not tell you WHERE to point the radio, and this view is often
@@ -1608,7 +1697,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                     className="settings-linkbtn"
                     onClick={() => onOpenSettings('audio')}
                   >
-                    Open audio settings
+                    {t('sstv.rx.openAudio')}
                   </button>
                 </>
               )}
@@ -1626,7 +1715,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           composer is a content-height strip and the gallery is the fill grower beside
           the RX stage, with deficit flowing to the shell's own overflow-y:auto valve. */}
       {shown('txcompose') && (
-        <CockpitPaneFrame title="Transmit" paneId="txcompose" fit="content">
+        <CockpitPaneFrame title={t('sstv.panel.txcompose')} paneId="txcompose" fit="content">
           {/* Unnamed section: the frame above is the landmark ("Transmit"); the wrapper
               stays for its column layout, with `.pane-body > .panel` stripping the
               card-in-card chrome. */}
@@ -1652,17 +1741,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   className={`sstv-tx-preview${packed ? '' : ' empty'} drag-${axis}`}
                   role="img"
                   tabIndex={packed ? 0 : -1}
-                  aria-label={
-                    packed
-                      ? `Transmit preview, ${packed.width}×${packed.height}${
-                          axis === 'none'
-                            ? ' — the picture already fits, no crop needed'
-                            : `. Drag or use the arrow keys to choose which part of the picture is sent (${
-                                axis === 'x' ? 'left and right' : 'up and down'
-                              }); Home re-centres.`
-                        }${overlays.length ? ' Click a text overlay to select it; arrows move it, Delete removes it.' : ''}`
-                      : 'No image chosen'
-                  }
+                  aria-label={previewAria}
                   onPointerDown={onPreviewPointerDown}
                   onPointerMove={onPreviewPointerMove}
                   onPointerUp={endDrag}
@@ -1690,14 +1769,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   })}
               </div>
               {!packed && (
-                <div className="sstv-tx-drop-hint">
-                  Drop an image here, or choose one below — any size, resized to the mode
-                  for you.
-                </div>
+                <div className="sstv-tx-drop-hint">{t('sstv.tx.drop.hint')}</div>
               )}
             </div>
             <label className="sstv-tx-file">
-              <span>{imageName ? 'Change image…' : 'Choose image…'}</span>
+              <span>{imageName ? t('sstv.tx.file.change') : t('sstv.tx.file.choose')}</span>
               <input
                 type="file"
                 accept={TX_ACCEPT}
@@ -1718,31 +1794,34 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 where nothing here can see it. */}
             {packed && (
               <div className="sstv-ov-presets">
-                <span className="sstv-ov-presets-label">Text:</span>
-                <button type="button" onClick={() => addOverlay(presetCq(callsign || 'MYCALL'))}>
-                  CQ
+                <span className="sstv-ov-presets-label">{t('sstv.tx.overlay.presets.label')}</span>
+                {/* `CQ`, `73` and the `MYCALL` stand-in are PAINTED INTO the picture and go
+                    on the air, so they stay written here — as does the `TEXT` placeholder
+                    below, which the ident/banner glyph tables have to be able to draw. */}
+                <button type="button" onClick={() => addOverlay(presetCq(callsign || MYCALL))}>
+                  {CQ_PRESET}
                 </button>
-                <button type="button" onClick={() => addOverlay(preset73(callsign || 'MYCALL'))}>
-                  73
+                <button type="button" onClick={() => addOverlay(preset73(callsign || MYCALL))}>
+                  {SEVENTY_THREE_PRESET}
                 </button>
                 <button
                   type="button"
                   disabled={!lastHeardCall}
                   title={
                     lastHeardCall
-                      ? `Reply to ${lastHeardCall} (the newest FSK ID in the gallery)`
-                      : 'Enabled once a station has been received with an FSK ID'
+                      ? t('sstv.tx.overlay.reply.title', { call: lastHeardCall })
+                      : t('sstv.tx.overlay.reply.none.title')
                   }
-                  onClick={() => lastHeardCall && addOverlay(presetReply(lastHeardCall, callsign || 'MYCALL'))}
+                  onClick={() => lastHeardCall && addOverlay(presetReply(lastHeardCall, callsign || MYCALL))}
                 >
-                  Reply
+                  {t('sstv.tx.overlay.reply.label')}
                 </button>
                 <button
                   type="button"
                   onClick={() =>
                     addOverlay({
                       id: newOverlayId(),
-                      text: 'TEXT',
+                      text: DEFAULT_OVERLAY_TEXT,
                       cx: 0.5,
                       cy: 0.5,
                       size: 2,
@@ -1752,7 +1831,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                     })
                   }
                 >
-                  + Text
+                  {t('sstv.tx.overlay.add.label')}
                 </button>
               </div>
             )}
@@ -1762,24 +1841,26 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   <input
                     className="settings-input sstv-ov-text"
                     value={it.text}
-                    aria-label="Overlay text"
+                    aria-label={t('sstv.tx.overlay.text.aria')}
                     onFocus={() => setSelectedOv(it.id)}
                     onChange={(e) => updateOverlay(it.id, { text: e.target.value })}
                   />
+                  {/* Every <select> here: the LABEL is prose, the `value` is the stored
+                      token, and they are not the same string. */}
                   <select
                     className="settings-input"
                     value={it.style}
-                    aria-label="Text style"
+                    aria-label={t('sstv.tx.overlay.style.aria')}
                     onChange={(e) => updateOverlay(it.id, { style: e.target.value as OverlayItem['style'] })}
-                    title="Crisp: the ident's pixel font, proven through the decoder. Banner: big display text with an outline, MMSSTV-style."
+                    title={t('sstv.tx.overlay.style.title')}
                   >
-                    <option value="crisp">Crisp</option>
-                    <option value="banner">Banner</option>
+                    <option value="crisp">{t('sstv.tx.overlay.style.crisp')}</option>
+                    <option value="banner">{t('sstv.tx.overlay.style.banner')}</option>
                   </select>
                   <select
                     className="settings-input"
                     value={it.size}
-                    aria-label="Text size"
+                    aria-label={t('sstv.tx.overlay.size.aria')}
                     onChange={(e) => updateOverlay(it.id, { size: Number(e.target.value) as OverlayItem['size'] })}
                   >
                     {[1, 2, 3, 4].map((s) => (
@@ -1788,14 +1869,19 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                       </option>
                     ))}
                   </select>
-                  <span className="sstv-ov-swatches" role="radiogroup" aria-label="Text colour">
+                  <span
+                    className="sstv-ov-swatches"
+                    role="radiogroup"
+                    aria-label={t('sstv.tx.overlay.color.aria')}
+                  >
                     {OVERLAY_COLORS.map((c) => (
                       <button
                         key={c.id}
                         type="button"
                         role="radio"
                         aria-checked={it.color === c.id}
-                        aria-label={c.id}
+                        // The palette id is the STORED VALUE; this is the word read off it.
+                        aria-label={overlayColorLabel(c.id)}
                         className={`sstv-ov-swatch${it.color === c.id ? ' active' : ''}`}
                         style={{ background: colorCss(c.id) }}
                         onClick={() => updateOverlay(it.id, { color: c.id })}
@@ -1805,20 +1891,20 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   <select
                     className="settings-input"
                     value={it.treatment}
-                    aria-label="Contrast treatment"
+                    aria-label={t('sstv.tx.overlay.treatment.aria')}
                     onChange={(e) =>
                       updateOverlay(it.id, { treatment: e.target.value as OverlayItem['treatment'] })
                     }
-                    title="What keeps the text readable on the far end: a solid plate behind it, or a thick outline around it"
+                    title={t('sstv.tx.overlay.treatment.title')}
                   >
-                    <option value="plate">Plate</option>
-                    <option value="outline">Outline</option>
+                    <option value="plate">{t('sstv.tx.overlay.treatment.plate')}</option>
+                    <option value="outline">{t('sstv.tx.overlay.treatment.outline')}</option>
                   </select>
                   <button
                     type="button"
                     className="sstv-ov-remove"
-                    aria-label={`Remove overlay ${it.text}`}
-                    title="Remove this text"
+                    aria-label={t('sstv.tx.overlay.remove.aria', { text: it.text })}
+                    title={t('sstv.tx.overlay.remove.title')}
                     onClick={() => {
                       if (selectedOv === it.id) setSelectedOv(null)
                       commitOverlays(overlaysRef.current.filter((o) => o.id !== it.id))
@@ -1834,9 +1920,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 bad crop. */}
             {imageName && txMode && (
               <span className="sstv-tx-name" title={imageName}>
-                {imageName}
-                {srcSize ? ` (${srcSize.w}×${srcSize.h})` : ''} → {txMode.width}×{txMode.height} ·{' '}
-                {txMode.name} · {fmtClock(txMode.seconds)} key-down
+                {t('sstv.tx.name', {
+                  name: imageName,
+                  size: srcSize ? ` (${srcSize.w}×${srcSize.h})` : '',
+                  w: txMode.width,
+                  h: txMode.height,
+                  mode: txMode.name,
+                  clock: fmtClock(txMode.seconds),
+                })}
               </span>
             )}
             {/* ⭐ THE IDENT, SAID OUT LOUD — where it is: the plate, the operator's own
@@ -1846,28 +1937,27 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
               <span className={`sstv-tx-id${callsign ? '' : ' missing'}`}>
                 {callsign ? (
                   idInImage ? (
-                    `${callsign} — you've said it's already in the picture`
+                    t('sstv.tx.id.inPicture', { call: callsign })
                   ) : overlayCarriesId() ? (
-                    `${callsign} in your text · no plate burned in`
+                    t('sstv.tx.id.inText', { call: callsign })
                   ) : (
-                    `${callsign} burned in · top left`
+                    t('sstv.tx.id.plate', { call: callsign })
                   )
                 ) : (
                   // Send refuses without a callsign, so this line is a stop sign — it carries
                   // the way to clear it rather than the name of a screen to go looking for.
                   <>
-                    No callsign set — SSTV identifies by burning your call into the picture, so it
-                    will not transmit without one.{' '}
+                    {t('sstv.tx.id.missing')}{' '}
                     {onOpenSettings ? (
                       <button
                         type="button"
                         className="settings-linkbtn"
                         onClick={() => onOpenSettings('operator-radio')}
                       >
-                        Set your callsign
+                        {t('sstv.tx.id.missing.action')}
                       </button>
                     ) : (
-                      'Set one in Settings ▸ Station.'
+                      t('sstv.tx.id.missing.where')
                     )}
                   </>
                 )}
@@ -1880,7 +1970,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                 anyone. The identification is the operator's responsibility either way;
                 this checkbox is them telling us where it lives. */}
             {packed && callsign && (
-              <label className="sstv-tx-idopt" title="Skip the burned-in callsign for this picture only — use when the image already shows your call, e.g. a pre-made QSO card">
+              <label className="sstv-tx-idopt" title={t('sstv.tx.idopt.title')}>
                 <input
                   type="checkbox"
                   checked={idInImage}
@@ -1891,20 +1981,25 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                     renderTx(modeSlugRef.current, true)
                   }}
                 />
-                My picture already shows my callsign
+                {t('sstv.tx.idopt.label')}
               </label>
             )}
             {/* Warnings that must survive to Send time, so a badge in the composer
                 rather than a toast that has already gone. */}
             {srcSize && txMode && isUpscale(srcSize.w, srcSize.h, txMode.width, txMode.height) && (
               <span className="sstv-tx-notice warn">
-                That picture is {srcSize.w}×{srcSize.h}, smaller than {txMode.name}'s{' '}
-                {txMode.width}×{txMode.height} — it will be enlarged and look soft.
+                {t('sstv.tx.notice.upscale', {
+                  w: srcSize.w,
+                  h: srcSize.h,
+                  mode: txMode.name,
+                  mw: txMode.width,
+                  mh: txMode.height,
+                })}
               </span>
             )}
             {srcSize && txMode && isExactFit(srcSize.w, srcSize.h, txMode.width, txMode.height) && (
               <span className="sstv-tx-notice">
-                Already {txMode.width}×{txMode.height} — sent pixel for pixel, no crop needed.
+                {t('sstv.tx.notice.exactFit', { w: txMode.width, h: txMode.height })}
               </span>
             )}
             {notice && (
@@ -1917,13 +2012,10 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       )}
 
       {shown('gallery') && (
-        <CockpitPaneFrame title="Gallery" paneId="gallery">
+        <CockpitPaneFrame title={t('sstv.panel.gallery')} paneId="gallery">
           <div className="sstv-gallery-grid">
             {gallery.length === 0 ? (
-              <div className="sstv-gallery-empty">
-                Received images collect here — auto-saved with callsign (FSK ID), mode, frequency,
-                and time.
-              </div>
+              <div className="sstv-gallery-empty">{t('sstv.gallery.empty')}</div>
             ) : (
               gallery.map((g) => (
                 <figure key={g.path} className="sstv-thumb" title={g.path}>
@@ -1936,8 +2028,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   <button
                     type="button"
                     className="sstv-thumb-del"
-                    aria-label={`Delete the ${g.mode} image received ${fmtUtc(g.finishedUtc)}`}
-                    title="Delete this image"
+                    aria-label={t('sstv.gallery.delete.aria', {
+                      mode: g.mode,
+                      when: fmtUtc(g.finishedUtc),
+                    })}
+                    title={t('sstv.gallery.delete.title')}
                     onClick={() => void deleteImage(g)}
                   >
                     ✕
@@ -1950,8 +2045,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   <button
                     type="button"
                     className="sstv-thumb-edit"
-                    aria-label={`Edit and resend the ${g.mode} image received ${fmtUtc(g.finishedUtc)}`}
-                    title="Load this image into the composer"
+                    aria-label={t('sstv.gallery.edit.aria', {
+                      mode: g.mode,
+                      when: fmtUtc(g.finishedUtc),
+                    })}
+                    title={t('sstv.gallery.edit.title')}
                     onClick={() => void editAndResend(g)}
                   >
                     ✎
@@ -1960,7 +2058,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                     <span className="sstv-thumb-mode">{g.mode}</span>
                     {g.fskId && <span className="sstv-thumb-call">{g.fskId}</span>}
                     <span className="sstv-thumb-meta">
-                      {fmtUtc(g.finishedUtc)} · {g.freqMhz.toFixed(3)} MHz
+                      {fmtUtc(g.finishedUtc)} · {g.freqMhz.toFixed(3)} {MHZ}
                     </span>
                   </figcaption>
                 </figure>
@@ -1975,14 +2073,16 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           shell child on purpose (the .cockpit-txdock discipline): the bar is sticky at
           the scrollport bottom, so when the shell's deficit valve scrolls, Send/Stop
           stay parked — mid-column it scrolled off the TOP on the way to the gallery. */}
+      {/* ⚠️ THE BAR'S OWN ACCESSIBLE NAME IS NOT MIGRATED — it names the stop control it
+          holds, and it moves with the stop line in the transmit-path batch. */}
       <div className="sstv-tx-bar" aria-label="SSTV transmit controls">
         <label className="sstv-tx-mode">
-          <span>Mode</span>
+          <span>{t('sstv.tx.mode.label')}</span>
           <select
             value={modeSlug}
             onChange={(e) => changeMode(e.target.value)}
-            aria-label="SSTV transmit mode"
-            title="Transmit mode. VHF/2 m images use PD-120 (ARISS); HF uses Scottie 1 (NA) or Martin 1 (EU)."
+            aria-label={t('sstv.tx.mode.aria')}
+            title={t('sstv.tx.mode.title')}
           >
             {TX_MODE_GROUPS.map((g) => (
               <optgroup key={g} label={g}>
@@ -2003,14 +2103,17 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             disabled={!packed || sending || !callsign}
             title={
               !packed
-                ? 'Choose an image to transmit first'
+                ? t('sstv.tx.send.noImage.title')
                 : !callsign
-                  ? 'Set your callsign in Settings → Station — SSTV identifies by burning it into the picture, and will not transmit without one'
-                  : `Transmit this image with ${callsign} burned in — switches to Phone (USB/LSB) and keys the rig`
+                  ? t('sstv.tx.send.noCallsign.title')
+                  : t('sstv.tx.send.title', { call: callsign })
             }
           >
-            Send
+            {t('sstv.tx.send.label')}
           </button>
+          {/* ⚠️ NOT MIGRATED — Stop is SSTV's stop-line census, and components/stop-line.test.tsx
+              finds it by ACCESSIBLE NAME (/^stop$/i). Label and tooltip move in the
+              transmit-path batch, with that sweep re-run. */}
           <button
             type="button"
             className="sstv-tx-stop"

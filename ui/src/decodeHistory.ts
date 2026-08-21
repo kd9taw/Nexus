@@ -20,8 +20,38 @@ export interface DecodeEntry extends DecodeRow {
   id: string
 }
 
-/** Rolling history cap (oldest rows dropped first). */
-export const MAX_HISTORY = 300
+/**
+ * Rolling STORE cap, oldest rows dropped first — what a pane KEEPS, not what it draws.
+ *
+ * ⚠️ THE STORE AND THE RENDER ARE CAPPED SEPARATELY, and conflating them is what made the
+ * Rx-Frequency pane forgetful (operator, 2026-08-18: "it's good to be able to look back").
+ * Both panes ingest the SAME full decode list and filter at RENDER, so the Rx pane spent its
+ * entire budget on band-wide rows it never displays: an 80-decode period on a busy evening
+ * filled 300 rows in under four minutes, and the two or three rows on the operator's own
+ * frequency — the whole point of that pane — were evicted along with them. A pane that shows
+ * five rows was remembering four minutes.
+ *
+ * Sized for the pane that keeps the least per row stored, then: 3,000 rows is ~10 minutes of a
+ * very busy band for Band Activity, and hours of the operator's own frequency for the Rx pane,
+ * which is the one an operator actually scrolls back through. The DOM cost does not follow it —
+ * see MAX_ROWS.
+ */
+export const MAX_HISTORY = 3000
+
+/**
+ * How many rows a pane may DRAW, newest kept.
+ *
+ * Unvirtualized rows are the pane's real cost — the cockpit's own 4 Hz ticker comment records
+ * that 300 of them per pane is what a machine without GPU compositing can paint. That number
+ * is unchanged by the deeper store: the extra history is reachable by scrolling back through
+ * what the filter keeps, not by painting more at once.
+ */
+export const MAX_ROWS = 300
+
+/** The newest `MAX_ROWS` of an ordered list — what the pane actually renders. */
+export function renderWindow<T>(ordered: T[]): T[] {
+  return ordered.length > MAX_ROWS ? ordered.slice(ordered.length - MAX_ROWS) : ordered
+}
 /** "On RX freq" tolerance (Hz) — decodes within this of the RX marker. */
 export const RX_TOL_HZ = 50
 /** Fallback own-TX cycle key width (ms) when a mine row carries no txAt. */

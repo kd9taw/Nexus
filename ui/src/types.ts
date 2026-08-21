@@ -1056,6 +1056,10 @@ export interface RadioStatus {
   rigMode?: string | null
   /** A CAT read succeeded — dial/mode are the rig's own values, not the persisted seed. */
   rigConfirmed?: boolean
+  /** Native Flex DAX audio is LIVE and carrying transmit audio, which means the radio's
+   * modulator takes DAX and the physical microphone is disconnected — radio-wide, on every
+   * slice and in every program. Display-only; the Phone cockpit warns on it. */
+  flexDaxTx?: boolean
   /** Transient Phone mode override ("USB"/"LSB"/"FM"), or null/absent = AUTO (band-derived). */
   sidebandOverride?: string | null
   /** The operator's phone (SSB) sub-band on the current band as [lo, hi) MHz, per license class
@@ -1251,6 +1255,37 @@ export interface RttyState {
   /** A CQ surfaced from the transcript for the operator to click-to-answer (only
    * while Auto is on), else null. Surfacing only — clicking it is the human gate. */
   heardCq: string | null
+}
+
+/** Live PSK state (the `get_psk_state` poll): the RX decoder + transcript,
+ * the selected sub-mode, and the TX side (sending / continuous-TX latch /
+ * keyer error) — `RttyState`'s shape for the Keyboard Modes cockpit. */
+export interface PskState {
+  armed: boolean
+  /** AFC correction from the netted center (Hz; slew-limited, clamped ±25). */
+  afcHz: number
+  /** The demodulator's quality squelch reads a signal right now. */
+  signal: boolean
+  /** Audio center (Hz) the decoder is netted on (the waterfall cursor). */
+  centerHz: number
+  /** Selected sub-mode slug ('psk31' | 'qpsk31') — engine truth for the
+   * cockpit's selector. Optional: absent reads as 'psk31' (the default). */
+  mode?: string
+  /** QPSK sideband-reverse (LSB) toggle state. Optional: absent = normal. */
+  reverse?: boolean
+  /** The decoded-text ring tail (caps at ~4000 chars; oldest drop off). */
+  text: string
+  /** Per-character confidence 0–100, parallel to `text`'s chars — render low
+   * values faint (the phase-margin soft metric). */
+  charConf: number[]
+  /** A PSK over is on the air, queued behind one, or the latched stream is
+   * running — the TX indicator and the Esc/Stop macro's enable. */
+  sending: boolean
+  /** Continuous TX is latched (reported separately from `sending` so Stop is
+   * live from the instant the latch goes up — the RTTY rule). */
+  latched: boolean
+  /** The last TX failure to surface (PTT refused, the ceiling note). */
+  keyerError: string | null
 }
 
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
@@ -1778,6 +1813,13 @@ export interface SpotRow {
   comment: string
   /** Operator may transmit at this freq+mode (license privileges; Open class ⇒ true). */
   licensed: boolean
+  /** At least one voice for this spot — the spotter or a corroborator — is on the operator's
+   *  own continent. True when locality cannot be judged (fail open).
+   *
+   *  OPTIONAL on purpose: a row from an older backend, or any fixture that predates the flag,
+   *  is "not judged" and must be KEPT rather than silently filtered out. The panel tests
+   *  `=== false`, never falsiness, for exactly that reason. */
+  spotterLocal?: boolean
   /** Set when this spot is a ONE-WAY transmission and so not workable: an NCDXF/IARU beacon
    * slot or a W1AW bulletin. Still displayed (an audible beacon is real propagation evidence)
    * but badged, and never painted with a need colour. Score suppression happens in the
@@ -2388,11 +2430,14 @@ export interface Settings {
   catRtsKeysPtt: boolean
   /** Serial baud rate. */
   baud: number
-  /** Rig connection: "serial" (default) or "network" (rigctld → rigAddr over TCP, e.g. a
-   * FlexRadio via SmartSDR). */
+  /** Rig connection: "serial" (default), "network" (rigctld → rigAddr over TCP, e.g. a
+   * FlexRadio via SmartSDR), or "omnirig" (VE3NEA's Windows COM rig-control server drives the
+   * radio; Nexus serves the rigctld protocol over it — Windows only). */
   rigConn: string
   /** Network rig address host:port when rigConn === "network" (e.g. "192.168.1.50:4992"). */
   rigAddr: string
+  /** Which OmniRig slot to drive when rigConn === "omnirig": 1 = RIG 1 (default), 2 = RIG 2. */
+  omnirigSlot: number
   /** Let Nexus set the rig's mode (forces the DATA submode). Off by default —
    * Nexus obeys whatever mode the rig is already in (max compatibility). */
   /** TCP port that rigctld listens on / Tempo launches it with. */
@@ -2400,6 +2445,8 @@ export interface Settings {
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */
   icomNativeCat: boolean
+  /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
+  icomDataMode: number
   /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
    * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
    *
@@ -2538,6 +2585,9 @@ export interface Settings {
   wsjtxUdpAddr: string
   /** Append every decode to a WSJT-X-format ALL.TXT decode log (loggers/GridTracker tail it). */
   writeAllTxt: boolean
+  /** Write the DEBUG tier to the diagnostic log. Off by default; a session switch, not a
+   *  better log. */
+  diagDebugLog: boolean
   /** Auto-save a WAV of the recent RX audio when a QSO is logged (per-contact recording). */
   saveQsoWav: boolean
   /** Log each QSO to Ham Radio Deluxe Logbook over its QSO-Forwarding UDP port. */
@@ -2655,6 +2705,10 @@ export interface Settings {
   /** SSTV drive, percent. null/undefined = never touch the rig's power (the shipped
    * behaviour); a value both seeds the screen's slider and is applied at Send. */
   sstvTxPowerPct?: number | null
+  /** Whether opening the PSK view starts the receiver. Default TRUE, so an ABSENT
+   * key must read as on — `!== false`, never `!!`. The gate is in the engine
+   * (`Engine::psk_auto_arm`), beside the session decline memory. */
+  pskRxAutoArm?: boolean
   /** Alert (beep + flash) when a decode is directed at my callsign. */
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */
@@ -2843,10 +2897,15 @@ export interface RadioProfile {
   baud: number
   rigConn: string
   rigAddr: string
+  /** Which OmniRig slot this radio drives when rigConn === "omnirig" (1 = RIG 1, 2 = RIG 2).
+   * PER-RADIO because it names WHICH radio inside OmniRig this profile is. */
+  omnirigSlot: number
   rigctldPort: number
   /** Native Icom CI-V: Nexus owns the CI-V serial port itself (real scope waveform +
    * instant dial tracking) instead of launching rigctld. Per-radio; default off. */
   icomNativeCat: boolean
+  /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
+  icomDataMode: number
   /** Command plain SSB (USB/LSB by band) instead of the DATA submode on the soundcard modes —
    * Digital, RTTY-AFSK and SSTV. Per radio. Off by default.
    *
@@ -2870,6 +2929,12 @@ export interface RadioProfile {
   lastSideband: string
   /** Native panadapter: "auto" | "none" | "flex" | "civ". */
   nativeScope: string
+  /** This radio's FlexRadio LAN IP (SmartSDR API :4992) — per-radio since 2026-08-18. */
+  flexRadioIp?: string
+  /** This radio's native SmartSDR panadapter opt-in. */
+  flexNativePan?: boolean
+  /** This radio's native DAX audio opt-in (both directions). */
+  flexNativeAudio?: boolean
 }
 
 /** A compact per-radio summary for the multi-radio switcher (dual-radio). One per configured

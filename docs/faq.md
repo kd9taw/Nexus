@@ -19,7 +19,7 @@ WSJT-X doesn't have — country and worked-before flags on every decode, one-cli
 stations on the air by what they are worth to *your* log.
 
 Nexus now transmits and receives **Q65, FST4, FST4W, MSK144, JT65 and WSPR** as well, so
-the mode gap has largely closed; WSJT-X still runs on **macOS**, which Nexus does not. And
+the mode gap has largely closed. And
 Nexus speaks WSJT-X's UDP protocol, so you don't have to choose all-or-nothing — your
 GridTracker/JTAlert/logger workflow survives either way. See [interop.md](interop.md).
 
@@ -84,6 +84,12 @@ On **Linux and the Raspberry Pi**, CAT uses the system Hamlib instead of a bundl
 copy: the `.deb` pulls `libhamlib-utils` in automatically, and AppImage users run
 `sudo apt install libhamlib-utils` once.
 
+On **macOS**, CAT needs Hamlib's tools from Homebrew: `brew install hamlib` in
+Terminal, then restart Nexus. (Homebrew itself is at [brew.sh](https://brew.sh).)
+WSJT-X or your logger working without it proves only the Hamlib *library* is
+present — Nexus drives the radio through the `rigctld` *program*, a separate
+package those apps don't use.
+
 ### Will Nexus transmit on its own?
 
 **Never on launch.** Nexus starts passive — it listens. Every transmission is an
@@ -144,8 +150,9 @@ page before running it. Click "More info → Run anyway" once the hash matches.
 
 Your log stays **local**, in an ADIF file on your machine. Uploads happen **only** to
 the services you explicitly configure — LoTW, QRZ, ClubLog, eQSL, HRDLog.net — and
-those credentials live in the **OS keychain** (Windows Credential Manager, or the Secret
-Service keyring on Linux and the Pi), never in a plaintext config file.
+those credentials live in the **OS keychain** (Windows Credential Manager, the macOS
+Keychain, or the Secret Service keyring on Linux and the Pi), never in a plaintext
+config file.
 Journey/achievement progress never leaves your computer. Nexus has no telemetry or
 analytics phone-home; the only outbound traffic is the connectors you turn on and, by
 default, PSK Reporter spot uploads (which you can disable).
@@ -173,14 +180,16 @@ are all useful.
 **Linux ships**, as `Nexus_<version>_pc_amd64.deb` and `Nexus_<version>_amd64.AppImage`,
 and 64-bit **Raspberry Pi OS** on a Pi 3, 4 or 5 gets its own `.deb` per base —
 `Nexus_<version>_pi_arm64_bookworm.deb` and `Nexus_<version>_pi_arm64_trixie.deb`. All
-three platforms build from the same tree and ship together every release. CAT on Linux
+platforms build from the same tree and ship together every release. CAT on Linux
 uses the system Hamlib rather than a bundled copy; the `.deb` pulls `libhamlib-utils` in
 for you and AppImage users run `sudo apt install libhamlib-utils` once. On a slower Pi,
 **Settings ▸ Digital ▸ Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
 
-**macOS does not ship.** The codebase is cross-platform Rust and Tauri, so it is a
-packaging and testing job rather than a port. If you want it, say so on the issue
-tracker — interest is what prioritizes it.
+**macOS ships too, since 1.5.0**, as `Nexus_<version>_aarch64.dmg` for Apple Silicon
+(M-series, macOS 12 or later) — signed and notarized, so Gatekeeper opens it without a
+warning, and it self-updates like the Windows build. CAT needs Hamlib from Homebrew
+(`brew install hamlib` — see "Do I need to install Hamlib…?" above). Intel Macs are
+source-build only.
 
 ### Will there be automatic updates?
 
@@ -188,9 +197,9 @@ They already work. A new version downloads quietly in the background and then of
 install. Nothing installs behind your back and nothing happens on a schedule: the button
 waits for you, and it stands down while you are transmitting, tuning, in a contact or
 running CQ, and tells you which. Every update is signed and verified before it is applied,
-and an altered installer is refused. Windows and the Linux AppImage update in place; the
-`.deb` packages, both Raspberry Pi ones included, are managed by your package system and
-notify you instead.
+and an altered installer is refused. Windows, macOS and the Linux AppImage update in
+place; the `.deb` packages, both Raspberry Pi ones included, are managed by your package
+system and notify you instead.
 
 ---
 

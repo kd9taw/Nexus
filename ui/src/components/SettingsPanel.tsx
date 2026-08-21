@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { confirmDialog } from '../confirm'
-import { checkRigForm, blocks, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   exportSettingsBundle,
@@ -67,6 +67,24 @@ import {
   n3fjpTestConnection,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+// What reads the catalog today: the panel SHELL (its chrome, the tab rail, Save, and the
+// toasts/confirms its handlers raise), the whole Appearance tab (Workspace + Features +
+// Accessibility), the Logging & Connectors sections above Confirmations (Connections,
+// Worked-before (B4) & dupes, Integrations & Feeds, DXKeeper, N3FJP, N1MM+, the LoTW users
+// list and the callsign→state database), the Spots & Alerts sections (Pounce + Alerts), the
+// two Contesting sections (Contest Category + Field Day Setup), and the Digital tab — the
+// FT8/FT4 section's Logging Behavior, Decoder and Station Housekeeping sub-groups plus JT65,
+// MSK144, Beacons, FST4, Q65 and the quick-reply macros. Every remaining tab's fieldsets are
+// still hardcoded English and are deliberately outside the i18n guard's scope; see its header.
+//
+// ⚠️ ONE RANGE IS DELIBERATELY STILL ENGLISH INSIDE A MIGRATED SECTION: Digital's "Transmit &
+// Sequencing" and "Auto-CQ & Caller Selection" sub-groups. They are the FT-mode TX / timing /
+// QSO-management surface, and they move in the transmit-path batch with the stop-line sweeps
+// re-run. The comment beside them says so at the call site.
+import { setLocale, t, type MessageKey } from '../i18n'
+import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
+import { T } from '../i18n/T'
+import { FD_EVENT_NAMES } from '../fdEvent'
 import { loadProfiles, mergeProfile, saveProfile, deleteProfile, type Profile } from '../profiles'
 import {
   getAssistanceJournal,
@@ -82,11 +100,11 @@ import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
 import { discoverFlex } from '../api'
 import { civDiagnosticLog, civDiagnosticStatus } from '../api'
-import { allTxtLocation, recordingsLocation, revealAllTxt, revealRecordings } from '../api'
+import { allTxtLocation, diagLogLocation, recordingsLocation, revealAllTxt, revealDiagLog, revealRecordings } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import type { AssistanceEvent, ConnEvent, CredStatus } from '../types'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
-import { FrequencyControl } from './FrequencyControl'
+import { SettingsStation } from './SettingsStation'
 import { SetupHealth } from './SetupHealth'
 import { ThemeSwitcher } from './ThemeSwitcher'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
@@ -100,15 +118,21 @@ import { resolveTarget } from '../settings/registry'
 import { SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
 // The APRS channel list and the grid→channel derivation, shared with the APRS cockpit so the
 // picker's options and the derived default can never name different numbers.
-import { APRS_FREQS, BEACON_SYMBOLS, aprsChannelForGrid } from '../aprsBeacon'
+import { APRS_FREQS, BEACON_SYMBOLS, NORTH_AMERICA, aprsChannelForGrid } from '../aprsBeacon'
 import type { Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { FeaturesApi } from '../useFeatures'
-import { FEATURES, featureById, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
+import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
 import { PROFILE_LIST } from '../features/profiles'
 import { checkForUpdateManual } from '../features/updateCheck'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
+
+// Serial-port examples and walkthroughs are platform prose: a Mac's ports are /dev/cu.* and
+// there is no Device Manager, so a "COM16" placeholder or a CP210x "Enhanced" label is a dead
+// end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
+// the modifier-chord labels needed it too.
+import { IS_MAC, IS_WINDOWS } from '../platform'
 
 interface Props {
   /** Called after a successful save so the shell can refresh its snapshot. */
@@ -178,46 +202,17 @@ const FD_SECTION_CODES = new Set(FD_SECTION_OPTIONS.map((s) => s.code))
 // Skipping rather than fabricating — the datalist + validation above already make the
 // section fast and correct to pick by hand.
 
-interface FieldDef {
-  key: FieldKey
-  label: string
-  type: 'text' | 'number'
-  placeholder: string
-  hint?: string
-}
+// Operator basics (band / dial / sideband are handled by FrequencyControl) live in
+// `SettingsStation.tsx` — extracted 2026-08-18 as the i18n pilot, DOM unchanged.
 
-// Operator basics (band / dial / sideband are handled by FrequencyControl).
-const BASIC_FIELDS: FieldDef[] = [
-  { key: 'mycall', label: 'Callsign', type: 'text', placeholder: 'KD9TAW', hint: 'Your station callsign (required).' },
-  {
-    key: 'mygrid',
-    label: 'Grid',
-    type: 'text',
-    placeholder: 'EN52xa',
-    hint: 'Maidenhead locator. All 6 characters — 4 measures every distance and bearing from the middle of a ~100-mile square.',
-  },
-  { key: 'opName', label: 'Operator name', type: 'text', placeholder: 'Seth', hint: 'Used by the CW {NAME} macro and logging.' },
-  // #25 — who is AT THE KEY, as opposed to whose station it is. Two different questions, and
-  // ADIF has two fields because the answers differ: STATION_CALLSIGN is the callsign above,
-  // OPERATOR is this. Set it and every contact you log carries it, so a two-person activation
-  // can be split by operator afterwards instead of hand-edited. This setting already existed
-  // but only inside the Field Day view, where a POTA pair would never find it — and it only
-  // ever reached the N3FJP feed, never the operator's own log.
-  {
-    key: 'fdOperator',
-    label: 'Operator at the key',
-    type: 'text',
-    placeholder: 'leave blank if that is you',
-    hint: 'Only for multi-operator: the callsign of whoever is operating, when that is not the station call. Stamped on every contact you log (ADIF OPERATOR) so a shared activation can be split per operator — POTA and Field Day both want each operator to submit their own. Blank means single-op and nothing is stamped. Change it when you swap seats.',
-  },
-  { key: 'opState', label: 'State', type: 'text', placeholder: 'WI', hint: 'Your US state/province — the CW {MYSTATE} macro (ragchew QTH).' },
-]
-
-const PTT_METHODS: { value: string; label: string }[] = [
-  { value: 'cat', label: 'CAT (via rigctld)' },
-  { value: 'rts', label: 'Serial RTS' },
-  { value: 'dtr', label: 'Serial DTR' },
-  { value: 'vox', label: 'VOX (no keying)' },
+// How transmit is keyed. ⚠️ The `value` is the persisted token the settings file and the radio
+// loop read; only the LABEL is prose, and CAT / rigctld / RTS / DTR / VOX inside those labels
+// name the keying paths themselves, so they survive translation unchanged.
+const PTT_METHODS: { value: string; labelKey: MessageKey }[] = [
+  { value: 'cat', labelKey: 'settings.rigControl.ptt.cat' },
+  { value: 'rts', labelKey: 'settings.rigControl.ptt.rts' },
+  { value: 'dtr', labelKey: 'settings.rigControl.ptt.dtr' },
+  { value: 'vox', labelKey: 'settings.rigControl.ptt.vox' },
 ]
 
 // Standard EIA CTCSS (PL) tones, Hz — for the FM repeater-access tone picker.
@@ -231,24 +226,27 @@ const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'rigctldPort', 'rigModel', 
 
 /** The APRS SSID conventions (APRS spec appendix / the de-facto community list). Not enforced
  *  anywhere — an SSID is free-form 0..15 — but naming them is the difference between a number
- *  picker and a choice an operator can make. */
-const APRS_SSIDS: [number, string][] = [
-  [0, 'fixed station'],
-  [1, 'generic / secondary'],
-  [2, 'generic'],
-  [3, 'generic'],
-  [4, 'generic'],
-  [5, 'phone / tablet'],
-  [6, 'satellite / special'],
-  [7, 'handheld'],
-  [8, 'boat / marine mobile'],
-  [9, 'mobile (car)'],
-  [10, 'iGate / internet'],
-  [11, 'balloon / aircraft'],
-  [12, 'tracker'],
-  [13, 'weather station'],
-  [14, 'truck / freight'],
-  [15, 'generic'],
+ *  picker and a choice an operator can make.
+ *
+ *  The SSID is the stored value and is printed as it stands; what each one CONVENTIONALLY
+ *  means is prose, so it is held as a catalog key and resolved when the row is rendered. */
+const APRS_SSIDS: { ssid: number; labelKey: MessageKey }[] = [
+  { ssid: 0, labelKey: 'settings.aprs.ssid.fixed' },
+  { ssid: 1, labelKey: 'settings.aprs.ssid.genericSecondary' },
+  { ssid: 2, labelKey: 'settings.aprs.ssid.generic' },
+  { ssid: 3, labelKey: 'settings.aprs.ssid.generic' },
+  { ssid: 4, labelKey: 'settings.aprs.ssid.generic' },
+  { ssid: 5, labelKey: 'settings.aprs.ssid.phone' },
+  { ssid: 6, labelKey: 'settings.aprs.ssid.satellite' },
+  { ssid: 7, labelKey: 'settings.aprs.ssid.handheld' },
+  { ssid: 8, labelKey: 'settings.aprs.ssid.boat' },
+  { ssid: 9, labelKey: 'settings.aprs.ssid.mobile' },
+  { ssid: 10, labelKey: 'settings.aprs.ssid.igate' },
+  { ssid: 11, labelKey: 'settings.aprs.ssid.balloon' },
+  { ssid: 12, labelKey: 'settings.aprs.ssid.tracker' },
+  { ssid: 13, labelKey: 'settings.aprs.ssid.weather' },
+  { ssid: 14, labelKey: 'settings.aprs.ssid.truck' },
+  { ssid: 15, labelKey: 'settings.aprs.ssid.generic' },
 ]
 
 // Standard serial CAT baud rates offered in the Rig baud picker. A rig's manual lists its
@@ -348,21 +346,123 @@ export const baudForRig = (modelNum: number, currentBaud: number): number | null
   return only
 }
 
-/** WSJT-X Split Operation choices (Settings ▸ Radio parity). */
-const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; label: string }[] = [
-  { value: 'none', label: 'None' },
-  { value: 'rig', label: 'Rig' },
-  { value: 'fakeit', label: 'Fake It' },
+/**
+ * ⭐ THE SAME RULE, FOR ROTATORS — and the reason a quarter of the picker could not work.
+ *
+ * The rotator side shipped ONE app-wide 9600 (`default_rotator_baud()`, and a tooltip that said
+ * "GS-232 default 9600" to every owner of every model), and `rotctld_args` forces it onto the
+ * daemon as `-s <baud>` whenever a port is set — which OVERRIDES the backend's own declared
+ * rate. Five of the thirteen real-hardware entries declare a single rate that is not 9600, so
+ * they were shipped unable to talk to their controller: SPID Rot2Prog 600, SPID Rot1Prog 1200,
+ * Idiom Press Rotor-EZ / Hy-Gain DCU-1 / Green Heron RT-21 4800. It reads to the operator as
+ * "Nexus doesn't work with my rotator" — the 2026-08-18 field report — because the wrong line
+ * rate looks exactly like dead hardware.
+ *
+ * The basis is the rig side's, unchanged: **only `serial_rate_min == serial_rate_max` is a
+ * fact; a range is not.** The rows below are DERIVED from the bundled Hamlib by
+ * `scripts/gen-hamlib-rotator-speeds.mjs` into `__fixtures__/hamlibRotatorSpeeds.json`, and
+ * `SettingsPanel.rotpicker.test.tsx` fails on any row that is not `min == max` there, on any
+ * rate that is not that value, and on any one-rate SERIAL rotator in the library with no row.
+ * A row cannot be added from a manual.
+ *
+ * It covers the WHOLE library rather than the curated list, because "Other Hamlib model #…"
+ * lets an operator type any number and a fixed-rate backend is fixed however it was chosen.
+ */
+export const ROT_FIXED_BAUD = new Map<number, number>([
+  // Idiom Press / Hy-Gain / Green Heron / DF9GR — the rotorez family, all 4800
+  [401, 4800], // Idiom Press Rotor-EZ
+  [402, 4800], // Idiom Press RotorCard
+  [403, 4800], // Hy-Gain DCU-1/DCU-1X
+  [404, 4800], // DF9GR ERC
+  [405, 4800], // Green Heron RT-21
+  [406, 4800], // Hy-Gain DCU2/DCU3/YRC-1
+  // SARtek
+  [501, 1200], // SARtek-1
+  // SPID — the two that are one-rate; MD-01/02 (903) declares 600..460800 and is left alone
+  [901, 600], // Rot2Prog
+  [902, 1200], // Rot1Prog
+  // M2
+  [1001, 9600], // RC2800
+  [1002, 9600], // RC2800_EARLY_AZ
+  [1003, 9600], // RC2800_EARLY_AZEL
+  // Telescope mounts pressed into rotator service
+  [1401, 9600], // Celestron NexStar
+  [1801, 9600], // Meade LX200/Autostar
+  // Prosistel
+  [1701, 9600], // D azimuth
+  [1702, 9600], // D elevation
+  [1703, 9600], // Combi-Track az+el
+  [1704, 9600], // D elevation CBOX az
+  // The rest of the one-rate serial backends
+  [2101, 9600], // SatEL
+  [2201, 9600], // Radant AZ-1/AZV-1
+  [2501, 9600], // FLIR PTU Serial
+  [2601, 57600], // Apex Shared Loop
+  [2801, 9600], // Sky-Watcher
+])
+
+/**
+ * The baud to apply when rotator `modelNum` is picked, or `null` to leave the setting alone —
+ * the rotator twin of [`baudForRig`], and the same rule: a listed rotator has exactly one rate,
+ * so it gets it; an unlisted one has no fact behind it, so it is not touched.
+ */
+export const baudForRotator = (modelNum: number, currentBaud: number): number | null => {
+  const only = ROT_FIXED_BAUD.get(modelNum)
+  if (only === undefined || only === currentBaud) return null
+  return only
+}
+
+/**
+ * The curated rotator list. Model numbers and the `(az)` / `(az/el)` suffixes are checked
+ * against the generated caps fixture by `SettingsPanel.rotpicker.test.tsx`, so neither can be
+ * typed from a manual either.
+ *
+ * ⚠️ REMOVED, and it must not come back: **EA4TX ARS (1101/1102) is Hamlib's PARALLEL-PORT
+ * backend** (`port: "parallel"` in the fixture — it declares no serial rate at all), and it was
+ * offered here with a serial-port box and a baud. It could not work as presented, and the brand
+ * label steered ARS-USB owners — whose box speaks GS-232 over USB — away from the entry that
+ * does work. They belong on **GS-232 (generic)**, which now says so.
+ */
+export const ROTATOR_MODELS: { model: number; label: string }[] = [
+  { model: 601, label: 'Yaesu GS-232A (az/el)' },
+  { model: 603, label: 'Yaesu GS-232B (az/el)' },
+  { model: 602, label: 'GS-232 (generic, az/el) — also EA4TX ARS-USB, LVB, ST2' },
+  { model: 605, label: 'Yaesu/Kenpro GS-23 (az/el)' },
+  { model: 606, label: 'Yaesu/Kenpro GS-232 (az/el)' },
+  { model: 607, label: 'AMSAT LVB Tracker (az/el)' },
+  { model: 901, label: 'SPID Rot2Prog (az/el)' },
+  { model: 902, label: 'SPID Rot1Prog (az)' },
+  { model: 903, label: 'SPID MD-01/02, ROT2 mode (az/el)' },
+  { model: 202, label: 'EasyComm II' },
+  { model: 204, label: 'EasyComm III' },
+  { model: 401, label: 'Idiom Press Rotor-EZ (az)' },
+  { model: 403, label: 'Hy-Gain DCU-1/DCU-1X (az)' },
+  { model: 406, label: 'Hy-Gain DCU2/DCU3/YRC-1 (az)' },
+  { model: 404, label: 'DF9GR ERC (az)' },
+  { model: 405, label: 'Green Heron RT-21' },
+  { model: 1001, label: 'M2 RC2800 (az/el)' },
+  { model: 1701, label: 'Prosistel D (az)' },
+  { model: 1703, label: 'Prosistel Combi-Track (az/el)' },
+  { model: 1, label: 'Dummy (testing — no hardware)' },
+]
+
+/** WSJT-X Split Operation choices (Settings ▸ Radio parity). The stored `value` is the token;
+ * the label is WSJT-X's own wording for the choice and is prose, named by the hint beside it. */
+const SPLIT_MODES: { value: NonNullable<Settings['splitMode']>; labelKey: MessageKey }[] = [
+  { value: 'none', labelKey: 'settings.rigControl.split.none' },
+  { value: 'rig', labelKey: 'settings.rigControl.split.rig' },
+  { value: 'fakeit', labelKey: 'settings.rigControl.split.fakeit' },
 ]
 
 // SAT_VFO_MAPS moved to features/satVfo.ts — the Satellites readiness rail
 // mirrors this setting live, and the two surfaces must share ONE label list.
 
-/** What the rotator does when a pass ends. */
-const ROT_POST_PASS: { value: string; label: string }[] = [
-  { value: 'stop', label: 'Stop — leave the antenna where the pass ended' },
-  { value: 'park', label: 'Park — drive to the park position' },
-  { value: 'ready', label: 'Ready — drive to the ready position' },
+/** What the rotator does when a pass ends. The stored `value` is the token the backend reads;
+ * only the LABEL is prose, so it resolves from the catalog at the call site. */
+const ROT_POST_PASS: { value: string; labelKey: MessageKey }[] = [
+  { value: 'stop', labelKey: 'settings.rotator.postPass.stop' },
+  { value: 'park', labelKey: 'settings.rotator.postPass.park' },
+  { value: 'ready', labelKey: 'settings.rotator.postPass.ready' },
 ]
 
 /** One operator override of the working-frequency table. */
@@ -415,7 +515,13 @@ const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12
 const FREQ_MODES = ['FT8', 'FT4']
 
 /** The mode classes radio ROUTING decides on, with the operator-facing labels (must match the Rust
- * `RouteMode::label`). Coarser than the submode list on purpose: five rules cover a whole station. */
+ * `RouteMode::label`). Coarser than the submode list on purpose: five rules cover a whole station.
+ *
+ * ⚠️ NOT IN THE CATALOG, DELIBERATELY (i18n phase 2). These five are MODE NAMES — the same
+ * invariant vocabulary that keeps the Phone / CW / Digital tabs above untranslated — and this
+ * array's own contract is that they match the Rust `RouteMode::label`, which no locale reaches.
+ * Translating this copy alone would break that parity. The words around them (`Any mode`,
+ * `Satellite`, the rule summary) ARE prose and live in `en.ts`. */
 const ROUTE_MODES: [RouteMode, string][] = [
   ['digital', 'Weak-signal digital'],
   ['fm', 'FM & APRS'],
@@ -456,17 +562,45 @@ type SettingsTab =
   | 'contesting'
   | 'appearance'
 
-const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
-  { id: 'station', label: 'Station' },
-  { id: 'radio', label: 'Radio' },
+//
+// `label` is the ENGLISH source string and stays literal for the two parsers above. What the
+// rail RENDERS is `labelKey` when there is one — and three tabs deliberately have none:
+// **Phone, CW and Digital are mode names**, invariant technical tokens by the same rule that
+// keeps 14.074 MHz out of the catalog (this array's own header calls them "the three
+// operating modes the nav rail itself presents"), so they render from `label` unchanged in
+// every language.
+const SETTINGS_TABS: { id: SettingsTab; label: string; labelKey?: MessageKey }[] = [
+  { id: 'station', label: 'Station', labelKey: 'settings.tabs.station' },
+  { id: 'radio', label: 'Radio', labelKey: 'settings.tabs.radio' },
   { id: 'phone', label: 'Phone' },
   { id: 'cw', label: 'CW' },
   { id: 'digital', label: 'Digital' },
-  { id: 'spots', label: 'Spots & Alerts' },
-  { id: 'logging', label: 'Logging & Connectors' },
-  { id: 'contesting', label: 'Contesting' },
-  { id: 'appearance', label: 'Appearance' },
+  { id: 'spots', label: 'Spots & Alerts', labelKey: 'settings.tabs.spots' },
+  { id: 'logging', label: 'Logging & Connectors', labelKey: 'settings.tabs.logging' },
+  { id: 'contesting', label: 'Contesting', labelKey: 'settings.tabs.contesting' },
+  { id: 'appearance', label: 'Appearance', labelKey: 'settings.tabs.appearance' },
 ]
+
+/** How the OmniRig connection option is offered, as a function of the platform.
+ *
+ * OmniRig is a Windows COM server, so off Windows the choice cannot work at all. It is still
+ * OFFERED — disabled, with the reason in its own label — rather than hidden: OmniRig is named
+ * in the rig docs and used by half the Windows logging ecosystem, and an operator who goes
+ * looking for it on a Mac must find the answer in the control rather than conclude the build
+ * is broken.
+ *
+ * Pure and takes the platform as an argument so BOTH directions are testable — jsdom is never
+ * Windows, so a component-only test could only ever see the disabled half. */
+export function omnirigChoiceFor(isWindows: boolean): { disabled: boolean; label: string } {
+  return isWindows
+    ? { disabled: false, label: t('settings.rigControl.conn.omnirig') }
+    : { disabled: true, label: t('settings.rigControl.conn.omnirig.unavailable') }
+}
+
+/** [`omnirigChoiceFor`] for the machine this is actually running on. */
+export function omnirigChoice(): { disabled: boolean; label: string } {
+  return omnirigChoiceFor(IS_WINDOWS)
+}
 
 /** Pick just the per-radio CAT/audio/PTT/rotator/native fields — the flat rig form and a radio
  * profile share these exact field names, so this serves BOTH directions: build the save patch
@@ -482,6 +616,10 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     baud: s.baud ?? APP_DEFAULT_BAUD,
     rigConn: s.rigConn ?? 'serial',
     rigAddr: s.rigAddr ?? '',
+    // ⚠️ PER-RADIO, so it MUST be here — see the Flex note below. Which radio inside OmniRig
+    // this profile drives is a property of the profile, and dropping it on Save would move an
+    // operator's RIG 2 radio silently onto RIG 1.
+    omnirigSlot: s.omnirigSlot ?? 1,
     rigctldPort: s.rigctldPort ?? 4532,
     icomNativeCat: s.icomNativeCat ?? false,
     dataModesPlainSsb: s.dataModesPlainSsb ?? false,
@@ -495,6 +633,16 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rotatorHost: s.rotatorHost ?? '',
     rotctldPort: s.rotctldPort ?? 4533,
     nativeScope: s.nativeScope ?? 'auto',
+    // ⚠️ THE FLEX THREE BELONG HERE, and their absence was silent data loss (2026-08-17 Flex
+    // audit). Every save of the rig form while EDITING a non-active radio routes through
+    // `persistRadioForm` → `updateRadioProfile(radioPatch(form))`, so a field this function does
+    // not return is dropped on Save while the panel reports success — the operator configures
+    // radio 2 and radio 1's Flex address is gone. Same class as `pttSerialPort`, and the backend
+    // now has a serde-computed guard (`every_per_radio_field_is_reachable_through_the_patch`)
+    // that fails when a per-radio field is added without a home in this patch.
+    flexRadioIp: s.flexRadioIp ?? '',
+    flexNativePan: s.flexNativePan ?? false,
+    flexNativeAudio: s.flexNativeAudio ?? false,
   }
 }
 
@@ -508,6 +656,125 @@ const CLUSTER_PRESETS: { label: string; host: string }[] = [
   { label: 'W1NR — DXSpider, phone-rich', host: 'dx.w1nr.net:23' },
   { label: 'W3LPL — firehose (skimmer-heavy)', host: 'w3lpl.net:7373' },
 ]
+
+/**
+ * The example network addresses the Logging & Connectors fields show INSIDE a placeholder.
+ *
+ * Invariant tokens, gathered rather than inlined for the reason `STATION_EXAMPLES` states: a
+ * bare address in a `placeholder=` is the moment someone has to decide which category the
+ * value is in, and an address a translator "localises" connects to nothing. The prose beside
+ * them — "(empty = off)" — is a catalog entry that interpolates one of these.
+ */
+const LOGGER_EXAMPLES = {
+  dxkeeperHost: '127.0.0.1',
+  n3fjpHost: '192.168.1.10',
+  n1mmAddr: '127.0.0.1:12060',
+  clusterNode: 've7cc.net:23',
+} as const
+
+/**
+ * The Confirmations placeholders that are TOKENS rather than prose — same rule as
+ * `LOGGER_EXAMPLES`, one category up: a "localised" `rbuapp_` prefix matches no token
+ * RepeaterBook issues, and a translated example hostname resolves nowhere. The station-profile
+ * placeholder is the bare number `1` and stays inline, as every number alone does.
+ */
+const CONFIRMATION_EXAMPLES = {
+  rbToken: 'rbuapp_…',
+  cloudlogUrl: 'https://log.example.com',
+} as const
+
+/**
+ * The serial-device names the Rig & CAT port fields show INSIDE a placeholder, one per
+ * platform — same rule as `LOGGER_EXAMPLES`. A device name is whatever the OS enumerated, so a
+ * "localised" `COM16` or `/dev/cu.usbserial-1420` names no port on any machine; the prose
+ * around them ("Select or type, e.g. …") is a catalog entry that interpolates one of these.
+ */
+const RIG_EXAMPLES = {
+  macSerialPort: '/dev/cu.usbserial-1420',
+  serialPort: 'COM16',
+} as const
+
+/**
+ * The rotator's own device and address examples — the same rule as `RIG_EXAMPLES` one section
+ * down the tab. A controller's serial device is whatever the OS enumerated and `127.0.0.1:4533`
+ * is rotctld's default address; a "localised" one reaches nothing. The prose around them
+ * ("host:port — e.g. …") is a catalog entry that interpolates one of these.
+ */
+const ROTATOR_EXAMPLES = {
+  macPort: '/dev/cu.usbserial-1420',
+  port: 'COM7 / /dev/ttyUSB1',
+  host: '127.0.0.1:4533',
+} as const
+
+/**
+ * OmniRig's two rig slots, named the way OmniRig's own window names them.
+ *
+ * Same category as `RIG_EXAMPLES`: this is not prose, it is the string an operator reads in
+ * ANOTHER program's interface and has to match this picker against. A translated "RIG 1" names
+ * nothing in OmniRig, so the label the panel shows is also the label OmniRig shows. Indexed by
+ * the stored slot number, which is the `value` beside it.
+ */
+const OMNIRIG_SLOTS: Record<1 | 2, string> = { 1: 'RIG 1', 2: 'RIG 2' }
+
+/**
+ * The quick-reply macro set named for a Q-code.
+ *
+ * Same category as `OMNIRIG_SLOTS`: QSO is the hobby's own three letters, identical in every
+ * language, so it is a token rather than a catalog entry — exactly as the CQ inside the
+ * "Band / CQ" label beside it is a token inside a label whose other word is prose. It lives
+ * here rather than inline because a bare word in JSX text is what the i18n guard reads as
+ * un-migrated English (i18n/hardcoded-strings.test.ts).
+ */
+const MACRO_SET_QSO = 'QSO'
+
+/** The CW F1 macro's role, which is the Q-code that key sends — same category as
+ *  `MACRO_SET_QSO`, and the reason it sits beside it rather than in the catalog. */
+const MACRO_SET_CQ = 'CQ'
+
+/**
+ * The keying-interface port examples the CW and RTTY placeholders show — same rule as
+ * `RIG_EXAMPLES` above. A COM number is whatever the OS enumerated, so a "localised" one names
+ * no port; the prose around it ("… — the keying interface") is a catalog entry that
+ * interpolates one of these.
+ */
+const KEYING_EXAMPLES = {
+  winkeyerPort: 'COM6',
+  cwKeyPort: 'COM7',
+  rttyFskPort: 'COM8',
+} as const
+
+/**
+ * APRS's own wire formats, shown as examples or written into a frame.
+ *
+ * `ssid` and `watchCalls` are callsigns, `path` is a digipeater path the packet carries
+ * verbatim, and `isHost` is a hostname — all four are matched literally by something outside
+ * this program, so all four stay here and are interpolated into the prose beside them.
+ */
+const APRS_EXAMPLES = {
+  ssid: 'KD9TAW-9',
+  watchCalls: 'W9XYZ-9, KD9ABC',
+  path: 'WIDE1-1, WIDE2-1',
+  isHost: 'rotate.aprs2.net',
+} as const
+
+/**
+ * The FCC rule the SSTV callsign burn-in satisfies. A citation is an address into a legal
+ * text — the same in every language, and a decimal comma in it would name a different rule.
+ */
+const SSTV_ID_RULE = '§97.119(b)(4)'
+
+/** The ISS SSTV downlink, in MHz. A dial reading: formatted invariantly, never written into
+ *  a sentence (`i18n/index.ts`, the invariant-token rule). */
+const ISS_SSTV_MHZ = 145.8
+
+/**
+ * Tokens the panel prints beside a number or stores as a `<select>` value, where the row has
+ * no prose in it at all. Named rather than written inline for the `MACRO_SET_QSO` reason: a
+ * bare word in JSX text is what the i18n guard reads as un-migrated English. `RTS` is a serial
+ * control line and `Hz` a unit symbol — the same category as `LINK_TOKENS` in the Now-Bar.
+ */
+const SERIAL_LINE_RTS = 'RTS'
+const UNIT_HZ = 'Hz'
 
 export function SettingsPanel({
   onSaved,
@@ -539,11 +806,9 @@ export function SettingsPanel({
     // additive and is not.
     if (
       !(await confirmDialog({
-        title: `Replace your current setup with ${f.name}?`,
-        body:
-          'Your radios, preferences, memory channels, watchlist and chase sets will be replaced. ' +
-          'Your contact log is not affected. This cannot be undone.',
-        confirmLabel: 'Restore',
+        title: t('settings.backup.restore.confirm.title', { file: f.name }),
+        body: t('settings.backup.restore.confirm.body'),
+        confirmLabel: t('settings.backup.restore.confirm.action'),
         danger: true,
       }))
     ) {
@@ -553,15 +818,15 @@ export function SettingsPanel({
       const snap = await importSettingsBundle(await f.text())
       if (!snap) return
       // Re-read and re-seed the form. Without this the panel goes on rendering the PRE-restore
-      // values, so a restore looks like it did nothing -- and the stale form is still live, so
-      // the next Save writes the old values straight back over the restored ones.
+      // values, so a restore looks like it did nothing — and the stale form is still live, so the
+      // next Save writes the old values straight back over the restored ones.
       const fresh = await getSettings()
       setForm(fresh)
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
       onSaved?.()
-      pushToast('Settings restored — check your radio and Test CAT', 'success')
-    }, 'Restore failed')
+      pushToast(t('settings.backup.restore.done'), 'success')
+    }, t('settings.backup.restore.failed'))
   }
   const [form, setForm] = useState<Settings | null>(null)
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
@@ -583,7 +848,14 @@ export function SettingsPanel({
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [MAX_STEP])
+  // Re-render the panel when the language changes, so the picker's own labels switch with it
+  // (the panel is the one screen guaranteed to be open at that moment).
+  const locale = useLocale()
+  // Read LIVE, not at module load: the catalogs are installed during startup, after this
+  // module is imported (see localeChoices).
+  const languages = localeChoices()
   const [allTxtPath, setAllTxtPath] = useState('')
+  const [diagLogPath, setDiagLogPath] = useState('')
   const [recordingsPath, setRecordingsPath] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'saved'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -635,6 +907,11 @@ export function SettingsPanel({
     allTxtLocation()
       .then((p) => {
         if (alive) setAllTxtPath(p)
+      })
+      .catch(() => {})
+    diagLogLocation()
+      .then((p) => {
+        if (alive) setDiagLogPath(p)
       })
       .catch(() => {})
     recordingsLocation()
@@ -721,14 +998,14 @@ export function SettingsPanel({
   // key without inserting anything). idle | testing | the result line.
   const [qrzTest, setQrzTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
   const runQrzTest = () => {
-    setQrzTest({ state: 'testing', msg: 'testing…' })
+    setQrzTest({ state: 'testing', msg: t('settings.connections.test.testing') })
     qrzTestConnection()
       .then((msg) => setQrzTest({ state: 'ok', msg }))
       .catch((e) => setQrzTest({ state: 'fail', msg: String(e) }))
   }
   const [n3fjpTest, setN3fjpTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
   const runN3fjpTest = () => {
-    setN3fjpTest({ state: 'testing', msg: 'testing…' })
+    setN3fjpTest({ state: 'testing', msg: t('settings.connections.test.testing') })
     n3fjpTestConnection()
       .then((msg) => setN3fjpTest({ state: 'ok', msg }))
       .catch((e) => setN3fjpTest({ state: 'fail', msg: String(e) }))
@@ -929,7 +1206,7 @@ export function SettingsPanel({
   // disk-thrash). The RX Level meter then responds within a poll, so the control
   // visibly "works" instead of appearing dead until a full Save.
   const applyRxGainLive = (value: number) => {
-    void setRxGain(value).catch(() => pushToast('Could not apply RX gain', 'error'))
+    void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
   // Apply TX drive (Pwr) to the LIVE radio, the SAME value as the cockpit "Pwr" slider —
@@ -943,7 +1220,7 @@ export function SettingsPanel({
     const now = Date.now()
     if (!force && now - txLevelThrottleRef.current < 60) return
     txLevelThrottleRef.current = now
-    void setTxLevel(value).catch(() => pushToast('Could not set TX power', 'error'))
+    void setTxLevel(value).catch(() => pushToast(t('settings.audio.txPower.failed'), 'error'))
   }
 
   // Keep the Tx Power slider in step with the cockpit "Pwr" control — both are the SAME value
@@ -1040,15 +1317,23 @@ export function SettingsPanel({
   // The Guided copilot recommends the next F-key by ROLE (CQ → answer → report → 73):
   // customization changes the TEXT each key sends, never the key's job — so the
   // recommended-key highlight and the auto call fill (!) keep working for everyone.
+  // The ROLE table moved to the catalog with the CW tab's editor (batch 17), as the comment
+  // that stood here said it would. A role says what the key is FOR, which is prose — except
+  // F1's, which is the Q-code the key sends and stays a token beside `MACRO_SET_QSO`.
+  //
+  // ⚠️ `CW_MACRO_DEFAULTS` DID NOT MOVE AND MUST NOT. It is SEED DATA: the moment "Customize"
+  // is pressed these labels are written into `settings.json` as the operator's own macro set,
+  // so a translated label is a translated PERSISTED value, stale the day the locale changes.
+  // Its `text` is macro tokens ({MYCALL}, {RST}) and was never translatable in any language.
   const CW_MACRO_ROLES: Record<string, string> = {
-    F1: 'CQ',
-    F2: 'Answer a station',
-    F3: 'Send report',
-    F4: 'Sign off (73)',
-    F5: 'My call',
-    F6: 'His call',
-    F7: 'Ask repeat',
-    F8: 'Query',
+    F1: MACRO_SET_CQ,
+    F2: t('settings.cw.macros.role.answer'),
+    F3: t('settings.cw.macros.role.report'),
+    F4: t('settings.cw.macros.role.signOff'),
+    F5: t('settings.cw.macros.role.myCall'),
+    F6: t('settings.cw.macros.role.hisCall'),
+    F7: t('settings.cw.macros.role.askRepeat'),
+    F8: t('settings.cw.macros.role.query'),
   }
   const CW_MACRO_DEFAULTS: { key: string; label: string; text: string }[] = [
     { key: 'F1', label: 'CQ', text: 'CQ CQ DE {MYCALL} {MYCALL} K' },
@@ -1073,7 +1358,15 @@ export function SettingsPanel({
     setForm((prev) => (prev ? { ...prev, macros: { ...prev.macros, activeCwProfile: i } } : prev))
   }
   const addCwProfile = () => {
-    const name = window.prompt('New CW macro profile name:', `Profile ${cwProfiles.length + 1}`)?.trim()
+    // The suggested name is a DISPLAY label, not seed data in the `CW_MACRO_DEFAULTS` sense:
+    // profiles are keyed by index everywhere, nothing reads the name back, and the same entry
+    // is what the picker falls back to for a profile with no name at all.
+    const name = window
+      .prompt(
+        t('settings.cw.macros.profiles.addPrompt'),
+        t('settings.cw.macros.profiles.unnamed', { n: cwProfiles.length + 1 }),
+      )
+      ?.trim()
     if (!name) return
     markDirty()
     setForm((prev) => {
@@ -1090,7 +1383,7 @@ export function SettingsPanel({
   const renameCwProfile = () => {
     const cur = cwProfiles[activeCwIdx]
     if (!cur) return
-    const name = window.prompt('Rename CW macro profile:', cur.name)?.trim()
+    const name = window.prompt(t('settings.cw.macros.profiles.renamePrompt'), cur.name)?.trim()
     if (!name) return
     markDirty()
     setForm((prev) => {
@@ -1170,7 +1463,7 @@ export function SettingsPanel({
     // Mirror into the form for display only — the backend owns the value.
     setForm((prev) => (prev ? { ...prev, satVfoMap: m } : prev))
     void confirmSatUplink(m).catch(() =>
-      pushToast('Could not confirm the VFO mapping', 'error'),
+      pushToast(t('settings.satellites.vfoMap.failed'), 'error'),
     )
   }
 
@@ -1215,9 +1508,9 @@ export function SettingsPanel({
     if (
       (form?.workingFrequencies?.length ?? 0) > 0 &&
       !(await confirmDialog({
-        title: 'Clear all working-frequency overrides?',
-        body: 'The stock WSJT-X frequency table is restored.',
-        confirmLabel: 'Clear overrides',
+        title: t('settings.workingFreq.reset.confirm.title'),
+        body: t('settings.workingFreq.reset.confirm.body'),
+        confirmLabel: t('settings.workingFreq.reset.confirm.action'),
         danger: true,
       }))
     ) {
@@ -1250,6 +1543,18 @@ export function SettingsPanel({
     })
   }
 
+  // The rotator twin, and it exists because the rotator picker did NOT have one: picking a
+  // model wrote `rotatorModel` and nothing else, so a SPID or a Green Heron kept the app-wide
+  // 9600 that its backend does not run at. Same rule, same shape — see `ROT_FIXED_BAUD`.
+  const selectRotator = (modelNum: number) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const baud = baudForRotator(modelNum, prev.rotatorBaud ?? 9600)
+      return { ...prev, rotatorModel: modelNum, ...(baud ? { rotatorBaud: baud } : {}) }
+    })
+  }
+
   // --- Dual-radio roster (P2). These are LIVE verbs: they persist immediately and return a fresh
   // snapshot. We then re-pull the full settings and merge ONLY the radios[]/active/peg fields back
   // into the form, so the roster reflects the change without discarding unsaved flat-form edits.
@@ -1276,7 +1581,7 @@ export function SettingsPanel({
     // Adding does not switch the station onto the new radio -- see Engine::add_radio. Select it
     // for EDITING instead, so the operator lands on the profile they just made and can configure
     // it, while the rig they are actually operating keeps running.
-    void withErrorToast(() => addRadio(), 'Could not add a radio').then(async (s) => {
+    void withErrorToast(() => addRadio(), t('settings.radios.add.failed')).then(async (s) => {
       if (!s) return
       reloadRadios()
       const fresh = await getSettings()
@@ -1290,18 +1595,28 @@ export function SettingsPanel({
     const r = form?.radios?.find((p) => p.id === id)
     if (
       !(await confirmDialog({
-        title: `Remove ${r?.name ?? 'this radio'}?`,
-        body: "This deletes its CAT/audio config, its rigctld port and its band coverage. Your contact log is not affected. This can't be undone.",
-        confirmLabel: 'Remove radio',
+        title: t('settings.radios.remove.confirm.title', {
+          name: r?.name ?? t('settings.radios.thisRadio'),
+        }),
+        body: t('settings.radios.remove.confirm.body'),
+        confirmLabel: t('settings.radios.remove.confirm.action'),
         danger: true,
       }))
     ) {
       return
     }
-    void withErrorToast(() => removeRadio(id), 'Could not remove the radio').then((s) => s && reloadRadios())
+    void withErrorToast(() => removeRadio(id), t('settings.radios.remove.failed')).then((s) => {
+      if (!s) return
+      // If the deleted radio was the one the rig form is editing, retarget the form: a
+      // dangling editingRadioId routes every later Save through update_radio_profile(<gone
+      // id>), which no-ops on a missing id — so station-wide edits (callsign, credentials)
+      // silently stop persisting with no error.
+      setEditingRadioId((cur) => (cur === id ? activeRadioId : cur))
+      reloadRadios()
+    })
   }
   const handleRenameRadio = (id: number, name: string) => {
-    void withErrorToast(() => renameRadio(id, name), 'Could not rename the radio').then((s) => s && reloadRadios())
+    void withErrorToast(() => renameRadio(id, name), t('settings.radios.rename.failed')).then((s) => s && reloadRadios())
   }
   const handleToggleRadioBand = (id: number, band: string) => {
     const radio = form?.radios?.find((r) => r.id === id)
@@ -1309,7 +1624,7 @@ export function SettingsPanel({
     const bands = radio.bands.includes(band)
       ? radio.bands.filter((b) => b !== band)
       : [...radio.bands, band]
-    void withErrorToast(() => setRadioBands(id, bands), 'Could not set band coverage').then(
+    void withErrorToast(() => setRadioBands(id, bands), t('settings.radios.bands.failed')).then(
       (s) => s && reloadRadios(),
     )
   }
@@ -1318,7 +1633,7 @@ export function SettingsPanel({
   // is pointed at a non-active radio, where Save goes through update_radio_profile and drops the
   // form entirely).
   const mutateRules = (next: RoutingRule[]) => {
-    void withErrorToast(() => setRoutingRules(next), 'Could not save the routing rules').then(
+    void withErrorToast(() => setRoutingRules(next), t('settings.routing.rules.failed')).then(
       (s) => s && reloadRadios(),
     )
   }
@@ -1350,7 +1665,7 @@ export function SettingsPanel({
     mutateRules(rules)
   }
   const handleSetDefaultRadio = (id: number | null) => {
-    void withErrorToast(() => setDefaultRadio(id), 'Could not set the default radio').then(
+    void withErrorToast(() => setDefaultRadio(id), t('settings.radios.default.failed')).then(
       (s) => s && reloadRadios(),
     )
   }
@@ -1371,9 +1686,9 @@ export function SettingsPanel({
     if (
       dirtyRef.current &&
       !(await confirmDialog({
-        title: 'Discard unsaved changes to the radio you were editing?',
-        body: 'The edits you have not saved for that radio are lost.',
-        confirmLabel: 'Discard and switch',
+        title: t('settings.radios.edit.confirm.title'),
+        body: t('settings.radios.edit.confirm.body'),
+        confirmLabel: t('settings.radios.edit.confirm.action'),
         danger: true,
       }))
     ) {
@@ -1392,15 +1707,15 @@ export function SettingsPanel({
     if (
       dirtyRef.current &&
       !(await confirmDialog({
-        title: 'Discard unsaved changes and switch the operating radio?',
-        body: 'The carrier is dropped before the swap. Unsaved edits to the radio you were editing are lost.',
-        confirmLabel: 'Discard and switch',
+        title: t('settings.radios.makeActive.confirm.title'),
+        body: t('settings.radios.makeActive.confirm.body'),
+        confirmLabel: t('settings.radios.makeActive.confirm.action'),
         danger: true,
       }))
     ) {
       return
     }
-    void withErrorToast(() => setActiveRadio(id), 'Could not switch radios').then((s) => {
+    void withErrorToast(() => setActiveRadio(id), t('settings.radios.switch.failed')).then((s) => {
       if (!s) return
       void getSettings().then((full) => {
         setForm(full)
@@ -1430,9 +1745,15 @@ export function SettingsPanel({
     // could never see a Flex): USB enumeration + LAN discovery in parallel;
     // either probe may fail without killing the other's results.
     const [rigs, flexes] = await Promise.all([
-      withErrorToast(() => detectRigs(), 'USB radio detection failed'),
+      withErrorToast(() => detectRigs(), t('settings.detect.usb.failed')),
       discoverFlex().catch((e) => {
-        pushToast(`Flex LAN scan: ${e instanceof Error ? e.message : e}`, 'info', 6000)
+        pushToast(
+          t('settings.detect.flex.scanFailed', {
+            error: String(e instanceof Error ? e.message : e),
+          }),
+          'info',
+          6000,
+        )
         return []
       }),
     ])
@@ -1441,7 +1762,7 @@ export function SettingsPanel({
     if (rigs) {
       setDetected(rigs)
       if (rigs.length === 0 && flexes.length === 0)
-        pushToast('No radios found — USB: plug in + power on; Flex: must be on this network.', 'info')
+        pushToast(t('settings.detect.none'), 'info')
     }
   }
 
@@ -1478,25 +1799,48 @@ export function SettingsPanel({
       // device is — a cable — and the sweep would be looking for a radio that this port may not
       // even have a CAT link to yet. Tell the operator the one thing still missing.
       pushToast(
-        `Applied ${r.interfaceName} on ${r.portName} — now pick your Rig Model, then Save`,
+        t('settings.detect.applied.interface', {
+          device: r.interfaceName,
+          port: r.portName,
+        }),
         'success',
       )
     } else if (r.suggestedModel == null) {
       // Unidentified rig (bridge chip only, no model) — instead of making the operator pick a model
       // and Test CAT by hand, chain straight into the port Auto-test, which sweeps COMMON_CAT_MODELS
       // + bauds to find the one that actually answers. Pass the freshly-applied form (state is async).
-      pushToast(`Applied ${r.product || 'radio'} on ${r.portName} — identifying via Auto-test…`, 'info')
+      pushToast(
+        t('settings.detect.applied.identifying', {
+          device: r.product || t('settings.detect.unknownRadio'),
+          port: r.portName,
+        }),
+        'info',
+      )
       void handleAutoTestPorts(applied)
     } else {
       pushToast(
-        `Applied ${r.suggestedModelName ?? (r.product || 'radio')} on ${r.portName} — review + Save settings`,
+        t('settings.detect.applied.review', {
+          device: r.suggestedModelName ?? (r.product || t('settings.detect.unknownRadio')),
+          port: r.portName,
+        }),
         'success',
       )
     }
   }
 
   // One-click apply a discovered Flex: network conn via SmartSDR CAT's default
-  // slice-A TCP port + the FLEX-6xxx dialect model (the WSJT-X-proven path).
+  // slice-A TCP port + the SmartSDR CAT dialect model (the WSJT-X-proven path). One model
+  // serves BOTH product lines — SmartSDR CAT presents the same command set for a 6000 and an
+  // 8000 (2026-08-17 Flex audit, critic gap #9), so a discovered FLEX-8400 lands here too.
+  //
+  // ⚠️ 127.0.0.1:5002 IS A WINDOWS FACT, NOT A FLEX FACT (2026-08-17 Flex audit, wave-1 #35/#58).
+  // It is the SmartSDR CAT *app's* default slice-A port, and FlexRadio ships SmartSDR CAT and the
+  // DAX drivers in the Windows suite ONLY. macOS has been a shipped platform since 1.5.0 and
+  // Linux longer, and on both this address is a program that cannot be installed: the operator
+  // got a config that fails Test CAT with an instant ECONNREFUSED and a toast naming software
+  // they cannot obtain. So the localhost proxy is applied only where it can exist; elsewhere the
+  // rig-model/conn/IP that ARE true are still applied, `rigAddr` is left for the operator, and
+  // the toast says what to put there.
   const applyDetectedFlex = (f: { model: string; nickname: string; ip: string }) => {
     markDirty()
     setForm((prev) =>
@@ -1504,9 +1848,9 @@ export function SettingsPanel({
         ? {
             ...prev,
             rigConn: 'network',
-            rigAddr: '127.0.0.1:5002',
+            ...(IS_WINDOWS ? { rigAddr: '127.0.0.1:5002' } : {}),
             rigModel: 2036,
-            rigModelName: 'FlexRadio FLEX-6xxx (SmartSDR CAT)',
+            rigModelName: 'FlexRadio FLEX-6xxx / 8xxx (SmartSDR CAT)',
             // Keep the discovered radio IP — the native panadapter / DAX path connects to the rig
             // directly over VITA-49 at this address (CAT still rides the localhost SmartSDR proxy
             // above). Discovery already knows it; dropping it left the native features unreachable.
@@ -1514,8 +1858,13 @@ export function SettingsPanel({
           }
         : prev,
     )
+    // The radio is named by its MODEL plus, when it has one, the nickname its owner gave it —
+    // both tokens, assembled here so the two sentences below each carry ONE `{{radio}}` slot.
+    const named = `${f.model}${f.nickname ? ` "${f.nickname}"` : ''}`
     pushToast(
-      `Applied ${f.model}${f.nickname ? ` "${f.nickname}"` : ''} at ${f.ip} — SmartSDR CAT (slice A, port 5002); native panadapter/DAX ready to enable below. Review + Save, then Test CAT. Second slice? Use port 60001.`,
+      IS_WINDOWS
+        ? t('settings.detect.flex.applied', { radio: named, ip: f.ip })
+        : t('settings.detect.flex.found', { radio: named, ip: f.ip }),
       'success',
     )
   }
@@ -1571,7 +1920,7 @@ export function SettingsPanel({
   const handleTestCat = async () => {
     if (!form) return
     if (!form.mycall.trim()) {
-      setError('Callsign is required.')
+      setError(t('settings.cat.callsignRequired'))
       return
     }
     setCatTesting(true)
@@ -1585,17 +1934,16 @@ export function SettingsPanel({
         // here would save this radio's config and then hand back a green tick earned by the
         // OTHER radio. A false green is worse than no test: it's what hid the CAT-flip bug
         // through a whole review. Say what was actually done instead.
-        const name = form.radios?.find((r) => r.id === editingRadioId)?.name ?? `radio ${editingRadioId}`
-        setCatResult({
-          ok: true,
-          detail: `Saved to ${name}. CAT can only be tested on the radio you're operating — make ${name} active to test it.`,
-        })
+        const name =
+          form.radios?.find((r) => r.id === editingRadioId)?.name ??
+          t('settings.radios.unnamed', { id: editingRadioId })
+        setCatResult({ ok: true, detail: t('settings.cat.savedNotTested', { name }) })
       } else {
         const result = await testCat()
         setCatResult(result)
       }
     } catch {
-      setCatResult({ ok: false, detail: 'Could not run the CAT test.' })
+      setCatResult({ ok: false, detail: t('settings.cat.test.failed') })
     } finally {
       setCatTesting(false)
     }
@@ -1635,7 +1983,7 @@ export function SettingsPanel({
         setCatResult({ ok: false, detail: r.detail })
       }
     } catch {
-      setCatResult({ ok: false, detail: 'Could not run the port auto-test.' })
+      setCatResult({ ok: false, detail: t('settings.cat.autoTest.failed') })
     } finally {
       setCatTesting(false)
     }
@@ -1649,7 +1997,7 @@ export function SettingsPanel({
     // form must not become a named configuration.
     const saved = await getSettings()
     setProfiles(saveProfile(newProfileName, saved))
-    pushToast(`Profile "${newProfileName.trim()}" saved`, 'success')
+    pushToast(t('settings.profiles.saved', { name: newProfileName.trim() }), 'success')
     setNewProfileName('')
   }
   const handleLoadProfile = async () => {
@@ -1667,7 +2015,7 @@ export function SettingsPanel({
     setEditingRadioId(merged.activeRadio)
     await setSettings(merged)
     onSaved?.()
-    pushToast(`Loaded profile "${p.name}"`, 'success')
+    pushToast(t('settings.profiles.loaded', { name: p.name }), 'success')
   }
   const handleDeleteProfile = () => {
     if (!selectedProfile) return
@@ -1680,10 +2028,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setLotwPassword(lotwPw)
       return true
-    }, 'Could not save the LoTW password')
+    }, t('settings.connections.lotw.password.saveFailed'))
     if (ok) {
       setLotwPw('')
-      pushToast('LoTW password saved to the system keychain', 'success')
+      pushToast(t('settings.connections.lotw.password.saved'), 'success')
     }
   }
 
@@ -1691,10 +2039,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearLotwPassword()
       return true
-    }, 'Could not clear the LoTW password')
+    }, t('settings.connections.lotw.password.clearFailed'))
     if (ok) {
       setLotwPw('')
-      pushToast('LoTW password cleared from the keychain', 'success')
+      pushToast(t('settings.connections.lotw.password.cleared'), 'success')
     }
   }
 
@@ -1711,13 +2059,24 @@ export function SettingsPanel({
         mycall: form.mycall.trim().toUpperCase(),
       })
       return downloadLotwReport()
-    }, 'LoTW sync failed')
+    }, t('settings.connections.lotw.sync.failed'))
     setLotwSyncing(false)
     if (r) {
-      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
-      const promoted = r.promoted ? ` · ${r.promoted} upload${r.promoted === 1 ? '' : 's'} now on file` : ''
+      // ONE sentence with its two optional clauses interpolated whole — each clause is its own
+      // catalog entry, so neither is a fragment a translator has to reassemble.
+      const orphans = r.orphans.length
+        ? t('settings.connections.sync.unmatched', { count: r.orphans.length })
+        : ''
+      const promoted = r.promoted
+        ? t('settings.connections.lotw.sync.promoted', { count: r.promoted })
+        : ''
       pushToast(
-        `LoTW: ${r.newlyConfirmed} newly confirmed, ${r.newlyCredited} credited${promoted}${orphans}`,
+        t('settings.connections.lotw.sync.done', {
+          confirmed: r.newlyConfirmed,
+          credited: r.newlyCredited,
+          promoted,
+          unmatched: orphans,
+        }),
         r.orphans.length ? 'info' : 'success',
       )
       onSaved?.()
@@ -1729,11 +2088,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setEqslPassword(eqslPw)
       return true
-    }, 'Could not save the eQSL password')
+    }, t('settings.connections.eqsl.password.saveFailed'))
     if (ok) {
       setEqslPw('')
       updateBool('eqslUpload', true)
-      pushToast('eQSL password saved — auto-upload to eQSL is ON', 'success')
+      pushToast(t('settings.connections.eqsl.password.saved'), 'success')
     }
   }
 
@@ -1741,11 +2100,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearEqslPassword()
       return true
-    }, 'Could not clear the eQSL password')
+    }, t('settings.connections.eqsl.password.clearFailed'))
     if (ok) {
       setEqslPw('')
       updateBool('eqslUpload', false)
-      pushToast('eQSL password cleared — auto-upload to eQSL is off', 'success')
+      pushToast(t('settings.connections.eqsl.password.cleared'), 'success')
     }
   }
 
@@ -1761,14 +2120,19 @@ export function SettingsPanel({
         mycall: form.mycall.trim().toUpperCase(),
       })
       return downloadEqslReport()
-    }, 'eQSL sync failed')
+    }, t('settings.connections.eqsl.sync.failed'))
     setEqslSyncing(false)
     if (r) {
-      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      const orphans = r.orphans.length
+        ? t('settings.connections.sync.unmatched', { count: r.orphans.length })
+        : ''
       // eQSL is non-award-grade, so report newlyConfirmedAny (newlyConfirmed is
       // award-only and always 0 for eQSL).
       pushToast(
-        `eQSL: ${r.newlyConfirmedAny} newly confirmed (not DXCC/WAS credit)${orphans}`,
+        t('settings.connections.eqsl.sync.done', {
+          confirmed: r.newlyConfirmedAny,
+          unmatched: orphans,
+        }),
         r.orphans.length ? 'info' : 'success',
       )
       onSaved?.()
@@ -1780,10 +2144,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setQrzPassword(qrzPw)
       return true
-    }, 'Could not save the QRZ password')
+    }, t('settings.connections.qrz.password.saveFailed'))
     if (ok) {
       setQrzPw('')
-      pushToast('QRZ password saved to the system keychain', 'success')
+      pushToast(t('settings.connections.qrz.password.saved'), 'success')
     }
   }
 
@@ -1791,10 +2155,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearQrzPassword()
       return true
-    }, 'Could not clear the QRZ password')
+    }, t('settings.connections.qrz.password.clearFailed'))
     if (ok) {
       setQrzPw('')
-      pushToast('QRZ password cleared from the keychain', 'success')
+      pushToast(t('settings.connections.qrz.password.cleared'), 'success')
     }
   }
 
@@ -1803,10 +2167,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setHamqthPassword(hamqthPw)
       return true
-    }, 'Could not save the HamQTH password')
+    }, t('settings.connections.hamqth.password.saveFailed'))
     if (ok) {
       setHamqthPw('')
-      pushToast('HamQTH password saved to the system keychain', 'success')
+      pushToast(t('settings.connections.hamqth.password.saved'), 'success')
     }
   }
 
@@ -1814,10 +2178,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearHamqthPassword()
       return true
-    }, 'Could not clear the HamQTH password')
+    }, t('settings.connections.hamqth.password.clearFailed'))
     if (ok) {
       setHamqthPw('')
-      pushToast('HamQTH password cleared from the keychain', 'success')
+      pushToast(t('settings.connections.hamqth.password.cleared'), 'success')
     }
   }
 
@@ -1826,11 +2190,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setQrzLogbookKey(qrzKey)
       return true
-    }, 'Could not save the QRZ Logbook key')
+    }, t('settings.connections.qrz.key.saveFailed'))
     if (ok) {
       setQrzKey('')
       updateBool('qrzLogbookUpload', true)
-      pushToast('QRZ Logbook key saved — auto-upload to QRZ is ON', 'success')
+      pushToast(t('settings.connections.qrz.key.saved'), 'success')
     }
   }
 
@@ -1838,11 +2202,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearQrzLogbookKey()
       return true
-    }, 'Could not clear the QRZ Logbook key')
+    }, t('settings.connections.qrz.key.clearFailed'))
     if (ok) {
       setQrzKey('')
       updateBool('qrzLogbookUpload', false)
-      pushToast('QRZ Logbook key cleared — auto-upload to QRZ is off', 'success')
+      pushToast(t('settings.connections.qrz.key.cleared'), 'success')
     }
   }
 
@@ -1850,14 +2214,21 @@ export function SettingsPanel({
     setQrzSyncing(true)
     // Two-way pull: FETCH the online QRZ logbook and merge it in (new QSOs +
     // confirmations). Uses the saved Logbook API key, so no form save is needed.
-    const r = await withErrorToast(syncQrz, 'QRZ sync failed')
+    const r = await withErrorToast(syncQrz, t('settings.connections.qrz.sync.failed'))
     setQrzSyncing(false)
     if (r) {
       const added = r.added ?? 0
-      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      const orphans = r.orphans.length
+        ? t('settings.connections.sync.unmatched', { count: r.orphans.length })
+        : ''
       // QRZ-native confirmations are non-award-grade, so report newlyConfirmedAny.
+      // `count` is the added QSOs — it picks the plural form as well as filling the slot.
       pushToast(
-        `QRZ: ${added} new QSO${added === 1 ? '' : 's'}, ${r.newlyConfirmedAny} newly confirmed${orphans}`,
+        t('settings.connections.qrz.sync.done', {
+          count: added,
+          confirmed: r.newlyConfirmedAny,
+          unmatched: orphans,
+        }),
         'success',
       )
       onSaved?.()
@@ -1869,11 +2240,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setClublogPassword(clublogPw)
       return true
-    }, 'Could not save the ClubLog password')
+    }, t('settings.connections.clublog.password.saveFailed'))
     if (ok) {
       setClublogPw('')
       updateBool('clublogUpload', true)
-      pushToast('ClubLog app-password saved — auto-upload to ClubLog is ON', 'success')
+      pushToast(t('settings.connections.clublog.password.saved'), 'success')
     }
   }
 
@@ -1881,11 +2252,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearClublogPassword()
       return true
-    }, 'Could not clear the ClubLog password')
+    }, t('settings.connections.clublog.password.clearFailed'))
     if (ok) {
       setClublogPw('')
       updateBool('clublogUpload', false)
-      pushToast('ClubLog password cleared — auto-upload to ClubLog is off', 'success')
+      pushToast(t('settings.connections.clublog.password.cleared'), 'success')
     }
   }
 
@@ -1894,11 +2265,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setHrdlogCode(hrdlogCode)
       return true
-    }, 'Could not save the HRDLog.net upload code')
+    }, t('settings.connections.hrdlog.code.saveFailed'))
     if (ok) {
       setHrdlogCodeField('')
       updateBool('hrdlogUpload', true)
-      pushToast('HRDLog.net code saved — auto-upload to HRDLog.net is ON', 'success')
+      pushToast(t('settings.connections.hrdlog.code.saved'), 'success')
     }
   }
 
@@ -1906,11 +2277,11 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearHrdlogCode()
       return true
-    }, 'Could not clear the HRDLog.net upload code')
+    }, t('settings.connections.hrdlog.code.clearFailed'))
     if (ok) {
       setHrdlogCodeField('')
       updateBool('hrdlogUpload', false)
-      pushToast('HRDLog.net code cleared — auto-upload to HRDLog.net is off', 'success')
+      pushToast(t('settings.connections.hrdlog.code.cleared'), 'success')
     }
   }
 
@@ -1919,10 +2290,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setRepeaterbookToken(rbToken)
       return true
-    }, 'Could not save the RepeaterBook token')
+    }, t('settings.connections.repeaterbook.token.saveFailed'))
     if (ok) {
       setRbTokenField('')
-      pushToast('RepeaterBook token saved — the Program section now uses RepeaterBook', 'success')
+      pushToast(t('settings.connections.repeaterbook.token.saved'), 'success')
     }
   }
 
@@ -1930,10 +2301,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setRepeaterbookToken('')
       return true
-    }, 'Could not clear the RepeaterBook token')
+    }, t('settings.connections.repeaterbook.token.clearFailed'))
     if (ok) {
       setRbTokenField('')
-      pushToast('RepeaterBook token cleared — the Program section falls back to hearham.com', 'success')
+      pushToast(t('settings.connections.repeaterbook.token.cleared'), 'success')
     }
   }
 
@@ -1942,10 +2313,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await setCloudlogKey(cloudlogKey)
       return true
-    }, 'Could not save the Cloudlog API key')
+    }, t('settings.connections.cloudlog.key.saveFailed'))
     if (ok) {
       setCloudlogKeyField('')
-      pushToast('Cloudlog API key saved to the keychain', 'success')
+      pushToast(t('settings.connections.cloudlog.key.saved'), 'success')
     }
   }
 
@@ -1953,10 +2324,10 @@ export function SettingsPanel({
     const ok = await withErrorToast(async () => {
       await clearCloudlogKey()
       return true
-    }, 'Could not clear the Cloudlog API key')
+    }, t('settings.connections.cloudlog.key.clearFailed'))
     if (ok) {
       setCloudlogKeyField('')
-      pushToast('Cloudlog API key cleared from the keychain', 'success')
+      pushToast(t('settings.connections.cloudlog.key.cleared'), 'success')
     }
   }
 
@@ -1967,7 +2338,7 @@ export function SettingsPanel({
       // Don't dead-end on another tab: route the operator to where the fix is instead of a
       // silently-greyed Save button with a context-free "required" error.
       setTab('station')
-      setError('Enter your callsign on the Station tab before saving.')
+      setError(t('settings.save.callsignFirst'))
       return
     }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
@@ -1980,7 +2351,7 @@ export function SettingsPanel({
     if (blocks(rigProblems)) {
       setTab('radio')
       setError(
-        rigProblems.find((c) => c.level === 'error')?.message ?? 'Check the radio settings.',
+        rigProblems.find((c) => c.level === 'error')?.message ?? t('settings.save.checkRadio'),
       )
       return
     }
@@ -1999,7 +2370,7 @@ export function SettingsPanel({
       // Surface the backend's actual message (Tauri rejects with the Err string) — e.g. the
       // dual-radio port-collision rejection tells the operator exactly which ports clash.
       const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : ''
-      setError(msg || 'Could not save settings.')
+      setError(msg || t('settings.save.failed'))
     }
   }
 
@@ -2007,9 +2378,9 @@ export function SettingsPanel({
     return (
       <section className="panel settings-panel">
         <div className="panel-header">
-          <h2>Settings</h2>
+          <h2>{t('settings.panel.title')}</h2>
         </div>
-        <p className="empty">Loading settings…</p>
+        <p className="empty">{t('settings.panel.loading')}</p>
       </section>
     )
   }
@@ -2017,13 +2388,16 @@ export function SettingsPanel({
   // One feature row. Core features are always on and can't be switched, so they
   // show a static "always on" badge instead of a toggle — a locked switch next to
   // the real, toggleable settings just reads as broken.
+  //
+  // ⚠️ `f.label` and `f.oneLine` are the REGISTRY's words (`features/registry.ts`), rendered
+  // and interpolated as values. They move with that registry, not with this panel.
   const featureRow = (f: FeatureDef) => {
     if (f.core) {
       return (
         <div className="settings-field" key={f.id}>
           <div className="settings-toggle">
             <span className="settings-label">{f.label}</span>
-            <span className="feature-always-on">always on</span>
+            <span className="feature-always-on">{t('settings.features.alwaysOn')}</span>
           </div>
           <span className="settings-hint">{f.oneLine}</span>
         </div>
@@ -2041,14 +2415,21 @@ export function SettingsPanel({
             aria-checked={on}
             className={`toggle${on ? ' on' : ''}`}
             onClick={() => features.toggle(f.id)}
-            aria-label={`${on ? 'Disable' : 'Enable'} ${f.label}`}
+            aria-label={
+              on
+                ? t('settings.features.toggle.aria.disable', { feature: f.label })
+                : t('settings.features.toggle.aria.enable', { feature: f.label })
+            }
           >
             <span className="toggle-knob" />
           </button>
         </label>
         <span className="settings-hint">
           {f.oneLine}
-          {depOff && ` Turning on also enables ${featureById(depOff as FeatureId)?.label ?? depOff}.`}
+          {depOff &&
+            ` ${t('settings.features.dependsOn', {
+              feature: featureById(depOff as FeatureId)?.label ?? depOff,
+            })}`}
         </span>
       </div>
     )
@@ -2116,7 +2497,7 @@ export function SettingsPanel({
   const audioLabel = (name: string, kind: 'input' | 'output') =>
     audio[kind].includes(name)
       ? (audioLabels[kind][name] ?? name)
-      : `${name} — saved, not in the list`
+      : t('settings.audio.device.notInList', { device: name })
 
   // Frequencies tab: last-wins override lookup for the stock table, plus
   // duplicate band+mode keys (flagged in the editor — the last row wins).
@@ -2131,6 +2512,9 @@ export function SettingsPanel({
 
   // Field Day section validity: a non-empty value that isn't a known ARRL/RAC
   // section is flagged inline so it never silently reaches the Cabrillo log.
+  // Why native CI-V cannot be offered for THIS radio, or null when it can. Derived rather than
+  // inlined so the control and its explanation can never disagree about the condition.
+  const civBlocked = nativeCivBlockedReason(form.rigModel, form.rigConn)
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
 
@@ -2138,46 +2522,49 @@ export function SettingsPanel({
     <SettingsOpenTarget.Provider value={openTarget}>
     <section className="panel settings-panel">
       <div className="panel-header">
-        <h2>Settings</h2>
-        <span className="settings-sub">operator, rig &amp; network</span>
+        <h2>{t('settings.panel.title')}</h2>
+        <span className="settings-sub">{t('settings.panel.subtitle')}</span>
         {/* Search sits in the HEADER, above the rail, because it is the way in that does not
             require guessing which tab something is under — which is the whole failure it exists
             to answer. Picking a result reuses the same deep-link machinery a pointer elsewhere
             in the app uses: it opens the tab, scrolls the section in and expands it if it is a
             collapsed disclosure. */}
         <SettingsSearch onPick={(sectionId) => {
-          const t = resolveTarget(sectionId)
-          if (!t) return
-          setTab(t.tab)
-          setOpenTarget(t.section ?? null)
+          // `target`, not `t` — `t` is the catalog lookup, and shadowing it here would make
+          // the next translated string added inside this callback silently uncallable.
+          const target = resolveTarget(sectionId)
+          if (!target) return
+          setTab(target.tab)
+          setOpenTarget(target.section ?? null)
         }} />
-        <span className="settings-build" title="This install's build stamp — confirm a fresh install actually took">
-          build {__BUILD_ID__}
+        <span className="settings-build" title={t('settings.panel.build.title')}>
+          {t('settings.panel.build', { id: __BUILD_ID__ })}
         </span>
         <button
           type="button"
           className="settings-update-btn"
           onClick={() => void checkForUpdateManual()}
-          title="Check for a newer Nexus release"
+          title={t('settings.panel.update.title')}
         >
-          Check for updates
+          {t('settings.panel.update.label')}
         </button>
       </div>
 
       <form className="settings-form" onSubmit={handleSubmit}>
-        <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+        <div className="settings-tabs" role="tablist" aria-label={t('settings.panel.tabs.aria')}>
           {/* Contesting is always visible now (0.17.0 decision) — capability, not config, gates
-              tabs; the Field Day master switch lives inside the Contesting tab. */}
-          {SETTINGS_TABS.map((t) => (
+              tabs; the Field Day master switch lives inside the Contesting tab.
+              The loop variable is `tb`, not `t`: `t` is the catalog lookup this file calls. */}
+          {SETTINGS_TABS.map((tb) => (
             <button
-              key={t.id}
+              key={tb.id}
               type="button"
               role="tab"
-              aria-selected={tab === t.id}
-              className={`settings-tab${tab === t.id ? ' active' : ''}`}
-              onClick={() => setTab(t.id)}
+              aria-selected={tab === tb.id}
+              className={`settings-tab${tab === tb.id ? ' active' : ''}`}
+              onClick={() => setTab(tb.id)}
             >
-              {t.label}
+              {tb.labelKey ? t(tb.labelKey) : tb.label}
             </button>
           ))}
         </div>
@@ -2185,30 +2572,55 @@ export function SettingsPanel({
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-workspace">
-            <legend>Workspace</legend>
+            <legend>{t('settings.workspace.legend')}</legend>
             <div className="settings-grid">
+              {/* LANGUAGE. Rendered only when a second catalog is actually installed — a picker
+                  offering one language is a control that cannot do anything, and this app's
+                  premise is that a setting exists because it changes something. It appears the
+                  day a translation ships and not before. The native name is what a picker shows
+                  (an operator looking for German is looking for "Deutsch"), with the tag beside
+                  it for the ones that share a word. */}
+              {languages.length > 1 && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.workspace.language.label')}</span>
+                  <select
+                    className="settings-input"
+                    value={locale}
+                    onChange={(e) => setLocale(e.target.value)}
+                    aria-label={t('settings.workspace.language.label')}
+                  >
+                    {languages.map((l) => (
+                      <option key={l} value={l}>
+                        {LOCALE_NATIVE_NAME[l] ?? l}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="settings-hint">{t('settings.workspace.language.hint')}</span>
+                </div>
+              )}
               {/* Theme lives HERE now, not the top bar (operator, 2026-08-10): Light/Dark
                   is a set-once preference, and the bar keeps only the Field quick toggle. */}
               {theme && onThemeChange && (
                 <div className="settings-field">
-                  <span className="settings-label">Theme</span>
+                  <span className="settings-label">{t('settings.workspace.theme.label')}</span>
                   <ThemeSwitcher theme={theme} onChange={onThemeChange} />
-                  <span className="settings-hint">
-                    Light reads best outdoors in daylight; the top bar&rsquo;s Field chip
-                    boosts contrast and size in whichever theme you use.
-                  </span>
+                  <span className="settings-hint">{t('settings.workspace.theme.hint')}</span>
                 </div>
               )}
               <div className="settings-field">
-                <span className="settings-label">UI scale</span>
-                <div className="theme-switcher" role="group" aria-label="UI scale mode">
+                <span className="settings-label">{t('settings.workspace.scale.label')}</span>
+                <div
+                  className="theme-switcher"
+                  role="group"
+                  aria-label={t('settings.workspace.scale.mode.aria')}
+                >
                   <button
                     type="button"
                     className={`theme-chip${scaleMode === 'auto' ? ' active' : ''}`}
                     aria-pressed={scaleMode === 'auto'}
                     onClick={() => onScaleModeChange('auto')}
                   >
-                    Auto (fit)
+                    {t('settings.workspace.scale.auto')}
                   </button>
                   <button
                     type="button"
@@ -2216,13 +2628,19 @@ export function SettingsPanel({
                     aria-pressed={scaleMode !== 'auto'}
                     onClick={() => onScaleModeChange(scale)}
                   >
-                    Manual
+                    {t('settings.workspace.scale.manual')}
                   </button>
                 </div>
                 {scaleMode === 'auto' ? (
                   <>
-                    <span className="settings-hint">Max scale (auto won&apos;t exceed)</span>
-                    <div className="theme-switcher" role="group" aria-label="Maximum UI scale">
+                    <span className="settings-hint">
+                      {t('settings.workspace.scale.cap.label')}
+                    </span>
+                    <div
+                      className="theme-switcher"
+                      role="group"
+                      aria-label={t('settings.workspace.scale.cap.aria')}
+                    >
                       {SCALE_STEPS.filter((s) => s >= 100).map((s) => {
                         // Disable chips this window can't reach: Auto never upscales
                         // past the fit, so every chip > autoCeil yields the SAME scale
@@ -2238,7 +2656,10 @@ export function SettingsPanel({
                             disabled={unreachable}
                             title={
                               unreachable
-                                ? `This window only fits up to ${autoCeil}% — a larger window or monitor unlocks ${s}%.`
+                                ? t('settings.workspace.scale.cap.unreachable', {
+                                    fits: autoCeil,
+                                    wanted: s,
+                                  })
                                 : undefined
                             }
                             onClick={() => onScaleCapChange(s)}
@@ -2248,18 +2669,30 @@ export function SettingsPanel({
                         )
                       })}
                     </div>
+                    {/* Three WHOLE messages, not one opening plus a tail: the second sentence
+                        is a different answer in each case, and a sentence assembled from two
+                        keys cannot be reordered by a translator who needs to. */}
                     <span className="settings-hint">
-                      Fits the whole interface to the window so nothing is cut off (currently {scale}%).
                       {autoCeil < 100
-                        ? ` This window maxes out at ${autoCeil}% — raising the cap can't help until you enlarge the window, or switch to Manual to force a bigger scale.`
+                        ? t('settings.workspace.scale.auto.hint.tooSmall', {
+                            scale,
+                            fits: autoCeil,
+                          })
                         : autoCeil < MAX_STEP
-                          ? ` This window fits up to ${autoCeil}%; bigger caps need a larger window or monitor. The waterfall stays sharp.`
-                          : ' The waterfall stays sharp. Raise the max for big monitors.'}
+                          ? t('settings.workspace.scale.auto.hint.limited', {
+                              scale,
+                              fits: autoCeil,
+                            })
+                          : t('settings.workspace.scale.auto.hint.full', { scale })}
                     </span>
                   </>
                 ) : (
                   <>
-                    <div className="theme-switcher" role="group" aria-label="UI scale">
+                    <div
+                      className="theme-switcher"
+                      role="group"
+                      aria-label={t('settings.workspace.scale.aria')}
+                    >
                       {SCALE_STEPS.map((s) => (
                         <button
                           key={s}
@@ -2273,22 +2706,26 @@ export function SettingsPanel({
                       ))}
                     </div>
                     <span className="settings-hint">
-                      Fixed scale. Switch to Auto to fit the interface to the window automatically.
+                      {t('settings.workspace.scale.manual.hint')}
                     </span>
                   </>
                 )}
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Density</span>
-                <div className="theme-switcher" role="group" aria-label="Information density">
+                <span className="settings-label">{t('settings.workspace.density.label')}</span>
+                <div
+                  className="theme-switcher"
+                  role="group"
+                  aria-label={t('settings.workspace.density.aria')}
+                >
                   <button
                     type="button"
                     className={`theme-chip${density !== 'dense' ? ' active' : ''}`}
                     aria-pressed={density !== 'dense'}
                     onClick={() => onDensityChange('standard')}
                   >
-                    Comfortable
+                    {t('settings.workspace.density.standard')}
                   </button>
                   <button
                     type="button"
@@ -2296,20 +2733,18 @@ export function SettingsPanel({
                     aria-pressed={density === 'dense'}
                     onClick={() => onDensityChange('dense')}
                   >
-                    Compact
+                    {t('settings.workspace.density.dense')}
                   </button>
                 </div>
-                <span className="settings-hint">
-                  How tightly rows and controls pack. Compact fits more on screen.
-                </span>
+                <span className="settings-hint">{t('settings.workspace.density.hint')}</span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Pane sizes</span>
+                <span className="settings-label">{t('settings.workspace.panes.label')}</span>
                 <button type="button" className="settings-refresh" onClick={onResetLayout}>
-                  Reset pane sizes
+                  {t('settings.workspace.panes.reset')}
                 </button>
-                <span className="settings-hint">Restore the default left/right pane widths.</span>
+                <span className="settings-hint">{t('settings.workspace.panes.hint')}</span>
               </div>
             </div>
           </fieldset>
@@ -2318,10 +2753,14 @@ export function SettingsPanel({
           {/* ---- Features (modular toggles + goal profiles) ---- */}
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-features">
-            <legend>Features</legend>
+            <legend>{t('settings.features.legend')}</legend>
             <div className="settings-field">
-              <span className="settings-label">Profile</span>
-              <div className="theme-switcher settings-profiles" role="group" aria-label="Feature profile">
+              <span className="settings-label">{t('settings.features.profile.label')}</span>
+              <div
+                className="theme-switcher settings-profiles"
+                role="group"
+                aria-label={t('settings.features.profile.aria')}
+              >
                 {PROFILE_LIST.map((p) => (
                   <button
                     key={p.id}
@@ -2335,9 +2774,12 @@ export function SettingsPanel({
                         if (
                           features.profile !== 'custom' ||
                           (await confirmDialog({
-                            title: `Switch to “${p.label}”?`,
-                            body: 'This replaces your custom feature set.',
-                            confirmLabel: 'Switch',
+                            // `p.label` is the profiles registry's word, interpolated as a value.
+                            title: t('settings.features.profile.confirm.title', {
+                              profile: p.label,
+                            }),
+                            body: t('settings.features.profile.confirm.body'),
+                            confirmLabel: t('settings.features.profile.confirm.action'),
                             danger: true,
                           }))
                         ) {
@@ -2350,20 +2792,24 @@ export function SettingsPanel({
                   </button>
                 ))}
                 {features.profile === 'custom' && (
-                  <span className="theme-chip active" aria-disabled="true" title="Custom — a blended feature set (manual toggles or multiple goals)">
-                    Custom
+                  <span
+                    className="theme-chip active"
+                    aria-disabled="true"
+                    title={t('settings.features.profile.custom.title')}
+                  >
+                    {t('settings.features.profile.custom.label')}
                   </span>
                 )}
               </div>
               <span className="settings-hint">
                 {features.profile === 'custom'
-                  ? 'Custom — a blended feature set. Pick a single goal above to reset to its defaults.'
-                  : 'Pick a goal to set sensible defaults — every feature stays toggleable below. Switching profiles re-applies its set.'}
+                  ? t('settings.features.profile.hint.custom')
+                  : t('settings.features.profile.hint.preset')}
                 {onRerunWizard && (
                   <>
                     {' '}
                     <button type="button" className="settings-linkbtn" onClick={onRerunWizard}>
-                      Re-run setup…
+                      {t('settings.features.rerunWizard')}
                     </button>
                   </>
                 )}
@@ -2372,7 +2818,7 @@ export function SettingsPanel({
 
             {/* Core spine first, as a locked group (spec §4.4). */}
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Core — always on</span>
+              <span className="settings-featgroup-title">{t('settings.features.core.title')}</span>
               <div className="settings-grid">{FEATURES.filter((f) => f.core).map(featureRow)}</div>
             </div>
 
@@ -2386,12 +2832,18 @@ export function SettingsPanel({
               if (inCat.length === 0 && !isContesting) return null
               return (
                 <div className="settings-featgroup" key={cat}>
-                  <span className="settings-featgroup-title">{cat}</span>
+                  {/* ⚠️ The category is the REGISTRY's own vocabulary (`FeatureCategory` in
+                      `features/registry.ts`). The union value is the group KEY; the word on
+                      screen resolves through the registry, beside every feature label. */}
+                  <span className="settings-featgroup-title">{featureCategoryLabel(cat)}</span>
                   <div className="settings-grid">
                     {isContesting && (
                       <div className="settings-field">
                         <label className="settings-toggle">
-                          <span className="settings-label">Field Day mode</span>
+                          {/* One master switch offered in two places — the label and its two
+                              accessible names are shared with Settings ▸ Contesting, so both
+                              read the same entries. Only the hint differs. */}
+                          <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
                           <button
                             type="button"
                             role="switch"
@@ -2405,16 +2857,17 @@ export function SettingsPanel({
                               // Field Day until both are set.
                               if (next && (!form.fdClass.trim() || !form.fdSection.trim())) setTab('contesting')
                             }}
-                            aria-label={`${form.fdActive ? 'Disable' : 'Enable'} Field Day mode`}
+                            aria-label={
+                              form.fdActive
+                                ? t('settings.fieldDay.mode.aria.disable')
+                                : t('settings.fieldDay.mode.aria.enable')
+                            }
                           >
                             <span className="toggle-knob" />
                           </button>
                         </label>
                         <span className="settings-hint">
-                          Turn on for Field Day weekend — reveals the Field Day workspace, the
-                          Class/Section exchange across all modes, and the setup tab. Off the rest of
-                          the year (nothing shows). Stays on across restarts until you turn it off;
-                          Save settings to apply.
+                          {t('settings.features.fieldDay.hint')}
                         </span>
                       </div>
                     )}
@@ -2428,62 +2881,13 @@ export function SettingsPanel({
 
           {/* ---- Operator & radio ---- */}
           {tab === 'station' && (
-          <fieldset className="settings-section" id="settings-operator-radio">
-            <legend>Operator &amp; Radio</legend>
-            <div className="settings-grid">
-              {BASIC_FIELDS.map((f) => {
-                const value = form[f.key]
-                const invalid = f.key === 'mycall' && !String(value).trim()
-                return (
-                  <label className="settings-field" key={f.key}>
-                    <span className="settings-label">{f.label}</span>
-                    <input
-                      className={`settings-input${invalid && error ? ' invalid' : ''}`}
-                      type={f.type}
-                      value={String(value)}
-                      placeholder={f.placeholder}
-                      onChange={(e) => update(f.key, e.target.value)}
-                      aria-invalid={invalid && !!error}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                    {f.hint && <span className="settings-hint">{f.hint}</span>}
-                  </label>
-                )
-              })}
-              <label className="settings-field">
-                <span className="settings-label">License Class</span>
-                <select
-                  className="settings-input"
-                  value={String(form.licenseClass ?? 'open')}
-                  onChange={(e) => update('licenseClass', e.target.value)}
-                >
-                  <option value="technician">Technician (US)</option>
-                  <option value="general">General (US)</option>
-                  <option value="extra">Amateur Extra (US)</option>
-                  <option value="open">Open — no transmit limits</option>
-                </select>
-                <span className="settings-hint">
-                  Sets your transmit privileges + the licensed-segment band dropdown. Open = no
-                  limits (outside the US).
-                </span>
-              </label>
-            </div>
-            <div className="settings-freq">
-              <span className="settings-label">Band &amp; Frequency</span>
-              <FrequencyControl
-                channels={bandPlan}
-                dialMhz={form.dialMhz}
-                band={form.band}
-                mode={form.sideband}
-                variant="full"
-                onSet={setFreq}
-              />
-              <span className="settings-hint">
-                Pick a band-plan channel, or type a dial frequency in MHz.
-              </span>
-            </div>
-          </fieldset>
+          <SettingsStation
+            form={form}
+            error={error}
+            bandPlan={bandPlan}
+            onUpdate={update}
+            onSetFreq={setFreq}
+          />
           )}
 
           {/* ---- Rig control ---- */}
@@ -2516,14 +2920,18 @@ export function SettingsPanel({
               affordance a single-radio operator sees; the per-radio list + band coverage only
               matter once there's a 2nd radio. */}
           <fieldset className="settings-section" id="settings-radios">
-            <legend>Radios</legend>
+            <legend>{t('settings.radios.legend')}</legend>
             {editingRadioId != null && editingRadioId !== form.activeRadio && (
               <p className="settings-note radio-editing-note">
-                <strong>
-                  Editing {form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'another radio'}
-                </strong>{' '}
-                — not your operating radio. <strong>Save</strong> writes only this radio&apos;s CAT /
-                audio config; your active radio and station-wide settings are untouched.
+                <T
+                  k="settings.radios.editingNote"
+                  tags={{ b: <strong /> }}
+                  vals={{
+                    name:
+                      form.radios?.find((r) => r.id === editingRadioId)?.name ??
+                      t('settings.radios.anotherRadio'),
+                  }}
+                />
               </p>
             )}
             <div className="radios-manager">
@@ -2541,7 +2949,7 @@ export function SettingsPanel({
                         className="settings-input radio-name-input"
                         type="text"
                         defaultValue={r.name}
-                        placeholder="Radio name"
+                        placeholder={t('settings.radios.name.placeholder')}
                         onBlur={(e) => {
                           const v = e.target.value.trim()
                           if (v && v !== r.name) handleRenameRadio(r.id, v)
@@ -2550,16 +2958,19 @@ export function SettingsPanel({
                         spellCheck={false}
                       />
                       {isActive && (
-                        <span className="radio-active-badge" title="Your operating radio.">
-                          Active
+                        <span
+                          className="radio-active-badge"
+                          title={t('settings.radios.active.title')}
+                        >
+                          {t('settings.radios.active.badge')}
                         </span>
                       )}
                       {isEditing && !isActive && (
                         <span
                           className="radio-editing-badge"
-                          title="The Rig / CAT + Audio form below is editing this radio."
+                          title={t('settings.radios.editing.title')}
                         >
-                          Editing
+                          {t('settings.radios.editing.badge')}
                         </span>
                       )}
                       {!isEditing && (
@@ -2567,9 +2978,9 @@ export function SettingsPanel({
                           type="button"
                           className="settings-refresh"
                           onClick={() => handleConfigureRadio(r.id)}
-                          title="Edit this radio's CAT / audio below — WITHOUT changing your operating radio (no swap, no dropped carrier)."
+                          title={t('settings.radios.edit.title')}
                         >
-                          Edit
+                          {t('settings.radios.edit.action')}
                         </button>
                       )}
                       {!isActive && (
@@ -2577,37 +2988,68 @@ export function SettingsPanel({
                           type="button"
                           className="settings-refresh"
                           onClick={() => handleMakeActive(r.id)}
-                          title="Make this your operating radio (swaps rigs; drops any carrier first)."
+                          title={t('settings.radios.makeActive.title')}
                         >
-                          Make active
+                          {t('settings.radios.makeActive.action')}
                         </button>
                       )}
-                      {multi && !isActive && (
+                      {multi && (
+                        // Rendered DISABLED on the active card, never absent: a missing button
+                        // reads as a bug ("the 9700 won't delete" — Mac field report,
+                        // 2026-08-17), a disabled one with a title teaches the rule.
                         <button
                           type="button"
                           className="settings-refresh danger"
                           onClick={() => handleRemoveRadio(r.id)}
-                          title="Remove this radio from the roster"
+                          disabled={isActive}
+                          title={
+                            isActive
+                              ? t('settings.radios.remove.title.blocked')
+                              : t('settings.radios.remove.title')
+                          }
                         >
-                          Remove
+                          {t('settings.radios.remove.action')}
                         </button>
                       )}
                     </div>
+                    {/* ⚠️ THREE ADDRESSES, ALL UNLABELLED (2026-08-17 Flex audit, wave-1 #57). A
+                        network Flex has a CAT address (the PC running SmartSDR CAT), a radio
+                        address (the rig's own :4992, for the native panadapter/DAX) and the local
+                        CAT-helper port — and this row printed two of them as bare numbers with
+                        nothing saying which was which. Naming them costs one word each; the row
+                        keeps its shape, so no pane sizing is involved. */}
+                    {/* ONE sentence, four holes. Every value in it is a TOKEN — a Hamlib
+                        model name, OmniRig's own slot name, a COM port or host:port, the OS's
+                        sound-device name, a TCP port — and only the labels between them are
+                        prose, which is why they cannot be four separate fragments. */}
                     <div className="radio-card-meta">
-                      {r.rigModelName && r.rigModelName !== 'None / VOX'
-                        ? r.rigModelName
-                        : 'No rig model set'}
-                      {' · '}
-                      {r.rigConn === 'network' ? r.rigAddr || 'no address' : r.serialPort || 'no COM port'}
-                      {' · audio '}
-                      {r.audioIn ? (audioLabels.input[r.audioIn] ?? r.audioIn) : 'default'}
-                      {' · rigctld :'}
-                      {r.rigctldPort}
+                      {t('settings.radios.card.meta', {
+                        rig:
+                          r.rigConn === 'omnirig'
+                            ? t('settings.radios.card.omnirig')
+                            : r.rigModelName && r.rigModelName !== 'None / VOX'
+                              ? r.rigModelName
+                              : t('settings.radios.card.noModel'),
+                        cat:
+                          r.rigConn === 'omnirig'
+                            ? `OmniRig ${OMNIRIG_SLOTS[r.omnirigSlot === 2 ? 2 : 1]}`
+                            : r.rigConn === 'network'
+                              ? r.rigAddr || t('settings.radios.card.noAddress')
+                              : r.serialPort || t('settings.radios.card.noPort'),
+                        flex:
+                          (r.flexRadioIp ?? '').trim() !== ''
+                            ? t('settings.radios.card.meta.flex', { ip: r.flexRadioIp ?? '' })
+                            : '',
+                        audio: r.audioIn
+                          ? (audioLabels.input[r.audioIn] ?? r.audioIn)
+                          : t('settings.radios.card.audioDefault'),
+                        port: r.rigctldPort,
+                      })}
                     </div>
                     {multi && (
                       <div className="radio-band-coverage">
                         <span className="settings-hint">
-                          Covers bands (for auto band-routing; none = covers all):
+                          {t('settings.radios.bands.hint')}
                         </span>
                         <div className="band-chip-row">
                           {FREQ_BANDS.map((b) => {
@@ -2633,29 +3075,25 @@ export function SettingsPanel({
             </div>
             <div className="radios-actions">
               <button type="button" className="settings-refresh" onClick={handleAddRadio}>
-                + Add radio
+                {t('settings.radios.add.action')}
               </button>
               <span className="settings-hint">
                 {(form.radios?.length ?? 1) > 1
-                  ? `The Rig / CAT + Audio settings below edit “${
-                      form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'the selected radio'
-                    }”. Each radio has its OWN CAT + audio — click “Edit” on any radio to configure it WITHOUT changing the one you're operating on; “Make active” swaps your operating radio.`
-                  : 'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.'}
+                  ? t('settings.radios.hint.multi', {
+                      name:
+                        form.radios?.find((r) => r.id === editingRadioId)?.name ??
+                        t('settings.radios.selectedRadio'),
+                    })
+                  : t('settings.radios.hint.single')}
               </span>
             </div>
             {(form.radios?.length ?? 1) > 1 && (
               <div className="routing-rules">
                 <span className="settings-hint">
-                  <strong>Route by band AND mode</strong> — band coverage above sends a whole band to
-                  one radio. Add rules here when TWO radios share a band and the MODE decides which
-                  one: 2 m FT8 to the digital rig, 2 m FM and APRS to the FM rig. Rules are checked
-                  top to bottom and the FIRST match wins; anything no rule matches falls back to band
-                  coverage, then to the default radio.
+                  <T k="settings.routing.intro" tags={{ b: <strong /> }} />
                 </span>
                 {(form.routingRules ?? []).length === 0 && (
-                  <p className="settings-note">
-                    No rules — routing is by band only (today&apos;s behavior).
-                  </p>
+                  <p className="settings-note">{t('settings.routing.empty')}</p>
                 )}
                 {(form.routingRules ?? []).map((rule, i) => (
                   <div className="routing-rule" key={i}>
@@ -2680,19 +3118,16 @@ export function SettingsPanel({
                                 },
                           )
                         }
-                        aria-label={`Rule ${i + 1} mode`}
+                        aria-label={t('settings.routing.rule.mode.aria', { n: i + 1 })}
                       >
-                        <option value="">Any mode</option>
+                        <option value="">{t('settings.routing.rule.mode.any')}</option>
                         {ROUTE_MODES.map(([v, label]) => (
                           <option key={v} value={v}>
                             {label}
                           </option>
                         ))}
-                        <option
-                          value="satellite"
-                          title="Satellite passes only: picking a transponder checks Satellite rules before the mode rules, so the FM & APRS rule can keep terrestrial packet while satellites go to the sat rig. Terrestrial tunes never match this rule."
-                        >
-                          Satellite
+                        <option value="satellite" title={t('settings.routing.rule.satellite.title')}>
+                          {t('settings.routing.rule.satellite')}
                         </option>
                       </select>
                       <span className="routing-rule-arrow">→</span>
@@ -2700,7 +3135,7 @@ export function SettingsPanel({
                         className="settings-input"
                         value={rule.radio}
                         onChange={(e) => handlePatchRule(i, { radio: Number(e.target.value) })}
-                        aria-label={`Rule ${i + 1} radio`}
+                        aria-label={t('settings.routing.rule.radio.aria', { n: i + 1 })}
                       >
                         {(form.radios ?? []).map((r) => (
                           <option key={r.id} value={r.id}>
@@ -2713,8 +3148,8 @@ export function SettingsPanel({
                         className="settings-refresh"
                         onClick={() => handleMoveRule(i, -1)}
                         disabled={i === 0}
-                        title="Check this rule earlier (first match wins)"
-                        aria-label={`Move rule ${i + 1} up`}
+                        title={t('settings.routing.rule.up.title')}
+                        aria-label={t('settings.routing.rule.up.aria', { n: i + 1 })}
                       >
                         ↑
                       </button>
@@ -2723,8 +3158,8 @@ export function SettingsPanel({
                         className="settings-refresh"
                         onClick={() => handleMoveRule(i, 1)}
                         disabled={i === (form.routingRules?.length ?? 0) - 1}
-                        title="Check this rule later"
-                        aria-label={`Move rule ${i + 1} down`}
+                        title={t('settings.routing.rule.down.title')}
+                        aria-label={t('settings.routing.rule.down.aria', { n: i + 1 })}
                       >
                         ↓
                       </button>
@@ -2732,7 +3167,7 @@ export function SettingsPanel({
                         type="button"
                         className="settings-refresh danger"
                         onClick={() => handleRemoveRule(i)}
-                        aria-label={`Remove rule ${i + 1}`}
+                        aria-label={t('settings.routing.rule.remove.aria', { n: i + 1 })}
                       >
                         ✕
                       </button>
@@ -2754,33 +3189,39 @@ export function SettingsPanel({
                       })}
                     </div>
                     <span className="settings-hint">
-                      {rule.bands.length === 0 ? 'Any band' : rule.bands.join(', ')}
-                      {' · '}
-                      {rule.context === 'satellite'
-                        ? 'Satellite'
-                        : rule.mode
-                          ? ROUTE_MODE_LABEL[rule.mode]
-                          : 'any mode'}
-                      {' → '}
-                      {form.radios?.find((r) => r.id === rule.radio)?.name ?? `Radio ${rule.radio}`}
+                      {t('settings.routing.rule.summary', {
+                        bands:
+                          rule.bands.length === 0
+                            ? t('settings.routing.rule.summary.anyBand')
+                            : rule.bands.join(', '),
+                        mode:
+                          rule.context === 'satellite'
+                            ? t('settings.routing.rule.satellite')
+                            : rule.mode
+                              ? ROUTE_MODE_LABEL[rule.mode]
+                              : t('settings.routing.rule.summary.anyMode'),
+                        radio:
+                          form.radios?.find((r) => r.id === rule.radio)?.name ??
+                          t('settings.routing.rule.summary.radio', { id: rule.radio }),
+                      })}
                     </span>
                   </div>
                 ))}
                 <div className="radios-actions">
                   <button type="button" className="settings-refresh" onClick={handleAddRule}>
-                    + Add routing rule
+                    {t('settings.routing.add.action')}
                   </button>
                   <label className="settings-input-row routing-default">
-                    <span className="settings-label">Everything else</span>
+                    <span className="settings-label">{t('settings.routing.default.label')}</span>
                     <select
                       className="settings-input"
                       value={form.defaultRadio ?? ''}
                       onChange={(e) =>
                         handleSetDefaultRadio(e.target.value === '' ? null : Number(e.target.value))
                       }
-                      aria-label="Default radio"
+                      aria-label={t('settings.routing.default.aria')}
                     >
-                      <option value="">Stay on the current radio</option>
+                      <option value="">{t('settings.routing.default.stay')}</option>
                       {(form.radios ?? []).map((r) => (
                         <option key={r.id} value={r.id}>
                           {r.name}
@@ -2792,13 +3233,13 @@ export function SettingsPanel({
                 {/* Test affordance: check the table without QSYing a rig. Answered by the same
                     resolver the radio loop uses, so it can't drift from real behavior. */}
                 <div className="routing-test">
-                  <span className="settings-label">Test a band + mode</span>
+                  <span className="settings-label">{t('settings.routing.test.label')}</span>
                   <div className="settings-input-row">
                     <select
                       className="settings-input"
                       value={routeTest.band}
                       onChange={(e) => runRouteTest(e.target.value, routeTest.mode)}
-                      aria-label="Test band"
+                      aria-label={t('settings.routing.test.band.aria')}
                     >
                       {FREQ_BANDS.map((b) => (
                         <option key={b} value={b}>
@@ -2810,7 +3251,7 @@ export function SettingsPanel({
                       className="settings-input"
                       value={routeTest.mode}
                       onChange={(e) => runRouteTest(routeTest.band, e.target.value as RouteMode)}
-                      aria-label="Test mode"
+                      aria-label={t('settings.routing.test.mode.aria')}
                     >
                       {ROUTE_MODES.map(([v, label]) => (
                         <option key={v} value={v}>
@@ -2823,13 +3264,20 @@ export function SettingsPanel({
                       className="settings-refresh"
                       onClick={() => runRouteTest(routeTest.band, routeTest.mode)}
                     >
-                      Where would this go?
+                      {t('settings.routing.test.action')}
                     </button>
                   </div>
                   {routeTestResult && (
                     <p className="settings-note routing-test-result">
-                      {routeTest.band} {ROUTE_MODE_LABEL[routeTest.mode]} →{' '}
-                      <strong>{routeTestResult}</strong>
+                      <T
+                        k="settings.routing.test.result"
+                        tags={{ b: <strong /> }}
+                        vals={{
+                          band: routeTest.band,
+                          mode: ROUTE_MODE_LABEL[routeTest.mode],
+                          radio: routeTestResult,
+                        }}
+                      />
                     </p>
                   )}
                 </div>
@@ -2842,30 +3290,27 @@ export function SettingsPanel({
                     type="checkbox"
                     checked={!!form.simultaneousRadios}
                     onChange={(e) => updateBool('simultaneousRadios', e.target.checked)}
-                    aria-label="Run both radios at the same time"
+                    aria-label={t('settings.radios.simultaneous.aria')}
                   />
                   <span className="settings-hint">
-                    <strong>Run both radios at the same time</strong> — launch Nexus and it asks
-                    which radio this window drives; open a second window for the other. Both share
-                    one logbook. Leave off if you only ever use one radio at a time (you can still
-                    switch between them from the top bar).
+                    <T k="settings.radios.simultaneous.hint" tags={{ b: <strong /> }} />
                   </span>
                 </span>
               </label>
             )}
           </fieldset>
           <fieldset className="settings-section" id="settings-profiles">
-            <legend>Profiles</legend>
+            <legend>{t('settings.profiles.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Saved profiles</span>
+                <span className="settings-label">{t('settings.profiles.list.label')}</span>
                 <div className="settings-input-row">
                   <select
                     className="settings-input"
                     value={selectedProfile}
                     onChange={(e) => setSelectedProfile(e.target.value)}
                   >
-                    <option value="">— Select a profile —</option>
+                    <option value="">{t('settings.profiles.list.none')}</option>
                     {profiles.map((p) => (
                       <option key={p.name} value={p.name}>
                         {p.name}
@@ -2877,9 +3322,9 @@ export function SettingsPanel({
                     className="settings-refresh"
                     onClick={handleLoadProfile}
                     disabled={!selectedProfile}
-                    title="Apply this profile — merged onto your current settings. Your callsign, license class, radio roster and sync history never come from a profile, and anything the profile predates keeps its current value."
+                    title={t('settings.profiles.load.title')}
                   >
-                    Load
+                    {t('settings.profiles.load.action')}
                   </button>
                   <button
                     type="button"
@@ -2887,22 +3332,20 @@ export function SettingsPanel({
                     onClick={handleDeleteProfile}
                     disabled={!selectedProfile}
                   >
-                    Delete
+                    {t('settings.profiles.delete.action')}
                   </button>
                 </div>
-                <span className="settings-hint">
-                  Switch a whole rig / antenna / CAT / band setup in one move.
-                </span>
+                <span className="settings-hint">{t('settings.profiles.list.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Save current as</span>
+                <span className="settings-label">{t('settings.profiles.save.label')}</span>
                 <div className="settings-input-row">
                   <input
                     className="settings-input"
                     type="text"
                     value={newProfileName}
-                    placeholder="e.g. Portable VHF"
+                    placeholder={t('settings.profiles.save.placeholder')}
                     onChange={(e) => setNewProfileName(e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
@@ -2913,19 +3356,19 @@ export function SettingsPanel({
                     onClick={handleSaveProfile}
                     disabled={!newProfileName.trim()}
                   >
-                    Save
+                    {t('settings.profiles.save.action')}
                   </button>
                 </div>
-                <span className="settings-hint">Snapshots the current settings under a name.</span>
+                <span className="settings-hint">{t('settings.profiles.save.hint')}</span>
               </label>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-rig-control">
-            <legend>Rig &amp; CAT</legend>
+            <legend>{t('settings.rigControl.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">PTT Method</span>
+                <span className="settings-label">{t('settings.rigControl.ptt.label')}</span>
                 <select
                   className="settings-input"
                   value={form.pttMethod}
@@ -2933,36 +3376,35 @@ export function SettingsPanel({
                 >
                   {PTT_METHODS.map((m) => (
                     <option key={m.value} value={m.value}>
-                      {m.label}
+                      {t(m.labelKey)}
                     </option>
                   ))}
                 </select>
-                <span className="settings-hint">How transmit is keyed.</span>
+                <span className="settings-hint">{t('settings.rigControl.ptt.hint')}</span>
               </label>
 
               {(form.pttMethod === 'rts' || form.pttMethod === 'dtr') && (
                 <label className="settings-field">
-                  <span className="settings-label">PTT Serial Port</span>
+                  <span className="settings-label">
+                    {t('settings.rigControl.pttPort.label')}
+                  </span>
                   <input
                     className="settings-input"
                     list="serial-port-list"
                     value={form.pttSerialPort}
-                    placeholder="e.g. COM16 — blank = use the CAT port"
+                    placeholder={t('settings.rigControl.pttPort.placeholder', {
+                      example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
+                    })}
                     onChange={(e) => update('pttSerialPort', e.target.value)}
                   />
                   <span className="settings-hint">
-                    COM port your RTS/DTR keying line is on — e.g. an SO2R controller (u2R/MK2R)
-                    that routes PTT on its own port, separate from CAT. Leave blank if keying
-                    shares the CAT port, which is how a single-cable interface like a Digirig
-                    Mobile is wired; CAT keeps working either way. <strong>Per radio</strong>:
-                    each rig on an SO2R box has its own keying port, and this one follows the
-                    radio you switch to.
+                    <T k="settings.rigControl.pttPort.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
               )}
 
               <label className="settings-field">
-                <span className="settings-label">Interface keys RTS on the CAT port</span>
+                <span className="settings-label">{t('settings.rigControl.catRts.label')}</span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
@@ -2971,18 +3413,12 @@ export function SettingsPanel({
                   />
                 </span>
                 <span className="settings-hint">
-                  Tick this if your interface keys the radio from the CAT port&rsquo;s RTS line —
-                  a Digirig Mobile and most other one-cable interfaces are wired this way. Nexus
-                  then holds RTS down, instead of leaving it up where it puts some rigs into
-                  transmit the moment the port opens.{' '}
-                  <strong>If your radio transmits as soon as Nexus starts, this is the setting.</strong>{' '}
-                  Leave it off if a plain serial cable goes straight to the radio: the radio may
-                  be using that line for flow control, and taking it away can cost you CAT.
+                  <T k="settings.rigControl.catRts.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
 
               <div className="settings-field">
-                <span className="settings-label">Zero-config setup</span>
+                <span className="settings-label">{t('settings.rigControl.detect.label')}</span>
                 <div className="settings-input-row">
                   <button
                     type="button"
@@ -2990,7 +3426,9 @@ export function SettingsPanel({
                     onClick={onDetectRigs}
                     disabled={detecting}
                   >
-                    {detecting ? 'Scanning…' : 'Detect my radio'}
+                    {detecting
+                      ? t('settings.rigControl.detect.scanning')
+                      : t('settings.rigControl.detect.action')}
                   </button>
                 </div>
                 {(detected.length > 0 || detectedFlex.length > 0) && (
@@ -2999,15 +3437,18 @@ export function SettingsPanel({
                       <li className="rig-detect" key={`flex-${f.ip}-${i}`}>
                         <div className="rig-detect-main">
                           <span className="rig-detect-name">
-                            {f.model}
-                            {f.nickname ? ` “${f.nickname}”` : ''} — network
+                            {/* Model + the nickname its owner gave it: both tokens, assembled
+                                here so the sentence carries ONE hole. */}
+                            {t('settings.rigControl.detect.flex.name', {
+                              radio: `${f.model}${f.nickname ? ` “${f.nickname}”` : ''}`,
+                            })}
                           </span>
                           <span className="rig-detect-meta">
-                            {f.ip} · via SmartSDR CAT on this PC (slice A, TCP 5002)
+                            {t('settings.rigControl.detect.flex.meta', { ip: f.ip })}
                           </span>
                         </div>
                         <button type="button" className="settings-save" onClick={() => applyDetectedFlex(f)}>
-                          Use this
+                          {t('settings.rigControl.detect.use')}
                         </button>
                       </li>
                     ))}
@@ -3017,16 +3458,16 @@ export function SettingsPanel({
                           <span className="rig-detect-name">
                             {r.interfaceName ??
                               r.suggestedModelName ??
-                              (r.product || 'Unknown radio')}
+                              (r.product || t('settings.rigControl.detect.unknownRadio'))}
                           </span>
                           <span className="rig-detect-meta">
                             {r.portName} · {r.chip}
                             {/* Dual-UART Icoms (IC-7610/9700) show up as TWO rows that both
                                 say the rig's name — the A/B tag is the only tie-breaker. */}
                             {r.civSide === true
-                              ? ' · CI-V port — use this one'
+                              ? t('settings.rigControl.detect.civ.isCiv')
                               : r.civSide === false
-                                ? ' · second port, not CI-V'
+                                ? t('settings.rigControl.detect.civ.notCiv')
                                 : ''}
                             {/* The suggestion is a device NAME (that is what gets stored);
                                 show its human label so the Linux row reads
@@ -3041,17 +3482,18 @@ export function SettingsPanel({
                               which reads as a failure when nothing actually went wrong. */}
                           {r.interfaceName && (
                             <span className="rig-detect-interface">
-                              This is an interface cable, not a radio — pick your rig in{' '}
-                              <em>Rig Model</em> below. {r.interfaceNote}
+                              {/* `interfaceNote` is the backend's own sentence — interpolated
+                                  as a VALUE, translated in phase 3, never here. */}
+                              <T
+                                k="settings.rigControl.detect.interface"
+                                tags={{ em: <em /> }}
+                                vals={{ note: r.interfaceNote ?? '' }}
+                              />
                             </span>
                           )}
                           {!r.suggestedModel && !r.interfaceName && (
                             <span className="rig-detect-nomodel">
-                              ⚠ Found the port but not the exact model — normal when the rig sits
-                              behind a generic USB bridge chip that reports only its own name (common
-                              on Icom, Yaesu, Kenwood, Elecraft, and Xiegu). Pick your rig in{' '}
-                              <em>Rig Model</em> below, or click <em>Auto-test</em> (it tries the
-                              common rigs to find the right port + baud for you).
+                              <T k="settings.rigControl.detect.noModel" tags={{ em: <em /> }} />
                             </span>
                           )}
                           {r.driverNote && !r.driverBundled && (
@@ -3061,7 +3503,7 @@ export function SettingsPanel({
                                 <>
                                   {' '}
                                   <a href={r.driverUrl} target="_blank" rel="noreferrer">
-                                    driver ↗
+                                    {t('settings.rigControl.detect.driverLink')}
                                   </a>
                                 </>
                               )}
@@ -3069,20 +3511,17 @@ export function SettingsPanel({
                           )}
                         </div>
                         <button type="button" className="settings-save" onClick={() => applyDetectedRig(r)}>
-                          Use this
+                          {t('settings.rigControl.detect.use')}
                         </button>
                       </li>
                     ))}
                   </ul>
                 )}
-                <span className="settings-hint">
-                  One scan for everything: USB radios (fills model, port, sound device)
-                  AND FlexRadios on the network (fills the SmartSDR CAT config). Review, then Save.
-                </span>
+                <span className="settings-hint">{t('settings.rigControl.detect.hint')}</span>
               </div>
 
               <label className="settings-field">
-                <span className="settings-label">Rig Model</span>
+                <span className="settings-label">{t('settings.rigControl.rigModel.label')}</span>
                 {/* Type-to-find. It sits BEFORE the select, so it is what the wrapping label
                     now targets — hence the explicit aria-label on the select below, which
                     also fixes the name it used to get (the whole label's text, hints and
@@ -3091,11 +3530,11 @@ export function SettingsPanel({
                   className="settings-input"
                   type="text"
                   value={rigFilter}
-                  placeholder="Find a rig — type a name or model number"
+                  placeholder={t('settings.rigControl.rigModel.filter.placeholder')}
                   onChange={(e) => setRigFilter(e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
-                  aria-label="Filter the rig model list"
+                  aria-label={t('settings.rigControl.rigModel.filter.aria')}
                 />
                 {/* Mounted unconditionally and EMPTY until there is something to say: a live
                     region added to the DOM at the same moment as its first content is a
@@ -3105,17 +3544,19 @@ export function SettingsPanel({
                   {rigFilterTokens.length === 0
                     ? ''
                     : rigModelMatches.length === 0
-                      ? 'No model matches — clear the box, or enter the model number directly.'
-                      : `${rigModelMatches.length} model${rigModelMatches.length === 1 ? '' : 's'} match.`}
+                      ? t('settings.rigControl.rigModel.filter.none')
+                      : t('settings.rigControl.rigModel.filter.count', {
+                          count: rigModelMatches.length,
+                        })}
                 </span>
                 <div className="settings-input-row">
                   <select
                     className="settings-input"
                     value={String(form.rigModel)}
                     onChange={(e) => selectRig(Number(e.target.value))}
-                    aria-label="Rig Model"
+                    aria-label={t('settings.rigControl.rigModel.label')}
                   >
-                    <option value="0">— None —</option>
+                    <option value="0">{t('settings.rigControl.rigModel.none')}</option>
                     {rigModelOptions.map(([num, name]) => (
                       <option key={num} value={String(num)}>
                         {name} ({num})
@@ -3127,7 +3568,7 @@ export function SettingsPanel({
                     type="number"
                     inputMode="numeric"
                     min="0"
-                    placeholder="or enter model #"
+                    placeholder={t('settings.rigControl.rigModel.number.placeholder')}
                     onChange={(e) => {
                       const raw = e.target.value
                       const n = Number(raw)
@@ -3138,7 +3579,7 @@ export function SettingsPanel({
                         )
                       }
                     }}
-                    aria-label="Enter a Hamlib rig model number directly"
+                    aria-label={t('settings.rigControl.rigModel.number.aria')}
                   />
                 </div>
                 <span className="settings-input-row">
@@ -3146,41 +3587,75 @@ export function SettingsPanel({
                     type="checkbox"
                     checked={showAllRigModels}
                     onChange={(e) => onToggleShowAllRigModels(e.target.checked)}
-                    aria-label="Show all Hamlib rig models"
+                    aria-label={t('settings.rigControl.rigModel.showAll.aria')}
                   />
                   <span className="settings-hint">
-                    Show all models{allRigModelsLoading ? ' (loading…)' : ''} — the list above
-                    defaults to ~50 curated common rigs; check this for the full Hamlib catalog.
+                    {t('settings.rigControl.rigModel.showAll.hint', {
+                      loading: allRigModelsLoading
+                        ? t('settings.rigControl.rigModel.showAll.loading')
+                        : '',
+                    })}
                   </span>
                 </span>
-                <span className="settings-hint">
-                  Hamlib rig model. Not listed? Type its model number directly — Hamlib may
-                  still support it even without a friendly name here.
-                </span>
+                <span className="settings-hint">{t('settings.rigControl.rigModel.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Connection</span>
+                <span className="settings-label">{t('settings.rigControl.conn.label')}</span>
                 <select
                   className="settings-input"
                   value={form.rigConn || 'serial'}
                   onChange={(e) => update('rigConn', e.target.value)}
                 >
-                  <option value="serial">Serial (USB / COM port)</option>
-                  <option value="network">Network (host:port — SDR software, or a remote rig)</option>
+                  <option value="serial">{t('settings.rigControl.conn.serial')}</option>
+                  <option value="network">{t('settings.rigControl.conn.network')}</option>
+                  {/* Offered on every platform and DISABLED off Windows, rather than hidden:
+                      OmniRig is named in the docs and in half the Windows logging ecosystem, so
+                      a mac/Linux operator who goes looking for it must find the answer here
+                      instead of concluding the build is broken. */}
+                  <option value="omnirig" disabled={omnirigChoice().disabled}>
+                    {omnirigChoice().label}
+                  </option>
                 </select>
                 <span className="settings-hint">
-                  Serial for a rig on a USB/COM port (most rigs, including Xiegu). Network for
-                  anything serving CAT over TCP: an SDR program on this PC (Thetis, PowerSDR,
-                  SmartSDR CAT, piHPSDR), or a remote rigctld. The <strong>Rig Model</strong>
-                  {' '}still picks which CAT dialect is spoken — for an SDR, choose the program
-                  you launched, not the board inside the radio.
+                  <T k="settings.rigControl.conn.hint" tags={{ b: <strong /> }} />
+                </span>
+                <span className="settings-hint">
+                  <T
+                    k="settings.rigControl.conn.omnirig.hint"
+                    tags={{ b: <strong />, em: <em /> }}
+                    vals={{
+                      availability: omnirigChoice().disabled
+                        ? t('settings.rigControl.conn.omnirig.unavailable.why')
+                        : t('settings.rigControl.conn.omnirig.install'),
+                    }}
+                  />
                 </span>
               </label>
 
+              {form.rigConn === 'omnirig' && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.omnirig.label')}</span>
+                  <select
+                    className="settings-input"
+                    value={String(form.omnirigSlot || 1)}
+                    onChange={(e) => updateNum('omnirigSlot', Number(e.target.value))}
+                    aria-label={t('settings.rigControl.omnirig.aria')}
+                  >
+                    {/* ⚠️ NOT PROSE. These are the labels OmniRig's OWN window puts on its two
+                        slots; they are how the operator matches this picker to that window, so
+                        they read the same in every language (RIG_EXAMPLES, beside the device
+                        names, for the same reason). */}
+                    <option value="1">{OMNIRIG_SLOTS[1]}</option>
+                    <option value="2">{OMNIRIG_SLOTS[2]}</option>
+                  </select>
+                  <span className="settings-hint">{t('settings.rigControl.omnirig.hint')}</span>
+                </label>
+              )}
+
               {form.rigConn === 'network' && (
                 <label className="settings-field">
-                  <span className="settings-label">Network Address</span>
+                  <span className="settings-label">{t('settings.rigControl.netAddr.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -3204,24 +3679,22 @@ export function SettingsPanel({
                         onClick={() => {
                           update('audioIn', dax.input)
                           update('audioOut', dax.output)
-                          pushToast(`DAX paired: ${dax.input} → in, ${dax.output} → out`, 'success', 6000)
+                          pushToast(
+                            t('settings.rigControl.dax.paired', {
+                              input: dax.input,
+                              output: dax.output,
+                            }),
+                            'success',
+                            6000,
+                          )
                         }}
-                        title="SmartSDR's DAX virtual audio devices were detected — one click sets them as Nexus's audio in/out (bit-clean digital audio, no sound card)"
+                        title={t('settings.rigControl.dax.title')}
                       >
-                        ⚡ Pair DAX audio ({dax.input})
+                        {t('settings.rigControl.dax.action', { device: dax.input })}
                       </button>
                     ) : null
                   })()}
-                  <span className="settings-hint">
-                    host:port. For a Flex: the WSJT-X-proven path is the SmartSDR CAT app
-                    on THIS PC — its DEFAULT TCP port 5002 is directed at slice A, so
-                    127.0.0.1:5002 with the FLEX-6xxx model works out of the box; audio
-                    rides DAX. Multi-slice: SmartSDR CAT's per-slice ports are B=60001,
-                    C=60002, D=60003 — Nexus drives ONE slice, so enter the port of the
-                    slice you run digital on. (Direct-to-radio :4992 needs Hamlib's
-                    experimental native model and failed on real hardware.) Other rigs:
-                    a remote rigctld's host:port with their normal model.
-                  </span>
+                  <span className="settings-hint">{t('settings.rigControl.netAddr.hint')}</span>
                   {/* Where an SDR operator finds the real number. Nothing here is a default —
                       every one of these programs lets the operator move the port, and the
                       Thetis field report was a rig served on a port that is Thetis's TCI
@@ -3242,22 +3715,19 @@ export function SettingsPanel({
                       The check that settles this class is one command: start rigctld on the
                       model and see whether it does. Do not infer a backend from a grep. */}
                   <span className="settings-hint">
-                    Running an SDR program? Read the port out of the program, don't guess it:{' '}
-                    <strong>Thetis</strong> → Setup ▸ Serial/Network/Midi CAT ▸{' '}
-                    <em>TCP/IP CAT Server</em> (its own box, factory 13013 — not the{' '}
-                    <em>TCI Server</em> box beside it, factory 50001; TCI is a different
-                    protocol and the Hamlib we ship has no backend for it, so pick a CAT
-                    profile such as "Thetis" and use the CAT server port);{' '}
-                    <strong>SmartSDR CAT</strong> → 5002; <strong>piHPSDR</strong> → 19090.
-                    Whatever it shows, type that.
+                    <T k="settings.rigControl.netAddr.sdrPorts" tags={{ b: <strong />, em: <em /> }} />
                   </span>
                 </label>
               )}
 
-              {form.rigConn !== 'network' && (
+              {/* Serial Port + Baud belong to whoever OPENS the port. With Network that is
+                  rigctld over TCP; with OmniRig it is OmniRig itself, which owns the rig type,
+                  the port and the baud — so asking for them here would be asking the operator
+                  to configure the same radio twice and get it wrong once. */}
+              {form.rigConn !== 'network' && form.rigConn !== 'omnirig' && (
                 <>
               <label className="settings-field">
-                <span className="settings-label">Serial Port</span>
+                <span className="settings-label">{t('settings.rigControl.serialPort.label')}</span>
                 <div className="settings-input-row">
                   {/* Combobox, not a bare <select>: some driver setups (virtual/SO2R COM
                       ports) make enumeration come back empty, so the operator must be able
@@ -3266,7 +3736,9 @@ export function SettingsPanel({
                     className="settings-input"
                     list="serial-port-list"
                     value={form.serialPort}
-                    placeholder="Select or type, e.g. COM16"
+                    placeholder={t('settings.rigControl.serialPort.placeholder', {
+                      example: IS_MAC ? RIG_EXAMPLES.macSerialPort : RIG_EXAMPLES.serialPort,
+                    })}
                     onChange={(e) => update('serialPort', e.target.value)}
                   />
                   {/* Shared by the CAT + PTT port inputs. The label text shows the USB product
@@ -3284,43 +3756,58 @@ export function SettingsPanel({
                     className="settings-refresh"
                     onClick={refreshPorts}
                     disabled={portsLoading}
-                    title="Re-scan serial ports"
+                    title={t('settings.rigControl.serialPort.refresh.title')}
                   >
-                    {portsLoading ? '…' : 'Refresh'}
+                    {portsLoading ? '…' : t('settings.rigControl.serialPort.refresh.action')}
                   </button>
                   <button
                     type="button"
                     className="settings-refresh"
                     onClick={() => handleAutoTestPorts()}
                     disabled={catTesting}
-                    title="Probe each USB port (read-only — never transmits) and auto-select the one that drives your rig"
+                    title={t('settings.rigControl.serialPort.autoTest.title')}
                   >
-                    {catTesting ? '…' : 'Auto-test'}
+                    {catTesting ? '…' : t('settings.rigControl.serialPort.autoTest.action')}
                   </button>
                 </div>
                 <span className="settings-hint">
-                  COM / tty device for rig control — or Auto-test to find it.
+                  {/* Never say "tty device": on a Mac the tty.* node is exactly the twin the
+                      picker hides because it hangs CAT on carrier detect — cu.* is the one. */}
+                  {IS_MAC
+                    ? t('settings.rigControl.serialPort.hint.mac')
+                    : t('settings.rigControl.serialPort.hint.other')}
                   {[3088, 3087, 3091, 3089, 3076].includes(form.rigModel) && (
                     <>
                       {' '}
-                      <strong>Xiegu:</strong> the radio makes two serial ports — CAT is on the{' '}
-                      <strong>SERIAL-B</strong> one (often the higher COM number).
+                      <T
+                        k="settings.rigControl.serialPort.xiegu"
+                        tags={{ b: <strong /> }}
+                        vals={{
+                          note: IS_MAC
+                            ? ''
+                            : t('settings.rigControl.serialPort.xiegu.comNumber'),
+                        }}
+                      />
                     </>
                   )}
                   {[3078, 3081].includes(form.rigModel) && (
                     <>
                       {' '}
-                      <strong>Icom:</strong> this radio makes two COM ports and only one speaks
-                      CI-V — in Device Manager it is the CP210x port marked{' '}
-                      <strong>Enhanced</strong> (Icom's driver: “Serial Port A (CI-V)”). The
-                      “Standard” / “Serial Port B” one never answers.
+                      {/* One whole sentence per platform, each named by its own key: the guard
+                          reads keys as literals, and a key computed in a ternary is a key no
+                          extractor can see. */}
+                      {IS_MAC ? (
+                        <T k="settings.rigControl.serialPort.icom.mac" tags={{ b: <strong /> }} />
+                      ) : (
+                        <T k="settings.rigControl.serialPort.icom.other" tags={{ b: <strong /> }} />
+                      )}
                     </>
                   )}
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Baud</span>
+                <span className="settings-label">{t('settings.rigControl.baud.label')}</span>
                 <select
                   className="settings-input"
                   value={String(form.baud)}
@@ -3336,122 +3823,19 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  Serial baud rate — match your rig's CAT setting (most modern rigs: 38,400 or 115,200).
-                  Native Icom CI-V scope needs 115,200 here <em>and</em> on the rig.
+                  <T k="settings.rigControl.baud.hint" tags={{ em: <em /> }} />
                 </span>
               </label>
                 </>
               )}
 
               <div className="settings-field">
-                <span className="settings-label">Antenna rotator</span>
-                {(() => {
-                  const CURATED = [
-                    '0', '601', '603', '602', '901', '902', '202', '204', '401',
-                    '403', '405', '1001', '1102', '1701', '1',
-                  ]
-                  const modelStr = String(form.rotatorModel ?? 0)
-                  const isOther = rotOther || !CURATED.includes(modelStr)
-                  return (
-                    <>
-                      <select
-                        value={isOther ? 'other' : modelStr}
-                        onChange={(e) => {
-                          const v = e.target.value
-                          if (v === 'other') {
-                            setRotOther(true)
-                            setRotCustom(
-                              (form.rotatorModel ?? 0) > 0 ? String(form.rotatorModel) : '',
-                            )
-                          } else {
-                            setRotOther(false)
-                            updateNum('rotatorModel', Number(v))
-                          }
-                        }}
-                        aria-label="Rotator model"
-                      >
-                        <option value="0">None</option>
-                        <option value="601">Yaesu GS-232A</option>
-                        <option value="603">Yaesu GS-232B</option>
-                        <option value="602">GS-232 (generic)</option>
-                        <option value="901">SPID Rot2Prog</option>
-                        <option value="902">SPID Rot1Prog</option>
-                        <option value="202">EasyComm II</option>
-                        <option value="204">EasyComm III</option>
-                        <option value="401">Hy-Gain Rotor-EZ</option>
-                        <option value="403">Hy-Gain DCU</option>
-                        <option value="405">Green Heron RT-21</option>
-                        <option value="1001">M2 RC2800</option>
-                        <option value="1102">EA4TX ARS (az)</option>
-                        <option value="1701">Prosistel D (az)</option>
-                        <option value="1">Dummy (testing — no hardware)</option>
-                        <option value="other">Other Hamlib model #…</option>
-                      </select>
-                      {isOther && (
-                        <input
-                          className="settings-input"
-                          type="number"
-                          min="1"
-                          placeholder="Hamlib rotator model number (rotctl -l lists them)"
-                          value={rotCustom}
-                          onChange={(e) => {
-                            setRotCustom(e.target.value)
-                            const n = Number(e.target.value)
-                            // Only ever commit a REAL model; an incomplete
-                            // entry leaves the last valid value in the form.
-                            if (Number.isInteger(n) && n > 0) updateNum('rotatorModel', n)
-                          }}
-                          aria-label="Hamlib rotator model number"
-                        />
-                      )}
-                    </>
-                  )
-                })()}
-                {(form.rotatorModel ?? 0) > 1 && (
-                  <div className="settings-inline-pair">
-                    <input
-                      className="settings-input"
-                      type="text"
-                      value={form.rotatorPort ?? ''}
-                      placeholder="COM7 / /dev/ttyUSB1"
-                      onChange={(e) => update('rotatorPort', e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-label="Rotator serial port"
-                    />
-                    <input
-                      className="settings-input"
-                      type="number"
-                      value={form.rotatorBaud ?? 9600}
-                      onChange={(e) => {
-                        const n = Number(e.target.value)
-                        if (!Number.isNaN(n)) updateNum('rotatorBaud', n)
-                      }}
-                      aria-label="Rotator baud rate"
-                      title="Baud rate (GS-232 default 9600)"
-                    />
-                  </div>
-                )}
-                <span className="settings-hint">
-                  Pick your rotator and its COM port — Nexus runs the control daemon for you
-                  (same as the rig). Then use the Rotor pane in Connect, ↗ on Needed rows,
-                  or the compass anywhere.
-                </span>
-                <input
-                  className="settings-input"
-                  type="text"
-                  value={form.rotatorHost}
-                  placeholder="Advanced: external rotctld host:port (overrides the above)"
-                  onChange={(e) => update('rotatorHost', e.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-label="External rotctld address (advanced)"
-                />
-              </div>
-
-              <div className="settings-field">
-                <span className="settings-label">Split operation</span>
-                <div className="theme-switcher" role="group" aria-label="Split operation">
+                <span className="settings-label">{t('settings.rigControl.split.label')}</span>
+                <div
+                  className="theme-switcher"
+                  role="group"
+                  aria-label={t('settings.rigControl.split.label')}
+                >
                   {SPLIT_MODES.map((m) => (
                     <button
                       key={m.value}
@@ -3460,21 +3844,16 @@ export function SettingsPanel({
                       aria-pressed={(form.splitMode ?? 'none') === m.value}
                       onClick={() => setSplitMode(m.value)}
                     >
-                      {m.label}
+                      {t(m.labelKey)}
                     </button>
                   ))}
                 </div>
-                <span className="settings-hint">
-                  Keeps your transmitted audio between 1500–2000 Hz by shifting the TX dial in
-                  500 Hz steps, so audio harmonics fall outside the transmit filter — cleaner
-                  signal. Rig = uses VFO B split. Fake It = retunes the VFO around each over (works
-                  on any CAT rig). None = stock WSJT-X default, transmits at the raw audio offset.
-                </span>
+                <span className="settings-hint">{t('settings.rigControl.split.hint')}</span>
               </div>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  Wheel tuning sensitivity{' '}
+                  {t('settings.rigControl.wheel.label')}{' '}
                   <span className="settings-value">×{(form.wheelTuneSensitivity ?? 1).toFixed(2)}</span>
                 </span>
                 <input
@@ -3485,18 +3864,20 @@ export function SettingsPanel({
                   step="0.05"
                   value={String(form.wheelTuneSensitivity ?? 1)}
                   onChange={(e) => updateNum('wheelTuneSensitivity', Number(e.target.value))}
-                  aria-label="Mouse-wheel tuning sensitivity"
+                  aria-label={t('settings.rigControl.wheel.aria')}
                 />
-                <span className="settings-hint">
-                  How far the dial moves per mouse-wheel notch. Lower it if a high-resolution or
-                  free-spin mouse tunes too far per flick; raise it to tune faster. Applies to the
-                  frequency readout and the Phone/CW scope wheel.
-                </span>
+                <span className="settings-hint">{t('settings.rigControl.wheel.hint')}</span>
               </label>
             </div>
-            <SettingsGroup id="rig-advanced" title="Advanced" defaultOpen={false}>
+            <SettingsGroup
+              id="rig-advanced"
+              title={t('settings.rigControl.advanced.title')}
+              defaultOpen={false}
+            >
               <label className="settings-field">
-                <span className="settings-label">rigctld TCP Port</span>
+                <span className="settings-label">
+                  {t('settings.rigControl.rigctldPort.label')}
+                </span>
                 <input
                   className="settings-input"
                   type="number"
@@ -3506,11 +3887,11 @@ export function SettingsPanel({
                   onChange={(e) => update('rigctldPort', e.target.value)}
                   autoComplete="off"
                 />
-                <span className="settings-hint">Port Nexus launches rigctld on.</span>
+                <span className="settings-hint">{t('settings.rigControl.rigctldPort.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Data modes use plain SSB</span>
+                <span className="settings-label">{t('settings.rigControl.plainSsb.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -3521,54 +3902,65 @@ export function SettingsPanel({
                   <span className="toggle-knob" />
                 </button>
                 <span className="settings-hint">
-                  <strong>Leave this off unless you know you need it.</strong> Nexus normally puts
-                  the radio in its DATA submode (DATA-U / USB-D / PKTUSB) for FT8, FT4, RTTY-AFSK
-                  and SSTV, because on most rigs that is the only mode where the USB codec reaches
-                  the transmitter. Turn this on and Nexus commands plain{' '}
-                  <strong>USB/LSB</strong> for those modes instead, and stays there — through band
-                  changes and when you call a station.
-                  {' '}
-                  Correct if your transmit audio goes in the <strong>microphone</strong> path, as
-                  with an interface wired to the mic jack (some RIGblaster models) — or if you
-                  simply prefer plain USB to the DATA submode (for its wider receive passband, say)
-                  and your rig is set to send its USB-codec audio in SSB, which on many modern rigs
-                  (FT-991A, IC-7300 and the like) is a single menu item. Either way the rig has to
-                  put the audio you're feeding onto the air in plain SSB: where it does not — the
-                  codec feeds only the data port and nothing carries in SSB — plain SSB takes audio
-                  from the mic and the radio transmits <strong>no RF at all</strong>, a red TX light
-                  and nothing on the air. <strong>Per radio</strong>, since it depends on how that
-                  rig is cabled and set. True FSK RTTY is unaffected — it keeps the rig's own RTTY
-                  mode.
+                  <T k="settings.rigControl.plainSsb.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
 
-              {form.rigConn !== 'network' &&
-                /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') && (
+              {/* Offered on the ENGINE's question — the model number — not on what the model
+                  NAME happens to look like. And when the answer is "this radio qualifies but
+                  the connection cannot carry it", the control is DISABLED WITH THE REASON
+                  rather than hidden: an absent control is a mystery, a greyed one with a
+                  sentence is an answer. (IC-7610 report, 2026-08-19.) */}
+              {NATIVE_CIV_MODELS.includes(form.rigModel) && (
                   <label className="settings-field">
-                    <span className="settings-label">Native Icom CI-V (early access)</span>
+                    <span className="settings-label">
+                      {t('settings.rigControl.icomNative.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
                       aria-checked={form.icomNativeCat ?? false}
                       className={`toggle${form.icomNativeCat ? ' on' : ''}`}
+                      disabled={civBlocked !== null}
                       onClick={() => updateBool('icomNativeCat', !form.icomNativeCat)}
                     >
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      Nexus drives this Icom's CI-V directly instead of launching rigctld —
-                      unlocking the rig's real spectrum scope in the waterfall ("CI-V RF") and
-                      instant dial tracking. The scope needs{' '}
-                      <strong>115200 baud, set the same on BOTH the radio and Nexus</strong>:
-                      (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" ={' '}
-                      <strong>115200</strong>; (2) on the rig, same menu, "CI-V USB Port" =
-                      "Unlink from [REMOTE]"; (3) the <strong>Baud</strong> field above ={' '}
-                      <strong>115200</strong> to match. Below that the rig refuses to stream the
-                      scope (CAT still works; the panadapter just stays off). Save to apply; turn
-                      off any time to return to the classic Hamlib path.
+                      {civBlocked === 'network' ? (
+                        'Not available on a network connection: the CI-V engine speaks to the radio over its serial port, and a LAN-connected radio has none for Nexus to open. Connect this radio by USB to use it.'
+                      ) : civBlocked === 'omnirig' ? (
+                        'Not available through OmniRig: OmniRig holds the COM port, so Nexus cannot open it to speak CI-V.'
+                      ) : (
+                        <T k="settings.rigControl.icomNative.hint" tags={{ b: <strong /> }} />
+                      )}
                     </span>
                   </label>
                 )}
+
+              {/* WHICH Icom data mode. Only for the radios that have more than one, and only
+                  through the native CI-V engine — Hamlib's PKT modes always select D1, so
+                  offering the choice on that path would be a control that does nothing. */}
+              {MULTI_DATA_MODE_ICOMS.includes(form.rigModel) && (
+                <label className="settings-field">
+                  <span className="settings-label">Data mode</span>
+                  <select
+                    className="settings-input"
+                    value={String(form.icomDataMode ?? 1)}
+                    disabled={!form.icomNativeCat}
+                    onChange={(e) => updateNum('icomDataMode', Number(e.target.value))}
+                  >
+                    <option value="1">D1</option>
+                    <option value="2">D2</option>
+                    <option value="3">D3</option>
+                  </select>
+                  <span className="settings-hint">
+                    {form.icomNativeCat
+                      ? 'Which DATA mode this radio is put into for digital operating. Pick the one your USB audio is wired to — D1 unless you changed it on the radio. Needs a bench check on a real radio before it is trusted.'
+                      : 'Needs the native CI-V connection above: through Hamlib the radio always lands on D1.'}
+                  </span>
+                </label>
+              )}
 
               {/* SmartSDR-only streams, gated on the MODEL NUMBER — never on the model's name.
                   A name-sniff for "flex" also matched the PowerSDR entry, offering an ANAN/HL2
@@ -3577,7 +3969,9 @@ export function SettingsPanel({
               {form.rigConn === 'network' &&
                 ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
                   <label className="settings-field">
-                    <span className="settings-label">Flex native panadapter (early access)</span>
+                    <span className="settings-label">
+                      {t('settings.rigControl.flexPan.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -3588,11 +3982,7 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the
-                      cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref
-                      controls. <strong>Unverified on hardware</strong>, so it's opt-in: needs the
-                      Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the
-                      scope stays blank or the app hitches, turn it back off. Save to apply.
+                      <T k="settings.rigControl.flexPan.hint" tags={{ b: <strong /> }} />
                     </span>
                   </label>
                 )}
@@ -3601,7 +3991,9 @@ export function SettingsPanel({
               {form.rigConn === 'network' &&
                 ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
                   <label className="settings-field">
-                    <span className="settings-label">Flex native DAX audio (early access)</span>
+                    <span className="settings-label">
+                      {t('settings.rigControl.flexAudio.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -3612,11 +4004,7 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     <span className="settings-hint">
-                      Take this FlexRadio's RX audio straight off the network (VITA-49 DAX) instead of
-                      the "DAX Audio RX" sound device — which is <strong>invisible under Remote
-                      Desktop</strong>. Decoders then read the rig's audio directly.{' '}
-                      <strong>Unverified on hardware</strong>, RX-only, opt-in: needs the Flex IP set
-                      and SmartSDR reachable. If decodes stop, turn it back off. Save to apply.
+                      <T k="settings.rigControl.flexAudio.hint" tags={{ b: <strong /> }} />
                     </span>
                   </label>
                 )}
@@ -3625,7 +4013,7 @@ export function SettingsPanel({
                 /IC-?\s?(7300|7610|9700|705|905)\b/i.test(form.rigModelName ?? '') &&
                 form.icomNativeCat && (
                   <label className="settings-field">
-                    <span className="settings-label">CI-V bus diagnostic log</span>
+                    <span className="settings-label">{t('settings.rigControl.civLog.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -3634,7 +4022,7 @@ export function SettingsPanel({
                       onClick={() =>
                         void withErrorToast(
                           () => civDiagnosticLog(civLogPath === null),
-                          'Could not toggle the CI-V diagnostic log',
+                          t('settings.rigControl.civLog.failed'),
                         ).then((path) => {
                           if (path === undefined) return // error already toasted
                           setCivLogPath(path === '' ? null : path)
@@ -3645,19 +4033,13 @@ export function SettingsPanel({
                     </button>
                     <span className="settings-hint">
                       {civLogPath !== null ? (
-                        <>
-                          <strong>Recording</strong> to <code>{civLogPath}</code> — this keeps
-                          running while you're on other screens, so go to the FT8 or Phone cockpit
-                          and reproduce the issue (Tune or transmit) now. Come back and turn it off
-                          when done, then send that file. It shows exactly what's on the bus during
-                          the fault.
-                        </>
+                        <T
+                          k="settings.rigControl.civLog.recording"
+                          tags={{ b: <strong />, code: <code /> }}
+                          vals={{ path: civLogPath }}
+                        />
                       ) : (
-                        <>
-                          Records every byte to/from the radio on the native CI-V path to a file in
-                          your Downloads — a support tool for hardware-only issues like the IC-9700
-                          PTT flicker. Turn on, reproduce the problem, turn off, then send the file.
-                        </>
+                        t('settings.rigControl.civLog.idle')
                       )}
                     </span>
                   </label>
@@ -3665,7 +4047,7 @@ export function SettingsPanel({
 
               {(form.rigModel === 2036 || form.rigModel === 23005) && (
                 <label className="settings-field">
-                  <span className="settings-label">Flex radio IP (native panadapter)</span>
+                  <span className="settings-label">{t('settings.rigControl.flexIp.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -3675,8 +4057,7 @@ export function SettingsPanel({
                     autoComplete="off"
                   />
                   <span className="settings-hint">
-                    Your FlexRadio's LAN IP (SmartSDR API, port 4992) — turns on the native RF
-                    panadapter. This is the <em>radio's</em> address, not the SmartSDR-CAT port above.
+                    <T k="settings.rigControl.flexIp.hint" tags={{ em: <em /> }} />
                   </span>
                 </label>
               )}
@@ -3686,7 +4067,7 @@ export function SettingsPanel({
                   port stays editable here for the rare collision, nothing else. */}
               {form.catBroker && (
                 <label className="settings-field">
-                  <span className="settings-label">Sharing port</span>
+                  <span className="settings-label">{t('settings.rigControl.sharingPort.label')}</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -3697,9 +4078,7 @@ export function SettingsPanel({
                     autoComplete="off"
                   />
                   <span className="settings-hint">
-                    The &quot;Share this radio&quot; address other programs connect to (Hamlib NET
-                    rigctl default 4532). Change it only if something else on this computer
-                    already owns the port.
+                    {t('settings.rigControl.sharingPort.hint')}
                   </span>
                 </label>
               )}
@@ -3710,9 +4089,11 @@ export function SettingsPanel({
                 className="settings-testcat"
                 onClick={handleTestCat}
                 disabled={catTesting}
-                title="Save settings, connect to the rig, and read its frequency"
+                title={t('settings.rigControl.testCat.title')}
               >
-                {catTesting ? 'Testing…' : 'Test CAT'}
+                {catTesting
+                  ? t('settings.rigControl.testCat.testing')
+                  : t('settings.rigControl.testCat.action')}
               </button>
               {(() => {
                 // Show the just-run test result, else the live CAT status from the snapshot.
@@ -3742,26 +4123,29 @@ export function SettingsPanel({
               from one of them expects it. Keep them together. */}
           {(form.radios?.length ?? 1) > 1 && (
             <div className="radio-config-banner">
-              🎚 Audio devices below are for{' '}
-              <strong>
-                {form.radios?.find((r) => r.id === editingRadioId)?.name ?? 'the selected radio'}
-              </strong>
-              . Each radio has its OWN input/output — click “Edit” on another radio (in Radios above)
-              to set its audio. The live RX audio + waterfall follow whichever radio is active.
+              <T
+                k="settings.audio.multiRadio.note"
+                tags={{ b: <strong /> }}
+                vals={{
+                  radio:
+                    form.radios?.find((r) => r.id === editingRadioId)?.name ??
+                    t('settings.audio.multiRadio.selectedRadio'),
+                }}
+              />
             </div>
           )}
           <fieldset className="settings-section" id="settings-audio">
-            <legend>Audio</legend>
+            <legend>{t('settings.audio.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Input Device (RX)</span>
+                <span className="settings-label">{t('settings.audio.input.label')}</span>
                 <div className="settings-input-row">
                   <select
                     className="settings-input"
                     value={form.audioIn}
                     onChange={(e) => update('audioIn', e.target.value)}
                   >
-                    <option value="">System default</option>
+                    <option value="">{t('settings.audio.device.systemDefault')}</option>
                     {audioInOptions.map((d) => (
                       <option key={d} value={d}>
                         {audioLabel(d, 'input')}
@@ -3773,46 +4157,41 @@ export function SettingsPanel({
                     className="settings-refresh"
                     onClick={refreshAudio}
                     disabled={audioLoading}
-                    title="Re-scan audio devices"
+                    title={t('settings.audio.refresh.title')}
                   >
-                    {audioLoading ? '…' : 'Refresh'}
+                    {audioLoading ? '…' : t('settings.audio.refresh.action')}
                   </button>
                 </div>
-                <span className="settings-hint">Sound card carrying receive audio.</span>
+                <span className="settings-hint">{t('settings.audio.input.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Output Device (TX)</span>
+                <span className="settings-label">{t('settings.audio.output.label')}</span>
                 <select
                   className="settings-input"
                   value={form.audioOut}
                   onChange={(e) => update('audioOut', e.target.value)}
                 >
-                  <option value="">System default</option>
+                  <option value="">{t('settings.audio.device.systemDefault')}</option>
                   {audioOutOptions.map((d) => (
                     <option key={d} value={d}>
                       {audioLabel(d, 'output')}
                     </option>
                   ))}
                 </select>
-                <span className="settings-hint">Sound card feeding the rig (transmit).</span>
+                <span className="settings-hint">{t('settings.audio.output.hint')}</span>
               </label>
 
               <div className="settings-field settings-audio-scope">
-                <span className="settings-label">Live input spectrum</span>
-                <MiniSpectrum
-                  height={84}
-                  idleHint="Flat — no audio on the selected input. Check the device above (radio on? right codec?)."
-                />
-                <span className="settings-hint">
-                  What the selected input hears, live — band noise should show as a moving
-                  floor. Confirms the RIGHT device before you leave Settings.
-                </span>
+                <span className="settings-label">{t('settings.audio.spectrum.label')}</span>
+                <MiniSpectrum height={84} idleHint={t('settings.audio.spectrum.idle')} />
+                <span className="settings-hint">{t('settings.audio.spectrum.hint')}</span>
               </div>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  Tx Power <span className="settings-value">{Math.round(form.txLevel * 100)}%</span>
+                  {t('settings.audio.txPower.label')}{' '}
+                  <span className="settings-value">{Math.round(form.txLevel * 100)}%</span>
                 </span>
                 <input
                   className="settings-slider"
@@ -3843,27 +4222,22 @@ export function SettingsPanel({
                   onKeyUp={(e) =>
                     applyTxLevelLive(Number((e.target as HTMLInputElement).value) ** 2, true)
                   }
-                  aria-label="Transmit drive level"
+                  aria-label={t('settings.audio.txPower.aria')}
                 />
                 <span className="settings-hint">
-                  The audio <strong>drive</strong> into the rig — the SAME control as the cockpit{' '}
-                  <strong>Pwr</strong> slider (they always match now). Trim down until your rig&apos;s
-                  ALC is just zero. This is <em>not</em> the rig&apos;s RF watts — set those on the radio.
+                  <T k="settings.audio.txPower.hint" tags={{ b: <strong />, em: <em /> }} />
                 </span>
               </label>
 
               <div className="settings-field">
                 <span className="settings-label">
-                  RX Level{' '}
+                  {t('settings.audio.rxLevel.label')}{' '}
                   {/* Live 100 ms poll (lock-free backend) — setting a gain against a needle
                       that answered 0.5–0.8 s late made level-setting guesswork. */}
                   <span className="settings-value"><LiveRxLevelDb /></span>
                 </span>
-                <LiveLevelMeter label="RX audio level" variant="full" />
-                <span className="settings-hint">
-                  A dB scale like WSJT-X — aim for around 30 dB. Anything from ~15–60 dB
-                  decodes fine; red means too hot (back off RX Gain or the rig's audio).
-                </span>
+                <LiveLevelMeter label={t('settings.audio.rxLevel.meter')} variant="full" />
+                <span className="settings-hint">{t('settings.audio.rxLevel.hint')}</span>
                 {radio?.audioError && (
                   <span className="cat-result fail" role="alert">✗ {radio.audioError}</span>
                 )}
@@ -3871,7 +4245,8 @@ export function SettingsPanel({
 
               <label className="settings-field">
                 <span className="settings-label">
-                  RX Gain <span className="settings-value">×{(form.rxGain ?? 1).toFixed(1)}</span>
+                  {t('settings.audio.rxGain.label')}{' '}
+                  <span className="settings-value">×{(form.rxGain ?? 1).toFixed(1)}</span>
                 </span>
                 <input
                   className="settings-slider"
@@ -3883,48 +4258,44 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('rxGain', Number(e.target.value))}
                   onPointerUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
                   onKeyUp={(e) => applyRxGainLive(Number((e.target as HTMLInputElement).value))}
-                  aria-label="RX capture gain"
+                  aria-label={t('settings.audio.rxGain.aria')}
                 />
-                <span className="settings-hint">
-                  Boost a quiet interface until RX Level reads around 30 dB — the meter responds
-                  as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB)
-                  — FT8 decodes on a small signal, so you rarely need much.
-                </span>
+                <span className="settings-hint">{t('settings.audio.rxGain.hint')}</span>
               </label>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-headphone-monitor">
-            <legend>Headphone monitor</legend>
+            <legend>{t('settings.headphoneMonitor.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Enable monitor</span>
+                <span className="settings-label">
+                  {t('settings.headphoneMonitor.enable.label')}
+                </span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
                     checked={!!form.monitorEnabled}
                     onChange={(e) => updateBool('monitorEnabled', e.target.checked)}
-                    aria-label="Enable headphone monitor"
+                    aria-label={t('settings.headphoneMonitor.enable.aria')}
                   />
                   <span className="settings-hint">
-                    Plays the exact audio the decoder hears — for level / RFI diagnosis and
-                    listening to the band. Off by default; UNVERIFIED on-air until the attended
-                    session. Guards against the rig's TX device by name (System default is
-                    resolved to its real device first) — if your devices go by multiple
-                    names, pick your headphones explicitly rather than System default.
+                    {t('settings.headphoneMonitor.enable.hint')}
                   </span>
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Monitor Output Device</span>
+                <span className="settings-label">
+                  {t('settings.headphoneMonitor.device.label')}
+                </span>
                 <select
                   className="settings-input"
                   value={form.monitorDevice ?? ''}
                   onChange={(e) => update('monitorDevice', e.target.value)}
                   disabled={!form.monitorEnabled}
                 >
-                  <option value="">System default</option>
+                  <option value="">{t('settings.audio.device.systemDefault')}</option>
                   {monitorOutOptions.map((d) => (
                     <option key={d} value={d}>
                       {audioLabel(d, 'output')}
@@ -3932,13 +4303,13 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  Your headphones or speakers — must NOT be the rig's TX output device.
+                  {t('settings.headphoneMonitor.device.hint')}
                 </span>
               </label>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  Monitor Level{' '}
+                  {t('settings.headphoneMonitor.level.label')}{' '}
                   <span className="settings-value">{Math.round((form.monitorLevel ?? 0.5) * 100)}%</span>
                 </span>
                 <input
@@ -3950,42 +4321,41 @@ export function SettingsPanel({
                   value={String(form.monitorLevel ?? 0.5)}
                   onChange={(e) => updateNum('monitorLevel', Number(e.target.value))}
                   disabled={!form.monitorEnabled}
-                  aria-label="Headphone monitor level"
+                  aria-label={t('settings.headphoneMonitor.level.aria')}
                 />
-                <span className="settings-hint">Headphone listening volume (does not affect TX).</span>
+                <span className="settings-hint">
+                  {t('settings.headphoneMonitor.level.hint')}
+                </span>
               </label>
             </div>
           </fieldset>
 
           {/* ---- Satellite Doppler + rotator manners (Phase 1 sat station) ---- */}
           <fieldset className="settings-section" id="settings-satellite-doppler">
-            <legend>Satellite Doppler</legend>
-            <p className="settings-note">
-              Corrects both legs of a pass: the downlink you listen on and the uplink you
-              transmit on. Nexus tunes only while auto-track is following a pass and you have
-              picked a transponder in the Satellites section. The downlink needs no setup here;
-              the uplink is confirmed once per radio, on the pass itself.
-            </p>
+            <legend>{t('settings.satelliteDoppler.legend')}</legend>
+            <p className="settings-note">{t('settings.satelliteDoppler.note')}</p>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Doppler correction</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.enable.label')}
+                </span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
                     checked={!form.satDopplerOff}
                     onChange={(e) => updateBool('satDopplerOff', !e.target.checked)}
-                    aria-label="Enable satellite Doppler correction"
+                    aria-label={t('settings.satelliteDoppler.enable.aria')}
                   />
                   <span className="settings-hint">
-                    Retunes the radio through a pass so you stay on the station you are working.
-                    On: the downlink follows the bird as soon as you arm a pass and hold a
-                    transponder. Clearing this stops both legs.
+                    {t('settings.satelliteDoppler.enable.hint')}
                   </span>
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">VFO mapping</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.vfoMap.label')}
+                </span>
                 {/* DISABLED while the panel is editing a radio that is not the
                     operating one: the mapping is a flat (station-level) field
                     whose pick is a LIVE write confirming the uplink for the
@@ -4008,11 +4378,11 @@ export function SettingsPanel({
                   }
                   title={
                     editingRadioId != null && editingRadioId !== (activeRadioId ?? form.activeRadio)
-                      ? 'The uplink mapping is confirmed per radio, for the radio you are operating. Confirm it for this radio on the pass rail during a pass, or make it the active radio first.'
+                      ? t('settings.satelliteDoppler.vfoMap.otherRadio')
                       : undefined
                   }
                   onChange={(e) => setSatVfoMap(e.target.value as NonNullable<Settings['satVfoMap']>)}
-                  aria-label="Satellite VFO mapping"
+                  aria-label={t('settings.satelliteDoppler.vfoMap.aria')}
                 >
                   {SAT_VFO_MAPS.map((m) => (
                     <option key={m.value} value={m.value}>
@@ -4021,17 +4391,14 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  Which VFO carries your uplink. Match this to how your radio is wired.{' '}
-                  <strong>A wrong mapping transmits on your own downlink</strong> — into the
-                  satellite&apos;s output passband, on top of everyone else working the bird.
-                  Picking one applies immediately and confirms it for the radio you are
-                  operating; a second radio gets its own confirmation on the pass rail. Every
-                  mapping except Uplink only keeps the downlink corrected.
+                  <T k="settings.satelliteDoppler.vfoMap.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Minimum shift (Hz)</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.minShift.label')}
+                </span>
                 <input
                   className="settings-input"
                   type="number"
@@ -4042,16 +4409,17 @@ export function SettingsPanel({
                     const n = Number(e.target.value)
                     if (!Number.isNaN(n)) updateNum('satMinShiftHz', n)
                   }}
-                  aria-label="Minimum Doppler shift before retuning (Hz)"
+                  aria-label={t('settings.satelliteDoppler.minShift.aria')}
                 />
                 <span className="settings-hint">
-                  Corrections smaller than this are not sent. 20 Hz is inaudible on SSB and keeps
-                  the CAT link quiet. 0 sends every update.
+                  {t('settings.satelliteDoppler.minShift.hint')}
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Update interval (ms)</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.interval.label')}
+                </span>
                 <input
                   className="settings-input"
                   type="number"
@@ -4062,27 +4430,26 @@ export function SettingsPanel({
                     const n = Number(e.target.value)
                     if (!Number.isNaN(n)) updateNum('satUpdateMs', n)
                   }}
-                  aria-label="Doppler update interval (milliseconds)"
+                  aria-label={t('settings.satelliteDoppler.interval.aria')}
                 />
                 <span className="settings-hint">
-                  Shortest gap between corrections. 1000 ms is what a low-orbit pass needs.
-                  Shorter fights your own tuning knob and saturates a serial CAT link.
+                  {t('settings.satelliteDoppler.interval.hint')}
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">Pass alert sounds</span>
+                <span className="settings-label">
+                  {t('settings.satelliteDoppler.passSounds.label')}
+                </span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
                     checked={!form.satPassAlertSoundOff}
                     onChange={(e) => updateBool('satPassAlertSoundOff', !e.target.checked)}
-                    aria-label="Audible tones at pass start and end"
+                    aria-label={t('settings.satelliteDoppler.passSounds.aria')}
                   />
                   <span className="settings-hint">
-                    A rising tone the moment an armed pass starts and a falling one when it
-                    ends, alongside the popup — hear AOS with your hands on the rotor. On by
-                    default; clearing this silences only the tones, never the popups.
+                    {t('settings.satelliteDoppler.passSounds.hint')}
                   </span>
                 </span>
               </label>
@@ -4092,7 +4459,7 @@ export function SettingsPanel({
           {/* ---- Orbital elements (the TLE currency pipeline's operator surface;
                   cloned from the FCC callsign→state fieldset) ---- */}
           <fieldset className="settings-section" id="settings-orbital-elements">
-            <legend>Orbital elements</legend>
+            <legend>{t('settings.orbitalElements.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
                 <button
@@ -4118,16 +4485,20 @@ export function SettingsPanel({
                       .finally(() => setTleFetching(false))
                   }}
                 >
-                  {tleFetching ? 'Updating…' : 'Update now'}
+                  {tleFetching
+                    ? t('settings.orbitalElements.update.busy')
+                    : t('settings.orbitalElements.update.action')}
                 </button>
                 <button
                   type="button"
                   className="settings-test-btn"
                   disabled={tleImporting}
                   onClick={() => tleFileRef.current?.click()}
-                  title="Import a downloaded element file (Celestrak TLE, AMSAT keps, a new launch's SupGP set) — the offline-shack escape hatch. Imports persist across refreshes; the newest epoch per satellite wins."
+                  title={t('settings.orbitalElements.import.title')}
                 >
-                  {tleImporting ? 'Importing…' : 'Import from file'}
+                  {tleImporting
+                    ? t('settings.orbitalElements.import.busy')
+                    : t('settings.orbitalElements.import.action')}
                 </button>
                 <input
                   ref={tleFileRef}
@@ -4144,14 +4515,19 @@ export function SettingsPanel({
                       .then((st) => {
                         setTleStatus(st)
                         pushToast(
-                          `Elements imported — ${st.importedCount} imported, ${st.count} total`,
+                          t('settings.orbitalElements.import.ok', {
+                            imported: st.importedCount,
+                            total: st.count,
+                          }),
                           'success',
                           5000,
                         )
                       })
                       .catch((err) =>
                         pushToast(
-                          `Element import failed: ${err instanceof Error ? err.message : err}`,
+                          t('settings.orbitalElements.import.failed', {
+                            error: `${err instanceof Error ? err.message : err}`,
+                          }),
                           'error',
                         ),
                       )
@@ -4165,42 +4541,196 @@ export function SettingsPanel({
                     during an error is not a count. */}
                 <span className="settings-hint">
                   {tleStatus && tleStatus.count > 0
-                    ? `${[`${tleStatus.count} birds`, ...elementBandParts(tleStatus)].join(' · ')} · ${
+                    ? // A LIST of independent chips, not a sentence — the shape
+                      // `elementBandSummary` already uses, so its parts drop straight in.
+                      // `source` is the backend's one-word provenance and stays a token.
+                      [
+                        t('settings.orbitalElements.status.birds', { count: tleStatus.count }),
+                        ...elementBandParts(tleStatus),
                         tleStatus.fetchedAt > 0
-                          ? `fetched ${new Date(tleStatus.fetchedAt * 1000).toISOString().slice(0, 10)}`
-                          : 'never fetched'
-                      } · ${tleStatus.source}${
-                        tleStatus.importedCount > 0 ? ` · ${tleStatus.importedCount} imported` : ''
-                      }`
-                    : 'Not loaded yet — fetched on first launch, then refreshed every 6 h.'}
+                          ? t('settings.orbitalElements.status.fetched', {
+                              date: new Date(tleStatus.fetchedAt * 1000)
+                                .toISOString()
+                                .slice(0, 10),
+                            })
+                          : t('settings.orbitalElements.status.neverFetched'),
+                        tleStatus.source,
+                        ...(tleStatus.importedCount > 0
+                          ? [
+                              t('settings.orbitalElements.status.imported', {
+                                count: tleStatus.importedCount,
+                              }),
+                            ]
+                          : []),
+                      ].join(' · ')
+                    : t('settings.orbitalElements.status.empty')}
                 </span>
               </div>
-              <span className="settings-hint">
-                Keplerian elements (TLEs) for the amateur satellites — pass times, pointing and
-                Doppler all come from them. Refreshed every 6 h from hamradiotools.io: the bird
-                list comes from the SatNOGS database (CC BY-SA 4.0), the elements from CelesTrak
-                and SatNOGS. Import a file for an offline shack or a just-launched bird.
-              </span>
+              <span className="settings-hint">{t('settings.orbitalElements.hint')}</span>
               {tleStatus?.lastError && (
                 // Operator words in the line, the raw error in the tooltip —
                 // during the pre-launch window the mirror 404s by design,
                 // and "HTTP 404" is not a thing to hand an operator.
                 <span className="settings-hint" title={tleRefreshMessage(tleStatus).raw}>
-                  Last refresh: {tleRefreshMessage(tleStatus).text}
+                  {t('settings.orbitalElements.lastRefresh', {
+                    detail: tleRefreshMessage(tleStatus).text,
+                  })}
                 </span>
               )}
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-rotator">
-            <legend>Rotator</legend>
-            <p className="settings-note">
-              Pointing manners for the rotator picked under <strong>Rig Control</strong>. They
-              apply to satellite auto-track.
-            </p>
+            <legend>{t('settings.rotator.legend')}</legend>
+            <p className="settings-note">{t('settings.rotator.note')}</p>
             <div className="settings-grid">
+              {/* THE MODEL AND ITS PORT LIVE HERE NOW. They were inside Rig &amp; CAT, which
+                  meant the one affordance the app has for a silent rotator — the cockpit's
+                  "Rotator not answering" chip, whose whole job is the model/port — deep-linked
+                  to a section that contained neither, and a Settings search for "rotator"
+                  landed on the pointing manners alone (rotor review 2026-08-18, findings
+                  26/32/42/50). The registry says where a setting lives; this is where the
+                  registry always said the rotator lived. */}
               <div className="settings-field">
-                <span className="settings-label">Park position (° az / el)</span>
+                <span className="settings-label">{t('settings.rotator.model.label')}</span>
+                {(() => {
+                  const model = form.rotatorModel ?? 0
+                  const curated = new Set(['0', ...ROTATOR_MODELS.map((r) => String(r.model))])
+                  const modelStr = String(model)
+                  const isOther = rotOther || !curated.has(modelStr)
+                  return (
+                    <>
+                      <select
+                        value={isOther ? 'other' : modelStr}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (v === 'other') {
+                            setRotOther(true)
+                            setRotCustom(model > 0 ? String(model) : '')
+                          } else {
+                            setRotOther(false)
+                            selectRotator(Number(v))
+                          }
+                        }}
+                        aria-label={t('settings.rotator.model.label')}
+                      >
+                        <option value="0">{t('settings.rotator.model.none')}</option>
+                        {ROTATOR_MODELS.map((r) => (
+                          <option key={r.model} value={r.model}>
+                            {r.label}
+                          </option>
+                        ))}
+                        <option value="other">{t('settings.rotator.model.other')}</option>
+                      </select>
+                      {isOther && (
+                        <input
+                          className="settings-input"
+                          type="number"
+                          min="1"
+                          placeholder={t('settings.rotator.model.number.placeholder')}
+                          // Falls back to the CONFIGURED model rather than staying blank: the
+                          // box is local state seeded only when the operator picks "Other" by
+                          // hand, so re-opening Settings — or switching radios — used to render
+                          // an empty field over a perfectly good saved model number.
+                          value={rotCustom || (model > 0 ? String(model) : '')}
+                          onChange={(e) => {
+                            setRotCustom(e.target.value)
+                            const n = Number(e.target.value)
+                            // Only ever commit a REAL model; an incomplete
+                            // entry leaves the last valid value in the form.
+                            if (Number.isInteger(n) && n > 0) selectRotator(n)
+                          }}
+                          aria-label={t('settings.rotator.model.number.aria')}
+                        />
+                      )}
+                    </>
+                  )
+                })()}
+                <span className="settings-hint">{t('settings.rotator.model.hint')}</span>
+              </div>
+
+              {(form.rotatorModel ?? 0) > 1 && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.rotator.port.label')}</span>
+                  <div className="settings-inline-pair">
+                    <input
+                      className="settings-input"
+                      type="text"
+                      value={form.rotatorPort ?? ''}
+                      placeholder={IS_MAC ? ROTATOR_EXAMPLES.macPort : ROTATOR_EXAMPLES.port}
+                      onChange={(e) => update('rotatorPort', e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label={t('settings.rotator.port.aria')}
+                    />
+                    <input
+                      className="settings-input"
+                      type="number"
+                      value={form.rotatorBaud ?? 9600}
+                      onChange={(e) => {
+                        const n = Number(e.target.value)
+                        if (!Number.isNaN(n)) updateNum('rotatorBaud', n)
+                      }}
+                      aria-label={t('settings.rotator.baud.aria')}
+                      title={t('settings.rotator.baud.title')}
+                    />
+                  </div>
+                  {/* The old hint here said "GS-232 default 9600" to EVERY model, which is how
+                      a SPID owner (600 baud) was told the number that kills his rotator was
+                      right. It now names THIS model's own declared rate, and says so loudly
+                      when the saved value cannot work. */}
+                  {(() => {
+                    const only = ROT_FIXED_BAUD.get(form.rotatorModel ?? 0)
+                    const set = form.rotatorBaud ?? 9600
+                    if (only === undefined) {
+                      return (
+                        <span className="settings-hint">{t('settings.rotator.baud.hint.any')}</span>
+                      )
+                    }
+                    // ⚠️ THE RATES GO IN AS ALREADY-FORMATTED STRINGS. `toLocaleString()` on a
+                    // baud rate is the defect the Rig & CAT baud picker has (a German install
+                    // reads "9.600"), and it is NOT fixed here: passing the numbers would let
+                    // `invariantNumber` render "9600" and change visible English, which this
+                    // batch may not do. Both fix together, in their own change.
+                    if (only === set) {
+                      return (
+                        <span className="settings-hint">
+                          {t('settings.rotator.baud.hint.fixed', { rate: only.toLocaleString() })}
+                        </span>
+                      )
+                    }
+                    return (
+                      <span className="settings-hint settings-warn">
+                        <T
+                          k="settings.rotator.baud.hint.wrong"
+                          tags={{ b: <strong /> }}
+                          vals={{ rate: only.toLocaleString(), set: set.toLocaleString() }}
+                        />
+                      </span>
+                    )
+                  })()}
+                </div>
+              )}
+
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.rotator.external.label')}</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.rotatorHost}
+                  placeholder={t('settings.rotator.external.placeholder', {
+                    example: ROTATOR_EXAMPLES.host,
+                  })}
+                  onChange={(e) => update('rotatorHost', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label={t('settings.rotator.external.aria')}
+                />
+                <span className="settings-hint">{t('settings.rotator.external.hint')}</span>
+              </div>
+
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.rotator.park.label')}</span>
                 <div className="settings-inline-pair">
                   <input
                     className="settings-input"
@@ -4211,7 +4741,7 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotParkAz', n)
                     }}
-                    aria-label="Park azimuth (degrees)"
+                    aria-label={t('settings.rotator.park.az.aria')}
                   />
                   <input
                     className="settings-input"
@@ -4222,17 +4752,14 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotParkEl', n)
                     }}
-                    aria-label="Park elevation (degrees)"
+                    aria-label={t('settings.rotator.park.el.aria')}
                   />
                 </div>
-                <span className="settings-hint">
-                  The stow position — wind-safe, or wherever your mast rests. Used only when
-                  After a pass is set to Park.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.park.hint')}</span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Ready position (° az / el)</span>
+                <span className="settings-label">{t('settings.rotator.ready.label')}</span>
                 <div className="settings-inline-pair">
                   <input
                     className="settings-input"
@@ -4243,7 +4770,7 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotReadyAz', n)
                     }}
-                    aria-label="Ready azimuth (degrees)"
+                    aria-label={t('settings.rotator.ready.az.aria')}
                   />
                   <input
                     className="settings-input"
@@ -4254,38 +4781,31 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotReadyEl', n)
                     }}
-                    aria-label="Ready elevation (degrees)"
+                    aria-label={t('settings.rotator.ready.el.aria')}
                   />
                 </div>
-                <span className="settings-hint">
-                  Where the antenna waits for the next pass. Used only when After a pass is set
-                  to Ready.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.ready.hint')}</span>
               </div>
 
               <label className="settings-field">
-                <span className="settings-label">After a pass</span>
+                <span className="settings-label">{t('settings.rotator.postPass.label')}</span>
                 <select
                   className="settings-input"
                   value={form.rotPostPass ?? 'stop'}
                   onChange={(e) => update('rotPostPass', e.target.value)}
-                  aria-label="What the rotator does after a pass"
+                  aria-label={t('settings.rotator.postPass.aria')}
                 >
                   {ROT_POST_PASS.map((o) => (
                     <option key={o.value} value={o.value}>
-                      {o.label}
+                      {t(o.labelKey)}
                     </option>
                   ))}
                 </select>
-                <span className="settings-hint">
-                  Stop is the default and moves nothing: the antenna stays pointed where the bird
-                  set. Park and Ready drive the rotator on their own at LOS, so set those
-                  positions above first.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.postPass.hint')}</span>
               </label>
 
               <div className="settings-field">
-                <span className="settings-label">Tolerance (° az / el)</span>
+                <span className="settings-label">{t('settings.rotator.tolerance.label')}</span>
                 <div className="settings-inline-pair">
                   <input
                     className="settings-input"
@@ -4297,7 +4817,7 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotTolAzDeg', n)
                     }}
-                    aria-label="Azimuth tolerance (degrees)"
+                    aria-label={t('settings.rotator.tolerance.az.aria')}
                   />
                   <input
                     className="settings-input"
@@ -4309,18 +4829,14 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotTolElDeg', n)
                     }}
-                    aria-label="Elevation tolerance (degrees)"
+                    aria-label={t('settings.rotator.tolerance.el.aria')}
                   />
                 </div>
-                <span className="settings-hint">
-                  A new target closer than this is not commanded. Without a deadband the rotator
-                  hunts and the relays chatter for the whole pass. 2° is about a G-5500&apos;s own
-                  resolution.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.tolerance.hint')}</span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Calibration trim (° az / el)</span>
+                <span className="settings-label">{t('settings.rotator.calibration.label')}</span>
                 <div className="settings-inline-pair">
                   <input
                     className="settings-input"
@@ -4331,7 +4847,7 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotCalAzDeg', n)
                     }}
-                    aria-label="Azimuth calibration trim (degrees)"
+                    aria-label={t('settings.rotator.calibration.az.aria')}
                   />
                   <input
                     className="settings-input"
@@ -4342,29 +4858,23 @@ export function SettingsPanel({
                       const n = Number(e.target.value)
                       if (!Number.isNaN(n)) updateNum('rotCalElDeg', n)
                     }}
-                    aria-label="Elevation calibration trim (degrees)"
+                    aria-label={t('settings.rotator.calibration.el.aria')}
                   />
                 </div>
-                <span className="settings-hint">
-                  Added to every command. Use it when the controller reads one heading and the
-                  boom points at another.
-                </span>
+                <span className="settings-hint">{t('settings.rotator.calibration.hint')}</span>
               </div>
 
               <label className="settings-field">
-                <span className="settings-label">Allow flip</span>
+                <span className="settings-label">{t('settings.rotator.flip.label')}</span>
                 <span className="settings-input-row">
                   <input
                     type="checkbox"
                     checked={!!form.rotAllowFlip}
                     onChange={(e) => updateBool('rotAllowFlip', e.target.checked)}
-                    aria-label="Allow the rotator to flip past 90 degrees elevation"
+                    aria-label={t('settings.rotator.flip.aria')}
                   />
                   <span className="settings-hint">
-                    Takes a high pass by turning azimuth 180° and running elevation past 90°,
-                    instead of swinging the mast around at the top of the pass. Off by default:{' '}
-                    <strong>many rotators cannot mechanically go past 90° elevation</strong>.
-                    Check your controller before turning this on.
+                    <T k="settings.rotator.flip.hint" tags={{ b: <strong /> }} />
                   </span>
                 </span>
               </label>
@@ -4379,14 +4889,14 @@ export function SettingsPanel({
               keep working exactly as before; they are transmit POLICY and station plumbing, not
               the CAT link, so they get a heading that says so and stop burying it. */}
           <fieldset className="settings-section" id="settings-transmit-limits">
-            <legend>Transmit limits &amp; sharing</legend>
+            <legend>{t('settings.transmit.legend')}</legend>
             {/* Band-edge tones live with the RIG, not with Digital: useBandEdgeTones is
                 called at App top level off snap.radio.txAllowed (App.tsx:739), so the cue
                 fires on phone and CW exactly as it does on FT8. It was only ever filed
                 under Digital by accident. */}
             <div className="settings-field">
               <label className="settings-toggle">
-                <span className="settings-label">Band-edge tones</span>
+                <span className="settings-label">{t('settings.transmit.bandEdgeTones.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -4397,15 +4907,14 @@ export function SettingsPanel({
                   <span className="toggle-knob" />
                 </button>
               </label>
-              <span className="settings-hint">
-                A short audio cue when the dial crosses your license privileges — a rising
-                "ding" back in band, a falling "dong" past an edge. Applies on every mode.
-              </span>
+              <span className="settings-hint">{t('settings.transmit.bandEdgeTones.hint')}</span>
             </div>
 
             <div className="settings-field">
-              <span className="settings-label">Max power by mode (safety)</span>
+              <span className="settings-label">{t('settings.transmit.powerCaps.label')}</span>
               <div className="settings-power-caps">
+                {/* The three names are MODE names — tokens, exactly as they are everywhere else
+                    in this panel — and the cap itself is a percentage. Only the prose moved. */}
                 {(
                   [
                     ['Phone', 'maxPowerPhone'],
@@ -4428,19 +4937,14 @@ export function SettingsPanel({
                   </label>
                 ))}
               </div>
-              <span className="settings-hint">
-                A ceiling on RF output per mode — leave blank for full power. FT8/FT4/RTTY run
-                ~100% duty cycle, so capping the Digital modes (e.g. 30%) protects your finals and
-                any amplifier. The rig is brought down to the cap the moment you enter a capped
-                mode, not only when you touch the power slider.
-              </span>
+              <span className="settings-hint">{t('settings.transmit.powerCaps.hint')}</span>
             </div>
 
             <p className="settings-note">
-              Saving applies your rig settings live (no restart). <strong>Test CAT</strong> saves,
-              launches the bundled <code>rigctld</code> (Hamlib ships with Nexus on Windows — no
-              separate install), and reads your rig&apos;s frequency to confirm CAT. For CAT, pick
-              your <em>Rig Model</em> and <em>Serial Port</em>; serial RTS/DTR and VOX need no model.
+              <T
+                k="settings.transmit.note"
+                tags={{ b: <strong />, code: <code />, em: <em /> }}
+              />
             </p>
 
             {/* Sharing the rig with another program (#48, rogerloxton). A serial port is
@@ -4458,7 +4962,7 @@ export function SettingsPanel({
                 operators never open, and the honest answer to "how do I move to a new laptop"
                 was to go and find it. */}
             <div className="settings-field">
-              <span className="settings-label">Back up your setup</span>
+              <span className="settings-label">{t('settings.transmit.backup.label')}</span>
               <div className="rig-share-row">
                 <button
                   type="button"
@@ -4467,13 +4971,15 @@ export function SettingsPanel({
                     withErrorToast(async () => {
                       const text = await exportSettingsBundle()
                       const stamp = new Date().toISOString().slice(0, 10)
+                      // The FILE NAME is invariant (batch 8): a translated word in it would
+                      // reduce a non-Latin locale's backup to `nexus-settings-.json`.
                       const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
-                      pushToast(`Settings backed up → ${path}`, 'success')
-                    }, 'Backup failed')
+                      pushToast(t('settings.transmit.backup.done', { path }), 'success')
+                    }, t('settings.transmit.backup.failed'))
                   }
-                  title="Save your radios, preferences, memory channels and watchlist to a file"
+                  title={t('settings.transmit.backup.title')}
                 >
-                  Back up
+                  {t('settings.transmit.backup.action')}
                 </button>
                 <input
                   ref={backupFileRef}
@@ -4486,18 +4992,13 @@ export function SettingsPanel({
                   type="button"
                   className="settings-linkbtn"
                   onClick={() => backupFileRef.current?.click()}
-                  title="Replace your current setup with a saved backup"
+                  title={t('settings.transmit.restore.title')}
                 >
-                  Restore…
+                  {t('settings.transmit.restore.action')}
                 </button>
               </div>
               <span className="settings-hint">
-                Your radios, operating preferences, memory channels, watchlist and chase sets in
-                one file — for a new computer, or before a rebuild. <strong>It holds no
-                passwords or API keys</strong>: those stay in your operating system&apos;s
-                keychain, so a restore asks for them again, and the file is safe to keep on a USB
-                stick. Your contact log is separate — export that from the Logbook. Restoring
-                replaces your current setup.
+                <T k="settings.transmit.backup.hint" tags={{ b: <strong /> }} />
               </span>
             </div>
 
@@ -4510,7 +5011,7 @@ export function SettingsPanel({
                 that used to live separately is merged here: two share affordances meant neither
                 told the whole story. */}
             <div className="settings-field">
-              <span className="settings-label">Share this radio with other programs</span>
+              <span className="settings-label">{t('settings.transmit.share.label')}</span>
               <div className="rig-share-row">
                 <button
                   type="button"
@@ -4534,41 +5035,40 @@ export function SettingsPanel({
                           ?.writeText(`127.0.0.1:${form.catBrokerPort || 4532}`)
                           .catch(() => {})
                       }}
-                      title="Copy the address to paste into the other program"
+                      title={t('settings.transmit.share.copy.title')}
                     >
-                      Copy
+                      {t('settings.transmit.share.copy.action')}
                     </button>
                   </>
                 )}
               </div>
+              {/* The PROGRAM NAMES (VarAC, FreeDV, WSJT-X, JS8Call, fldigi) and the rig-model
+                  name `Hamlib NET rigctl` are the other software's own, so they are written in
+                  the sentence and emphasised by the markers this call site supplies. */}
               {form.catBroker ? (
                 <span className="settings-hint">
-                  Nexus itself answers at this address, so <strong>VarAC</strong>,{' '}
-                  <strong>FreeDV</strong>, <strong>WSJT-X</strong>, <strong>JS8Call</strong> and{' '}
-                  <strong>fldigi</strong> can use the radio while Nexus runs — pick the rig{' '}
-                  <em>Hamlib NET rigctl</em> (VarAC and FreeDV call it a network or rigctld
-                  connection), give it the address above, and leave their serial port blank. They
-                  stay connected even while Nexus tests or reconfigures the radio link, and they
-                  follow whichever radio is active. Only for this computer — the address is not
-                  reachable from the network. Takes effect right away. Both programs can command
-                  the rig, so expect them to argue if you tune in both at once.
+                  <T k="settings.transmit.share.hint.on" tags={{ b: <strong />, em: <em /> }} />
                 </span>
               ) : (
                 <span className="settings-hint">
-                  Off — other programs cannot use the radio while Nexus runs. Turn it on and
-                  point them at the address that appears here (<em>Hamlib NET rigctl</em>).
+                  <T k="settings.transmit.share.hint.off" tags={{ em: <em /> }} />
                 </span>
               )}
               {form.catBroker && (form.radios?.length ?? 0) > 1 && (
                 <span className="settings-hint">
-                  Driving a specific radio that is <em>not</em> the active one: use its direct
-                  address <code className="rig-share-direct mono">127.0.0.1:{form.rigctldPort || 4532}</code>{' '}
-                  (per-radio; this link drops briefly whenever Nexus reconfigures that radio).
+                  <T
+                    k="settings.transmit.share.hint.direct"
+                    tags={{
+                      em: <em />,
+                      code: <code className="rig-share-direct mono" />,
+                    }}
+                    vals={{ address: `127.0.0.1:${form.rigctldPort || 4532}` }}
+                  />
                 </span>
               )}
               {form.catBroker && (
                 <div className="settings-field">
-                  <span className="settings-label">Other programs may key transmit</span>
+                  <span className="settings-label">{t('settings.transmit.foreignPtt.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -4578,11 +5078,7 @@ export function SettingsPanel({
                   >
                     <span className="toggle-knob" />
                   </button>
-                  <span className="settings-hint">
-                    On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when
-                    it owned the CAT cable — every Nexus transmit safeguard still applies. Off:
-                    shared programs tune and read but never transmit.
-                  </span>
+                  <span className="settings-hint">{t('settings.transmit.foreignPtt.hint')}</span>
                 </div>
               )}
             </div>
@@ -4595,7 +5091,16 @@ export function SettingsPanel({
           {/* ---- Digital (FT8/FT4) — was "Operating"; ~90% FT8 sequencing/decoder knobs ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-digital-ft8-ft4">
-            <legend>Digital (FT8/FT4)</legend>
+            <legend>{t('settings.digital.legend')}</legend>
+            {/* ⚠️ THE NEXT TWO SUB-GROUPS ARE DELIBERATELY NOT MIGRATED, and stay in English
+                here until the transmit-path batch moves them. "Transmit & Sequencing" and
+                "Auto-CQ & Caller Selection" are the FT-mode TX / timing / QSO-management
+                surface — the T/R period, the TX watchdog, disable-after-73, double-click-arms-
+                TX, the tune timeout, the CQ budget, the blocked-caller list and the best-caller
+                pick. Every label, hint and accessible name in them moves in its own batch with
+                the stop-line sweeps re-run, deliberately, because WSJT-X parity here is a
+                compatibility contract that cannot be checked in CI. Everything BELOW them —
+                Logging Behavior, Decoder, Station Housekeeping — is in the catalog. */}
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">Transmit &amp; Sequencing</span>
               <div className="settings-grid">
@@ -4840,11 +5345,11 @@ export function SettingsPanel({
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Logging Behavior</span>
+              <span className="settings-featgroup-title">{t('settings.digital.logging.title')}</span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-log QSOs</span>
+                    <span className="settings-label">{t('settings.digital.autoLog.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -4855,12 +5360,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">Automatically log completed contacts to the ADIF logbook.</span>
+                  <span className="settings-hint">{t('settings.digital.autoLog.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Prompt before logging</span>
+                    <span className="settings-label">{t('settings.digital.promptToLog.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -4871,15 +5376,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Show a confirm-and-edit popup when a QSO completes instead of logging silently
-                    (WSJT-X “Prompt me to log QSO”). No effect unless Auto-log is on.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.promptToLog.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Roger with RRR (not RR73)</span>
+                    <span className="settings-label">{t('settings.digital.preferRrr.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -4890,15 +5392,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Acknowledge the final report with a bare RRR (partner still owes a 73) instead of
-                    the combined RR73. Off = RR73 (modern FT8 practice).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.preferRrr.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Clear DX call after logging</span>
+                    <span className="settings-label">{t('settings.digital.clearDxAfterLog.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -4909,20 +5408,23 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Wipe the DX Call / DX Grid fields once a contact is logged (WSJT-X option,
-                    off by default).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.clearDxAfterLog.hint')}</span>
                 </div>
               </div>
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Decoder</span>
+              <span className="settings-featgroup-title">{t('settings.digital.decoder.title')}</span>
               <div className="settings-grid">
                 <div className="settings-field">
-                  <span className="settings-label">Decode depth</span>
-                  <div className="theme-switcher" role="group" aria-label="Decode depth">
+                  <span className="settings-label">{t('settings.digital.decodeDepth.label')}</span>
+                  {/* The chip row is a radio group whose accessible name IS the field label —
+                      one entry, read twice, rather than two identical ones that could drift. */}
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.digital.decodeDepth.label')}
+                  >
                     {([1, 2, 3] as const).map((d) => (
                       <button
                         key={d}
@@ -4934,22 +5436,22 @@ export function SettingsPanel({
                           setForm((prev) => (prev ? { ...prev, decodeDepth: d } : prev))
                         }}
                       >
-                        {d === 1 ? 'Fast' : d === 2 ? 'Normal' : 'Deep'}
+                        {d === 1
+                          ? t('settings.digital.decodeDepth.fast')
+                          : d === 2
+                            ? t('settings.digital.decodeDepth.normal')
+                            : t('settings.digital.decodeDepth.deep')}
                       </button>
                     ))}
                   </div>
-                  <span className="settings-hint">
-                    Deep finds the most signals (WSJT-X default); Fast saves CPU on old hardware.
-                    All Decoder settings drive the native decoder — on a WSJT-X UDP source
-                    (companion mode) decodes arrive already made and none of them apply.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.decodeDepth.hint')}</span>
                 </div>
 
                 <div className="settings-field">
-                  <span className="settings-label">Decoder passband (Hz)</span>
+                  <span className="settings-label">{t('settings.digital.passband.label')}</span>
                   <div className="settings-input-row">
                     <label className="settings-inline-label">
-                      <span>F low</span>
+                      <span>{t('settings.digital.passband.low')}</span>
                       <input
                         id="decode-flow"
                         className="settings-input"
@@ -4959,7 +5461,7 @@ export function SettingsPanel({
                         max={2900}
                         step={1}
                         value={form.decodeFLowHz ?? 200}
-                        aria-label="Decoder F low (Hz)"
+                        aria-label={t('settings.digital.passband.low.aria')}
                         onChange={(e) => {
                           if (e.target.value === '') return // mid-edit clear: keep the prior value
                           markDirty()
@@ -4983,7 +5485,7 @@ export function SettingsPanel({
                       />
                     </label>
                     <label className="settings-inline-label">
-                      <span>F high</span>
+                      <span>{t('settings.digital.passband.high')}</span>
                       <input
                         id="decode-fhigh"
                         className="settings-input"
@@ -4993,7 +5495,7 @@ export function SettingsPanel({
                         max={4000}
                         step={1}
                         value={form.decodeFHighHz ?? 2900}
-                        aria-label="Decoder F high (Hz)"
+                        aria-label={t('settings.digital.passband.high.aria')}
                         onChange={(e) => {
                           if (e.target.value === '') return // mid-edit clear: keep the prior value
                           markDirty()
@@ -5017,16 +5519,12 @@ export function SettingsPanel({
                       />
                     </label>
                   </div>
-                  <span className="settings-hint">
-                    The decoder&apos;s search range. Default 200–2900 Hz. Raise F high toward 4000 Hz
-                    to decode stations calling above ~2.9 kHz (common on crowded FT8 bands); lower the
-                    range to focus on a narrow filter or dodge strong close-in QRM.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.passband.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">A-priori (AP) decoding — FT8</span>
+                    <span className="settings-label">{t('settings.digital.apDecode.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5037,17 +5535,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Retry marginal signals against hypotheses built from your call, the DX call and
-                    the QSO state (WSJT-X &quot;Enable AP&quot;, on by default) — including the
-                    cross-cycle replay of last cycle&apos;s QSOs. FT8 only: FT4&apos;s AP is part of
-                    its Normal/Deep depth and has no separate switch.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.apDecode.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">AP: CQ hypothesis only</span>
+                    <span className="settings-label">{t('settings.digital.apCqOnly.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5058,17 +5551,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Limit AP to the &quot;CQ&quot; guess — no MyCall/DxCall hypotheses (FT8 and
-                    FT4). WSJT-X switches to this by itself after 5 minutes without transmitting,
-                    as a guard against stale-context false decodes; here it is your explicit
-                    choice. Off = full AP, the stock behavior.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.apCqOnly.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Single decode</span>
+                    <span className="settings-label">{t('settings.digital.singleDecode.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5079,21 +5567,21 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Decode only within ±25 Hz of your green RX marker (the same one-station window
-                    WSJT-X uses for a double-click re-decode) instead of the whole passband —
-                    isolates one weak station and saves CPU. FT8 and FT4 only: 50 Hz is narrower
-                    than a single JT65, Q65 or MSK144 signal, so those modes keep the full
-                    passband. Applies while the RX marker sits inside the passband above; off =
-                    full passband, the stock behavior.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.singleDecode.hint')}</span>
                 </div>
 
                 <div className="settings-field">
-                  <span className="settings-label">DXpedition mode</span>
-                  <div className="theme-switcher" role="group" aria-label="DXpedition mode">
+                  <span className="settings-label">{t('settings.digital.dxpedition.label')}</span>
+                  <div
+                    className="theme-switcher"
+                    role="group"
+                    aria-label={t('settings.digital.dxpedition.label')}
+                  >
                     {([
-                      { value: 'none' as const, label: 'Off' },
+                      { value: 'none' as const, label: t('settings.digital.dxpedition.off') },
+                      // ⚠️ "Hound" stays in the code: it is WSJT-X's own name for the calling
+                      // side of a DXpedition QSO, a role token exactly as Fox is, and it names
+                      // nothing once translated (i18n/index.ts, the invariant-token rule).
                       { value: 'hound' as const, label: 'Hound' },
                     ]).map((op) => (
                       <button
@@ -5110,20 +5598,25 @@ export function SettingsPanel({
                       </button>
                     ))}
                   </div>
-                  <span className="settings-hint">
-                    Off = normal FT8/FT4 operation. Hound = DXpedition pile-up discipline (calls
-                    above 1000 Hz; your report auto-moves to the Fox&apos;s frequency).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.dxpedition.hint')}</span>
                 </div>
               </div>
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Station Housekeeping</span>
+              <span className="settings-featgroup-title">
+                {t('settings.digital.housekeeping.title')}
+              </span>
               <div className="settings-grid">
+                {/* ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit control: it
+                    chooses whether the station announces itself, and it can neither key, unkey
+                    nor stop anything. Same reading as Tx Power's drive slider — nothing in this
+                    sub-group is on any cockpit's stop-line census. */}
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Journey — track a weekly streak</span>
+                    <span className="settings-label">
+                      {t('settings.digital.journeyStreak.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -5134,15 +5627,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Off by default. A gentle &ldquo;weeks on the air&rdquo; counter on the Journey
-                    board — never a daily streak, never a penalty for a break.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.journeyStreak.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Beacon — announce presence (CQ)</span>
+                    <span className="settings-label">{t('settings.digital.beacon.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5153,15 +5643,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Off = passive (hunt &amp; pounce): Nexus listens and only transmits when you act.
-                    On = periodically calls CQ to announce you&apos;re on frequency.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.beacon.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">IR-HARQ — combine retransmissions</span>
+                    <span className="settings-label">{t('settings.digital.harq.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5172,16 +5659,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    On (default) = a weak frame that fails is recovered by joint-combining its
-                    retransmissions (RV0+RV1+RV2), and unacknowledged QSO overs escalate redundancy.
-                    Off = RV0-only (each frame decoded on its own).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.harq.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Clock check (NTP)</span>
+                    <span className="settings-label">{t('settings.digital.clockCheck.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -5192,16 +5675,14 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Periodically check your PC clock against an NTP server and show the offset in the
-                    top bar. TempoFast/TempoDeep are slot-timed to UTC — keep it within ~0.5 s (NTP / time.is;
-                    off-grid: GPS). Turn off for fully-offline operation (no network calls).
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.clockCheck.hint')}</span>
                 </div>
 
+                {/* The placeholder below is a POWER in watts — a token, so it stays written
+                    here exactly as the example addresses and device names in Rig & CAT do. */}
                 <div className="settings-field">
                   <label className="settings-label" htmlFor="station-power">
-                    Station power (W)
+                    {t('settings.digital.stationPower.label')}
                   </label>
                   <input
                     id="station-power"
@@ -5227,15 +5708,12 @@ export function SettingsPanel({
                       )
                     }}
                   />
-                  <span className="settings-hint">
-                    Your transmit power in watts — unlocks the Journey miles-per-watt &amp; QRP feats.
-                    Leave blank if unknown.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.stationPower.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-label" htmlFor="units">
-                    Units
+                    {t('settings.digital.units.label')}
                   </label>
                   <select
                     id="units"
@@ -5243,14 +5721,11 @@ export function SettingsPanel({
                     value={form.units ?? 'auto'}
                     onChange={(e) => update('units', e.target.value)}
                   >
-                    <option value="auto">Automatic (from your system)</option>
-                    <option value="metric">Metric (km, °C)</option>
-                    <option value="imperial">Imperial (mi, °F)</option>
+                    <option value="auto">{t('settings.digital.units.auto')}</option>
+                    <option value="metric">{t('settings.digital.units.metric')}</option>
+                    <option value="imperial">{t('settings.digital.units.imperial')}</option>
                   </select>
-                  <span className="settings-hint">
-                    Distances, temperature and wind speed. Automatic follows your operating
-                    system's region. Applies everywhere in the app immediately.
-                  </span>
+                  <span className="settings-hint">{t('settings.digital.units.hint')}</span>
                 </div>
               </div>
             </div>
@@ -5260,94 +5735,89 @@ export function SettingsPanel({
           {/* ---- JT65: submode only. One fixed 60 s period, unlike the others. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-jt65">
-            <legend>JT65 &mdash; classic EME</legend>
+            <legend>{t('settings.jt65.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Submode (tone spacing)</span>
+                <span className="settings-label">{t('settings.jt65.submode.label')}</span>
+                {/* The <option> VALUE is the WSJT-X submode index the settings file stores;
+                    only the label is read, and the A/B/C in it is the submode's own name. */}
                 <select
                   className="settings-input"
                   value={String(form.jt65Submode ?? 0)}
                   onChange={(e) => updateNum('jt65Submode', Number(e.target.value))}
                 >
-                  <option value="0">A &mdash; HF standard, narrowest</option>
-                  <option value="1">B &mdash; 2x spacing</option>
-                  <option value="2">C &mdash; 4x spacing, most Doppler-tolerant</option>
+                  <option value="0">{t('settings.jt65.submode.a')}</option>
+                  <option value="1">{t('settings.jt65.submode.b')}</option>
+                  <option value="2">{t('settings.jt65.submode.c')}</option>
                 </select>
-                <span className="settings-hint">
-                  JT65 always uses a 60&nbsp;s T/R period, so spacing is the only choice. A is
-                  what you want on HF; EME operators move up to B or C as Doppler spread on the
-                  higher bands smears the tones. Both stations must use the same submode.
-                </span>
+                <span className="settings-hint">{t('settings.jt65.submode.hint')}</span>
               </label>
             </div>
-            <span className="settings-hint">
-              The classic weak-signal and moonbounce mode, decoded and transmitted. Messages are
-              the older 22-character format, not the 37-character one FT8 and friends use.
-            </span>
+            <span className="settings-hint">{t('settings.jt65.hint')}</span>
           </fieldset>
           )}
 
           {/* ---- MSK144: meteor scatter. Period is the whole setting. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-msk144">
-            <legend>MSK144 &mdash; meteor scatter</legend>
+            <legend>{t('settings.msk144.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">T/R period</span>
+                <span className="settings-label">{t('settings.msk144.period.label')}</span>
+                {/* "10 s" carries no prose at all — it is a period and its unit, so there is
+                    nothing in it to translate and it stays written here. */}
                 <select
                   className="settings-input"
                   value={String(form.msk144PeriodS ?? 15)}
                   onChange={(e) => updateNum('msk144PeriodS', Number(e.target.value))}
                 >
-                  <option value="5">5 s &mdash; fast turnaround, big showers</option>
+                  <option value="5">{t('settings.msk144.period.fast')}</option>
                   <option value="10">10 s</option>
-                  <option value="15">15 s &mdash; the 6 m standard</option>
-                  <option value="30">30 s &mdash; sparse pings, more to stack</option>
+                  <option value="15">{t('settings.msk144.period.standard')}</option>
+                  <option value="30">{t('settings.msk144.period.sparse')}</option>
                 </select>
-                <span className="settings-hint">
-                  MSK144 sends a 72&nbsp;ms message over and over, so a single meteor trail lasting
-                  a tenth of a second can carry the whole thing. Shorter periods turn the exchange
-                  around faster during a shower; longer ones give the decoder more frames to stack
-                  when pings are sparse. Both stations must use the same period.
-                </span>
+                <span className="settings-hint">{t('settings.msk144.period.hint')}</span>
               </label>
             </div>
-            <span className="settings-hint">
-              MSK144 transmits for nearly the whole period, sending the same 72 ms frame
-              hundreds of times &mdash; that is how meteor scatter works, and a contact can
-              take many minutes of apparent silence. The audio frequency is fixed at a
-              1500 Hz centre; the signal is 1 kHz wide, so there is nowhere to tune it.
-              Shorthand (MSK40) messages are off, matching WSJT-X&rsquo;s default.
-            </span>
+            <span className="settings-hint">{t('settings.msk144.hint')}</span>
           </fieldset>
           )}
 
           {/* ---- Beacons (WSPR / FST4W). A SEPARATE surface from the QSO modes:
                there is no exchange, only a schedule. Off by default — beaconing
                keys the radio unattended, so it is always an explicit choice. ---- */}
-          {tab === 'digital' && (
+          {tab === 'digital' && (() => {
+          // Round Robin is active only with a real rotation: a slot picked AND ≥2
+          // stations in it. slots=1 is degenerate (the rotation would claim every
+          // interval), so the engine falls back to the transmit-% schedule (#101b).
+          const rrActive = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) >= 2
+          const rrDegenerate = (form.beaconRrSlot ?? 0) > 0 && (form.beaconRrSlots ?? 0) < 2
+          return (
           <fieldset className="settings-section" id="settings-beacons-wspr-fst4w">
-            <legend>Beacons — WSPR &amp; FST4W</legend>
+            <legend>{t('settings.beacons.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Transmit %</span>
+                <span className="settings-label">{t('settings.beacons.txPercent.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
                   min={0}
                   max={100}
+                  disabled={rrActive}
+                  title={rrActive ? t('settings.beacons.txPercent.title') : undefined}
                   value={String(form.beaconTxPercent ?? 0)}
                   onChange={(e) => updateNum('beaconTxPercent', Number(e.target.value))}
                 />
                 <span className="settings-hint">
-                  Fraction of intervals to transmit on. 0 = listen only. A beacon that
-                  transmits every interval hears nothing, so a minority is the convention
-                  &mdash; 20&ndash;30% is typical. Below 40% Nexus also avoids
-                  back-to-back transmissions while still hitting the rate you asked for.
+                  {rrActive ? (
+                    <T k="settings.beacons.txPercent.hint.roundRobin" tags={{ b: <strong /> }} />
+                  ) : (
+                    t('settings.beacons.txPercent.hint')
+                  )}
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Transmit power (dBm)</span>
+                <span className="settings-label">{t('settings.beacons.power.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -5357,15 +5827,11 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('beaconPowerDbm', Number(e.target.value))}
                 />
                 <span className="settings-hint">
-                  <strong>Required, and it has to be real.</strong> WSPR reports are
-                  published to a public propagation database that other operators draw
-                  conclusions from, so a wrong figure corrupts their data as well as
-                  yours. The beacon stays silent until this is set. 23 = 200 mW,
-                  30 = 1 W, 37 = 5 W, 43 = 20 W.
+                  <T k="settings.beacons.power.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">FST4W Round Robin slot</span>
+                <span className="settings-label">{t('settings.beacons.rrSlot.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -5374,15 +5840,10 @@ export function SettingsPanel({
                   value={String(form.beaconRrSlot ?? 0)}
                   onChange={(e) => updateNum('beaconRrSlot', Number(e.target.value))}
                 />
-                <span className="settings-hint">
-                  0 = use the transmit-% schedule. Otherwise your slot in a coordinated
-                  rotation: stations agreeing on the same slot count and each taking a
-                  different slot never transmit at the same time, because the assignment
-                  is fixed by UTC.
-                </span>
+                <span className="settings-hint">{t('settings.beacons.rrSlot.hint')}</span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Round Robin slots</span>
+                <span className="settings-label">{t('settings.beacons.rrSlots.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -5392,27 +5853,29 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('beaconRrSlots', Number(e.target.value))}
                 />
                 <span className="settings-hint">
-                  How many stations are in the rotation. Ignored when the slot is 0.
+                  {rrDegenerate ? (
+                    <T k="settings.beacons.rrSlots.hint.degenerate" tags={{ b: <strong /> }} />
+                  ) : (
+                    t('settings.beacons.rrSlots.hint')
+                  )}
                 </span>
               </label>
             </div>
-            <span className="settings-hint">
-              Beacons transmit your callsign, grid and power &mdash; there is no QSO
-              sequence, so Call CQ and S&amp;P are inactive on these tiers. Transmit
-              still has to be armed as usual; the schedule never keys a radio whose
-              transmit you have not enabled.
-            </span>
+            <span className="settings-hint">{t('settings.beacons.hint')}</span>
           </fieldset>
-          )}
+          )
+          })()}
 
           {/* ---- FST4 / FST4W: one period setting, shared. Same decoder, same
                slot clock; the tier picks QSO vs beacon. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-fst4">
-            <legend>FST4 (QSO) / FST4W (beacon)</legend>
+            <legend>{t('settings.fst4.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">T/R period</span>
+                <span className="settings-label">{t('settings.fst4.period.label')}</span>
+                {/* The five rows with no prose beside them are a period and its unit — nothing
+                    in them to translate, so they stay written here. */}
                 <select
                   className="settings-input"
                   value={String(form.fst4PeriodS ?? 120)}
@@ -5421,24 +5884,16 @@ export function SettingsPanel({
                   <option value="15">15 s</option>
                   <option value="30">30 s</option>
                   <option value="60">60 s</option>
-                  <option value="120">120 s — shortest FST4W beacon interval</option>
+                  <option value="120">{t('settings.fst4.period.shortestBeacon')}</option>
                   <option value="300">300 s</option>
                   <option value="900">900 s</option>
-                  <option value="1800">1800 s — deepest</option>
+                  <option value="1800">{t('settings.fst4.period.deepest')}</option>
                 </select>
-                <span className="settings-hint">
-                  Shared by both tiers. Longer periods hear weaker signals at fewer exchanges per
-                  hour. FST4W beacons run at 120/300/900/1800 s; FST4 QSO work is usually
-                  15&ndash;60 s. Both stations (or the beacon you are listening for) must be on the
-                  same period.
-                </span>
+                <span className="settings-hint">{t('settings.fst4.period.hint')}</span>
               </label>
             </div>
             <span className="settings-hint">
-              <strong>FST4</strong> is the QSO mode; <strong>FST4W</strong> is the WSPR-like beacon
-              mode &mdash; pick which one on the tier selector. Nexus decodes both and transmits
-              neither. Note that FST4W hashed callsigns show as <code>&lt;...&gt;</code>: the
-              lookup table upstream fills from a file this build does not carry.
+              <T k="settings.fst4.hint" tags={{ b: <strong />, code: <code /> }} />
             </span>
           </fieldset>
           )}
@@ -5447,62 +5902,54 @@ export function SettingsPanel({
                decode frame length, so they belong with the mode, not the radio. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-q65">
-            <legend>Q65 &mdash; EME / VHF+ scatter</legend>
+            <legend>{t('settings.q65.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">T/R period</span>
+                <span className="settings-label">{t('settings.q65.period.label')}</span>
                 <select
                   className="settings-input"
                   value={String(form.q65PeriodS ?? 60)}
                   onChange={(e) => updateNum('q65PeriodS', Number(e.target.value))}
                 >
-                  <option value="15">15 s — troposcatter</option>
-                  <option value="30">30 s — 6 m meteor / ionoscatter</option>
-                  <option value="60">60 s — EME (most common)</option>
-                  <option value="120">120 s — deep EME</option>
-                  <option value="300">300 s — deepest, microwave EME</option>
+                  <option value="15">{t('settings.q65.period.tropo')}</option>
+                  <option value="30">{t('settings.q65.period.meteor')}</option>
+                  <option value="60">{t('settings.q65.period.eme')}</option>
+                  <option value="120">{t('settings.q65.period.deepEme')}</option>
+                  <option value="300">{t('settings.q65.period.microwaveEme')}</option>
                 </select>
                 <span className="settings-hint">
-                  Longer periods integrate longer and hear weaker signals, at one exchange per
-                  period. Both stations must use the <strong>same</strong> period. Changing this
-                  changes the decode frame length, so it takes effect on the next slot.
+                  <T k="settings.q65.period.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Submode (tone spacing)</span>
+                <span className="settings-label">{t('settings.q65.submode.label')}</span>
+                {/* The <option> VALUE is the submode index the settings file stores; only the
+                    label is read, and the A…E in it is the submode's own name. */}
                 <select
                   className="settings-input"
                   value={String(form.q65Submode ?? 0)}
                   onChange={(e) => updateNum('q65Submode', Number(e.target.value))}
                 >
-                  <option value="0">A — narrowest, most sensitive</option>
-                  <option value="1">B — 2x spacing</option>
-                  <option value="2">C — 4x spacing</option>
-                  <option value="3">D — 8x spacing</option>
-                  <option value="4">E — 16x spacing, most Doppler-tolerant</option>
+                  <option value="0">{t('settings.q65.submode.a')}</option>
+                  <option value="1">{t('settings.q65.submode.b')}</option>
+                  <option value="2">{t('settings.q65.submode.c')}</option>
+                  <option value="3">{t('settings.q65.submode.d')}</option>
+                  <option value="4">{t('settings.q65.submode.e')}</option>
                 </select>
-                <span className="settings-hint">
-                  Wider spacing survives more Doppler spread and frequency drift but costs
-                  sensitivity. Move up the letters as the path degrades — EME on the higher bands
-                  usually needs B or C.
-                </span>
+                <span className="settings-hint">{t('settings.q65.submode.hint')}</span>
               </label>
             </div>
-            <span className="settings-hint">
-              Q65 transmits and receives. The period and submode set both what you hear and
-              what you send, and BOTH STATIONS MUST MATCH &mdash; a correspondent on a
-              different period or submode will not decode you.
-            </span>
+            <span className="settings-hint">{t('settings.q65.hint')}</span>
           </fieldset>
           )}
 
           {/* ---- Digital quick-reply macros (moved out of the old Alerts/Macros orphan) ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-quick-reply-macros">
-            <legend>Quick-reply macros</legend>
+            <legend>{t('settings.quickReply.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">Chat</span>
+                <span className="settings-label">{t('settings.quickReply.chat.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
@@ -5511,10 +5958,10 @@ export function SettingsPanel({
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">Comma-separated chips for Chat.</span>
+                <span className="settings-hint">{t('settings.quickReply.chat.hint')}</span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">QSO</span>
+                <span className="settings-label">{MACRO_SET_QSO}</span>
                 <input
                   className="settings-input"
                   type="text"
@@ -5523,10 +5970,10 @@ export function SettingsPanel({
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">Chips for sequenced QSOs.</span>
+                <span className="settings-hint">{t('settings.quickReply.qso.hint')}</span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Band / CQ</span>
+                <span className="settings-label">{t('settings.quickReply.band.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
@@ -5535,49 +5982,52 @@ export function SettingsPanel({
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">Open broadcasts — the Call CQ launchpad + band feed.</span>
+                <span className="settings-hint">{t('settings.quickReply.band.hint')}</span>
               </label>
             </div>
           </fieldset>
           )}
 
-          {/* ---- Phone (SSB / FM) ---- */}
+          {/* ---- Phone (SSB / FM) ----
+               MIGRATED to the string catalog (i18n/hardcoded-strings.test.ts) with the CW tab
+               and the rest of the per-mode sections. The <select> VALUES are persisted tokens
+               and stay here, as do the CTCSS tones and their unit. */}
           {tab === 'phone' && (
           <fieldset className="settings-section" id="settings-phone">
-            <legend>Phone (SSB / FM)</legend>
+            <legend>{t('settings.phone.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Mode</span>
+              <span className="settings-featgroup-title">{t('settings.phone.mode.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Phone mode</span>
+                <span className="settings-label">{t('settings.phone.mode.label')}</span>
                 <select
                   className="settings-input"
                   value={form.phoneMode}
                   onChange={(e) => update('phoneMode', e.target.value)}
                 >
-                  <option value="ssb">SSB (USB/LSB by band)</option>
-                  <option value="fm">FM (VHF/UHF + repeaters)</option>
+                  <option value="ssb">{t('settings.phone.mode.ssb')}</option>
+                  <option value="fm">{t('settings.phone.mode.fm')}</option>
                 </select>
-                <span className="settings-hint">FM drives the rig to FM + the shift/tone below.</span>
+                <span className="settings-hint">{t('settings.phone.mode.hint')}</span>
               </label>
 
               {form.phoneMode === 'fm' && (
                 <>
                   <label className="settings-field">
-                    <span className="settings-label">Repeater shift</span>
+                    <span className="settings-label">{t('settings.phone.shift.label')}</span>
                     <select
                       className="settings-input"
                       value={form.rptrShift}
                       onChange={(e) => update('rptrShift', e.target.value)}
                     >
-                      <option value="simplex">Simplex (no shift)</option>
-                      <option value="plus">Plus (+)</option>
-                      <option value="minus">Minus (−)</option>
+                      <option value="simplex">{t('settings.phone.shift.simplex')}</option>
+                      <option value="plus">{t('settings.phone.shift.plus')}</option>
+                      <option value="minus">{t('settings.phone.shift.minus')}</option>
                     </select>
-                    <span className="settings-hint">Offset is the band standard (2 m 600 k, 70 cm 5 M…).</span>
+                    <span className="settings-hint">{t('settings.phone.shift.hint')}</span>
                   </label>
 
                   <label className="settings-field">
-                    <span className="settings-label">CTCSS (PL) tone</span>
+                    <span className="settings-label">{t('settings.phone.ctcss.label')}</span>
                     <select
                       className="settings-input"
                       value={String(form.ctcssToneHz)}
@@ -5585,45 +6035,37 @@ export function SettingsPanel({
                         setForm((p) => (p ? { ...p, ctcssToneHz: Number(e.target.value) } : p))
                       }
                     >
-                      <option value="0">Off</option>
-                      {CTCSS_TONES.map((t) => (
-                        <option key={t} value={String(t)}>
-                          {t.toFixed(1)} Hz
+                      <option value="0">{t('settings.phone.ctcss.off')}</option>
+                      {CTCSS_TONES.map((tone) => (
+                        <option key={tone} value={String(tone)}>
+                          {tone.toFixed(1)} {UNIT_HZ}
                         </option>
                       ))}
                     </select>
-                    <span className="settings-hint">Repeater access tone (PL).</span>
+                    <span className="settings-hint">{t('settings.phone.ctcss.hint')}</span>
                   </label>
                 </>
               )}
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Microphone</span>
+              <span className="settings-featgroup-title">{t('settings.phone.mic.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Voice mic (recording)</span>
+                <span className="settings-label">{t('settings.phone.voiceMic.label')}</span>
                 <select
                   className="settings-input"
                   value={form.voiceMicDevice ?? ''}
                   onChange={(e) => update('voiceMicDevice', e.target.value)}
                 >
-                  <option value="">Same as audio input (default)</option>
+                  <option value="">{t('settings.phone.voiceMic.default')}</option>
                   {voiceMicOptions.map((d) => (
                     <option key={d} value={d}>
                       {audioLabel(d, 'input')}
                     </option>
                   ))}
                 </select>
-                <span className="settings-hint">
-                  Mic used when RECORDING a voice-keyer message. Default records from the audio
-                  input device — but on a digital setup that's the rig's RX audio, so you'd record
-                  the band, not your voice. Pick your actual mic here. If it can't open, recording
-                  falls back to the input device (never silent).
-                </span>
+                <span className="settings-hint">{t('settings.phone.voiceMic.hint')}</span>
               </label>
-              <span className="settings-hint">
-                Mic gain and voice-keyer message recording are in the Phone cockpit (live CAT +
-                one-touch record).
-              </span>
+              <span className="settings-hint">{t('settings.phone.mic.hint')}</span>
             </div>
           </fieldset>
           )}
@@ -5631,32 +6073,27 @@ export function SettingsPanel({
           {/* ---- CW — the standalone CW home (keyer + F-key macros) ---- */}
           {tab === 'cw' && (
           <fieldset className="settings-section" id="settings-cw">
-            <legend>CW</legend>
+            <legend>{t('settings.cw.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Keyer</span>
+              <span className="settings-featgroup-title">{t('settings.cw.keyer.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Keyer backend</span>
+                <span className="settings-label">{t('settings.cw.keyer.label')}</span>
                 <select
                   className="settings-input"
                   value={form.cwKeyer ?? 'cat'}
                   onChange={(e) => update('cwKeyer', e.target.value)}
                 >
-                  <option value="cat">CAT — the rig keys CW (Hamlib send_morse; newer rigs only)</option>
-                  <option value="serial">Serial keyline (DTR/RTS) — key the rig&apos;s KEY jack</option>
-                  <option value="winkeyer">WinKeyer — K1EL hardware keyer</option>
-                  <option value="soundcard">Soundcard — audio tone through SSB (workaround)</option>
+                  <option value="cat">{t('settings.cw.keyer.cat')}</option>
+                  <option value="serial">{t('settings.cw.keyer.serial')}</option>
+                  <option value="winkeyer">{t('settings.cw.keyer.winkeyer')}</option>
+                  <option value="soundcard">{t('settings.cw.keyer.soundcard')}</option>
                 </select>
                 <span className="settings-hint">
-                  How Nexus sends CW. <strong>CAT</strong> uses the rig&apos;s internal keyer, but older
-                  rigs (e.g. IC-756PRO III) don&apos;t support it. <strong>Serial keyline</strong> toggles
-                  DTR/RTS into the rig&apos;s KEY jack (rig in CW, rig shapes the signal — the clean
-                  N1MM/fldigi method, needs only a keying cable). <strong>WinKeyer</strong> drives a K1EL.
-                  <strong>Soundcard</strong> keys an audio tone through SSB — a workaround; set drive so
-                  ALC reads zero. Also switchable live from the CW cockpit.
+                  <T k="settings.cw.keyer.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Sidetone pitch (Hz)</span>
+                <span className="settings-label">{t('settings.cw.pitch.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -5667,10 +6104,7 @@ export function SettingsPanel({
                   value={form.cwPitchHz}
                   onChange={(e) => updateNum('cwPitchHz', Number(e.target.value))}
                 />
-                <span className="settings-hint">
-                  CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope
-                  zero-beat marker.
-                </span>
+                <span className="settings-hint">{t('settings.cw.pitch.hint')}</span>
               </label>
               {/* Gated on its own backend, exactly like the keyline port/line below. Shipped
                   unconditionally through 0.27, which made it the ONLY visible port box under
@@ -5678,32 +6112,32 @@ export function SettingsPanel({
                   nothing keyed — the box he could see belonged to a keyer he had not chosen. */}
               {form.cwKeyer === 'winkeyer' && (
                 <label className="settings-field">
-                  <span className="settings-label">WinKeyer port</span>
+                  <span className="settings-label">{t('settings.cw.winkeyerPort.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.winkeyerPort}
-                    placeholder="COM6 — K1EL WinKeyer serial port"
+                    placeholder={t('settings.cw.winkeyerPort.placeholder', {
+                      example: KEYING_EXAMPLES.winkeyerPort,
+                    })}
                     onChange={(e) => update('winkeyerPort', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">
-                    The serial port your WinKey presents. 1200 baud. A WinKey micro inside a
-                    multi-function interface (Timewave Navigator, microHAM) counts — use that
-                    device&apos;s CW/WinKey port, not its CAT port.
-                  </span>
+                  <span className="settings-hint">{t('settings.cw.winkeyerPort.hint')}</span>
                 </label>
               )}
               {form.cwKeyer === 'serial' && (
                 <>
                   <label className="settings-field">
-                    <span className="settings-label">Keyline serial port</span>
+                    <span className="settings-label">{t('settings.cw.keyPort.label')}</span>
                     <input
                       className="settings-input"
                       type="text"
                       value={form.cwKeyPort ?? ''}
-                      placeholder="COM7 — the keying interface (separate from CAT)"
+                      placeholder={t('settings.cw.keyPort.placeholder', {
+                        example: KEYING_EXAMPLES.cwKeyPort,
+                      })}
                       onChange={(e) => update('cwKeyPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -5713,34 +6147,26 @@ export function SettingsPanel({
                         entirely — so this hint pointed a Navigator owner at the one backend
                         that cannot drive his hardware, and CW just never keyed. */}
                     <span className="settings-hint">
-                      The USB-to-serial into your keying interface (Buxcomm, a homebrew
-                      DTR cable, …) that plugs into the rig&apos;s KEY jack. Must be a SEPARATE port
-                      from CAT. Set the rig to CW and its key-jack to straight-key / bug.
-                      An interface with a WinKey chip in it — Timewave Navigator, microHAM, a K1EL
-                      WinKeyer — does <strong>not</strong> key on DTR: pick the WinKeyer backend above
-                      instead and give it that device&apos;s CW port.
+                      <T k="settings.cw.keyPort.hint" tags={{ b: <strong /> }} />
                     </span>
                   </label>
                   <label className="settings-field">
-                    <span className="settings-label">Keying line</span>
+                    <span className="settings-label">{t('settings.cw.keyLine.label')}</span>
                     <select
                       className="settings-input"
                       value={form.cwKeyLine ?? 'dtr'}
                       onChange={(e) => update('cwKeyLine', e.target.value)}
                     >
-                      <option value="dtr">DTR (the CW convention)</option>
-                      <option value="rts">RTS</option>
+                      <option value="dtr">{t('settings.cw.keyLine.dtr')}</option>
+                      <option value="rts">{SERIAL_LINE_RTS}</option>
                     </select>
-                    <span className="settings-hint">
-                      Which control line keys the rig. DTR is standard (RTS = PTT); flip to RTS if your
-                      interface is wired the other way.
-                    </span>
+                    <span className="settings-hint">{t('settings.cw.keyLine.hint')}</span>
                   </label>
                 </>
               )}
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">CW ID after 73</span>
+                  <span className="settings-label">{t('settings.cw.idAfter73.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -5751,17 +6177,13 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">
-                  Keys your callsign in CW once the final 73 has fully left the air (stock WSJT-X
-                  option, default off). Uses the normal CW keying path — PTT + tone — after the FT8
-                  over, never on top of it.
-                </span>
+                <span className="settings-hint">{t('settings.cw.idAfter73.hint')}</span>
               </div>
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Macros (F-key profiles)</span>
+              <span className="settings-featgroup-title">{t('settings.cw.macros.title')}</span>
               <div className="settings-field cw-macro-editor">
-                <span className="settings-label">CW cockpit F-keys</span>
+                <span className="settings-label">{t('settings.cw.macros.label')}</span>
                 {/* Named macro profiles — a rotating operator switches sets here (or in one
                     click from the CW cockpit bar). The grid below edits the ACTIVE profile. */}
                 <div className="cw-macro-row">
@@ -5769,42 +6191,46 @@ export function SettingsPanel({
                     className="settings-input"
                     value={activeCwIdx}
                     onChange={(e) => selectCwProfile(Number(e.target.value))}
-                    aria-label="Active CW macro profile"
+                    aria-label={t('settings.cw.macros.profiles.aria')}
                   >
                     {cwProfiles.map((p, i) => (
                       <option key={i} value={i}>
-                        {p.name || `Profile ${i + 1}`}
+                        {p.name || t('settings.cw.macros.profiles.unnamed', { n: i + 1 })}
                       </option>
                     ))}
                   </select>
                   <button type="button" className="settings-refresh" onClick={addCwProfile}>
-                    New
+                    {t('settings.cw.macros.profiles.add')}
                   </button>
                   <button type="button" className="settings-refresh" onClick={renameCwProfile}>
-                    Rename
+                    {t('settings.cw.macros.profiles.rename')}
                   </button>
                   <button
                     type="button"
                     className="settings-refresh danger"
                     onClick={deleteCwProfile}
                     disabled={cwProfiles.length <= 1}
-                    title={cwProfiles.length <= 1 ? 'Keep at least one profile' : 'Delete this profile'}
+                    title={
+                      cwProfiles.length <= 1
+                        ? t('settings.cw.macros.profiles.keepOne')
+                        : t('settings.cw.macros.profiles.deleteTitle')
+                    }
                   >
-                    Delete
+                    {t('settings.cw.macros.profiles.delete')}
                   </button>
                 </div>
                 {!activeCwMacros.length ? (
                   <div className="cw-macro-row">
-                    <span className="settings-hint">
-                      Using the built-in F1–F8 set. Customize to make them your own (labels +
-                      templates; tokens: {'{MYCALL} {RST} {NAME}'} and ! = the worked call).
-                    </span>
+                    {/* The macro tokens live INSIDE the entry — `{MYCALL}` and friends are
+                        matched literally by the expander, and the catalog interpolates on
+                        `{{double}}` braces precisely so they pass through untouched. */}
+                    <span className="settings-hint">{t('settings.cw.macros.builtin.hint')}</span>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={() => setCwMacros(CW_MACRO_DEFAULTS.map((m) => ({ ...m })))}
                     >
-                      Customize
+                      {t('settings.cw.macros.customize')}
                     </button>
                   </div>
                 ) : (
@@ -5820,7 +6246,7 @@ export function SettingsPanel({
                           type="text"
                           value={m.label}
                           onChange={(e) => updateCwMacro(i, 'label', e.target.value)}
-                          aria-label={`${m.key} label`}
+                          aria-label={t('settings.cw.macros.row.label.aria', { key: m.key })}
                           autoComplete="off"
                           spellCheck={false}
                         />
@@ -5829,28 +6255,20 @@ export function SettingsPanel({
                           type="text"
                           value={m.text}
                           onChange={(e) => updateCwMacro(i, 'text', e.target.value)}
-                          aria-label={`${m.key} text`}
+                          aria-label={t('settings.cw.macros.row.text.aria', { key: m.key })}
                           autoComplete="off"
                           spellCheck={false}
                         />
                       </div>
                     ))}
                     <div className="cw-macro-row">
-                      <span className="settings-hint">
-                        Tokens: {'{MYCALL} {NAME} {MYGRID} {MYSTATE} {RST}'} · ! = the worked call ·{' '}
-                        {'{HISNAME} {HISSTATE}'} = the worked station's QRZ name/state (fill in
-                        Settings ▸ Station for {'{MYSTATE}'}; the rest auto-fill from the copilot /
-                        roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's
-                        next-step highlight follows the role, so customized text still rolls through
-                        F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other
-                        station's call inserted. Save to apply.
-                      </span>
+                      <span className="settings-hint">{t('settings.cw.macros.tokens.hint')}</span>
                       <button
                         type="button"
                         className="settings-refresh"
                         onClick={() => setCwMacros([])}
                       >
-                        Reset to defaults
+                        {t('settings.cw.macros.reset')}
                       </button>
                     </div>
                   </>
@@ -5863,99 +6281,87 @@ export function SettingsPanel({
           {/* ---- RTTY — keying backend + signal parameters (TX + RX demod both) ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-rtty">
-            <legend>RTTY</legend>
+            <legend>{t('settings.rtty.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Keying</span>
+              <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Keying backend</span>
+                <span className="settings-label">{t('settings.rtty.backend.label')}</span>
                 <select
                   className="settings-input"
                   value={form.rttyBackend ?? 'afsk'}
                   onChange={(e) => update('rttyBackend', e.target.value)}
                 >
-                  <option value="afsk">AFSK — soundcard tones through the rig in LSB (default)</option>
-                  <option value="fsk">True FSK — serial keyline (DTR/RTS), rig in RTTY mode</option>
+                  <option value="afsk">{t('settings.rtty.backend.afsk')}</option>
+                  <option value="fsk">{t('settings.rtty.backend.fsk')}</option>
                 </select>
                 <span className="settings-hint">
-                  How Nexus transmits RTTY. <strong>AFSK</strong> plays the two-tone waveform through
-                  the same TX audio path as FT8 (soundcard-clocked = jitter-free; set drive so ALC
-                  reads just zero). <strong>True FSK</strong> bit-bangs the rig&apos;s FSK input over a
-                  serial control line with the rig in RTTY mode — unlocking its narrow RTTY filters
-                  (e.g. the FTDX10&apos;s) — with PTT on CAT or its own line. Software FSK timing is
-                  casual/Field-Day grade; AFSK is the timing-cleanest path.
+                  <T k="settings.rtty.backend.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               {form.rttyBackend === 'fsk' && (
                 <>
                   <label className="settings-field">
-                    <span className="settings-label">FSK serial port</span>
+                    <span className="settings-label">{t('settings.rtty.fskPort.label')}</span>
                     <input
                       className="settings-input"
                       type="text"
                       value={form.rttyFskPort ?? ''}
-                      placeholder="COM8 — e.g. the FTDX10's USB Enhanced COM"
+                      placeholder={t('settings.rtty.fskPort.placeholder', {
+                        example: KEYING_EXAMPLES.rttyFskPort,
+                      })}
                       onChange={(e) => update('rttyFskPort', e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
                     />
-                    <span className="settings-hint">
-                      The port whose control line feeds the rig&apos;s FSK input. Empty = the CAT
-                      serial port.
-                    </span>
+                    <span className="settings-hint">{t('settings.rtty.fskPort.hint')}</span>
                   </label>
                   <label className="settings-field">
-                    <span className="settings-label">FSK data line</span>
+                    <span className="settings-label">{t('settings.rtty.fskLine.label')}</span>
                     <select
                       className="settings-input"
                       value={form.rttyFskLine ?? 'dtr'}
                       onChange={(e) => update('rttyFskLine', e.target.value)}
                     >
-                      <option value="dtr">DTR (the common wiring — RTS stays free for PTT)</option>
-                      <option value="rts">RTS</option>
+                      <option value="dtr">{t('settings.rtty.fskLine.dtr')}</option>
+                      <option value="rts">{SERIAL_LINE_RTS}</option>
                     </select>
-                    <span className="settings-hint">
-                      Which control line carries the data bits. PTT must ride its OWN path — CAT
-                      PTT or the separate PTT line, never this one; Nexus refuses a send if they
-                      collide.
-                    </span>
+                    <span className="settings-hint">{t('settings.rtty.fskLine.hint')}</span>
                   </label>
                 </>
               )}
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Signal</span>
+              <span className="settings-featgroup-title">{t('settings.rtty.signal.title')}</span>
               <label className="settings-field">
-                <span className="settings-label">Baud rate</span>
+                <span className="settings-label">{t('settings.rtty.baud.label')}</span>
                 <select
                   className="settings-input"
                   value={String(form.rttyBaud ?? 45.45)}
                   onChange={(e) => updateNum('rttyBaud', Number(e.target.value))}
                 >
-                  <option value="45.45">45.45 — the HF standard</option>
-                  <option value="75">75 — VHF / some nets</option>
+                  <option value="45.45">{t('settings.rtty.baud.hf')}</option>
+                  <option value="75">{t('settings.rtty.baud.vhf')}</option>
                 </select>
-                <span className="settings-hint">
-                  Drives the TX bit clock and the RX demodulator (true 45.45, never rounded to 45).
-                </span>
+                <span className="settings-hint">{t('settings.rtty.baud.hint')}</span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Shift (Hz)</span>
+                <span className="settings-label">{t('settings.rtty.shift.label')}</span>
+                {/* 425 and 850 are rows with nothing in them but the shift itself — no prose
+                    to translate, so they stay written here. */}
                 <select
                   className="settings-input"
                   value={String(form.rttyShiftHz ?? 170)}
                   onChange={(e) => updateNum('rttyShiftHz', Number(e.target.value))}
                 >
-                  <option value="170">170 — the HF standard</option>
+                  <option value="170">{t('settings.rtty.shift.hf')}</option>
                   <option value="425">425</option>
                   <option value="850">850</option>
                 </select>
-                <span className="settings-hint">
-                  Mark/space spacing — the TX tone pair and the RX demodulator both.
-                </span>
+                <span className="settings-hint">{t('settings.rtty.shift.hint')}</span>
               </label>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Reverse (swap mark/space)</span>
+                  <span className="settings-label">{t('settings.rtty.reverse.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -5966,12 +6372,34 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">
-                  The convention is LSB with mark on the lower audio tone. Turn this on when
-                  deliberately running the opposite sideband (e.g. AFSK in USB/DATA-U) so the
-                  on-air sense stays correct — applies to TX and the RX decoder.
-                </span>
+                <span className="settings-hint">{t('settings.rtty.reverse.hint')}</span>
               </div>
+            </div>
+          </fieldset>
+          )}
+
+          {/* ---- PSK — receive-only this phase (Keyboard Modes Phase 1). ONE deliberate
+               setting: the auto-arm opt-out. PSK31 must work with ZERO configuration —
+               open the screen, click a trace, read the text — so everything else
+               (netted frequency, AFC, squelch) is cockpit/decoder state, not schema. ---- */}
+          {tab === 'digital' && (
+          <fieldset className="settings-section" id="settings-psk">
+            <legend>{t('settings.psk.legend')}</legend>
+            <div className="settings-field">
+              <label className="settings-toggle">
+                <span className="settings-label">{t('settings.psk.rxAutoArm.label')}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
+                  aria-checked={form.pskRxAutoArm !== false}
+                  className={`toggle${form.pskRxAutoArm !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('pskRxAutoArm', form.pskRxAutoArm === false)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              <span className="settings-hint">{t('settings.psk.rxAutoArm.hint')}</span>
             </div>
           </fieldset>
           )}
@@ -5981,12 +6409,12 @@ export function SettingsPanel({
                baud, framing or keying; it is here now, beside the rest of SSTV. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-sstv">
-            <legend>SSTV</legend>
+            <legend>{t('settings.sstv.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Receiving</span>
+              <span className="settings-featgroup-title">{t('settings.sstv.receiving.title')}</span>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Start receiving when SSTV opens</span>
+                  <span className="settings-label">{t('settings.sstv.rxAutoArm.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -5998,16 +6426,11 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">
-                  The SSTV screen starts the decoder as soon as you open it, so a picture on the
-                  band decodes without arming anything. Turn this off to arm the receiver by hand
-                  (the Arm button in the SSTV header). Stopping the receiver yourself is already
-                  remembered for the rest of the session.
-                </span>
+                <span className="settings-hint">{t('settings.sstv.rxAutoArm.hint')}</span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">ISS SSTV auto-arm</span>
+                  <span className="settings-label">{t('settings.sstv.issAutoArm.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6018,23 +6441,25 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
+                {/* The ISS downlink is a dial reading, so it is interpolated as a value and
+                    never written inside the sentence (the invariant-token rule). */}
                 <span className="settings-hint">
-                  Auto-arm SSTV for ISS passes — tunes 145.800 FM and arms the decoder when the
-                  ISS is overhead, restores your dial at LOS. Off by default. A pass arm is an
-                  explicit act, so it works whether or not the switch above is on.
+                  {t('settings.sstv.issAutoArm.hint', { freq: ISS_SSTV_MHZ.toFixed(3) })}
                 </span>
               </div>
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Transmitting</span>
+              <span className="settings-featgroup-title">
+                {t('settings.sstv.transmitting.title')}
+              </span>
               <label className="settings-field">
-                <span className="settings-label">Transmit mode</span>
+                <span className="settings-label">{t('settings.sstv.txMode.label')}</span>
                 <select
                   className="settings-input"
                   value={form.sstvDefaultTxMode ?? 'auto'}
                   onChange={(e) => update('sstvDefaultTxMode', e.target.value)}
                 >
-                  <option value="auto">Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)</option>
+                  <option value="auto">{t('settings.sstv.txMode.auto')}</option>
                   {TX_MODE_GROUPS.map((g) => (
                     <optgroup key={g} label={g}>
                       {SSTV_TX_MODES.filter((m) => m.group === g).map((m) => (
@@ -6046,14 +6471,11 @@ export function SettingsPanel({
                   ))}
                 </select>
                 <span className="settings-hint">
-                  This is the mode the SSTV screen starts on; you can still change it there for one
-                  picture. <strong>Automatic</strong> follows the band: HF gets Scottie 1 (the NA
-                  calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is
-                  what ARISS transmits.
+                  <T k="settings.sstv.txMode.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
               <label className="settings-field">
-                <span className="settings-label">Transmit power</span>
+                <span className="settings-label">{t('settings.sstv.txPower.label')}</span>
                 <span className="settings-input-row">
                   <input
                     type="number"
@@ -6063,28 +6485,18 @@ export function SettingsPanel({
                     placeholder="—"
                     value={form.sstvTxPowerPct == null ? '' : String(form.sstvTxPowerPct)}
                     onChange={(e) => updateSstvTxPower(e.target.value)}
-                    aria-label="SSTV transmit power percent"
+                    aria-label={t('settings.sstv.txPower.aria')}
                   />
                   <span>%</span>
                 </span>
-                <span className="settings-hint">
-                  The drive the SSTV screen starts on, and the level an image is sent at. Leave it
-                  blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous
-                  key-down at full duty, so most operators run it well below their SSB drive. Your
-                  Phone power cap still applies on top of this.
-                </span>
+                <span className="settings-hint">{t('settings.sstv.txPower.hint')}</span>
               </label>
             </div>
             {/* Not a control — the answer to the question this section otherwise invites. The
                 plate is drawn in Rust before encoding so no webview path can bypass it, and its
                 geometry is derived from the demodulator's own window lengths, not chosen. */}
             <p className="settings-note">
-              Your callsign is burned into the top-left of every picture you transmit, and there is
-              no switch for it: an SSTV over is one long carrier of picture-only audio, so the
-              picture is the identification (§97.119(b)(4)). Send is refused until you have set a
-              callsign in Settings ▸ Station. If a picture already shows your call — a pre-made QSO
-              card — tick &ldquo;My picture already shows my callsign&rdquo; in the SSTV screen:
-              that is per-picture on purpose and resets with every new image.
+              {t('settings.sstv.callsignNote', { rule: SSTV_ID_RULE })}
             </p>
           </fieldset>
           )}
@@ -6094,26 +6506,32 @@ export function SettingsPanel({
                person to go hunting for these went to APRS, not to Integrations & Feeds. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-aprs">
-            <legend>APRS</legend>
+            <legend>{t('settings.aprs.legend')}</legend>
             {/* The RF side. ⚠️ NOTHING HERE MAY CARRY `disabled={!form.aprsIsEnabled}` — that is
                 the internet feed's gate, and copying it down would put RF APRS behind an
                 internet connection it does not need. */}
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Over the air</span>
+              <span className="settings-featgroup-title">{t('settings.aprs.rf.title')}</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">Channel (RF)</span>
+                  <span className="settings-label">{t('settings.aprs.channel.label')}</span>
                   <select
                     className="settings-input"
                     value={form.aprsChannelMhz == null ? '' : String(form.aprsChannelMhz)}
                     onChange={(e) => updateNullableNum('aprsChannelMhz', e.target.value, 0)}
                   >
                     {/* Naming the derived number is the whole mitigation for a table of
-                        approximate bounding boxes: a wrong guess is visible, not silent. */}
+                        approximate bounding boxes: a wrong guess is visible, not silent. Both
+                        readings are interpolated — a channel is a dial frequency and never
+                        belongs inside a translatable sentence. */}
                     <option value="">
                       {form.mygrid
-                        ? `Automatic — ${aprsChannelForGrid(form.mygrid).toFixed(3)} from your grid`
-                        : 'Automatic — 144.390 (set your grid on the Station tab)'}
+                        ? t('settings.aprs.channel.derived', {
+                            freq: aprsChannelForGrid(form.mygrid).toFixed(3),
+                          })
+                        : t('settings.aprs.channel.default', {
+                            freq: NORTH_AMERICA.toFixed(3),
+                          })}
                     </option>
                     {APRS_FREQS.map(([f, region]) => (
                       <option key={f} value={String(f)}>
@@ -6125,21 +6543,19 @@ export function SettingsPanel({
                     {form.aprsChannelMhz != null &&
                       !APRS_FREQS.some(([f]) => f === form.aprsChannelMhz) && (
                         <option value={String(form.aprsChannelMhz)}>
-                          {form.aprsChannelMhz.toFixed(3)} · custom
+                          {t('settings.aprs.channel.custom', {
+                            freq: form.aprsChannelMhz.toFixed(3),
+                          })}
                         </option>
                       )}
                   </select>
                   <span className="settings-hint">
-                    The 2 m FM channel APRS runs on, which is regional.{' '}
-                    <strong>Automatic</strong> follows your grid square, so moving to another
-                    region lands you on the right channel with nothing to configure — the number
-                    it picked is shown above. The boundaries are approximate; pick a channel here
-                    to pin it for good.
+                    <T k="settings.aprs.channel.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Beacon symbol</span>
+                  <span className="settings-label">{t('settings.aprs.symbol.label')}</span>
                   <select
                     className="settings-input"
                     value={`${form.aprsSymbolTable ?? '/'}${form.aprsSymbolCode ?? '>'}`}
@@ -6155,15 +6571,11 @@ export function SettingsPanel({
                       </option>
                     ))}
                   </select>
-                  <span className="settings-hint">
-                    The icon other stations see on the map for your beacon. Digipeater and iGate
-                    come from the alternate symbol table and are what a fixed station running as
-                    infrastructure should show.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.symbol.hint')}</span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Beacon comment</span>
+                  <span className="settings-label">{t('settings.aprs.comment.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -6172,14 +6584,11 @@ export function SettingsPanel({
                     onChange={(e) => update('aprsComment', e.target.value)}
                     autoComplete="off"
                   />
-                  <span className="settings-hint">
-                    Free text carried with your position — a name, a net, a URL. This goes on the
-                    air, and APRS caps it at 43 characters.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.comment.hint')}</span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Digipeater path</span>
+                  <span className="settings-label">{t('settings.aprs.path.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -6196,14 +6605,16 @@ export function SettingsPanel({
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Which digipeaters may repeat your beacon. <code>WIDE1-1, WIDE2-1</code> is the
-                    near-universal default — one hop through a local fill-in digi, then one wide
-                    hop. Leave it empty to transmit direct, with no digipeaters at all.
+                    <T
+                      k="settings.aprs.path.hint"
+                      tags={{ code: <code /> }}
+                      vals={{ path: APRS_EXAMPLES.path }}
+                    />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Beacon SSID</span>
+                  <span className="settings-label">{t('settings.aprs.ssid.label')}</span>
                   <select
                     className="settings-input"
                     value={form.aprsSsid == null ? '' : String(form.aprsSsid)}
@@ -6212,29 +6623,29 @@ export function SettingsPanel({
                     {/* '' = null = follow the callsign, exactly like the channel picker above.
                         NOT `updateNum` — a plain number cannot express "I have not chosen", and
                         writing 0 unconditionally would demote a station whose call is KD9TAW-9. */}
-                    <option value="">From my callsign</option>
-                    {APRS_SSIDS.map(([n, what]) => (
-                      <option key={n} value={String(n)}>
-                        {n} — {what}
+                    <option value="">{t('settings.aprs.ssid.fromCallsign')}</option>
+                    {APRS_SSIDS.map(({ ssid, labelKey }) => (
+                      <option key={ssid} value={String(ssid)}>
+                        {ssid} — {t(labelKey)}
                       </option>
                     ))}
                   </select>
                   <span className="settings-hint">
-                    The suffix on your callsign in every APRS frame you send, which is how other
-                    operators tell your mobile from your home station.{' '}
-                    <strong>From my callsign</strong> uses whatever your callsign already spells
-                    out — so if you have set it to <code>KD9TAW-9</code> on the Station tab,
-                    that is what goes out.
+                    <T
+                      k="settings.aprs.ssid.hint"
+                      tags={{ b: <strong />, code: <code /> }}
+                      vals={{ example: APRS_EXAMPLES.ssid }}
+                    />
                   </span>
                 </label>
               </div>
             </div>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">APRS-IS (internet feed)</span>
+              <span className="settings-featgroup-title">{t('settings.aprs.is.title')}</span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">APRS-IS feed</span>
+                    <span className="settings-label">{t('settings.aprs.is.enabled.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6245,32 +6656,30 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Plot stations the internet reports alongside the ones your own antenna hears —
-                    each one tagged so you can always tell which is which. Runs whether or not the
-                    APRS decoder is armed: it uses no radio and never transmits. If internet
-                    stations appear while your receiver stays silent, the fault is in the RF chain.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.enabled.hint')}</span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">Server</span>
+                  <span className="settings-label">{t('settings.aprs.is.host.label')}</span>
                   <input
                     className="settings-input"
                     value={form.aprsIsHost ?? ''}
                     onChange={(e) => update('aprsIsHost', e.target.value)}
-                    placeholder="rotate.aprs2.net"
+                    placeholder={APRS_EXAMPLES.isHost}
                     spellCheck={false}
                     disabled={!form.aprsIsEnabled}
                   />
                   <span className="settings-hint">
-                    Your regional Tier 2 rotate is best — noam / soam / euro / asia / aunz
-                    .aprs2.net. <code>rotate.aprs2.net</code> works anywhere.
+                    <T
+                      k="settings.aprs.is.host.hint"
+                      tags={{ code: <code /> }}
+                      vals={{ host: APRS_EXAMPLES.isHost }}
+                    />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Port</span>
+                  <span className="settings-label">{t('settings.aprs.is.port.label')}</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -6280,14 +6689,11 @@ export function SettingsPanel({
                     onChange={(e) => updateNum('aprsIsPort', Number(e.target.value))}
                     disabled={!form.aprsIsEnabled}
                   />
-                  <span className="settings-hint">
-                    14580 is the filtered port clients and iGates should use. The full-feed ports
-                    would send you the entire planet.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.port.hint')}</span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Radius (km)</span>
+                  <span className="settings-label">{t('settings.aprs.is.radius.label')}</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -6297,14 +6703,11 @@ export function SettingsPanel({
                     onChange={(e) => updateNum('aprsIsRadiusKm', Number(e.target.value))}
                     disabled={!form.aprsIsEnabled}
                   />
-                  <span className="settings-hint">
-                    How far around your grid square to subscribe. APRS is a local mode; 150 km is a
-                    generous 2 m-plus-digipeater horizon. 0 = no distance limit (busy).
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.radius.hint')}</span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Watched calls</span>
+                  <span className="settings-label">{t('settings.aprs.is.watchCalls.label')}</span>
                   <input
                     className="settings-input"
                     value={(form.aprsIsWatchCalls ?? []).join(', ')}
@@ -6316,19 +6719,16 @@ export function SettingsPanel({
                           .filter(Boolean),
                       )
                     }
-                    placeholder="W9XYZ-9, KD9ABC"
+                    placeholder={APRS_EXAMPLES.watchCalls}
                     spellCheck={false}
                     disabled={!form.aprsIsEnabled}
                   />
-                  <span className="settings-hint">
-                    Comma separated. These come through from anywhere on earth, however far outside
-                    your radius they are — the club tracker on a road trip, a friend chasing a summit.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.watchCalls.hint')}</span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Weather stations</span>
+                    <span className="settings-label">{t('settings.aprs.is.weather.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6340,12 +6740,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">Include weather reports in the feed.</span>
+                  <span className="settings-hint">{t('settings.aprs.is.weather.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Objects &amp; items</span>
+                    <span className="settings-label">{t('settings.aprs.is.objects.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6357,14 +6757,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Repeaters, NWS alerts and event markers other stations have placed on the map.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.objects.hint')}</span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Messages</span>
+                    <span className="settings-label">{t('settings.aprs.is.messages.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6376,14 +6774,11 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    Show APRS text messages from the feed. Display only — replying to an internet
-                    message is not wired up.
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.is.messages.hint')}</span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">Keep stations for (min)</span>
+                  <span className="settings-label">{t('settings.aprs.stationTtl.label')}</span>
                   <input
                     className="settings-input"
                     type="number"
@@ -6392,18 +6787,12 @@ export function SettingsPanel({
                     value={form.aprsStationTtlMin ?? 60}
                     onChange={(e) => updateNum('aprsStationTtlMin', Number(e.target.value))}
                   />
-                  <span className="settings-hint">
-                    How long a station stays on the map after its last packet. Stations start to fade
-                    at a third of this. An hour by default: fixed stations often beacon only every
-                    ten to thirty minutes, and a shorter window makes the slow ones blink off between
-                    their own beacons. 0 keeps every station forever (no fade, no removal — the
-                    2000-station ceiling still applies).
-                  </span>
+                  <span className="settings-hint">{t('settings.aprs.stationTtl.hint')}</span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Receive-only iGate</span>
+                    <span className="settings-label">{t('settings.aprs.is.uplink.label')}</span>
                     <button
                       type="button"
                       role="switch"
@@ -6415,13 +6804,19 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
+                  {/* Two WHOLE sentences, not a stem and two tails: "Publishes under KD9TAW"
+                      and "Publishes under your callsign" are different statements, and a
+                      language that orders them differently cannot be served by a glued tail. */}
                   <span className="settings-hint">
-                    Contribute packets <strong>your own antenna hears</strong> to APRS-IS, so
-                    stations in your area reach the global map through you. Publishes under{' '}
-                    {form.mycall ? <strong>{form.mycall.toUpperCase()}</strong> : 'your callsign'}, so
-                    it is a separate choice from watching the feed, and it needs the APRS decoder
-                    running to have anything to send. Nexus never sends the other way: gating the
-                    internet back onto the air means transmitting unattended.
+                    {form.mycall ? (
+                      <T
+                        k="settings.aprs.is.uplink.hint.call"
+                        tags={{ b: <strong /> }}
+                        vals={{ call: form.mycall.toUpperCase() }}
+                      />
+                    ) : (
+                      <T k="settings.aprs.is.uplink.hint.noCall" tags={{ b: <strong /> }} />
+                    )}
                   </span>
                 </div>
               </div>
@@ -6432,21 +6827,23 @@ export function SettingsPanel({
           {/* ---- Frequencies (working-frequency table overrides) ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-working-frequencies">
-            <legend>Working Frequencies</legend>
+            <legend>{t('settings.workingFrequencies.legend')}</legend>
             <p className="settings-note">
-              The dial frequency used when a band/mode is selected. These are{' '}
-              <strong>overrides</strong> of the stock WSJT-X working-frequency table — leave the
-              list empty to use stock everywhere. An override replaces the stock row for its
-              band + mode (e.g. to move FT8 to an alternate sub-band).
+              <T k="settings.workingFrequencies.note" tags={{ b: <strong /> }} />
             </p>
 
             <div className="settings-field">
-              <span className="settings-label">Standard table (read-only)</span>
+              <span className="settings-label">
+                {t('settings.workingFrequencies.stock.label')}
+              </span>
+              {/* Every dial reading below is DATA, formatted invariantly by `toFixed(6)`; the
+                  band and mode cells print the table's own tokens. Only the three column
+                  headings are words. */}
               <div className="freq-table">
                 <div className="freq-row head">
-                  <span className="freq-cell">Band</span>
-                  <span className="freq-cell">Mode</span>
-                  <span className="freq-cell">Dial (MHz)</span>
+                  <span className="freq-cell">{t('settings.workingFrequencies.stock.band')}</span>
+                  <span className="freq-cell">{t('settings.workingFrequencies.stock.mode')}</span>
+                  <span className="freq-cell">{t('settings.workingFrequencies.stock.dial')}</span>
                 </div>
                 {STOCK_WORKING_FREQUENCIES.map((r) => {
                   const ov = overrideByKey.get(`${r.band}|${r.mode}`)
@@ -6457,10 +6854,14 @@ export function SettingsPanel({
                       {ov != null ? (
                         <span
                           className="freq-cell mono freq-override"
-                          title={`Your override — stock is ${r.mhz.toFixed(6)} MHz`}
+                          title={t('settings.workingFrequencies.stock.overrideTitle', {
+                            mhz: r.mhz.toFixed(6),
+                          })}
                         >
                           {ov.toFixed(6)}
-                          <span className="freq-override-tag">override</span>
+                          <span className="freq-override-tag">
+                            {t('settings.workingFrequencies.stock.overrideTag')}
+                          </span>
                         </span>
                       ) : (
                         <span className="freq-cell mono">{r.mhz.toFixed(6)}</span>
@@ -6470,15 +6871,18 @@ export function SettingsPanel({
                 })}
               </div>
               <span className="settings-hint">
-                WSJT-X stock dial frequencies. A row with an active override shows your value
-                (highlighted) instead of the stock one.
+                {t('settings.workingFrequencies.stock.hint')}
               </span>
             </div>
 
             <div className="settings-field">
-              <span className="settings-label">Your overrides</span>
+              <span className="settings-label">
+                {t('settings.workingFrequencies.overrides.label')}
+              </span>
               {overrides.length === 0 && (
-                <span className="settings-hint">None — the stock table is in effect.</span>
+                <span className="settings-hint">
+                  {t('settings.workingFrequencies.overrides.none')}
+                </span>
               )}
               {overrides.map((o, i) => {
                 const dup = dupKeys.has(`${o.band}|${o.mode}`)
@@ -6487,7 +6891,9 @@ export function SettingsPanel({
                     <select
                       className="settings-input"
                       value={o.band}
-                      aria-label={`Override ${i + 1} band`}
+                      aria-label={t('settings.workingFrequencies.overrides.band.aria', {
+                        n: i + 1,
+                      })}
                       onChange={(e) => updateOverride(i, { band: e.target.value })}
                     >
                       {FREQ_BANDS.map((b) => (
@@ -6499,7 +6905,9 @@ export function SettingsPanel({
                     <select
                       className="settings-input"
                       value={o.mode}
-                      aria-label={`Override ${i + 1} mode`}
+                      aria-label={t('settings.workingFrequencies.overrides.mode.aria', {
+                        n: i + 1,
+                      })}
                       onChange={(e) => updateOverride(i, { mode: e.target.value })}
                     >
                       {FREQ_MODES.map((m) => (
@@ -6514,7 +6922,9 @@ export function SettingsPanel({
                       inputMode="decimal"
                       min="0"
                       step="0.0001"
-                      aria-label={`Override ${i + 1} dial frequency in MHz`}
+                      aria-label={t('settings.workingFrequencies.overrides.mhz.aria', {
+                        n: i + 1,
+                      })}
                       value={mhzDraft && mhzDraft.idx === i ? mhzDraft.text : o.mhz.toFixed(6)}
                       onChange={(e) => {
                         setMhzDraft({ idx: i, text: e.target.value })
@@ -6527,20 +6937,25 @@ export function SettingsPanel({
                       type="button"
                       className="settings-refresh"
                       onClick={() => removeOverride(i)}
-                      aria-label={`Remove the ${o.band} ${o.mode} override`}
-                      title="Remove this override"
+                      aria-label={t('settings.workingFrequencies.overrides.remove.aria', {
+                        band: o.band,
+                        mode: o.mode,
+                      })}
+                      title={t('settings.workingFrequencies.overrides.remove.title')}
                     >
                       ✕
                     </button>
                     {dup && (
-                      <span className="freq-dup-tag">duplicate band + mode — the last row wins</span>
+                      <span className="freq-dup-tag">
+                        {t('settings.workingFrequencies.overrides.duplicate')}
+                      </span>
                     )}
                   </div>
                 )
               })}
               <div className="settings-input-row freq-actions">
                 <button type="button" className="settings-refresh" onClick={addOverride}>
-                  Add override
+                  {t('settings.workingFrequencies.overrides.add')}
                 </button>
                 <button
                   type="button"
@@ -6548,12 +6963,11 @@ export function SettingsPanel({
                   onClick={resetOverrides}
                   disabled={overrides.length === 0}
                 >
-                  Reset to standard
+                  {t('settings.workingFrequencies.overrides.reset')}
                 </button>
               </div>
               <span className="settings-hint">
-                MHz is the dial (suppressed-carrier) frequency. Save to apply — band switches
-                then use your value for that band + mode.
+                {t('settings.workingFrequencies.overrides.hint')}
               </span>
             </div>
           </fieldset>
@@ -6562,29 +6976,25 @@ export function SettingsPanel({
           {/* ---- Alerts ---- */}
           {tab === 'spots' && (
           <>
+          {/* MIGRATED to the string catalog (i18n/hardcoded-strings.test.ts) with the Spots
+              and alert panels this section configures, so the wording matches on both sides.
+              The <select> VALUES are persisted tokens and stay here. The rest of this file is
+              NOT migrated — see the guard's scope note. */}
           <fieldset className="settings-section" id="settings-pounce">
-            <legend>Pounce — new-one alert</legend>
+            <legend>{t('settings.pounce.legend')}</legend>
             <p className="settings-note">
-              Interrupts you the INSTANT a needed station appears on the cluster or RBN, rather
-              than waiting for the spot board to refresh. A loud tone plays whether or not Nexus
-              is the window you are looking at, and a banner offers one-click Work.
-              {' '}
-              Off until you switch it on. How rare "rare" is depends on your own totals: if you
-              are chasing your first hundred entities then almost every DX spot is a new one and
-              this would never stop talking. Start with <em>New DXCC entity only</em> once your
-              log is far enough along that a new one is genuinely an event. Each station alerts
-              once per band and mode.
+              <T k="settings.pounce.note" tags={{ em: <em /> }} />
             </p>
             <label className="settings-field">
-              <span className="settings-label">Alert me for</span>
+              <span className="settings-label">{t('settings.pounce.threshold.label')}</span>
               <select
                 value={form.pounceThreshold ?? 'off'}
                 onChange={(e) => update('pounceThreshold', e.target.value as never)}
               >
-                <option value="off">Off (default)</option>
-                <option value="atno">New DXCC entity only</option>
-                <option value="atnoOrZone">New entity or CQ zone</option>
-                <option value="atnoZoneOrState">New entity, zone, or US state</option>
+                <option value="off">{t('settings.pounce.threshold.off')}</option>
+                <option value="atno">{t('settings.pounce.threshold.atno')}</option>
+                <option value="atnoOrZone">{t('settings.pounce.threshold.atnoOrZone')}</option>
+                <option value="atnoZoneOrState">{t('settings.pounce.threshold.atnoZoneOrState')}</option>
               </select>
             </label>
           </fieldset>
@@ -6598,35 +7008,36 @@ export function SettingsPanel({
               what an operator opens Appearance for. Reunited with UI scale and density. */}
           {tab === 'appearance' && (
           <>
+          {/* MIGRATED to the string catalog (i18n/hardcoded-strings.test.ts) with the rest of
+              the Appearance tab. The <select> VALUES are persisted tokens and stay here. */}
           <fieldset className="settings-section" id="settings-accessibility">
-            <legend>Accessibility &amp; eyes-free</legend>
-            <p className="settings-note">
-              Speech and sound cues for operating by ear (screen-reader users, or anyone who wants
-              audible feedback). The keyboard and screen-reader labels throughout Nexus are always
-              on — these settings only control what comes out of the speakers.
-            </p>
+            <legend>{t('settings.accessibility.legend')}</legend>
+            <p className="settings-note">{t('settings.accessibility.note')}</p>
             <div className="settings-grid">
               <div className="settings-field">
                 <label className="settings-inline-label">
-                  <span className="settings-label">Announce decodes (screen reader)</span>
+                  <span className="settings-label">
+                    {t('settings.accessibility.announce.label')}
+                  </span>
                   <select
                     className="settings-input"
                     value={form.announceVerbosity ?? 'needed'}
                     onChange={(e) => update('announceVerbosity', e.target.value)}
                   >
-                    <option value="off">Off</option>
-                    <option value="needed">Needed only (calling you / new / watched)</option>
-                    <option value="all">All (adds a per-cycle CQ summary)</option>
+                    <option value="off">{t('settings.accessibility.announce.off')}</option>
+                    <option value="needed">{t('settings.accessibility.announce.needed')}</option>
+                    <option value="all">{t('settings.accessibility.announce.all')}</option>
                   </select>
                 </label>
                 <span className="settings-hint">
-                  What a screen reader speaks as decodes arrive. Silent without a reader running.
-                  "Needed" mirrors your alerts; "All" adds a spoken batch summary each cycle.
+                  {t('settings.accessibility.announce.hint')}
                 </span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">TX / RX earcon</span>
+                  <span className="settings-label">
+                    {t('settings.accessibility.txRxEarcon.label')}
+                  </span>
                   <button
                     type="button"
                     role="switch"
@@ -6637,11 +7048,15 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">A rising tone when you key up, falling when you unkey — know your TX state by ear.</span>
+                <span className="settings-hint">
+                  {t('settings.accessibility.txRxEarcon.hint')}
+                </span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Decode-batch tick</span>
+                  <span className="settings-label">
+                    {t('settings.accessibility.decodeTick.label')}
+                  </span>
                   <button
                     type="button"
                     role="switch"
@@ -6652,7 +7067,9 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.</span>
+                <span className="settings-hint">
+                  {t('settings.accessibility.decodeTick.hint')}
+                </span>
               </div>
             </div>
           </fieldset>
@@ -6661,12 +7078,15 @@ export function SettingsPanel({
 
           {tab === 'spots' && (
           <>
+          {/* MIGRATED to the string catalog — see the note on the Pounce section above. The
+              band-scope <option> VALUES are persisted tokens; the four labels are one shared
+              vocabulary because the same four choices mean the same thing on all three. */}
           <fieldset className="settings-section" id="settings-alerts">
-            <legend>Alerts</legend>
+            <legend>{t('settings.alerts.legend')}</legend>
             <div className="settings-grid">
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">My call</span>
+                  <span className="settings-label">{t('settings.alerts.myCall.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6677,12 +7097,12 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">Beep + flash when someone directs a call at you.</span>
+                <span className="settings-hint">{t('settings.alerts.myCall.hint')}</span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">CQ calls</span>
+                  <span className="settings-label">{t('settings.alerts.cq.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6693,76 +7113,68 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">Alert on any decoded CQ. Off by default — CQs are constant.</span>
+                <span className="settings-hint">{t('settings.alerts.cq.hint')}</span>
               </div>
 
               {/* Per-type band scopes: all decode alerts fire on the CURRENT band, so the
                   scope is "should this alert on the band I'm on". VHF+ = 6 m and up. */}
               <div className="settings-field">
                 <label className="settings-inline-label">
-                  <span className="settings-label">New DXCC</span>
+                  <span className="settings-label">{t('settings.alerts.dxcc.label')}</span>
                   <select
                     className="settings-input"
                     value={!form.alertNew ? 'off' : (form.alertDxccBands ?? 'all')}
-                    aria-label="New DXCC alert bands"
+                    aria-label={t('settings.alerts.dxcc.aria')}
                     onChange={(e) => changeAlertScope('alertDxccBands', e.target.value)}
                   >
-                    <option value="off">Off</option>
-                    <option value="hf">HF only</option>
-                    <option value="vhf">VHF+ (6 m and up)</option>
-                    <option value="all">All bands</option>
+                    <option value="off">{t('settings.alerts.scope.off')}</option>
+                    <option value="hf">{t('settings.alerts.scope.hf')}</option>
+                    <option value="vhf">{t('settings.alerts.scope.vhf')}</option>
+                    <option value="all">{t('settings.alerts.scope.all')}</option>
                   </select>
                 </label>
-                <span className="settings-hint">
-                  Loud alert on a new DXCC entity — a “new one”. Does NOT alert on every decode.
-                </span>
+                <span className="settings-hint">{t('settings.alerts.dxcc.hint')}</span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-inline-label">
-                  <span className="settings-label">New grid</span>
+                  <span className="settings-label">{t('settings.alerts.grid.label')}</span>
                   <select
                     className="settings-input"
                     value={!form.alertNew ? 'off' : (form.alertGridBands ?? 'vhf')}
-                    aria-label="New grid alert bands"
+                    aria-label={t('settings.alerts.grid.aria')}
                     onChange={(e) => changeAlertScope('alertGridBands', e.target.value)}
                   >
-                    <option value="off">Off</option>
-                    <option value="hf">HF only</option>
-                    <option value="vhf">VHF+ (6 m and up)</option>
-                    <option value="all">All bands</option>
+                    <option value="off">{t('settings.alerts.scope.off')}</option>
+                    <option value="hf">{t('settings.alerts.scope.hf')}</option>
+                    <option value="vhf">{t('settings.alerts.scope.vhf')}</option>
+                    <option value="all">{t('settings.alerts.scope.all')}</option>
                   </select>
                 </label>
-                <span className="settings-hint">
-                  Quiet toast on a grid you haven&apos;t worked. Default VHF+ only — grid awards
-                  (VUCC/FFMA) start at 6 m; on HF nearly every decode is an unworked grid.
-                </span>
+                <span className="settings-hint">{t('settings.alerts.grid.hint')}</span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-inline-label">
-                  <span className="settings-label">Rare grid 💎</span>
+                  <span className="settings-label">{t('settings.alerts.rareGrid.label')}</span>
                   <select
                     className="settings-input"
                     value={!form.alertNew ? 'off' : (form.alertRareGridBands ?? 'vhf')}
-                    aria-label="Rare grid alert bands"
+                    aria-label={t('settings.alerts.rareGrid.aria')}
                     onChange={(e) => changeAlertScope('alertRareGridBands', e.target.value)}
                   >
-                    <option value="off">Off</option>
-                    <option value="hf">HF only</option>
-                    <option value="vhf">VHF+ (6 m and up)</option>
-                    <option value="all">All bands</option>
+                    <option value="off">{t('settings.alerts.scope.off')}</option>
+                    <option value="hf">{t('settings.alerts.scope.hf')}</option>
+                    <option value="vhf">{t('settings.alerts.scope.vhf')}</option>
+                    <option value="all">{t('settings.alerts.scope.all')}</option>
                   </select>
                 </label>
-                <span className="settings-hint">
-                  The loud 💎 alert for rare/water-only grids (rovers, maritime, DXpeditions) —
-                  separate from plain grids so silencing HF chatter keeps the gems.
-                </span>
+                <span className="settings-hint">{t('settings.alerts.rareGrid.hint')}</span>
               </div>
 
             </div>
             <div className="settings-watchlist-block">
-              <span className="settings-label">Watch list</span>
+              <span className="settings-label">{t('settings.alerts.watchlist.label')}</span>
               <WatchlistPanel />
             </div>
           </fieldset>
@@ -6772,11 +7184,13 @@ export function SettingsPanel({
           {/* ---- Connections (connector status + log) — moved from Logbook & QSL ---- */}
           {tab === 'logging' && (
           <fieldset className="settings-section" id="settings-connections">
-            <legend>Connections</legend>
+            <legend>{t('settings.connections.legend')}</legend>
             <div className="conn-status-grid">
               {creds.map((c) => {
                 // The dot comes from the last ROUND TRIP, not from `stored` — see
                 // settings/connHealth.ts. A stored secret proves only that a save took.
+                // ⚠️ The state word and the "failed 10m ago …" line are that module's prose
+                // and move with it; the connector name and identity are data.
                 const state = connState(c)
                 const dot = dotClass(state)
                 const when = whenText(c, state)
@@ -6799,9 +7213,11 @@ export function SettingsPanel({
                       className="settings-test-btn"
                       onClick={runQrzTest}
                       disabled={qrzTest.state === 'testing'}
-                      title="Round-trips the QRZ Logbook API (ACTION=STATUS) — proves the key works without logging anything"
+                      title={t('settings.connections.qrz.test.title')}
                     >
-                      {qrzTest.state === 'testing' ? 'Testing…' : 'Test'}
+                      {qrzTest.state === 'testing'
+                        ? t('settings.connections.test.busy')
+                        : t('settings.connections.qrz.test.action')}
                     </button>
                   )}
                 </div>
@@ -6810,26 +7226,24 @@ export function SettingsPanel({
             </div>
             {qrzTest.state !== 'idle' && qrzTest.state !== 'testing' && (
               <p className={`conn-test-result ${qrzTest.state}`}>
-                {qrzTest.state === 'ok' ? '✓ QRZ Logbook reachable: ' : '✗ QRZ test failed: '}
-                {qrzTest.msg}
-                {qrzTest.state === 'fail' && (
-                  <>
-                    {' '}
-                    (Uploads need the per-logbook <strong>API key</strong> from
-                    logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)
-                  </>
+                {qrzTest.state === 'ok' ? (
+                  t('settings.connections.qrz.test.ok', { detail: qrzTest.msg })
+                ) : (
+                  <T
+                    k="settings.connections.qrz.test.fail"
+                    tags={{ b: <strong /> }}
+                    vals={{ detail: qrzTest.msg }}
+                  />
                 )}
               </p>
             )}
             <div className="conn-log">
               <div className="conn-log-head">
-                <span>Connection log</span>
-                <span className="settings-hint">every save, sync, push, and failure lands here</span>
+                <span>{t('settings.connections.log.title')}</span>
+                <span className="settings-hint">{t('settings.connections.log.hint')}</span>
               </div>
               {connLog.length === 0 ? (
-                <p className="conn-log-empty">
-                  No events yet this session — save a credential or run a sync and it shows here.
-                </p>
+                <p className="conn-log-empty">{t('settings.connections.log.empty')}</p>
               ) : (
                 <ul className="conn-log-list">
                   {connLog.slice(0, 40).map((e, i) => (
@@ -6849,10 +7263,10 @@ export function SettingsPanel({
 
           {tab === 'logging' && (
             <fieldset className="settings-section" id="settings-connections-b4">
-              <legend>Worked-before (B4) &amp; dupes</legend>
+              <legend>{t('settings.b4.legend')}</legend>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">Match mode too</span>
+                  <span className="settings-label">{t('settings.b4.matchMode.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -6862,13 +7276,7 @@ export function SettingsPanel({
                   >
                     <span className="toggle-knob" />
                   </button>
-                  <span className="settings-hint">
-                    Off (the default, and WSJT-X&rsquo;s): working a station on 40m marks them
-                    B4-on-band for 40m in every mode, and the log strip&rsquo;s Dupe badge counts
-                    any mode on the band. On: 40m FT8 and 40m phone are separate contacts — the
-                    solid B4 chip and the Dupe badge require the mode to match as well. The
-                    hollow B4 chip (worked anywhere) is unaffected either way.
-                  </span>
+                  <span className="settings-hint">{t('settings.b4.matchMode.hint')}</span>
                 </label>
               </div>
             </fieldset>
@@ -6877,12 +7285,17 @@ export function SettingsPanel({
           {/* ---- Network integrations ---- */}
           {tab === 'logging' && (
           <fieldset className="settings-section" id="settings-integrations-feeds">
-            <legend>Integrations &amp; Feeds</legend>
+            <legend>{t('settings.integrations.legend')}</legend>
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Local APIs &amp; Loggers</span>
+              <span className="settings-featgroup-title">
+                {t('settings.integrations.local.title')}
+              </span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
+                    {/* ⚠️ A label that is nothing but names — the program, the protocol and
+                        the interface — so it is invariant and stays here, exactly as the
+                        Phone/CW/Digital tab labels do. */}
                     <span className="settings-label">WSJT-X UDP API</span>
                     <button
                       type="button"
@@ -6894,11 +7307,11 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">for JTAlert / GridTracker / loggers</span>
+                  <span className="settings-hint">{t('settings.integrations.wsjtxUdp.hint')}</span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">UDP Address</span>
+                  <span className="settings-label">{t('settings.integrations.udpAddr.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -6909,12 +7322,14 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">host:port for the UDP feed</span>
+                  <span className="settings-hint">{t('settings.integrations.udpAddr.hint')}</span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Ham Radio Deluxe logging</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.hrdLogging.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -6925,14 +7340,11 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">
-                    push each QSO to HRD Logbook over its QSO-Forwarding UDP port (HRD must be running;
-                    don't also run JTAlert/QSO Relay into HRD or you'll double-log)
-                  </span>
+                  <span className="settings-hint">{t('settings.integrations.hrdLogging.hint')}</span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">HRD UDP Address</span>
+                  <span className="settings-label">{t('settings.integrations.hrdAddr.label')}</span>
                   <input
                     className="settings-input"
                     type="text"
@@ -6943,21 +7355,25 @@ export function SettingsPanel({
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">HRD QSO-Forwarding host:port (default 127.0.0.1:2333)</span>
+                  <span className="settings-hint">{t('settings.integrations.hrdAddr.hint')}</span>
                   {form.hrdLogging && radio?.hrdLinkUp != null && (
                     <span
                       className={`settings-hint ${radio.hrdLinkUp ? 'ok' : 'warn'}`}
                       style={{ color: radio.hrdLinkUp ? 'var(--ok)' : 'var(--state-weak)' }}
                     >
                       {radio.hrdLinkUp
-                        ? '● HRD reachable — contacts are forwarding'
-                        : `○ HRD not reachable — ${radio.hrdQueued ?? 0} contact(s) queued, will send when HRD is back`}
+                        ? t('settings.integrations.hrd.linkUp')
+                        : t('settings.integrations.hrd.linkDown', {
+                            count: radio.hrdQueued ?? 0,
+                          })}
                     </span>
                   )}
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Companion UDP address</span>
+                  <span className="settings-label">
+                    {t('settings.integrations.companionAddr.label')}
+                  </span>
                   <input
                     className="settings-input"
                     value={form.companionAddr ?? ''}
@@ -6966,13 +7382,15 @@ export function SettingsPanel({
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Where Nexus listens for WSJT-X/JTDX in Companion source mode.
+                    {t('settings.integrations.companionAddr.hint')}
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Write ALL.TXT decode log</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.allTxt.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -6984,11 +7402,15 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    WSJT-X-format decode log for GridTracker / loggers to tail. Written only while
-                    this is on, and it first appears after the next decode.
+                    {t('settings.integrations.allTxt.hint')}
                     {allTxtPath && (
                       <>
-                        {' '}Saved at <code>{allTxtPath}</code>.
+                        {' '}
+                        <T
+                          k="settings.integrations.allTxt.path"
+                          tags={{ code: <code /> }}
+                          vals={{ path: allTxtPath }}
+                        />
                       </>
                     )}
                   </span>
@@ -6999,13 +7421,71 @@ export function SettingsPanel({
                       revealAllTxt().catch(() => {})
                     }}
                   >
+                    {t('settings.integrations.allTxt.reveal')}
+                  </button>
+                </div>
+
+                {/* The diagnostic log has no toggle — it is written from the first moments of
+                    startup, deliberately, because the failures worth diagnosing are the early
+                    ones. That is exactly why it needs a line HERE: it was the one
+                    operator-facing artefact nothing in the interface named, on a file we ask
+                    people to send us when something goes wrong. */}
+                <div className="settings-field">
+                  <span className="settings-label">Diagnostic log</span>
+                  <span className="settings-hint">
+                    Always on. A plain-text record of what Nexus did — startup steps, the CAT and
+                    audio device open, updater checks, and any failure — so a “it won’t start” or
+                    “it stopped decoding” report has something to look at. Passwords, API keys and
+                    tokens are masked before anything is written, so it is safe to attach to a bug
+                    report. Bounded to two files, about 8 MB in total.
+                    {diagLogPath && (
+                      <>
+                        {' '}Saved at <code>{diagLogPath}</code>.
+                      </>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => {
+                      revealDiagLog().catch(() => {})
+                    }}
+                  >
                     Reveal in folder
                   </button>
                 </div>
 
+                {/* The DEBUG tier. Deliberately a SEPARATE field under the log rather than a
+                    line in its hint: it is a session switch an operator is talked into by us
+                    ("turn this on and send me the log"), not a preference, and it should read
+                    as the exception it is. Applies live — no restart — because whatever is
+                    being chased is usually happening right now. */}
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Save a WAV per logged QSO</span>
+                    <span className="settings-label">Extra detail in the diagnostic log</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.diagDebugLog}
+                      className={`toggle${form.diagDebugLog ? ' on' : ''}`}
+                      onClick={() => updateBool('diagDebugLog', !form.diagDebugLog)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">
+                    Records each transmission, per-period decode counts and CAT traffic. Leave
+                    this OFF for normal operating — it is for a session where something is being
+                    chased, and the extra volume shortens how far back the log reaches. The log
+                    says at the top when it was on.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.integrations.qsoWav.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7017,11 +7497,15 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Auto-records the last ~60 s of RX audio on log.
+                    {t('settings.integrations.qsoWav.hint')}
                     {recordingsPath && (
                       <>
-                        {' '}Saved in <code>{recordingsPath}</code>, created the first time
-                        you record.
+                        {' '}
+                        <T
+                          k="settings.integrations.qsoWav.path"
+                          tags={{ code: <code /> }}
+                          vals={{ path: recordingsPath }}
+                        />
                       </>
                     )}
                   </span>
@@ -7032,33 +7516,35 @@ export function SettingsPanel({
                       revealRecordings().catch(() => {})
                     }}
                   >
-                    Open recordings folder
+                    {t('settings.integrations.qsoWav.reveal')}
                   </button>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">Save received audio (.wav per period)</span>
+                  <span className="settings-label">
+                    {t('settings.integrations.saveWav.label')}
+                  </span>
                   <select
                     value={form.saveWav || 'none'}
                     onChange={(e) => update('saveWav', e.target.value)}
                   >
-                    <option value="none">None (default)</option>
-                    <option value="decodes">Save periods with decodes</option>
-                    <option value="all">Save all periods</option>
+                    <option value="none">{t('settings.integrations.saveWav.none')}</option>
+                    <option value="decodes">{t('settings.integrations.saveWav.decodes')}</option>
+                    <option value="all">{t('settings.integrations.saveWav.all')}</option>
                   </select>
-                  <span className="settings-hint">
-                    WAVs land in recordings/periods (12 kHz mono, ~360 KB each). "All" writes
-                    ~2 GB/day of continuous monitoring — use for decoder debugging, not always-on.
-                  </span>
+                  <span className="settings-hint">{t('settings.integrations.saveWav.hint')}</span>
                 </label>
               </div>
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Spot Sources</span>
+              <span className="settings-featgroup-title">
+                {t('settings.integrations.spotSources.title')}
+              </span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
+                    {/* ⚠️ The reporting service's own name — invariant, like a callsign. */}
                     <span className="settings-label">PSK Reporter</span>
                     <button
                       type="button"
@@ -7070,12 +7556,16 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">upload spots to the global map</span>
+                  <span className="settings-hint">
+                    {t('settings.integrations.pskreporter.hint')}
+                  </span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">DX Cluster / RBN spots</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.clusterSpots.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7087,16 +7577,17 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Surface "new ones" from the Reverse Beacon Network on the Needed board + Connect.
-                    Takes effect on restart.
+                    {t('settings.integrations.clusterSpots.hint')}
                   </span>
                 </div>
 
                 <div className="settings-field">
-                  <span className="settings-label">Phone/SSB cluster nodes</span>
+                  <span className="settings-label">
+                    {t('settings.integrations.clusterNodes.label')}
+                  </span>
                   {(form.clusterHosts ?? []).length === 0 ? (
                     <span className="settings-hint cluster-node-empty">
-                      No nodes — add one below to get SSB/phone needs (RBN only carries CW + digital).
+                      {t('settings.integrations.clusterNodes.empty')}
                     </span>
                   ) : (
                     (form.clusterHosts ?? []).map((host, i) => (
@@ -7107,14 +7598,18 @@ export function SettingsPanel({
                           onChange={(e) =>
                             mutateClusterHosts((hs) => hs.map((h, j) => (j === i ? e.target.value : h)))
                           }
-                          placeholder="ve7cc.net:23"
+                          placeholder={LOGGER_EXAMPLES.clusterNode}
                           spellCheck={false}
                         />
                         <button
                           type="button"
                           className="cluster-node-remove"
-                          title="Remove this cluster node"
-                          aria-label={`Remove ${host || 'node'}`}
+                          title={t('settings.integrations.clusterNodes.remove.title')}
+                          aria-label={
+                            host
+                              ? t('settings.integrations.clusterNodes.remove.aria', { host })
+                              : t('settings.integrations.clusterNodes.remove.ariaBlank')
+                          }
                           onClick={() => mutateClusterHosts((hs) => hs.filter((_, j) => j !== i))}
                         >
                           ✕
@@ -7136,7 +7631,12 @@ export function SettingsPanel({
                         )
                       }}
                     >
-                      <option value="">+ Add a known node…</option>
+                      <option value="">
+                        {t('settings.integrations.clusterNodes.add.option')}
+                      </option>
+                      {/* Each preset LABEL names a real node (its callsign, its port and why
+                          you would pick it) — data about the cluster mesh, invariant, and it
+                          lives in CLUSTER_PRESETS above. */}
                       {CLUSTER_PRESETS.map((p) => (
                         <option key={p.host} value={p.host}>
                           {p.label}
@@ -7146,28 +7646,29 @@ export function SettingsPanel({
                     <button
                       type="button"
                       className="cluster-node-add-blank"
-                      title="Add a custom node row"
+                      title={t('settings.integrations.clusterNodes.addCustom.title')}
                       onClick={() => mutateClusterHosts((hs) => [...hs, ''])}
                     >
-                      + Custom
+                      {t('settings.integrations.clusterNodes.addCustom.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    We connect to ALL listed nodes and union their human SSB/phone spots — more
-                    nodes = wider phone coverage (RBN CW + digital connect automatically; RBN
-                    endpoints are ignored here). An added node connects on the next Save; removing
-                    one takes effect on restart.
+                    {t('settings.integrations.clusterNodes.hint')}
                   </span>
                 </div>
               </div>
             </div>
 
             <div className="settings-featgroup">
-              <span className="settings-featgroup-title">Propagation</span>
+              <span className="settings-featgroup-title">
+                {t('settings.integrations.propagation.title')}
+              </span>
               <div className="settings-grid">
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Near-region opening watch</span>
+                    <span className="settings-label">
+                      {t('settings.integrations.openingWatch.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7179,30 +7680,35 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Watch VHF/10 m activity near your QTH (not just your own contacts) so openings flag "open
-                    around you" before you've worked anyone. Takes effect on restart.
+                    {t('settings.integrations.openingWatch.hint')}
                   </span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">Prediction engine</span>
+                  <span className="settings-label">
+                    {t('settings.integrations.propEngine.label')}
+                  </span>
                   <select
                     value={form.propEngine || 'heuristic'}
                     onChange={(e) => update('propEngine', e.target.value)}
                   >
-                    <option value="heuristic">Modelled (fast heuristic)</option>
-                    <option value="p533">ITU-R P.533 (full physics)</option>
+                    <option value="heuristic">
+                      {t('settings.integrations.propEngine.heuristic')}
+                    </option>
+                    <option value="p533">{t('settings.integrations.propEngine.p533')}</option>
                   </select>
                   <span className="settings-hint">
-                    Drives the per-station path outlook + 24h band×hour grid. P.533 is the real
-                    circuit-reliability method (validated against the ITU reference; ~0.1 s per
-                    prediction, uses your station power). Live spots always win over any model.
+                    {t('settings.integrations.propEngine.hint')}
                   </span>
                 </label>
               </div>
-              <SettingsGroup id="antenna-gain" title="Antenna gain (advanced)" defaultOpen={false}>
+              <SettingsGroup
+                id="antenna-gain"
+                title={t('settings.antennaGain.title')}
+                defaultOpen={false}
+              >
                 <div className="settings-field">
-                  <span className="settings-label">Antenna gain (dBi) — TX / RX</span>
+                  <span className="settings-label">{t('settings.antennaGain.label')}</span>
                   <div className="settings-inline-pair">
                     {(['antTxGainDbi', 'antRxGainDbi'] as const).map((k) => (
                       <input
@@ -7213,7 +7719,11 @@ export function SettingsPanel({
                         min="-10"
                         max="30"
                         inputMode="decimal"
-                        aria-label={k === 'antTxGainDbi' ? 'TX antenna gain (dBi)' : 'RX antenna gain (dBi)'}
+                        aria-label={
+                          k === 'antTxGainDbi'
+                            ? t('settings.antennaGain.tx.aria')
+                            : t('settings.antennaGain.rx.aria')
+                        }
                         value={form[k] ?? 0}
                         onChange={(e) => {
                           const num = Number(e.target.value)
@@ -7222,11 +7732,7 @@ export function SettingsPanel({
                       />
                     ))}
                   </div>
-                  <span className="settings-hint">
-                    Used by the P.533 link budget only. 0 = a simple wire/vertical (isotropic);
-                    a 3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or
-                    takeoff-angle modelling, and the fast heuristic ignores it.
-                  </span>
+                  <span className="settings-hint">{t('settings.antennaGain.hint')}</span>
                 </div>
               </SettingsGroup>
             </div>
@@ -7237,30 +7743,33 @@ export function SettingsPanel({
           {tab === 'logging' && (
           <>
           <fieldset className="settings-section" id="settings-dxkeeper">
+            {/* ⚠️ The legend is two product names and nothing else — invariant, and it stays
+                here for the same reason the mode-name tab labels do. */}
             <legend>DXKeeper (DXLab Suite)</legend>
             <p className="settings-note">
-              Pushes each logged QSO into <strong>DXKeeper</strong> over its TCP Network
-              Service. Enable it in DXKeeper under <em>Configuration ▸ Defaults ▸ Network
-              Service</em> first.
+              <T k="settings.dxkeeper.note" tags={{ b: <strong />, em: <em /> }} />
             </p>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">DXKeeper host</span>
+                <span className="settings-label">{t('settings.dxkeeper.host.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
                   value={form.dxkeeperHost ?? ''}
-                  placeholder="127.0.0.1 (empty = off)"
+                  placeholder={t('settings.dxkeeper.host.placeholder', {
+                    example: LOGGER_EXAMPLES.dxkeeperHost,
+                  })}
                   onChange={(e) => update('dxkeeperHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">
-                  Usually 127.0.0.1 — same PC. Leave blank to disable.
-                </span>
+                <span className="settings-hint">{t('settings.dxkeeper.host.hint')}</span>
               </label>
 
               <label className="settings-field">
+                {/* ⚠️ NOT a catalog entry: this label names a control in DXKeeper's OWN
+                    English interface — see the note below the input — and a translated one
+                    sends the operator looking for a field that is not there. */}
                 <span className="settings-label">DXLab Base Port</span>
                 <input
                   className="settings-input"
@@ -7279,16 +7788,17 @@ export function SettingsPanel({
                     shows them. Asking for the base and adding 1 ourselves means the value
                     they read off DXKeeper is the value that works. */}
                 <span className="settings-hint">
-                  The <em>Base Port</em> from DXKeeper&apos;s Network Service panel (default
-                  52000). DXKeeper itself listens on{' '}
-                  <strong>{(form.dxkeeperBasePort ?? 52000) + 1}</strong> — Nexus adds the 1 for
-                  you.
+                  <T
+                    k="settings.dxkeeper.basePort.hint"
+                    tags={{ em: <em />, b: <strong /> }}
+                    vals={{ port: (form.dxkeeperBasePort ?? 52000) + 1 }}
+                  />
                 </span>
               </label>
 
               <label className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Let DXKeeper do the uploads</span>
+                  <span className="settings-label">{t('settings.dxkeeper.uploads.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7300,40 +7810,36 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Off by default: Nexus already uploads to LoTW / eQSL / ClubLog / QRZ, so
-                  turning this on would upload every QSO twice. Note DXKeeper ignores this for
-                  Club Log and QRZ if <em>Auto upload</em> is ticked on its own QSL
-                  Configuration tab — untick it there.
+                  <T k="settings.dxkeeper.uploads.hint" tags={{ em: <em /> }} />
                 </span>
               </label>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-n3fjp">
-            <legend>N3FJP Integration (club master log)</legend>
+            <legend>{t('settings.n3fjp.legend')}</legend>
             <p className="settings-note">
-              Each FD contact lands in the club's{' '}
-              <strong>N3FJP Field Day Contest Log</strong> the moment you log it — so the whole
-              club's score updates in real time. Run N3FJP on the master computer; point Nexus at
-              its IP + port (default 1100).
+              <T k="settings.n3fjp.note" tags={{ b: <strong /> }} />
             </p>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">N3FJP host</span>
+                <span className="settings-label">{t('settings.n3fjp.host.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
                   value={form.n3fjpHost ?? ''}
-                  placeholder="192.168.1.10 (empty = off)"
+                  placeholder={t('settings.n3fjp.host.placeholder', {
+                    example: LOGGER_EXAMPLES.n3fjpHost,
+                  })}
                   onChange={(e) => update('n3fjpHost', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
                 />
-                <span className="settings-hint">IP or hostname of the master log computer. Leave blank to disable.</span>
+                <span className="settings-hint">{t('settings.n3fjp.host.hint')}</span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">N3FJP port</span>
+                <span className="settings-label">{t('settings.n3fjp.port.label')}</span>
                 <input
                   className="settings-input"
                   type="number"
@@ -7346,12 +7852,12 @@ export function SettingsPanel({
                   }}
                   autoComplete="off"
                 />
-                <span className="settings-hint">N3FJP's API TCP port (default 1100).</span>
+                <span className="settings-hint">{t('settings.n3fjp.port.hint')}</span>
               </label>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Use ENTER for Field Day scoring</span>
+                  <span className="settings-label">{t('settings.n3fjp.useEnter.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7363,15 +7869,13 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Log each FD contact with N3FJP's <strong>ENTER</strong> sequence, which scores the
-                  contest — the correct path. Turn off to fall back to a plain <code>ADDDIRECT</code>{' '}
-                  insert (may not score). On by default.
+                  <T k="settings.n3fjp.useEnter.hint" tags={{ b: <strong />, code: <code /> }} />
                 </span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Report my band to N3FJP</span>
+                  <span className="settings-label">{t('settings.n3fjp.reportBand.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7382,15 +7886,12 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                 </label>
-                <span className="settings-hint">
-                  Tell N3FJP which band you're on (no CAT needed), so the club's Network Status
-                  Display band board shows this position. Off by default.
-                </span>
+                <span className="settings-hint">{t('settings.n3fjp.reportBand.hint')}</span>
               </div>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Forward every QSO</span>
+                  <span className="settings-label">{t('settings.n3fjp.forwardAll.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7402,67 +7903,66 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Also push <strong>every</strong> logged QSO (not just Field Day) to N3FJP ACLog on
-                  the host above — everyday general logging. N3FJP dedupes, so it's safe to run
-                  alongside the Field-Day push.
+                  <T k="settings.n3fjp.forwardAll.hint" tags={{ b: <strong /> }} />
                 </span>
               </div>
 
               <div className="settings-field">
-                <span className="settings-label">Connection test</span>
+                <span className="settings-label">{t('settings.n3fjp.test.label')}</span>
                 <div className="settings-input-row">
                   <button
                     type="button"
                     className="settings-refresh"
                     onClick={runN3fjpTest}
                     disabled={n3fjpTest.state === 'testing' || !form.n3fjpHost?.trim()}
-                    title="Save settings, then test the N3FJP TCP connection"
+                    title={t('settings.n3fjp.test.title')}
                   >
-                    {n3fjpTest.state === 'testing' ? 'Testing…' : 'Test N3FJP'}
+                    {n3fjpTest.state === 'testing'
+                      ? t('settings.connections.test.busy')
+                      : t('settings.n3fjp.test.action')}
                   </button>
                 </div>
                 {n3fjpTest.state !== 'idle' && n3fjpTest.state !== 'testing' && (
+                  // A pass/fail glyph and the answer the connection itself gave — neither is
+                  // this panel's prose, so neither is in the catalog.
                   <span className={`cat-result ${n3fjpTest.state}`} role="status">
                     {n3fjpTest.state === 'ok' ? '✓ ' : '✗ '}{n3fjpTest.msg}
                   </span>
                 )}
-                <span className="settings-hint">Run this at the club site before the event starts to confirm the API link works.</span>
+                <span className="settings-hint">{t('settings.n3fjp.test.hint')}</span>
               </div>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-n1mm">
-            <legend>N1MM+ Integration</legend>
+            <legend>{t('settings.n1mm.legend')}</legend>
             <div className="settings-grid">
               <label className="settings-field">
-                <span className="settings-label">N1MM contact broadcast address</span>
+                <span className="settings-label">{t('settings.n1mm.addr.label')}</span>
                 <input
                   className="settings-input"
                   type="text"
                   value={form.n1mmAddr ?? ''}
-                  placeholder="127.0.0.1:12060 (empty = off)"
+                  placeholder={t('settings.n1mm.addr.placeholder', {
+                    example: LOGGER_EXAMPLES.n1mmAddr,
+                  })}
                   onChange={(e) => update('n1mmAddr', e.target.value)}
                   autoComplete="off"
                   spellCheck={false}
                 />
                 <span className="settings-hint">
-                  Where the N1MM contact packets go (host:port, UDP). Name the port — consumers
-                  stack on one host, and 12060 is often already taken by another logger. Leave
-                  blank to disable.{' '}
+                  {t('settings.n1mm.addr.hint')}{' '}
                   {form.n1mmUpload ? (
-                    <strong>Sending for every logged QSO.</strong>
+                    <strong>{t('settings.n1mm.addr.sending')}</strong>
                   ) : (
-                    <strong>
-                      An address alone sends nothing outside a Field Day event — turn on Broadcast
-                      every QSO below for everyday logging.
-                    </strong>
+                    <strong>{t('settings.n1mm.addr.idle')}</strong>
                   )}
                 </span>
               </label>
 
               <div className="settings-field">
                 <label className="settings-toggle">
-                  <span className="settings-label">Broadcast every QSO</span>
+                  <span className="settings-label">{t('settings.n1mm.broadcastAll.label')}</span>
                   <button
                     type="button"
                     role="switch"
@@ -7482,11 +7982,10 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">
-                  Send the contact packet for <strong>every</strong> logged QSO, not just Field Day
-                  — point OpenHamClock or GridTracker at the address above and each contact plots on
-                  its map as you log it. One packet per QSO: this never doubles up with the Field Day
-                  broadcast, so it is safe to leave on through an event. Off by default; with it off,
-                  packets go out <em>only</em> while a Field Day event is running.
+                  <T
+                    k="settings.n1mm.broadcastAll.hint"
+                    tags={{ b: <strong />, em: <em /> }}
+                  />
                 </span>
               </div>
             </div>
@@ -7498,7 +7997,7 @@ export function SettingsPanel({
           {tab === 'logging' && (
           <>
           <fieldset className="settings-section" id="settings-lotw-users">
-            <legend>LoTW users list</legend>
+            <legend>{t('settings.lotwUsers.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
                 <button
@@ -7510,31 +8009,42 @@ export function SettingsPanel({
                     fetchLotwUsers()
                       .then((st) => {
                         setLotwUsers(st)
+                        // The grouping is this call site's, not the catalog's — `t()` has no
+                        // locale-aware number path (see the invariant-token rule).
                         pushToast(
-                          `LoTW list loaded — ${st.count.toLocaleString()} calls`,
+                          t('settings.lotwUsers.fetch.done', {
+                            count: st.count.toLocaleString(),
+                          }),
                           'success',
                           5000,
                         )
                       })
                       .catch((e) =>
                         pushToast(
-                          `LoTW list fetch failed: ${e instanceof Error ? e.message : e}`,
+                          t('settings.lotwUsers.fetch.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
                           'error',
                         ),
                       )
                       .finally(() => setLotwFetching(false))
                   }}
                 >
-                  {lotwFetching ? 'Fetching…' : 'Fetch now'}
+                  {lotwFetching
+                    ? t('settings.lotwUsers.fetch.busy')
+                    : t('settings.lotwUsers.fetch.action')}
                 </button>
                 <span className="settings-hint">
                   {lotwUsers && lotwUsers.count > 0
-                    ? `${lotwUsers.count.toLocaleString()} calls · fetched ${new Date(lotwUsers.fetchedAt * 1000).toISOString().slice(0, 10)}`
-                    : 'Not fetched yet — decode lists gain an L mark on calls that upload to LoTW.'}
+                    ? t('settings.lotwUsers.status', {
+                        count: lotwUsers.count.toLocaleString(),
+                        date: new Date(lotwUsers.fetchedAt * 1000).toISOString().slice(0, 10),
+                      })
+                    : t('settings.lotwUsers.empty')}
                 </span>
               </div>
               <label className="settings-label" htmlFor="lotw-max-age" style={{ marginTop: 8 }}>
-                Count as a LoTW user if uploaded within (days)
+                {t('settings.lotwUsers.maxAge.label')}
               </label>
               <input
                 id="lotw-max-age"
@@ -7550,15 +8060,12 @@ export function SettingsPanel({
                   if (!Number.isNaN(n)) updateNum('lotwMaxAgeDays', n)
                 }}
               />
-              <span className="settings-hint">
-                ARRL's activity list updates weekly — refetching more often just returns
-                "unchanged". Manual fetch by design (WSJT-X convention).
-              </span>
+              <span className="settings-hint">{t('settings.lotwUsers.maxAge.hint')}</span>
             </div>
           </fieldset>
 
           <fieldset className="settings-section" id="settings-callsign-state">
-            <legend>Callsign → state database</legend>
+            <legend>{t('settings.callsignState.legend')}</legend>
             <div className="settings-field">
               <div className="lotw-users-row">
                 <button
@@ -7571,64 +8078,75 @@ export function SettingsPanel({
                       .then((st) => {
                         setFccStates(st)
                         pushToast(
-                          `Callsign→state database updated — ${st.count.toLocaleString()} US calls`,
+                          t('settings.callsignState.update.done', {
+                            count: st.count.toLocaleString(),
+                          }),
                           'success',
                           5000,
                         )
                       })
                       .catch((e) =>
                         pushToast(
-                          `Callsign→state update failed: ${e instanceof Error ? e.message : e}`,
+                          t('settings.callsignState.update.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
                           'error',
                         ),
                       )
                       .finally(() => setFccFetching(false))
                   }}
                 >
-                  {fccFetching ? 'Updating…' : 'Update now'}
+                  {fccFetching
+                    ? t('settings.callsignState.update.busy')
+                    : t('settings.callsignState.update.action')}
                 </button>
                 <span className="settings-hint">
                   {fccStates && fccStates.count > 0
-                    ? `${fccStates.count.toLocaleString()} US calls · fetched ${new Date(fccStates.fetchedAt * 1000).toISOString().slice(0, 10)}`
-                    : 'Not loaded yet — downloads on first launch, then auto-refreshes weekly.'}
+                    ? t('settings.callsignState.status', {
+                        count: fccStates.count.toLocaleString(),
+                        date: new Date(fccStates.fetchedAt * 1000).toISOString().slice(0, 10),
+                      })
+                    : t('settings.callsignState.empty')}
                 </span>
               </div>
-              <span className="settings-hint">
-                A callsign→state index (from the FCC license file) so a New State lights up on
-                cluster / CW / SSB spots that carry no grid. Refreshed weekly from
-                hamradiotools.io; a live decode grid refines it for rovers.
-              </span>
+              <span className="settings-hint">{t('settings.callsignState.hint')}</span>
             </div>
           </fieldset>
           <fieldset className="settings-section" id="settings-confirmations">
-            <legend>Confirmations</legend>
+            <legend>{t('settings.confirmations.legend')}</legend>
             <div className="settings-featgroup">
+              {/* ⚠️ Every featgroup title in this fieldset is a service's own name and nothing
+                  else — invariant, like a callsign, and it stays here. */}
               <span className="settings-featgroup-title">LoTW</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">LoTW username</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.username.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.lotwUsername}
-                    placeholder="your LoTW account login"
+                    placeholder={t('settings.confirmations.lotw.username.placeholder')}
                     onChange={(e) => update('lotwUsername', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Often your callsign, but not always — use your LoTW account login. Save settings to apply.
+                    {t('settings.confirmations.lotw.username.hint')}
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">LoTW password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={lotwPw}
-                      placeholder="LoTW website password"
+                      placeholder={t('settings.confirmations.lotw.password.placeholder')}
                       onChange={(e) => setLotwPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -7639,25 +8157,26 @@ export function SettingsPanel({
                       onClick={onSaveLotwPassword}
                       disabled={!lotwPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetLotwPassword}
-                      title="Remove the stored password from the system keychain"
+                      title={t('settings.confirmations.credential.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Your LoTW <strong>website</strong> password (not your TQSL certificate password). Stored in
-                    the OS keychain, never on disk; not shown again after you click Set.
+                    <T k="settings.confirmations.lotw.password.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <div className="settings-field">
-                  <span className="settings-label">LoTW confirmations</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.sync.label')}
+                  </span>
                   <div className="settings-input-row">
                     <button
                       type="button"
@@ -7665,38 +8184,44 @@ export function SettingsPanel({
                       onClick={onSyncLotw}
                       disabled={lotwSyncing || !form.lotwUsername.trim()}
                     >
-                      {lotwSyncing ? 'Downloading…' : 'Download confirmations'}
+                      {lotwSyncing
+                        ? t('settings.confirmations.lotw.sync.busy')
+                        : t('settings.confirmations.lotw.sync.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    This only pulls confirmations <strong>down</strong>. To send your contacts{' '}
-                    <em>to</em> LoTW, use <strong>Upload to LoTW (N)</strong> in the Logbook.{' '}
-                    Pulls new confirmations into your log and marks which of your uploads LoTW now holds on file
-                    (so they read “waiting on the other op,” not “never uploaded”). The first pull covers your whole
-                    history (can be slow); later ones are incremental.
+                    <T
+                      k="settings.confirmations.lotw.sync.hint"
+                      tags={{ b: <strong />, em: <em /> }}
+                    />
                   </span>
                 </div>
 
                 <label className="settings-field">
-                  <span className="settings-label">LoTW Station Location</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.stationLocation.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.lotwStationLocation}
-                    placeholder="exact TQSL Station Location name"
+                    placeholder={t('settings.confirmations.lotw.stationLocation.placeholder')}
                     onChange={(e) => update('lotwStationLocation', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    For <strong>uploading</strong> to LoTW (the "Upload to LoTW" button in the Logbook). Signing is
-                    done by your installed <strong>TQSL</strong> against this named Station Location — set it up in
-                    TQSL first; the name must match exactly. No certificate or password is stored by Nexus.
+                    <T
+                      k="settings.confirmations.lotw.stationLocation.hint"
+                      tags={{ b: <strong /> }}
+                    />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Sign from ADIF location (travelers)</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.adifLocation.label')}
+                  </span>
                   <span className="settings-input-row">
                     <input
                       type="checkbox"
@@ -7708,33 +8233,32 @@ export function SettingsPanel({
                         // and silently refused. The backend gate is the one that holds.
                         if (e.target.checked) updateBool('lotwAutoUpload', false)
                       }}
-                      aria-label="Sign LoTW uploads from the ADIF location"
+                      aria-label={t('settings.confirmations.lotw.adifLocation.aria')}
                     />
                     <span className="settings-hint">
-                      Turn on if you set TQSL to <em>"use the location in the ADIF file"</em> and don't create
-                      named Station Locations (handy if you travel). Nexus then stamps your call + grid
-                      (STATION_CALLSIGN / MY_GRIDSQUARE) into the upload and omits the <code>-l</code> argument,
-                      so TQSL signs from those and the Station Location above isn't required.{' '}
-                      <strong>The whole batch is signed from your current grid above</strong>, so if you operate
-                      from more than one location, upload <em>before</em> you move — otherwise earlier contacts
-                      are signed with the new grid.
+                      <T
+                        k="settings.confirmations.lotw.adifLocation.hint"
+                        tags={{ b: <strong />, em: <em />, code: <code /> }}
+                      />
                     </span>
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">TQSL path (optional)</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.lotw.tqslPath.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.tqslPath}
-                    placeholder="auto-detect (leave blank)"
+                    placeholder={t('settings.confirmations.lotw.tqslPath.placeholder')}
                     onChange={(e) => update('tqslPath', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Only if TQSL is installed somewhere non-standard; otherwise leave blank to auto-detect.
+                    {t('settings.confirmations.lotw.tqslPath.hint')}
                   </span>
                 </label>
 
@@ -7745,7 +8269,9 @@ export function SettingsPanel({
                     a dead control that does not say why reads as a bug. */}
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Upload to LoTW automatically</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.lotw.autoUpload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7758,23 +8284,21 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Every few hours, Nexus hands your un-uploaded contacts to TQSL in one batch and
-                    TQSL signs and sends them — the same thing the Logbook's{' '}
-                    <strong>Upload to LoTW</strong> button does, on a timer. Needs TQSL installed and
-                    the Station Location above. If a batch is refused, this stops and waits for you
-                    rather than retrying; save any LoTW setting to start it again.
+                    <T k="settings.confirmations.lotw.autoUpload.hint" tags={{ b: <strong /> }} />
                     {form.lotwUseAdifLocation && (
                       <>
                         {' '}
-                        <strong>
-                          Unavailable while “Sign from ADIF location” is on: an unattended batch
-                          would sign older contacts with wherever you are NOW.
-                        </strong>
+                        <strong>{t('settings.confirmations.lotw.autoUpload.blocked')}</strong>
                       </>
                     )}
                     {!!form.lotwLastAutoUploadUnix && form.lotwLastAutoUploadUnix > 0 && (
                       <>
-                        {' '}Last run: {new Date(form.lotwLastAutoUploadUnix * 1000).toLocaleString()}.
+                        {' '}
+                        {/* The stamp is a LOCAL wall-clock time the panel formats itself, exactly
+                            as the LoTW-users count does — `t()` has no locale formatter. */}
+                        {t('settings.confirmations.lotw.autoUpload.lastRun', {
+                          when: new Date(form.lotwLastAutoUploadUnix * 1000).toLocaleString(),
+                        })}
                       </>
                     )}
                   </span>
@@ -7785,29 +8309,33 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">eQSL</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">eQSL username</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.eqsl.username.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.eqslUsername}
-                    placeholder="your eQSL.cc account login"
+                    placeholder={t('settings.confirmations.eqsl.username.placeholder')}
                     onChange={(e) => update('eqslUsername', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Your eQSL.cc login (often your callsign). Save settings to apply.
+                    {t('settings.confirmations.eqsl.username.hint')}
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">eQSL password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.eqsl.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={eqslPw}
-                      placeholder="eQSL.cc account password"
+                      placeholder={t('settings.confirmations.eqsl.password.placeholder')}
                       onChange={(e) => setEqslPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -7818,24 +8346,26 @@ export function SettingsPanel({
                       onClick={onSaveEqslPassword}
                       disabled={!eqslPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetEqslPassword}
-                      title="Remove the stored password from the system keychain"
+                      title={t('settings.confirmations.credential.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Stored in the OS keychain, never on disk; not shown again after you click Set.
+                    {t('settings.confirmations.eqsl.password.hint')}
                   </span>
                 </label>
 
                 <div className="settings-field">
-                  <span className="settings-label">eQSL confirmations</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.eqsl.sync.label')}
+                  </span>
                   <div className="settings-input-row">
                     <button
                       type="button"
@@ -7843,18 +8373,21 @@ export function SettingsPanel({
                       onClick={onSyncEqsl}
                       disabled={eqslSyncing || !form.eqslUsername.trim()}
                     >
-                      {eqslSyncing ? 'Syncing…' : 'Sync eQSL now'}
+                      {eqslSyncing
+                        ? t('settings.confirmations.eqsl.sync.busy')
+                        : t('settings.confirmations.eqsl.sync.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Download eQSL confirmations into your log. These count as confirmations but{' '}
-                    <strong>not</strong> for DXCC/WAS (ARRL doesn't accept eQSL) — a separate tier.
+                    <T k="settings.confirmations.eqsl.sync.hint" tags={{ b: <strong /> }} />
                   </span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-upload QSOs to eQSL</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.eqsl.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7866,7 +8399,7 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Upload each logged QSO to eQSL.cc as you log it (needs the eQSL username + password above).
+                    {t('settings.confirmations.eqsl.upload.hint')}
                   </span>
                 </div>
               </div>
@@ -7875,29 +8408,33 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">QRZ</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">QRZ username</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.username.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.qrzUsername}
-                    placeholder="your QRZ.com account login"
+                    placeholder={t('settings.confirmations.qrz.username.placeholder')}
                     onChange={(e) => update('qrzUsername', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    Used to look up a callsign's name + grid when logging. Save settings to apply.
+                    {t('settings.confirmations.qrz.username.hint')}
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">QRZ password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={qrzPw}
-                      placeholder="QRZ.com account password"
+                      placeholder={t('settings.confirmations.qrz.password.placeholder')}
                       onChange={(e) => setQrzPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -7908,33 +8445,32 @@ export function SettingsPanel({
                       onClick={onSaveQrzPassword}
                       disabled={!qrzPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetQrzPassword}
-                      title="Remove the stored password from the system keychain"
+                      title={t('settings.confirmations.credential.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Your QRZ.com login password — <strong>this is what powers callbook lookups</strong>{' '}
-                    (name, QTH, grid), and it is separate from the Logbook API key below (that key only
-                    uploads QSOs). Stored in the OS keychain, never on disk. Grid &amp; state need a QRZ
-                    XML subscription; free accounts return only name/address/country.
+                    <T k="settings.confirmations.qrz.password.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">QRZ Logbook API key</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.apiKey.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={qrzKey}
-                      placeholder="from your QRZ logbook settings page"
+                      placeholder={t('settings.confirmations.qrz.apiKey.placeholder')}
                       onChange={(e) => setQrzKey(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -7945,26 +8481,27 @@ export function SettingsPanel({
                       onClick={onSaveQrzLogbookKey}
                       disabled={!qrzKey}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetQrzLogbookKey}
-                      title="Remove the stored Logbook key from the system keychain"
+                      title={t('settings.confirmations.qrz.apiKey.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    A <strong>separate</strong> key (not the login password) from your QRZ logbook's settings
-                    page — used to upload logged QSOs.
+                    <T k="settings.confirmations.qrz.apiKey.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-upload QSOs to QRZ</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.qrz.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7976,13 +8513,15 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Push each logged QSO to your QRZ logbook (needs the Logbook API key above).
+                    {t('settings.confirmations.qrz.upload.hint')}
                   </span>
                 </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Pull confirmations automatically</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.qrz.autoSync.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -7994,35 +8533,38 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    As people confirm on QRZ, the confirmations flow in on their own — no need to
-                    press Sync. After the first run only what CHANGED is fetched. QRZ confirmations
-                    show as confirmed but never count toward DXCC or WAS, which need LoTW or a card.
+                    {t('settings.confirmations.qrz.autoSync.hint')}
                     {form.qrzLastSyncUnix > 0 && (
                       <>
-                        {' '}Last pull: {new Date(form.qrzLastSyncUnix * 1000).toLocaleString()}.
+                        {' '}
+                        {/* Local wall-clock time, formatted by the panel — see the LoTW stamp. */}
+                        {t('settings.confirmations.qrz.autoSync.lastPull', {
+                          when: new Date(form.qrzLastSyncUnix * 1000).toLocaleString(),
+                        })}
                       </>
                     )}
                   </span>
                 </div>
 
                 <div className="settings-field">
-                  <span className="settings-label">Two-way sync</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.qrz.sync.label')}
+                  </span>
                   <div className="settings-input-row">
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onSyncQrz}
                       disabled={qrzSyncing}
-                      title="FETCH your online QRZ logbook and merge it in — pulls QSOs you logged elsewhere plus their confirmations"
+                      title={t('settings.confirmations.qrz.sync.title')}
                     >
-                      {qrzSyncing ? 'Syncing…' : 'Sync from QRZ now'}
+                      {qrzSyncing
+                        ? t('settings.confirmations.qrz.sync.busy')
+                        : t('settings.confirmations.qrz.sync.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Pull your QRZ logbook <strong>down</strong> — adds QSOs you logged elsewhere (e.g. a
-                    phone app in the field) and marks QRZ-confirmed contacts. QRZ confirmations count as
-                    confirmations but <strong>not</strong> for DXCC/WAS. Safe to run repeatedly (deduped).
-                    Needs the Logbook API key above.
+                    <T k="settings.confirmations.qrz.sync.hint" tags={{ b: <strong /> }} />
                   </span>
                 </div>
               </div>
@@ -8031,31 +8573,33 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">HamQTH</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">HamQTH username</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.hamqth.username.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.hamqthUsername}
-                    placeholder="your HamQTH.com account login"
+                    placeholder={t('settings.confirmations.hamqth.username.placeholder')}
                     onChange={(e) => update('hamqthUsername', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    A <strong>free</strong> callbook used as a fallback when QRZ isn't configured or has
-                    no match — a HamQTH account returns name, grid &amp; US state at no charge. Save
-                    settings to apply.
+                    <T k="settings.confirmations.hamqth.username.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">HamQTH password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.hamqth.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={hamqthPw}
-                      placeholder="HamQTH.com account password"
+                      placeholder={t('settings.confirmations.hamqth.password.placeholder')}
                       onChange={(e) => setHamqthPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8066,19 +8610,19 @@ export function SettingsPanel({
                       onClick={onSaveHamqthPassword}
                       disabled={!hamqthPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetHamqthPassword}
-                      title="Remove the stored password from the system keychain"
+                      title={t('settings.confirmations.credential.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Stored in the OS keychain, never on disk.
+                    {t('settings.confirmations.hamqth.password.hint')}
                   </span>
                 </label>
               </div>
@@ -8087,41 +8631,51 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">ClubLog</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">ClubLog email</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.clublog.email.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.clublogEmail}
-                    placeholder="your ClubLog account email (not a callsign)"
+                    placeholder={t('settings.confirmations.clublog.email.placeholder')}
                     onChange={(e) => update('clublogEmail', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">Your ClubLog login email. Save settings to apply.</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.clublog.email.hint')}
+                  </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">ClubLog callsign</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.clublog.callsign.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.clublogCallsign}
-                    placeholder="defaults to your callsign"
+                    placeholder={t('settings.confirmations.clublog.callsign.placeholder')}
                     onChange={(e) => update('clublogCallsign', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">The ClubLog logbook to upload into (empty = your callsign).</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.clublog.callsign.hint')}
+                  </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">ClubLog app-password</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.clublog.password.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={clublogPw}
-                      placeholder="a ClubLog Application Password"
+                      placeholder={t('settings.confirmations.clublog.password.placeholder')}
                       onChange={(e) => setClublogPw(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8132,45 +8686,45 @@ export function SettingsPanel({
                       onClick={onSaveClublogPassword}
                       disabled={!clublogPw}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetClublogPassword}
-                      title="Remove the stored ClubLog password from the system keychain"
+                      title={t('settings.confirmations.clublog.password.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Use a ClubLog <strong>Application Password</strong> (Settings → App Passwords), not your main
-                    password. Stored in the OS keychain.
+                    <T k="settings.confirmations.clublog.password.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">ClubLog API key (application-level)</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.clublog.apiKey.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.clublogApiKey}
-                    placeholder="blank = use the key bundled with this build (if any)"
+                    placeholder={t('settings.confirmations.clublog.apiKey.placeholder')}
                     onChange={(e) => update('clublogApiKey', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                   <span className="settings-hint">
-                    This is the <strong>application</strong> credential, not yours — official installer builds
-                    bundle one, and you only need email + app-password above. Building from source? Request a
-                    free key at clublog.org/requestapikey.php and paste it here (open-source can't ship one —
-                    ClubLog auto-revokes published keys).
+                    <T k="settings.confirmations.clublog.apiKey.hint" tags={{ b: <strong /> }} />
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-upload QSOs to ClubLog</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.clublog.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8182,7 +8736,7 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Push each logged QSO to ClubLog in real time (needs the email + app-password above; official builds bundle the API key).
+                    {t('settings.confirmations.clublog.upload.hint')}
                   </span>
                 </div>
               </div>
@@ -8191,13 +8745,15 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">HRDLog</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">HRDLog.net upload code</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.hrdlog.code.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={hrdlogCode}
-                      placeholder="your hrdlog.net upload code"
+                      placeholder={t('settings.confirmations.hrdlog.code.placeholder')}
                       onChange={(e) => setHrdlogCodeField(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8208,27 +8764,27 @@ export function SettingsPanel({
                       onClick={onSaveHrdlogCode}
                       disabled={!hrdlogCode}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetHrdlogCode}
-                      title="Remove the stored HRDLog.net code from the system keychain"
+                      title={t('settings.confirmations.hrdlog.code.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    The upload code from your HRDLog.net account (Options → your code). Uploads log under your
-                    station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate
-                    from the HRD Logbook UDP push under Logging.
+                    {t('settings.confirmations.hrdlog.code.hint')}
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-upload QSOs to HRDLog.net</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.hrdlog.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8240,9 +8796,7 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">
-                    Push each logged QSO to HRDLog.net (needs the upload code above). HRDLog.net is a live-logging
-                    and awards site — it is <strong>not</strong> an ARRL confirmation source, so an upload here
-                    never earns DXCC/WAS credit.
+                    <T k="settings.confirmations.hrdlog.upload.hint" tags={{ b: <strong /> }} />
                   </span>
                 </div>
               </div>
@@ -8251,13 +8805,15 @@ export function SettingsPanel({
               <span className="settings-featgroup-title">RepeaterBook</span>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">RepeaterBook API token</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.repeaterbook.token.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={rbToken}
-                      placeholder="rbuapp_…"
+                      placeholder={CONFIRMATION_EXAMPLES.rbToken}
                       onChange={(e) => setRbTokenField(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8268,24 +8824,22 @@ export function SettingsPanel({
                       onClick={onSaveRbToken}
                       disabled={!rbToken}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetRbToken}
-                      title="Remove the stored RepeaterBook token from the system keychain"
+                      title={t('settings.confirmations.repeaterbook.token.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Optional. Without a token the <strong>Program</strong> section uses the open hearham.com
-                    directory. Add a personal token (from your RepeaterBook account's{' '}
-                    <strong>API Apps</strong> page) to pull from RepeaterBook.com under your own account
-                    instead. Stored in the OS keychain. Shared RepeaterBook access for every Nexus user is
-                    pending RepeaterBook's approval; if RepeaterBook is unreachable, Program falls back to
-                    hearham.com.
+                    <T
+                      k="settings.confirmations.repeaterbook.token.hint"
+                      tags={{ b: <strong /> }}
+                    />
                   </span>
                 </label>
               </div>
@@ -8293,27 +8847,31 @@ export function SettingsPanel({
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">Cloudlog / Wavelog</span>
               <p className="settings-note">
-                Auto-forward each logged QSO to your self-hosted <strong>Cloudlog</strong> or{' '}
-                <strong>Wavelog</strong> logbook (HTTP). The API key is a per-instance token for your
-                own server — enter it, your station-profile id, and turn on the toggle.
+                <T k="settings.confirmations.cloudlog.note" tags={{ b: <strong /> }} />
               </p>
               <div className="settings-grid">
                 <label className="settings-field">
-                  <span className="settings-label">Base URL</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.cloudlog.url.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
                     value={form.cloudlogUrl ?? ''}
-                    placeholder="https://log.example.com"
+                    placeholder={CONFIRMATION_EXAMPLES.cloudlogUrl}
                     onChange={(e) => update('cloudlogUrl', e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
-                  <span className="settings-hint">Your Cloudlog/Wavelog site root. Leave blank to disable.</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.cloudlog.url.hint')}
+                  </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">Station profile id</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.cloudlog.stationId.label')}
+                  </span>
                   <input
                     className="settings-input"
                     type="text"
@@ -8323,17 +8881,21 @@ export function SettingsPanel({
                     onChange={(e) => update('cloudlogStationId', e.target.value)}
                     autoComplete="off"
                   />
-                  <span className="settings-hint">The station-location profile to log against (Cloudlog ▸ Station Locations).</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.cloudlog.stationId.hint')}
+                  </span>
                 </label>
 
                 <label className="settings-field">
-                  <span className="settings-label">API key</span>
+                  <span className="settings-label">
+                    {t('settings.confirmations.cloudlog.apiKey.label')}
+                  </span>
                   <div className="settings-input-row">
                     <input
                       className="settings-input"
                       type="password"
                       value={cloudlogKey}
-                      placeholder="your instance API key"
+                      placeholder={t('settings.confirmations.cloudlog.apiKey.placeholder')}
                       onChange={(e) => setCloudlogKeyField(e.target.value)}
                       autoComplete="off"
                       spellCheck={false}
@@ -8344,26 +8906,27 @@ export function SettingsPanel({
                       onClick={onSaveCloudlogKey}
                       disabled={!cloudlogKey}
                     >
-                      Set
+                      {t('settings.confirmations.credential.set.action')}
                     </button>
                     <button
                       type="button"
                       className="settings-refresh"
                       onClick={onForgetCloudlogKey}
-                      title="Remove the stored Cloudlog key from the system keychain"
+                      title={t('settings.confirmations.cloudlog.apiKey.forget.title')}
                     >
-                      Forget
+                      {t('settings.confirmations.credential.forget.action')}
                     </button>
                   </div>
                   <span className="settings-hint">
-                    Cloudlog ▸ Account ▸ API Keys — a key with read/write. Stored in the OS keychain,
-                    never on disk.
+                    {t('settings.confirmations.cloudlog.apiKey.hint')}
                   </span>
                 </label>
 
                 <div className="settings-field">
                   <label className="settings-toggle">
-                    <span className="settings-label">Auto-forward QSOs</span>
+                    <span className="settings-label">
+                      {t('settings.confirmations.cloudlog.upload.label')}
+                    </span>
                     <button
                       type="button"
                       role="switch"
@@ -8374,7 +8937,9 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </label>
-                  <span className="settings-hint">Push every logged QSO to the instance above as it's logged.</span>
+                  <span className="settings-hint">
+                    {t('settings.confirmations.cloudlog.upload.hint')}
+                  </span>
                 </div>
               </div>
             </div>
@@ -8383,14 +8948,20 @@ export function SettingsPanel({
           )}
           {/* ---- Field Day ---- */}
           {tab === 'contesting' && (
+            /* Migrated to the catalog (i18n phase 2) with the Field Day section below, and
+               paired with the POTA/SOTA + Field Day surfaces so the wording matches on both
+               sides. Invariant and staying here: the class/category and section placeholders
+               (1D, 2O, WI), the section list itself, and the event names, which are the
+               events' own (FD_EVENT_NAMES). The rest of this file is NOT migrated — see the
+               guard's scope note. */
             <fieldset className="settings-section" id="settings-contest-category">
-              <legend>Contest Category</legend>
+              <legend>{t('settings.contestCategory.legend')}</legend>
               {/* ONE switch for every QSO-finding assistance source. It takes effect IMMEDIATELY
                   (its own command, not Save) because an operator flips it as an event starts, and
                   a switch that needed a restart mid-contest would be useless. The form field is
                   synced so a later Save cannot write the stale value back. */}
               <label className="settings-field">
-                <span className="settings-label">Unassisted entry</span>
+                <span className="settings-label">{t('settings.contestCategory.unassisted.label')}</span>
                 <button
                   type="button"
                   role="switch"
@@ -8403,15 +8974,16 @@ export function SettingsPanel({
                       .then(() => getAssistanceJournal().then(setAssistLog))
                       .catch(() => {})
                   }}
-                  aria-label={`${form.unassistedMode ? 'End' : 'Declare'} an unassisted contest entry`}
+                  aria-label={
+                    form.unassistedMode
+                      ? t('settings.contestCategory.unassisted.aria.end')
+                      : t('settings.contestCategory.unassisted.aria.declare')
+                  }
                 >
                   <span className="toggle-knob" />
                 </button>
                 <span className="settings-hint">
-                  Turns off the AI CW decoder, DX cluster / RBN spots and the PSK Reporter needs
-                  feed together, and records the change with a timestamp. Takes effect at once.
-                  Your own settings for each of those are left alone and come back when you switch
-                  this off.
+                  {t('settings.contestCategory.unassisted.hint')}
                 </span>
               </label>
               <AssistanceNote
@@ -8420,7 +8992,7 @@ export function SettingsPanel({
               />
               {assistLog.length > 0 && (
                 <div className="assist-journal">
-                  <span className="settings-label">Assistance record</span>
+                  <span className="settings-label">{t('settings.contestCategory.journal.label')}</span>
                   <ul className="assist-journal-list mono">
                     {assistLog.slice(0, 8).map((e) => (
                       <li key={`${e.tsUnix}-${e.note}`}>
@@ -8428,19 +9000,22 @@ export function SettingsPanel({
                           {new Date(e.tsUnix * 1000).toISOString().slice(0, 16).replace('T', ' ')}Z
                         </span>
                         <span className={`assist-journal-state${e.unassisted ? ' unassisted' : ''}`}>
-                          {e.unassisted ? 'UNASSISTED' : 'assisted'}
+                          {e.unassisted
+                            ? t('settings.contestCategory.journal.unassisted')
+                            : t('settings.contestCategory.journal.assisted')}
                         </span>
+                        {/* The note and the source names are the engine's own words. */}
                         <span className="assist-journal-note">
                           {e.note}
                           {': '}
-                          {e.sources.filter((x) => x.active).map((x) => x.name).join(', ') || 'nothing active'}
+                          {e.sources.filter((x) => x.active).map((x) => x.name).join(', ') ||
+                            t('settings.contestCategory.journal.noSources')}
                         </span>
                       </li>
                     ))}
                   </ul>
                   <span className="settings-hint">
-                    Kept in <code>assistance_journal.json</code> beside your settings, so it
-                    survives restarts. Newest first.
+                    <T k="settings.contestCategory.journal.hint" tags={{ code: <code /> }} />
                   </span>
                 </div>
               )}
@@ -8449,40 +9024,40 @@ export function SettingsPanel({
 
           {tab === 'contesting' && (
           <fieldset className="settings-section" id="settings-field-day">
-            <legend>Field Day Setup</legend>
+            <legend>{t('settings.fieldDay.legend')}</legend>
             {/* The Field Day MASTER lives here now (Contesting is always visible) — turning it on
                 reveals the FD workspace + Class/Section exchange across all modes. */}
             <label className="settings-field">
-              <span className="settings-label">Field Day mode</span>
+              <span className="settings-label">{t('settings.fieldDay.mode.label')}</span>
               <button
                 type="button"
                 role="switch"
                 aria-checked={!!form.fdActive}
                 className={`toggle${form.fdActive ? ' on' : ''}`}
                 onClick={() => updateBool('fdActive', !form.fdActive)}
-                aria-label={`${form.fdActive ? 'Disable' : 'Enable'} Field Day mode`}
+                aria-label={
+                  form.fdActive
+                    ? t('settings.fieldDay.mode.aria.disable')
+                    : t('settings.fieldDay.mode.aria.enable')
+                }
               >
                 <span className="toggle-knob" />
               </button>
-              <span className="settings-hint">
-                Turn on for Field Day weekend — reveals the Field Day workspace and the
-                Class/Section exchange across all modes. Off the rest of the year. Fill in Class +
-                Section below to start operating. Save to apply.
-              </span>
+              <span className="settings-hint">{t('settings.fieldDay.mode.hint')}</span>
             </label>
             {form.fdActive && (!form.fdClass.trim() || !form.fdSection.trim()) && (
               <p className="settings-note">
-                <strong>Set your Class + Section to start operating.</strong> Field Day mode is on,
-                but the station won&apos;t enter Field Day until both are filled in below.
+                <T k="settings.fieldDay.needExchange" tags={{ b: <strong /> }} />
               </p>
             )}
             <div className="settings-grid">
               <div className="settings-field">
-                <span className="settings-label">Event</span>
-                <div className="theme-switcher" role="group" aria-label="Field Day event">
+                <span className="settings-label">{t('settings.fieldDay.event.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.fieldDay.event.aria')}>
+                  {/* The event NAMES are the events' own — invariant, shared with the header. */}
                   {([
-                    { value: 'arrlfd', label: 'ARRL Field Day' },
-                    { value: 'wfd',    label: 'Winter Field Day' },
+                    { value: 'arrlfd', label: FD_EVENT_NAMES.arrlfd },
+                    { value: 'wfd',    label: FD_EVENT_NAMES.wfd },
                   ] as { value: string; label: string }[]).map((ev) => (
                     <button
                       key={ev.value}
@@ -8498,12 +9073,14 @@ export function SettingsPanel({
                     </button>
                   ))}
                 </div>
-                <span className="settings-hint">Which event you're operating in — affects scoring labels and export headers.</span>
+                <span className="settings-hint">{t('settings.fieldDay.event.hint')}</span>
               </div>
 
               <label className="settings-field">
                 <span className="settings-label">
-                  {(form.fdEvent ?? 'arrlfd') === 'wfd' ? 'WFD Category' : 'FD Class'}
+                  {(form.fdEvent ?? 'arrlfd') === 'wfd'
+                    ? t('settings.fieldDay.category.label')
+                    : t('settings.fieldDay.class.label')}
                 </span>
                 <input
                   className="settings-input mono"
@@ -8516,13 +9093,13 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">
                   {(form.fdEvent ?? 'arrlfd') === 'wfd'
-                    ? 'Transmitters + location: H=Home, I=Indoor, M=Mobile, O=Outdoor (e.g. 2O = 2 transmitters, outdoor).'
-                    : 'Number of transmitters + class letter: A=club/group portable, B=1–2 person portable, C=mobile, D=home (mains power), E=home (emergency power), F=EOC. E.g. 3A = 3 transmitters, club portable.'}
+                    ? t('settings.fieldDay.category.hint')
+                    : t('settings.fieldDay.class.hint')}
                 </span>
               </label>
 
               <label className="settings-field">
-                <span className="settings-label">ARRL Section</span>
+                <span className="settings-label">{t('settings.fieldDay.section.label')}</span>
                 <input
                   className={`settings-input mono${fdSectionInvalid ? ' invalid' : ''}`}
                   type="text"
@@ -8541,41 +9118,38 @@ export function SettingsPanel({
                 </datalist>
                 {fdSectionInvalid && (
                   <span className="fd-section-warn" role="alert">
-                    &ldquo;{form.fdSection}&rdquo; isn&apos;t a known ARRL/RAC section — pick one from the list.
+                    {t('settings.fieldDay.section.invalid', { section: form.fdSection })}
                   </span>
                 )}
                 <span className="settings-hint">
-                  Your ARRL / RAC section (e.g. WI, ENY, ONN). Start typing the code or a state name and pick from
-                  the list — validated against all {FD_SECTION_OPTIONS.length} sections. Required for the Cabrillo log.
+                  {t('settings.fieldDay.section.hint', { count: FD_SECTION_OPTIONS.length })}
                 </span>
               </label>
 
               <div className="settings-field">
-                <span className="settings-label">Power multiplier</span>
-                <div className="theme-switcher" role="group" aria-label="Field Day power multiplier">
+                <span className="settings-label">{t('settings.fieldDay.power.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.fieldDay.power.aria')}>
                   {([
-                    { value: 5, label: '×5 QRP / battery', hint: 'Runs entirely on battery or other natural power, ≤5W output' },
-                    { value: 2, label: '×2 ≤100W',         hint: '100W or less from any power source' },
-                    { value: 1, label: '×1 >100W',         hint: 'Over 100W — commercial/generator power' },
-                  ] as { value: number; label: string; hint: string }[]).map((p) => (
+                    { value: 5, labelKey: 'settings.fieldDay.power.qrp.label',     hintKey: 'settings.fieldDay.power.qrp.hint' },
+                    { value: 2, labelKey: 'settings.fieldDay.power.hundred.label', hintKey: 'settings.fieldDay.power.hundred.hint' },
+                    { value: 1, labelKey: 'settings.fieldDay.power.high.label',    hintKey: 'settings.fieldDay.power.high.hint' },
+                  ] as const).map((p) => (
                     <button
                       key={p.value}
                       type="button"
                       className={`theme-chip${(form.fdPowerMult ?? 1) === p.value ? ' active' : ''}`}
                       aria-pressed={(form.fdPowerMult ?? 1) === p.value}
-                      title={p.hint}
+                      title={t(p.hintKey)}
                       onClick={() => {
                         markDirty()
                         setForm((prev) => prev ? { ...prev, fdPowerMult: p.value } : prev)
                       }}
                     >
-                      {p.label}
+                      {t(p.labelKey)}
                     </button>
                   ))}
                 </div>
-                <span className="settings-hint">
-                  Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.
-                </span>
+                <span className="settings-hint">{t('settings.fieldDay.power.hint')}</span>
               </div>
             </div>
           </fieldset>
@@ -8595,7 +9169,7 @@ export function SettingsPanel({
             ))}
           {error && <span className="settings-error" role="alert">{error}</span>}
           {status === 'saved' && !error && (
-            <span className="settings-ok" role="status">Saved</span>
+            <span className="settings-ok" role="status">{t('settings.panel.saved')}</span>
           )}
           <button
             type="submit"
@@ -8604,7 +9178,7 @@ export function SettingsPanel({
             // message (handleSubmit), rather than a greyed button that gives no reason or fix.
             disabled={status === 'saving'}
           >
-            {status === 'saving' ? 'Saving…' : 'Save'}
+            {status === 'saving' ? t('settings.panel.saving') : t('settings.panel.save')}
           </button>
         </div>
       </form>

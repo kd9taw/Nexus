@@ -13,12 +13,18 @@ import { dxpedLink, dxpedLinkTitle } from './dxpedLink'
 import { azimuthLabel, azimuthTitle, backendAzimuth } from '../../grid'
 import { openDxpedPage } from '../../api'
 import { withErrorToast } from '../../toast'
+import { t } from '../../i18n'
+
+/** The ITU recommendation's number — a citation, not a word. */
+const ENGINE_P533 = 'P.533'
 
 function daysUntil(startUnix: number): string {
+  // `T-3d` is a countdown, not prose — digits and the T-minus notation only.
   const d = Math.round((startUnix - Date.now() / 1000) / 86400)
-  return d <= 0 ? 'on the air' : `T-${d}d`
+  return d <= 0 ? t('dxped.calendar.onAir') : `T-${d}d`
 }
 
+// Weekday names are DATE FORMATTING, not catalog prose — see DxpedMonth.tsx.
 const WEEKDAY = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 
 /** The week-planner strip: one chip per modelled day, colored by that day's best
@@ -29,7 +35,7 @@ function WeekStrip({ days, entry }: { days: DxpedDayBest[]; entry: CalendarEntry
   return (
     <div
       className="cal-week"
-      title="Your modelled best shot for each of the next 7 days — plan the chase"
+      title={t('dxped.calendar.week.title')}
     >
       {days.map((d) => {
         const onAir = d.dayUnix < entry.endUnix && d.dayUnix + 86_400 > entry.startUnix
@@ -39,7 +45,14 @@ function WeekStrip({ days, entry }: { days: DxpedDayBest[]; entry: CalendarEntry
           <span
             key={d.dayUnix}
             className={`cal-day ${cls}`}
-            title={onAir ? `${wd}: ${d.best || 'no modelled path'}` : `${wd}: not on the air`}
+            title={
+              onAir
+                ? t('dxped.calendar.day.title', {
+                    day: wd,
+                    best: d.best || t('dxped.calendar.day.noPath'),
+                  })
+                : t('dxped.calendar.day.offAir', { day: wd })
+            }
           >
             {wd}
           </span>
@@ -60,7 +73,11 @@ export function DxpedCalendar({
   alarms,
   onToggleAlarm,
   onAlarmLead,
-  openPage = (e) => void withErrorToast(() => openDxpedPage(e.call, e.website), `Could not open the page for ${e.call}`),
+  openPage = (e) =>
+    void withErrorToast(
+      () => openDxpedPage(e.call, e.website),
+      t('dxped.calendar.openFailed', { call: e.call }),
+    ),
 }: {
   entries: CalendarEntry[]
   /** Modelled windows by call (get_dxped_windows) — preferred over the entry's
@@ -95,10 +112,10 @@ export function DxpedCalendar({
     })
   }
   return (
-    <section className="dxped-calendar panel" aria-label="DXpedition calendar">
+    <section className="dxped-calendar panel" aria-label={t('dxped.calendar.aria')}>
       <div className="cal-topbar">
-        <h2>DXpedition calendar — when to plan your chase</h2>
-        <div className="cal-viewtabs" role="tablist" aria-label="Calendar view">
+        <h2>{t('dxped.calendar.head')}</h2>
+        <div className="cal-viewtabs" role="tablist" aria-label={t('dxped.calendar.view.aria')}>
           <button
             type="button"
             role="tab"
@@ -106,7 +123,7 @@ export function DxpedCalendar({
             className={view === 'month' ? 'on' : ''}
             onClick={() => setView('month')}
           >
-            Calendar
+            {t('dxped.calendar.view.month')}
           </button>
           <button
             type="button"
@@ -115,7 +132,7 @@ export function DxpedCalendar({
             className={view === 'list' ? 'on' : ''}
             onClick={() => setView('list')}
           >
-            Details
+            {t('dxped.calendar.view.list')}
           </button>
         </div>
       </div>
@@ -166,7 +183,11 @@ export function DxpedCalendar({
                 {(w?.best || e.best) && (
                   <span className="cal-best">
                     {w?.best ?? e.best}
-                    {w && <span className="cp-engine">{w.engine === 'p533' ? 'P.533' : 'modelled'}</span>}
+                    {w && (
+                      <span className="cp-engine">
+                        {w.engine === 'p533' ? ENGINE_P533 : t('dxped.engine.modelled')}
+                      </span>
+                    )}
                   </span>
                 )}
                 {/* The same page the calendar bar opens, reachable from the detail
@@ -188,9 +209,7 @@ export function DxpedCalendar({
                     className={`wn-chase${isChased ? ' active' : ''}`}
                     onClick={() => onToggleChase(e.call)}
                     title={
-                      isChased
-                        ? 'Chasing — you get an alert when your window opens and they are spotted. Click to stop.'
-                        : 'Chase this expedition — alert me when my modelled window opens and live spots confirm them'
+                      isChased ? t('dxped.chase.toggle.on.title') : t('dxped.chase.toggle.off.title')
                     }
                     aria-pressed={isChased}
                   >
@@ -204,8 +223,8 @@ export function DxpedCalendar({
                     onClick={() => onToggleAlarm(e.call)}
                     title={
                       alarm
-                        ? `Alarm armed — a loud in-app wake-up fires ${alarm.leadMin} min before your modelled window opens. Click to disarm.`
-                        : 'Wake me — arm a loud in-app alarm for when your modelled window to this expedition opens'
+                        ? t('dxped.alarm.toggle.on.title', { lead: alarm.leadMin })
+                        : t('dxped.alarm.toggle.off.title')
                     }
                     aria-pressed={!!alarm}
                   >
@@ -217,12 +236,12 @@ export function DxpedCalendar({
                     className="cal-lead"
                     value={alarm.leadMin}
                     onChange={(ev) => onAlarmLead(e.call, Number(ev.target.value))}
-                    title="How long before the window opens to wake you"
-                    aria-label="Alarm lead time"
+                    title={t('dxped.alarm.lead.title')}
+                    aria-label={t('dxped.alarm.lead.aria')}
                   >
                     {LEADS.map((m) => (
                       <option key={m} value={m}>
-                        {m} min
+                        {t('dxped.alarm.lead.option', { mins: m })}
                       </option>
                     ))}
                   </select>

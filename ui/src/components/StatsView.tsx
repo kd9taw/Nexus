@@ -1,7 +1,17 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT come from it: the band
+// names, mode names, years, DXCC entity names, US state codes, continents and CQ zone numbers
+// these cards slice (data), and the three names in SERVICE_LABELS below — LoTW and eQSL are the
+// services' own names and DX is ham shorthand, all invariant tokens (see `i18n/index.ts`).
+
 import { useEffect, useState } from 'react'
 import { getLog, getLogStats } from '../api'
+import { t } from '../i18n'
 import type { LoggedQso, GeoLogStats } from '../types'
 import { computeLogStats, type Tally } from '../features/logStats'
+
+/** Service names and ham shorthand — the same letters in every language. */
+const SERVICE_LABELS = { lotw: 'LoTW', eqsl: 'eQSL', dx: 'DX' }
 
 /** A horizontal-bar breakdown (CSS width-% bars — the house viz idiom, no chart lib). */
 function BarList({ title, items, max }: { title: string; items: Tally[]; max?: number }) {
@@ -55,15 +65,15 @@ export function StatsView() {
   if (failed) {
     return (
       <main className="layout single stats-view">
-        <h2>Statistics</h2>
-        <p className="stats-empty">Couldn’t read the logbook — try reopening this view.</p>
+        <h2>{t('stats.title')}</h2>
+        <p className="stats-empty">{t('stats.failed')}</p>
       </main>
     )
   }
   if (!log) {
     return (
       <main className="layout single stats-view">
-        <p className="stats-empty">Loading your logbook…</p>
+        <p className="stats-empty">{t('stats.loading')}</p>
       </main>
     )
   }
@@ -71,10 +81,8 @@ export function StatsView() {
   if (s.total === 0) {
     return (
       <main className="layout single stats-view">
-        <h2>Statistics</h2>
-        <p className="stats-empty">
-          No QSOs logged yet — your stats will fill in here as you work stations.
-        </p>
+        <h2>{t('stats.title')}</h2>
+        <p className="stats-empty">{t('stats.empty')}</p>
       </main>
     )
   }
@@ -87,34 +95,38 @@ export function StatsView() {
       <div className="stats-summary">
         <div className="stats-stat">
           <span className="stats-num mono">{s.total}</span>
-          <span className="stats-lbl">QSOs</span>
+          <span className="stats-lbl">{t('stats.qsos')}</span>
         </div>
         <div className="stats-stat">
           <span className="stats-num mono">{s.uniqueCalls}</span>
-          <span className="stats-lbl">unique calls</span>
+          <span className="stats-lbl">{t('stats.uniqueCalls')}</span>
         </div>
         <div className="stats-stat">
           <span className="stats-num mono">{s.dxccEntities}</span>
-          <span className="stats-lbl">DXCC entities</span>
+          <span className="stats-lbl">{t('stats.dxccEntities')}</span>
         </div>
         <div className="stats-stat">
           <span className="stats-num mono">{confRate}%</span>
-          <span className="stats-lbl">confirmed</span>
+          <span className="stats-lbl">{t('stats.confirmed')}</span>
         </div>
       </div>
 
       <div className="stats-grid">
-        <BarList title="By band" items={s.byBand} />
-        <BarList title="By mode" items={s.byMode} />
-        <BarList title="By year" items={s.byYear} />
-        <BarList title="Top DXCC entities" items={s.topEntities} />
-        <BarList title="Most-worked states (WAS)" items={s.byState} max={12} />
+        <BarList title={t('stats.byBand.head')} items={s.byBand} />
+        <BarList title={t('stats.byMode.head')} items={s.byMode} />
+        <BarList title={t('stats.byYear.head')} items={s.byYear} />
+        <BarList title={t('stats.topEntities.head')} items={s.topEntities} />
+        <BarList title={t('stats.byState.head')} items={s.byState} max={12} />
 
         <div className="stats-card">
-          <h3>Activity by hour (UTC)</h3>
+          <h3>{t('stats.byHour.head')}</h3>
           <div className="stats-hours">
             {s.hourUtc.map((c, h) => (
-              <div className="stats-hour" key={h} title={`${String(h).padStart(2, '0')}:00 UTC — ${c} QSOs`}>
+              <div
+                className="stats-hour"
+                key={h}
+                title={t('stats.hour.title', { hour: String(h).padStart(2, '0'), count: c })}
+              >
                 <div className="stats-hour-fill" style={{ height: `${(c / hourMax) * 100}%` }} />
                 <span className="stats-hour-lbl">{h % 6 === 0 ? h : ''}</span>
               </div>
@@ -122,21 +134,23 @@ export function StatsView() {
           </div>
           {s.hourUnknown > 0 && (
             <p className="stats-hour-note">
-              {s.hourUnknown.toLocaleString()} QSO{s.hourUnknown === 1 ? '' : 's'} not shown — imported
-              with a date but no time of day.
+              {t('stats.hoursMissing', {
+                count: s.hourUnknown,
+                formatted: s.hourUnknown.toLocaleString(),
+              })}
             </p>
           )}
         </div>
 
         <div className="stats-card">
-          <h3>Confirmations</h3>
+          <h3>{t('stats.confirmations.head')}</h3>
           <div className="stats-bars">
             {(
               [
-                { label: 'Award-grade', count: s.awardConfirmed },
-                { label: 'LoTW', count: s.qsl.lotw },
-                { label: 'eQSL', count: s.qsl.eqsl },
-                { label: 'Paper card', count: s.qsl.card },
+                { label: t('stats.confirmations.awardGrade'), count: s.awardConfirmed },
+                { label: SERVICE_LABELS.lotw, count: s.qsl.lotw },
+                { label: SERVICE_LABELS.eqsl, count: s.qsl.eqsl },
+                { label: t('stats.confirmations.paperCard'), count: s.qsl.card },
               ] as Tally[]
             ).map((i) => (
               <div className="stats-bar-row" key={i.label}>
@@ -167,7 +181,7 @@ function GeoCards({ geo }: { geo: GeoLogStats }) {
   return (
     <>
       <div className="stats-card">
-        <h3>By continent</h3>
+        <h3>{t('stats.byContinent.head')}</h3>
         {geo.byContinent.length === 0 ? (
           <p className="stats-empty">—</p>
         ) : (
@@ -179,7 +193,10 @@ function GeoCards({ geo }: { geo: GeoLogStats }) {
                   <div className="stats-bar-fill" style={{ width: `${(c.qsos / contMax) * 100}%` }} />
                 </div>
                 <span className="stats-bar-count mono">
-                  {c.qsos} <span className="stats-bar-sub">· {c.entities} ent</span>
+                  {c.qsos}{' '}
+                  <span className="stats-bar-sub">
+                    {t('stats.continent.entities', { count: c.entities })}
+                  </span>
                 </span>
               </div>
             ))}
@@ -188,17 +205,17 @@ function GeoCards({ geo }: { geo: GeoLogStats }) {
       </div>
 
       <BarList
-        title="By CQ zone"
-        items={zones.map((z) => ({ label: `Zone ${z.zone}`, count: z.qsos }))}
+        title={t('stats.byZone.head')}
+        items={zones.map((z) => ({ label: t('stats.zone.label', { zone: z.zone }), count: z.qsos }))}
       />
 
       <div className="stats-card">
-        <h3>DX vs domestic</h3>
+        <h3>{t('stats.dxSplit.head')}</h3>
         <div className="stats-bars">
           {(
             [
-              { label: 'DX', count: geo.dx },
-              { label: 'Domestic', count: geo.domestic },
+              { label: SERVICE_LABELS.dx, count: geo.dx },
+              { label: t('stats.dxSplit.domestic'), count: geo.domestic },
             ] as Tally[]
           ).map((i) => (
             <div className="stats-bar-row" key={i.label}>
@@ -215,8 +232,10 @@ function GeoCards({ geo }: { geo: GeoLogStats }) {
         </div>
         {geo.resolved < geo.total && (
           <p className="stats-cap">
-            {(geo.total - geo.resolved).toLocaleString()} of {geo.total.toLocaleString()} QSOs
-            couldn’t be placed by callsign
+            {t('stats.unplaced', {
+              unplaced: (geo.total - geo.resolved).toLocaleString(),
+              total: geo.total.toLocaleString(),
+            })}
           </p>
         )}
       </div>

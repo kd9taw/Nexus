@@ -32,7 +32,7 @@ brand-specific page yet. If you run one and want notes added, open an issue.
 
 ---
 
-## The two connection types
+## The three connection types
 
 Everything in **Settings ▸ Radio ▸ Rig & CAT** comes down to one choice — the
 **Connection** dropdown:
@@ -64,6 +64,43 @@ Choose this for a **FlexRadio** driven through SmartSDR CAT, or for any rig
 served by a **remote `rigctld`** over TCP. You set a single **Network Address**
 as `host:port` — for a Flex that's `127.0.0.1:5002`. See the
 [FlexRadio guide](flexradio.md) for the full picture.
+
+### OmniRig (Windows only)
+
+**OmniRig** is VE3NEA's rig-control server — the one a lot of Windows logging
+and contest software already uses. If you run it, your radio is already set up
+once, in one place, and every program shares it instead of fighting over the COM
+port. Pick this and Nexus becomes another one of those programs.
+
+**The radio is configured in OmniRig, not in Nexus.** Rig type, COM port, baud,
+polling interval — all of that lives in OmniRig's own settings window. So when
+you pick OmniRig here, Nexus stops asking for **Rig Model**, **Serial Port** and
+**Baud**: they would be a second copy of settings OmniRig owns, and a second copy
+is a second thing to get wrong.
+
+What Nexus does ask for is **which** radio:
+
+- **OmniRig radio** — `RIG 1` or `RIG 2`, matching the two tabs in OmniRig's own
+  window. Default is RIG 1. If you run two radios, give each Nexus radio its own
+  slot.
+
+**PTT.** With OmniRig selected, leaving **PTT Method** on `CAT` keys the radio
+through OmniRig — nothing else to set up. The other choices still work exactly as
+they always have, and they are deliberately independent of OmniRig: plenty of
+operators key a hardware line while OmniRig drives CAT. Pick `RTS` or `DTR` and
+set **PTT Serial Port** to your keying cable's port, and Nexus asserts that line
+itself; pick `VOX` and the radio keys off transmit audio. Only the `CAT` choice
+goes through OmniRig.
+
+Two things to know before you pick it:
+
+- **It is Windows only.** OmniRig is a Windows COM server, so on macOS and Linux
+  the choice is shown greyed out with that reason. Use Serial or Network there.
+- **OmniRig has to be installed.** Install it from
+  [dxatlas.com/OmniRig](https://dxatlas.com/OmniRig/) and run it once so it
+  registers itself with Windows. If it isn't there, Nexus says so plainly rather
+  than reporting a dead radio — and if OmniRig is running but your rig is off, on
+  a busy port, or not answering, Nexus shows OmniRig's own words for it.
 
 ---
 

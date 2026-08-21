@@ -1,3 +1,14 @@
+// ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
+// reason only: THE PTT ROW, the pinned dock row this cockpit's stop line rests on, is still
+// written in English here — the button's four labels (which ARE the accessible name
+// components/stop-line.test.tsx matches), its three-armed tooltip, the Lock toggle that
+// decides whether the Space bar is a stop at all, and the Field Day exchange chip that
+// shares the row. It moves in the transmit-path batch, with the stop-line sweeps re-run.
+// Everything else is in the catalog under `phone.*` — the refusal TOASTS that row raises
+// included, a toast being neither a control nor anything a sweep can see. Every dial
+// reading, split offset, filter and scope width, reference level, percentage, band and mode
+// name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
+// and stay in the code.
 import { useEffect, useState, useRef } from 'react'
 import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost, NO_DSP_FUNCS_REASON, NO_DSP_LEVELS_REASON } from '../features/panelHost'
@@ -43,6 +54,25 @@ import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
+import { t } from '../i18n'
+
+/** This cockpit's INVARIANT vocabulary — the words that are technical tokens rather than
+ *  prose, gathered here so the i18n guard reads them as the deliberate constants they are:
+ *  the rig's own control-group names, the units the readouts print, and the two plates. */
+const DSP = 'DSP'
+const NR = 'NR'
+const AGC = 'AGC'
+const BW = 'BW'
+const DB = 'dB'
+const DBM = 'dBm'
+const REC = 'REC'
+const SPLIT_PLATE = 'SPLIT'
+/** The mode picker's AUTO face — the word and the sideband it resolved to, both tokens. */
+const autoPlate = (sideband: string) => `AUTO·${sideband}`
+/** The nudges the two steppers take, as their tooltips print them — figures, so they are
+ *  supplied to the message rather than written in it. */
+const FILTER_STEP_HZ = 100
+const SPLIT_STEP_KHZ = 1
 
 interface Props {
   /** Which panels this cockpit shows or hides (⊞ Panels). Owned by the HOST (App), never
@@ -97,20 +127,21 @@ interface Props {
  *  unticking Voice Keyer hides its ■ Stop, which is allowed — a pane's own stop is a
  *  convenience, and PTT / Stop TX / Tune are what hold the guarantee up. THE STOP LINE lives
  *  in features/panelState.ts. */
-const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
+/** Resolved when the menu is BUILT — a module constant would freeze the first locale loaded. */
+const phonePanelLabels = (): Record<PhonePanelId, string> => ({
   // The strip itself, in this cockpit's own word for it. NOT "Waterfall": what Phone shows
   // there is a trace + waterfall of the passband (or the rig's RF panadapter when one is
   // streaming), and the header above it already calls the thing a scope. `rigscope` below is
   // a different entry — the controls that command the RADIO's scope — so the two labels have
   // to read as different things at a glance, which is why one says Controls and this does not.
-  scope: 'Scope',
-  rigscope: 'Rig Scope Controls',
-  txmeters: 'TX Meters',
-  dsp: 'DSP Functions',
-  dspLevels: 'RX DSP Levels',
-  bandActivity: 'Band Activity',
-  voiceKeyer: 'Voice Keyer',
-}
+  scope: t('phone.panel.scope'),
+  rigscope: t('phone.panel.rigscope'),
+  txmeters: t('phone.panel.txmeters'),
+  dsp: t('phone.panel.dsp'),
+  dspLevels: t('phone.panel.dspLevels'),
+  bandActivity: t('phone.panel.bandActivity'),
+  voiceKeyer: t('phone.panel.voiceKeyer'),
+})
 
 /** The one ⊞ entry whose tick has consequences beyond the pane going away, so the entry
  *  carries them BEFORE the tick rather than apologising after. Hiding the keyer unmounts
@@ -127,6 +158,13 @@ const PHONE_PANEL_LABELS: Record<PhonePanelId, string> = {
  *  Both also announce themselves when they happen (VoiceKeyer's cleanup), for the operator
  *  who walked off the Phone screen and never opened a menu. PanelsMenu hangs this off
  *  aria-describedby, so it reaches a screen reader.
+ *
+ *  ⚠️ NOT MIGRATED, with the one below it. These two are ⊞ MENU NOTES, and the other four on
+ *  this cockpit's menu live in `features/panelHost.ts` (the two DSP reasons), `waterfall.ts`
+ *  (the native-scope reason) and `TxMeters.tsx` — none of which this batch owns. Moving the
+ *  two that happen to sit in this file would leave one menu speaking two languages, so the
+ *  five move together when the notes do. The announcements VoiceKeyer makes AFTER the fact
+ *  did move; they are toasts, not menu prose.
  */
 export const VOICE_KEYER_STOPS_ON_HIDE =
   'hiding this stops a voice message that is playing and throws away a recording in ' +
@@ -155,11 +193,11 @@ export const VOICE_KEYER_UNDO_ENDS =
 /** Expert DSP-function toggles. `key` matches the RadioStatus field + the set_rig_func name; the
  * cockpit only renders those the rig reports as supported (field non-null), so no dead buttons. */
 const DSP_FUNCS = [
-  { key: 'nb', label: 'NB', title: 'Noise Blanker — kills impulse/ignition noise (RX)' },
-  { key: 'nr', label: 'NR', title: 'Noise Reduction — pulls voice out of broadband hiss (RX, DSP)' },
-  { key: 'notch', label: 'Notch', title: 'Auto-Notch (ANF) — nulls carriers/heterodynes (RX, DSP)' },
-  { key: 'comp', label: 'COMP', title: 'Speech Compressor — more average talk power (TX)' },
-  { key: 'vox', label: 'VOX', title: 'Voice-Operated Transmit — hands-free keying (TX)' },
+  { key: 'nb', label: 'NB', titleKey: 'phone.dsp.nb.title' },
+  { key: 'nr', label: 'NR', titleKey: 'phone.dsp.nr.title' },
+  { key: 'notch', label: 'Notch', titleKey: 'phone.dsp.notch.title' },
+  { key: 'comp', label: 'COMP', titleKey: 'phone.dsp.comp.title' },
+  { key: 'vox', label: 'VOX', titleKey: 'phone.dsp.vox.title' },
 ] as const
 
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
@@ -174,27 +212,85 @@ const DSP_FUNCS = [
  *  FROM THE OLD SLICES: 'Full' (0–4000) and 'Voice' (300–2700) are unchanged in meaning.
  *  'Low' (200–1500) is now the plain 1.5k zoom. 'High' (1500–2900) has no carrier-referenced
  *  equivalent — a window that excludes the dial cannot be drawn from it — so its slot became
- *  the tighter 800 Hz zoom. */
+ *  the tighter 800 Hz zoom.
+ *
+ *  The chips whose face is a WIDTH ('1.5k', '800') print it from here; 'Auto', 'Full' and
+ *  'Voice' are words, and every title's figure is supplied to the sentence rather than
+ *  written in it. Both resolve when the row RENDERS (a module constant would freeze the
+ *  first locale loaded), so a chip is keyed and compared on `id` — the preset itself rather
+ *  than the word printed on it. */
 const SPANS = [
   // ⭐ 'Auto' tracks the rig's reported filter width (operator, 2026-08-16: a fixed span
   // wider than the filter shows a dead stopband — on the audio feed those pixels can never
   // light). widthHz 0 is the sentinel; the render resolves it from filterWidthHz, clamped
   // 800..4000, falling back to the full 4 kHz when the rig doesn't report one.
-  { label: 'Auto', widthHz: 0, title: "Follows the radio's filter — the scope shows what the rig can pass" },
-  { label: 'Full', widthHz: 4000, title: 'The whole captured passband — 4 kHz of sideband from your dial' },
-  { label: 'Voice', widthHz: 2700, title: 'Voice energy — 2.7 kHz of sideband from your dial' },
-  { label: '1.5k', widthHz: 1500, title: 'Zoomed — 1.5 kHz of sideband from your dial' },
-  { label: '800', widthHz: 800, title: 'Tight — 800 Hz of sideband from your dial, for fine tuning' },
+  {
+    id: 'auto',
+    widthHz: 0,
+    label: () => t('phone.span.auto.label'),
+    title: () => t('phone.span.auto.title'),
+  },
+  {
+    id: 'full',
+    widthHz: 4000,
+    label: () => t('phone.span.full.label'),
+    title: () => t('phone.span.full.title', { khz: 4 }),
+  },
+  {
+    id: 'voice',
+    widthHz: 2700,
+    label: () => t('phone.span.voice.label'),
+    title: () => t('phone.span.voice.title', { khz: 2.7 }),
+  },
+  {
+    id: '1.5k',
+    widthHz: 1500,
+    label: () => '1.5k',
+    title: () => t('phone.span.zoom.title', { khz: 1.5 }),
+  },
+  {
+    id: '800',
+    widthHz: 800,
+    label: () => '800',
+    title: () => t('phone.span.tight.title', { hz: 800 }),
+  },
 ] as const
 
 /** RF panadapter zoom presets (used only when a native RF scope is streaming). Symmetric ±Hz
  *  windows centered on the dial — scopeView maps these to absolute RF and clamps to the swept
- *  span, so "Full" (a huge window) shows the rig's WHOLE sweep rather than a passband-width sliver. */
+ *  span, so "Full" (a huge window) shows the rig's WHOLE sweep rather than a passband-width sliver.
+ *
+ *  The ± faces are measurements and stay written here; 'Full' is a word. Keyed and compared
+ *  on `id` for the same reason SPANS is. */
 const RF_SPANS = [
-  { label: 'Full', lo: -1e9, hi: 1e9, title: "The rig's whole scope sweep (set the width on the radio)" },
-  { label: '±25k', lo: -25_000, hi: 25_000, title: '±25 kHz around your dial' },
-  { label: '±10k', lo: -10_000, hi: 10_000, title: '±10 kHz around your dial' },
-  { label: '±5k', lo: -5_000, hi: 5_000, title: '±5 kHz around your dial' },
+  {
+    id: 'full',
+    lo: -1e9,
+    hi: 1e9,
+    label: () => t('phone.rfZoom.full.label'),
+    title: () => t('phone.rfZoom.full.title'),
+  },
+  {
+    id: '±25k',
+    lo: -25_000,
+    hi: 25_000,
+    label: () => '±25k',
+    title: () => t('phone.rfZoom.span.title', { khz: 25 }),
+  },
+  {
+    id: '±10k',
+    lo: -10_000,
+    hi: 10_000,
+    label: () => '±10k',
+    title: () => t('phone.rfZoom.span.title', { khz: 10 }),
+  },
+  {
+    id: '±5k',
+    lo: -5_000,
+    hi: 5_000,
+    label: () => '±5k',
+    title: () => t('phone.rfZoom.span.title', { khz: 5 }),
+  },
 ] as const
 
 /** RIG scope-span presets (native Icom CI-V only) — these change the RADIO's real panadapter
@@ -362,7 +458,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const pickMode = (m: 'USB' | 'LSB' | 'FM' | null) =>
     void setSidebandOverride(m)
       .then((s) => onSnap?.(s))
-      .catch(() => pushToast('Could not set mode', 'error'))
+      .catch(() => pushToast(t('phone.mode.failed'), 'error'))
   // Whether the app can actually control the rig. Without CAT (VOX/serial PTT) the dial +
   // mode can't be set or read back — surface that so it's clear, not silently broken.
   const catOk = snap.radio.catOk === true
@@ -386,7 +482,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     if ((deltaHz > 0 && next <= base) || (deltaHz < 0 && next >= base)) return
     void setFilterWidth(next)
       .then((s) => onSnap?.(s))
-      .catch(() => pushToast('Could not set filter width', 'error'))
+      .catch(() => pushToast(t('phone.filter.failed'), 'error'))
   }
 
   // Rig's actual mode read back over CAT (display-only). The app's `commandedMode` stays
@@ -398,6 +494,17 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // REAL operational mismatch worth flagging, not a cosmetic naming variant.
   const rigFamily = /^W?FM/.test(rigMode) ? 'FM' : rigMode
   const modeMismatch = catOk && rigMode !== '' && rigFamily !== commandedMode ? rigMode : null
+
+  // ⚠️ THE MIC IS DEAD AND ONLY THIS SCREEN CAN SAY SO (2026-08-17 Flex audit, critic gap #6).
+  // Native Flex DAX audio sends `transmit set dax=1`, which is a RADIO-WIDE setting: while it
+  // stands, the Flex's modulator takes its audio from DAX and ignores the physical microphone —
+  // on every slice, in every program, SmartSDR's own MOX included. So the operator who switched
+  // native audio on for FT8 and then picks up the mic to work someone on SSB transmits silence,
+  // and until now nothing anywhere told them. The digital screens don't care (they feed the
+  // modulator over DAX, which is the point); Phone is where the harm lands, so Phone is where it
+  // is said. Same chip vocabulary as the mode-mismatch pill beside it — no new pane, no
+  // structural size of its own (cockpit-panes.css owns those).
+  const micOffForDax = snap.radio.flexDaxTx === true
 
   // Manual split (casual DX "work up N"): the desired TX dial lives in the snapshot; a plain
   // retune clears it (backend). Offset is kHz off the RX dial; default +5, the common pileup.
@@ -416,12 +523,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const applySplitTx = (offsetKhz: number) =>
     setSplit(snap.radio.dialMhz + offsetKhz / 1000)
       .then((s) => onSnap?.(s))
-      .catch(() => pushToast('Could not set split', 'error'))
+      .catch(() => pushToast(t('phone.split.setFailed'), 'error'))
   const toggleSplit = () =>
     splitOn
       ? setSplit(null)
           .then((s) => onSnap?.(s))
-          .catch(() => pushToast('Could not clear split', 'error'))
+          .catch(() => pushToast(t('phone.split.clearFailed'), 'error'))
       : applySplitTx(splitOffsetKhz)
   // Accumulate on local state (functional updater) so rapid bumps that fire before the
   // IPC/onSnap round-trip don't all read the same stale value and collapse into one step.
@@ -439,7 +546,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const key = (on: boolean) => {
     // Don't key (or show ON-AIR) outside license privileges — the engine blocks it anyway.
     if (on && !snapRef.current.radio.txAllowed) {
-      pushToast('TX locked — this frequency/mode is outside your license privileges', 'info', 3500)
+      pushToast(t('phone.tx.locked'), 'info', 3500)
       return
     }
     // TX SWITCHED OFF IS A SECOND, SEPARATE REFUSAL, and until #81 it was a SILENT one.
@@ -465,7 +572,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     // allowed: set_ptt still refuses while tx_enabled is false, and TX is still only ever
     // armed by an explicit operator action.
     if (on && !snapRef.current.radio.txEnabled) {
-      pushToast('TX was off — turned it back on. Press PTT again to talk.', 'info', 4000)
+      pushToast(t('phone.tx.turnedBackOn'), 'info', 4000)
       void setTxEnabled(true)
         .then((s) => onSnap?.(s))
         .catch(() => {})
@@ -511,7 +618,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     const fn = recording ? stopQsoRecording : startQsoRecording
     fn()
       .then((s) => onSnap?.(s))
-      .catch(() => pushToast(`Could not ${recording ? 'stop' : 'start'} recording`, 'error'))
+      .catch(() =>
+        pushToast(recording ? t('phone.record.stopFailed') : t('phone.record.startFailed'), 'error'),
+      )
       .finally(() => setRecBusy(false))
   }
 
@@ -606,7 +715,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         menu: PHONE_PANEL_IDS,
         side: [],
         main: 'bandActivity',
-        labels: PHONE_PANEL_LABELS,
+        labels: phonePanelLabels(),
         notes: {
           rigscope: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
           dsp: canDsp ? undefined : NO_DSP_FUNCS_REASON,
@@ -654,7 +763,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
   const bandPane =
     hasBandPane && onWorkSpot ? (
-      <CockpitPaneFrame title="Band activity" paneId="bandActivity" fit="content">
+      <CockpitPaneFrame title={t('phone.pane.bandActivity.title')} paneId="bandActivity" fit="content">
         <BandStrip
           band={snap.radio.band}
           dialMhz={snap.radio.dialMhz}
@@ -666,6 +775,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           typeByCall={typeByCall}
           onWorkSpot={onWorkSpot}
           onPopOut={() => void openPanelWindow('bandmapPhone')}
+          // Wheel-tune from the strip (#96): same step + sensitivity + gate as the scope above.
+          sideband={snap.radio.sideband || 'USB'}
+          tuneEnabled={snap.radio.catOk === true && !snap.radio.txBusyReason && !snap.radio.transmitting}
+          stepHz={tuneStep}
+          wheelSensitivity={wheelSensitivity}
+          onSnap={onSnap}
         />
       </CockpitPaneFrame>
     ) : null
@@ -696,7 +811,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // fiber across that. Guarded by PhoneCockpit.structure.test.tsx (tier flips, ⊞ toggles
   // of other panels, and the restore back to stock).
   const keyerPane = hasKeyerPane ? (
-    <CockpitPaneFrame title="Voice keyer" paneId="voiceKeyer" fit="content">
+    <CockpitPaneFrame title={t('phone.pane.voiceKeyer.title')} paneId="voiceKeyer" fit="content">
       <VoiceKeyer
         txEnabled={snap.radio.txEnabled}
         keyed={keyed}
@@ -716,10 +831,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           changes the hardware sweep width, ref sets weak-signal visibility. Distinct from the
           view-zoom chips on the scope itself, which only zoom what's already streamed. */}
       {hasRigScopePane && civScope && (
-        <CockpitPaneFrame title="Rig scope controls" paneId="rigscope" fit="content">
-          <div className="ph-rigscope" role="group" aria-label="Rig scope control">
-            <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
-              Rig&nbsp;scope
+        <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content">
+          <div className="ph-rigscope" role="group" aria-label={t('phone.rigScope.aria')}>
+            <span className="ph-rigscope-lbl" title={t('phone.rigScope.title')}>
+              {t('phone.rigScope.label')}
             </span>
             <div className="ph-span">
               {RIG_SPANS.map((sp) => (
@@ -727,15 +842,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   key={sp.label}
                   type="button"
                   className="theme-chip"
-                  title={`Set the radio's scope span to ${sp.label}`}
+                  title={t('phone.rigScope.span.title', { span: sp.label })}
                   onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
                 >
                   {sp.label}
                 </button>
               ))}
             </div>
-            <label className="ph-rigscope-ref" title="Scope reference level — lower to lift weak signals out of the noise">
-              <span>Ref</span>
+            <label className="ph-rigscope-ref" title={t('phone.rigScope.ref.title')}>
+              <span>{t('phone.scope.ref.label')}</span>
               <input
                 type="range"
                 min={-200}
@@ -743,9 +858,9 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                 step={5}
                 value={scopeRefTenths}
                 onChange={(e) => changeScopeRef(Number(e.target.value))}
-                aria-label="Scope reference level (dB)"
+                aria-label={t('phone.rigScope.ref.aria')}
               />
-              <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} dB</span>
+              <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} {DB}</span>
             </label>
           </div>
         </CockpitPaneFrame>
@@ -753,10 +868,10 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
       {/* FlexRadio SmartSDR panadapter controls — command the Flex pan's real bandwidth + ref. */}
       {hasRigScopePane && flexScope && (
-        <CockpitPaneFrame title="Rig scope controls" paneId="rigscope" fit="content">
-          <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
-            <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
-              Flex&nbsp;pan
+        <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content">
+          <div className="ph-rigscope" role="group" aria-label={t('phone.flexPan.aria')}>
+            <span className="ph-rigscope-lbl" title={t('phone.flexPan.title')}>
+              {t('phone.flexPan.label')}
             </span>
             <div className="ph-span">
               {FLEX_SPANS.map((sp) => (
@@ -764,15 +879,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   key={sp.label}
                   type="button"
                   className="theme-chip"
-                  title={`Set the Flex panadapter bandwidth to ${sp.label}`}
+                  title={t('phone.flexPan.span.title', { span: sp.label })}
                   onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
                 >
                   {sp.label}
                 </button>
               ))}
             </div>
-            <label className="ph-rigscope-ref" title="Panadapter reference level (dBm) — lower to lift weak signals out of the noise">
-              <span>Ref</span>
+            <label className="ph-rigscope-ref" title={t('phone.flexPan.ref.title')}>
+              <span>{t('phone.scope.ref.label')}</span>
               <input
                 type="range"
                 min={-140}
@@ -780,18 +895,18 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                 step={5}
                 value={flexRefDbm}
                 onChange={(e) => changeFlexRef(Number(e.target.value))}
-                aria-label="Flex panadapter reference level (dBm)"
+                aria-label={t('phone.flexPan.ref.aria')}
               />
-              <span className="ph-power-val">{flexRefDbm} dBm</span>
+              <span className="ph-power-val">{flexRefDbm} {DBM}</span>
             </label>
           </div>
         </CockpitPaneFrame>
       )}
 
       {hasDspPane && (
-        <CockpitPaneFrame title="DSP functions" paneId="dsp" fit="content">
-          <div className="ph-dsp" role="group" aria-label="Rig DSP functions">
-            <span className="ph-dsp-label">DSP</span>
+        <CockpitPaneFrame title={t('phone.pane.dsp.title')} paneId="dsp" fit="content">
+          <div className="ph-dsp" role="group" aria-label={t('phone.dsp.aria')}>
+            <span className="ph-dsp-label">{DSP}</span>
             {dspFuncs.map((f) => {
               const on = snap.radio[f.key] === true
               return (
@@ -800,11 +915,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   type="button"
                   className={`ph-dsp-btn${on ? ' on' : ''}`}
                   aria-pressed={on}
-                  title={f.title}
+                  title={t(f.titleKey)}
                   onClick={() =>
                     void setRigFunc(f.key, !on)
                       .then((s) => onSnap?.(s))
-                      .catch(() => pushToast(`Could not toggle ${f.label}`, 'error'))
+                      .catch(() => pushToast(t('phone.dsp.toggleFailed', { func: f.label }), 'error'))
                   }
                 >
                   {f.label}
@@ -817,11 +932,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
 
       {/* RX DSP levels — NR level slider + AGC speed, each shown only when the rig reports it. */}
       {hasDspLevelsPane && (
-        <CockpitPaneFrame title="RX DSP levels" paneId="dspLevels" fit="content">
-          <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
+        <CockpitPaneFrame title={t('phone.pane.dspLevels.title')} paneId="dspLevels" fit="content">
+          <div className="ph-dsp-levels" role="group" aria-label={t('phone.rxDsp.aria')}>
             {snap.radio.nrLevel != null && (
-              <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if audio gets watery">
-                <span>NR</span>
+              <label className="ph-dsplev" title={t('phone.rxDsp.nr.title')}>
+                <span>{NR}</span>
                 <input
                   type="range"
                   min={0}
@@ -834,14 +949,14 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   onPointerUp={() => {
                     nrDragging.current = false
                   }}
-                  aria-label="Noise-reduction level"
+                  aria-label={t('phone.rxDsp.nr.aria')}
                 />
                 <span className="ph-power-val">{nr}%</span>
               </label>
             )}
             {snap.radio.agc != null && (
-              <div className="ph-agc" role="group" aria-label="AGC speed" title="AGC time constant">
-                <span className="ph-dsplev-lbl">AGC</span>
+              <div className="ph-agc" role="group" aria-label={t('phone.rxDsp.agc.aria')} title={t('phone.rxDsp.agc.title')}>
+                <span className="ph-dsplev-lbl">{AGC}</span>
                 {(['fast', 'mid', 'slow'] as const).map((sp) => (
                   <button
                     key={sp}
@@ -850,7 +965,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                     aria-pressed={agc === sp}
                     onClick={() => changeAgc(sp)}
                   >
-                    {sp === 'fast' ? 'Fast' : sp === 'mid' ? 'Mid' : 'Slow'}
+                    {sp === 'fast'
+                      ? t('phone.rxDsp.agc.fast')
+                      : sp === 'mid'
+                        ? t('phone.rxDsp.agc.mid')
+                        : t('phone.rxDsp.agc.slow')}
                   </button>
                 ))}
               </div>
@@ -862,7 +981,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   )
 
   const logPane = (
-    <CockpitPaneFrame title="Log" paneId="log">
+    <CockpitPaneFrame title={t('phone.pane.log.title')} paneId="log">
       {/* compactRecall died here (2026-07-31). It existed because the pre-overhaul cockpit had
           no interposed scroller: the full recall card's height crushed the operating panes
           directly. This pane is now a FILL pane whose .pane-body scrolls internally, so a tall
@@ -893,7 +1012,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         snap={snap}
         onSnap={onSnap}
         modeIndicator={
-          <div className="ph-mode-pick" role="group" aria-label="Phone mode">
+          <div className="ph-mode-pick" role="group" aria-label={t('phone.mode.aria')}>
             {(['AUTO', 'USB', 'LSB', 'FM'] as const).map((m) => {
               const active = m === 'AUTO' ? modeOverride === null : modeOverride === m
               return (
@@ -905,12 +1024,12 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   disabled={!catOk}
                   title={
                     m === 'AUTO'
-                      ? `AUTO — sideband by band (now ${sidebandAuto}); a band change re-asserts this`
-                      : `Force ${m} until you change bands`
+                      ? t('phone.mode.auto.title', { sideband: sidebandAuto })
+                      : t('phone.mode.force.title', { mode: m })
                   }
                   onClick={() => pickMode(m === 'AUTO' ? null : m)}
                 >
-                  {m === 'AUTO' ? `AUTO·${sidebandAuto}` : m}
+                  {m === 'AUTO' ? autoPlate(sidebandAuto) : m}
                 </button>
               )
             })}
@@ -953,8 +1072,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           value: power,
           unit: '%',
           onChange: changePower,
-          label: 'Power',
-          title: 'RF output power',
+          label: t('phone.header.power.label'),
+          title: t('phone.header.power.title'),
           onPointerDown: () => {
             dragging.current = true
           },
@@ -971,12 +1090,20 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         }
         onStopTx={() => void haltTx()}
       >
+        {micOffForDax && (
+          <span className="ph-mode-mismatch" title={t('phone.micDax.title')}>
+            {t('phone.micDax.label')}
+          </span>
+        )}
         {modeMismatch && (
           <span
             className="ph-mode-mismatch"
-            title={`Your rig is on ${modeMismatch}, but Phone is set to ${commandedMode}. Logging and TX use ${commandedMode} — turn the rig's mode knob (or re-pick the band) to match.`}
+            title={t('phone.rigMismatch.title', {
+              rigMode: modeMismatch,
+              mode: commandedMode,
+            })}
           >
-            rig: {modeMismatch}
+            {t('phone.rigMismatch.chip', { mode: modeMismatch })}
           </span>
         )}
         {catOk && (
@@ -986,19 +1113,27 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               onClick={toggleSplit}
               title={
                 splitOn
-                  ? `Split ON — TX ${splitTxMhz?.toFixed(3)} MHz. Click for simplex.`
-                  : 'Work split — TX off your RX frequency (e.g. up 5)'
+                  ? t('phone.split.on.title', { freq: splitTxMhz?.toFixed(3) ?? '' })
+                  : t('phone.split.off.title')
               }
             >
-              SPLIT
+              {SPLIT_PLATE}
             </button>
-            <button className="ph-split-step" onClick={() => bumpSplit(-1)} title="TX 1 kHz lower">
+            <button
+              className="ph-split-step"
+              onClick={() => bumpSplit(-SPLIT_STEP_KHZ)}
+              title={t('phone.split.lower.title', { step: SPLIT_STEP_KHZ })}
+            >
               −
             </button>
-            <span className="ph-split-amt mono" title="TX offset from your RX dial (kHz)">
+            <span className="ph-split-amt mono" title={t('phone.split.offset.title')}>
               {splitOffsetKhz >= 0 ? `+${splitOffsetKhz}` : `${splitOffsetKhz}`}
             </span>
-            <button className="ph-split-step" onClick={() => bumpSplit(1)} title="TX 1 kHz higher">
+            <button
+              className="ph-split-step"
+              onClick={() => bumpSplit(SPLIT_STEP_KHZ)}
+              title={t('phone.split.higher.title', { step: SPLIT_STEP_KHZ })}
+            >
               +
             </button>
           </div>
@@ -1006,17 +1141,14 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         {!catOk && (
           <span
             className="ph-nocat"
-            title={
-              snap.radio.catDetail ||
-              'No CAT link — set a rigctld/CAT rig in Settings so the app can switch the mode and follow the dial. On VOX/RTS-DTR PTT the rig has no command channel.'
-            }
+            title={snap.radio.catDetail || t('phone.noCat.title')}
           >
-            ⚠ no rig control
+            {t('phone.noCat.label')}
           </span>
         )}
         {snap.radio.micGain != null && (
-          <label className="ph-power" title="Microphone gain — raise it until SSB peaks tickle the ALC zone">
-            <span>Mic</span>
+          <label className="ph-power" title={t('phone.mic.title')}>
+            <span>{t('phone.mic.label')}</span>
             <input
               type="range"
               min={0}
@@ -1029,19 +1161,19 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               onPointerUp={() => {
                 micDragging.current = false
               }}
-              aria-label="Mic gain"
+              aria-label={t('phone.mic.aria')}
             />
             <span className="ph-power-val">{mic}%</span>
           </label>
         )}
         {catOk && commandedMode !== 'FM' && (
-          <div className="ph-filter" title="RX filter / passband width (CAT)">
-            <span className="ph-filter-lbl">BW</span>
+          <div className="ph-filter" title={t('phone.filter.title')}>
+            <span className="ph-filter-lbl">{BW}</span>
             <button
               type="button"
               className="ph-filter-step"
-              onClick={() => bumpFilter(-100)}
-              title="Narrower (−100 Hz)"
+              onClick={() => bumpFilter(-FILTER_STEP_HZ)}
+              title={t('phone.filter.narrower.title', { step: FILTER_STEP_HZ })}
             >
               −
             </button>
@@ -1051,8 +1183,8 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             <button
               type="button"
               className="ph-filter-step"
-              onClick={() => bumpFilter(100)}
-              title="Wider (+100 Hz)"
+              onClick={() => bumpFilter(FILTER_STEP_HZ)}
+              title={t('phone.filter.wider.title', { step: FILTER_STEP_HZ })}
             >
               +
             </button>
@@ -1079,22 +1211,18 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
           disabled={recBusy}
-          aria-label={recording ? 'Stop recording this QSO' : 'Record QSO audio'}
-          title={
-            recording
-              ? 'Recording — click to stop recording this QSO'
-              : 'Record the received audio to a WAV in the recordings folder'
-          }
+          aria-label={recording ? t('phone.record.stop.aria') : t('phone.record.start.aria')}
+          title={recording ? t('phone.record.on.title') : t('phone.record.off.title')}
         >
           <span className="ph-rec-dot" aria-hidden="true">
             {recording ? '■' : '●'}
           </span>
-          REC
+          {REC}
         </button>
         {/* No visible 'RX': the meter is a role="meter" already named "RX audio level", and
             the label element keeps the same string as its tooltip. */}
-        <label className="ph-rxmeter" title="RX audio level">
-          <LiveLevelMeter label="RX audio level" variant="compact" />
+        <label className="ph-rxmeter" title={t('phone.rxMeter.label')}>
+          <LiveLevelMeter label={t('phone.rxMeter.label')} variant="compact" />
         </label>
       </CockpitHeader>
 
@@ -1124,21 +1252,18 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             // Honest per feed: soundcard FFT = the demodulated RX audio; a native
             // panadapter = the real RF spectrum, so name it a panadapter and show its span.
             const rf = nativeRf ? scopeFeed : null
+            // The fed span is a MEASUREMENT and is assembled here; only the audio view's
+            // word is a catalog entry.
+            const scopeSub = rf
+              ? `· ${(rf.loHz / 1e6).toFixed(4)}–${(rf.hiHz / 1e6).toFixed(4)} MHz`
+              : `· ${t('phone.scope.audio.sub')}`
             return (
               <span
                 className="ph-scope-title"
-                title={
-                  rf
-                    ? 'Native RF panadapter — the real RF spectrum around your dial, not the demodulated audio passband.'
-                    : 'Receiver AUDIO spectrum on your rig’s axis: the centre line is your dial, and the passband sits on the side your sideband is on (USB above, LSB below) — the other half is quiet because an SSB receiver only hears one side. Not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.'
-                }
+                title={rf ? t('phone.scope.nativeRf.title') : t('phone.scope.audio.title')}
               >
-                {rf ? 'RF Panadapter' : 'Passband'}{' '}
-                <span className="ph-scope-sub">
-                  {rf
-                    ? `· ${(rf.loHz / 1e6).toFixed(4)}–${(rf.hiHz / 1e6).toFixed(4)} MHz`
-                    : '· RX audio'}
-                </span>
+                {rf ? t('phone.scope.nativeRf.label') : t('phone.scope.audio.label')}{' '}
+                <span className="ph-scope-sub">{scopeSub}</span>
               </span>
             )
           })()}
@@ -1147,35 +1272,35 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
               tooltip, so the word was the third statement of the same thing on one row. */}
           <PalettePicker />
         </div>
-        <div className="ph-scope-wrap" ref={scopeRef} title="Scroll here to tune the VFO">
+        <div className="ph-scope-wrap" ref={scopeRef} title={t('phone.scope.tuneHint')}>
           {nativeRf ? (
             // Native RF panadapter: RF-width zoom around the dial (not audio-passband slices).
-            <div className="ph-span" role="group" aria-label="Panadapter zoom">
+            <div className="ph-span" role="group" aria-label={t('phone.rfZoom.aria')}>
               {RF_SPANS.map((sp) => (
                 <button
-                  key={sp.label}
+                  key={sp.id}
                   type="button"
-                  className={`theme-chip${rfSpan.label === sp.label ? ' active' : ''}`}
-                  aria-pressed={rfSpan.label === sp.label}
-                  title={sp.title}
+                  className={`theme-chip${rfSpan.id === sp.id ? ' active' : ''}`}
+                  aria-pressed={rfSpan.id === sp.id}
+                  title={sp.title()}
                   onClick={() => setRfSpan(sp)}
                 >
-                  {sp.label}
+                  {sp.label()}
                 </button>
               ))}
             </div>
           ) : (
-            <div className="ph-span" role="group" aria-label="Bandscope span">
+            <div className="ph-span" role="group" aria-label={t('phone.scope.span.aria')}>
               {SPANS.map((sp) => (
                 <button
-                  key={sp.label}
+                  key={sp.id}
                   type="button"
-                  className={`theme-chip${span.label === sp.label ? ' active' : ''}`}
-                  aria-pressed={span.label === sp.label}
-                  title={sp.title}
+                  className={`theme-chip${span.id === sp.id ? ' active' : ''}`}
+                  aria-pressed={span.id === sp.id}
+                  title={sp.title()}
                   onClick={() => setSpan(sp)}
                 >
-                  {sp.label}
+                  {sp.label()}
                 </button>
               ))}
             </div>
@@ -1204,7 +1329,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         min={SCOPE_SPLIT_MIN}
         max={SCOPE_SPLIT_MAX}
         defaultPct={22}
-        label="scope height"
+        label={t('phone.scope.splitter.label')}
       />
         </>
       )}
@@ -1268,6 +1393,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           unkey the rig. Growth above the row leaves the row's screen position fixed. */}
       {shown('txmeters') && <TxMeters radio={snap.radio} />}
 
+      {/* ⚠️ NOTHING IN THIS ROW IS MIGRATED, and that is the whole of why this file is on the
+          i18n PARTIAL list. PTT is Phone's stop-line census (features/panelState.ts) and
+          components/stop-line.test.tsx finds it by ACCESSIBLE NAME, matching all four of the
+          labels below; its tooltip IS that control's description, naming the switch that is
+          down and the mic the operator talks on. The Lock toggle beside it decides whether
+          the window's Space keyup is a PTT release at all — the census's fourth holder — and
+          the Field Day chip shares the row. All of it moves in the transmit-path batch, with
+          the stop-line sweeps re-run. The TOASTS this row's handler raises did move (see
+          `key` above): a toast is not a control, and no sweep can see one. */}
       <div className="ph-ptt-row">
         {fdExchange && (
           <span

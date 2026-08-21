@@ -807,6 +807,11 @@ pub struct RadioStatus {
     /// for VOX/serial-PTT rigs with no control channel, and after a CAT breaker trip.
     #[serde(default)]
     pub rig_confirmed: bool,
+    /// Native Flex DAX audio is live and carrying TRANSMIT audio, so the radio's modulator
+    /// is taking DAX and the operator's microphone is disconnected — radio-wide, every
+    /// slice, every client. The Phone cockpit says so; see `Engine::observe_flex_dax_tx`.
+    #[serde(default)]
+    pub flex_dax_tx: bool,
 }
 
 /// serde default helper: TX drive defaults to 0.9.

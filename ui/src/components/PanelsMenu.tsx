@@ -45,7 +45,14 @@
 // aria-disabled was `opacity` on the focusable element, which composites its FOCUS RING too
 // — the change made to keep the entry keyboard-reachable is what made its focus indicator
 // hard to see. Both problems are deleted, not worked around, by leaving the box alone.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The ENTRIES are not
+// its words: each cockpit names its own panels and supplies the `label` and the `note`, so
+// those move with the cockpit. What is here is the menu itself — the ⊞ button, the popover,
+// the popped-out tag, and Undo / Reset. No vocabulary ID passes through this file as prose,
+// so nothing here can rename one.
 import { useEffect, useId, useRef, useState } from 'react'
+import { t } from '../i18n'
 import type { PanelState } from '../features/panelState'
 
 export interface PanelsMenuItem {
@@ -119,15 +126,15 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        title="Show or hide the panels on this screen — untick one and its neighbours expand into the space it leaves"
+        title={t('panels.button.title')}
       >
-        ⊞ Panels{hidden > 0 ? ` · ${hidden} hidden` : ''}
+        {hidden > 0 ? t('panels.button.hidden', { count: hidden }) : t('panels.button')}
       </button>
       {open && (
         <div
           className="panels-menu-pop"
           role="group"
-          aria-label="Panels on this screen"
+          aria-label={t('panels.popover.aria')}
           // Escape closes the menu. It deliberately does NOT stop propagating: Escape
           // is the abort key and must still reach the cockpit's halt handler.
           onKeyDown={(e) => {
@@ -174,7 +181,7 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
                   </label>
                   {tagId && (
                     <span className="panels-menu-tag" id={tagId}>
-                      popped out
+                      {t('panels.tag.popped')}
                     </span>
                   )}
                 </div>
@@ -200,12 +207,12 @@ export function PanelsMenu({ items, onToggle, onUndo, canUndo, undoNote, onReset
               onClick={onUndo}
               disabled={!canUndo}
               aria-describedby={canUndo && undoNote ? `${uid}-undo-why` : undefined}
-              title="Put the layout back the way it was before the last change"
+              title={t('panels.undo.title')}
             >
-              Undo last change
+              {t('panels.undo')}
             </button>
-            <button type="button" onClick={onReset} title="Show every panel again (the stock layout)">
-              Reset layout
+            <button type="button" onClick={onReset} title={t('panels.reset.title')}>
+              {t('panels.reset')}
             </button>
           </div>
         </div>

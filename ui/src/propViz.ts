@@ -2,7 +2,15 @@
 // separate + unit-tested so the color/threshold/format logic is verifiable and
 // the components stay declarative. Colors resolve to semantic tokens (DESIGN.md)
 // except the heatmap, which uses the perceptual inferno LUT (dark=low, bright=high).
+//
+// ⚠️ ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every string this module
+// RETURNS goes straight into a tooltip or a chip, so each is looked up when the string is
+// built — these are functions, not module constants, so there is nothing to freeze. What
+// stays here: band names, callsigns, grid squares, octants, km, MHz, dB, degrees, the ★/☆
+// glyphs, and the `dualStateLabel` state WORD, which is the backend's `BandModeled` enum
+// passed through and is compared against by `components/connect/paneFormat.ts`.
 import { sampleLut } from './colormaps'
+import { t } from './i18n'
 import { STATUS, type StatusMeta } from './statusMeta'
 import type {
   ActivityTier,
@@ -70,17 +78,16 @@ export function rarityMeta(
     case 'rare':
       return {
         glyph: '◆',
-        label: 'RARE',
+        label: t('prop.rarity.rare.label'),
         cls: 'rare',
-        title: 'Rare grid — almost no land (small island or coastal sliver)',
+        title: t('prop.rarity.rare.title'),
       }
     case 'ultraRare':
       return {
         glyph: '◆◆',
-        label: 'ULTRA',
+        label: t('prop.rarity.ultra.label'),
         cls: 'ultra',
-        title:
-          'Ultra-rare grid — open water: only rovers, maritime mobiles, or DXpeditions can activate it',
+        title: t('prop.rarity.ultra.title'),
       }
     default:
       return null
@@ -119,14 +126,14 @@ export interface Impact {
 
 /** Plain-language HF impact for a space-weather index (numbers stay visible in the UI). */
 export function sfiImpact(sfi: number): Impact {
-  if (sfi >= 150) return { sev: 'active', text: 'high flux — upper bands lively' }
-  if (sfi >= 100) return { sev: 'active', text: 'moderate flux — 20–15 m workable' }
-  return { sev: 'quiet', text: 'low flux — high bands sluggish' }
+  if (sfi >= 150) return { sev: 'active', text: t('prop.impact.sfi.high') }
+  if (sfi >= 100) return { sev: 'active', text: t('prop.impact.sfi.moderate') }
+  return { sev: 'quiet', text: t('prop.impact.sfi.low') }
 }
 export function kpImpact(kp: number): Impact {
-  if (kp >= 5) return { sev: 'warn', text: 'geomag storm — polar paths degraded' }
-  if (kp >= 4) return { sev: 'warn', text: 'unsettled — high-lat paths soft' }
-  return { sev: 'quiet', text: 'quiet field — stable paths' }
+  if (kp >= 5) return { sev: 'warn', text: t('prop.impact.kp.storm') }
+  if (kp >= 4) return { sev: 'warn', text: t('prop.impact.kp.unsettled') }
+  return { sev: 'quiet', text: t('prop.impact.kp.quiet') }
 }
 /** The model's "usable" (≥ Fair) cutoff — mirrors likelihood.rs Workability::from_score.
  * A per-UTC-hour likelihood at/above this reads as an open hour. */
@@ -145,14 +152,16 @@ export function bandTiming(hourly: number[], nowMs: number): string {
     let left = 0
     while (left < 24 && open(nowH + left)) left++
     const remMin = left * 60 - nowMin
-    return remMin >= 90 ? `open now · ~${Math.round(remMin / 60)}h left` : `open now · ~${remMin}m left`
+    return remMin >= 90
+      ? t('prop.bandTiming.openNowHours', { hours: Math.round(remMin / 60) })
+      : t('prop.bandTiming.openNowMins', { mins: remMin })
   }
   for (let ahead = 1; ahead <= 24; ahead++) {
     if (open(nowH + ahead)) {
       const mins = ahead * 60 - nowMin
       const when = mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h${mins % 60 ? ` ${mins % 60}m` : ''}`
       const z = `${String((nowH + ahead) % 24).padStart(2, '0')}00Z`
-      return `opens in ~${when} (${z})`
+      return t('prop.bandTiming.opensIn', { when, at: z })
     }
   }
   return ''
@@ -161,23 +170,23 @@ export function bandTiming(hourly: number[], nowMs: number): string {
 /** IMF Bz (nT) — the leading geomagnetic signal (leads Kp by hours). Southward (negative)
  * couples solar-wind energy in: <=-10 strongly geoeffective, -10..-5 unsettled, else benign. */
 export function bzImpact(bz: number): Impact {
-  if (bz <= -10) return { sev: 'warn', text: 'field hard south — storm likely, polar paths fading' }
-  if (bz <= -5) return { sev: 'warn', text: 'field south — high-lat paths softening soon' }
-  return { sev: 'quiet', text: 'field neutral/north — stable' }
+  if (bz <= -10) return { sev: 'warn', text: t('prop.impact.bz.hardSouth') }
+  if (bz <= -5) return { sev: 'warn', text: t('prop.impact.bz.south') }
+  return { sev: 'quiet', text: t('prop.impact.bz.neutral') }
 }
 /** A-index (24 h average of geomagnetic activity — the day's character, where Kp is
  * the last 3 h). NOAA scale: <8 quiet · 8–15 unsettled · 16–29 active · 30+ storm. */
 export function aImpact(a: number): Impact {
-  if (a >= 30) return { sev: 'warn', text: 'stormy day — HF rough, polar paths out' }
-  if (a >= 16) return { sev: 'warn', text: 'active day — paths up and down' }
-  if (a >= 8) return { sev: 'active', text: 'unsettled day — minor fading spells' }
-  return { sev: 'quiet', text: 'quiet day — conditions steady' }
+  if (a >= 30) return { sev: 'warn', text: t('prop.impact.a.storm') }
+  if (a >= 16) return { sev: 'warn', text: t('prop.impact.a.active') }
+  if (a >= 8) return { sev: 'active', text: t('prop.impact.a.unsettled') }
+  return { sev: 'quiet', text: t('prop.impact.a.quiet') }
 }
 export function xrayImpact(cls: string): Impact {
   const c = cls.trim().charAt(0).toUpperCase()
-  if (c === 'X' || c === 'M') return { sev: 'warn', text: 'flare — low-band shortwave fade' }
-  if (c === 'C') return { sev: 'active', text: 'C-class — minor low-band absorption' }
-  return { sev: 'quiet', text: 'no significant flares' }
+  if (c === 'X' || c === 'M') return { sev: 'warn', text: t('prop.impact.xray.flare') }
+  if (c === 'C') return { sev: 'active', text: t('prop.impact.xray.cClass') }
+  return { sev: 'quiet', text: t('prop.impact.xray.none') }
 }
 
 // ───────────────── nerve-center: modeled state, trend, insights ─────────────────
@@ -265,14 +274,18 @@ export function dualStateLabel(
   modeled: BandModeled | undefined,
   tier: ActivityTier,
 ): { word: string; sub: string } {
+  // ⚠️ The WORD is the backend's `BandModeled` enum passed straight through, and
+  // `components/connect/paneFormat.ts` compares against it (`!== 'Closed'`). It moves with
+  // the rest of the backend's vocabulary, not here. The SUB-NOTE is ours.
+  //
   // Observed activity PROVES the band is open, regardless of what the model says.
-  if (tier === 'Active') return { word: 'Open', sub: 'active' }
-  if (tier === 'Moderate') return { word: 'Open', sub: 'some activity' }
+  if (tier === 'Active') return { word: 'Open', sub: t('prop.state.sub.active') }
+  if (tier === 'Moderate') return { word: 'Open', sub: t('prop.state.sub.someActivity') }
   // Silent band: defer to the model. Open-but-unheard reads "Open · none heard" — the
   // key fix so a quiet band never reads as dead.
   const m: BandModeled = modeled ?? 'Open'
   if (m === 'Closed') return { word: 'Closed', sub: '' }
-  return { word: m, sub: 'none heard' }
+  return { word: m, sub: t('prop.state.sub.noneHeard') }
 }
 
 /** The map hover-tooltip line for a live cluster/RBN/PSKR spot — who/where/what
@@ -283,7 +296,8 @@ export function spotTooltip(sp: MapSpot): string {
   const age = sp.ageSecs < 60 ? `${sp.ageSecs}s` : `${Math.round(sp.ageSecs / 60)}m`
   const freq = sp.freqMhz ? ` · ${sp.freqMhz.toFixed(4).replace(/\.?0+$/, '')} MHz` : ''
   const mode = sp.mode ? ` ${sp.mode}` : ''
-  return `${sp.call} · ${sp.band}${mode}${freq} · ${age} ago${sp.heardMe ? ' · heard YOU' : ''}${sp.approx ? ' · ~location' : ''}`
+  const line = t('prop.spotTooltip', { call: sp.call, band: sp.band, mode, freq, age })
+  return `${line}${sp.heardMe ? t('prop.spotTooltip.heardMe') : ''}${sp.approx ? t('prop.spotTooltip.approx') : ''}`
 }
 
 /** The map hover-tooltip line for an amateur satellite — which bird, ★ or not,
@@ -307,16 +321,26 @@ export function satTooltip(
 ): string {
   const star = chased ? '★' : '☆'
   const bird = sats?.birds.find((b) => b.name === name)
-  const alt = bird ? ` · alt ${Math.round(bird.altKm)} km` : ''
+  const alt = bird ? t('prop.satTooltip.alt', { km: Math.round(bird.altKm) }) : ''
   const pass = sats?.passes.find((pp) => pp.name === name && pp.losUnix > nowSecs)
-  let when = 'no pass over you in 24 h'
+  let when = t('prop.satTooltip.noPass')
   if (pass) {
-    const t = new Date(pass.aosUnix * 1000)
-    const hhmm = `${t.getHours().toString().padStart(2, '0')}:${t.getMinutes().toString().padStart(2, '0')}`
+    const at = new Date(pass.aosUnix * 1000)
+    const hhmm = `${at.getHours().toString().padStart(2, '0')}:${at.getMinutes().toString().padStart(2, '0')}`
     when =
       pass.aosUnix <= nowSecs
-        ? `IN PASS now · max ${Math.round(pass.maxElDeg)}°`
-        : `next pass ${hhmm} (in ${Math.max(1, Math.round((pass.aosUnix - nowSecs) / 60))} min) · max ${Math.round(pass.maxElDeg)}°`
+        ? t('prop.satTooltip.inPass', { maxEl: Math.round(pass.maxElDeg) })
+        : t('prop.satTooltip.nextPass', {
+            at: hhmm,
+            mins: Math.max(1, Math.round((pass.aosUnix - nowSecs) / 60)),
+            maxEl: Math.round(pass.maxElDeg),
+          })
   }
-  return `${name} ${star}${alt} · ${when}${clickable ? ' — click for passes' : ''} · dbl-click: favorite`
+  return t('prop.satTooltip', {
+    name,
+    star,
+    alt,
+    when,
+    click: clickable ? t('prop.satTooltip.clickForPasses') : '',
+  })
 }

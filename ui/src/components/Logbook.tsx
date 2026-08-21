@@ -1,5 +1,13 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog (`i18n/en.ts`); a hardcoded one fails CI. What does NOT come from
+// the catalog: LOG_EXAMPLES and the four service/Q-code labels below, and every value the table
+// prints — callsign, band, mode, frequency, RST, park reference, QSL letters. Those are wire
+// formats, identical in every language. See the invariant-token rule in `i18n/index.ts`.
+
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { confirmDialog } from '../confirm'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { LoggedQso } from '../types'
 import { gpuCapableForGlobe } from '../gpu'
@@ -67,8 +75,36 @@ interface DraftQso {
   parkMyRef: string
 }
 
-/** The word the operator must type to arm the full-log purge (irreversible). */
+/** The word the operator must type to arm the full-log purge (irreversible). It is COMPARED
+ * against what they type, so it is a token and not prose — translating it would move the gate. */
 const PURGE_WORD = 'DELETE'
+
+/**
+ * The invariant example values the hand-log form shows in empty fields, gathered so the guard can
+ * prove they never became catalog entries. Callsign, grid, band, mode, signal reports, a state
+ * code, a power in watts and two POTA references: every one a wire format, so every one the same
+ * characters in every language. The two placeholders that are HUMAN prose (a first name, a town)
+ * are catalog entries instead.
+ */
+const LOG_EXAMPLES = {
+  call: 'W1AW',
+  grid: 'FN31',
+  band: '20m',
+  mode: 'TempoFast',
+  rstSent: '59 / 599 / -09',
+  rstRcvd: '59 / 599 / -11',
+  state: 'WI',
+  txPower: '100',
+  parkTheirRef: 'US-1234',
+  parkMyRef: 'US-5678',
+} as const
+
+/** Q-codes and service names printed as labels. Proper nouns and shorthand, not words. */
+const QRZ_LABEL = 'QRZ'
+const EQSL_LABEL = 'eQSL'
+const CLUBLOG_LABEL = 'CL'
+const HRDLOG_LABEL = 'HL'
+const QSL_MENU_LABEL = 'QSL▸'
 
 /** Parse a `datetime-local` value as UTC seconds. The browser's own Date parsing treats a
  * bare `YYYY-MM-DDTHH:MM` as LOCAL time; a log is UTC, so an operator in EN52 typing the UTC
@@ -101,14 +137,33 @@ function fmtReport(v: string | null): string {
   return v && v.trim() !== '' ? v : '—'
 }
 
-/** ADIF QSL_SENT_VIA letter → human word for the "sent via …" note. */
-const QSL_VIA_LABEL: Record<string, string> = { B: 'bureau', D: 'direct', E: 'electronic' }
+/** ADIF QSL_SENT_VIA letter → human word for the "sent via …" note. The LETTER is the wire
+ * value and stays a token; the word is prose, so it comes from the catalog. */
+function qslViaLabel(via: string): string | null {
+  switch (via.toUpperCase()) {
+    case 'B':
+      return t('logbook.qsl.via.bureau')
+    case 'D':
+      return t('logbook.qsl.via.direct')
+    case 'E':
+      return t('logbook.qsl.via.electronic')
+    default:
+      return null
+  }
+}
 
-/** A quiet "sent <date> via <method>" note for a row that's been QSL-requested. */
+/** A quiet "sent <date> via <method>" note for a row that's been QSL-requested.
+ *
+ * FOUR WHOLE SENTENCES, not a stem plus two tails: a date and a delivery method land in a
+ * different place in different languages, and a sentence glued from fragments cannot be
+ * re-ordered by a translator. */
 function fmtQslSent(sent: { sent: boolean; via: string | null; dateUnix: number | null }): string {
-  const via = sent.via ? QSL_VIA_LABEL[sent.via.toUpperCase()] ?? sent.via : null
+  const via = sent.via ? qslViaLabel(sent.via) ?? sent.via : null
   const date = sent.dateUnix ? fmtUtc(sent.dateUnix).slice(0, 10) : null
-  return `QSL sent${date ? ` ${date}` : ''}${via ? ` via ${via}` : ''}`
+  if (date && via) return t('logbook.qsl.sentOnVia', { date, via })
+  if (date) return t('logbook.qsl.sentOn', { date })
+  if (via) return t('logbook.qsl.sentVia', { via })
+  return t('logbook.qsl.sent')
 }
 
 // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
@@ -221,6 +276,9 @@ export function Logbook({
   const [spotSeed, setSpotSeed] = useState<{ call: string; freq: number; mode: string } | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('time')
   const [sortAsc, setSortAsc] = useState(false)
+  // Export date range (#98) — "YYYY-MM-DD" UTC or '' = unbounded. Both empty = whole log.
+  const [exportFrom, setExportFrom] = useState('')
+  const [exportTo, setExportTo] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const syncRef = useRef<HTMLInputElement>(null)
   const potaRef = useRef<HTMLInputElement>(null)
@@ -231,15 +289,17 @@ export function Logbook({
     const call = draft.call.trim()
     if (!call) return
     setQrzBusy(true)
-    const r = await withErrorToast(() => qrzLookup(call), 'QRZ lookup failed')
+    const r = await withErrorToast(() => qrzLookup(call), t('callbook.lookupFailed'))
     setQrzBusy(false)
     if (r) {
       if (r.grid && !draft.grid.trim()) setField('grid', r.grid)
       const preferredName = r.nickname || r.name
       if (preferredName && !draft.name.trim()) setField('name', preferredName)
-      const detail = [r.name, r.grid && `grid ${r.grid}`, r.state].filter(Boolean).join(' · ')
-      const note = r.grid ? '' : ' · grid/state need a QRZ subscription'
-      pushToast(`QRZ ${r.call}: ${detail || r.country || 'found'}${note}`, 'info')
+      const detail = [r.name, r.grid && t('callbook.detail.grid', { grid: r.grid }), r.state]
+        .filter(Boolean)
+        .join(' · ')
+      const vals = { call: r.call, detail: detail || r.country || t('callbook.detail.found') }
+      pushToast(r.grid ? t('callbook.result', vals) : t('callbook.resultNoGrid', vals), 'info')
     }
   }
 
@@ -260,17 +320,17 @@ export function Logbook({
     e.target.value = '' // let the same file be re-selected later
     if (!f) return
     const text = await f.text()
-    const stats = await withErrorToast(() => importAdif(text), 'ADIF import failed')
+    const stats = await withErrorToast(() => importAdif(text), t('logbook.import.failed'))
     if (stats) {
       // An import of a LoTW/eQSL download adds nothing and updates everything —
       // say so, or the one toast that means "your awards were just repaired"
       // reads as "nothing happened, all dupes".
-      const dupes = stats.skipped ? ` (${stats.skipped} dupes skipped)` : ''
-      const upgraded = stats.updated
-        ? ` · ${stats.updated} existing QSO${stats.updated === 1 ? '' : 's'} updated with confirmations/credits`
-        : ''
+      // Three statements, each with its OWN count: one message cannot select a plural form
+      // for two counts at once, so each carries its own (see the catalog's note).
+      const dupes = stats.skipped ? t('logbook.import.dupes', { count: stats.skipped }) : ''
+      const upgraded = stats.updated ? t('logbook.import.updated', { count: stats.updated }) : ''
       pushToast(
-        `Imported ${stats.added} QSO${stats.added === 1 ? '' : 's'}${dupes}${upgraded}`,
+        `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
         'success',
       )
       load()
@@ -284,11 +344,13 @@ export function Logbook({
     e.target.value = ''
     if (!f) return
     const text = await f.text()
-    const r = await withErrorToast(() => syncLotwReport(text), 'LoTW sync failed')
+    const r = await withErrorToast(() => syncLotwReport(text), t('logbook.sync.failed'))
     if (r) {
-      const orphans = r.orphans.length ? ` · ${r.orphans.length} unmatched` : ''
+      const vals = { confirmed: r.newlyConfirmed, credited: r.newlyCredited }
       pushToast(
-        `Synced: ${r.newlyConfirmed} newly confirmed, ${r.newlyCredited} credited${orphans}`,
+        r.orphans.length
+          ? t('logbook.sync.doneUnmatched', { ...vals, unmatched: r.orphans.length })
+          : t('logbook.sync.done', vals),
         r.orphans.length ? 'info' : 'success',
       )
       load()
@@ -303,11 +365,11 @@ export function Logbook({
     e.target.value = ''
     if (!f) return
     const text = await f.text()
-    const r = await withErrorToast(() => importPotaLog(text), 'POTA import failed')
+    const r = await withErrorToast(() => importPotaLog(text), t('logbook.pota.failed'))
     if (r) {
-      const skipped = r.unmatched ? ` · ${r.unmatched} had no matching QSO (not added)` : ''
-      const had = r.already ? ` · ${r.already} already stamped` : ''
-      pushToast(`POTA: ${r.stamped} QSO${r.stamped === 1 ? '' : 's'} stamped with park refs${had}${skipped}`, 'success')
+      const skipped = r.unmatched ? t('logbook.pota.unmatched', { count: r.unmatched }) : ''
+      const had = r.already ? t('logbook.pota.already', { count: r.already }) : ''
+      pushToast(`${t('logbook.pota.stamped', { count: r.stamped })}${had}${skipped}`, 'success')
       load()
     }
   }
@@ -326,28 +388,44 @@ export function Logbook({
   // Sign + upload the unsent batch to LoTW via the operator's TQSL.
   const onUploadLotw = async () => {
     setUploading(true)
-    const r = await withErrorToast(() => uploadLotwReport(), 'LoTW upload failed')
+    const r = await withErrorToast(() => uploadLotwReport(), t('logbook.lotw.upload.failed'))
     setUploading(false)
     if (!r) return
     const n = r.dispatched
-    const s = n === 1 ? '' : 's'
-    if (r.outcome === 'none') pushToast('Nothing new to upload to LoTW', 'info')
+    if (r.outcome === 'none') pushToast(t('logbook.lotw.upload.nothingNew'), 'info')
     else if (r.outcome === 'pending')
-      pushToast(`Signed + uploaded ${n} QSO${s} to LoTW — they'll confirm as partners upload`, 'success')
-    else if (r.outcome === 'duplicate') pushToast(`${n} QSO${s} were already on LoTW`, 'info')
-    else if (r.outcome === 'retry') pushToast(r.detail || 'LoTW unreachable — try again shortly', 'error')
+      pushToast(t('logbook.lotw.upload.pending', { count: n }), 'success')
+    else if (r.outcome === 'duplicate')
+      pushToast(t('logbook.lotw.upload.duplicate', { count: n }), 'info')
+    else if (r.outcome === 'retry')
+      pushToast(r.detail || t('logbook.lotw.upload.retry'), 'error')
     else if (r.outcome === 'authfail')
-      pushToast(`LoTW rejected your certificate/Station Location${r.detail ? `: ${r.detail}` : ''}`, 'error')
-    else pushToast(`LoTW upload failed${r.detail ? `: ${r.detail}` : ''}`, 'error')
+      pushToast(
+        r.detail
+          ? t('logbook.lotw.upload.authFailedDetail', { detail: r.detail })
+          : t('logbook.lotw.upload.authFailed'),
+        'error',
+      )
+    else
+      pushToast(
+        r.detail
+          ? t('logbook.lotw.upload.failedDetail', { detail: r.detail })
+          : t('logbook.lotw.upload.failed'),
+        'error',
+      )
     load()
   }
 
   const onMarkLotwUploaded = async () => {
     setShowMarkLotw(false)
-    const n = await withErrorToast(() => markLotwUploaded(), 'Could not update LoTW state')
+    const n = await withErrorToast(() => markLotwUploaded(), t('logbook.markLotw.failed'))
     if (n == null) return
     pushToast(
-      n > 0 ? `Marked ${n.toLocaleString()} QSO${n === 1 ? '' : 's'} as already on LoTW` : 'Nothing to mark',
+      n > 0
+        ? // `count` selects the plural form; `formatted` is the grouped count the operator
+          // reads. A count of contacts is not a technical quantity — see the catalog note.
+          t('logbook.markLotw.done', { count: n, formatted: n.toLocaleString() })
+        : t('logbook.markLotw.nothing'),
       'success',
     )
     load()
@@ -396,14 +474,18 @@ export function Logbook({
     try {
       const r = await qrzPushQso(q)
       if (r.result === 'ok' || r.result === 'replace') {
-        pushToast(`✓ ${q.call} pushed to QRZ logbook`, 'success', 4000)
+        pushToast(t('logbook.push.qrz.ok', { call: q.call }), 'success', 4000)
       } else if (r.result === 'duplicate') {
-        pushToast(`✓ ${q.call} already in your QRZ logbook (duplicate) — upload chain works`, 'success', 5000)
+        pushToast(t('logbook.push.qrz.duplicate', { call: q.call }), 'success', 5000)
       } else {
-        pushToast(`✗ QRZ rejected ${q.call}: ${r.reason ?? r.result}`, 'error', 6000)
+        pushToast(
+          t('logbook.push.qrz.rejected', { call: q.call, reason: r.reason ?? r.result }),
+          'error',
+          6000,
+        )
       }
     } catch (e) {
-      pushToast(`✗ QRZ push failed: ${String(e)}`, 'error', 6000)
+      pushToast(t('logbook.push.qrz.failed', { detail: String(e) }), 'error', 6000)
     }
   }
 
@@ -413,14 +495,18 @@ export function Logbook({
     try {
       const r = await clublogPushQso(q)
       if (r.result === 'ok' || r.result === 'modified') {
-        pushToast(`✓ ${q.call} pushed to ClubLog`, 'success', 4000)
+        pushToast(t('logbook.push.clublog.ok', { call: q.call }), 'success', 4000)
       } else if (r.result === 'duplicate') {
-        pushToast(`✓ ${q.call} already on ClubLog (duplicate) — upload chain works`, 'success', 5000)
+        pushToast(t('logbook.push.clublog.duplicate', { call: q.call }), 'success', 5000)
       } else {
-        pushToast(`✗ ClubLog rejected ${q.call}: ${r.message ?? r.result}`, 'error', 6000)
+        pushToast(
+          t('logbook.push.clublog.rejected', { call: q.call, reason: r.message ?? r.result }),
+          'error',
+          6000,
+        )
       }
     } catch (e) {
-      pushToast(`✗ ClubLog push failed: ${String(e)}`, 'error', 6000)
+      pushToast(t('logbook.push.clublog.failed', { detail: String(e) }), 'error', 6000)
     }
   }
 
@@ -431,18 +517,22 @@ export function Logbook({
     try {
       const r = await hrdlogPushQso(q)
       if (r.result === 'ok') {
-        pushToast(`✓ ${q.call} pushed to HRDLog.net`, 'success', 4000)
+        pushToast(t('logbook.push.hrdlog.ok', { call: q.call }), 'success', 4000)
       } else if (r.result === 'duplicate') {
-        pushToast(`✓ ${q.call} already on HRDLog.net (duplicate) — upload chain works`, 'success', 5000)
+        pushToast(t('logbook.push.hrdlog.duplicate', { call: q.call }), 'success', 5000)
       } else if (r.result === 'unknown') {
         // Transient by contract (server down / odd body) — saying "rejected"
         // would imply the QSO itself is permanently bad. Match the auto-push.
-        pushToast(`HRDLog.net unavailable — ${q.call} not confirmed uploaded; try again later`, 'info', 6000)
+        pushToast(t('logbook.push.hrdlog.unavailable', { call: q.call }), 'info', 6000)
       } else {
-        pushToast(`✗ HRDLog.net rejected ${q.call}: ${r.message ?? r.result}`, 'error', 6000)
+        pushToast(
+          t('logbook.push.hrdlog.rejected', { call: q.call, reason: r.message ?? r.result }),
+          'error',
+          6000,
+        )
       }
     } catch (e) {
-      pushToast(`✗ HRDLog.net push failed: ${String(e)}`, 'error', 6000)
+      pushToast(t('logbook.push.hrdlog.failed', { detail: String(e) }), 'error', 6000)
     }
   }
 
@@ -450,9 +540,9 @@ export function Logbook({
   // via bureau/direct/electronic). This is NOT a confirmation — it stays in the
   // needs-confirmation filter until the partner actually confirms.
   const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E') => {
-    const snap = await withErrorToast(() => markQslSent(i, via), 'Could not mark QSL sent')
+    const snap = await withErrorToast(() => markQslSent(i, via), t('logbook.qsl.markFailed'))
     if (snap) {
-      pushToast(`Marked QSL sent to ${q.call} (${QSL_VIA_LABEL[via]})`, 'success')
+      pushToast(t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via }), 'success')
       load()
     }
   }
@@ -460,16 +550,16 @@ export function Logbook({
   const onDelete = async (q: LoggedQso, i: number) => {
     if (
       !(await confirmDialog({
-        title: `Delete the QSO with ${q.call} on ${q.band}?`,
-        body: "This removes it from your log. This can't be undone.",
-        confirmLabel: 'Delete QSO',
+        title: t('logbook.delete.heading', { call: q.call, band: q.band }),
+        body: t('logbook.delete.body'),
+        confirmLabel: t('logbook.delete.confirm'),
         danger: true,
       }))
     )
       return
-    const snap = await withErrorToast(() => deleteQso(i), 'Could not delete the QSO')
+    const snap = await withErrorToast(() => deleteQso(i), t('logbook.delete.failed'))
     if (snap) {
-      pushToast(`Deleted ${q.call}`, 'success')
+      pushToast(t('logbook.delete.done', { call: q.call }), 'success')
       if (editIndex === i) cancelForm()
       load()
     }
@@ -485,10 +575,10 @@ export function Logbook({
   const onPurge = async () => {
     if (purgeText.trim().toUpperCase() !== PURGE_WORD) return
     setPurging(true)
-    const removed = await withErrorToast(() => purgeLog(), 'Could not purge the log')
+    const removed = await withErrorToast(() => purgeLog(), t('logbook.purge.failed'))
     setPurging(false)
     if (removed !== null && removed !== undefined) {
-      pushToast(`Purged ${removed} contact${removed === 1 ? '' : 's'} from the log`, 'success')
+      pushToast(t('logbook.purge.done', { count: removed }), 'success')
       closePurge()
       cancelForm()
       load()
@@ -563,7 +653,7 @@ export function Logbook({
     e.preventDefault()
     const call = draft.call.trim().toUpperCase()
     if (!call) {
-      setErr('Callsign is required.')
+      setErr(t('logbook.form.callRequired'))
       return
     }
     const freq = Number(draft.freq)
@@ -618,16 +708,16 @@ export function Logbook({
     }
     if (editIndex !== null) {
       const idx = editIndex
-      const snap = await withErrorToast(() => editQso(idx, record), 'Could not save the edit')
+      const snap = await withErrorToast(() => editQso(idx, record), t('logbook.form.saveFailed'))
       if (snap) {
-        pushToast(`Updated ${record.call}`, 'success')
+        pushToast(t('logbook.form.updated', { call: record.call }), 'success')
         cancelForm()
         setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenUtc: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '' }))
         load()
       }
       return
     }
-    const snap = await withErrorToast(() => logQso(record), 'Could not log QSO')
+    const snap = await withErrorToast(() => logQso(record), t('logbook.form.logFailed'))
     if (snap) {
       load()
       setShowForm(false)
@@ -663,9 +753,9 @@ export function Logbook({
     <section className="panel log-view logbook">
       <div className="panel-header log-header">
         <div className="log-title">
-          <h2>Logbook</h2>
+          <h2>{t('logbook.title')}</h2>
           <span className="count-badge">{log.length}</span>
-          <span className="log-sub">ADIF contacts</span>
+          <span className="log-sub">{t('logbook.subtitle')}</span>
         </div>
         <div className="log-actions">
           <input
@@ -676,7 +766,7 @@ export function Logbook({
             onChange={onImportFile}
           />
           <button type="button" className="export-btn" onClick={() => fileRef.current?.click()}>
-            Import ADIF
+            {t('logbook.import.adif.label')}
           </button>
           <input
             ref={syncRef}
@@ -689,9 +779,9 @@ export function Logbook({
             type="button"
             className="export-btn"
             onClick={() => syncRef.current?.click()}
-            title="Reconcile a LoTW ADIF export into the log — upgrades confirmations + credit on existing QSOs"
+            title={t('logbook.sync.title')}
           >
-            Sync confirmations
+            {t('logbook.sync.label')}
           </button>
           <input
             ref={potaRef}
@@ -704,9 +794,9 @@ export function Logbook({
             type="button"
             className="export-btn"
             onClick={() => potaRef.current?.click()}
-            title="Import a pota.app hunter/activator ADIF export — stamps park references onto your matching logged QSOs. Never creates or overwrites records."
+            title={t('logbook.pota.title')}
           >
-            Import POTA
+            {t('logbook.pota.label')}
           </button>
           <button
             type="button"
@@ -715,18 +805,24 @@ export function Logbook({
               // The authenticated in-app LoTW download also existed but hid in Settings
               // (same story as QRZ, same day): fetches lotwreport.adi with the keychain
               // credentials + the incremental high-water cursor, merges confirmations.
-              const r = await withErrorToast(() => downloadLotwReport(), 'LoTW fetch failed')
+              const r = await withErrorToast(
+                () => downloadLotwReport(),
+                t('logbook.fetchLotw.failed'),
+              )
               if (r) {
                 pushToast(
-                  `LoTW — ${r.newlyConfirmed} newly confirmed, ${r.newlyCredited} credited`,
+                  t('logbook.fetchLotw.done', {
+                    confirmed: r.newlyConfirmed,
+                    credited: r.newlyCredited,
+                  }),
                   'success',
                 )
                 load()
               }
             }}
-            title="Fetch confirmations directly from LoTW (no file download — uses the LoTW credentials saved in Settings ▸ Confirmations)"
+            title={t('logbook.fetchLotw.title')}
           >
-            Fetch LoTW
+            {t('logbook.fetchLotw.label')}
           </button>
           <button
             type="button"
@@ -735,34 +831,70 @@ export function Logbook({
               // Two-way QRZ Logbook sync existed but hid in Settings — the operator asked
               // for exactly this and couldn't find it (2026-07-21). Same command, surfaced
               // where log work happens; needs the per-logbook API key from Settings.
-              const r = await withErrorToast(() => syncQrz(), 'QRZ sync failed')
+              const r = await withErrorToast(() => syncQrz(), t('logbook.qrzSync.failed'))
               if (r) {
                 pushToast(
-                  `QRZ sync — ${r.added} new QSO${r.added === 1 ? '' : 's'}, ${r.newlyConfirmedAny} newly confirmed`,
+                  t('logbook.qrzSync.done', {
+                    // `added` is optional on the shared sync result (0 for every sync but
+                    // this one). It was interpolated straight into the old template, so an
+                    // absent field printed the word "undefined"; the count is what selects
+                    // the plural form now, and it has to be a number.
+                    count: r.added ?? 0,
+                    confirmed: r.newlyConfirmedAny,
+                  }),
                   'success',
                 )
                 load()
               }
             }}
-            title="Fetch your online QRZ Logbook and merge it here — QSOs logged elsewhere plus QRZ confirmation status (needs the QRZ Logbook API key in Settings ▸ Confirmations)"
+            title={t('logbook.qrzSync.title')}
           >
-            Sync QRZ
+            {t('logbook.qrzSync.label')}
           </button>
+          {/* Export date range (#98): bounds the ADIF/CSV exports below by UTC QSO date,
+              inclusive. Empty = unbounded — no dates at all is the whole log, as before.
+              The per-operator export stays deliberately unfiltered: it is the compliance
+              path (POTA/FD submissions), and a stray leftover date silently truncating an
+              uploaded log is the worse failure. */}
+          <label className="log-export-range" title={t('logbook.export.from.title')}>
+            <span>{t('logbook.export.from.label')}</span>
+            <input
+              type="date"
+              className="settings-input log-export-date"
+              value={exportFrom}
+              onChange={(e) => setExportFrom(e.target.value)}
+            />
+          </label>
+          <label className="log-export-range" title={t('logbook.export.to.title')}>
+            <span>{t('logbook.export.to.label')}</span>
+            <input
+              type="date"
+              className="settings-input log-export-date"
+              value={exportTo}
+              onChange={(e) => setExportTo(e.target.value)}
+            />
+          </label>
           <button
             type="button"
             className="export-btn"
             disabled={log.length === 0}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('adif')
+                const text = await exportGeneralLog('adif', exportFrom, exportTo)
+                // Count what the file actually holds — with a date range the log length lies.
+                const n = (text.match(/<eor>/gi) ?? []).length
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.adi`, text)
-                pushToast(`Exported ${log.length} QSOs → ${path}`, 'success')
-              }, 'Export failed')
+                pushToast(t('logbook.export.done', { count: n, path }), 'success')
+              }, t('logbook.export.failed'))
             }
-            title="Save the whole logbook as an ADIF file in your Downloads folder"
+            title={
+              exportFrom || exportTo
+                ? t('logbook.export.adif.titleRange')
+                : t('logbook.export.adif.title')
+            }
           >
-            Export ADIF
+            {t('logbook.export.adif.label')}
           </button>
           {/* Per-operator export (#25). Shown only when the log actually HAS more than one
               operator in it — for the single-op station that is nearly everyone, a button that
@@ -786,12 +918,12 @@ export function Logbook({
                   // logged with no operator set, and it is what the station itself uploads.
                   const all = await exportGeneralLog('adif')
                   saved.push(await saveTextToDownloads(`nexus-log-${stamp}.adi`, all))
-                  pushToast(`Exported ${saved.length} files → Downloads`, 'success')
-                }, 'Export failed')
+                  pushToast(t('logbook.export.perOperator.done', { count: saved.length }), 'success')
+                }, t('logbook.export.failed'))
               }
-              title={`One ADIF per operator (${operators.join(', ')}) plus the combined log`}
+              title={t('logbook.export.perOperator.title', { operators: operators.join(', ') })}
             >
-              Export per operator
+              {t('logbook.export.perOperator.label')}
             </button>
           )}
           <button
@@ -800,15 +932,21 @@ export function Logbook({
             disabled={log.length === 0}
             onClick={() =>
               withErrorToast(async () => {
-                const text = await exportGeneralLog('csv')
+                const text = await exportGeneralLog('csv', exportFrom, exportTo)
+                // Rows minus the header — with a date range the log length lies.
+                const n = Math.max(0, text.trim().split('\n').length - 1)
                 const stamp = new Date().toISOString().slice(0, 10)
                 const path = await saveTextToDownloads(`nexus-log-${stamp}.csv`, text)
-                pushToast(`Exported ${log.length} QSOs → ${path}`, 'success')
-              }, 'Export failed')
+                pushToast(t('logbook.export.done', { count: n, path }), 'success')
+              }, t('logbook.export.failed'))
             }
-            title="Save the whole logbook as a CSV spreadsheet in your Downloads folder"
+            title={
+              exportFrom || exportTo
+                ? t('logbook.export.csv.titleRange')
+                : t('logbook.export.csv.title')
+            }
           >
-            Export CSV
+            {t('logbook.export.csv.label')}
           </button>
           <button
             type="button"
@@ -816,38 +954,42 @@ export function Logbook({
             onClick={onUploadLotw}
             disabled={uploading || unsentLotw === 0}
             title={
-              `Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)` +
-              (timelessLotw
-                ? ` — ${timelessLotw} imported QSO${timelessLotw === 1 ? ' has' : 's have'} no time of day and can never match at LoTW, so they are not sent`
-                : '')
+              // A second statement with its own count, appended — see the catalog note on the
+              // import toast for why it is not one message.
+              t('logbook.lotw.upload.title') +
+              (timelessLotw ? t('logbook.lotw.upload.timeless', { count: timelessLotw }) : '')
             }
           >
-            {uploading ? 'Uploading…' : `Upload to LoTW${unsentLotw ? ` (${unsentLotw})` : ''}`}
+            {uploading
+              ? t('logbook.lotw.upload.busy')
+              : unsentLotw
+                ? t('logbook.lotw.upload.labelCount', { count: unsentLotw })
+                : t('logbook.lotw.upload.label')}
           </button>
           <button
             type="button"
             className="export-btn"
             onClick={() => setShowMarkLotw(true)}
             disabled={unsentLotw === 0}
-            title="Already have these on LoTW (uploaded via another tool)? Mark them so Nexus stops counting them as needing upload."
+            title={t('logbook.markLotw.title')}
           >
-            Mark on LoTW
+            {t('logbook.markLotw.label')}
           </button>
           <button
             type="button"
             className="export-btn"
             onClick={() => (showForm ? cancelForm() : setShowForm(true))}
           >
-            {showForm ? 'Close' : 'Log QSO'}
+            {showForm ? t('logbook.form.close') : t('logbook.form.open')}
           </button>
           <button
             type="button"
             className="export-btn danger"
             onClick={() => setShowPurge(true)}
             disabled={log.length === 0}
-            title="Delete every contact in the local logbook (irreversible)"
+            title={t('logbook.purge.title')}
           >
-            Purge log
+            {t('logbook.purge.label')}
           </button>
         </div>
       </div>
@@ -857,13 +999,13 @@ export function Logbook({
         <form className="logbook-form" onSubmit={submit}>
           <div className="logbook-form-grid">
             <label className="logbook-field">
-              <span>Call</span>
+              <span>{t('logbook.field.call.label')}</span>
               <div className="settings-input-row">
                 <input
                   className="settings-input"
                   value={draft.call}
                   onChange={(e) => setField('call', e.target.value)}
-                  placeholder="W1AW"
+                  placeholder={LOG_EXAMPLES.call}
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -872,111 +1014,111 @@ export function Logbook({
                   className="settings-refresh"
                   onClick={onQrzLookup}
                   disabled={qrzBusy || !draft.call.trim()}
-                  title="Look up name + grid on QRZ.com"
+                  title={t('logbook.field.qrz.title')}
                 >
-                  {qrzBusy ? '…' : 'QRZ'}
+                  {qrzBusy ? '…' : QRZ_LABEL}
                 </button>
               </div>
             </label>
             <label className="logbook-field">
-              <span>Grid</span>
-              <input className="settings-input" value={draft.grid} onChange={(e) => setField('grid', e.target.value)} placeholder="FN31" autoComplete="off" spellCheck={false} />
+              <span>{t('logbook.field.grid.label')}</span>
+              <input className="settings-input" value={draft.grid} onChange={(e) => setField('grid', e.target.value)} placeholder={LOG_EXAMPLES.grid} autoComplete="off" spellCheck={false} />
             </label>
             <label className="logbook-field">
-              <span>Band</span>
-              <input className="settings-input" value={draft.band} onChange={(e) => setField('band', e.target.value)} placeholder="20m" autoComplete="off" />
+              <span>{t('logbook.field.band.label')}</span>
+              <input className="settings-input" value={draft.band} onChange={(e) => setField('band', e.target.value)} placeholder={LOG_EXAMPLES.band} autoComplete="off" />
             </label>
             <label className="logbook-field">
-              <span>Freq (MHz)</span>
+              <span>{t('logbook.field.freq.label')}</span>
               <input className="settings-input" type="number" step="0.0001" value={draft.freq} onChange={(e) => setField('freq', e.target.value)} autoComplete="off" />
             </label>
             <label className="logbook-field">
-              <span>Mode</span>
-              <input className="settings-input" value={draft.mode} onChange={(e) => setField('mode', e.target.value)} placeholder="TempoFast" autoComplete="off" />
+              <span>{t('logbook.field.mode.label')}</span>
+              <input className="settings-input" value={draft.mode} onChange={(e) => setField('mode', e.target.value)} placeholder={LOG_EXAMPLES.mode} autoComplete="off" />
             </label>
             <label className="logbook-field">
-              <span>RST Sent</span>
-              <input className="settings-input" value={draft.rstSent} onChange={(e) => setField('rstSent', e.target.value)} placeholder="59 / 599 / -09" autoComplete="off" />
+              <span>{t('logbook.field.rstSent.label')}</span>
+              <input className="settings-input" value={draft.rstSent} onChange={(e) => setField('rstSent', e.target.value)} placeholder={LOG_EXAMPLES.rstSent} autoComplete="off" />
             </label>
             <label className="logbook-field">
-              <span>RST Rcvd</span>
-              <input className="settings-input" value={draft.rstRcvd} onChange={(e) => setField('rstRcvd', e.target.value)} placeholder="59 / 599 / -11" autoComplete="off" />
+              <span>{t('logbook.field.rstRcvd.label')}</span>
+              <input className="settings-input" value={draft.rstRcvd} onChange={(e) => setField('rstRcvd', e.target.value)} placeholder={LOG_EXAMPLES.rstRcvd} autoComplete="off" />
             </label>
             <label className="logbook-field">
-              <span>Date + time (UTC)</span>
+              <span>{t('logbook.field.when.label')}</span>
               <input
                 className="settings-input"
                 type="datetime-local"
                 value={draft.whenUtc}
                 onChange={(e) => setField('whenUtc', e.target.value)}
-                title="When the contact actually happened, in UTC. Leave blank to stamp now."
+                title={t('logbook.field.when.title')}
               />
             </label>
             <label className="logbook-field">
-              <span>State</span>
+              <span>{t('logbook.field.state.label')}</span>
               <input
                 className="settings-input"
                 value={draft.state}
                 onChange={(e) => setField('state', e.target.value)}
-                placeholder="WI"
+                placeholder={LOG_EXAMPLES.state}
                 maxLength={2}
                 autoComplete="off"
-                title="US state — drives Worked All States. A hand-logged contact has no decode to derive it from."
+                title={t('logbook.field.state.title')}
               />
             </label>
             <label className="logbook-field">
-              <span>TX power (W)</span>
+              <span>{t('logbook.field.txPower.label')}</span>
               <input
                 className="settings-input"
                 type="number"
                 min="0"
                 value={draft.txPower}
                 onChange={(e) => setField('txPower', e.target.value)}
-                placeholder="100"
+                placeholder={LOG_EXAMPLES.txPower}
                 autoComplete="off"
               />
             </label>
             <label className="logbook-field">
-              <span>Park (worked)</span>
+              <span>{t('logbook.field.parkTheirs.label')}</span>
               <input
                 className="settings-input"
                 value={draft.parkTheirRef}
                 onChange={(e) => setField('parkTheirRef', e.target.value)}
-                placeholder="US-1234"
+                placeholder={LOG_EXAMPLES.parkTheirRef}
                 autoComplete="off"
-                title="POTA reference of the park the station you worked was activating (ADIF SIG_INFO). Defaults to POTA."
+                title={t('logbook.field.parkTheirs.title')}
               />
             </label>
             <label className="logbook-field">
-              <span>Park (mine)</span>
+              <span>{t('logbook.field.parkMine.label')}</span>
               <input
                 className="settings-input"
                 value={draft.parkMyRef}
                 onChange={(e) => setField('parkMyRef', e.target.value)}
-                placeholder="US-5678"
+                placeholder={LOG_EXAMPLES.parkMyRef}
                 autoComplete="off"
-                title="POTA reference of YOUR own activation for this contact (ADIF MY_SIG_INFO). Defaults to POTA."
+                title={t('logbook.field.parkMine.title')}
               />
             </label>
             <label className="logbook-field">
-              <span>Name</span>
-              <input className="settings-input" value={draft.name} onChange={(e) => setField('name', e.target.value)} placeholder="Jim" autoComplete="off" />
+              <span>{t('logbook.field.name.label')}</span>
+              <input className="settings-input" value={draft.name} onChange={(e) => setField('name', e.target.value)} placeholder={t('logbook.field.name.placeholder')} autoComplete="off" />
             </label>
             <label className="logbook-field">
-              <span>QTH</span>
-              <input className="settings-input" value={draft.qth} onChange={(e) => setField('qth', e.target.value)} placeholder="Dayton, OH" autoComplete="off" />
+              <span>{t('logbook.field.qth.label')}</span>
+              <input className="settings-input" value={draft.qth} onChange={(e) => setField('qth', e.target.value)} placeholder={t('logbook.field.qth.placeholder')} autoComplete="off" />
             </label>
             <label className="logbook-field">
-              <span>Comment</span>
-              <input className="settings-input" value={draft.comment} onChange={(e) => setField('comment', e.target.value)} placeholder="Shared on the QSL" autoComplete="off" />
+              <span>{t('logbook.field.comment.label')}</span>
+              <input className="settings-input" value={draft.comment} onChange={(e) => setField('comment', e.target.value)} placeholder={t('logbook.field.comment.placeholder')} autoComplete="off" />
             </label>
             <label className="logbook-field logbook-field-wide">
-              <span>Notes</span>
+              <span>{t('logbook.field.notes.label')}</span>
               <textarea
                 className="settings-input logbook-notes"
                 value={draft.notes}
                 onChange={(e) => setField('notes', e.target.value)}
-                placeholder="Rig / antenna / weather / what you talked about…"
+                placeholder={t('logbook.field.notes.placeholder')}
                 rows={3}
               />
             </label>
@@ -984,14 +1126,10 @@ export function Logbook({
           <div className="logbook-form-actions">
             {err && <span className="settings-error" role="alert">{err}</span>}
             {editIndex !== null && (
-              <span className="logbook-editing-note">
-                Editing — confirmations and upload state are kept, unless you change the
-                callsign: a corrected call re-sends to every service and drops
-                confirmations matched on the old one.
-              </span>
+              <span className="logbook-editing-note">{t('logbook.form.editingNote')}</span>
             )}
             <button type="submit" className="settings-save" disabled={!draft.call.trim()}>
-              {editIndex !== null ? 'Save' : 'Log'}
+              {editIndex !== null ? t('logbook.form.save') : t('logbook.form.log')}
             </button>
           </div>
         </form>
@@ -1001,7 +1139,7 @@ export function Logbook({
         <div className="log-scroll" ref={scrollRef}>
           {globeShown && (
             <div className="log-globe-band">
-              <Suspense fallback={<div className="log-globe-loading">Loading globe…</div>}>
+              <Suspense fallback={<div className="log-globe-loading">{t('logbook.globe.loading')}</div>}>
                 <QsoGlobe qsos={log} />
               </Suspense>
             </div>
@@ -1014,7 +1152,7 @@ export function Logbook({
           className="settings-input log-search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search call / grid / band / mode / date…"
+          placeholder={t('logbook.search.placeholder')}
           autoComplete="off"
           spellCheck={false}
         />
@@ -1023,33 +1161,34 @@ export function Logbook({
           className={`log-filter-chip${needsConfirmOnly ? ' active' : ''}`}
           onClick={() => setNeedsConfirmOnly((v) => !v)}
           aria-pressed={needsConfirmOnly}
-          title="Show only contacts without an award-eligible (LoTW/paper) confirmation. Rows you've already sent a QSL request for stay here — a request is not a confirmation."
+          title={t('logbook.filter.needsConfirmation.title')}
         >
-          needs confirmation
+          {t('logbook.filter.needsConfirmation.label')}
         </button>
         {search.trim() && (
-          <button type="button" className="log-search-clear" onClick={() => setSearch('')} title="Clear">
+          <button type="button" className="log-search-clear" onClick={() => setSearch('')} title={t('logbook.search.clear')}>
             ✕
           </button>
         )}
       </div>
         <div className="log-row logbook-row head" role="row">
-          {th('Call', 'call')}
-          {th('Country', 'country')}
-          {th('Band', 'band')}
-          {th('Freq', 'freq')}
-          {th('Mode', 'mode')}
-          {th('Sent', 'sent')}
-          {th('Rcvd', 'rcvd')}
-          {th('Time (UTC)', 'time')}
-          {th('Park', 'park')}
+          {th(t('logbook.column.call'), 'call')}
+          {th(t('logbook.column.country'), 'country')}
+          {th(t('logbook.column.band'), 'band')}
+          {th(t('logbook.column.freq'), 'freq')}
+          {th(t('logbook.column.mode'), 'mode')}
+          {th(t('logbook.column.sent'), 'sent')}
+          {th(t('logbook.column.rcvd'), 'rcvd')}
+          {th(t('logbook.column.time'), 'time')}
+          {th(t('logbook.column.park'), 'park')}
+          {/* The QSL column's header is the Q-code itself, not a word for it. */}
           {th('QSL', 'qsl')}
-          <span className="log-cell" role="columnheader" aria-label="Edit / delete"></span>
+          <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
-          {log.length === 0 && <p className="empty">No logged contacts yet.</p>}
+          {log.length === 0 && <p className="empty">{t('logbook.empty')}</p>}
           {log.length > 0 && rows.length === 0 && (
-            <p className="empty">No contacts match “{deferredSearch.trim()}”.</p>
+            <p className="empty">{t('logbook.emptySearch', { query: deferredSearch.trim() })}</p>
           )}
           {rows.length > 0 && (
             <div
@@ -1087,8 +1226,13 @@ export function Logbook({
                   <button
                     type="button"
                     className="qrz-link-call"
-                    onClick={() => void withErrorToast(() => openQrzPage(q.call), `Could not open ${q.call} on QRZ`)}
-                    title={`${q.call} on QRZ.com (opens your browser)`}
+                    onClick={() =>
+                      void withErrorToast(
+                        () => openQrzPage(q.call),
+                        t('callbook.qrzPage.failed', { call: q.call }),
+                      )
+                    }
+                    title={t('callbook.qrzPage.title', { call: q.call })}
                   >
                     {q.call}
                   </button>
@@ -1104,9 +1248,15 @@ export function Logbook({
                   className="log-cell mono log-park"
                   title={
                     q.ota?.theirRef
-                      ? `${q.ota.theirProgram ?? 'POTA'} ${q.ota.theirRef} (worked)`
+                      ? t('logbook.row.park.worked', {
+                          program: q.ota.theirProgram ?? 'POTA',
+                          ref: q.ota.theirRef,
+                        })
                       : q.ota?.myRef
-                        ? `My activation: ${q.ota.myProgram ?? 'POTA'} ${q.ota.myRef}`
+                        ? t('logbook.row.park.mine', {
+                            program: q.ota.myProgram ?? 'POTA',
+                            ref: q.ota.myRef,
+                          })
                         : ''
                   }
                 >
@@ -1118,9 +1268,9 @@ export function Logbook({
                     <span
                       className={`log-qsl ${q.awardConfirmed ? 'ok' : 'eqsl'}`}
                       title={[
-                        q.qslRcvd.lotw ? 'LoTW confirmed (award-eligible)' : null,
-                        q.qslRcvd.card ? 'Paper card received (award-eligible)' : null,
-                        q.qslRcvd.eqsl ? 'eQSL received (NOT DXCC/WAZ/WAS-eligible)' : null,
+                        q.qslRcvd.lotw ? t('logbook.row.qsl.lotw') : null,
+                        q.qslRcvd.card ? t('logbook.row.qsl.card') : null,
+                        q.qslRcvd.eqsl ? t('logbook.row.qsl.eqsl') : null,
                       ]
                         .filter(Boolean)
                         .join(' · ')}
@@ -1134,15 +1284,15 @@ export function Logbook({
                         .join('·')}
                     </span>
                   ) : q.awardConfirmed ? (
-                    <span className="log-qsl ok" title="LoTW / paper — award-eligible">
+                    <span className="log-qsl ok" title={t('logbook.row.qsl.confirmed')}>
                       ✓
                     </span>
                   ) : q.confirmed ? (
-                    <span className="log-qsl eqsl" title="eQSL only — not accepted for DXCC/WAZ/WAS">
-                      eQSL
+                    <span className="log-qsl eqsl" title={t('logbook.row.qsl.eqslOnly')}>
+                      {EQSL_LABEL}
                     </span>
                   ) : (
-                    <span className="log-qsl none" title="Not confirmed">
+                    <span className="log-qsl none" title={t('logbook.row.qsl.none')}>
                       —
                     </span>
                   )}
@@ -1163,8 +1313,8 @@ export function Logbook({
                     type="button"
                     className="log-rowbtn"
                     onClick={() => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode })}
-                    title={`Spot ${q.call} to the DX cluster (pre-fills this QSO's call + frequency)`}
-                    aria-label={`Spot ${q.call} to the DX cluster`}
+                    title={t('logbook.row.spot.title', { call: q.call })}
+                    aria-label={t('logbook.row.spot.aria', { call: q.call })}
                   >
                     📢
                   </button>
@@ -1172,8 +1322,8 @@ export function Logbook({
                     type="button"
                     className="log-rowbtn"
                     onClick={() => void onPushQrz(q)}
-                    title={`Push ${q.call} to your QRZ logbook (re-push is safe — duplicates are detected)`}
-                    aria-label={`Push ${q.call} to QRZ`}
+                    title={t('logbook.row.pushQrz.title', { call: q.call })}
+                    aria-label={t('logbook.row.pushQrz.aria', { call: q.call })}
                   >
                     ↥
                   </button>
@@ -1181,19 +1331,19 @@ export function Logbook({
                     type="button"
                     className="log-rowbtn"
                     onClick={() => void onPushClublog(q)}
-                    title={`Push ${q.call} to ClubLog (re-push is safe — duplicates are detected)`}
-                    aria-label={`Push ${q.call} to ClubLog`}
+                    title={t('logbook.row.pushClublog.title', { call: q.call })}
+                    aria-label={t('logbook.row.pushClublog.aria', { call: q.call })}
                   >
-                    CL
+                    {CLUBLOG_LABEL}
                   </button>
                   <button
                     type="button"
                     className="log-rowbtn"
                     onClick={() => void onPushHrdlog(q)}
-                    title={`Push ${q.call} to HRDLog.net (live-logging/awards site — not an ARRL confirmation source; re-push is safe)`}
-                    aria-label={`Push ${q.call} to HRDLog.net`}
+                    title={t('logbook.row.pushHrdlog.title', { call: q.call })}
+                    aria-label={t('logbook.row.pushHrdlog.aria', { call: q.call })}
                   >
-                    HL
+                    {HRDLOG_LABEL}
                   </button>
                   {/* QSL-request queue: mark a card/request sent (once) on the
                       needs-confirmation view. Operator-declared, not a confirmation. */}
@@ -1206,21 +1356,22 @@ export function Logbook({
                         const v = e.target.value as 'B' | 'D' | 'E' | ''
                         if (v) void onMarkQslSent(q, i, v)
                       }}
-                      title={`Mark a QSL request sent to ${q.call} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.`}
-                      aria-label={`Mark QSL sent to ${q.call}`}
+                      title={t('logbook.row.qslSent.title', { call: q.call })}
+                      aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
                     >
-                      <option value="">QSL▸</option>
-                      <option value="B">Bureau</option>
-                      <option value="D">Direct</option>
-                      <option value="E">Electronic</option>
+                      {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
+                      <option value="">{QSL_MENU_LABEL}</option>
+                      <option value="B">{t('logbook.row.qslSent.bureau')}</option>
+                      <option value="D">{t('logbook.row.qslSent.direct')}</option>
+                      <option value="E">{t('logbook.row.qslSent.electronic')}</option>
                     </select>
                   )}
                   <button
                     type="button"
                     className="log-rowbtn"
                     onClick={() => startEdit(q, i)}
-                    title={`Edit ${q.call}`}
-                    aria-label={`Edit ${q.call}`}
+                    title={t('logbook.row.edit', { call: q.call })}
+                    aria-label={t('logbook.row.edit', { call: q.call })}
                   >
                     ✎
                   </button>
@@ -1228,8 +1379,8 @@ export function Logbook({
                     type="button"
                     className="log-rowbtn danger"
                     onClick={() => onDelete(q, i)}
-                    title={`Delete ${q.call}`}
-                    aria-label={`Delete ${q.call}`}
+                    title={t('logbook.row.delete', { call: q.call })}
+                    aria-label={t('logbook.row.delete', { call: q.call })}
                   >
                     ✕
                   </button>
@@ -1247,19 +1398,16 @@ export function Logbook({
           className="logconfirm-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-label="Purge logbook"
+          aria-label={t('logbook.purge.aria')}
           onClick={closePurge}
         >
           <div className="logconfirm purge-confirm" onClick={(e) => e.stopPropagation()}>
             <div className="logconfirm-head">
-              <h2>Purge the entire logbook?</h2>
-              <span className="logconfirm-sub danger">Irreversible</span>
+              <h2>{t('logbook.purge.heading')}</h2>
+              <span className="logconfirm-sub danger">{t('logbook.purge.irreversible')}</span>
             </div>
             <p className="purge-warn">
-              This permanently deletes <strong>all {log.length} contact{log.length === 1 ? '' : 's'}</strong>{' '}
-              from your local logbook and rewrites the ADIF file to empty. It does <strong>not</strong> remove
-              anything you've already uploaded to LoTW, QRZ, eQSL, or ClubLog. There is no undo — export an
-              ADIF backup first if you might want it.
+              <T k="logbook.purge.warn" tags={{ b: <strong /> }} vals={{ count: log.length }} />
             </p>
             {/* The sync cursors are the non-obvious half of a purge, and getting it wrong cost an
                 operator his whole confirmation history: each cursor means "I already hold every
@@ -1268,14 +1416,11 @@ export function Logbook({
                 far larger than a routine sync, and an operator who is not told that reads the wait
                 as a hang. Says what happens, not what used to go wrong. */}
             <p className="purge-warn">
-              It also resets your <strong>LoTW and eQSL sync position</strong>, so the next sync re-downloads
-              your whole confirmation history instead of only recent matches. That is what brings your
-              confirmations back after a purge — but it takes considerably longer than a routine sync, so
-              give it time to finish.
+              <T k="logbook.purge.syncWarn" tags={{ b: <strong /> }} />
             </p>
             <label className="purge-field">
               <span>
-                Type <strong>{PURGE_WORD}</strong> to confirm
+                <T k="logbook.purge.typeWord" tags={{ b: <strong /> }} vals={{ word: PURGE_WORD }} />
               </span>
               <input
                 className="settings-input mono"
@@ -1293,7 +1438,7 @@ export function Logbook({
             </label>
             <div className="logconfirm-actions">
               <button type="button" className="logconfirm-discard" onClick={closePurge}>
-                Cancel
+                {t('logbook.purge.cancel')}
               </button>
               <button
                 type="button"
@@ -1301,7 +1446,7 @@ export function Logbook({
                 onClick={onPurge}
                 disabled={purging || purgeText.trim().toUpperCase() !== PURGE_WORD}
               >
-                {purging ? 'Purging…' : `Purge ${log.length} contact${log.length === 1 ? '' : 's'}`}
+                {purging ? t('logbook.purge.busy') : t('logbook.purge.confirm', { count: log.length })}
               </button>
             </div>
           </div>
@@ -1313,22 +1458,24 @@ export function Logbook({
           className="logconfirm-backdrop"
           role="dialog"
           aria-modal="true"
-          aria-label="Mark as already on LoTW"
+          aria-label={t('logbook.markLotw.aria')}
           onClick={() => setShowMarkLotw(false)}
         >
           <div className="logconfirm" onClick={(e) => e.stopPropagation()}>
             <div className="logconfirm-head">
               <h2>
-                Mark {unsentLotw.toLocaleString()} QSO{unsentLotw === 1 ? '' : 's'} as already on LoTW?
+                {t('logbook.markLotw.heading', {
+                  count: unsentLotw,
+                  formatted: unsentLotw.toLocaleString(),
+                })}
               </h2>
             </div>
             <p className="purge-warn">
-              Use this if you imported a log you'd already uploaded to LoTW another way (Ham2K Polo,
-              TQSL…). It marks the {unsentLotw.toLocaleString()} un-uploaded QSO
-              {unsentLotw === 1 ? '' : 's'} as already on LoTW, so the <strong>Upload to LoTW</strong>{' '}
-              count stops offering to re-send them. It only updates Nexus's own record — nothing is
-              sent, and your LoTW account and log are untouched. New QSOs you make later still upload
-              normally.
+              <T
+                k="logbook.markLotw.body"
+                tags={{ b: <strong /> }}
+                vals={{ count: unsentLotw, formatted: unsentLotw.toLocaleString() }}
+              />
             </p>
             <div className="logconfirm-actions">
               <button
@@ -1336,10 +1483,10 @@ export function Logbook({
                 className="logconfirm-discard"
                 onClick={() => setShowMarkLotw(false)}
               >
-                Cancel
+                {t('logbook.markLotw.cancel')}
               </button>
               <button type="button" className="logconfirm-log" onClick={onMarkLotwUploaded}>
-                Mark {unsentLotw.toLocaleString()} as on LoTW
+                {t('logbook.markLotw.confirm', { formatted: unsentLotw.toLocaleString() })}
               </button>
             </div>
           </div>

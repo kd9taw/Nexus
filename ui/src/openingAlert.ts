@@ -16,6 +16,7 @@
 // Both are fixed; this file cheerfully told the operator to point SE right now
 // for as long as either stood.
 import type { OpeningView } from './types'
+import { t } from './i18n'
 
 /// The backend's `Confidence::Strong` cut (propagation/src/engine.rs
 /// `confidence_word`). Mirrored rather than re-derived so the toast's tone and
@@ -56,7 +57,13 @@ export function openingToastSpec(o: OpeningView): OpeningToastSpec {
   if (spec.prominent && o.confidenceScore < STRONG_CONFIDENCE) {
     const km = Math.round(o.maxKm)
     return {
-      message: `📻 ${o.band} possible ${o.mode} — thin evidence: ${o.stations} stns to ~${km} km ${o.octant}; may not be audible by ear`,
+      message: t('prop.openingAlert.thin', {
+        band: o.band,
+        mode: o.mode,
+        stations: o.stations,
+        km,
+        octant: o.octant,
+      }),
       kind: 'info',
       ttlMs: 12000,
       prominent: false,
@@ -72,7 +79,12 @@ function tierSpec(o: OpeningView): OpeningToastSpec {
   switch (o.mode) {
     case 'Sporadic-E':
       return {
-        message: `⚡ ${o.band} SPORADIC-E — rare & brief, point ${o.octant} NOW · DX ~${km} km · ${o.stations} stns`,
+        message: t('prop.openingAlert.sporadicE', {
+          band: o.band,
+          octant: o.octant,
+          km,
+          stations: o.stations,
+        }),
         kind: 'success',
         ttlMs: 20000,
         prominent: true,
@@ -80,7 +92,7 @@ function tierSpec(o: OpeningView): OpeningToastSpec {
       }
     case 'Aurora':
       return {
-        message: `🌌 ${o.band} AURORA — beam NORTH (not at the station); signals sound raspy/buzzy, CW & SSB work best`,
+        message: t('prop.openingAlert.aurora', { band: o.band }),
         kind: 'success',
         ttlMs: 20000,
         prominent: true,
@@ -88,7 +100,12 @@ function tierSpec(o: OpeningView): OpeningToastSpec {
       }
     case 'F2':
       return {
-        message: `⚡ ${o.band} F2 opening — real DX, point ${o.octant} · ~${km} km · ${o.stations} stns`,
+        message: t('prop.openingAlert.f2', {
+          band: o.band,
+          octant: o.octant,
+          km,
+          stations: o.stations,
+        }),
         kind: 'success',
         ttlMs: 20000,
         prominent: true,
@@ -96,7 +113,12 @@ function tierSpec(o: OpeningView): OpeningToastSpec {
       }
     case 'Tropo':
       return {
-        message: `📡 ${o.band} tropo opening — DX to ~${km} km, point ${o.octant} · ${o.stations} stns`,
+        message: t('prop.openingAlert.tropo', {
+          band: o.band,
+          km,
+          octant: o.octant,
+          stations: o.stations,
+        }),
         kind: 'info',
         ttlMs: 10000,
         prominent: false,
@@ -104,7 +126,11 @@ function tierSpec(o: OpeningView): OpeningToastSpec {
       }
     default:
       return {
-        message: `⚡ ${o.band} open — point ${o.octant} · ${o.stations} stns`,
+        message: t('prop.openingAlert.generic', {
+          band: o.band,
+          octant: o.octant,
+          stations: o.stations,
+        }),
         kind: 'success',
         ttlMs: 8000,
         prominent: false,

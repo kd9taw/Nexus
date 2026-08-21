@@ -1,3 +1,13 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The chip and badge
+// WORDS come from the catalog; the CSS class, the icon and the precedence order are code.
+// POTA and SOTA are the programmes' own names — invariant tokens, kept below as constants
+// (the rule is in `i18n/index.ts`).
+//
+// THE WORDS RESOLVE LAZILY, through getters. These two records are module constants that a
+// dozen surfaces read during render, so resolving them at import time would freeze whichever
+// locale was active when this module first loaded and no re-render could ever move it. A
+// getter keeps the record's SHAPE — every consumer still reads `.label` / `.short` / `.title`
+// — and does the lookup at the moment the string is read.
 import {
   Globe2,
   Compass,
@@ -12,6 +22,11 @@ import {
   Star,
   type LucideIcon,
 } from 'lucide-react'
+import { t, type MessageKey } from '../i18n'
+
+/** The programmes' own names — the same four letters in every language. */
+const POTA_PROGRAM = 'POTA'
+const SOTA_PROGRAM = 'SOTA'
 
 /** A reason a heard station is worth working, in one vocabulary shared by the Needed
  * panel and the band-activity decode feed so the two views read as one system. */
@@ -42,18 +57,56 @@ export interface NeedVisual {
   iconOnly?: boolean
 }
 
+/** One badge, with its words looked up when they are read rather than at import. */
+function badge(v: {
+  cls: string
+  Icon: LucideIcon
+  labelKey: MessageKey
+  titleKey: MessageKey
+  iconOnly?: boolean
+}): NeedVisual {
+  return {
+    cls: v.cls,
+    Icon: v.Icon,
+    iconOnly: v.iconOnly,
+    get label() {
+      return t(v.labelKey)
+    },
+    get title() {
+      return t(v.titleKey)
+    },
+  }
+}
+
 export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
-  entity: { cls: 'need-entity', Icon: Globe2, label: 'NEW ONE', title: 'New DXCC entity — an all-time new one' },
-  zone: { cls: 'need-zone', Icon: Compass, label: 'ZONE', title: 'New CQ zone on this band (5BWAZ)' },
-  band: { cls: 'need-band', Icon: Layers, label: 'BAND', title: 'New band-slot for this entity' },
-  mode: { cls: 'need-mode', Icon: Radio, label: 'MODE', title: 'New mode for this entity' },
-  grid: { cls: 'need-grid', Icon: Grid3x3, label: 'GRID', title: 'New grid square on this band (VUCC is per band)' },
-  state: { cls: 'need-state', Icon: MapPin, label: 'STATE', title: 'New US state on this band (5BWAS) — a hint from the grid; confirm from the log' },
-  dxped: { cls: 'need-dxped', Icon: Tent, label: 'DXPED', title: 'Active DXpedition — limited-time window', iconOnly: true },
-  confirm: { cls: 'need-confirm', Icon: MailQuestion, label: 'NEEDS QSL', title: 'This entity/zone/grid is worked on this band but not yet confirmed — a QSL from this station would close it. Not a claim about this callsign: B4 is the worked-this-call chip.' },
-  pota: { cls: 'need-pota', Icon: TreePine, label: 'POTA', title: 'Live POTA activator', iconOnly: true },
-  sota: { cls: 'need-sota', Icon: Mountain, label: 'SOTA', title: 'Live SOTA activator', iconOnly: true },
-  wanted: { cls: 'need-wanted', Icon: Star, label: 'WANTED', title: 'On your wanted watch list' },
+  entity: badge({ cls: 'need-entity', Icon: Globe2, labelKey: 'need.badge.entity.label', titleKey: 'need.badge.entity.title' }),
+  zone: badge({ cls: 'need-zone', Icon: Compass, labelKey: 'need.badge.zone.label', titleKey: 'need.badge.zone.title' }),
+  band: badge({ cls: 'need-band', Icon: Layers, labelKey: 'need.badge.band.label', titleKey: 'need.badge.band.title' }),
+  mode: badge({ cls: 'need-mode', Icon: Radio, labelKey: 'need.badge.mode.label', titleKey: 'need.badge.mode.title' }),
+  grid: badge({ cls: 'need-grid', Icon: Grid3x3, labelKey: 'need.badge.grid.label', titleKey: 'need.badge.grid.title' }),
+  state: badge({ cls: 'need-state', Icon: MapPin, labelKey: 'need.badge.state.label', titleKey: 'need.badge.state.title' }),
+  dxped: badge({ cls: 'need-dxped', Icon: Tent, labelKey: 'need.badge.dxped.label', titleKey: 'need.badge.dxped.title', iconOnly: true }),
+  confirm: badge({ cls: 'need-confirm', Icon: MailQuestion, labelKey: 'need.badge.confirm.label', titleKey: 'need.badge.confirm.title' }),
+  // The two programme names are tokens, so these entries carry the label directly.
+  pota: {
+    cls: 'need-pota',
+    Icon: TreePine,
+    label: POTA_PROGRAM,
+    get title() {
+      return t('need.badge.pota.title')
+    },
+    iconOnly: true,
+  },
+  sota: {
+    cls: 'need-sota',
+    Icon: Mountain,
+    label: SOTA_PROGRAM,
+    get title() {
+      return t('need.badge.sota.title')
+    },
+    iconOnly: true,
+  },
+  wanted: badge({ cls: 'need-wanted', Icon: Star, labelKey: 'need.badge.wanted.label', titleKey: 'need.badge.wanted.title' }),
 }
 
 /** Canonical precedence (icon order left→right; also picks the row colour): the most
@@ -82,52 +135,107 @@ export const NEED_PRECEDENCE: NeedCat[] = [
  * StationCard, OperateRoster, NeededPanel, and the Connect paneFormat).
  * `label` is the full board wording; `short` is for dense columns — the
  * surface picks, the words stay in one place. */
-export const NEED_CHIP: Record<
-  import('../types').NeedTag,
-  { label: string; short: string; cls: string; title: string }
-> = {
-  NewEntity: {
-    label: 'NEW ONE',
-    short: 'NEW',
+interface NeedChip {
+  label: string
+  short: string
+  cls: string
+  title: string
+}
+
+/** One chip, with its words looked up when they are read rather than at import. */
+function chip(v: {
+  cls: string
+  labelKey: MessageKey
+  shortKey: MessageKey
+  titleKey: MessageKey
+}): NeedChip {
+  return {
+    cls: v.cls,
+    get label() {
+      return t(v.labelKey)
+    },
+    get short() {
+      return t(v.shortKey)
+    },
+    get title() {
+      return t(v.titleKey)
+    },
+  }
+}
+
+export const NEED_CHIP: Record<import('../types').NeedTag, NeedChip> = {
+  NewEntity: chip({
     cls: 'entity',
-    title: 'All-time-new DXCC entity (ATNO)',
-  },
-  NewZone: { label: 'ZONE', short: 'ZONE', cls: 'zone', title: 'New CQ zone on this band' },
-  NewBand: { label: 'BAND', short: 'BAND', cls: 'band', title: 'New band-slot for this entity' },
-  NewMode: { label: 'MODE', short: 'MODE', cls: 'mode', title: 'New mode for this entity' },
-  NewGrid: { label: 'GRID', short: 'GRID', cls: 'grid', title: 'New grid square on this band' },
-  NewState: { label: 'STATE', short: 'ST', cls: 'state', title: 'New US state on this band — best-guess from the grid' },
-  Confirm: {
-    label: 'NEEDS QSL',
-    short: 'QSL',
+    labelKey: 'need.chip.newEntity.label',
+    shortKey: 'need.chip.newEntity.short',
+    titleKey: 'need.chip.newEntity.title',
+  }),
+  NewZone: chip({
+    cls: 'zone',
+    labelKey: 'need.chip.newZone.label',
+    shortKey: 'need.chip.newZone.short',
+    titleKey: 'need.chip.newZone.title',
+  }),
+  NewBand: chip({
+    cls: 'band',
+    labelKey: 'need.chip.newBand.label',
+    shortKey: 'need.chip.newBand.short',
+    titleKey: 'need.chip.newBand.title',
+  }),
+  NewMode: chip({
+    cls: 'mode',
+    labelKey: 'need.chip.newMode.label',
+    shortKey: 'need.chip.newMode.short',
+    titleKey: 'need.chip.newMode.title',
+  }),
+  NewGrid: chip({
+    cls: 'grid',
+    labelKey: 'need.chip.newGrid.label',
+    shortKey: 'need.chip.newGrid.short',
+    titleKey: 'need.chip.newGrid.title',
+  }),
+  NewState: chip({
+    cls: 'state',
+    labelKey: 'need.chip.newState.label',
+    shortKey: 'need.chip.newState.short',
+    titleKey: 'need.chip.newState.title',
+  }),
+  // The subject is the AWARD SLOT (entity/zone/grid/state on this band), never the
+  // callsign in the row — CONFIRM-without-B4 is the normal case, not a bug (an operator
+  // reasonably read the old "Worked —" as a claim about the station, 2026-08-16).
+  Confirm: chip({
     cls: 'confirm',
-    // The subject is the AWARD SLOT (entity/zone/grid/state on this band), never the
-    // callsign in the row — CONFIRM-without-B4 is the normal case, not a bug (an operator
-    // reasonably read the old "Worked —" as a claim about the station, 2026-08-16).
-    title: 'Worked on this band but not yet confirmed — a QSL from this station would close it',
-  },
-  Dxped: {
-    label: 'DXPED',
-    short: 'DXP',
+    labelKey: 'need.chip.confirm.label',
+    shortKey: 'need.chip.confirm.short',
+    titleKey: 'need.chip.confirm.title',
+  }),
+  Dxped: chip({
     cls: 'dxped',
-    title: 'Active announced DXpedition — a limited-time window',
-  },
+    labelKey: 'need.chip.dxped.label',
+    shortKey: 'need.chip.dxped.short',
+    titleKey: 'need.chip.dxped.title',
+  }),
+  // The programme names are tokens in both the full and the dense form.
   Pota: {
-    label: 'POTA',
-    short: 'POTA',
+    label: POTA_PROGRAM,
+    short: POTA_PROGRAM,
     cls: 'pota',
-    title: "Live POTA activator — the row's call is on a park right now",
+    get title() {
+      return t('need.chip.pota.title')
+    },
   },
   Sota: {
-    label: 'SOTA',
-    short: 'SOTA',
+    label: SOTA_PROGRAM,
+    short: SOTA_PROGRAM,
     cls: 'sota',
-    title: "Live SOTA activator — the row's call is on a summit right now",
+    get title() {
+      return t('need.chip.sota.title')
+    },
   },
-  Wanted: {
-    label: 'WANTED',
-    short: 'WANT',
+  Wanted: chip({
     cls: 'wanted',
-    title: 'On your wanted watch list',
-  },
+    labelKey: 'need.chip.wanted.label',
+    shortKey: 'need.chip.wanted.short',
+    titleKey: 'need.chip.wanted.title',
+  }),
 }

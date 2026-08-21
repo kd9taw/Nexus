@@ -418,6 +418,11 @@ principal third-party components, not a substitute for that gate:
 - **tauri-plugin-updater** (signed self-update: verifies a minisign signature over each
   installer before applying it) — MIT OR Apache-2.0.
 - **tauri-plugin-opener** (open a URL / file in the system handler) — MIT OR Apache-2.0.
+- **tauri-plugin-notification** (Pounce's rare-DX alert via the platform notification
+  center — the web Notification API does not exist in WKWebView) — Apache-2.0 OR MIT.
+  Its desktop backends **notify-rust** (Linux) — MIT OR Apache-2.0,
+  **mac-notification-sys** (macOS) — MIT/Apache-2.0, and **tauri-winrt-notification**
+  (Windows) — MIT OR Apache-2.0, arrive with it.
 - **cpal** (sound-card audio transport) — MIT OR Apache-2.0.
 - **alsa** (Linux only: reading ALSA's PCM device hints, so the audio picker can show the
   card description the operator's own system shows — cpal keeps only the raw PCM name) —
@@ -443,6 +448,10 @@ principal third-party components, not a substitute for that gate:
 - **windows-sys** (Windows only: the Win32 job-object / process calls that make a crashed or
   killed Nexus take its child `rigctld` with it instead of orphaning the serial port) —
   MIT OR Apache-2.0.
+- **windows** (Windows only: COM and `IDispatch`, for driving VE3NEA's OmniRig rig-control
+  server as a CAT backend — `crates/tempo-audio/src/omnirig/com.rs`) — MIT OR Apache-2.0.
+  OmniRig itself is a separate program the operator installs; Nexus only calls its published
+  COM interface and ships none of it.
 
 `crates/tempo-net` (the WSJT-X-compatible UDP API and PSK Reporter spotting) is otherwise
 pure `std` Rust: **socket2** is its only third-party crate, and only because `std` exposes no

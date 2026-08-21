@@ -76,6 +76,19 @@ pub struct N3fjpQso {
     /// QSO time, unix seconds (formatted YYYY/MM/DD + HH:MM UTC).
     pub when_unix: u64,
     pub operator: String,
+    // ── General-logging extras (#106) ──────────────────────────────────────
+    // A Field Day exchange carries none of these, and the FD push sets them all
+    // `None` — which emits nothing, keeping the contest ADDDIRECT line
+    // byte-identical. The general (ACLog) push was sending only the contest
+    // fields, so an operator logging into ACLog lost every report/name/power.
+    /// Signal report sent (ACLog `fldRstS`).
+    pub rst_sent: Option<String>,
+    /// Signal report received (ACLog `fldRstR`).
+    pub rst_rcvd: Option<String>,
+    /// The other operator's name (ACLog `fldNameR`).
+    pub name: Option<String>,
+    /// TX power in watts, pre-formatted (ACLog `fldPower`).
+    pub power: Option<String>,
 }
 
 /// Unix secs → ("YYYY/MM/DD", "HH:MM") UTC (same civil math as the Cabrillo
@@ -114,6 +127,21 @@ pub fn build_adddirect(q: &N3fjpQso) -> String {
     s.push_str(&format!("<fldFrequency>{:.4}</fldFrequency>", q.freq_mhz));
     s.push_str(&format!("<fldClass>{}</fldClass>", esc(&q.class)));
     s.push_str(&format!("<fldSection>{}</fldSection>", esc(&q.section)));
+    // General-logging extras (#106): emitted only when present, so a Field Day
+    // push (all `None`) produces the exact line it always has. Field names are
+    // ACLog's DB columns (the ADDDIRECT `fld*` convention, per the N3FJP API).
+    if let Some(v) = q.rst_sent.as_deref().filter(|v| !v.trim().is_empty()) {
+        s.push_str(&format!("<fldRstS>{}</fldRstS>", esc(v)));
+    }
+    if let Some(v) = q.rst_rcvd.as_deref().filter(|v| !v.trim().is_empty()) {
+        s.push_str(&format!("<fldRstR>{}</fldRstR>", esc(v)));
+    }
+    if let Some(v) = q.name.as_deref().filter(|v| !v.trim().is_empty()) {
+        s.push_str(&format!("<fldNameR>{}</fldNameR>", esc(v)));
+    }
+    if let Some(v) = q.power.as_deref().filter(|v| !v.trim().is_empty()) {
+        s.push_str(&format!("<fldPower>{}</fldPower>", esc(v)));
+    }
     if !q.operator.is_empty() {
         s.push_str(&format!("<fldOperator>{}</fldOperator>", esc(&q.operator)));
     }
@@ -338,6 +366,10 @@ mod tests {
             freq_mhz: 14.074,
             when_unix: 1_782_583_500, // 2026-06-27 18:05 UTC (FD Saturday)
             operator: "KD9TAW".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            power: None,
         };
         let line = build_adddirect(&q);
         assert!(line.starts_with("<CMD><ADDDIRECT><EXCLUDEDUPES>TRUE</EXCLUDEDUPES>"));
@@ -353,6 +385,72 @@ mod tests {
         assert!(!line.contains('\n'), "single line; CRLF added at send");
     }
 
+    /// #106 — the general (ACLog) push was sending only the contest fields, so every
+    /// report, name and power logged in Nexus vanished on the ACLog side.
+    #[test]
+    fn adddirect_carries_the_general_fields_when_present() {
+        let q = N3fjpQso {
+            call: "W9XYZ".into(),
+            class: String::new(),
+            section: String::new(),
+            band_meters: "20".into(),
+            mode: "SSB".into(),
+            freq_mhz: 14.250,
+            when_unix: 1_782_583_500,
+            operator: "KD9TAW".into(),
+            rst_sent: Some("59".into()),
+            rst_rcvd: Some("57".into()),
+            name: Some("Scott".into()),
+            power: Some("100".into()),
+        };
+        let line = build_adddirect(&q);
+        assert!(line.contains("<fldRstS>59</fldRstS>"));
+        assert!(line.contains("<fldRstR>57</fldRstR>"));
+        assert!(line.contains("<fldNameR>Scott</fldNameR>"));
+        assert!(line.contains("<fldPower>100</fldPower>"));
+    }
+
+    /// #106, the other direction: absent fields emit NOTHING — no empty tags — and
+    /// the Field Day line (which never carries them) is byte-identical to before.
+    #[test]
+    fn adddirect_omits_absent_general_fields_and_fd_line_is_unchanged() {
+        let fd = N3fjpQso {
+            call: "W1AW".into(),
+            class: "2A".into(),
+            section: "CT".into(),
+            band_meters: "20".into(),
+            mode: "FT8".into(),
+            freq_mhz: 14.074,
+            when_unix: 1_782_583_500,
+            operator: "KD9TAW".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            power: None,
+        };
+        let line = build_adddirect(&fd);
+        for tag in ["fldRstS", "fldRstR", "fldNameR", "fldPower"] {
+            assert!(!line.contains(tag), "{tag} must not appear when None");
+        }
+        // The exact pre-#106 Field Day line, spelled out — the byte-identical claim.
+        assert_eq!(
+            line,
+            "<CMD><ADDDIRECT><EXCLUDEDUPES>TRUE</EXCLUDEDUPES>\
+             <fldCall>W1AW</fldCall><fldDateStr>2026/06/27</fldDateStr>\
+             <fldTimeOnStr>18:05</fldTimeOnStr><fldBand>20</fldBand>\
+             <fldMode>FT8</fldMode><fldFrequency>14.0740</fldFrequency>\
+             <fldClass>2A</fldClass><fldSection>CT</fldSection>\
+             <fldOperator>KD9TAW</fldOperator>\
+             <fldComments>via Nexus</fldComments></CMD>"
+        );
+        // An empty-string report is "absent", not an empty tag.
+        let line = build_adddirect(&N3fjpQso {
+            rst_sent: Some("  ".into()),
+            ..fd
+        });
+        assert!(!line.contains("fldRstS"), "whitespace-only is absent");
+    }
+
     #[test]
     fn values_are_xml_escaped() {
         let q = N3fjpQso {
@@ -364,6 +462,10 @@ mod tests {
             freq_mhz: 7.0,
             when_unix: 0,
             operator: String::new(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            power: None,
         };
         let line = build_adddirect(&q);
         assert!(line.contains("<fldCall>A&amp;B&lt;C&gt;</fldCall>"));
@@ -380,6 +482,10 @@ mod tests {
             freq_mhz: 14.074,
             when_unix: 1_782_583_500,
             operator: "KD9TAW".into(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            power: None,
         };
         let block = build_enter_sequence(&q);
         // Rig polls frozen for the whole sequence, then released.
@@ -421,6 +527,10 @@ mod tests {
             freq_mhz: 14.074,
             when_unix: 1_782_583_500,
             operator: String::new(),
+            rst_sent: None,
+            rst_rcvd: None,
+            name: None,
+            power: None,
         };
         let block = build_enter_sequence(&q);
         assert!(

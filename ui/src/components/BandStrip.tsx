@@ -1,8 +1,19 @@
-import { useState } from 'react'
-import type { SpotRow, NeedTag } from '../types'
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog. What does NOT: the band and mode names (`modeLabel` is CW or
+// SSB), the scale's edge frequencies, the dial reading, and every value in a spot's tooltip —
+// `detail` is the spot line assembled from cluster data, and `de <spotter>` is the cluster's own
+// shorthand. The need and badge WORDS arrive already translated from `needVisuals.ts` and
+// `SpotLegend.tsx`, whose tables resolve through getters.
+//
+// The dial marker reads `txAllowed` to say the engine is blocking transmit here. It is a readout;
+// this surface has no transmit control and is on no cockpit's stop-line census.
+import { useRef, useState } from 'react'
+import type { SpotRow, NeedTag, AppSnapshot } from '../types'
 import { bandRangeForLabel, cwRangeForLabel } from '../band'
+import { useWheelTune } from '../useWheelTune'
 import { NEED_CHIP } from '../features/needVisuals'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { t } from '../i18n'
 import { BEACON_BADGE, SpotLegend, TYPE_BADGE } from './SpotLegend'
 
 interface Props {
@@ -27,15 +38,36 @@ interface Props {
   onWorkSpot: (s: SpotRow) => void
   /** When set, shows a "pop out" button that opens the full vertical band-map in its own window. */
   onPopOut?: () => void
+
+  // ── Tuning from the strip itself (#96) ─────────────────────────────────────────────────
+  // The pop-out band map wheel-tunes (#39); the docked strip is the same frequency scale in
+  // the same cockpits and stayed silent, which read as an inconsistency. Same shape as
+  // BandMap's: all optional, and with these absent the strip is exactly the read-only scale
+  // it was — which is what keeps the existing tests honest.
+  /** Sideband to preserve so a strip tune never flips the mode. */
+  sideband?: string
+  /** Tune only when CAT is up and nothing is transmitting. Absent ⇒ read-only strip. */
+  tuneEnabled?: boolean
+  /** Wheel step (Hz), the operator's tuning step — same value the cockpit dials use. */
+  stepHz?: number
+  /** Settings ▸ Radio wheel sensitivity, so the strip matches every other dial. */
+  wheelSensitivity?: number
+  /** Fresh snapshot after a tune, so the dial marker moves without waiting for a poll. */
+  onSnap?: (s: AppSnapshot) => void
 }
 
 
-/** Compact "how long ago" for a spot tooltip. */
+/** The scale's unit, printed on the axis beside the edge frequency. A unit symbol is a token:
+ * MHz is MHz in every language, and the guard is told so by this constant. */
+const MHZ_UNIT = 'MHz'
+
+/** Compact "how long ago" for a spot tooltip. The unit letter rides inside the message with its
+ * number, so a translation can never separate the two. */
 function ageLabel(secs: number): string {
   if (secs < 0) return ''
-  if (secs < 60) return `${secs}s ago`
+  if (secs < 60) return t('bandStrip.age.secs', { secs })
   const m = Math.floor(secs / 60)
-  return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`
+  return m < 60 ? t('bandStrip.age.mins', { mins: m }) : t('bandStrip.age.hours', { hours: Math.floor(m / 60) })
 }
 
 /**
@@ -57,6 +89,11 @@ export function BandStrip({
   typeByCall,
   onWorkSpot,
   onPopOut,
+  sideband,
+  tuneEnabled,
+  stepHz,
+  wheelSensitivity,
+  onSnap,
 }: Props) {
   // Legend is opt-in but remembered — it answers "what do the colours mean?" once, then
   // stays out of the way. Default ON the first time so the key is discoverable.
@@ -69,6 +106,20 @@ export function BandStrip({
       return !v
     })
   }
+  // Wheel-tune the track, through the SAME hook the readout digits, the waterfall and the
+  // pop-out band map (#39) use — coalescer, band-edge handling, per-event step cap and the
+  // sensitivity setting are all the ones the operator already knows, never a second
+  // implementation that drifts. `enabled` false makes it inert (the read-only case).
+  // Called BEFORE the off-plan early return below: hooks must run on every render.
+  const trackEl = useRef<HTMLDivElement | null>(null)
+  useWheelTune(trackEl, {
+    dialMhz,
+    sideband: sideband || 'USB',
+    enabled: tuneEnabled === true,
+    stepHz: stepHz ?? 1000,
+    sensitivity: wheelSensitivity,
+    onSnap,
+  })
   // In the CW cockpit, clip the strip to the band's CW sub-band (band bottom → CW top) so it shows
   // ONLY the CW portion; the Phone cockpit still spans the whole allocation. But only while the dial
   // is actually IN that segment — if the operator tunes above CW top (into the data/phone part) fall
@@ -89,20 +140,22 @@ export function BandStrip({
     return (
       <div className="bandstrip">
         <div className="bandstrip-head">
-          <span className="bandstrip-count">{band || '—'} — off the band plan</span>
+          <span className="bandstrip-count">{t('bandStrip.offPlan', { band: band || '—' })}</span>
           {onPopOut && (
             <button
               type="button"
               className="bandstrip-popout"
               onClick={onPopOut}
-              title="Open the vertical band map in its own window"
+              title={t('bandStrip.popout.title')}
             >
-              ⧉ Band map
+              {t('bandStrip.popout.label')}
             </button>
           )}
         </div>
         <div className="bandstrip-track">
-          <div className="bandstrip-empty">no band-plan data for {band || 'this frequency'}</div>
+          <div className="bandstrip-empty">
+            {t('bandStrip.empty.noPlan', { band: band || t('bandStrip.empty.thisFrequency') })}
+          </div>
         </div>
       </div>
     )
@@ -134,36 +187,44 @@ export function BandStrip({
             have needed a prop instead. The live count below is not a duplicate and stays. */}
         <span className="bandstrip-count">
           {phone.length > 0
-            ? `${phone.length} ${modeLabel} spot${phone.length === 1 ? '' : 's'} · ${band}`
-            : `no ${modeLabel} spots on ${band} yet`}
+            ? t('bandStrip.count', { count: phone.length, mode: modeLabel, band })
+            : t('bandStrip.empty.none', { mode: modeLabel, band })}
         </span>
         <button
           type="button"
           className={`bandstrip-legend-toggle${showLegend ? ' on' : ''}`}
           onClick={toggleLegend}
-          title="Show/hide the colour + type key"
+          title={t('bandStrip.legend.title')}
           aria-pressed={showLegend}
         >
-          Legend
+          {t('bandStrip.legend.label')}
         </button>
         {onPopOut && (
           <button
             type="button"
             className="bandstrip-popout"
             onClick={onPopOut}
-            title="Open the vertical band map in its own window"
+            title={t('bandStrip.popout.title')}
           >
-            ⧉ Band map
+            {t('bandStrip.popout.label')}
           </button>
         )}
       </div>
       {showLegend && <SpotLegend />}
-      <div className="bandstrip-track" title={`${band}: ${lo.toFixed(3)}–${hi.toFixed(3)} MHz`}>
+      <div
+        ref={trackEl}
+        className="bandstrip-track"
+        title={
+          tuneEnabled === true
+            ? t('bandStrip.track.title.tunable', { band, lo: lo.toFixed(3), hi: hi.toFixed(3) })
+            : t('bandStrip.track.title', { band, lo: lo.toFixed(3), hi: hi.toFixed(3) })
+        }
+      >
         {shade && shade.width > 0 && (
           <div
             className="bandstrip-shade"
             style={{ left: `${shade.left}%`, width: `${shade.width}%` }}
-            title="Your licensed phone segment on this band"
+            title={t('bandStrip.shade.title')}
           />
         )}
         {phone.map((s, i) => {
@@ -201,7 +262,7 @@ export function BandStrip({
               type="button"
               className="bandstrip-spot"
               style={{ left: `${pct(s.freqMhz)}%`, opacity }}
-              title={`${detail} — click to work`}
+              title={t('bandStrip.spot.title', { detail })}
               onClick={() => onWorkSpot(s)}
             >
               {beacon && (
@@ -216,12 +277,18 @@ export function BandStrip({
         <div
           className={`bandstrip-dial${txAllowed ? '' : ' blocked'}`}
           style={{ left: `${pct(dialMhz)}%` }}
-          title={`You: ${dialMhz.toFixed(3)} MHz${txAllowed ? '' : ' — transmit blocked (outside your privileges)'}`}
+          title={
+            txAllowed
+              ? t('bandStrip.dial.title', { freq: dialMhz.toFixed(3) })
+              : t('bandStrip.dial.title.blocked', { freq: dialMhz.toFixed(3) })
+          }
         />
       </div>
       <div className="bandstrip-axis mono">
         <span>{lo.toFixed(3)}</span>
-        <span>{hi.toFixed(3)} MHz</span>
+        <span>
+          {hi.toFixed(3)} {MHZ_UNIT}
+        </span>
       </div>
     </div>
   )

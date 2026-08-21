@@ -16,6 +16,7 @@ import type {
 } from '../types'
 import { buildChaseTargets } from './chase'
 import { modeClassOf } from './needs'
+import { t } from '../i18n'
 
 export interface ChaseFeedItem {
   kind: 'spot' | 'dxped'
@@ -88,10 +89,13 @@ export function buildChaseFeed(
       (c.status === 'WorkNow' ? WORK_NOW : 0) +
       (endsSoon ? ENDS_SOON : 0)
     const why = c.liveConfirmed
-      ? `on the air now (spotted) — ${c.band}`
+      ? t('chase.why.spotted', { band: c.band })
       : c.status === 'WorkNow'
-        ? `${c.band} path modelled open — ${c.likelihood}`
-        : `${c.band} ${c.likelihood.toLowerCase()}${w?.best ? ` · best ${w.best}` : ''}`
+        ? t('chase.why.modelledOpen', { band: c.band, likelihood: c.likelihood })
+        : `${t('chase.why.likelihood', {
+            band: c.band,
+            likelihood: c.likelihood.toLowerCase(),
+          })}${w?.best ? t('chase.why.best', { best: w.best }) : ''}`
     items.push({
       kind: 'dxped',
       call: c.call,
@@ -100,7 +104,7 @@ export function buildChaseFeed(
       mode: dxpedMode(c.modes),
       freqMhz: null,
       score,
-      why: endsSoon ? `${why} · last days!` : why,
+      why: endsSoon ? t('chase.why.lastDays', { why }) : why,
       openNow: c.status === 'WorkNow',
       window: w?.best ?? c.windowHint,
       tags: [],
@@ -108,31 +112,31 @@ export function buildChaseFeed(
     })
   }
 
-  for (const t of buildChaseTargets(needs, bandOutlook, nowMs)) {
-    if (dxpedCalls.has(t.call.toUpperCase())) continue // the card said it better
-    const need = (needs ?? []).find((n) => n.call === t.call && n.band === t.band)
+  for (const target of buildChaseTargets(needs, bandOutlook, nowMs)) {
+    if (dxpedCalls.has(target.call.toUpperCase())) continue // the card said it better
+    const need = (needs ?? []).find((n) => n.call === target.call && n.band === target.band)
     const rarity = need?.gridRarity ?? null
     const score =
-      t.priority +
-      (t.openNow ? OPEN_NOW : t.window ? HAS_WINDOW : 0) +
+      target.priority +
+      (target.openNow ? OPEN_NOW : target.window ? HAS_WINDOW : 0) +
       (rarity ? (RARITY[rarity] ?? 0) : 0)
-    const why = t.openNow
-      ? `${t.band} open now — call it`
-      : t.window
-        ? `${t.band} closed now · best ${t.window}`
-        : `heard on ${t.band}`
+    const why = target.openNow
+      ? t('chase.why.openNow', { band: target.band })
+      : target.window
+        ? t('chase.why.closedBest', { band: target.band, window: target.window })
+        : t('chase.why.heardOn', { band: target.band })
     items.push({
       kind: 'spot',
-      call: t.call,
-      entity: t.entity,
-      band: t.band,
-      mode: t.mode,
-      freqMhz: t.freqMhz,
+      call: target.call,
+      entity: target.entity,
+      band: target.band,
+      mode: target.mode,
+      freqMhz: target.freqMhz,
       score,
       why,
-      openNow: t.openNow,
-      window: t.window,
-      tags: t.tags,
+      openNow: target.openNow,
+      window: target.window,
+      tags: target.tags,
       gridRarity: rarity,
       endsSoon: false,
     })
@@ -144,9 +148,17 @@ export function buildChaseFeed(
 
 /** One plain sentence for the pane's Basic view / empty hint. */
 export function chaseFeedLine(items: ChaseFeedItem[]): string {
-  if (items.length === 0)
-    return 'Nothing chase-worthy right now — targets appear as needed stations are heard or expeditions come on the air.'
+  if (items.length === 0) return t('chase.feed.empty')
   const top = items[0]
   const openCount = items.filter((i) => i.openNow).length
-  return `${items.length} to chase (${openCount > 0 ? `${openCount} workable now` : 'none open this minute'}). Top: ${top.call}${top.entity ? ` (${top.entity})` : ''} — ${top.why}.`
+  return t('chase.feed.summary', {
+    count: items.length,
+    openness:
+      openCount > 0
+        ? t('chase.feed.workableNow', { count: openCount })
+        : t('chase.feed.noneOpen'),
+    top: top.call,
+    entity: top.entity ? ` (${top.entity})` : '',
+    why: top.why,
+  })
 }

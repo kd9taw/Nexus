@@ -1429,6 +1429,12 @@ pub struct Engine {
     rx_offset_hz: f32,
     /// Keep TX offset fixed when RX changes (WSJT-X "Hold Tx Freq").
     hold_tx_freq: bool,
+    /// Consecutive boundary periods with no decode — see DECODE_DROUGHT_PERIODS.
+    quiet_periods: u32,
+    /// Suppress the per-step transmit log lines while a COMPOSITE operation runs, so the
+    /// operation logs once with its cause instead of narrating its own internals. Set only by
+    /// `halt_tx_for_context_change`, and cleared in the same function — never a mode.
+    quiet_tx_log: bool,
     tx_parity: u64,
     /// When true (default), answering a heard station in chat auto-picks the OPPOSITE
     /// T/R cycle (FT8-style); an explicit 1st/2nd selection clears it. A CQ run holds
@@ -1486,6 +1492,16 @@ pub struct Engine {
     /// [`clear_decode_context`]: Engine::clear_decode_context
     /// [`apply_decode_result`]: Engine::apply_decode_result
     decode_epoch: u64,
+    /// The decode epoch the IN-PROGRESS slot capture began under (#103). The epoch
+    /// guard above only catches jobs already in flight when the context switches; a
+    /// mid-slot band change leaves the capture ring holding the OLD band's air, and
+    /// the boundary job for that slot is built AFTER the switch — so stamping it with
+    /// the fresh [`decode_epoch`](Self::decode_epoch) laundered pre-QSY decodes into
+    /// the new band's roster. Boundary/Early jobs are stamped with THIS epoch instead;
+    /// the radio loop resets it to the live epoch at every consumed slot boundary
+    /// ([`begin_slot_capture`](Engine::begin_slot_capture)), where the ring rolls into
+    /// a capture that genuinely belongs to the current context.
+    capture_epoch: u64,
     /// Which kind of source [`source`](Self::source) currently is. Tracked so
     /// [`set_tier`](Engine::set_tier) only re-points the *native* source and a
     /// live companion isn't clobbered, and so [`ingest`](Engine::ingest) routes
@@ -1533,6 +1549,10 @@ pub struct Engine {
     /// A rig read (freq) actually succeeded this session — the cockpit dial/mode are
     /// rig-confirmed rather than the persisted seed (read-only launch provenance).
     rig_confirmed: bool,
+    /// Native Flex DAX audio is LIVE, which means `transmit set dax=1` is standing on the
+    /// radio and the operator's MICROPHONE is disconnected. Display-only; see
+    /// [`Self::observe_flex_dax_tx`].
+    flex_dax_tx: bool,
     /// Per-area tier memory: the structured tier (FT8/FT4) last used in the DX
     /// area and the chat tier (FT1/DX1) last used in MSG — so switching areas
     /// round-trips without losing the operator's pick (the "FT4 lost through
@@ -1570,6 +1590,11 @@ pub struct Engine {
     /// than be rebuilt per slot — rebuilding would reset the spread and skew the
     /// achieved duty cycle.
     beacon_sched: tempo_core::beacon::BeaconScheduler,
+    /// The last beacon slot an ALL.TXT `Tx` line was written for (#101c): `poll_tx`
+    /// runs many times inside one interval and each returns the same plan, so the
+    /// writer needs its own once-per-slot latch or every poll would append a
+    /// duplicate line.
+    beacon_txline_slot: Option<u64>,
     /// The last beacon slot a transmit decision was taken for, so one decision is
     /// made per interval no matter how often `poll_tx` is called within it.
     beacon_decided_slot: Option<u64>,
@@ -2144,6 +2169,79 @@ pub struct Engine {
     /// over has fully keyed out — the edge the service tick turns into exactly one
     /// `on_tx_complete` (restarting the sequencer's reply timer).
     rtty_auto_over: bool,
+    // --- PSK31 RX (Keyboard Modes Phase 1 — the RX block stays receive-only;
+    // the TX path lives in the psk_* TX block below, behind its own gates). ---
+    /// PSK31 RX decoder armed (session-only runtime state, never persisted — the
+    /// decoder must never come up armed at launch except via the view-entry
+    /// auto-arm policy in [`Engine::psk_auto_arm`], which is itself RX-only).
+    psk_armed: bool,
+    /// The operator explicitly stopped the PSK decoder this session, so entering
+    /// the PSK view must not quietly restart it behind them (the APRS/SSTV
+    /// decline-memory doctrine). Session-only; a manual arm retires it.
+    psk_auto_arm_declined: bool,
+    /// Drain buffer for the PSK decode thread: 12 kHz RX audio accumulates here
+    /// while armed; the thread empties it via [`Engine::take_psk_audio`]. Empty
+    /// (zero cost) while disarmed.
+    psk_audio: Vec<f32>,
+    /// Ring of decoded PSK31 characters (+ per-char phase-margin confidence),
+    /// capped at [`PSK_TEXT_CAP`] — the cockpit transcript. Pushed by the
+    /// decode thread.
+    psk_chars: VecDeque<tempo_core::textmode::DecodedChar>,
+    /// Latest AFC correction (Hz) reported by the PSK demodulator — slew-limited
+    /// and clamped to ±25 Hz around the netted center, by the demod's design.
+    psk_afc_hz: f32,
+    /// Whether the PSK demodulator's quality squelch currently reads a signal
+    /// (the cockpit's carrier indicator).
+    psk_signal: bool,
+    /// One-shot: drop + rebuild the RX demodulator (the cockpit's Re-acquire —
+    /// fresh AFC pull from the netted center).
+    psk_afc_reset: bool,
+    /// Audio center (Hz) the PSK decoder is netted on. `None` = un-netted, which
+    /// resolves to the 1 kHz PSK31 convention (the `PskConfig` default). A
+    /// waterfall click sets it via [`Engine::psk_net`] — and TX transmits HERE
+    /// (the transceive convention; the radio loop reads it per chunk).
+    psk_center: Option<f32>,
+    /// PSK sub-mode (BPSK31 | QPSK31) — COCKPIT STATE (the sstvModes pattern:
+    /// selected in the cockpit, session-only, never persisted). One field read
+    /// by the RX decode thread AND both TX paths, so the demod and the
+    /// modulator can never disagree about the modulation. Set only via
+    /// [`Engine::set_psk_mode`], which refuses mid-transmission.
+    psk_mode: tempo_core::psk::PskModeKind,
+    /// QPSK31 sideband polarity (`true` = reversed/LSB): flips the ±90° shift
+    /// sense in the demod AND the modulator (the QPSK31 interop trap — BPSK
+    /// doesn't care). Cockpit state beside the mode; ignored in BPSK31.
+    psk_reverse: bool,
+    // --- PSK31 TX (Keyboard Modes Phase 2) — the RTTY TX block's shape,
+    // instantiated over the shared `crate::keyboard` machinery. Launch-safety:
+    // nothing here runs on startup or on arm; the queue fills ONLY via
+    // `psk_send_text` and the latch only via `set_psk_latched`, each behind
+    // `psk_tx_gate`. ---
+    /// FIFO of PSK31 messages to transmit (operator-initiated, varicode-
+    /// filtered). Filled ONLY by [`Engine::psk_send_text`]; the radio loop
+    /// keys one at a time via [`Engine::poll_psk_one`] (gated on tx_enabled +
+    /// privileges + the Keyboard section + not-tuning). Stop/halt clears it.
+    psk_queue: VecDeque<String>,
+    /// One-shot: abort PSK TX now (the radio loop flushes the audio ring and
+    /// unkeys on its next tick). Mirrors `rtty_abort`.
+    psk_abort: bool,
+    /// Continuous-TX latch (the cockpit's TX button) — [`crate::keyboard`]'s
+    /// three-field latch state, PSK31's instantiation. Set ONLY by
+    /// [`Engine::set_psk_latched`]; re-checked against every TX gate on EVERY
+    /// radio-loop tick in [`Engine::poll_psk_stream`], which drops it (not
+    /// merely the feed) when one goes down.
+    psk_latched: bool,
+    /// Un-keyed type-ahead for the latched stream (filled by
+    /// [`Engine::psk_type`], drained by [`Engine::poll_psk_stream`]).
+    psk_type_buf: VecDeque<char>,
+    /// When the current latched over keyed up (Unix ms) — the anchor for the
+    /// hard per-over ceiling ([`crate::keyboard::PSK31`]'s `max_latch_ms`).
+    psk_latch_start_ms: Option<u64>,
+    /// A PSK over is on the air (stamped by the radio loop from the audio
+    /// actually in flight; the cockpit's TX indicator). Mirrors `rtty_sending`.
+    psk_sending: bool,
+    /// The last TX failure to surface in the cockpit (PTT refused, the
+    /// ceiling's why-did-it-unkey note). Mirrors `rtty_keyer_error`.
+    psk_keyer_error: Option<String>,
     /// APRS (AFSK-1200 / AX.25) RX decoder arm state + HOW it was armed (session-only, never
     /// persisted). See [`AprsArm`] — the distinction gates the auto-ack, so it is TX-safety state.
     aprs_arm: AprsArm,
@@ -2265,6 +2363,9 @@ const AI_CW_WINDOW: usize = 180_000;
 const QSO_WAV_WINDOW: usize = 720_000;
 /// RTTY decoded-character ring cap: ~4000 chars ≈ tens of minutes of copy at 45.45 baud.
 const RTTY_TEXT_CAP: usize = 4000;
+/// PSK31 decoded-character ring cap — the RTTY sizing (PSK31 copies even slower,
+/// ~4 chars/s, so 4000 chars is comfortably tens of minutes of transcript).
+const PSK_TEXT_CAP: usize = 4000;
 /// AFSK RTTY mark tone (Hz) — mirrors `tempo_audio::rtty_afsk::MARK_HZ` (tempo-app can't
 /// depend on tempo-audio); used only to judge where the AFSK emission lands vs the dial.
 const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
@@ -2977,6 +3078,39 @@ pub struct RttyRxState {
     pub heard_cq: Option<String>,
 }
 
+/// Compact PSK31 state for the `get_psk_state` poll: armed flag, AFC, signal
+/// presence, the netted audio center, the decoded-text ring with per-character
+/// confidence (0–100, parallel to `text`'s chars — render low values faint),
+/// plus the TX side (Keyboard Modes Phase 2): the live sending flag, the
+/// continuous-TX latch and any keyer failure to surface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PskRxState {
+    pub armed: bool,
+    /// AFC correction from the netted center (Hz; slew-limited, clamped ±25).
+    pub afc_hz: f32,
+    /// The demodulator's quality squelch reads a signal right now.
+    pub signal: bool,
+    /// Audio center (Hz) the decoder is netted on (waterfall cursor position)
+    /// — and where TX transmits (the transceive convention).
+    pub center_hz: f32,
+    /// Selected sub-mode (BPSK31 | QPSK31) — cockpit state, echoed here so
+    /// the selector renders the engine's truth.
+    pub mode: tempo_core::psk::PskModeKind,
+    /// QPSK sideband-reverse (LSB) toggle state.
+    pub reverse: bool,
+    pub text: String,
+    pub conf: Vec<u8>,
+    /// An over is on the air (stamped by the loop) OR messages are still
+    /// queued behind it OR the latched stream is running — the cockpit's TX
+    /// indicator and the Esc/Stop macro's enable.
+    pub sending: bool,
+    /// Continuous TX is latched. Reported SEPARATELY from `sending` for
+    /// exactly [`RttyRxState::latched`]'s reason: the Stop control must be
+    /// live from the instant the latch goes up, before the first chunk keys.
+    pub latched: bool,
+    pub keyer_error: Option<String>,
+}
+
 /// One operation applied to the RTTY auto-sequencer via [`Engine::rtty_drive`].
 enum RttyOp {
     /// Operator initiates a CQ run (a human-initiate gate).
@@ -2994,37 +3128,31 @@ enum RttyOp {
 /// Uppercase + drop anything with no ITA2 mapping — the ONE filter every RTTY TX
 /// path runs, so what is queued (or typed into a latched stream) is exactly what
 /// keys, and the two paths can never disagree about which characters exist.
+///
+/// RTTY's instantiation of the per-mode [`crate::keyboard::kb_filter`]; the
+/// alphabet lives on the mode descriptor so PSK31's full-ASCII varicode is a
+/// different `Charset` rather than a second filter.
 fn rtty_filter(text: &str) -> String {
-    text.chars()
-        .map(|c| c.to_ascii_uppercase())
-        .filter(|&c| tempo_core::rtty::encodable(c))
-        .collect()
+    crate::keyboard::kb_filter(crate::keyboard::RTTY, text)
 }
 
 /// What the radio loop should key this tick on behalf of the continuous-TX latch
-/// ([`Engine::poll_rtty_stream`]).
-///
-/// Three explicit answers rather than an empty-string sentinel: "nothing typed"
-/// and "not transmitting" are opposite instructions to a keyed transmitter, and a
-/// consumer that had to infer the difference from an empty buffer would sooner or
-/// later infer it wrong.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RttyStreamTick {
-    /// Not streaming. The loop must not key on the latch's behalf — and if it was,
-    /// the latch has just been dropped and the abort armed, so it unkeys.
-    Idle,
-    /// Streaming and every gate is up, but the loop asked for no characters this
-    /// tick because its audio look-ahead is already full. Stay keyed, key nothing.
-    /// This exists so the loop can run the gate re-check on EVERY tick without
-    /// having to feed on every tick — the predicate is the safety, the feeding is
-    /// only the feature.
-    Ahead,
-    /// Key these typed characters (never empty).
-    Text(String),
-    /// Latched with nothing typed: key the RTTY IDLE (a LTRS diddle) to hold the
-    /// carrier and the far end's sync. Never silence under a held PTT.
-    Diddle,
+/// ([`Engine::poll_rtty_stream`]) — the mode-generic [`crate::keyboard::KbTick`]
+/// under the name RTTY's call sites have always used.
+pub use crate::keyboard::KbTick as RttyStreamTick;
+
+/// PSK31's instantiation of the per-mode [`crate::keyboard::kb_filter`]:
+/// full-ASCII varicode, case preserved — the ONE filter every PSK TX path
+/// runs, so what is queued (or typed into a latched stream) is exactly what
+/// keys.
+fn psk_filter(text: &str) -> String {
+    crate::keyboard::kb_filter(crate::keyboard::PSK31, text)
 }
+
+/// The latched-stream tick [`Engine::poll_psk_stream`] returns — the same
+/// mode-generic [`crate::keyboard::KbTick`] under PSK's name (`Diddle` there
+/// means the PSK31 idle: continuous reversals, never silence under held PTT).
+pub use crate::keyboard::KbTick as PskStreamTick;
 
 /// The `rtty_state` seq-state string the UI switches on.
 fn seq_state_label(s: tempo_core::rtty::SeqState) -> &'static str {
@@ -3127,8 +3255,10 @@ pub struct TxPlan {
     pub slot: u64,
     pub tier: Tier,
     pub waveform: TxWaveform,
-    /// Beacon overs run the wall-clock watchdog at COMMIT, matching the order
-    /// the single-shot path used (build, then check).
+    /// A WSPR/FST4W beacon over. Beacons are EXEMPT from the wall-clock TX
+    /// watchdog (operator-approved 2026-08-17, matching WSJT-X — see the
+    /// `plan.beacon` branch in [`Engine::commit_tx`]); the flag now only marks
+    /// the transmitting state at commit.
     beacon: bool,
     /// Everything the TX gate evaluated when this plan was made — see
     /// [`TxGateStamp`].
@@ -3150,6 +3280,8 @@ pub enum TxOwner {
     Cw,
     /// An RTTY over is in flight or queued.
     Rtty,
+    /// A PSK31 over is in flight or queued (or the continuous-TX latch is up).
+    Psk,
     /// An SSTV image is in flight.
     Sstv,
 }
@@ -3164,6 +3296,7 @@ impl TxOwner {
             TxOwner::Voice => "A voice message is transmitting — stop it first",
             TxOwner::Cw => "CW is sending — stop it first",
             TxOwner::Rtty => "RTTY is transmitting — stop it first",
+            TxOwner::Psk => "PSK is transmitting — stop it first",
             TxOwner::Sstv => "An SSTV image is transmitting — stop it first",
         }
         .to_string()
@@ -3403,6 +3536,8 @@ impl Engine {
             tx_offset_hz,
             rx_offset_hz,
             hold_tx_freq,
+            quiet_periods: 0,
+            quiet_tx_log: false,
             tx_parity,
             tx_cycle_auto: true,
             beacon_every: 8,
@@ -3417,6 +3552,7 @@ impl Engine {
             source: Arc::new(Mutex::new(Box::new(default_source))),
             source_label: default_source_label,
             decode_epoch: 0,
+            capture_epoch: 0,
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
@@ -3435,6 +3571,7 @@ impl Engine {
             recent_dt: VecDeque::new(),
             seen_decode: false,
             rig_confirmed: false,
+            flex_dax_tx: false,
             last_dx_tier: None,
             last_msg_tier: None,
             work_tick: 0,
@@ -3448,6 +3585,7 @@ impl Engine {
             // Seeded from the callsign so two stations do not share a draw
             // sequence; the percentage is applied from settings on each decision.
             beacon_sched: tempo_core::beacon::BeaconScheduler::new(0, 0x5EED),
+            beacon_txline_slot: None,
             beacon_decided_slot: None,
             beacon_tx_this_slot: false,
             chat_cq: false,
@@ -3586,6 +3724,23 @@ impl Engine {
             rtty_keyer_error: None,
             rtty_seq: None,
             rtty_auto_over: false,
+            psk_armed: false,
+            psk_auto_arm_declined: false,
+            psk_audio: Vec::new(),
+            psk_chars: VecDeque::new(),
+            psk_afc_hz: 0.0,
+            psk_signal: false,
+            psk_afc_reset: false,
+            psk_center: None,
+            psk_mode: tempo_core::psk::PskModeKind::Bpsk31,
+            psk_reverse: false,
+            psk_queue: VecDeque::new(),
+            psk_abort: false,
+            psk_latched: false,
+            psk_type_buf: VecDeque::new(),
+            psk_latch_start_ms: None,
+            psk_sending: false,
+            psk_keyer_error: None,
             aprs_arm: AprsArm::Off,
             aprs_stations: std::collections::HashMap::new(),
             aprs_uplink_queue: VecDeque::new(),
@@ -3747,10 +3902,18 @@ impl Engine {
 
     /// Apply new settings. A change of callsign/grid rebinds identity IN PLACE
     /// (preserving roster + conversations + the `*` band feed — see
-    /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place. The
-    /// operating mode returns to Chat.
-    /// Apply a settings FORM save. The live roster, routing, sat consent, blocked calls and the
-    /// active radio are kept from the engine — see `apply_settings_inner`.
+    /// [`AppState::set_identity`]); band/dial/Field-Day fields update in place.
+    ///
+    /// The operating mode is touched ONLY to reconcile Field Day with the
+    /// `fd_active` master switch — a contact in flight survives a save and stays
+    /// loggable (#100). Still heavyweight in every other respect: the TX gate
+    /// generation bumps and the TX/broadcast queues are cleared, so a save is
+    /// never the way to persist one field (see [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
+    /// and the other narrow setters — #54).
+    ///
+    /// A FORM SAVE keeps the live roster, routing, sat consent, blocked calls and the active
+    /// radio from the engine — see `apply_settings_inner`. A RESTORE does the opposite and takes
+    /// the bundle's; that is `apply_restored_settings`, and the two must never be the same call.
     pub fn apply_settings(&mut self, s: Settings) {
         self.apply_settings_inner(s, true);
     }
@@ -3945,10 +4108,23 @@ impl Engine {
         self.hold_tx_freq = self.settings.hold_tx_freq;
         // A settings save reconciles the operating mode with the Field Day
         // master switch `fd_active`, which is authoritative over whether the
-        // engine operates in Field Day (spec §1). apply_settings is heavyweight
-        // — it resets the mode to Chat and clears the TX queue — so this is the
-        // one place a save re-enters (or leaves) FD to keep it in step with the
-        // master.
+        // engine operates in Field Day (spec §1). This is the one place a save
+        // re-enters (or leaves) FD to keep it in step with the master.
+        //
+        // ⭐ #100 (kr4fqg, "Lost logging when in Settings and FT8 completes a
+        // call"): this reconcile is the ONLY reason `apply_settings` touches the
+        // operating mode, and it used to write `mode = Mode::Chat` on EVERY save
+        // — on the stated belief that "a QSO is transient". It is not. The
+        // `Mode::Qso` variant OWNS the contact: the sequencer, the DX call, the
+        // received report. Throwing it away mid-contact meant the completion
+        // never fired (no auto-log, no `pending_log`) and the manual Log button
+        // then fell through `log_current_qso`'s `_ => return false` — so a save
+        // pressed while a contact was on the air lost it three ways at once.
+        // The distinction is now explicit: this reset fires when Field Day is
+        // being ENTERED or LEFT, and never as collateral on a live contact. It
+        // is deliberately NOT the whole of the heavyweight save — the TX gate
+        // generation still bumps and the TX/broadcast queues are still cleared
+        // below, so no over planned before the save can key after it.
         if self.settings.fd_active {
             // Master ON. PRESERVE an already-active FD session in place: the
             // Mode::FieldDay variant carries the whole dupe-checked contest log
@@ -3957,28 +4133,34 @@ impl Engine {
             // other live copy). The FD panel saves settings on every bonus-
             // checkbox toggle, so this preservation is load-bearing. If NOT yet
             // in FD, this save turned the master on (or followed a mode change):
-            // reset the heavyweight state, then enter passive S&P so every
-            // cockpit goes FD-aware — but only once class + section are set
-            // (else `restore_field_day_if_enabled` leaves Chat so the UI can
-            // prompt for them; the exchange goes on the air and `set_mode`
-            // refuses a blank one).
-            if !matches!(self.mode, Mode::FieldDay { .. }) {
-                self.mode = Mode::Chat;
-                self.cq_running = false;
-                self.restore_field_day_if_enabled();
-            }
-        } else {
-            // Master OFF. Field Day must be fully EXITED — reset to Chat
-            // regardless of the current mode. This closes the gap (spec §1.3)
-            // where flipping the master off left a lingering Mode::FieldDay, so
-            // the operator was stranded in FD with the nav hidden. The durable
-            // journal (written per contact) restores the log on the next
-            // re-enable. Every non-FD mode is likewise safe to reset — Chat
-            // holds nothing, a QSO is transient.
+            // enter passive S&P so every cockpit goes FD-aware — but only once
+            // class + section are set (the exchange goes on the air and
+            // `set_mode` refuses a blank one).
+            //
+            // `set_mode("fieldday-sp")` REPLACES the mode wholesale and clears
+            // cq_running/the queues itself, so the old `mode = Mode::Chat` here
+            // was redundant on the success path — and on the failure path (blank
+            // class/section) it reset the operator to Chat for an entry that
+            // never happened. That is the #100 teardown again, on a save that
+            // changed nothing about Field Day: with the master left on and no
+            // exchange filled in, EVERY save killed the contact in flight.
+            self.restore_field_day_if_enabled();
+        } else if matches!(self.mode, Mode::FieldDay { .. }) {
+            // Master OFF while IN Field Day. FD must be fully EXITED — reset to
+            // Chat. This closes the gap (spec §1.3) where flipping the master
+            // off left a lingering Mode::FieldDay, so the operator was stranded
+            // in FD with the nav hidden. The durable journal (written per
+            // contact) restores the log on the next re-enable.
+            //
+            // Gated on actually being in FD (#100): a save made in Chat wrote
+            // Chat — a no-op — and a save made mid-QSO wrote away the contact.
+            // Only the FD exit ever needed this line.
             self.mode = Mode::Chat;
-            // Clear the CQ-run flag alongside the mode reset — otherwise a save
-            // that drops out of a QSO run leaves `cq_running` stale-true, which
-            // suppresses the smart auto-cycle on the next chat answer.
+            // Clear the CQ-run flag alongside the mode reset — a Field Day RUN
+            // sets it, and leaving it stale-true after the exit suppresses the
+            // smart auto-cycle on the next chat answer. Scoped to the reset for
+            // the same reason: outside an FD exit the flag belongs to the run
+            // that is still going.
             self.cq_running = false;
         }
         // A save carries a `band` field; now that the Field Day log survives a
@@ -4040,6 +4222,10 @@ impl Engine {
     /// non-blank class + section (the exchange goes on the air; `set_mode`
     /// refuses a blank one) and the engine is not already in FD (never rebuild a
     /// live in-memory FD log).
+    ///
+    /// A no-op leaves the operating mode EXACTLY as it was — load-bearing since
+    /// #100: `apply_settings` calls this on every save with the master on, so a
+    /// master left on with a blank exchange must not disturb a contact in flight.
     pub fn restore_field_day_if_enabled(&mut self) {
         if self.settings.fd_active
             && !self.settings.fd_class.trim().is_empty()
@@ -4171,6 +4357,23 @@ impl Engine {
         if id == self.settings.active_radio || !self.settings.radios.iter().any(|p| p.id == id) {
             return;
         }
+        // THE CONTEXT EVERY OTHER LINE IS READ AGAINST. Past the no-op guard above, so this is
+        // a real transition and fires once per operator action — never on a timer.
+        let from = self
+            .settings
+            .radios
+            .iter()
+            .find(|p| p.id == self.settings.active_radio)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("radio {}", self.settings.active_radio));
+        let to = self
+            .settings
+            .radios
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| format!("radio {id}"));
+        tempo_core::applog::info("radio", &format!("active radio {from} → {to}"));
         // Switching rigs leaves the APRS FM-simplex context (the new radio has its own band/mode).
         // The band-gate in `rig_mode_effective` already prevents an FM leak onto a non-2 m band;
         // this clears the flag outright so it never lingers pointed at a different radio.
@@ -4213,7 +4416,7 @@ impl Engine {
         // (see `halt_tx_for_context_change`). EVERY path that changes the active radio — band
         // routing, satellite routing, the coverage fallback, the operator's own radio button —
         // arrives here, so this one line covers all of them.
-        self.halt_tx_for_context_change();
+        self.halt_tx_for_context_change("radio handoff");
         // …and exactly like a QSY, take the queued split one-shot
         // (`set_frequency` / `observe_rig_freq` do the identical three lines).
         // A pending split was authorized against the OUTGOING radio — for the
@@ -4413,6 +4616,22 @@ impl Engine {
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
+        // Band transitions only. The dial itself moves constantly (RIT, a click on the
+        // waterfall, Doppler on a pass) and logging THAT would be per-tick noise; the band is
+        // what a reader needs to make sense of the lines under it.
+        if !band.is_empty() && band != self.settings.band {
+            tempo_core::applog::info(
+                "band",
+                &format!(
+                    "{} → {band} ({dial_mhz:.6} MHz {mode}, {origin:?})",
+                    if self.settings.band.is_empty() {
+                        "off-band"
+                    } else {
+                        &self.settings.band
+                    }
+                ),
+            );
+        }
         // #35 instrumentation: every dial REQUEST with its provenance (stderr; the
         // operator-visible half is the service loop's dial→rig Connections-log notes).
         eprintln!("tempo: dial request: {dial_mhz:.4} MHz ({band} {mode}, {origin:?})");
@@ -4546,9 +4765,9 @@ impl Engine {
             // and no in-section control to re-arm with, so the operator keeps the mic
             // they were already holding (see `halt_tx_for_context_change`) — Digital
             // is untouched, which is what the paragraph above is about.
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("band change");
         } else if leaving_the_bands {
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("tuned off the ham bands");
         }
         // A band change drops the transient mode override, so a QSY re-asserts the auto sideband
         // (LSB <10 MHz / USB above) — "manual mode, but don't impede band auto-select".
@@ -4712,7 +4931,7 @@ impl Engine {
                 modes::reset_ft8_a7();
                 // Context halt, exactly like the app-commanded band change above: spinning
                 // the rig's own VFO across a band edge must not take the operator's mic away.
-                self.halt_tx_for_context_change();
+                self.halt_tx_for_context_change("band change at the rig");
                 self.clear_cw_decode(); // stale CW copy across a cross-band knob QSY
                                         // A knob QSY across bands drops the transient mode override too, exactly like an
                                         // app-commanded band change (set_frequency) — so the tooltip's "until you change
@@ -4756,7 +4975,7 @@ impl Engine {
             // paired check. (`context_band_changed` above has already banked the band being
             // left; all that remains here is to blank the label and cut transmit.)
             self.settings.band = String::new();
-            self.halt_tx_for_context_change();
+            self.halt_tx_for_context_change("tuned off the ham bands at the rig");
         }
         // Declare the knob's provenance after the band write, so whichever answer it is
         // names the cell the dial landed in. The hand on the knob is always the operator's,
@@ -4839,6 +5058,26 @@ impl Engine {
     /// rig state when the CAT breaker trips.
     pub fn set_rig_confirmed(&mut self, confirmed: bool) {
         self.rig_confirmed = confirmed;
+    }
+
+    /// Native Flex DAX audio just started or stopped carrying TRANSMIT audio.
+    ///
+    /// ⚠️ WHY THIS IS STATE AND NOT A SETTING READ-BACK (2026-08-17 Flex audit, critic gap
+    /// #6 — "the phone operator's microphone"). Starting native DAX sends
+    /// `transmit set dax=1`, which is a **radio-wide** setting: for as long as it stands the
+    /// Flex's modulator takes its audio from DAX and IGNORES the physical mic, on every
+    /// slice, in every client, including SmartSDR's own MOX. So an operator who turned
+    /// native audio on for FT8 and then picks up the mic for an SSB contact transmits
+    /// silence, and nothing anywhere says why.
+    ///
+    /// The `flex_native_audio` SETTING is not the same fact and must not be substituted: the
+    /// toggle can be on while no worker exists (no radio address, a failed start), and the
+    /// worker can be torn down by RX starvation — in both cases `transmit set dax=1` is not
+    /// standing and the mic is fine. This mirrors the TX tee actually installed in the audio
+    /// backend, which is exactly the condition. Display-only: it gates nothing and keys
+    /// nothing.
+    pub fn observe_flex_dax_tx(&mut self, on: bool) {
+        self.flex_dax_tx = on;
     }
 
     // --- Dual-radio: per-radio live read-back from the monitor thread (NON-active radios only) ---
@@ -4969,6 +5208,12 @@ impl Engine {
                 .into_iter()
                 .find(|c| c.band == band)
                 .filter(|c| self.rtty_emission_ok(c.dial_mhz))
+                .map(|c| (c.dial_mhz, c.mode)),
+            // Keyboard (PSK31): the band's PSK watering hole, same rule.
+            OperatingMode::Keyboard => crate::bandplan::psk_band_plan()
+                .into_iter()
+                .find(|c| c.band == band)
+                .filter(|c| self.psk_emission_ok(c.dial_mhz))
                 .map(|c| (c.dial_mhz, c.mode)),
         }
     }
@@ -5111,6 +5356,11 @@ impl Engine {
                 .find(|c| c.band == band)
                 .filter(|c| self.rtty_emission_ok(c.dial_mhz))
                 .map(|c| (c.dial_mhz, c.mode)),
+            OperatingMode::Keyboard => crate::bandplan::psk_band_plan()
+                .into_iter()
+                .find(|c| c.band == band)
+                .filter(|c| self.psk_emission_ok(c.dial_mhz))
+                .map(|c| (c.dial_mhz, c.mode)),
         }
     }
 
@@ -5135,6 +5385,7 @@ impl Engine {
             Some("phone") => OperatingMode::Phone,
             Some("cw") => OperatingMode::Cw,
             Some("rtty") => OperatingMode::Rtty,
+            Some("keyboard") | Some("psk") => OperatingMode::Keyboard,
             Some(_) => OperatingMode::Digital,
             None => self.settings.operating_mode,
         };
@@ -5206,6 +5457,7 @@ impl Engine {
             "phone" => OperatingMode::Phone,
             "cw" => OperatingMode::Cw,
             "rtty" => OperatingMode::Rtty,
+            "keyboard" => OperatingMode::Keyboard,
             _ => OperatingMode::Digital,
         };
         // A mode change invalidates any planned over (commit_tx checks the generation).
@@ -5217,6 +5469,25 @@ impl Engine {
         // The per-tick predicate in `poll_rtty_stream` catches this too; this is
         // the explicit half, so the kill does not depend on a tick arriving.
         self.drop_rtty_latch();
+        // …and PSK's, for the identical reason.
+        self.drop_psk_latch();
+        // The other half of the context pair (see the tier line): which section the operator is
+        // in decides what every transmit, CAT and audio line beneath it means. Logged only when
+        // it CHANGES — this method is re-asserted on every view entry, and a line per re-assert
+        // would be exactly the timer-driven noise the strategy forbids.
+        if self.settings.operating_mode != om {
+            tempo_core::applog::info(
+                "mode",
+                &format!("section {:?} → {:?}", self.settings.operating_mode, om),
+            );
+        }
+        let left_a_manual_mode = matches!(
+            self.settings.operating_mode,
+            OperatingMode::Phone
+                | OperatingMode::Cw
+                | OperatingMode::Rtty
+                | OperatingMode::Keyboard
+        );
         self.settings.operating_mode = om;
         // SAFETY re-clamp: entering a mode with a lower power ceiling (SSB → FT8) must bring the
         // rig DOWN to the cap now, not wait for the operator to touch the power slider. If a cap
@@ -5247,6 +5518,7 @@ impl Engine {
         // side, the new section names the form (Digital → PKTUSB/PKTLSB, CW → CW/CWR,
         // Phone → the bird's sideband) via `rig_mode_effective`'s existing arms. This is
         // exactly the behavior the same-mode re-entry (`follow_freq = false`) always had.
+        let mut re_homed = false;
         if follow_freq && self.sat_dial_owner.is_none() {
             let band = self.settings.band.clone();
             if let Some((dial, sideband)) = self
@@ -5254,7 +5526,53 @@ impl Engine {
                 .or_else(|| self.mode_home(om))
             {
                 self.set_frequency(dial, &band, &sideband); // also flags immediate_retune
+                re_homed = true;
             }
+        }
+        // ⭐ THE DIGITAL SECTION RE-DERIVES ITS SIDE EVEN WHEN IT DOES NOT QSY —
+        // ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
+        //
+        // `settings.sideband` is written VERBATIM by every QSY (`tune_dial`), so it names
+        // the channel of whichever section wrote it last — and the RTTY and SSTV plans are
+        // LSB on every HF band. Digital is the ONE section whose policy reads that field
+        // DIRECTLY (`Settings::rig_mode`: an FT dial's side is a property of the CHANNEL,
+        // not of the band convention, so 40 m FT8 is USB where the band would say LSB), so
+        // a stale LSB commands PKTLSB — Yaesu DATA-L, Flex DIGL — on a USB-side channel.
+        // It is the same class as the 20 m DATA-L report that `sstv_tune` exists for: a
+        // section entry that asserts nothing leaves the section being LEFT in charge.
+        //
+        // The re-home above was the only thing that ever corrected it, and it is gated on
+        // `follow_freq` — which BOTH clicks on the reported path leave false. The UI's
+        // Tempo (chat) view maps to this section but is not one of the views it re-homes
+        // for, and entering it still records the section as entered, so the later click
+        // into the FT cockpit is not a mode CHANGE either. The DOUBLE-click is only what
+        // makes it visible: `set_tx_enabled(true)` arms `immediate_retune`, which re-pushes
+        // the commanded mode over the operator's manual DIGU correction.
+        //
+        // LSB is the only value that can be wrong here, and the only one corrected: the
+        // Digital arm already maps every non-LSB word (including empty/garbled) to PKTUSB,
+        // no tier's band plan has an LSB channel (pinned in `bandplan.rs`), and leaving the
+        // others alone keeps `tune_dial`'s FM-family hop test reading the channel word it
+        // was actually written from. A HELD PASS keeps its side for the same reason the QSY
+        // above stands down: the BIRD names it, from the transponder record, and
+        // `rig_mode_effective`'s linear arm answers without ever reading this field.
+        //
+        // ⚠️ NEEDS-BENCH — this changes the MODE word commanded over CAT for the FT modes.
+        // Its blast radius is bounded by never widening a privilege: the corrected side
+        // moves the judged emission from `dial - offset` to `dial + offset`
+        // (`emission_allowed`), which is the passband the operator is actually keying, and
+        // the same field feeds the logged on-air frequency and the TX-gate stamp — all
+        // three now agree with the DATA submode being commanded instead of contradicting it.
+        if om == OperatingMode::Digital
+            && !re_homed
+            && self.sat_dial_owner.is_none()
+            && self.settings.sideband.eq_ignore_ascii_case("LSB")
+        {
+            self.settings.sideband = "USB".to_string();
+            // Keep the app's mirror in step, as every other writer of this field does — the
+            // two copies feeding one display is how a cockpit comes to disagree with the rig.
+            let (dial, band) = (self.settings.dial_mhz, self.settings.band.clone());
+            self.app.set_radio(dial, &band, "USB");
         }
         // Re-assert the rig mode now even if the dial didn't change (e.g. picking CW while
         // already on a CW freq must still command CW, not wait for a dial change).
@@ -5268,9 +5586,39 @@ impl Engine {
         // never auto-keys FT8 on launch — the safety invariant.)
         if matches!(
             om,
-            OperatingMode::Phone | OperatingMode::Cw | OperatingMode::Rtty
+            OperatingMode::Phone
+                | OperatingMode::Cw
+                | OperatingMode::Rtty
+                | OperatingMode::Keyboard
         ) {
             self.set_tx_enabled(true);
+        } else if left_a_manual_mode {
+            // …AND DISARM ON THE WAY BACK. Field incident 2026-08-19: PSK31 → FT8 → pick 20 m
+            // → "it started transmitting on its own". Arming above had no counterpart, so an
+            // operator who used a manual mode arrived in the FT8 cockpit with the transmitter
+            // still armed from it — and in FT8 an armed latch is what turns a station
+            // selection into an immediate over. The invariant the comment above claims ("the
+            // app never auto-keys FT8") held at LAUNCH and nowhere else.
+            //
+            // Deliberately narrow: only the transition OUT of a manual mode disarms. A
+            // digital → digital re-assert (the FT8/FT4 sub-mode click, which routes through
+            // here with follow_freq=false) must not drop the latch under an operator who
+            // armed it here and is working someone. Nothing else in this method turns TX ON,
+            // so this is the only arm that needs undoing.
+            //
+            // ⚠️ NOT through `set_tx_enabled(false)`, and that is not a shortcut skipped. That
+            // path carries TX-OFF's semantics — it clears the CW, RTTY and PSK queues and arms
+            // their aborts — and a section change is not an operator pressing TX Off. A manual
+            // mode's queued over is HELD across a section change and keys when the operator
+            // returns to it; `rtty_and_ft8_sequencers_never_key_together` pins exactly that,
+            // and it went red when this was first written the blunt way. So: lower the latch,
+            // bump the gate generation (an over planned while armed must not commit), and
+            // nothing else. One bit changes, and it is the operator's.
+            if self.tx_enabled {
+                tempo_core::applog::info("tx", "transmit disarmed by leaving a manual mode");
+            }
+            self.tx_enabled = false;
+            self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         }
     }
 
@@ -5755,7 +6103,9 @@ impl Engine {
         match self.settings.operating_mode {
             OperatingMode::Cw => RouteMode::Cw,
             OperatingMode::Rtty => RouteMode::Rtty,
-            OperatingMode::Digital => RouteMode::Digital,
+            // Keyboard modes route as Digital: soundcard audio through a DATA
+            // submode (always PKTUSB terrestrially) — the same radio class.
+            OperatingMode::Digital | OperatingMode::Keyboard => RouteMode::Digital,
             // SSTV rides the Phone section, so it routes as SSB — see `RouteMode`'s note on why it
             // is not its own class.
             // The cockpit's explicit mode pick (no dial gate, same-band only) and the
@@ -5937,6 +6287,7 @@ impl Engine {
             // the operator re-enters the mode (a band/contact switch). CW is manual keying: hitting
             // the key must always transmit (privilege permitting — tx_allowed still gates). FT8 is
             // unaffected: it never calls send_cw and keeps its Monitor/double-click keying gate.
+            tempo_core::applog::info("tx", &format!("CW over queued: {expanded:?}"));
             self.tx_enabled = true;
             // A fresh send supersedes BOTH pending one-shot aborts: the CW abort, and the
             // radio loop's mid-over cut. `send_cw` is the only self-re-arming transmit
@@ -6582,6 +6933,10 @@ impl Engine {
     /// any still-pending message (one voice over at a time).
     pub fn send_voice(&mut self, samples: Vec<f32>) {
         if self.tx_enabled && self.tx_allowed() && !samples.is_empty() {
+            tempo_core::applog::info(
+                "tx",
+                &format!("voice-keyer over queued: {} samples", samples.len()),
+            );
             self.voice_tx = Some(samples);
         }
     }
@@ -7044,6 +7399,23 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // One line per contact — the event behind "my log is missing a QSO". Bounded by
+        // contacts, which is bounded by the operator: a busy hour is a few dozen lines, and a
+        // quiet one is none. Nothing here is on a timer.
+        tempo_core::applog::info(
+            "logbook",
+            &format!(
+                "QSO logged: {} on {} {} at {:.6} MHz",
+                if rec.call.trim().is_empty() {
+                    "(no call)"
+                } else {
+                    rec.call.trim()
+                },
+                rec.band,
+                rec.mode,
+                rec.freq_mhz
+            ),
+        );
         // THE SATELLITE STAMP, rebuilt (2026-08-10) with the three guards whose absence
         // got the 0.24-era stamp removed — the removal notice that used to live here was
         // this block's design brief:
@@ -8003,6 +8375,20 @@ impl Engine {
     /// free-text frames so they don't double / show "A13DE KD9TAW".)
     fn record_own_tx(&mut self, text: String) {
         const OWN_TX_RING: usize = 30;
+        // Diagnostic trace. An operator reported (2026-08-18) their own calls not appearing in
+        // the Rx-Frequency pane on one band and appearing after a QSY — an intermittent nobody
+        // can reproduce from the code, and the pane's own filters were cleared of it (`mine`
+        // rows bypass the frequency test and every optional hide). This line and the two
+        // `cleared` ones below are the pair that settles it from a log: an over that was
+        // recorded and never rendered is a UI fault; an over that was recorded and then wiped
+        // names the wiper.
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "over recorded: {:?} at {} Hz",
+                text, self.tx_offset_hz as i32
+            ),
+        );
         self.own_tx.push_back(OwnTx {
             text,
             freq_hz: self.tx_offset_hz,
@@ -8135,6 +8521,9 @@ impl Engine {
         self.app.inbox.roster.clear();
         // Captured BEFORE the swap: the halt below asks what we are LEAVING.
         let from = self.app.tier();
+        // A real transition (the no-op guard above already returned). State TRANSITIONS are
+        // logged; current state never is, and nothing here is on a timer.
+        tempo_core::applog::info("mode", &format!("tier {:?} → {:?}", self.app.tier(), tier));
         self.app.set_tier(tier);
         // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
         //
@@ -8393,6 +8782,13 @@ impl Engine {
         // Stop transmitting AND stay stopped: disable TX so the auto-sequencer
         // doesn't immediately re-arm on the next slot (WSJT-X "Halt Tx" also
         // unchecks Enable Tx). Drop any tune carrier and queued audio too.
+        //
+        // Logged here rather than through `set_tx_enabled` because this writes the latch
+        // directly — and a halt that does not stick is exactly the shape under investigation,
+        // so the trace must show the halt as well as whatever re-arms after it.
+        if self.tx_enabled && !self.quiet_tx_log {
+            tempo_core::applog::info("tx", "transmit disarmed by halt");
+        }
         self.tx_enabled = false;
         // Halt is the IMMEDIATE kill: arm the one-shot the radio loop consumes to
         // cut a slot over in flight (drop PTT + flush). A plain TX-disable
@@ -8426,6 +8822,11 @@ impl Engine {
         self.rtty_queue.clear();
         self.rtty_abort = true;
         self.drop_rtty_latch();
+        // Cut any in-progress PSK the same way — queue, one-shot abort, and the
+        // continuous-TX latch (a halt that left it up would unkey and re-key).
+        self.psk_queue.clear();
+        self.psk_abort = true;
+        self.drop_psk_latch();
         self.aprs_tx_queue.clear(); // drop any queued APRS beacon so Stop TX cancels it
         self.voice_tx = None; // drop any queued voice-keyer audio too
                               // Cut any in-progress SSTV image the same way: drop the queued job and arm the
@@ -8485,15 +8886,38 @@ impl Engine {
     /// engine now says "key" during windows where the radio loop is holding a `Rig` that is
     /// not the operator's radio — a deferred dual-radio handoff, the Test-CAT port hold. The
     /// cleared latch used to mask those; `RadioLoop::may_key` is what stops them now.
-    pub fn halt_tx_for_context_change(&mut self) {
+    pub fn halt_tx_for_context_change(&mut self, why: &str) {
         use crate::settings::OperatingMode;
+        // ONE EVENT, ONE LINE. This method halts and then puts the operator's arm switch back,
+        // and logging those two steps separately made a routine QSY read as a fight in the file
+        // — "transmit disarmed by halt" and "transmit ARMED by …:8713" in the same second, with
+        // nothing saying what changed (operator, 2026-08-19). The steps below stay silent (see
+        // the `quiet` guard) and this says what actually happened, with its cause.
+        let was = self.tx_enabled;
         let restore = self.tx_enabled
             && matches!(
                 self.settings.operating_mode,
-                OperatingMode::Phone | OperatingMode::Cw | OperatingMode::Rtty
+                OperatingMode::Phone
+                    | OperatingMode::Cw
+                    | OperatingMode::Rtty
+                    | OperatingMode::Keyboard
             );
         let (retune, watchdog_start) = (self.immediate_retune, self.tx_watchdog_start);
+        // ⚠️ QUIET THROUGH THE RESTORE TOO, not just the halt. The first version cleared this
+        // before the `if restore` below, so a context change still printed TWO lines — the
+        // collapsed one and then `transmit ARMED by …:8798` from the restore's own
+        // `set_tx_enabled`. Visible in an operator's DEBUG-mode log, 2026-08-19, which is the
+        // second time this same pair has been logged as its steps.
+        self.quiet_tx_log = true;
         self.halt_tx();
+        tempo_core::applog::info(
+            "tx",
+            &match (was, restore) {
+                (false, _) => format!("{why}: transmit was already off"),
+                (true, true) => format!("{why}: transmit halted and re-armed (manual mode)"),
+                (true, false) => format!("{why}: transmit halted and left off"),
+            },
+        );
         if restore {
             self.set_tx_enabled(true);
             self.immediate_retune = retune;
@@ -8502,6 +8926,7 @@ impl Engine {
             // the arm above, which clears it.
             self.broker_context_hold = true;
         }
+        self.quiet_tx_log = false;
     }
 
     /// Enable/disable normal slot TX. `false` = Monitor-off (transmit muted):
@@ -8636,7 +9061,27 @@ impl Engine {
         }
     }
 
+    #[track_caller]
     pub fn set_tx_enabled(&mut self, on: bool) {
+        // WHO ARMED IT. Field incident 2026-08-19: the operator halted twice and an over went
+        // out 45 s later, so something re-armed — and no amount of reading named it, because
+        // every arm path funnels through here from a dozen call sites. `#[track_caller]` makes
+        // the LOG name it: one line per transition, carrying the file:line of whoever asked.
+        // Transitions only (an idempotent re-arm is silent), so this is a handful of lines a
+        // session, and the whole point is that the next report arrives with its cause attached.
+        let was = self.tx_enabled;
+        if was != on && !self.quiet_tx_log {
+            let at = std::panic::Location::caller();
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "transmit {} by {}:{}",
+                    if on { "ARMED" } else { "disarmed" },
+                    at.file(),
+                    at.line()
+                ),
+            );
+        }
         // BACKSTOP for the receive-only tiers. Every arm path funnels here, so this
         // is where "armed but unable to transmit" is made unrepresentable — the UI
         // reads `tx_enabled`, so letting it latch true is exactly what made the app
@@ -8702,6 +9147,11 @@ impl Engine {
             self.rtty_queue.clear();
             self.rtty_abort = true;
             self.drop_rtty_latch();
+            // Same for PSK: the TX-enable latch is one of the PSK cockpit's
+            // stop controls for exactly RTTY's reason.
+            self.psk_queue.clear();
+            self.psk_abort = true;
+            self.drop_psk_latch();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -10354,6 +10804,13 @@ impl Engine {
                 self.rtty_audio.drain(0..drop);
             }
         }
+        if self.psk_armed {
+            self.psk_audio.extend_from_slice(samples);
+            if self.psk_audio.len() > RX_TAP_CAP {
+                let drop = self.psk_audio.len() - RX_TAP_CAP;
+                self.psk_audio.drain(0..drop);
+            }
+        }
         if self.aprs_arm.is_armed() {
             self.aprs_audio.extend_from_slice(samples);
             if self.aprs_audio.len() > RX_TAP_CAP {
@@ -11128,6 +11585,10 @@ impl Engine {
             // first chunk has been keyed and `rtty_sending` stamped — otherwise a
             // tune, a beacon or a voice message could grab the rig in that gap.
             Some(TxOwner::Rtty)
+        } else if self.psk_sending || !self.psk_queue.is_empty() || self.psk_streaming() {
+            // The same latch rule for PSK: streaming owns the transmitter from
+            // the instant TX is pressed, before the first chunk keys.
+            Some(TxOwner::Psk)
         } else if self.sstv_tx.is_some() || self.sstv_sending {
             Some(TxOwner::Sstv)
         } else {
@@ -11244,6 +11705,462 @@ impl Engine {
         self.rtty_center = Some(hz.clamp(300.0, 3700.0));
         // Rebuild the demod around the new center (zeros AFC + arms the reset).
         self.request_rtty_afc_reset();
+    }
+
+    // --- PSK31 RX (armed decoder on the RX audio path; decode runs in the
+    // tempo-audio `pskrx` thread). RX ONLY — nothing in this block can key the
+    // rig; the TX path is the psk_* TX block above, behind its own gates. ---
+
+    /// Arm/disarm the PSK31 RX decoder by an EXPLICIT operator act. Session-only
+    /// (never persisted, so the app never launches armed). Arming starts a fresh
+    /// transcript; disarming keeps the transcript readable, stops the audio tap
+    /// immediately, and is REMEMBERED for the session (the decline memory), so
+    /// re-entering the view cannot restart the decoder behind the operator.
+    pub fn set_psk_armed(&mut self, on: bool) {
+        if on && !self.psk_armed {
+            self.psk_chars.clear();
+            self.psk_afc_hz = 0.0;
+            self.psk_signal = false;
+        }
+        if on {
+            // An explicit Arm is the operator's LATEST decision, so it retires an
+            // earlier Stop — the SSTV lesson: without this, stop → arm → (any
+            // automatic disarm) left every later view entry silently refusing to
+            // start the receiver, the field bug one step removed.
+            self.psk_auto_arm_declined = false;
+        } else {
+            self.psk_audio.clear();
+            // An operator who stopped the decoder has made a decision. Remember
+            // it for the rest of the session.
+            self.psk_auto_arm_declined = true;
+        }
+        self.psk_armed = on;
+    }
+
+    /// Arm the decoder because the operator ENTERED the PSK view — the APRS/SSTV
+    /// auto-arm doctrine (operator ruling 2026-08-17): a receive screen with a
+    /// dead receiver is the field bug, so entry starts it. Returns whether this
+    /// call armed it.
+    ///
+    /// Only ever an upgrade from disarmed; refuses once the operator has
+    /// explicitly stopped the decoder this session, and refuses for good when
+    /// Settings ▸ Digital ▸ PSK ▸ "Start receiving when PSK opens" is off. The
+    /// policy lives here rather than in the view so it survives a remount and is
+    /// testable without a webview. RX ONLY — arming the decoder cannot key
+    /// anything (TX starts only from an explicit send behind `psk_tx_gate`).
+    pub fn psk_auto_arm(&mut self) -> bool {
+        if self.psk_armed || self.psk_auto_arm_declined || !self.settings.psk_rx_auto_arm {
+            return false;
+        }
+        self.psk_chars.clear();
+        self.psk_afc_hz = 0.0;
+        self.psk_signal = false;
+        self.psk_armed = true;
+        true
+    }
+
+    /// Whether the PSK RX decoder is armed (read by the decode thread's gate).
+    pub fn psk_armed(&self) -> bool {
+        self.psk_armed
+    }
+
+    /// Drain the armed PSK audio tap (12 kHz mono since the last take). The
+    /// decode thread calls this under a brief lock; the demod runs off-lock.
+    pub fn take_psk_audio(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.psk_audio)
+    }
+
+    /// Record what the decode thread just produced: decoded characters (ring,
+    /// capped), the live AFC correction, and whether the quality squelch reads
+    /// a signal.
+    pub fn push_psk_decode(
+        &mut self,
+        chars: &[tempo_core::textmode::DecodedChar],
+        afc_hz: f32,
+        signal: bool,
+    ) {
+        self.psk_chars.extend(chars.iter().copied());
+        while self.psk_chars.len() > PSK_TEXT_CAP {
+            self.psk_chars.pop_front();
+        }
+        self.psk_afc_hz = afc_hz;
+        self.psk_signal = signal;
+    }
+
+    /// The compact PSK state the UI polls (`get_psk_state`).
+    pub fn psk_state(&self) -> PskRxState {
+        PskRxState {
+            armed: self.psk_armed,
+            afc_hz: self.psk_afc_hz,
+            signal: self.psk_signal,
+            center_hz: self.psk_center_hz(),
+            mode: self.psk_mode,
+            reverse: self.psk_reverse,
+            text: self.psk_chars.iter().map(|c| c.ch).collect(),
+            conf: self
+                .psk_chars
+                .iter()
+                .map(|c| (c.confidence.clamp(0.0, 1.0) * 100.0).round() as u8)
+                .collect(),
+            // Sending = an over on the air (stamped by the loop) OR messages
+            // still queued OR the latched stream running (see RttyRxState).
+            sending: self.psk_sending || !self.psk_queue.is_empty() || self.psk_streaming(),
+            latched: self.psk_latched,
+            keyer_error: self.psk_keyer_error.clone(),
+        }
+    }
+
+    /// Clear the decoded-PSK transcript (the cockpit's Clear button). RX display
+    /// only — the demodulator keeps running.
+    pub fn psk_clear(&mut self) {
+        self.psk_chars.clear();
+    }
+
+    /// Request an RX demodulator rebuild (the cockpit's Re-acquire): the decode
+    /// thread drops its demod and builds a fresh one — a clean AFC pull from the
+    /// netted center. RX only.
+    pub fn request_psk_afc_reset(&mut self) {
+        self.psk_afc_reset = true;
+        self.psk_afc_hz = 0.0;
+        self.psk_signal = false;
+    }
+
+    /// Take + reset the one-shot demod-rebuild request (decode-thread only).
+    pub fn take_psk_afc_reset(&mut self) -> bool {
+        std::mem::take(&mut self.psk_afc_reset)
+    }
+
+    /// The audio center (Hz) the PSK demod nets around. Un-netted resolves to
+    /// the `PskConfig` default (the 1 kHz PSK31 convention) so the engine and
+    /// the demodulator can never disagree about where "un-netted" sits.
+    pub fn psk_center_hz(&self) -> f32 {
+        self.psk_center
+            .unwrap_or_else(|| tempo_core::psk::PskConfig::default().center_hz)
+    }
+
+    /// Net the PSK decoder onto a new audio center (Hz) — a waterfall click,
+    /// the single-signal click-to-tune (the CW/RTTY precedent). Clamps into the
+    /// audio passband, then rebuilds the demod around the new center. RX-only
+    /// decoder state, so this is safe during TX and needs no privilege gate.
+    pub fn psk_net(&mut self, hz: f32) {
+        self.psk_center = Some(hz.clamp(300.0, 3700.0));
+        self.request_psk_afc_reset();
+    }
+
+    /// The selected PSK sub-mode + QPSK sideband polarity — read per tick by
+    /// the RX decode thread and the radio loop's TX paths, so one field is
+    /// the truth for both directions.
+    pub fn psk_mode(&self) -> (tempo_core::psk::PskModeKind, bool) {
+        (self.psk_mode, self.psk_reverse)
+    }
+
+    /// Select the PSK sub-mode / sideband polarity — the cockpit's selector
+    /// and Reverse toggle. REFUSED while any PSK transmission is active (an
+    /// over keying, messages queued, or the latch streaming): a mid-over
+    /// switch would splice two modulations into one carrier and silently
+    /// garble the far end's copy — the operator stops first, deliberately.
+    /// A change re-acquires the RX demodulator on the new mode.
+    pub fn set_psk_mode(
+        &mut self,
+        mode: tempo_core::psk::PskModeKind,
+        reverse: bool,
+    ) -> Result<(), String> {
+        if (mode, reverse) == (self.psk_mode, self.psk_reverse) {
+            return Ok(());
+        }
+        if self.psk_sending || !self.psk_queue.is_empty() || self.psk_streaming() {
+            return Err("Stop the PSK transmission before switching modes".to_string());
+        }
+        self.psk_mode = mode;
+        self.psk_reverse = reverse;
+        self.request_psk_afc_reset();
+        Ok(())
+    }
+
+    // ----- PSK31 transmit (Keyboard Modes Phase 2) — the RTTY TX block's shape,
+    // instantiated over the shared `crate::keyboard` machinery: the latch, its
+    // per-tick gate re-check, the two wall clocks and the type-ahead all arrive
+    // from `KeyboardLatch`, NOT re-derived here. Launch-safety: nothing in this
+    // block runs on startup or on arm; the queue fills ONLY via `psk_send_text`
+    // and the latch only via `set_psk_latched`, each behind `psk_tx_gate`.
+    // Soundcard only — there is no PSK equivalent of RTTY's FSK keyline, so
+    // there is no line-conflict gate (Phase 0 left that gate RTTY-specific on
+    // purpose). -----
+
+    /// HARD CEILING on one continuous latched PSK over (ms) — PSK31's entry in
+    /// [`crate::keyboard::PSK31`], kept under its own name for the same reason
+    /// as [`Self::RTTY_MAX_LATCH_MS`]: it is what the ceiling is called
+    /// wherever it is discussed, and the tests pin the ENGINE's answer.
+    pub const PSK_MAX_LATCH_MS: u64 = crate::keyboard::PSK31.max_latch_ms;
+
+    /// Cap on a single queued PSK over (characters). Varicode characters
+    /// average ~8 wire bits (≈250 ms at 31.25 Bd) and the worst is 12, so 500
+    /// chars ≈ 2–3 minutes of air time — a single message can never key past
+    /// the 6-minute default watchdog on its own (`poll_psk_one` checks the
+    /// watchdog BETWEEN messages, exactly like RTTY's).
+    const PSK_MAX_SEND_CHARS: usize = 500;
+
+    /// Queue PSK31 text to transmit — every TX gate validated UP FRONT so a
+    /// refused send says why (never a silent hold): TX armed, the emission
+    /// inside license privileges at the current dial, the Keyboard section
+    /// owning the rig, no tune carrier, no foreign transmission. Text is
+    /// filtered to the varicode alphabet (full ASCII, case preserved), so
+    /// exactly what's queued is what keys. While continuous TX is latched a
+    /// send TYPES INTO the live transmission (the MMTTY/RTTY macro semantic).
+    pub fn psk_send_text(&mut self, text: &str) -> Result<(), String> {
+        self.psk_tx_gate()?;
+        let filtered = psk_filter(text);
+        if filtered.trim().is_empty() {
+            return Err("Nothing to send — PSK31 carries the ASCII characters".to_string());
+        }
+        if self.psk_latched {
+            return self.psk_type(&filtered);
+        }
+        if filtered.chars().count() > Self::PSK_MAX_SEND_CHARS {
+            return Err(format!(
+                "Message too long — PSK sends are capped at {} characters per over",
+                Self::PSK_MAX_SEND_CHARS
+            ));
+        }
+        // Manual-mode overs reach the diagnostic log too. Only the FT path recorded, so an
+        // operator who sent a PSK CQ and then reported an FT8 problem sent a log with a hole
+        // exactly where their own transmissions were ("it didnt actually log the psk move and
+        // the cq I sent on that mode", 2026-08-19). The trace is the same shape as the FT one:
+        // what went out, and on which mode.
+        tempo_core::applog::info("tx", &format!("PSK over queued: {filtered:?}"));
+        // An explicit operator send restarts the TX-watchdog clock.
+        self.reset_tx_watchdog();
+        self.psk_queue.push_back(filtered);
+        Ok(())
+    }
+
+    /// The up-front PSK TX gate: every reason a send would be refused, checked
+    /// before anything is queued so the operator learns WHY. Shared by the
+    /// manual send path and the continuous-TX latch.
+    fn psk_tx_gate(&self) -> Result<(), String> {
+        use crate::settings::OperatingMode;
+        if self.settings.operating_mode != OperatingMode::Keyboard {
+            return Err("Not in the PSK section — enter the PSK cockpit first".to_string());
+        }
+        if !self.tx_enabled {
+            return Err(
+                "TX is off — enable TX first (Stop TX / the watchdog disarmed it)".to_string(),
+            );
+        }
+        if !self.tx_allowed() {
+            return Err(
+                "TX locked — this frequency is outside your license privileges".to_string(),
+            );
+        }
+        // Ownership from the ONE arbiter — everything except PSK itself:
+        // sending while PSK transmits queues BEHIND the current over.
+        if let Some(owner) = self.tx_owner() {
+            if owner != TxOwner::Psk {
+                return Err(owner.busy_reason());
+            }
+        }
+        Ok(())
+    }
+
+    /// Stop PSK: drop everything queued and abort the over in progress — the
+    /// radio loop flushes the audio ring and unkeys PTT. The cockpit's Stop
+    /// button (`halt_tx` also does this).
+    pub fn psk_stop(&mut self) {
+        self.psk_queue.clear();
+        self.psk_abort = true;
+        // …and the PTT tail past psk_busy_until (see rtty_stop).
+        self.slot_tx_abort = true;
+        // …and continuous TX — the one PSK transmission with no precomputed
+        // end; without this the latch would key straight back up next tick.
+        self.drop_psk_latch();
+    }
+
+    /// Pop the next queued PSK MESSAGE for the radio loop to key, or `None`
+    /// while any TX gate is down (the queue is then HELD — nothing keys
+    /// unexpectedly). One message per call; the loop paces on the real
+    /// rendered duration. The wall-clock TX watchdog trips BEFORE handing a
+    /// message out, exactly as [`Self::poll_rtty_one`] does.
+    pub fn poll_psk_one(&mut self) -> Option<String> {
+        use crate::settings::OperatingMode;
+        if !self.tx_enabled
+            || !self.tx_allowed()
+            || self.tuning
+            || self.settings.operating_mode != OperatingMode::Keyboard
+            || self.psk_queue.is_empty()
+        {
+            return None;
+        }
+        let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
+        if limit_secs > 0 {
+            let now = now_unix_secs();
+            let start = *self.tx_watchdog_start.get_or_insert(now);
+            if now.saturating_sub(start) >= limit_secs {
+                self.tx_watchdog = true;
+                self.tx_enabled = false;
+                self.psk_queue.clear();
+                self.psk_abort = true;
+                self.slot_tx_abort = true;
+                return None;
+            }
+        }
+        self.psk_queue.pop_front()
+    }
+
+    /// Take + reset the one-shot PSK abort flag (the loop flushes queued audio
+    /// and unkeys).
+    pub fn take_psk_abort(&mut self) -> bool {
+        std::mem::take(&mut self.psk_abort)
+    }
+
+    /// Turn PSK continuous TX on/off — the cockpit's TX button. Same contract
+    /// as [`Self::set_rtty_latched`], minus the auto-sequencer exclusivity
+    /// (PSK has no sequencer): ON runs the full up-front gate and starts the
+    /// ceiling's clock; OFF lets what was typed drain, every gate still
+    /// re-checked per tick while it does. Not the emergency stop — Stop TX,
+    /// the Esc/Stop macro and the TX-enable latch cut instantly, and each of
+    /// them also drops this.
+    pub fn set_psk_latched(&mut self, on: bool) -> Result<(), String> {
+        if !on {
+            // Intent down; the typed buffer drains on the air, still under the
+            // ceiling (`psk_latch_start_ms` deliberately LEFT SET — see
+            // `KeyboardLatch::latch_off`).
+            self.psk_latch().latch_off();
+            return Ok(());
+        }
+        if self.psk_latched {
+            return Ok(()); // idempotent — re-latching must not restart the ceiling
+        }
+        self.psk_tx_gate()?;
+        let now = now_unix_millis();
+        self.psk_latch().latch_on(now);
+        // Keying up is an operator action, exactly like a send.
+        self.reset_tx_watchdog();
+        Ok(())
+    }
+
+    /// Whether continuous TX is latched (the cockpit's TX button state).
+    pub fn psk_latched(&self) -> bool {
+        self.psk_latched
+    }
+
+    /// The latched stream is running: latched, or the latch is down but what
+    /// was typed is still going out.
+    fn psk_streaming(&self) -> bool {
+        crate::keyboard::streaming(self.psk_latched, &self.psk_type_buf)
+    }
+
+    /// PSK31's instantiation of the shared keyboard-mode transmit machinery —
+    /// the borrowed view over PSK's three flat fields (the Phase 0 design:
+    /// the second mode adds its own three fields and this accessor, and there
+    /// is never a copy of a latch's state that can disagree with the latch).
+    fn psk_latch(&mut self) -> crate::keyboard::KeyboardLatch<'_> {
+        crate::keyboard::KeyboardLatch::new(
+            crate::keyboard::PSK31,
+            &mut self.psk_latched,
+            &mut self.psk_type_buf,
+            &mut self.psk_latch_start_ms,
+        )
+    }
+
+    /// Feed typed characters into the live transmission — varicode-filtered
+    /// exactly as a send is. Refused unless the latch is up (no path from a
+    /// keystroke to the transmitter that skips the TX button). A typed
+    /// character restarts the TX watchdog ([`Self::rtty_type`]'s rationale);
+    /// [`Self::PSK_MAX_LATCH_MS`] above it is what no keystroke can extend.
+    pub fn psk_type(&mut self, text: &str) -> Result<(), String> {
+        if !self.psk_latched {
+            return Err("Continuous TX is off — click TX first".to_string());
+        }
+        let filtered = psk_filter(text);
+        let typed = self.psk_latch().type_chars(&filtered);
+        if typed > 0 {
+            self.reset_tx_watchdog();
+        }
+        Ok(())
+    }
+
+    /// Drop the latch NOW: clear intent AND type-ahead, arm the aborts that
+    /// make the radio loop flush and unkey. Every kill path calls this;
+    /// the abort is conditional on a running stream for the same reason
+    /// [`Self::drop_rtty_latch`]'s is.
+    pub fn drop_psk_latch(&mut self) {
+        if self.psk_latch().drop_latch() {
+            self.psk_abort = true;
+            self.slot_tx_abort = true; // and the PTT tail (see psk_stop)
+        }
+    }
+
+    /// One radio-loop tick of the latched PSK stream — the ONLY path from the
+    /// latch to the transmitter. ⚠️ THE PER-TICK PREDICATE is
+    /// [`crate::keyboard::KeyboardLatch::tick`], shared gate-for-gate with
+    /// RTTY (its table lives on that method); what is PSK's here is only which
+    /// engine field answers each gate and what a drop means to this mode.
+    /// `Diddle` is the PSK31 idle — continuous reversals, never silence under
+    /// a held PTT (silence loses the far end's sync and reads as a dropout).
+    pub fn poll_psk_stream(&mut self, max_chars: usize) -> PskStreamTick {
+        use crate::keyboard::{KbDrop, KbGates};
+        use crate::settings::OperatingMode;
+        if !self.psk_streaming() {
+            return PskStreamTick::Idle;
+        }
+        let gates = KbGates {
+            tx_enabled: self.tx_enabled,
+            tx_allowed: self.tx_allowed(),
+            tuning: self.tuning,
+            in_section: self.settings.operating_mode == OperatingMode::Keyboard,
+            now_ms: now_unix_millis(),
+            now_secs: now_unix_secs(),
+            watchdog_limit_secs: self.settings.tx_watchdog_min as u64 * 60,
+            watchdog_start_secs: self.tx_watchdog_start,
+        };
+        let res = self.psk_latch().tick(gates, max_chars);
+        if let Some(start) = res.watchdog_start {
+            self.tx_watchdog_start = Some(start);
+        }
+        match res.drop {
+            None => res.tick,
+            Some(why) => {
+                if why == KbDrop::Watchdog {
+                    self.tx_watchdog = true;
+                    self.tx_enabled = false;
+                    self.psk_queue.clear();
+                }
+                self.drop_psk_latch();
+                if why == KbDrop::Ceiling {
+                    self.psk_keyer_error = Some(format!(
+                        "Continuous TX unkeyed at its {}-minute ceiling — click TX again to \
+                         carry on",
+                        Self::PSK_MAX_LATCH_MS / 60_000
+                    ));
+                }
+                res.tick
+            }
+        }
+    }
+
+    /// Stamp whether a PSK over is on the air (the radio loop's per-tick
+    /// truth; the cockpit's TX indicator).
+    pub fn set_psk_sending(&mut self, on: bool) {
+        self.psk_sending = on;
+    }
+
+    /// Surface (or clear) a PSK TX failure in the cockpit.
+    pub fn set_psk_keyer_error(&mut self, e: Option<String>) {
+        self.psk_keyer_error = e;
+    }
+
+    /// May the operator's class key the PSK31 EMISSION at `dial`? USB always
+    /// (the Keyboard section's convention), signal ~60 Hz wide at the tuned
+    /// audio offset above the dial — judge that one emission point through
+    /// the same model `tx_allowed` uses.
+    fn psk_emission_ok(&self, dial: f64) -> bool {
+        use crate::settings::OperatingMode;
+        let off = self.psk_center_hz() as f64 / 1_000_000.0;
+        crate::privileges::tx_allowed(
+            self.settings.license_class,
+            dial + off,
+            OperatingMode::Keyboard,
+        )
     }
 
     // ----- RTTY transmit — operator-initiated, mirroring the CW send path. -----
@@ -11370,6 +12287,7 @@ impl Engine {
                  per over"
             ));
         }
+        tempo_core::applog::info("tx", &format!("RTTY over queued: {up:?}"));
         // An explicit operator send restarts the TX-watchdog clock (see poll_rtty_one).
         if reset_watchdog {
             self.reset_tx_watchdog();
@@ -11480,12 +12398,23 @@ impl Engine {
     /// cannot see, because typing resets the watchdog (see `rtty_type`): a stuck
     /// key, an autorepeat, a wedged compose field. Mirrors [`MAX_TUNE_MS`]: a
     /// latched carrier gets a ceiling that no setting and no input can raise.
-    pub const RTTY_MAX_LATCH_MS: u64 = 10 * 60 * 1000;
+    ///
+    /// Now RTTY's entry in [`crate::keyboard::RTTY`], where every keyboard mode's
+    /// ceiling lives; kept here under its own name because it is what the ceiling
+    /// is called everywhere it is discussed.
+    pub const RTTY_MAX_LATCH_MS: u64 = crate::keyboard::RTTY.max_latch_ms;
 
     /// Cap on the un-keyed type-ahead buffer. A human types far slower than
     /// 45.45 baud drains (6.6 char/s), so this only bites a runaway producer —
     /// and it bounds how long a latch-off takes to drain.
-    const RTTY_TYPE_BUF_CAP: usize = 1000;
+    ///
+    /// The cap itself now lives on [`crate::keyboard::RTTY`] and is applied by
+    /// the shared type-ahead, so nothing outside the tests reads this name any
+    /// more — it is kept because it is what the cap is called wherever it is
+    /// discussed, and a test that names the mode descriptor instead would stop
+    /// pinning the engine's own answer.
+    #[allow(dead_code)]
+    const RTTY_TYPE_BUF_CAP: usize = crate::keyboard::RTTY.type_buf_cap;
 
     /// Turn continuous TX on/off — the cockpit's TX button.
     ///
@@ -11514,7 +12443,7 @@ impl Engine {
             // so the hard ceiling has to bound the whole keyed period and not just
             // the part with the operator's intent still up. `drop_rtty_latch` is
             // what clears it, together with everything else.
-            self.rtty_latched = false;
+            self.rtty_latch().latch_off();
             return Ok(());
         }
         if self.rtty_latched {
@@ -11532,8 +12461,8 @@ impl Engine {
                     .to_string(),
             );
         }
-        self.rtty_latched = true;
-        self.rtty_latch_start_ms = Some(now_unix_millis());
+        let now = now_unix_millis();
+        self.rtty_latch().latch_on(now);
         // Keying up is an operator action, exactly like a send: restart the
         // watchdog clock so the ceiling is measured from here.
         self.reset_tx_watchdog();
@@ -11548,7 +12477,24 @@ impl Engine {
     /// The latched stream is running: the operator is latched, or the latch is
     /// down but what they typed is still going out.
     fn rtty_streaming(&self) -> bool {
-        self.rtty_latched || !self.rtty_type_buf.is_empty()
+        crate::keyboard::streaming(self.rtty_latched, &self.rtty_type_buf)
+    }
+
+    /// RTTY's instantiation of the shared keyboard-mode transmit machinery — the
+    /// latch predicate, its two wall clocks and the type-ahead, written once in
+    /// [`crate::keyboard`] and borrowed over RTTY's three fields here.
+    ///
+    /// A borrowed view rather than an owned struct so the fields stay flat on the
+    /// Engine: the second keyboard mode adds its own three and its own accessor,
+    /// and there is never a copy of a latch's state that can disagree with the
+    /// latch.
+    fn rtty_latch(&mut self) -> crate::keyboard::KeyboardLatch<'_> {
+        crate::keyboard::KeyboardLatch::new(
+            crate::keyboard::RTTY,
+            &mut self.rtty_latched,
+            &mut self.rtty_type_buf,
+            &mut self.rtty_latch_start_ms,
+        )
     }
 
     /// Feed typed characters into the live transmission. Uppercased and filtered
@@ -11567,14 +12513,8 @@ impl Engine {
         if !self.rtty_latched {
             return Err("Continuous TX is off — click TX first".to_string());
         }
-        let mut typed = 0usize;
-        for c in rtty_filter(text).chars() {
-            if self.rtty_type_buf.len() >= Self::RTTY_TYPE_BUF_CAP {
-                break;
-            }
-            self.rtty_type_buf.push_back(c);
-            typed += 1;
-        }
+        let filtered = rtty_filter(text);
+        let typed = self.rtty_latch().type_chars(&filtered);
         if typed > 0 {
             self.reset_tx_watchdog();
         }
@@ -11590,11 +12530,7 @@ impl Engine {
     /// abort when nothing was streaming would cut an unrelated over riding the
     /// same PTT — the same care `set_tx_enabled(false)`'s RTTY arm takes).
     pub fn drop_rtty_latch(&mut self) {
-        let was_streaming = self.rtty_streaming();
-        self.rtty_latched = false;
-        self.rtty_latch_start_ms = None;
-        self.rtty_type_buf.clear();
-        if was_streaming {
+        if self.rtty_latch().drop_latch() {
             self.rtty_abort = true;
             self.slot_tx_abort = true; // and the PTT tail (see rtty_stop)
         }
@@ -11610,60 +12546,64 @@ impl Engine {
     /// the far end's decoder in sync and what an MMTTY operator hears. Silence
     /// under a held PTT would read as a dropout and lose the far end's clock.
     pub fn poll_rtty_stream(&mut self, max_chars: usize) -> RttyStreamTick {
+        use crate::keyboard::{KbDrop, KbGates};
         use crate::settings::OperatingMode;
+        // The fast path, and the predicate re-checks it: nothing is running, so
+        // there is nothing to gate and nothing to cut. Kept here so a quiet tick
+        // costs no clock read and no privilege lookup.
         if !self.rtty_streaming() {
             return RttyStreamTick::Idle;
         }
-        // ⚠️ THE PER-TICK PREDICATE. Every gate `rtty_tx_gate` checks before a
-        // send is re-checked here before every chunk, because a latch outlives
-        // the moment it was granted and the gates do not. `poll_rtty_one`'s
-        // equivalent gate merely HOLDS the queue; holding is not an option for a
-        // keyed transmitter, so each of these DROPS THE LATCH and unkeys.
-        if !self.tx_enabled
-            || !self.tx_allowed()
-            || self.tuning
-            || self.settings.operating_mode != OperatingMode::Rtty
-        {
-            self.drop_rtty_latch();
-            return RttyStreamTick::Idle;
+        // ⚠️ THE PER-TICK PREDICATE, and it is not written here — it is
+        // [`crate::keyboard::KeyboardLatch::tick`], shared by every keyboard
+        // mode, with the gate-for-gate table in its doc. Every gate
+        // `rtty_tx_gate` checks before a send is re-checked before every chunk,
+        // because a latch outlives the moment it was granted and the gates do
+        // not. `poll_rtty_one`'s equivalent gate merely HOLDS the queue; holding
+        // is not an option for a keyed transmitter, so each of these DROPS THE
+        // LATCH and unkeys.
+        //
+        // What stays here is only what is RTTY's: which engine field answers
+        // each gate, and what each drop means to this mode's transmitter.
+        let gates = KbGates {
+            tx_enabled: self.tx_enabled,
+            tx_allowed: self.tx_allowed(),
+            tuning: self.tuning,
+            in_section: self.settings.operating_mode == OperatingMode::Rtty,
+            now_ms: now_unix_millis(),
+            now_secs: now_unix_secs(),
+            watchdog_limit_secs: self.settings.tx_watchdog_min as u64 * 60,
+            watchdog_start_secs: self.tx_watchdog_start,
+        };
+        let res = self.rtty_latch().tick(gates, max_chars);
+        // The watchdog clock the predicate started, if it got that far (the
+        // `get_or_insert` half — a tick a gate already ended must not date an
+        // unattended run).
+        if let Some(start) = res.watchdog_start {
+            self.tx_watchdog_start = Some(start);
         }
-        let now = now_unix_millis();
-        // Ceiling 1 — the hard per-over cap no typing can extend.
-        if let Some(start) = self.rtty_latch_start_ms {
-            if now.saturating_sub(start) >= Self::RTTY_MAX_LATCH_MS {
+        match res.drop {
+            None => res.tick,
+            Some(why) => {
+                if why == KbDrop::Watchdog {
+                    // A trip disarms TX so it stays stopped, and takes the queued
+                    // overs with it — identical to `poll_rtty_one`'s.
+                    self.tx_watchdog = true;
+                    self.tx_enabled = false;
+                    self.rtty_queue.clear();
+                }
                 self.drop_rtty_latch();
-                self.rtty_keyer_error = Some(format!(
-                    "Continuous TX unkeyed at its {}-minute ceiling — click TX again to carry on",
-                    Self::RTTY_MAX_LATCH_MS / 60_000
-                ));
-                return RttyStreamTick::Idle;
+                if why == KbDrop::Ceiling {
+                    // An unexplained unkey reads as a fault — say why.
+                    self.rtty_keyer_error = Some(format!(
+                        "Continuous TX unkeyed at its {}-minute ceiling — click TX again to \
+                         carry on",
+                        Self::RTTY_MAX_LATCH_MS / 60_000
+                    ));
+                }
+                res.tick
             }
         }
-        // Ceiling 2 — the ordinary wall-clock TX watchdog, identical to
-        // `poll_rtty_one`'s (a trip disarms TX, so it stays stopped). Typing
-        // restarts its clock; walking away does not.
-        let limit_secs = self.settings.tx_watchdog_min as u64 * 60;
-        if limit_secs > 0 {
-            let now_s = now_unix_secs();
-            let start = *self.tx_watchdog_start.get_or_insert(now_s);
-            if now_s.saturating_sub(start) >= limit_secs {
-                self.tx_watchdog = true;
-                self.tx_enabled = false;
-                self.rtty_queue.clear();
-                self.drop_rtty_latch();
-                return RttyStreamTick::Idle;
-            }
-        }
-        // Every gate above has been re-checked; from here it is only about what
-        // to key. A zero budget means the loop is already fed far enough ahead.
-        if max_chars == 0 {
-            return RttyStreamTick::Ahead;
-        }
-        if self.rtty_type_buf.is_empty() {
-            return RttyStreamTick::Diddle;
-        }
-        let n = max_chars.min(self.rtty_type_buf.len());
-        RttyStreamTick::Text(self.rtty_type_buf.drain(..n).collect())
     }
 
     // ----- RTTY auto-sequencer — the pure `tempo_core::rtty::RttySeq` state
@@ -12470,6 +13410,9 @@ impl Engine {
             // RTTY: judge the real mark/space RF span per keying backend (AFSK tones
             // below the LSB dial; FSK shift below the RTTY-mode dial) — both edges.
             OperatingMode::Rtty => self.rtty_emission_ok(dial),
+            // Keyboard (PSK31): a ~60 Hz signal at the tuned audio offset
+            // above the always-USB dial.
+            OperatingMode::Keyboard => self.psk_emission_ok(dial),
         }
     }
 
@@ -12780,6 +13723,7 @@ impl Engine {
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
+        s.radio.flex_dax_tx = self.flex_dax_tx;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
         s.radio.cat_detail = self.cat_status.1.clone();
@@ -12800,6 +13744,7 @@ impl Engine {
             crate::settings::OperatingMode::Phone => "phone",
             crate::settings::OperatingMode::Cw => "cw",
             crate::settings::OperatingMode::Rtty => "rtty",
+            crate::settings::OperatingMode::Keyboard => "keyboard",
         }
         .to_string();
         s.radio.cw_wpm = self.settings.cw_wpm;
@@ -12822,7 +13767,11 @@ impl Engine {
                         &self.settings.radios,
                     )
                 })
-                .or_else(|| crate::settings::audio_device_conflicts(&self.settings.radios));
+                .or_else(|| crate::settings::audio_device_conflicts(&self.settings.radios))
+                // The network twin of the serial check (Flex audit wave-2 #20) — LAST in the
+                // chain because a shared COM port, a keyer clash and a shared codec are all
+                // certainly wrong, while a shared network endpoint is only usually wrong.
+                .or_else(|| crate::settings::network_cat_address_conflicts(&self.settings.radios));
         s.radio.tx_even = self.tx_even();
         s.radio.tx_cycle_auto = self.tx_cycle_auto;
         s.radio.tr_period_secs = self.active_slot_secs();
@@ -13326,7 +14275,12 @@ impl Engine {
             self.beacon_decided_slot = Some(slot);
             self.beacon_sched
                 .set_tx_percent(self.settings.beacon_tx_percent);
-            self.beacon_tx_this_slot = if self.settings.beacon_rr_slot > 0 {
+            // Round Robin is ACTIVE only with a real rotation: a slot picked AND at
+            // least two stations in it (#101b). `slots = 1` made the RR arithmetic
+            // claim every interval — transmit-every-interval sold as a rotation — so
+            // a degenerate config falls back to the transmit-% schedule instead.
+            let rr_active = self.settings.beacon_rr_slot > 0 && self.settings.beacon_rr_slots >= 2;
+            self.beacon_tx_this_slot = if rr_active {
                 // FST4W Round Robin: a deterministic assignment so coordinated
                 // stations never collide. A pure function of UTC, which `slot`
                 // counts periods of.
@@ -13362,6 +14316,33 @@ impl Engine {
         if modes::tx_mode(kind).is_none() {
             self.app.set_transmitting(false);
             return None;
+        }
+        // ALL.TXT parity (#101c): a beacon over is a transmission like any other,
+        // but this path returns ABOVE the QSO arm's Tx-line writer — so a WSPR/FST4W
+        // session produced an RX-only ALL.TXT with the station's own transmissions
+        // invisible, to tailing loggers and to us. Same shape as the QSO writer
+        // (plan time, SNR/DT 0, audio = our TX offset), same 5000-line cap. Latched
+        // per slot: unlike the QSO arm (whose sequencer yields the text once),
+        // this plan is re-produced by every poll inside the interval.
+        if self.settings.write_all_txt && self.beacon_txline_slot != Some(slot) {
+            self.beacon_txline_slot = Some(slot);
+            let mode = format!("{:?}", self.app.tier()).to_uppercase();
+            self.station
+                .all_txt_pending
+                .push(crate::alltxt::all_txt_line(
+                    now_unix_secs(),
+                    self.settings.dial_mhz,
+                    true,
+                    &mode,
+                    0,
+                    0.0,
+                    self.tx_offset_hz,
+                    &msg,
+                ));
+            let len = self.station.all_txt_pending.len();
+            if len > 5000 {
+                self.station.all_txt_pending.drain(0..len - 5000);
+            }
         }
         Some(TxPlan {
             slot,
@@ -13842,8 +14823,12 @@ impl Engine {
             return Vec::new();
         };
         let wave = plan.waveform.build();
-        // One thread, no unlock between plan and commit → the planned slot IS the
-        // current slot.
+        // One thread, no unlock between plan and commit — but `slot` is the CALLER's
+        // claim, not a clock reading, so commit's `plan.slot != current_slot` check is
+        // vacuous on this path. A caller holding a stale slot index (a decode-worker
+        // result that outlived its period) sails through every freshness check here:
+        // slot liveness is the CALLER's obligation (the radio loop's drain arm gates
+        // on it — the 2026-08-17 wrong-parity incident is what happens otherwise).
         self.commit_tx(&plan, wave, slot)
     }
 
@@ -13889,23 +14874,19 @@ impl Engine {
             self.app.set_transmitting(false);
             return Vec::new();
         }
-        // The BEACON path runs the wall-clock watchdog HERE rather than in the
-        // planner, preserving the order the single-shot path used (build, then
-        // check): a build that produces nothing still leaves the watchdog clock
-        // unstarted, exactly as before.
+        // BEACON MODES ARE EXEMPT FROM THE WALL-CLOCK TX WATCHDOG — operator-approved
+        // 2026-08-17 ("Match WSJT-X"). The watchdog's premise is idleness: repeated TX
+        // with no operator action means a station left keying by mistake. WSPR/FST4W
+        // beaconing IS unattended repeated transmission by design, so the wall clock
+        // used to trip a perfectly compliant beacon a few intervals into every session
+        // (#101a). WSJT-X exempts exactly these modes — mainwindow.cpp gates its
+        // tx-watchdog check on `m_mode != "WSPR" && m_mode != "FST4W"`. The non-beacon
+        // watchdog (poll_tx's QSO/chat arm) is untouched, and every beacon over stays
+        // hard-bounded by the slot clamp (`tempo_audio::slot::tx_deadline_ms` — PTT is
+        // never held past the period boundary), so an exempt beacon still cannot key
+        // continuously; stopping one remains the operator's TX latch, exactly as
+        // upstream.
         if plan.beacon {
-            let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
-            if limit_secs > 0 {
-                let now = now_unix_secs();
-                let start = *self.tx_watchdog_start.get_or_insert(now);
-                if now.saturating_sub(start) >= limit_secs {
-                    self.tx_watchdog = true;
-                    self.tx_enabled = false;
-                    self.slot_tx_abort = true; // watchdog = hard kill (see plan_tx)
-                    self.app.set_transmitting(false);
-                    return Vec::new();
-                }
-            }
             self.app.set_transmitting(true);
         }
         vec![wave]
@@ -13920,6 +14901,12 @@ impl Engine {
     /// thread, no await), so the result always applies. Used by the headless test
     /// driver and as the in-process reference; the live loop uses the async split.
     pub fn ingest(&mut self, frame: &[f32], slot: u64) -> usize {
+        // The synchronous driver hands the frame in directly — there is no capture
+        // ring that could predate the context, so the capture epoch IS the live one.
+        // Without this resync a caller that QSYs and then ingests fresh audio would
+        // see its decodes dropped as stale (#103's guard misfiring on a path that
+        // has no staleness to guard against).
+        self.capture_epoch = self.decode_epoch;
         let job = self.build_decode_job(frame.to_vec(), slot, DecodePass::Boundary);
         let result = run_decode_job(job);
         match self.apply_decode_result(result) {
@@ -13928,13 +14915,31 @@ impl Engine {
         }
     }
 
+    /// The radio loop consumed a slot boundary: the capture ring now accumulates a
+    /// NEW slot's audio, which genuinely belongs to the current decode context.
+    /// Called AFTER the boundary job for the just-ended slot is built, so that job
+    /// still carries the epoch its audio was captured under (#103).
+    pub fn begin_slot_capture(&mut self) {
+        self.capture_epoch = self.decode_epoch;
+    }
+
     /// Build the OWNED decode job for `frame`/`slot` under the engine lock: capture
     /// the branch (Native / DX1 / Companion), the AP request context, the HARQ-reset
     /// flag and the current decode epoch, plus an `Arc` clone of the decoder. No heavy
     /// work — the actual decode runs later in [`run_decode_job`] off the engine mutex.
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
-        let epoch = self.decode_epoch;
+        // The epoch stamped here decides whether the RESULT still applies (see
+        // `apply_decode_result`). Boundary/Early decode the slot capture in progress,
+        // which began under `capture_epoch` — a mid-slot band change bumps
+        // `decode_epoch` while the ring still holds the OLD band's air, so stamping
+        // the live epoch would launder pre-QSY decodes into the new band's roster
+        // (#103). Redecode replays `last_rx`, whose fold is display-only and gated by
+        // its own history filter, so it keeps the live epoch (unchanged behavior).
+        let epoch = match pass {
+            DecodePass::Boundary | DecodePass::Early => self.capture_epoch,
+            DecodePass::Redecode => self.decode_epoch,
+        };
         // Companion: decodes arrive over UDP; the audio is irrelevant. Drain the
         // network source regardless of the selected tier.
         if self.source_kind == SourceKind::Companion {
@@ -14191,6 +15196,9 @@ impl Engine {
             // boundary's decodes); modes without `early_decode` take full frames only.
             return 0;
         }
+        // Synchronous driver: the frame is handed in, no capture ring — same resync
+        // as `ingest` (see there).
+        self.capture_epoch = self.decode_epoch;
         let job = self.build_decode_job(frame.to_vec(), slot, DecodePass::Early);
         let result = run_decode_job(job);
         match self.apply_decode_result(result) {
@@ -14306,7 +15314,57 @@ impl Engine {
 
     /// Fold a slot's decodes into the app/sequencer state (the shared back half
     /// of [`Engine::ingest`] / [`Engine::ingest_early`]).
+    /// How many consecutive boundary periods produced no decode at all.
+    ///
+    /// Eight periods is two minutes on FT8. On a live band that is a fault worth a line — the
+    /// dial is wrong, the mode is wrong, the passband is squelched, the audio is silent. On a
+    /// dead band it is one line and then silence, because this logs the TRANSITION in and the
+    /// transition out, never the state.
+    const DECODE_DROUGHT_PERIODS: u32 = 8;
+
     fn process_decodes(&mut self, frame: &[f32], decodes: Vec<modes::Decode>, slot: u64) -> usize {
+        if tempo_core::applog::debug_enabled() {
+            tempo_core::applog::debug(
+                "decode",
+                &format!(
+                    "slot {slot}: {} decode(s) on {} {}",
+                    decodes.len(),
+                    if self.settings.band.is_empty() {
+                        "off-band"
+                    } else {
+                        &self.settings.band
+                    },
+                    self.app.tier().label()
+                ),
+            );
+        }
+        if decodes.is_empty() {
+            self.quiet_periods = self.quiet_periods.saturating_add(1);
+            if self.quiet_periods == Self::DECODE_DROUGHT_PERIODS {
+                tempo_core::applog::warn(
+                    "decode",
+                    &format!(
+                        "no decodes for {} periods on {} {} at {:.6} MHz",
+                        Self::DECODE_DROUGHT_PERIODS,
+                        if self.settings.band.is_empty() {
+                            "off-band"
+                        } else {
+                            &self.settings.band
+                        },
+                        self.app.tier().label(),
+                        self.settings.dial_mhz
+                    ),
+                );
+            }
+        } else {
+            if self.quiet_periods >= Self::DECODE_DROUGHT_PERIODS {
+                tempo_core::applog::info(
+                    "decode",
+                    &format!("decoding again after {} quiet periods", self.quiet_periods),
+                );
+            }
+            self.quiet_periods = 0;
+        }
         // Keep the ON-AIR text for UDP consumers BEFORE any hound rewriting —
         // JTAlert/GridTracker must never receive a message the Fox didn't send.
         let hound_active = matches!(
@@ -15444,8 +16502,13 @@ impl Engine {
     }
 
     /// See [`StationCore::export_logbook`].
-    pub fn export_logbook(&self, format: &str) -> String {
-        self.station.export_logbook(format)
+    pub fn export_logbook(
+        &self,
+        format: &str,
+        from_unix: Option<u64>,
+        to_unix: Option<u64>,
+    ) -> String {
+        self.station.export_logbook(format, from_unix, to_unix)
     }
 
     /// Distinct operators in the log (#25).
@@ -15808,6 +16871,41 @@ mod tests {
         assert_eq!(
             reloaded.active_radio, third,
             "and the bundle's active radio, not the pre-restore one"
+        );
+    }
+
+    /// A CONTEXT CHANGE IS ONE EVENT AND MUST LOG AS ONE LINE.
+    ///
+    /// It halts and then puts the operator's arm switch back, and both steps used to write
+    /// their own line: "transmit disarmed by halt" and "transmit ARMED by …:8798", in the same
+    /// second, with nothing saying what changed. Collapsed once — and the first collapse still
+    /// leaked the restore's line, which showed up in an operator's DEBUG log. Pinned here
+    /// because the file is read by people deciding whether their radio misbehaved.
+    #[test]
+    fn a_context_change_leaves_the_arm_state_it_found() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        // In a MANUAL mode an armed operator keeps their key across a QSY.
+        e.set_operating_mode("cw", false);
+        assert!(e.tx_enabled(), "control: entering CW arms");
+        e.halt_tx_for_context_change("band change");
+        assert!(
+            e.tx_enabled(),
+            "a QSY must not take the operator's key away"
+        );
+
+        // Disarmed stays disarmed — a context change never turns TX ON.
+        e.set_tx_enabled(false);
+        e.halt_tx_for_context_change("band change");
+        assert!(!e.tx_enabled(), "a context change must never arm");
+
+        // In DIGITAL there is nothing to restore: FT8 is armed only by its own three gates.
+        let mut d = Engine::new("W9XYZ", "EN37", 0);
+        d.set_operating_mode("digital", false);
+        d.set_tx_enabled(true);
+        d.halt_tx_for_context_change("radio handoff");
+        assert!(
+            !d.tx_enabled(),
+            "digital is left disarmed after a context change"
         );
     }
 
@@ -16393,6 +17491,338 @@ mod tests {
         assert_eq!(e.poll_rtty_one(), Some("TEST".to_string()));
     }
 
+    // ----- PSK31 continuous TX (Keyboard Modes Phase 2) — the RTTY latch
+    // suite instantiated over the second mode. Same shapes on purpose: these
+    // are the latched-scene contracts every keyboard mode must hold, and the
+    // point of Phase 0 was that holding them costs instantiation, not a second
+    // derivation of transmit safety. -----
+
+    /// A latched PSK engine, keyed and ready to stream (the Keyboard section's
+    /// entry arms TX as a manual mode does; the default 20 m dial is inside
+    /// General data privileges at the PSK audio offset).
+    fn psk_latched_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_operating_mode("keyboard", false);
+        e.set_psk_latched(true).unwrap();
+        assert!(e.psk_latched());
+        // The first tick of a latch with nothing typed is the PSK idle
+        // (continuous reversals) — never silence under a held PTT.
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Diddle);
+        e
+    }
+
+    #[test]
+    fn psk_latch_never_comes_up_on_its_own() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(!e.psk_latched());
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        assert!(!e.take_psk_abort());
+        // Arming the RX decoder is RX-only — it cannot key.
+        e.set_psk_armed(true);
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        // Entering the section arms TX (a manual mode) but does NOT latch.
+        e.set_operating_mode("keyboard", false);
+        assert!(e.tx_enabled());
+        assert!(!e.psk_latched());
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        // Typing without the latch is refused outright.
+        assert!(e.psk_type("cq").is_err());
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+    }
+
+    #[test]
+    fn psk_latch_inherits_every_gate_a_send_passes() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Not in the Keyboard section → refused, same reason a send is.
+        assert!(e.set_psk_latched(true).is_err());
+        e.set_operating_mode("keyboard", false);
+        // TX disarmed → refused.
+        e.set_tx_enabled(false);
+        assert!(e.set_psk_latched(true).unwrap_err().contains("TX is off"));
+        e.set_tx_enabled(true);
+        // Tune carrier up → refused.
+        e.set_tune(true);
+        assert!(e.set_psk_latched(true).unwrap_err().contains("Tune"));
+        e.set_tune(false);
+        // Outside license privileges → refused (a Technician on 20 m PSK —
+        // the band-plan privilege sweep, at the latch).
+        e.set_license_class("technician");
+        e.set_frequency(14.070, "20m", "USB");
+        assert!(!e.tx_allowed());
+        assert!(e.set_psk_latched(true).unwrap_err().contains("license"));
+        assert!(!e.psk_latched());
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        // …and where a send would be allowed, so is the latch (10 m 28.120 is
+        // inside Technician data privileges).
+        e.set_frequency(28.120, "10m", "USB");
+        assert!(e.tx_allowed());
+        e.set_psk_latched(true).unwrap();
+        assert!(e.psk_latched());
+    }
+
+    #[test]
+    fn a_latched_psk_stream_idles_on_reversals_and_keys_what_is_typed() {
+        let mut e = psk_latched_engine();
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Diddle);
+        // Typed characters key in order, CASE PRESERVED (full-ASCII varicode —
+        // the point over Baudot); what varicode cannot carry is dropped.
+        e.psk_type("de w9xyz \u{263A}ok").unwrap();
+        let mut out = String::new();
+        loop {
+            match e.poll_psk_stream(3) {
+                PskStreamTick::Text(t) => out.push_str(&t),
+                PskStreamTick::Diddle => break,
+                PskStreamTick::Idle => panic!("the latch dropped while streaming"),
+                PskStreamTick::Ahead => panic!("asked for characters, told to wait"),
+            }
+        }
+        assert_eq!(out, "de w9xyz ok");
+        // The chunk budget is honoured (the loop's look-ahead bound).
+        e.psk_type("abcdefg").unwrap();
+        assert_eq!(e.poll_psk_stream(3), PskStreamTick::Text("abc".into()));
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Text("de".into()));
+        // And the buffer is bounded at the MODE's own cap.
+        e.psk_type(&"a".repeat(5000)).unwrap();
+        let mut n = 2; // "fg" still pending
+        while let PskStreamTick::Text(t) = e.poll_psk_stream(100) {
+            n += t.len();
+        }
+        assert_eq!(n, crate::keyboard::PSK31.type_buf_cap + 2);
+    }
+
+    /// EVERY KILL PATH, one assertion each — the RTTY suite's shape over the
+    /// PSK instantiation (no auto-sequencer arm: PSK has no sequencer).
+    #[test]
+    fn psk_latch_drops_on_every_kill_path() {
+        fn killed(kill: impl FnOnce(&mut Engine)) -> Engine {
+            let mut e = psk_latched_engine();
+            e.psk_type("still typing").unwrap();
+            kill(&mut e);
+            assert!(!e.psk_latched(), "the latch survived");
+            assert!(
+                e.take_psk_abort(),
+                "no abort armed — the loop would keep keying to the end of the ring"
+            );
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Idle,
+                "the stream kept feeding after the kill"
+            );
+            e
+        }
+
+        // 1. Stop (the cockpit's Stop button / Esc — psk_stop).
+        killed(|e| e.psk_stop());
+        // 2. halt_tx — the universal stop (header Stop TX, UDP HaltTx).
+        let e = killed(|e| e.halt_tx());
+        assert!(!e.tx_enabled(), "halt disarms TX — stopped stays stopped");
+        // 3. The TX-enable latch (one of the PSK cockpit's census stops).
+        killed(|e| e.set_tx_enabled(false));
+        // 4. Leaving the section.
+        killed(|e| e.set_operating_mode("phone", false));
+        // 5. A tune carrier taking the transmitter — the PER-TICK predicate.
+        killed(|e| {
+            e.set_tune(true);
+            assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        });
+        // 6. A QSY out of privileges — per-tick only (a spot click or memory
+        //    recall can move the dial under a latched transmitter).
+        killed(|e| {
+            e.set_license_class("technician");
+            e.set_frequency(14.070, "20m", "USB");
+            assert!(!e.tx_allowed());
+            assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        });
+        // 7. The loop's own gate (may_key) calls this directly.
+        killed(|e| e.drop_psk_latch());
+    }
+
+    /// The guard shown NOT firing (the positive-control complement): with
+    /// every gate up the latch holds tick after tick.
+    #[test]
+    fn the_psk_latch_predicate_holds_while_every_gate_is_up() {
+        let mut e = psk_latched_engine();
+        for _ in 0..50 {
+            assert_eq!(e.poll_psk_stream(2), PskStreamTick::Diddle);
+        }
+        assert!(e.psk_latched(), "the latch dropped with every gate up");
+        assert!(!e.take_psk_abort(), "an abort was armed with nothing wrong");
+    }
+
+    #[test]
+    fn a_latched_psk_over_is_bounded_by_the_wall_clock_watchdog() {
+        let mut e = psk_latched_engine();
+        let mut s = e.settings().clone();
+        s.tx_watchdog_min = 1;
+        e.apply_settings(s);
+        // Typing restarts the clock — a keystroke is evidence of attendance.
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        e.psk_type("still here").unwrap();
+        assert!(
+            e.tx_watchdog_start.is_none(),
+            "a typed character must restart the watchdog clock"
+        );
+        // Walking away does not: the trip disarms TX and drops the latch.
+        while let PskStreamTick::Text(_) = e.poll_psk_stream(100) {}
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(61));
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        assert!(e.tx_watchdog, "the watchdog did not trip on a latched over");
+        assert!(!e.tx_enabled(), "a trip disarms TX");
+        assert!(!e.psk_latched(), "a trip must drop the latch");
+        assert!(e.take_psk_abort(), "a trip must unkey");
+    }
+
+    #[test]
+    fn a_latched_psk_over_is_bounded_by_its_own_ceiling_that_typing_cannot_extend() {
+        let mut e = psk_latched_engine();
+        let mut s = e.settings().clone();
+        s.tx_watchdog_min = 0; // the ceiling stands alone
+        e.apply_settings(s);
+        e.psk_latch_start_ms = Some(now_unix_millis().saturating_sub(Engine::PSK_MAX_LATCH_MS + 1));
+        e.psk_type("aaaa").unwrap();
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        assert!(!e.psk_latched(), "the hard ceiling did not unkey");
+        assert!(e.take_psk_abort());
+        assert!(
+            e.psk_state()
+                .keyer_error
+                .is_some_and(|m| m.contains("ceiling")),
+            "an unexplained unkey reads as a fault — say why"
+        );
+        // The ceiling bounds the whole keyed period, drain included.
+        e.set_tx_enabled(true);
+        e.set_psk_latched(true).unwrap();
+        e.psk_type("a long tail").unwrap();
+        e.set_psk_latched(false).unwrap(); // draining, intent already down
+        e.psk_latch_start_ms = Some(now_unix_millis().saturating_sub(Engine::PSK_MAX_LATCH_MS + 1));
+        assert_eq!(e.poll_psk_stream(2), PskStreamTick::Idle);
+        assert!(e.take_psk_abort(), "the drain outran the ceiling unbounded");
+    }
+
+    #[test]
+    fn a_psk_macro_fired_while_latched_types_into_the_live_transmission() {
+        let mut e = psk_latched_engine();
+        e.psk_send_text("CQ de W9XYZ k").unwrap();
+        assert_eq!(
+            e.poll_psk_one(),
+            None,
+            "nothing was queued behind the latch"
+        );
+        assert_eq!(
+            e.poll_psk_stream(99),
+            PskStreamTick::Text("CQ de W9XYZ k".into())
+        );
+        // Unmappable-only text still refuses, exactly as a send refuses it.
+        assert!(e.psk_send_text("\u{263A}\u{2603}").is_err());
+        // Unlatched, sends go back to being whole queued overs.
+        e.set_psk_latched(false).unwrap();
+        e.psk_send_text("test 73").unwrap();
+        assert_eq!(e.poll_psk_one(), Some("test 73".to_string()));
+    }
+
+    #[test]
+    fn psk_sends_are_gated_and_stops_clear_the_queue() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Outside the section a send is refused with the reason.
+        assert!(e.psk_send_text("hi").unwrap_err().contains("PSK section"));
+        e.set_operating_mode("keyboard", false);
+        e.psk_send_text("cq cq de w9xyz").unwrap();
+        // Disarm holds nothing: it aborts and drops the queue.
+        e.set_tx_enabled(false);
+        assert!(e.take_psk_abort(), "disarm aborts the over in flight");
+        e.set_tx_enabled(true);
+        assert_eq!(e.poll_psk_one(), None, "disarm dropped the queue");
+        // Stop drops the queue + arms the one-shot abort.
+        e.psk_send_text("a message").unwrap();
+        e.psk_stop();
+        assert!(e.take_psk_abort());
+        assert!(!e.take_psk_abort(), "abort is one-shot");
+        assert_eq!(e.poll_psk_one(), None, "stop cleared the queue");
+        // halt_tx: aborts, disarms, stays stopped.
+        e.psk_send_text("cq de w9xyz").unwrap();
+        e.halt_tx();
+        assert!(e.take_psk_abort());
+        assert!(!e.tx_enabled());
+        e.set_tx_enabled(true);
+        assert_eq!(e.poll_psk_one(), None, "halt dropped the queued messages");
+        // A Technician on 20 m PSK is refused up front with the license reason.
+        e.set_license_class("technician");
+        e.set_frequency(14.070, "20m", "USB");
+        assert!(e.psk_send_text("cq").unwrap_err().contains("license"));
+    }
+
+    #[test]
+    fn psk_mode_is_cockpit_state_defaulting_bpsk() {
+        // Phase 3: the sub-mode + QPSK reverse are ENGINE state (one truth for
+        // the RX thread and both TX paths), defaulting BPSK31/normal, echoed
+        // through the poll for the selector to render.
+        use tempo_core::psk::PskModeKind;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert_eq!(e.psk_mode(), (PskModeKind::Bpsk31, false));
+        let s = e.psk_state();
+        assert_eq!((s.mode, s.reverse), (PskModeKind::Bpsk31, false));
+        e.set_psk_mode(PskModeKind::Qpsk31, true).unwrap();
+        assert_eq!(e.psk_mode(), (PskModeKind::Qpsk31, true));
+        let s = e.psk_state();
+        assert_eq!((s.mode, s.reverse), (PskModeKind::Qpsk31, true));
+        // A change re-acquires the RX demod (fresh AFC pull on the new mode).
+        assert!(
+            e.take_psk_afc_reset(),
+            "a mode switch must rebuild the demod"
+        );
+        // A no-op set does not thrash the demod.
+        e.set_psk_mode(PskModeKind::Qpsk31, true).unwrap();
+        assert!(!e.take_psk_afc_reset(), "a no-op switch rebuilt the demod");
+    }
+
+    #[test]
+    fn psk_mode_switch_is_refused_mid_transmission() {
+        // A mid-over switch would splice two modulations into one carrier —
+        // silently garbling the far copy — so it is refused while the latch
+        // streams, while messages are queued, and while an over is on the air.
+        use tempo_core::psk::PskModeKind;
+        let mut e = psk_latched_engine();
+        assert!(e.set_psk_mode(PskModeKind::Qpsk31, false).is_err());
+        e.psk_stop();
+        assert!(e.take_psk_abort());
+        e.set_psk_mode(PskModeKind::Qpsk31, false).unwrap();
+        // Queued (not yet keying) still refuses — the queue will key in the
+        // mode it was gated under.
+        e.psk_send_text("cq cq de w9xyz").unwrap();
+        assert!(e.set_psk_mode(PskModeKind::Bpsk31, false).is_err());
+        e.psk_stop();
+        let _ = e.take_psk_abort();
+        // On the air (stamped by the loop) refuses too.
+        e.set_psk_sending(true);
+        assert!(e.set_psk_mode(PskModeKind::Bpsk31, false).is_err());
+        e.set_psk_sending(false);
+        e.set_psk_mode(PskModeKind::Bpsk31, false).unwrap();
+        assert_eq!(e.psk_mode(), (PskModeKind::Bpsk31, false));
+    }
+
+    #[test]
+    fn psk_and_the_slot_sequencer_never_key_together() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // The Keyboard section owns the rig: the FT8/FT1 slot sequencer
+        // transmits NOTHING (poll_tx is gated off for non-Digital).
+        e.set_operating_mode("keyboard", false);
+        e.call_cq(None).unwrap();
+        for slot in 0..4 {
+            assert!(
+                e.poll_tx(slot).is_empty(),
+                "no FT8 keying while the Keyboard section owns the rig"
+            );
+        }
+        // And vice versa: the PSK queue is HELD while Digital owns the rig.
+        e.psk_send_text("cq test").unwrap();
+        e.set_operating_mode("digital", false);
+        assert_eq!(
+            e.poll_psk_one(),
+            None,
+            "no PSK keying while Digital owns the rig"
+        );
+    }
+
     #[test]
     fn rtty_and_ft8_sequencers_never_key_together() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
@@ -16696,6 +18126,117 @@ mod tests {
         // Re-arming starts a fresh transcript (a new copy session).
         e.set_rtty_armed(true);
         assert!(e.rtty_state().text.is_empty());
+    }
+
+    #[test]
+    fn psk_arm_gates_tap_accumulates_ring_and_caps() {
+        use tempo_core::textmode::DecodedChar;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+
+        // Disarmed = zero added work: the tap stays empty however much audio flows.
+        e.feed_rx_audio(&[0.0; 256]);
+        assert!(e.take_psk_audio().is_empty(), "disarmed tap never fills");
+        assert!(!e.psk_state().armed);
+
+        // Armed: RX audio accumulates; take() drains it for the decode thread.
+        e.set_psk_armed(true);
+        e.feed_rx_audio(&[0.0; 256]);
+        e.feed_rx_audio(&[0.0; 100]);
+        assert_eq!(e.take_psk_audio().len(), 356);
+        assert!(e.take_psk_audio().is_empty(), "take drains");
+
+        // Synthesized decode push → state carries text + parallel confidence +
+        // AFC + signal presence.
+        let chars: Vec<DecodedChar> = "CQ de W1ABC"
+            .chars()
+            .map(|ch| DecodedChar {
+                ch,
+                confidence: 0.9,
+            })
+            .collect();
+        e.push_psk_decode(&chars, -12.5, true);
+        let s = e.psk_state();
+        assert!(s.armed);
+        assert_eq!(s.text, "CQ de W1ABC");
+        assert_eq!(s.conf.len(), s.text.chars().count());
+        assert_eq!(s.conf[0], 90, "0..1 confidence maps to 0..100");
+        assert!((s.afc_hz + 12.5).abs() < 1e-6);
+        assert!(s.signal);
+
+        // The ring caps at 4000 chars — oldest drop off the front.
+        let many = vec![
+            DecodedChar {
+                ch: 'X',
+                confidence: 1.0,
+            };
+            PSK_TEXT_CAP + 500
+        ];
+        e.push_psk_decode(&many, 0.0, true);
+        assert_eq!(e.psk_state().text.chars().count(), PSK_TEXT_CAP);
+
+        // Disarm: the tap stops immediately, but the transcript stays readable.
+        e.set_psk_armed(false);
+        e.feed_rx_audio(&[0.0; 64]);
+        assert!(e.take_psk_audio().is_empty());
+        let s = e.psk_state();
+        assert!(!s.armed);
+        assert_eq!(
+            s.text.chars().count(),
+            PSK_TEXT_CAP,
+            "transcript survives disarm"
+        );
+
+        // Re-arming starts a fresh transcript (a new copy session).
+        e.set_psk_armed(true);
+        assert!(e.psk_state().text.is_empty());
+    }
+
+    #[test]
+    fn psk_auto_arm_policy_mirrors_aprs_and_sstv() {
+        // The view-entry arm: on by default, once per need; an explicit stop is
+        // remembered for the session; an explicit arm retires the decline; the
+        // Settings opt-out refuses it entirely. The policy lives in the engine
+        // so a cockpit remount cannot lose it (the APRS armed-desync lesson).
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(e.psk_auto_arm(), "first view entry arms");
+        assert!(e.psk_armed());
+        assert!(!e.psk_auto_arm(), "already armed — entry is a no-op");
+
+        // The operator stops the decoder: view entry must NOT restart it.
+        e.set_psk_armed(false);
+        assert!(!e.psk_auto_arm(), "declined for the session");
+        assert!(!e.psk_armed());
+
+        // An explicit Arm is the operator's latest decision — it retires the
+        // decline (the SSTV stop→arm→auto-disarm regression, pinned here too).
+        e.set_psk_armed(true);
+        e.psk_armed = false; // an automatic disarm, NOT an operator stop
+        assert!(e.psk_auto_arm(), "explicit re-arm retired the decline");
+
+        // The persisted opt-out refuses the auto-arm outright; the explicit Arm
+        // button is unaffected.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.psk_rx_auto_arm = false;
+        assert!(!e.psk_auto_arm(), "setting off = never auto-arm");
+        e.set_psk_armed(true);
+        assert!(e.psk_armed(), "manual arm still works with the setting off");
+    }
+
+    #[test]
+    fn psk_net_clamps_and_rearms_the_demod() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Un-netted resolves to the demod's own default center — one source of truth.
+        assert_eq!(
+            e.psk_center_hz(),
+            tempo_core::psk::PskConfig::default().center_hz
+        );
+        e.psk_net(1500.0);
+        assert_eq!(e.psk_center_hz(), 1500.0);
+        assert!(e.take_psk_afc_reset(), "a net arms the demod rebuild");
+        assert!(!e.take_psk_afc_reset(), "take resets the one-shot");
+        // Passband clamp: a click off the audio edge cannot strand the decoder.
+        e.psk_net(50_000.0);
+        assert_eq!(e.psk_center_hz(), 3700.0);
     }
 
     #[test]
@@ -17897,6 +19438,50 @@ mod tests {
         assert!(
             e.take_immediate_retune(),
             "a mode change still arms a retune"
+        );
+    }
+
+    #[test]
+    fn the_digital_section_never_inherits_another_plans_lsb() {
+        // ⭐ ISSUE #111 (ve3wej): "double-click puts the Flex in DIGL instead of DIGU".
+        //
+        // `settings.sideband` is written VERBATIM by every QSY, the RTTY band plan is LSB
+        // on every HF band, and `Settings::rig_mode`'s Digital arm reads that field
+        // DIRECTLY — so an FT dial reached from the RTTY section commanded PKTLSB, which
+        // is Yaesu DATA-L and Flex DIGL, on a channel that is USB-side.
+        //
+        // The section-entry re-home was the only thing that ever corrected it, and it is
+        // gated on `follow_freq` — which BOTH clicks on this path leave false: the UI's
+        // Tempo (chat) view maps to the Digital section but is not one of the views it
+        // re-homes for, and entering it still sets `lastOpModeRef = 'digital'`, so the
+        // later click into the FT cockpit is not a mode CHANGE either.
+        use crate::settings::OperatingMode;
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        // The RTTY cockpit — its own section entry DOES re-home, to 20 m RTTY, LSB.
+        e.set_operating_mode("rtty", true);
+        assert_eq!(
+            e.settings().sideband,
+            "LSB",
+            "precondition: the RTTY band plan is LSB"
+        );
+        // …Tempo (chat): the Digital policy, no re-home…
+        e.set_operating_mode("digital", false);
+        // …then the FT cockpit, which is no longer a mode change.
+        e.set_operating_mode("digital", false);
+        assert_eq!(e.settings().operating_mode, OperatingMode::Digital);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTUSB",
+            "the Digital section commands the USB-side DATA submode, never the LSB the \
+             RTTY plan left in `settings.sideband`"
+        );
+        // …and it is the SIDE that is re-derived, never the dial: a section entry with
+        // `follow_freq = false` must still leave the VFO exactly where it was.
+        assert!(
+            (e.settings().dial_mhz - 14.083).abs() < 1e-9,
+            "the dial is untouched, got {}",
+            e.settings().dial_mhz
         );
     }
 
@@ -19671,6 +21256,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_wspr_beacon_files_in_the_roster_under_the_callsign_not_the_grid() {
+        // #101d — the same #55 misparse, at the OTHER ingest. The recent-decodes feed
+        // has special-cased WSPR since #55, but the roster ingest still ran "CALL
+        // GRID DBM" through the FT8 grammar, so the operating roster filed a station
+        // called "EK70" (the grid in the call column) with no grid at all.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let wspr = modes::Decode {
+            message: "TI4JWC EK70 30".into(),
+            sync: 1.0,
+            snr: -19,
+            dt: 0.2,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            mode: Some(modes::ModeKind::Wspr),
+        };
+        e.ingest_decodes_for_test(std::slice::from_ref(&wspr), 1);
+        let stations = e.snapshot().stations;
+        let s = stations
+            .iter()
+            .find(|s| s.call == "TI4JWC")
+            .expect("the beacon files under its CALL field");
+        assert_eq!(
+            s.grid.as_deref(),
+            Some("EK70"),
+            "…with the GRID field as its grid"
+        );
+        assert!(
+            !stations.iter().any(|s| s.call == "EK70"),
+            "the grid must not appear as a station: {stations:?}"
+        );
+
+        // Positive control — the misparse is real and the MODE TAG gates the fix: the
+        // same text untagged still goes through the FT8 grammar and files the grid.
+        let mut c = Engine::new("KD9TAW", "EN52", 0);
+        c.ingest_decodes_for_test(&[modes::Decode { mode: None, ..wspr }], 1);
+        assert!(
+            c.snapshot().stations.iter().any(|s| s.call == "EK70"),
+            "control: the FT8-grammar misparse this fix exists for"
+        );
+    }
+
     /// #64 first half (kr4fqg, confirmed standard FT8): a DXpedition Fox packs two
     /// messages into one frame — "KR4FQG RR73; W3DIY <YS/WE9G> -06". Outside Hound
     /// mode the sequencer must never see the halves (a Fox frame must not arm a
@@ -20089,6 +21718,63 @@ mod tests {
     ///
     /// The defect was that the Hold test lived in `set_rx_offset`, one level too low, so it
     /// applied to every caller including the click that must never move Tx.
+    /// FIELD INCIDENT 2026-08-19 (KD9TAW, 1.7.1-test1): "I was on psk31, then moved to ft,
+    /// selected the 20m band and almost immediately it tried to call XE1IHD, it started
+    /// transmitting on its own."
+    ///
+    /// `set_operating_mode` ARMED transmit for the manual modes (Phone/CW/RTTY/Keyboard —
+    /// correct: they are a live mic and key, and arming keys nothing by itself) and then never
+    /// disarmed on the way back. So an operator who used PSK31 and returned to FT8 arrived with
+    /// the transmitter already armed, and the comment two lines above the arm — "Digital is NOT
+    /// auto-armed … so the app never auto-keys FT8 on launch — the safety invariant" — was true
+    /// of LAUNCH and false of every mode transition. In FT8 an armed latch is what turns a
+    /// station selection into an immediate over, and the operator has no reason to think they
+    /// armed anything.
+    ///
+    /// Digital now disarms on entry, so FT8 is armed only by its own three gates: Monitor,
+    /// a double-click, or Call CQ.
+    #[test]
+    fn returning_to_digital_from_a_manual_mode_disarms_transmit() {
+        use crate::settings::OperatingMode;
+        for (wire, manual) in [
+            ("phone", OperatingMode::Phone),
+            ("cw", OperatingMode::Cw),
+            ("rtty", OperatingMode::Rtty),
+            ("keyboard", OperatingMode::Keyboard),
+        ] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_operating_mode(wire, false);
+            assert!(
+                e.tx_enabled(),
+                "{manual:?}: control — a manual mode still arms on entry (it is a live key)"
+            );
+            e.set_operating_mode("digital", false);
+            assert!(
+                !e.tx_enabled(),
+                "{manual:?} → digital left TX ARMED: the FT8 cockpit must be armed only by \
+                 Monitor, a double-click or Call CQ"
+            );
+        }
+    }
+
+    /// The disarm must not undo an arm that the SAME action is about to make: the Needed /
+    /// spot click sets the operating mode and then works the station, and the working half is
+    /// what arms. Order, not absence, is what keeps both true.
+    #[test]
+    fn a_needed_click_into_digital_still_ends_up_armed() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.work_spot("digital", 14.074, "20m");
+        assert!(
+            !e.tx_enabled(),
+            "the QSY alone must not arm — it is not a transmit action"
+        );
+        let _ = e.call_station_ctx("K2DEF", None, None, None, Some(1200.0));
+        assert!(
+            e.tx_enabled(),
+            "working the station is the transmit action, and it arms (double_click_sets_tx)"
+        );
+    }
+
     #[test]
     fn a_waterfall_click_moves_only_rx_whatever_hold_tx_freq_says() {
         for hold in [false, true] {
@@ -20647,31 +22333,42 @@ mod tests {
     }
 
     /// The hourly QRZ auto-sync persists ONE field. Persisting it through apply_settings
-    /// tore down the whole session (#54): CONTROL — apply_settings really does reset the
-    /// mode and drop the TX queue (that is why the narrow setter exists); then the narrow
-    /// setter advances the cursor and touches neither.
+    /// tore down the whole session (#54): CONTROL — apply_settings really is heavyweight
+    /// (that is why the narrow setter exists); then the narrow setter advances the cursor
+    /// and touches none of it.
+    ///
+    /// The control asserts the QUEUE drop, not a mode reset: since #100 a save no longer
+    /// evaporates a contact in flight (only a Field Day master transition moves the mode).
+    /// A background thread firing this path once an hour would still drop the operator's
+    /// queued over and re-derive the TX cycle from a snapshot, so the narrow setter is as
+    /// load-bearing as it ever was.
     #[test]
     fn the_qrz_sync_cursor_advances_without_the_heavyweight_reset() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 5);
         e.call_station("PJ4DX");
         assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
-        // Control: the heavyweight path kills it.
+        e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
+        // Control: the heavyweight path drops the queued over.
         let s = e.settings().clone();
         e.apply_settings(s);
         assert!(
-            e.snapshot().qso.is_none(),
-            "control: apply_settings must reset the mode, or the narrow setter is pointless"
+            e.tx_queue.is_empty(),
+            "control: apply_settings must drop the TX queue, or the narrow setter is pointless"
         );
-        // Re-arm, then the narrow path: cursor moves, QSO survives.
-        e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
-        e.call_station("PJ4DX");
-        assert!(e.snapshot().qso.is_some(), "harness: re-armed");
+        // Re-arm, then the narrow path: cursor moves, QSO and queue survive.
+        e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
+        assert!(e.snapshot().qso.is_some(), "harness: the QSO is still up");
         e.set_qrz_sync_cursor(1_754_700_000);
         assert_eq!(e.settings().qrz_last_sync_unix, 1_754_700_000);
         assert!(
             e.snapshot().qso.is_some(),
             "advancing the sync cursor must not evaporate an in-flight QSO"
+        );
+        assert_eq!(
+            e.tx_queue.len(),
+            1,
+            "…nor drop the over already queued for it"
         );
     }
 
@@ -20681,8 +22378,13 @@ mod tests {
     /// (#54): mode back to Chat, TX queue dropped, and the TX parity re-derived from the
     /// form's `tx_even` — which, on a struct the panel loaded before the answer picked a
     /// cycle, puts the next over on the DX's own period. CONTROL first (the old path must
-    /// still tear all three down, or this test cannot tell the fix from the bug), then the
+    /// still tear the rest down, or this test cannot tell the fix from the bug), then the
     /// narrow setter, which touches none of them.
+    ///
+    /// TWO of the three, since #100: a save no longer resets the mode (only a Field Day
+    /// master transition does), so the QSO survives the control too. The queue drop and
+    /// the cycle re-derive are untouched — and the cycle one is why a seat swap must never
+    /// take this path, stale form or not.
     #[test]
     fn the_fd_operator_swap_keeps_the_qso_the_queue_and_the_cycle() {
         let mut e = Engine::new("W9XYZ", "EN37", 0);
@@ -20699,14 +22401,10 @@ mod tests {
             "harness: answering a slot-5 decode took the odd cycle"
         );
 
-        // Control: the old path really does tear all three down.
+        // Control: the old path really does tear the queue and the cycle down.
         let mut patched = stale_form.clone();
         patched.fd_operator = "W1ABC".into();
         e.apply_settings(patched);
-        assert!(
-            e.snapshot().qso.is_none(),
-            "control: apply_settings resets the mode"
-        );
         assert!(
             e.tx_queue.is_empty(),
             "control: apply_settings drops the TX queue"
@@ -20715,8 +22413,16 @@ mod tests {
             e.tx_parity, 0,
             "control: apply_settings re-derives the cycle from the stale form"
         );
+        // …and since #100 it leaves the contact itself alone. Asserted, not assumed: this
+        // is the seam the narrowing moved, so it goes red if a save starts killing QSOs
+        // again — from either direction.
+        assert!(
+            e.snapshot().qso.is_some(),
+            "a save must not tear down the contact in flight (#100)"
+        );
 
-        // Re-arm, then the narrow path: the operator changes, nothing else does.
+        // Re-arm the two it DID tear down (a fresh call re-derives the cycle from the
+        // DX's own period), then the narrow path: the operator changes, nothing else does.
         e.ingest_decodes_for_test(&[dec_snr("CQ PJ4DX FK52", -10)], 7);
         e.call_station("PJ4DX");
         assert!(e.snapshot().qso.is_some(), "harness: re-armed");
@@ -20738,6 +22444,80 @@ mod tests {
             e.tx_parity, 1,
             "the answering cycle must survive the swap — a flip transmits on the DX's period"
         );
+    }
+
+    /// #100 (kr4fqg, "Lost logging when in Settings and FT8 completes a call"): pressing
+    /// SAVE in Settings mid-QSO tore the contact down. `apply_settings` reset the mode to
+    /// Chat unconditionally, so the sequencer that owns the contact was thrown away — the
+    /// completion never fired (no auto-log, no `pending_log`), and the manual Log button
+    /// then fell through `log_current_qso`'s `_ => return false` because there was no
+    /// `Mode::Qso` left to read a call out of. One cause, all three of his symptoms.
+    ///
+    /// The save must be narrow enough that a live contact survives it AND still logs.
+    #[test]
+    fn a_settings_save_mid_qso_keeps_the_contact_and_it_still_logs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.call_station("W9XYZ");
+        // Their report comes back — the contact is now loggable (a report was exchanged).
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("W9XYZ"),
+            "harness: a QSO with a report exchanged is in flight"
+        );
+
+        // The operator is sitting in Settings and presses SAVE. The panel sends the whole
+        // struct back, unchanged — this is the ordinary save, not a Field Day toggle.
+        let form = e.settings().clone();
+        e.apply_settings(form);
+
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("W9XYZ"),
+            "a settings save must not tear down the contact in flight (#100)"
+        );
+        // …and the Log button still reaches the logbook, which is what he lost.
+        assert!(
+            e.log_current_qso(),
+            "the Log button must still log the contact after a save (#100)"
+        );
+        assert_eq!(e.get_log().len(), 1, "the contact reached the logbook");
+        assert_eq!(e.get_log()[0].call, "W9XYZ");
+    }
+
+    /// The other half of #100: the mode reset is a FIELD DAY reconcile, so it must still
+    /// happen for Field Day. Master OFF with a live FD session → the engine truly leaves
+    /// `Mode::FieldDay` even though a QSO-bearing mode now survives a save (spec §1.3 —
+    /// a lingering `Mode::FieldDay` strands the operator with the nav hidden). Guards the
+    /// narrowing above from being widened into "a save never touches the mode".
+    #[test]
+    fn the_field_day_master_still_forces_the_exit_after_the_100_narrowing() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        assert!(
+            matches!(e.mode, Mode::FieldDay { .. }),
+            "harness: the master put the engine in Field Day"
+        );
+        // A Field Day RUN, so `cq_running` is genuinely true going in — otherwise the
+        // flag assertion below passes on a flag that was never set.
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.cq_running, "harness: an FD run is calling CQ");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = false;
+            e.apply_settings(s);
+        }
+        assert!(
+            matches!(e.mode, Mode::Chat),
+            "master off must still force the FD exit — not merely hide the chrome"
+        );
+        assert!(!e.cq_running, "and clear the CQ-run flag it left behind");
     }
 
     /// Mode-matrix audit (2026-08-10): apply_settings adopted the form's operating_mode
@@ -22952,9 +24732,18 @@ mod tests {
     /// Master ON but the exchange is incomplete: `apply_settings` must NOT enter
     /// FD on a blank class/section (the exchange goes on the air) — it leaves the
     /// engine non-FD so the setup screen (spec §1.2 #1) can prompt for them.
+    ///
+    /// …and it must leave the operator where they ARE while it declines (#100). This
+    /// is a sticky state — the master stays on until someone turns it off — so the
+    /// old unconditional `mode = Mode::Chat` before the attempt meant EVERY save made
+    /// with FD armed but unconfigured tore down whatever contact was in flight, for a
+    /// Field Day entry that then did not happen.
     #[test]
     fn apply_settings_master_on_without_exchange_stays_out_of_field_day() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // A contact in flight when the save lands.
+        e.call_station("K1ABC");
+        assert!(e.snapshot().qso.is_some(), "harness: a QSO is in flight");
         {
             let mut s = e.settings().clone();
             s.fd_active = true; // master flipped on, but class/section still blank
@@ -22963,6 +24752,11 @@ mod tests {
         assert!(
             e.snapshot().field_day.is_none(),
             "no FD entry without a class/section to transmit"
+        );
+        assert_eq!(
+            e.snapshot().qso.and_then(|q| q.dxcall).as_deref(),
+            Some("K1ABC"),
+            "an FD entry that DECLINED must not have reset the operator to Chat (#100)"
         );
     }
 
@@ -24148,6 +25942,96 @@ mod tests {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::TempoFast);
         assert_eq!(e.ingest_early(&[0.0f32; 48000], 1), 0);
+    }
+
+    /// #103 — pre-QSY audio must not decode into the new band. The in-flight epoch
+    /// guard only catches jobs built BEFORE the context switch; the slot's audio
+    /// captured before a mid-slot QSY is decoded in a boundary job built AFTER it,
+    /// which used to be stamped with the fresh epoch — so the old band's decodes
+    /// sailed through `apply_decode_result` and repopulated the roster the QSY had
+    /// just cleared. Boundary jobs now carry the epoch their CAPTURE began under.
+    #[test]
+    fn a_boundary_job_built_after_a_mid_slot_qsy_lands_stale() {
+        /// A source that always "hears" one CQ — what the old band's air decodes to.
+        struct CannedCq;
+        impl SignalSource for CannedCq {
+            fn label(&self) -> String {
+                "canned-cq".into()
+            }
+            fn mode_kind(&self) -> Option<modes::ModeKind> {
+                Some(modes::ModeKind::Ft8)
+            }
+            fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+                vec![cq_decode_from("W9XYZ")]
+            }
+            fn decode_a7(
+                &mut self,
+                _req: &modes::DecodeRequest,
+                _a7_final: bool,
+            ) -> Vec<modes::Decode> {
+                vec![cq_decode_from("W9XYZ")]
+            }
+        }
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.install_source(Box::new(CannedCq));
+        let frame = vec![0.0f32; 1024];
+
+        // POSITIVE CONTROL first — the async split (build → decode → apply), no QSY:
+        // the decode applies and populates the roster, so the Stale below is the
+        // guard firing and not a broken fixture.
+        let job = e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+        assert!(
+            matches!(
+                e.apply_decode_result(run_decode_job(job)),
+                DecodeApplied::Boundary { .. }
+            ),
+            "control: an un-QSY'd boundary job applies"
+        );
+        assert_eq!(
+            e.snapshot().stations.len(),
+            1,
+            "control: and populates the roster"
+        );
+
+        // The loop rolls the ring into the next slot's capture, still on 20 m…
+        e.begin_slot_capture();
+        // …then the operator QSYs MID-SLOT: roster cleared, epoch bumped — but the
+        // ring still holds 20 m air.
+        e.set_frequency(7.074, "40m", "USB");
+        assert_eq!(
+            e.snapshot().stations.len(),
+            0,
+            "precondition: the QSY cleared the roster"
+        );
+
+        // The boundary job for that slot is built AFTER the QSY, from audio captured
+        // BEFORE it. It must land stale — never populate the new band's roster.
+        let job = e.build_decode_job(frame.clone(), 2, DecodePass::Boundary);
+        assert!(
+            matches!(
+                e.apply_decode_result(run_decode_job(job)),
+                DecodeApplied::Stale
+            ),
+            "a boundary job whose capture predates the QSY must land stale"
+        );
+        assert_eq!(
+            e.snapshot().stations.len(),
+            0,
+            "the old band's decode must not repopulate the new band's roster"
+        );
+
+        // And the very NEXT slot — captured wholly on 40 m — decodes normally again:
+        // one period is lost to the QSY, not the band.
+        e.begin_slot_capture();
+        let job = e.build_decode_job(frame, 3, DecodePass::Boundary);
+        assert!(
+            matches!(
+                e.apply_decode_result(run_decode_job(job)),
+                DecodeApplied::Boundary { .. }
+            ),
+            "the next slot's capture belongs to the new band and applies"
+        );
     }
 
     /// The a7 cross-cycle flag plumb through the decode split
@@ -26165,8 +28049,10 @@ mod tests {
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),
+            omnirig_slot: p.omnirig_slot,
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
+            icom_data_mode: p.icom_data_mode,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
@@ -26178,6 +28064,9 @@ mod tests {
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
+            flex_radio_ip: p.flex_radio_ip.clone(),
+            flex_native_pan: p.flex_native_pan,
+            flex_native_audio: p.flex_native_audio,
         };
 
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -30819,6 +32708,7 @@ mod tests {
                     OperatingMode::Cw => "cw",
                     OperatingMode::Rtty => "rtty",
                     OperatingMode::Digital => "digital",
+                    OperatingMode::Keyboard => "keyboard",
                 };
                 e.set_operating_mode(om_str, false);
                 e.set_sat_transponder(Some(("RS-44|linear".into(), 0, RS44)));
@@ -31459,30 +33349,116 @@ mod tests {
     }
 
     #[test]
-    fn a_beacon_is_bounded_by_the_tx_watchdog_like_everything_else() {
-        // The wall-clock watchdog is implemented inline in poll_tx's QSO arm, ~240
-        // lines BELOW the beacon branch, so beacons had no duration bound at all:
-        // Settings offers "TX watchdog: 6 min" and it silently did not cover the two
-        // modes most likely to be left running unattended.
+    fn a_beacon_is_exempt_from_the_tx_watchdog_but_a_qso_is_not() {
+        // ⚠️ DELIBERATE REVERSAL of `a_beacon_is_bounded_by_the_tx_watchdog_like_
+        // everything_else` — operator-approved 2026-08-17 ("Match WSJT-X"). The
+        // watchdog's premise is idleness; WSPR/FST4W beaconing is unattended repeated
+        // TX by design, and the wall clock was tripping a compliant beacon a few
+        // intervals into every session (#101a). WSJT-X exempts exactly these modes
+        // (mainwindow.cpp: m_mode != "WSPR" && m_mode != "FST4W").
+        for tier in BEACON_TIERS {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_tier(tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            s.tx_watchdog_min = 1;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+
+            assert!(
+                !e.poll_tx(0).is_empty(),
+                "precondition: the {tier:?} beacon keys"
+            );
+
+            // Backdate the watchdog clock far past its limit: the beacon must keep
+            // its schedule regardless.
+            e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+            assert!(
+                !e.poll_tx(1).is_empty(),
+                "a {tier:?} beacon over must not be killed by the wall-clock watchdog"
+            );
+            assert!(!e.tx_watchdog, "no trip is reported for a {tier:?} beacon");
+            assert!(
+                e.tx_enabled(),
+                "TX stays armed — stopping a beacon is the latch"
+            );
+        }
+
+        // The OTHER direction, in the same breath: the non-beacon watchdog is
+        // untouched. A directed QSO over past the same backdated limit still trips.
+        let mut q = Engine::new("KD9TAW", "EN52", 0);
+        q.call_station("W9XYZ");
+        q.settings.tx_watchdog_min = 1;
+        q.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            q.poll_tx(0).is_empty(),
+            "control: a QSO over is still refused"
+        );
+        assert!(q.tx_watchdog, "control: and the trip is visible");
+        assert!(!q.tx_enabled(), "control: and TX is disarmed");
+    }
+
+    #[test]
+    fn a_wspr_beacon_over_writes_one_all_txt_tx_line() {
+        // #101c: the beacon path returns above the QSO arm's ALL.TXT Tx-line writer,
+        // so a WSPR/FST4W session produced an RX-only ALL.TXT — the station's own
+        // transmissions invisible to tailing loggers and to us. Exactly ONE line per
+        // over: poll_tx runs many times inside an interval and re-produces the plan
+        // each time, so an unlatched writer would duplicate the line per poll.
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Wspr);
         let mut s = e.settings().clone();
         s.beacon_tx_percent = 100;
         s.beacon_power_dbm = 37;
-        s.tx_watchdog_min = 1;
+        s.write_all_txt = true;
         e.apply_settings(s);
         e.set_tx_enabled(true);
+        let _ = e.take_all_txt_pending(); // drop anything setup produced
 
-        assert!(!e.poll_tx(0).is_empty(), "precondition: the beacon keys");
+        assert!(!e.poll_tx(4).is_empty(), "precondition: the beacon keys");
+        let _ = e.poll_tx(4); // the loop polls repeatedly inside the same interval
+        let lines = e.take_all_txt_pending();
+        let tx: Vec<&String> = lines.iter().filter(|l| l.contains(" Tx ")).collect();
+        assert_eq!(
+            tx.len(),
+            1,
+            "exactly one Tx line per beacon over: {lines:?}"
+        );
+        assert!(
+            tx[0].contains("KD9TAW EN52 37"),
+            "the line carries the beacon message: {}",
+            tx[0]
+        );
+        assert!(tx[0].contains("WSPR"), "and the mode: {}", tx[0]);
+    }
 
-        // Backdate the watchdog past its limit, as the probe did.
-        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+    #[test]
+    fn a_degenerate_one_slot_round_robin_falls_back_to_the_percent_schedule() {
+        // #101b: `slots = 1` made the RR arithmetic claim every interval — a beacon
+        // that transmits every interval hears nothing, sold as a "rotation". A
+        // degenerate config now means Round-Robin-off: the transmit-% schedule
+        // governs, in BOTH directions.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Fst4w);
+        let mut s = e.settings().clone();
+        s.beacon_rr_slot = 1; // a slot picked…
+        s.beacon_rr_slots = 1; // …in a one-station "rotation"
+        s.beacon_power_dbm = 37;
+        s.beacon_tx_percent = 100;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        assert!(
+            !e.poll_tx(0).is_empty(),
+            "the percent schedule (100%) governs — not the refused rotation"
+        );
+        let mut s = e.settings().clone();
+        s.beacon_tx_percent = 0;
+        e.apply_settings(s);
         assert!(
             e.poll_tx(1).is_empty(),
-            "the beacon kept keying past the watchdog limit"
+            "0% = listen only, honored under a degenerate Round Robin too"
         );
-        assert!(e.tx_watchdog, "the trip must be visible to the operator");
-        assert!(!e.tx_enabled(), "a trip disarms TX");
     }
 
     /// Drive a directed QSO until `call_cap` withholds the over, and return the next

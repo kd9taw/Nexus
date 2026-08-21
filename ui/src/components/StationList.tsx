@@ -1,7 +1,15 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT: the callsigns and
+// message previews in the recents list (data), and the presence CODE a dot's tooltip falls back
+// to ('active' / 'idle' / 'stale') — that is a state value off the wire, not a phrase, and it is
+// migrated with the presence vocabulary rather than spelled out here.
+
 import { useMemo, useState } from 'react'
 import type { Conversation as Conv, NeedAlert, NeedTag, Station, Tier } from '../types'
 import { StationCard } from './StationCard'
 import { tagsForSurface } from '../features/needs'
+import { matchAnyTerm } from '../searchQuery'
+import { t, type MessageKey } from '../i18n'
 
 type Presence = Station['presence'] | 'offline'
 
@@ -44,11 +52,12 @@ interface Props {
   dropAfterCycles?: number
 }
 
-const FILTERS: { id: Filter; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'heard-now', label: 'Heard now' },
-  { id: 'beaconing', label: 'Beaconing' },
-  { id: 'needed', label: 'Needed' },
+/** The filter `id`s are persisted-shaped tokens; only the labels are prose. */
+const FILTERS: { id: Filter; labelKey: MessageKey }[] = [
+  { id: 'all', labelKey: 'roster.filter.all' },
+  { id: 'heard-now', labelKey: 'roster.filter.heardNow' },
+  { id: 'beaconing', labelKey: 'roster.filter.beaconing' },
+  { id: 'needed', labelKey: 'roster.filter.needed' },
 ]
 
 export function StationList({
@@ -71,6 +80,12 @@ export function StationList({
   feedMode,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all')
+  // The search box. Deliberately NOT persisted: a filter chip is a way of working and
+  // survives the session, but a search is a thing you are doing right now, and finding
+  // yesterday's `PA*` still narrowing a 478-station list on the next band is a bug report
+  // waiting to happen. Esc clears it, which is also the way out for anyone who typed into
+  // it by accident and cannot see why the band went quiet.
+  const [query, setQuery] = useState('')
 
   // The full set of need tags per call — union of every alert's tags, deduped, falling
   // back to the single top tier when the alerts map isn't provided. This is what lets
@@ -116,6 +131,12 @@ export function StationList({
 
   const filtered = useMemo(() => {
     let list = stations
+    // The search runs FIRST and against the callsign alone — this list is a column of
+    // calls, and matching the country or the grid behind them would make `ON4*` quietly
+    // return Ontario-nothing and Belgium-everything. `PA* ON4*` is two prefixes the
+    // operator wants, so the terms are alternatives (searchQuery.ts owns that ruling).
+    const matches = matchAnyTerm(query)
+    if (matches) list = list.filter((s) => matches(s.call))
     // Decode-cycle flush (FT cockpit only): count MISSED DECODE CYCLES, not wall time.
     if (dropAfterCycles != null) {
       list = list.filter((s) => currentSlot - s.lastHeardSlot <= dropAfterCycles)
@@ -134,29 +155,37 @@ export function StationList({
     return [...list].sort(
       (a, b) => order[a.presence] - order[b.presence] || b.snr - a.snr,
     )
-  }, [stations, filter, needByCall, needAlertsByCall, band, feedMode, currentSlot, dropAfterCycles])
+  }, [stations, filter, query, needByCall, needAlertsByCall, band, feedMode, currentSlot, dropAfterCycles])
 
   return (
     <aside className="station-list panel">
       <div className="panel-header">
-        <h2>Stations</h2>
-        <span className="count-badge">{stations.length}</span>
+        <h2>{t('roster.title')}</h2>
+        {/* The badge counts what is ON SCREEN, with the total beside it when a filter or a
+            search is holding something back (the Spots panel's idiom). It used to show the
+            total unconditionally, which read as "478 stations" over a list of three. */}
+        <span className="count-badge">{filtered.length}</span>
+        {filtered.length !== stations.length && (
+          <span className="count-badge count-badge-total">
+            {t('roster.countFiltered', { count: stations.length })}
+          </span>
+        )}
       </div>
       <button
         type="button"
         className={`band-row${bandActive ? ' active' : ''}`}
         onClick={onSelectBand}
-        title="Call CQ and see open broadcasts on the band"
+        title={t('roster.band.title')}
       >
         <span className="band-row-star" aria-hidden="true">
           ★
         </span>
-        Band — calling CQ
+        {t('roster.band.label')}
         {!bandActive && bandUnread > 0 && <span className="unread-badge">{bandUnread}</span>}
       </button>
       {recents.length > 0 && (
-        <div className="recent-chats" aria-label="Recent conversations">
-          <div className="recent-head">Recent chats</div>
+        <div className="recent-chats" aria-label={t('roster.recents.aria')}>
+          <div className="recent-head">{t('roster.recents.head')}</div>
           {recents.map((r) => (
             <div
               key={r.peer}
@@ -166,12 +195,12 @@ export function StationList({
                 type="button"
                 className="recent-open"
                 onClick={() => onSelect(r.peer)}
-                title={`Open conversation with ${r.peer}`}
+                title={t('roster.recents.open', { call: r.peer })}
               >
                 <span
                   className={`presence-dot ${r.presence}`}
                   aria-hidden="true"
-                  title={r.presence === 'offline' ? 'not heard recently' : r.presence}
+                  title={r.presence === 'offline' ? t('roster.recents.offline') : r.presence}
                 />
                 <span className="recent-call">{r.peer}</span>
                 <span className="recent-preview">{r.preview}</span>
@@ -183,8 +212,8 @@ export function StationList({
                 type="button"
                 className="recent-archive"
                 onClick={() => onArchive(r.peer)}
-                title="Delete this conversation"
-                aria-label={`Delete conversation with ${r.peer}`}
+                title={t('roster.recents.archive.title')}
+                aria-label={t('roster.recents.archive.aria', { call: r.peer })}
               >
                 ✕
               </button>
@@ -192,23 +221,52 @@ export function StationList({
           ))}
         </div>
       )}
-      {recents.length > 0 && <div className="roster-head">On the band now</div>}
-      <div className="filter-row" role="tablist" aria-label="Station filter">
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            role="tab"
-            aria-selected={filter === f.id}
-            className={`filter-chip${filter === f.id ? ' active' : ''}`}
-            onClick={() => setFilter(f.id)}
-          >
-            {f.label}
-          </button>
-        ))}
+      {recents.length > 0 && <div className="roster-head">{t('roster.onBandNow')}</div>}
+      {/* The chips and the search share one row, which is where the operator asked for it.
+          The `role="tablist"` moved onto the chip group rather than the row: a tablist may
+          only contain tabs, and a textbox inside one is read out wrong by every screen
+          reader. The row keeps `.filter-row` so its padding and rule are the shipped ones. */}
+      <div className="filter-row station-filter-row">
+        <div className="station-filter-tabs" role="tablist" aria-label={t('roster.filter.aria')}>
+          {FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              role="tab"
+              aria-selected={filter === f.id}
+              className={`filter-chip${filter === f.id ? ' active' : ''}`}
+              onClick={() => setFilter(f.id)}
+            >
+              {t(f.labelKey)}
+            </button>
+          ))}
+        </div>
+        <span className="station-search">
+          <input
+            type="search"
+            value={query}
+            placeholder={t('roster.search.placeholder')}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setQuery('')
+            }}
+            aria-label={t('roster.search.label')}
+            title={t('roster.search.title')}
+          />
+          {query && (
+            <button
+              type="button"
+              className="station-search-clear"
+              onClick={() => setQuery('')}
+              title={t('roster.search.clear')}
+            >
+              ✕
+            </button>
+          )}
+        </span>
       </div>
       <div className="station-scroll">
-        {filtered.length === 0 && <p className="empty">No stations match.</p>}
+        {filtered.length === 0 && <p className="empty">{t('roster.empty')}</p>}
         {filtered.map((s) => (
           <StationCard
             key={s.call}

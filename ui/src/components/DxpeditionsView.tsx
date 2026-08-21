@@ -15,6 +15,7 @@ import { modeClassOf } from '../features/needs'
 import { getDxpedWindows } from '../api'
 import { chasingSet, toggleChasing } from '../features/dxpedChase'
 import { alarmMap, setAlarmLead, toggleAlarm } from '../features/dxpedAlarm'
+import { t } from '../i18n'
 
 interface Props {
   snap: PropagationSnapshot | null
@@ -38,13 +39,13 @@ function dxpedWorkMode(modes?: string[]): string | null {
 }
 
 function provenance(source: PropagationSnapshot['source'], asOf: number): { label: string; cls: string } {
-  if (source === 'live') return { label: 'LIVE', cls: 'live' }
-  if (source === 'partial') return { label: 'PARTIAL', cls: 'partial' }
+  if (source === 'live') return { label: t('dxped.prov.live'), cls: 'live' }
+  if (source === 'partial') return { label: t('dxped.prov.partial'), cls: 'partial' }
   if (source === 'cached') {
     const m = Math.max(0, Math.round((Date.now() / 1000 - asOf) / 60))
-    return { label: `CACHED ${m}m`, cls: 'cached' }
+    return { label: t('dxped.prov.cached', { mins: m }), cls: 'cached' }
   }
-  return { label: 'NO LIVE DATA', cls: 'offline' }
+  return { label: t('dxped.prov.none'), cls: 'offline' }
 }
 
 export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Props) {
@@ -96,8 +97,8 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
       <div className="prop">
         <StateBlock
           kind="loading"
-          title="Reading the expedition feeds…"
-          detail="Fetching the announced-operations calendar and who's active now."
+          title={t('dxped.loading.title')}
+          detail={t('dxped.loading.detail')}
         />
       </div>
     )
@@ -114,12 +115,15 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
       <div className="prop-hero-row">
         <div className="prop-hero">
           {activeCount > 0
-            ? `${activeCount} DXpedition${activeCount === 1 ? '' : 's'} on the air now · ${dxpeditions.upcoming.length} announced`
+            ? t('dxped.hero.onAir', {
+                count: activeCount,
+                announced: dxpeditions.upcoming.length,
+              })
             : dxpeditions.upcoming.length > 0
-              ? `No expeditions on the air right now — ${dxpeditions.upcoming.length} announced and coming`
-              : 'No expeditions announced right now'}
+              ? t('dxped.hero.noneOnAir', { announced: dxpeditions.upcoming.length })
+              : t('dxped.hero.none')}
         </div>
-        <span className={`prop-prov prov-${prov.cls}`} title="Data provenance">
+        <span className={`prop-prov prov-${prov.cls}`} title={t('dxped.prov.title')}>
           {prov.label}
         </span>
         {onPopOut && (
@@ -127,20 +131,17 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
             type="button"
             className="dxped-popout"
             onClick={onPopOut}
-            title="Open DXpeditions in its own window (for a second monitor)"
+            title={t('dxped.popOut.title')}
           >
-            ⧉ Pop out
+            {t('dxped.popOut.label')}
           </button>
         )}
       </div>
 
-      <section className="dx-section" aria-label="Workable now">
-        <h2>Work now — needed × on the air</h2>
+      <section className="dx-section" aria-label={t('dxped.workNow.aria')}>
+        <h2>{t('dxped.workNow.head')}</h2>
         {workable.length === 0 ? (
-          <p className="dx-none">
-            Nothing you need is workable right now. New ones appear here the moment a
-            needed expedition is on a band with a real path to you.
-          </p>
+          <p className="dx-none">{t('dxped.workNow.none')}</p>
         ) : (
           <div className="dx-cards">
             {workable.map((c: WorkableCard, i) => (
@@ -166,9 +167,9 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
                   type="button"
                   className="dx-map-link"
                   onClick={() => onShowOnMap(c.call)}
-                  title="Open Connect with this expedition selected on the map"
+                  title={t('dxped.showOnMap.title')}
                 >
-                  ◎ show on map
+                  {t('dxped.showOnMap.label')}
                 </button>
               </div>
             ))}
@@ -186,7 +187,7 @@ export function DxpeditionsView({ snap, onWorkSpot, onShowOnMap, onPopOut }: Pro
         onAlarmLead={onAlarmLead}
       />
       {dxpeditions.upcoming.length === 0 && (
-        <p className="dx-none">The forward calendar is empty — announced operations land here.</p>
+        <p className="dx-none">{t('dxped.calendar.empty')}</p>
       )}
     </div>
   )

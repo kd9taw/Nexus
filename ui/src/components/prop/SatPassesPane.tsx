@@ -11,7 +11,12 @@
 // row, and a ★ bird the view could not place at all is NAMED under the list
 // rather than dropped (an absent bird reads as "no pass this window", which is
 // a different and much more encouraging claim than "no current elements").
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
+// words come from the catalog; the bird names, the Z clock times, the compass
+// octants, the elevations and the durations are data and stay here.
 import { useEffect, useState } from 'react'
+import { t } from '../../i18n'
 import type { SatView } from '../../types'
 import { getSatellites } from '../../api'
 import { satBirdHealth, satExcludedHealth } from '../../features/satHealth'
@@ -35,19 +40,25 @@ function octant(az: number): string {
 
 function timeLabel(unix: number, now: number): string {
   const mins = Math.round((unix - now) / 60)
-  if (mins <= 0) return 'now'
-  if (mins < 60) return `in ${mins} min`
+  if (mins <= 0) return t('sat.passesPane.now')
+  if (mins < 60) return t('sat.passesPane.inMins', { mins })
   const d = new Date(unix * 1000)
   return `${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}Z`
 }
 
 /** One plain sentence for the Basic projection (exported for paneFormat). */
 export function satPassesLine(sats: SatView | null): string {
-  if (!sats) return 'No orbital elements yet — satellite data loads once online.'
+  if (!sats) return t('sat.passesPane.noElements')
   const now = Date.now() / 1000
   const next = sats.passes.find((p) => p.losUnix > now)
-  if (!next) return 'No passes over your QTH in the next 24 h (set your grid in Settings?).'
-  return `Next: ${next.name} ${timeLabel(next.aosUnix, now)}, max ${Math.round(next.maxElDeg)}° ${octant(next.aosAzDeg)}→${octant(next.losAzDeg)}.`
+  if (!next) return t('sat.passesPane.noPasses')
+  return t('sat.passesPane.line', {
+    name: next.name,
+    when: timeLabel(next.aosUnix, now),
+    maxEl: Math.round(next.maxElDeg),
+    aos: octant(next.aosAzDeg),
+    los: octant(next.losAzDeg),
+  })
 }
 
 export function SatPassesPane() {
@@ -114,12 +125,10 @@ export function SatPassesPane() {
         <button
           type="button"
           className={`sat-fav-toggle${favOnly ? ' on' : ''}`}
-          aria-label="Filter to ★ birds"
+          aria-label={t('sat.passesPane.favFilter.aria')}
           aria-pressed={favOnly}
           title={
-            favOnly
-              ? 'Showing your ★ birds (map + globe follow) — click to show all satellites'
-              : 'Showing all satellites — click to show only your ★ birds (map + globe follow)'
+            favOnly ? t('sat.passesPane.favFilter.on') : t('sat.passesPane.favFilter.off')
           }
           onClick={() => {
             const next = !favOnly
@@ -127,7 +136,7 @@ export function SatPassesPane() {
             setFavOnly(next)
           }}
         >
-          {favOnly ? '★' : 'All'}
+          {favOnly ? '★' : t('sat.passesPane.favFilter.all')}
         </button>
       </div>
       {/* Same 14 d line, same set-wide median, as the Satellites chip — this
@@ -140,19 +149,16 @@ export function SatPassesPane() {
           warning is a pane nobody reads (the majority test lives in
           elementBands.ts, shared with the Now-Bar lane). */}
       {sats.tleAgeDays > 14 ? (
-        <p className="sat-stale" title="Orbital elements decay; pass times drift as they age">
-          stale elements ({Math.round(sats.tleAgeDays)} d) — times are approximate
+        <p className="sat-stale" title={t('sat.passesPane.stale.title')}>
+          {t('sat.passesPane.stale', { days: Math.round(sats.tleAgeDays) })}
         </p>
       ) : elementsMostlyPastLine(sats) ? (
-        <p
-          className="sat-stale"
-          title="The typical bird in your catalog is still current, so the times below are good for it — but most of the set is past the 14-day line, or held back past 30 days. Refresh elements from the Satellites section."
-        >
-          {elementsPastLineLabel(sats)} — most times are approximate
+        <p className="sat-stale" title={t('sat.passesPane.mostlyStale.title')}>
+          {t('sat.passesPane.mostlyStale', { label: elementsPastLineLabel(sats) })}
         </p>
       ) : null}
       {rows.length === 0 ? (
-        <p className="sat-fav-empty">No passes for your ★ birds in the next 24 h.</p>
+        <p className="sat-fav-empty">{t('sat.passesPane.favEmpty')}</p>
       ) : (
       <ul className="sat-list">
         {rows.slice(0, 14).map((p) => {
@@ -169,7 +175,7 @@ export function SatPassesPane() {
                   toggleSatChasing(p.name, p.norad)
                   setKeys(satChaseKeys())
                 }}
-                title={isChased ? 'Chasing — sorts first, footprint ring on the map. Click to stop.' : 'Chase this bird — sort its passes first + draw its footprint on the map'}
+                title={isChased ? t('sat.passesPane.chase.on') : t('sat.passesPane.chase.off')}
                 aria-pressed={isChased}
               >
                 {isChased ? '★' : '☆'}
@@ -183,15 +189,17 @@ export function SatPassesPane() {
               <span className="sat-when">{timeLabel(p.aosUnix, now)}</span>
               <span
                 className="sat-el"
-                title={`Peak elevation ${p.maxElDeg.toFixed(0)}° — higher = longer, stronger pass`}
+                title={t('sat.passesPane.peakEl.title', { el: p.maxElDeg.toFixed(0) })}
               >
                 {Math.round(p.maxElDeg)}°
               </span>
-              <span className="sat-arc" title="Rise → set compass directions">
+              <span className="sat-arc" title={t('sat.passesPane.arc.title')}>
                 {octant(p.aosAzDeg)}→{octant(p.losAzDeg)}
               </span>
               <span className="sat-dur">
-                {Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))} min
+                {t('sat.passesPane.duration', {
+                  mins: Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60)),
+                })}
               </span>
             </li>
           )

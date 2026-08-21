@@ -64,7 +64,7 @@ vi.mock('./OperateDecodes', async (importOriginal) => {
 })
 const captured = (OD as unknown as { __captured: Array<Record<string, unknown>> }).__captured
 
-function makeSnap(over: { transmitting?: boolean } = {}): AppSnapshot {
+function makeSnap(over: { transmitting?: boolean; atu?: boolean | null } = {}): AppSnapshot {
   return {
     mycall: 'KD9TAW',
     mygrid: 'EN61',
@@ -93,6 +93,9 @@ function makeSnap(over: { transmitting?: boolean } = {}): AppSnapshot {
       txAllowed: true,
       transmitting: over.transmitting ?? false,
       tuning: false,
+      // A rig WITH a tuner by default, so the dock-law sweep covers the ATU button;
+      // `atu: null` models a tuner-less rig (the button must then not render at all).
+      atu: over.atu === undefined ? true : over.atu,
       qsoRecording: false,
       catOk: true,
       splitTxMhz: null,
@@ -117,7 +120,7 @@ function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLay
 
 function renderCockpit(
   state: Partial<Record<OperatePanelId, PanelState>>,
-  over: { transmitting?: boolean; layoutMode?: 'classic' | 'roster' } = {},
+  over: { transmitting?: boolean; atu?: boolean | null; layoutMode?: 'classic' | 'roster' } = {},
 ) {
   const noop = () => {}
   const onCall = vi.fn()
@@ -164,6 +167,7 @@ const PROTECTED = [
   /s&p/i,
   /tx off|tx on/i,
   /^tune$/i,
+  /^atu$/i,
   /stop tx/i,
   /hold tx$/i,
   /tx auto/i,
@@ -264,6 +268,11 @@ describe('the merged operating strip is the un-removable TX surface', () => {
     renderCockpit({}, { transmitting: true })
     const cap = screen.getByText('▲ TRANSMITTING')
     expect(cap.closest('.cockpit-qso')).not.toBeNull()
+  })
+
+  it('a rig with no tuner gets NO ATU button (an ATU button on a radio with no ATU is worse than no button)', () => {
+    renderCockpit({}, { atu: null })
+    expect(screen.queryByRole('button', { name: /^atu$/i })).toBeNull()
   })
 })
 

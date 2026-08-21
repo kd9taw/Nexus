@@ -1,3 +1,8 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT come from it: every
+// title, meaning, heritage note, gate hint, unit, rung label and personal-best value on this
+// surface, which the backend (`get_journey`) writes and hands over as data.
+
 import { useEffect, useState } from 'react'
 import type {
   JourneyCollection,
@@ -8,6 +13,7 @@ import type {
   JourneyTier,
 } from '../types'
 import { getJourney, getSettings } from '../api'
+import { t } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { shareCard } from '../features/shareCard'
 
@@ -41,13 +47,17 @@ export function JourneyView() {
   if (err)
     return (
       <div className="journey-view">
-        <StateBlock kind="error" title="Couldn't load your Journey" detail={err} />
+        <StateBlock kind="error" title={t('journey.load.failed.title')} detail={err} />
       </div>
     )
   if (!j)
     return (
       <div className="journey-view">
-        <StateBlock kind="loading" title="Loading your Journey…" detail="Reading your log." />
+        <StateBlock
+          kind="loading"
+          title={t('journey.loading.title')}
+          detail={t('journey.loading.detail')}
+        />
       </div>
     )
 
@@ -59,55 +69,68 @@ export function JourneyView() {
       {/* Hero: level + XP + the single most-attainable next milestone (goal-gradient) */}
       <section className="jy-hero panel">
         <div className="jy-level">
-          <div className="jy-level-badge" title={`${j.xp.toLocaleString()} XP earned`}>
+          <div
+            className="jy-level-badge"
+            title={t('journey.xpEarned.title', { xp: j.xp.toLocaleString() })}
+          >
             <span className="jy-level-num">{j.level}</span>
-            <span className="jy-level-cap">level</span>
+            <span className="jy-level-cap">{t('journey.levelCap')}</span>
           </div>
           <div className="jy-level-bar-wrap">
             <div className="jy-level-top">
-              <strong>Level {j.level}</strong>
+              <strong>{t('journey.level', { level: j.level })}</strong>
               <span className="jy-xp">
-                {j.xpIntoLevel.toLocaleString()} / {j.xpForLevel.toLocaleString()} XP to level{' '}
-                {j.level + 1}
+                {t('journey.xpToLevel', {
+                  into: j.xpIntoLevel.toLocaleString(),
+                  forLevel: j.xpForLevel.toLocaleString(),
+                  next: j.level + 1,
+                })}
               </span>
             </div>
             <div className="jy-bar">
               <div className="jy-bar-fill" style={{ width: `${xpPct}%` }} />
             </div>
             <div className="jy-hero-meta">
-              <span>{j.totalQsos.toLocaleString()} QSOs logged</span>
+              <span>{t('journey.qsosLogged', { qsos: j.totalQsos.toLocaleString() })}</span>
               {j.streak.enabled && j.streak.weeks > 0 && (
-                <span className="jy-streak" title="Consecutive weeks with at least one contact">
-                  {j.streak.weeks} week{j.streak.weeks === 1 ? '' : 's'} on the air
-                  {j.streak.activeThisWeek ? '' : ' · this week pending'}
+                <span className="jy-streak" title={t('journey.streak.title')}>
+                  {t('journey.streak', { count: j.streak.weeks })}
+                  {j.streak.activeThisWeek ? '' : t('journey.streak.pending')}
                 </span>
               )}
             </div>
           </div>
         </div>
         {j.nextMilestone && (
-          <div className="jy-next" title="Your most-attainable next milestone">
-            <span className="jy-next-cap">Next milestone</span>
+          <div className="jy-next" title={t('journey.next.title')}>
+            <span className="jy-next-cap">{t('journey.next.cap')}</span>
             <strong className="jy-next-title">{j.nextMilestone.title}</strong>
             <span className="jy-next-go">
-              {j.nextMilestone.remaining} to go ({j.nextMilestone.current}/{j.nextMilestone.target})
+              {t('journey.next.go', {
+                remaining: j.nextMilestone.remaining,
+                current: j.nextMilestone.current,
+                target: j.nextMilestone.target,
+              })}
             </span>
           </div>
         )}
         <button
           type="button"
           className="jy-share"
-          title="Copy a share-card image of your Journey (local render — nothing is uploaded)"
+          title={t('journey.share.title')}
           onClick={() =>
             shareCard({
-              call: myCall || 'MY STATION',
-              headline: `Level ${j.level}`,
-              sub: `${j.totalQsos.toLocaleString()} QSOs logged · ${j.xp.toLocaleString()} XP`,
-              footer: 'Journey · Nexus',
+              call: myCall || t('journey.share.anonCall'),
+              headline: t('journey.level', { level: j.level }),
+              sub: t('journey.share.sub', {
+                qsos: j.totalQsos.toLocaleString(),
+                xp: j.xp.toLocaleString(),
+              }),
+              footer: t('journey.share.footer'),
             })
           }
         >
-          ⤴ Share
+          {t('journey.share.label')}
         </button>
       </section>
 
@@ -115,27 +138,34 @@ export function JourneyView() {
       {j.marathon && (
         <section className="jy-section">
           <div className="jy-section-head">
-            <h2>DX Marathon {j.marathon.year}</h2>
-            <span className="jy-section-note">
-              Entities + zones worked this calendar year — resets every Jan 1 (CQ DX
-              Marathon-style, personal).
-            </span>
+            <h2>{t('journey.marathon.head', { year: j.marathon.year })}</h2>
+            <span className="jy-section-note">{t('journey.marathon.note')}</span>
           </div>
           <div className="jy-marathon panel">
-            <span className="jy-marathon-score" title="Entities + zones this year">
+            <span className="jy-marathon-score" title={t('journey.marathon.score.title')}>
               {j.marathon.score}
             </span>
             <span className="jy-marathon-parts">
-              {j.marathon.entities} entities · {j.marathon.zones} zones
+              {t('journey.marathon.parts', {
+                entities: j.marathon.entities,
+                zones: j.marathon.zones,
+              })}
             </span>
             {j.marathon.bestYear != null && j.marathon.bestYear !== j.marathon.year && (
               <span className="jy-marathon-best">
-                personal best {j.marathon.bestScore} ({j.marathon.bestYear})
-                {j.marathon.score > j.marathon.bestScore ? ' — beaten!' : ''}
+                {j.marathon.score > j.marathon.bestScore
+                  ? t('journey.marathon.bestBeaten', {
+                      score: j.marathon.bestScore,
+                      year: j.marathon.bestYear,
+                    })
+                  : t('journey.marathon.best', {
+                      score: j.marathon.bestScore,
+                      year: j.marathon.bestYear,
+                    })}
               </span>
             )}
             {j.marathon.bestYear === j.marathon.year && j.marathon.score > 0 && (
-              <span className="jy-marathon-best">your best year yet</span>
+              <span className="jy-marathon-best">{t('journey.marathon.bestYear')}</span>
             )}
           </div>
         </section>
@@ -144,7 +174,7 @@ export function JourneyView() {
       {/* Firsts — the moments that kill the first-100-QSO motivational dead zone. */}
       <section className="jy-section">
         <div className="jy-section-head">
-          <h2>Firsts</h2>
+          <h2>{t('journey.firsts.head')}</h2>
           <span className="jy-count">
             {firstsDone}/{j.firsts.length}
           </span>
@@ -159,10 +189,8 @@ export function JourneyView() {
       {/* Ladders — tiered sub-awards climbing toward the big official awards. */}
       <section className="jy-section">
         <div className="jy-section-head">
-          <h2>Climb toward the awards</h2>
-          <span className="jy-section-note">
-            Sub-award ladders — the official awards are the capstones in the Awards tab.
-          </span>
+          <h2>{t('journey.ladders.head')}</h2>
+          <span className="jy-section-note">{t('journey.ladders.note')}</span>
         </div>
         <div className="jy-ladders">
           {j.ladders.map((l) => (
@@ -174,7 +202,7 @@ export function JourneyView() {
       {/* Collections — fill-the-map boards. */}
       <section className="jy-section">
         <div className="jy-section-head">
-          <h2>Collections</h2>
+          <h2>{t('journey.collections.head')}</h2>
         </div>
         <div className="jy-collections">
           {j.collections.map((c) => (
@@ -186,7 +214,7 @@ export function JourneyView() {
       {/* Feats — novel, ham-native accomplishments. */}
       <section className="jy-section">
         <div className="jy-section-head">
-          <h2>Feats</h2>
+          <h2>{t('journey.feats.head')}</h2>
         </div>
         <div className="jy-feats">
           {j.feats.map((f) => (
@@ -199,7 +227,7 @@ export function JourneyView() {
       {j.bests.length > 0 && (
         <section className="jy-section">
           <div className="jy-section-head">
-            <h2>Personal bests</h2>
+            <h2>{t('journey.bests.head')}</h2>
           </div>
           <div className="jy-bests">
             {j.bests.map((b) => (
@@ -217,9 +245,10 @@ export function JourneyView() {
 }
 
 function FirstChip({ first }: { first: JourneyFirst }) {
+  // Unlocked: the backend's own meaning, with its heritage note under it — no prose of ours.
   const title = first.unlocked
     ? `${first.meaning}${first.heritage ? `\n\n${first.heritage}` : ''}`
-    : `Locked — ${first.meaning}`
+    : t('journey.first.locked.title', { meaning: first.meaning })
   return (
     <div className={`jy-first${first.unlocked ? ' done' : ''}`} title={title}>
       <span className="jy-first-mark">{first.unlocked ? '✦' : '○'}</span>
@@ -241,8 +270,8 @@ function LadderCard({ ladder }: { ladder: JourneyLadder }) {
         <strong>{ladder.title}</strong>
         <span className="jy-ladder-count">
           {ladder.worked}
-          <span className="jy-dim"> worked</span> · {ladder.confirmed}
-          <span className="jy-dim"> confirmed</span> / {ladder.max}
+          <span className="jy-dim"> {t('journey.ladder.worked')}</span> · {ladder.confirmed}
+          <span className="jy-dim"> {t('journey.ladder.confirmed')}</span> / {ladder.max}
         </span>
       </div>
       <p className="jy-ladder-meaning">{ladder.meaning}</p>
@@ -268,12 +297,12 @@ function LadderCard({ ladder }: { ladder: JourneyLadder }) {
             {ladder.nextRung.label}
           </span>
           <span className="jy-ladder-go">
-            {ladder.nextRung.target - ladder.worked} to go
+            {t('journey.ladder.toGo', { count: ladder.nextRung.target - ladder.worked })}
           </span>
         </div>
       ) : (
         <div className="jy-ladder-next">
-          <span className="jy-tier-pill jy-tier-platinum">Complete ★</span>
+          <span className="jy-tier-pill jy-tier-platinum">{t('journey.ladder.complete')}</span>
         </div>
       )}
     </div>
@@ -298,7 +327,13 @@ function CollectionCard({ collection }: { collection: JourneyCollection }) {
           <span
             key={c.key}
             className={`jy-cell${c.worked ? ' worked' : ''}${c.confirmed ? ' confirmed' : ''}`}
-            title={`${c.label}${c.confirmed ? ' — confirmed' : c.worked ? ' — worked' : ' — needed'}`}
+            title={
+              c.confirmed
+                ? t('journey.cell.confirmed.title', { label: c.label })
+                : c.worked
+                  ? t('journey.cell.worked.title', { label: c.label })
+                  : t('journey.cell.needed.title', { label: c.label })
+            }
           >
             {labelled ? c.label : ''}
           </span>
@@ -308,12 +343,20 @@ function CollectionCard({ collection }: { collection: JourneyCollection }) {
   )
 }
 
-const TIER_LABEL: Record<JourneyTier, string> = {
-  bronze: 'Bronze',
-  silver: 'Silver',
-  gold: 'Gold',
-  platinum: 'Platinum',
-  legendary: 'Legendary',
+/** The five tier names. A switch rather than a table so each key is a literal at its use. */
+function tierLabel(tier: JourneyTier): string {
+  switch (tier) {
+    case 'bronze':
+      return t('journey.tier.bronze')
+    case 'silver':
+      return t('journey.tier.silver')
+    case 'gold':
+      return t('journey.tier.gold')
+    case 'platinum':
+      return t('journey.tier.platinum')
+    case 'legendary':
+      return t('journey.tier.legendary')
+  }
 }
 
 function FeatCard({ feat, myCall }: { feat: JourneyFeat; myCall?: string }) {
@@ -327,18 +370,18 @@ function FeatCard({ feat, myCall }: { feat: JourneyFeat; myCall?: string }) {
       <div className="jy-feat-head">
         <span className="jy-feat-mark">{feat.unlocked ? '★' : feat.gated ? '🔒' : '○'}</span>
         <strong>{feat.title}</strong>
-        <span className={`jy-tier-pill jy-tier-${feat.tier}`}>{TIER_LABEL[feat.tier]}</span>
+        <span className={`jy-tier-pill jy-tier-${feat.tier}`}>{tierLabel(feat.tier)}</span>
         {feat.unlocked && (
           <button
             type="button"
             className="jy-share jy-share-sm"
-            title="Copy a share-card image of this feat (local render — nothing is uploaded)"
+            title={t('journey.share.feat.title')}
             onClick={() =>
               shareCard({
-                call: myCall || 'MY STATION',
+                call: myCall || t('journey.share.anonCall'),
                 headline: feat.title,
                 sub: feat.meaning,
-                footer: `${TIER_LABEL[feat.tier]} feat · Journey · Nexus`,
+                footer: t('journey.share.featFooter', { tier: tierLabel(feat.tier) }),
               })
             }
           >

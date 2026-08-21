@@ -437,11 +437,23 @@ describe('hotkeyRecallTarget — Ctrl+1..9 quick recall', () => {
     expect(hotkeyRecallTarget(chord({ code: 'Digit3' }), bank)).toBeNull()
   })
 
-  it('requires Ctrl ALONE — Alt/Meta/Shift + digit are other rigs’ shortcuts', () => {
+  it('requires exactly one of Ctrl/Cmd — Alt/Shift + digit are other rigs’ shortcuts', () => {
     expect(hotkeyRecallTarget(chord({ ctrlKey: false }), bank)).toBeNull()
     expect(hotkeyRecallTarget(chord({ altKey: true }), bank)).toBeNull() // Alt+1 = FT8 Tx
-    expect(hotkeyRecallTarget(chord({ metaKey: true }), bank)).toBeNull()
     expect(hotkeyRecallTarget(chord({ shiftKey: true }), bank)).toBeNull()
+    // Both modifiers at once is not a recall chord either.
+    expect(hotkeyRecallTarget(chord({ metaKey: true, ctrlKey: true }), bank)).toBeNull()
+  })
+
+  // Mac QA audit: Cmd+digit is the native macOS app-slot chord, and Ctrl+digit there is
+  // Mission Control's Spaces switch (consumed by the OS) — so Cmd must recall too. Accepted
+  // on every platform: cheap, harmless, and one policy to test.
+  it('accepts Cmd+digit exactly like Ctrl+digit (the mac chord)', () => {
+    expect(hotkeyRecallTarget(chord({ ctrlKey: false, metaKey: true }), bank)?.id).toBe('a')
+    expect(
+      hotkeyRecallTarget(chord({ ctrlKey: false, metaKey: true, code: 'Digit2' }), bank)?.id,
+    ).toBe('b')
+    expect(hotkeyRecallTarget(chord({ ctrlKey: false, metaKey: true, altKey: true }), bank)).toBeNull()
   })
 
   it('ignores non-digit and numpad codes', () => {

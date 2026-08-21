@@ -1112,15 +1112,25 @@ export function resolveColormap(palette: string, theme: string): ColormapName {
  * LEFT = RX is the one gesture that must never move: it is identical in stock WSJT-X and in
  * JTDX, so it is universal muscle memory. Everything else layers on top:
  *
- * | gesture      | target | origin                          |
- * |--------------|--------|---------------------------------|
- * | left         | rx     | WSJT-X + JTDX                   |
- * | Shift + left | tx     | WSJT-X                          |
- * | right        | tx     | JTDX (operator ask 2026-07-26)  |
- * | Ctrl + left  | both   | WSJT-X                          |
+ * | gesture         | target | origin                                        |
+ * |-----------------|--------|-----------------------------------------------|
+ * | left            | rx     | WSJT-X + JTDX                                 |
+ * | Shift + left    | tx     | WSJT-X                                        |
+ * | right           | tx     | JTDX (operator ask 2026-07-26)                |
+ * | Ctrl + click    | both   | WSJT-X                                        |
+ * | Cmd (⌘) + left  | both   | WSJT-X on macOS (Qt maps its Ctrl to ⌘ there) |
  *
  * Right-click is ADDITIVE: stock WSJT-X binds no right-button action, so supporting JTDX's
  * here costs a WSJT-X operator nothing and both conventions work at once.
+ *
+ * TWO macOS facts shape the modifier handling (mac QA audit 2026-08-17):
+ * - Ctrl+left-click IS the OS right-click gesture — WebKit delivers it as a button-2 press
+ *   with ctrlKey set. Testing `button === 2` before the modifier sent the advertised
+ *   "Ctrl = both" chord down the TX-only arm, silently moving the WRONG marker. So Ctrl is
+ *   checked FIRST, on either button: a deliberate JTDX right-click with Ctrl held is not a
+ *   real gesture in any client, so folding it into 'both' costs nothing anywhere.
+ * - A mac WSJT-X operator's muscle memory for "both" is ⌘-click (Qt swaps Ctrl/Cmd), so
+ *   metaKey+left is 'both' too — accepted on every platform, harmless where ⌘ doesn't exist.
  *
  * ⚠️ Nexus once shipped left=TX / right=RX — its own invention, which moved the WRONG marker
  * for anyone arriving from either mainstream client. Do not "restore" it.
@@ -1132,10 +1142,12 @@ export function tuneTarget(
   button: number,
   ctrlKey: boolean,
   shiftKey: boolean,
+  metaKey: boolean,
 ): 'tx' | 'rx' | 'both' | null {
-  if (button === 2) return 'tx' // JTDX right-click, before any modifier
+  if (ctrlKey && (button === 0 || button === 2)) return 'both' // before button 2 — see above
+  if (button === 2) return 'tx' // JTDX right-click
   if (button !== 0) return null
-  if (ctrlKey) return 'both'
+  if (metaKey) return 'both' // ⌘+click — mac WSJT-X parity
   if (shiftKey) return 'tx'
   return 'rx'
 }

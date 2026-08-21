@@ -325,4 +325,44 @@ describe('SSTV text overlays', () => {
     fireEvent.click(reply2)
     expect((screen.getByLabelText('Overlay text') as HTMLInputElement).value).toBe('ON8ST DE KD9TAW 599')
   })
+
+  // ⚠️ THE DRAG THAT SNAPPED BACK (operator report, 2026-08-18: "it continues to snap it back
+  // to the center after dragging and dropping it"). The overlay ref is written IMPERATIVELY by
+  // the pointer-move handler — deliberately, so a drag costs no React render per frame — and
+  // only landed in state on release. But `overlaysRef.current = overlays` ran during EVERY
+  // render, and this component re-renders on every snapshot poll, so an unrelated re-render
+  // mid-gesture threw the in-flight drag away and put the item back at its last committed
+  // position (its birth position: cx 0.5). Release then committed that clobbered ref, making
+  // the snap-back permanent rather than cosmetic.
+  //
+  // The re-render below is the whole point of the test: without it the bug is invisible, which
+  // is exactly why the original overlay suite passed while dragging was broken in the field.
+  it('a drag survives a re-render mid-gesture instead of snapping back to centre', async () => {
+    installRecordingCanvas() // stubs Image + 2D context, or the picture never finishes loading
+    const { rerender } = render(<SstvView snap={snap} />)
+    await loadPicture()
+    fireEvent.click(screen.getByRole('button', { name: 'CQ' }))
+
+    const canvas = document.querySelector('.sstv-tx-preview') as HTMLCanvasElement
+    const outline = () => document.querySelector('.sstv-ov-outline') as HTMLElement | null
+    expect(outline(), 'the new item is selected, so its outline renders').not.toBeNull()
+    const before = outline()!.style.left
+
+    // Grab the item where it is born (presetCq: cx 0.5, cy 0.24) and drag it right.
+    const x0 = canvas.width * 0.5
+    const y0 = canvas.height * 0.24
+    fireEvent.pointerDown(canvas, { pointerId: 1, clientX: x0, clientY: y0 })
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: x0 + 60, clientY: y0 })
+
+    // THE SNAPSHOT POLL, mid-drag — a new object identity, exactly as the app delivers it.
+    rerender(<SstvView snap={{ ...snap }} />)
+
+    fireEvent.pointerUp(canvas, { pointerId: 1 })
+
+    expect(
+      outline()!.style.left,
+      'the dragged position must survive the re-render and the release',
+    ).not.toBe(before)
+  })
+
 })

@@ -1,5 +1,8 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; the radios' own profile names are interpolated as they are.
 import { Radio } from 'lucide-react'
 import type { RadioLaunchInfo } from '../api'
+import { t } from '../i18n'
 
 /** First-screen launch picker for the two-radio setup: "which radio is this window?" Shown only
  *  when simultaneous-radios is enabled AND ≥2 radios are configured AND this window launched
@@ -17,16 +20,18 @@ export function RadioPicker({
   onSingleRadio: () => void
 }) {
   return (
-    <div className="radio-picker-overlay" role="dialog" aria-modal="true" aria-label="Choose radio">
+    <div
+      className="radio-picker-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t('radios.picker.aria')}
+    >
       <div className="radio-picker">
         <div className="radio-picker-head">
           <Radio size={22} aria-hidden="true" />
-          <h1>Which radio?</h1>
+          <h1>{t('radios.picker.title')}</h1>
         </div>
-        <p className="radio-picker-sub">
-          You have two radios running at once. Pick the radio this window will operate — you can
-          open a second window for the other. They share one logbook.
-        </p>
+        <p className="radio-picker-sub">{t('radios.picker.sub')}</p>
         <div className="radio-picker-list">
           {info.radios.map((r) => (
             <button
@@ -34,16 +39,20 @@ export function RadioPicker({
               type="button"
               className={`radio-picker-btn${r.inUse ? ' in-use' : ''}`}
               disabled={r.inUse}
-              title={r.inUse ? `${r.name} is already open in another window` : `Operate ${r.name}`}
+              title={
+                r.inUse
+                  ? t('radios.picker.inUse.title', { name: r.name })
+                  : t('radios.picker.choose.title', { name: r.name })
+              }
               onClick={() => onChoose(r.id)}
             >
               <span className="radio-picker-name">{r.name}</span>
-              {r.inUse && <span className="radio-picker-tag">in use</span>}
+              {r.inUse && <span className="radio-picker-tag">{t('radios.picker.inUse.tag')}</span>}
             </button>
           ))}
         </div>
         <button type="button" className="radio-picker-single" onClick={onSingleRadio}>
-          Use one radio (follow bands on a single window)
+          {t('radios.picker.single')}
         </button>
       </div>
     </div>

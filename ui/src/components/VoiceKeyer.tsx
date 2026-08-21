@@ -1,3 +1,12 @@
+// ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
+// reason only: this pane's two ■ Stop buttons are still written in English here — ■ Stop,
+// which really does end an over (stopVoice → Engine::stop_voice flushes the output ring and
+// unkeys), and the ■ Stop & save beside it, which ends the RECORDER. The first is a stop
+// control however few sweeps look for it (it is pane-resident, so it is deliberately on no
+// stop-line list), and the second shares its vocabulary; they move together in the
+// transmit-path batch so the pair cannot be reworded apart. Everything else is in the
+// catalog under `phone.keyer.*` — F1–F6 are key names, a slot's own label is the operator's
+// words, and both stay in the code.
 import { useEffect, useRef, useState } from 'react'
 import type { VoiceMessage } from '../types'
 import {
@@ -11,6 +20,12 @@ import {
   stopVoiceRecording,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { IS_MAC, FN_KEY_HINT } from '../platform'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
+
+/** The recorder's own plate — REC is the rig's word, the ● its state glyph. */
+const REC_PLATE = '● REC'
 
 interface Props {
   /** Whether TX is enabled (Monitor). Playback/record are no-ops when off — we surface why. */
@@ -28,18 +43,19 @@ interface Props {
   fdExchange?: string | null
 }
 
-/**
- * THE INPUT-DEVICE WARNING, and it is not chrome. It had a `.vk-note` paragraph of its own —
- * two permanent lines of the pane at every window, in a leading column that already overflows
- * its track (density pass, 2026-08-04). The ROW went; the SENTENCE did not, because recording
- * the rig's RX audio into a slot puts the WRONG AUDIO on the air the moment the slot is
- * played, which is an on-air failure, not 40px of ornament. It now rides BOTH controls that
- * start a recording — the ● tool, and the slot button itself while the slot is empty — since
- * either one is where the operator is standing when it matters. Pinned in
- * PhoneCockpit.density.test.tsx, which asserts the sentence rather than the deletion.
- */
-const RECORD_HINT =
-  "Records from your INPUT DEVICE — often the rig's RX audio, not a mic. If it is, record the message elsewhere and use Import (⤓)."
+// THE INPUT-DEVICE WARNING, and it is not chrome. It had a `.vk-note` paragraph of its own —
+// two permanent lines of the pane at every window, in a leading column that already overflows
+// its track (density pass, 2026-08-04). The ROW went; the SENTENCE did not, because recording
+// the rig's RX audio into a slot puts the WRONG AUDIO on the air the moment the slot is
+// played, which is an on-air failure, not 40px of ornament. It rides BOTH controls that start
+// a recording — the ● tool, and the slot button itself while the slot is empty — since either
+// one is where the operator is standing when it matters. Pinned in
+// PhoneCockpit.density.test.tsx, which asserts the sentence rather than the deletion.
+//
+// It is no longer a `RECORD_HINT` constant spliced onto "Record F3. " but a clause of ONE
+// catalog sentence, `phone.keyer.slot.record.title`: a warning glued to a stem cannot be
+// translated into a language that orders the two the other way round. Both controls name the
+// whole sentence and pass their slot.
 
 /**
  * Phone voice keyer (casual) — F1–F6 message slots, each a recorded 12 kHz mono WAV played
@@ -122,20 +138,14 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
       const over = onAirRef.current ? playingRef.current : null
       void stopVoice().catch(() => {})
       if (over !== null) {
-        pushToast(`F${over} was on the air — the voice keyer closed and stopped it`, 'info', 6000)
+        pushToast(t('phone.keyer.hide.stoppedOver', { slot: over }), 'info', 6000)
       }
       const slot = recordingRef.current
       if (slot !== null) {
         void cancelVoiceRecording()
-          .then(() =>
-            pushToast(`Recording for F${slot} discarded — the voice keyer closed`, 'info', 6000),
-          )
+          .then(() => pushToast(t('phone.keyer.hide.discarded', { slot }), 'info', 6000))
           .catch(() =>
-            pushToast(
-              `Could not stop the recorder for F${slot} — it may still be running. Reopen the voice keyer.`,
-              'error',
-              8000,
-            ),
+            pushToast(t('phone.keyer.hide.recorderStuck', { slot }), 'error', 8000),
           )
       }
     }
@@ -144,15 +154,15 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
   const play = (slot: number) => {
     const m = msgs.find((x) => x.slot === slot)
     if (!m || !m.file) {
-      pushToast(`F${slot} has no recording yet — record or import one`, 'info', 3000)
+      pushToast(t('phone.keyer.empty', { slot }), 'info', 3000)
       return
     }
     if (recording !== null) {
-      pushToast('Finish the recording first', 'info', 2500)
+      pushToast(t('phone.keyer.busyRecording'), 'info', 2500)
       return
     }
     if (keyed) {
-      pushToast('Release PTT before sending a voice message', 'info', 3000)
+      pushToast(t('phone.keyer.releasePtt'), 'info', 3000)
       return
     }
     if (!txEnabled) {
@@ -161,13 +171,13 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
       // cluster in this view and the header's TX pill is display-only — so the operator was
       // told to flip a switch he could not find. PTT is that switch when TX is off (it reads
       // "■ TX OFF — CLICK TO ENABLE" and arms transmit on the press).
-      pushToast('TX is off — click PTT once to turn it back on, then play the message', 'info', 3500)
+      pushToast(t('phone.keyer.txOff'), 'info', 3500)
       return
     }
     playingRef.current = slot
     void playVoiceMessage(slot).catch(() => {
       playingRef.current = null
-      pushToast(`Could not play F${slot}`, 'error')
+      pushToast(t('phone.keyer.playFailed', { slot }), 'error')
     })
   }
 
@@ -180,17 +190,20 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
     setRecording(slot)
     void startVoiceRecording().catch(() => {
       setRecording(null)
-      pushToast('Could not start recording', 'error')
+      pushToast(t('phone.keyer.recordFailed'), 'error')
     })
   }
 
   const stopRec = async (slot: number) => {
     const label = msgs.find((m) => m.slot === slot)?.label ?? ''
     setRecording(null)
-    const list = await withErrorToast(() => stopVoiceRecording(slot, label), 'Could not save recording')
+    const list = await withErrorToast(
+      () => stopVoiceRecording(slot, label),
+      t('phone.keyer.saveFailed'),
+    )
     if (list) {
       setMsgs(list)
-      pushToast(`Saved F${slot} (${label})`, 'success')
+      pushToast(t('phone.keyer.saved', { slot, label }), 'success')
     }
   }
 
@@ -199,16 +212,16 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
     const bytes = Array.from(new Uint8Array(await file.arrayBuffer()))
     const list = await withErrorToast(
       () => importVoiceMessage(slot, label, bytes),
-      'Could not import the WAV',
+      t('phone.keyer.importFailed'),
     )
     if (list) {
       setMsgs(list)
-      pushToast(`Imported F${slot} (${label})`, 'success')
+      pushToast(t('phone.keyer.imported', { slot, label }), 'success')
     }
   }
 
   const clear = async (slot: number) => {
-    const list = await withErrorToast(() => clearVoiceMessage(slot), 'Could not clear the slot')
+    const list = await withErrorToast(() => clearVoiceMessage(slot), t('phone.keyer.clearFailed'))
     if (list) setMsgs(list)
   }
 
@@ -242,18 +255,26 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
       {/* No title of its own: the keyer renders inside a CockpitPaneFrame whose head
           already says "Voice keyer" — the old <h2> here would double it. */}
       <div className="vk-head">
-        <span className="vk-hint">click or press F1–F6 to send · Esc stops</span>
+        {/* Default Mac keyboards eat bare F-keys as media keys — say so where the binding
+            is advertised, or the feature silently reads as broken there (mac QA audit). */}
+        <span className="vk-hint" title={IS_MAC ? FN_KEY_HINT : undefined}>
+          {IS_MAC ? t('phone.keyer.hint.mac') : t('phone.keyer.hint')}
+        </span>
         <span className="vk-spacer" />
+        {/* ⚠️ NOT MIGRATED — this button STOPS A TRANSMISSION (stopVoice → Engine::stop_voice:
+            the radio loop flushes the output ring and unkeys). It is pane-resident, so it is
+            deliberately on no sweep's stopControls list — but the transmit-path batch moves
+            every control that stops an over, whether or not a sweep looks for it, and its label
+            and tooltip go with it. */}
         <button type="button" className="vk-stop" onClick={stop} title="Abort playback (Esc)">
           ■ Stop
         </button>
       </div>
-      {/* The `.vk-note` paragraph stood here until 2026-08-04 — see RECORD_HINT above, which
-          is where its sentence went. */}
+      {/* The `.vk-note` paragraph stood here until 2026-08-04 — see the input-device note
+          above, which is where its sentence went. */}
       {fdExchange && (
         <p className="vk-fd-hint">
-          Field Day: record a slot with your exchange <strong>“{fdExchange}”</strong> for
-          one-key sends.
+          <T k="phone.keyer.fd.hint" tags={{ b: <strong /> }} vals={{ exchange: fdExchange }} />
         </p>
       )}
       <div className="vk-grid">
@@ -268,15 +289,24 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
                 onClick={() => (hasFile ? play(m.slot) : startRec(m.slot))}
                 disabled={recording !== null && !isRec}
                 title={
-                  hasFile ? `Play F${m.slot} (${m.label})` : `Record F${m.slot}. ${RECORD_HINT}`
+                  hasFile
+                    ? t('phone.keyer.slot.play.title', { slot: m.slot, label: m.label })
+                    : t('phone.keyer.slot.record.title', { slot: m.slot })
                 }
               >
                 <span className="vk-fkey">F{m.slot}</span>
-                <span className="vk-label">{m.label || `Slot ${m.slot}`}</span>
-                <span className="vk-state">{isRec ? '● REC' : hasFile ? '▶' : 'record'}</span>
+                <span className="vk-label">
+                  {m.label || t('phone.keyer.slot.unnamed', { slot: m.slot })}
+                </span>
+                <span className="vk-state">
+                  {isRec ? REC_PLATE : hasFile ? '▶' : t('phone.keyer.slot.state.record')}
+                </span>
               </button>
               <div className="vk-tools">
                 {isRec ? (
+                  // ⚠️ NOT MIGRATED — this one ends the RECORDER, not an over, but it is the
+                  // other half of this pane's ■ Stop vocabulary and moves with it, so the pair
+                  // cannot be reworded apart.
                   <button type="button" className="vk-tool stop" onClick={() => void stopRec(m.slot)}>
                     ■ Stop &amp; save
                   </button>
@@ -287,7 +317,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
                       className="vk-tool"
                       onClick={() => startRec(m.slot)}
                       disabled={recording !== null}
-                      title={`Record F${m.slot}. ${RECORD_HINT}`}
+                      title={t('phone.keyer.slot.record.title', { slot: m.slot })}
                     >
                       ●
                     </button>
@@ -296,7 +326,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
                       className="vk-tool"
                       onClick={() => fileRefs.current[m.slot]?.click()}
                       disabled={recording !== null}
-                      title="Import a .wav file"
+                      title={t('phone.keyer.import.title')}
                     >
                       ⤓
                     </button>
@@ -305,7 +335,7 @@ export function VoiceKeyer({ txEnabled, keyed, transmitting, fdExchange }: Props
                       className="vk-tool"
                       onClick={() => void clear(m.slot)}
                       disabled={recording !== null || !hasFile}
-                      title="Clear this recording"
+                      title={t('phone.keyer.clear.title')}
                     >
                       ✕
                     </button>

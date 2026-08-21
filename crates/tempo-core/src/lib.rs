@@ -11,6 +11,7 @@
 //! [`channel::VirtualAir`]. A real `cpal` audio backend slots in behind the same
 //! frame-in/frame-out boundary later (see task #10).
 
+pub mod applog;
 pub mod aprs;
 pub mod beacon;
 pub mod channel;
@@ -31,6 +32,7 @@ pub mod lotw;
 pub mod lotw_upload;
 pub mod message;
 pub mod pota;
+pub mod psk;
 pub mod qrz;
 pub mod qso;
 pub mod qsy;
@@ -41,6 +43,7 @@ pub mod rtty;
 pub mod spectrum;
 pub mod store;
 pub mod text;
+pub mod textmode;
 pub mod timing;
 pub mod tx;
 pub mod wavfile;

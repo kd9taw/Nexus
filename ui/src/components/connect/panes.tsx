@@ -5,7 +5,19 @@
 // (the honest loading/OFFLINE state — prop-derived panes return null on source==='offline'
 // so modeled defaults never render as if live), or renders its own inline empty state
 // (getout). Never render a modelled snapshot as live data.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Each pane's NAME
+// resolves through a getter, exactly as `features/needVisuals.ts` does: this registry is a
+// module constant that PaneFrame reads during render, so resolving at import time would
+// freeze whichever locale loaded first. The record shape is unchanged, so no consumer moved.
+// What stays in the code: band, mode and octant names, MUF and spot frequencies, bearings,
+// distances, SNR, CQ zones, grids, the `P.533` recommendation number, and every word the
+// BACKEND sends (the advisory headline and its banners, the workability, the window text).
+// No transmit control renders on any of these panes — ▶ Work moves the rig and opens a
+// cockpit; it keys nothing.
 import type { ReactNode } from 'react'
+import { t } from '../../i18n'
+import { T } from '../../i18n/T'
 import { type PaneId, PANE_IDS } from '../../features/connectConfig'
 import type { PaneContext } from './paneContext'
 import type { BandOutlook } from '../../types'
@@ -58,6 +70,15 @@ import {
 
 export type PaneCategory = 'core' | 'b2' | 'b3' // picker optgroups; extension seam
 
+/** The ITU recommendation's number — a document name, the same in every language. */
+const ENGINE_P533 = 'P.533'
+
+/** Unit symbols printed beside a reading. A unit is a token — MHz is MHz, dB is dB and km is
+ * km in every language — and the guard is told so by these constants. */
+const MHZ_UNIT = 'MHz'
+const DB_UNIT = 'dB'
+const KM_UNIT = 'km'
+
 export interface PaneDef {
   id: PaneId
   title: string
@@ -83,7 +104,10 @@ function ModeNowChips({ b }: { b: BandOutlook }) {
           <span
             key={m.mode}
             className={`cp-mode ${cls}`}
-            title={`${m.mode}: ~${Math.round(m.score * 100)}% of days this circuit works right now (P.533)`}
+            title={t('connect.path.modeChip.title', {
+              mode: m.mode,
+              pct: Math.round(m.score * 100),
+            })}
           >
             {m.mode}
           </span>
@@ -105,7 +129,12 @@ function renderSelection(c: PaneContext): ReactNode {
           const chip = tag ? NEED_CHIP[tag] : null
           return chip ? <span className={`need-chip need-${chip.cls}`}>{chip.label}</span> : null
         })()}
-        <button type="button" className="cs-close" onClick={() => c.onSelectCall(null)} title="Clear selection">
+        <button
+          type="button"
+          className="cs-close"
+          onClick={() => c.onSelectCall(null)}
+          title={t('connect.selection.clear.title')}
+        >
           ✕
         </button>
       </div>
@@ -127,26 +156,28 @@ function renderSelection(c: PaneContext): ReactNode {
         <div className="cs-spot">
           {c.selSpot.band}
           {c.selSpot.mode ? ` ${c.selSpot.mode}` : ''}
-          {c.selSpot.freqMhz ? ` · ${c.selSpot.freqMhz.toFixed(4).replace(/\.?0+$/, '')} MHz` : ''}
+          {c.selSpot.freqMhz
+            ? ` · ${c.selSpot.freqMhz.toFixed(4).replace(/\.?0+$/, '')} ${MHZ_UNIT}`
+            : ''}
           {' · '}
           {c.selSpot.ageSecs < 60
-            ? `${c.selSpot.ageSecs}s ago`
-            : `${Math.round(c.selSpot.ageSecs / 60)}m ago`}
-          {c.selSpot.heardMe && ' · heard YOU'}
-          {c.selSpot.approx && ' · ~location'}
+            ? t('connect.selection.age.secs', { secs: c.selSpot.ageSecs })
+            : t('connect.selection.age.mins', { mins: Math.round(c.selSpot.ageSecs / 60) })}
+          {c.selSpot.heardMe && ` · ${t('connect.selection.heardYou')}`}
+          {c.selSpot.approx && ` · ${t('connect.selection.approx')}`}
         </div>
       )}
       {c.selStation && (
         <div className="cs-spot">
-          decoded here · {c.selStation.snr} dB
-          {c.selStation.worked ? ' · worked before' : ''}
+          {t('connect.selection.decoded')} · {c.selStation.snr} {DB_UNIT}
+          {c.selStation.worked ? ` · ${t('connect.selection.workedBefore')}` : ''}
         </div>
       )}
       {c.selDxped && c.selDxpedWindow?.best && (
         <div className="cs-spot">
-          Best shot: {c.selDxpedWindow.best}
+          {t('connect.selection.bestShot', { window: c.selDxpedWindow.best })}
           <span className="cp-engine">
-            {c.selDxpedWindow.engine === 'p533' ? 'P.533' : 'modelled'}
+            {c.selDxpedWindow.engine === 'p533' ? ENGINE_P533 : t('connect.engine.modelled')}
           </span>
         </div>
       )}
@@ -170,9 +201,11 @@ function renderSelection(c: PaneContext): ReactNode {
                   freqMhz: null,
                 })
           }
-          title="Rig jumps to this spot's band/mode/frequency; the right cockpit opens"
+          title={t('connect.selection.work.title')}
         >
-          ▶ Work {c.selSpot ? c.selSpot.band : c.selDxped?.band}
+          {t('connect.selection.work.label', {
+            band: (c.selSpot ? c.selSpot.band : c.selDxped?.band) ?? '',
+          })}
           {c.selSpot?.freqMhz ? ` @ ${c.selSpot.freqMhz.toFixed(4).replace(/\.?0+$/, '')}` : ''}
         </button>
       )}
@@ -186,21 +219,28 @@ function renderPath(c: PaneContext): ReactNode {
   return (
     <section className="connect-path panel">
       <h3>
-        Path to {c.selectedCall}
+        {t('connect.path.heading', { call: c.selectedCall })}
         {p.engine && (
-          <span className="cp-engine">{p.engine === 'heuristic' ? 'modelled' : p.engine === 'p533' ? 'P.533' : p.engine}</span>
+          <span className="cp-engine">
+            {p.engine === 'heuristic'
+              ? t('connect.engine.modelled')
+              : p.engine === 'p533'
+                ? ENGINE_P533
+                : p.engine}
+          </span>
         )}
       </h3>
       {p.mufNow > 0 && (
-        <p
-          className="cp-muf"
-          title="Maximum Usable Frequency — the path's ceiling right now. Bands below it are open; bands above it are closed."
-        >
-          Ceiling (MUF): <strong>{p.mufNow.toFixed(1)} MHz</strong>
+        <p className="cp-muf" title={t('connect.path.muf.title')}>
+          <T
+            k="connect.path.muf"
+            vals={{ muf: p.mufNow.toFixed(1) }}
+            tags={{ b: <strong /> }}
+          />
         </p>
       )}
       {c.pathOpen.length === 0 ? (
-        <p className="cp-none">No HF band modelled workable on this path right now.</p>
+        <p className="cp-none">{t('connect.path.none')}</p>
       ) : (
         <>
           <ul className="connect-path-list">
@@ -210,7 +250,7 @@ function renderPath(c: PaneContext): ReactNode {
                 <span className={`cp-work w-${b.workability.toLowerCase()}`}>{b.workability}</span>
                 <span className="cp-win">
                   {b.grayline && (
-                    <span className="cp-grayline" title="Greyline (terminator) opening">
+                    <span className="cp-grayline" title={t('connect.path.greyline.title')}>
                       ◐{' '}
                     </span>
                   )}
@@ -234,19 +274,20 @@ function renderOutlook(c: PaneContext): ReactNode {
   return (
     <section className="connect-path panel">
       <h3>
-        Band outlook
-        <span className="cp-engine">modelled · DX</span>
+        {t('connect.outlook.heading')}
+        <span className="cp-engine">{t('connect.engine.outlook')}</span>
       </h3>
       {o.mufNow > 0 && (
-        <p
-          className="cp-muf"
-          title="Maximum Usable Frequency — the modeled ceiling to long-haul DX right now. Bands below it are open; above it, closed."
-        >
-          Ceiling (MUF): <strong>{o.mufNow.toFixed(1)} MHz</strong>
+        <p className="cp-muf" title={t('connect.outlook.muf.title')}>
+          <T
+            k="connect.path.muf"
+            vals={{ muf: o.mufNow.toFixed(1) }}
+            tags={{ b: <strong /> }}
+          />
         </p>
       )}
       {c.outlookOpen.length === 0 ? (
-        <p className="cp-none">No HF band modelled workable to DX right now.</p>
+        <p className="cp-none">{t('connect.outlook.none')}</p>
       ) : (
         <>
           <ul className="connect-path-list">
@@ -256,7 +297,7 @@ function renderOutlook(c: PaneContext): ReactNode {
                 <span className={`cp-work w-${b.workability.toLowerCase()}`}>{b.workability}</span>
                 <span className="cp-win">
                   {b.grayline && (
-                    <span className="cp-grayline" title="Greyline (terminator) opening">
+                    <span className="cp-grayline" title={t('connect.path.greyline.title')}>
                       ◐{' '}
                     </span>
                   )}
@@ -278,14 +319,17 @@ function renderGetout(c: PaneContext): ReactNode {
   const g = c.getout
   return (
     <section className="connect-getout panel">
-      <h3>Am I getting out?</h3>
+      <h3>{t('connect.getout.heading')}</h3>
       {!g || g.count === 0 ? (
-        <p className="cp-none">No reception reports yet — call CQ, then watch who hears you.</p>
+        <p className="cp-none">{t('connect.getout.none')}</p>
       ) : (
         <>
           <p className="getout-summary">
-            <strong>{g.count}</strong> hearing you · furthest{' '}
-            <strong>{g.maxKm.toLocaleString()} km</strong>
+            <T
+              k="connect.getout.summary"
+              vals={{ count: g.count, km: g.maxKm.toLocaleString() }}
+              tags={{ b: <strong /> }}
+            />
           </p>
           <div className="getout-rose-wrap">
             <GetoutCompass reports={g.reports} maxKm={g.maxKm} />
@@ -297,14 +341,14 @@ function renderGetout(c: PaneContext): ReactNode {
                 key={r.call}
                 className="go-clickable"
                 onClick={() => c.onSelectCall(r.call)}
-                title={`Select ${r.call} on the map`}
+                title={t('connect.getout.select.title', { call: r.call })}
               >
                 <span className="go-call">{r.call}</span>
                 <span className="go-where">
-                  {r.octant} {r.km.toLocaleString()} km
+                  {r.octant} {r.km.toLocaleString()} {KM_UNIT}
                 </span>
                 <span className="go-band">{r.band}</span>
-                <span className="go-snr">{r.snr != null ? `${r.snr} dB` : ''}</span>
+                <span className="go-snr">{r.snr != null ? `${r.snr} ${DB_UNIT}` : ''}</span>
               </li>
             ))}
           </ul>
@@ -317,7 +361,9 @@ function renderGetout(c: PaneContext): ReactNode {
 export const PANES: PaneDef[] = [
   {
     id: 'advisory',
-    title: 'Conditions',
+    get title() {
+      return t('connect.pane.advisory.title')
+    },
     category: 'core',
     basic: advisoryLine,
     // Offline → null → Basic's honest "No live propagation data" (never the modelled
@@ -328,7 +374,7 @@ export const PANES: PaneDef[] = [
           <div className="connect-hero-row">
             <div className="connect-hero">{c.prop.advisory.headline}</div>
             {c.prov && (
-              <span className={`prop-prov prov-${c.prov.cls}`} title="Data provenance">
+              <span className={`prop-prov prov-${c.prov.cls}`} title={t('connect.prov.title')}>
                 {c.prov.label}
               </span>
             )}
@@ -343,7 +389,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'bandAdvisor',
-    title: 'Band Advisor',
+    get title() {
+      return t('connect.pane.bandAdvisor.title')
+    },
     category: 'core',
     basic: bandAdvisorLine,
     expert: (c) =>
@@ -358,14 +406,18 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'selection',
-    title: 'Selection',
+    get title() {
+      return t('connect.pane.selection.title')
+    },
     category: 'core',
     basic: selectionLine,
     expert: (c) => renderSelection(c),
   },
   {
     id: 'outlook',
-    title: 'Band Outlook',
+    get title() {
+      return t('connect.pane.outlook.title')
+    },
     category: 'core',
     basic: outlookLine,
     // Selection-aware: path-to-the-selected-call, else band-outlook-to-DX (same JSX shape).
@@ -373,7 +425,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'openings',
-    title: 'Openings',
+    get title() {
+      return t('connect.pane.openings.title')
+    },
     category: 'core',
     basic: openingsLine,
     expert: (c) =>
@@ -383,17 +437,20 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'openingsLog',
-    title: 'Openings Log',
+    get title() {
+      return t('connect.pane.openingsLog.title')
+    },
     category: 'core',
     // Self-fetching pane (get_openings_log) — the Basic line stays a static
     // honest hint because the history lives inside the component.
-    basic: () =>
-      'A historical record of every detected band opening (6m/2m tropo, Es, aurora) builds here.',
+    basic: () => t('connect.pane.openingsLog.basic'),
     expert: () => <OpeningsLogPane />,
   },
   {
     id: 'spacewx',
-    title: 'Space Wx',
+    get title() {
+      return t('connect.pane.spacewx.title')
+    },
     category: 'core',
     basic: spaceWxLine,
     expert: (c) =>
@@ -406,7 +463,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'getout',
-    title: 'Getting Out',
+    get title() {
+      return t('connect.pane.getout.title')
+    },
     category: 'core',
     basic: getoutLine,
     expert: (c) => renderGetout(c),
@@ -414,7 +473,9 @@ export const PANES: PaneDef[] = [
   // ---- B2 Tier-1 panes (pickable; DEFAULT_SLOTS keeps the approved core layout) ----
   {
     id: 'bestband',
-    title: 'Best Band → Region',
+    get title() {
+      return t('connect.pane.bestband.title')
+    },
     category: 'b2',
     basic: bestbandLine,
     expert: (c) => {
@@ -426,7 +487,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'activity',
-    title: 'Activity Matrix',
+    get title() {
+      return t('connect.pane.activity.title')
+    },
     category: 'b2',
     basic: activityLine,
     expert: (c) => {
@@ -438,7 +501,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'beacons',
-    title: 'NCDXF Beacons',
+    get title() {
+      return t('connect.pane.beacons.title')
+    },
     category: 'b2',
     basic: beaconsLine,
     // Clock-derived — never gates on offline; only the heard badges need spots.
@@ -446,7 +511,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'insights',
-    title: 'Insights',
+    get title() {
+      return t('connect.pane.insights.title')
+    },
     category: 'b2',
     basic: insightsLine,
     expert: (c) => {
@@ -458,7 +525,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'chase',
-    title: 'Chase',
+    get title() {
+      return t('connect.pane.chase.title')
+    },
     category: 'b2',
     basic: chaseLine,
     // "Work THIS now": needed stations fused with band openness + window. Returns null
@@ -468,7 +537,9 @@ export const PANES: PaneDef[] = [
   // ---- B3 Tier-2 no-network panes (pickable; reuse existing snapshot data) ----
   {
     id: 'greyline',
-    title: 'Greyline',
+    get title() {
+      return t('connect.pane.greyline.title')
+    },
     category: 'b3',
     basic: greylineLine,
     // Clock-derived; GreylineWindow handles the no-grid case itself (never null).
@@ -476,7 +547,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'bandHours',
-    title: '24h Band×Hour',
+    get title() {
+      return t('connect.pane.bandHours.title')
+    },
     category: 'b3',
     basic: bandHoursLine,
     expert: (c) =>
@@ -484,7 +557,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'esNowcast',
-    title: 'Sporadic-E',
+    get title() {
+      return t('connect.pane.esNowcast.title')
+    },
     category: 'b3',
     basic: esNowcastLine,
     expert: (c) => {
@@ -496,7 +571,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'measuredMuf',
-    title: 'Measured MUF',
+    get title() {
+      return t('connect.pane.measuredMuf.title')
+    },
     category: 'b3',
     basic: measuredMufLine,
     expert: (c) => {
@@ -506,7 +583,9 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'chaseFeed',
-    title: 'Chase Feed',
+    get title() {
+      return t('connect.pane.chaseFeed.title')
+    },
     category: 'b3',
     basic: chaseFeedLine,
     // The ranked "chase tonight" board: heard needs + on-air expeditions fused and
@@ -516,44 +595,51 @@ export const PANES: PaneDef[] = [
   },
   {
     id: 'satPasses',
-    title: 'Satellite Passes',
+    get title() {
+      return t('connect.pane.satPasses.title')
+    },
     category: 'b3',
     // Self-fetching pane (get_satellites) — the Basic line stays a static honest
     // hint because the data lives inside the component, not PaneContext.
-    basic: () =>
-      'Upcoming amateur-satellite passes over your QTH appear here once orbital elements load.',
+    basic: () => t('connect.pane.satPasses.basic'),
     expert: () => <SatPassesPane />,
   },
   {
     id: 'rotor',
-    title: 'Rotor',
+    get title() {
+      return t('connect.pane.rotor.title')
+    },
     category: 'b3',
-    basic: () =>
-      'Rotator control appears here once a rotctld host is set in Settings (and the daemon answers).',
-    // Self-contained control surface — polls read_rotator while mounted and
-    // hides itself (→ this Basic hint) when nothing answers.
+    basic: () => t('connect.pane.rotor.basic'),
+    // Self-contained control surface — polls read_rotator while mounted and hides itself
+    // (→ this Basic hint) only when NO rotator is configured. A configured rotator that cannot
+    // report its position keeps the pane and its STOP button; the hint used to name the
+    // ADVANCED external-rotctld field, which is not where a rotator is set up.
     expert: () => <RotorPane />,
   },
   {
     id: 'scope',
-    title: 'Band Scope',
+    get title() {
+      return t('connect.pane.scope.title')
+    },
     category: 'b3',
-    basic: () =>
-      "A live spectrum of the active radio's passband — band noise and signals at a glance.",
+    basic: () => t('connect.pane.scope.basic'),
     expert: () => (
       <MiniSpectrum
         height={120}
-        idleHint="Flat — the radio's audio isn't reaching Nexus right now."
+        idleHint={t('connect.pane.scope.idle')}
       />
     ),
   },
   {
     id: 'contests',
-    title: 'Contests',
+    get title() {
+      return t('connect.pane.contests.title')
+    },
     category: 'b3',
     // Self-fetching (get_contests) — Basic stays a static hint since the data
     // lives in the component, not PaneContext (same pattern as Satellite Passes).
-    basic: () => 'Upcoming HF/VHF contests (WA7BNM) appear here once online.',
+    basic: () => t('connect.pane.contests.basic'),
     expert: () => <ContestCalendarPane load={getContests} />,
   },
 ]

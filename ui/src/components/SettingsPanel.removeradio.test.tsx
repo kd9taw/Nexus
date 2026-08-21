@@ -66,8 +66,9 @@ const FTDX10 = {
   nativeScope: 'auto',
   bands: [],
 }
-// The radio the operator removes. It must NOT be the active one: Remove is only offered for a
-// non-active radio in a multi-radio roster, which is exactly the case that was reported broken.
+// The radio the operator removes. It must NOT be the active one: the active card's Remove
+// button renders disabled (with a teaching title), so the removable radio in a multi-radio
+// roster is exactly the case that was reported broken.
 const IC9700 = {
   ...FTDX10,
   id: 1,
@@ -122,7 +123,12 @@ function renderPanel() {
 async function clickRemove() {
   renderPanel()
   fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
-  const remove = await screen.findByRole('button', { name: 'Remove' })
+  // Every roster card renders a Remove button — the ACTIVE card's is disabled with a teaching
+  // title — so scope to the enabled (removable) one rather than assuming a single match.
+  const remove = (await screen.findAllByRole('button', { name: 'Remove' })).find(
+    (b) => !(b as HTMLButtonElement).disabled && /roster/i.test((b as HTMLButtonElement).title),
+  )!
+  expect(remove).toBeTruthy()
   fireEvent.click(remove)
 }
 

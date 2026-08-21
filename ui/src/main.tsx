@@ -5,6 +5,12 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { DetachedPanel } from './DetachedPanel'
 import { redockAllStalePopouts } from './features/panelState'
 import { loadDurable } from './features/durableStore'
+import { initLocale, installCatalog } from './i18n'
+import { DE } from './i18n/de'
+import { installExternalLinkInterceptor } from './externalLinks'
+import { isTauri, openExternalUrl } from './api'
+import { pushToast } from './toast'
+import { t } from './i18n'
 import './styles.css'
 // AFTER styles.css, deliberately: the cockpit pane grid's structural rules are all flat
 // single-class selectors, so an equal-specificity tie with anything in styles.css must
@@ -39,22 +45,40 @@ if (!panel) {
   }
 }
 
+// Every `<a target="_blank">` needs routing through Rust (externalLinks.ts has the whole
+// story: the opener plugin's injected handler swallows the click and its invoke is
+// ACL-denied). Main window AND pop-outs — panels render external anchors too (APRS cards).
+// In a plain browser (vite dev preview) there is no bridge and no plugin interceptor, so the
+// native `_blank` behavior is correct and we install nothing.
+if (isTauri()) {
+  installExternalLinkInterceptor((url) => {
+    openExternalUrl(url).catch((e) => {
+      // A dead link failing SILENTLY is the exact bug class this fixes — say so instead.
+      pushToast(t('externalLink.failed', { detail: e instanceof Error ? e.message : String(e) }), 'error')
+    })
+  })
+}
+
 // Outermost net. App carries its own boundary around the workspace (so a view crash
 // leaves the rail usable), but a throw ABOVE `.shell` — the top bar, the Now Bar, App's
 // own render — would still take the root down to a bare black window with no way out,
 // which is exactly the 0.24.6 field report. A pop-out is a separate React root and gets
 // nothing from the main window's boundary, so it needs its own. Recovery here is a
 // window reload: at this level there is no navigation left to fall back to.
-const reload = { label: 'Reload window', onClick: () => window.location.reload() }
+const reload = { label: t('crash.reload'), onClick: () => window.location.reload() }
+
+// The product name, not prose: it is the same six characters in every language, and a catalog
+// entry for it is an invitation to "localise" a brand. Same escape hatch as STATION_EXAMPLES.
+const APP_NAME = 'Nexus'
 
 const tree = (
   <StrictMode>
     {panel ? (
-      <ErrorBoundary label={`The ${panel} window`} action={reload}>
+      <ErrorBoundary label={t('crash.panelWindow', { panel })} action={reload}>
         <DetachedPanel panel={panel} />
       </ErrorBoundary>
     ) : (
-      <ErrorBoundary label="Nexus" action={reload}>
+      <ErrorBoundary label={APP_NAME} action={reload}>
         <App />
       </ErrorBoundary>
     )}
@@ -72,5 +96,14 @@ const tree = (
 // change that does let it throw still renders the app rather than a blank window — the 0.24.6
 // failure mode, and not one to re-create over a preferences file.
 void loadDurable().finally(() => {
+  // Language BEFORE the first render, for the same reason the durable store is: `t()` reads a
+  // module-level variable, so a locale applied after mount would leave the first paint in
+  // English and switch it under the operator a frame later. Reads the stored choice, else the
+  // OS language; unknown or uninstalled falls through to English, silently and safely.
+  // Register every shipped language BEFORE initLocale, which only accepts a locale that has a
+  // catalog. Static imports, never a fetch: a catalog that arrives over the network is a
+  // catalog that is absent in a field-day tent.
+  installCatalog('de', DE)
+  initLocale()
   createRoot(document.getElementById('root')!).render(tree)
 })

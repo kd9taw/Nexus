@@ -3,9 +3,32 @@
 
 use std::collections::VecDeque;
 
-/// A TX-audio tee: invoked with each 12 kHz buffer handed to [`AudioBackend::play`], to send TX
-/// audio over Flex native DAX in parallel with the soundcard.
-pub type TxTee = std::sync::Arc<dyn Fn(&[f32]) + Send + Sync>;
+/// An ALTERNATE route for transmit audio — Flex native DAX, which carries the over to the radio
+/// over the network instead of through a sound card.
+///
+/// ⚠️ EXCLUSIVE, NOT PARALLEL. While a tee is installed, [`AudioBackend::play`] hands the over to
+/// the tee and NOT to the output device. It was parallel, and that was a shipped defect: the Flex
+/// setup Nexus itself creates with one click points the output device at the "DAX TX" endpoint, so
+/// the same over reached the radio TWICE by two routes with different rates, resampler states and
+/// latencies — and when the operator's output is speakers instead, every native over played out
+/// loud in the room (2026-08-17 Flex audit, finding #1051).
+///
+/// Being the only route brings the other two obligations with it: the tee applies the operator's
+/// TX level ([`TxTee::set_level`]), because nothing downstream will, and it can be emptied
+/// ([`TxTee::flush`]), because a hard Stop TX must cut whichever route is carrying the over.
+pub trait TxTee: Send + Sync {
+    /// Take one 12 kHz mono TX buffer. Called on the radio loop, with a whole over in one call —
+    /// implementations must not block and must not do their own I/O inline.
+    fn feed(&self, samples: &[f32]);
+    /// Adopt the backend's TX audio level (0.0–1.0). Pushed on install and on every change, so the
+    /// tee can apply it AS THE AUDIO LEAVES (the `next_tx_sample` rule — see `device.rs`).
+    fn set_level(&self, level: f32);
+    /// Discard anything queued on this route (hard Stop TX). Returns the count discarded.
+    fn flush(&self) -> usize;
+}
+
+/// A shared handle to the installed [`TxTee`].
+pub type TxTeeHandle = std::sync::Arc<dyn TxTee>;
 
 /// A 12 kHz mono audio source/sink.
 pub trait AudioBackend {
@@ -30,11 +53,11 @@ pub trait AudioBackend {
     /// Set the TX audio level (0.0–1.0) applied to played samples. No-op default
     /// for non-hardware backends (the real sound card overrides it).
     fn set_tx_level(&mut self, _level: f32) {}
-    /// Install (or clear with `None`) a TX-audio tee: while set, every [`AudioBackend::play`] also
-    /// hands the same 12 kHz samples to this closure. Used to send TX audio over Flex native DAX in
-    /// parallel with the soundcard, WITHOUT changing the TX schedule. Default no-op; the real sound
-    /// card overrides it.
-    fn set_tx_tee(&mut self, _tee: Option<TxTee>) {}
+    /// Install (or clear with `None`) a TX-audio tee: while set, every [`AudioBackend::play`] hands
+    /// the 12 kHz samples to the tee INSTEAD of the output device, so exactly one route carries an
+    /// over. Used to send TX audio over Flex native DAX, WITHOUT changing the TX schedule. Default
+    /// no-op; the real sound card overrides it. See [`TxTee`].
+    fn set_tx_tee(&mut self, _tee: Option<TxTeeHandle>) {}
     /// Take the report of a decode-path stream the OS has KILLED since the last call, if any.
     ///
     /// A stream can die without any setting changing — the device unplugged, a CoreAudio

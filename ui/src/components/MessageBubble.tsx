@@ -1,4 +1,10 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The bubble's
+// technical subline — SNR in dB, the audio frequency in Hz, dT in seconds and the tier the
+// backend named — is a readout of wire values and stays in the code, as do the delivery
+// glyphs (✓, ✓✓, ⚠, ⋯, ↻). What moved is what the operator READS: the delivery sentence
+// behind each glyph, and the partial-message warning.
 import type { ChatMessage } from '../types'
+import { t } from '../i18n'
 
 interface Props {
   message: ChatMessage
@@ -41,20 +47,23 @@ function DeliveryTicks({
   // transmitted one otherwise, since every directed message goes via store-and-forward.
   const label =
     stage === 'abandoned'
-      ? 'Not sent — abandoned on restart. Tap to send it again.'
+      ? t('tempo.bubble.abandoned')
       : stage === 'no-ack'
-        ? `Sent ${attempts ?? '?'}× — no acknowledgement. Tap to send it again.`
+        ? t('tempo.bubble.noAck', { attempts: attempts ?? '?' })
         : stage === 'held'
-          ? `Waiting to send${to ? ` — ${to} not heard yet` : ''}`
+          ? // Two whole messages: naming the peer is a different statement, not a tail.
+            to
+            ? t('tempo.bubble.held.peer', { call: to })
+            : t('tempo.bubble.held')
           : stage === 'sending'
-            ? `Sending — try ${attempts ?? 1}`
+            ? t('tempo.bubble.sending', { attempt: attempts ?? 1 })
             : stage === 'sent'
-              ? 'Sent'
+              ? t('tempo.bubble.sent')
               : stage === 'on-air'
-                ? 'On air'
+                ? t('tempo.bubble.onAir')
                 : stage === 'delivered'
-                  ? 'Delivered' // a real id-bearing RR73 ACK came back
-                  : 'Confirmed — they answered after this went out' // implicit, never "Delivered"
+                  ? t('tempo.bubble.delivered') // a real id-bearing RR73 ACK came back
+                  : t('tempo.bubble.confirmed') // implicit, never "Delivered"
   return (
     <span className={`delivery ${stage}`} title={label} aria-label={label}>
       {stage === 'abandoned' && '⚠'}
@@ -80,7 +89,7 @@ export function MessageBubble({ message, delivery, onResend }: Props) {
         className={`bubble ${side}${message.directedToMe ? ' directed' : ''}${resendable ? ' resendable' : ''}`}
         role={resendable ? 'button' : undefined}
         tabIndex={resendable ? 0 : undefined}
-        title={resendable ? 'Tap to re-send this message' : undefined}
+        title={resendable ? t('tempo.bubble.resend.title') : undefined}
         onClick={resendable ? () => onResend(message) : undefined}
         onKeyDown={
           resendable
@@ -101,9 +110,15 @@ export function MessageBubble({ message, delivery, onResend }: Props) {
           {message.incomplete && (
             <span
               className="bubble-incomplete"
-              title={`Only ${message.incomplete[0]} of ${message.incomplete[1]} parts of this message were received — the rest never arrived`}
+              title={t('tempo.bubble.incomplete.title', {
+                got: message.incomplete[0],
+                total: message.incomplete[1],
+              })}
             >
-              ⚠ {message.incomplete[0]} of {message.incomplete[1]} received
+              ⚠ {t('tempo.bubble.incomplete.badge', {
+                got: message.incomplete[0],
+                total: message.incomplete[1],
+              })}
             </span>
           )}
           {sub && <span className="bubble-tech">{sub}</span>}

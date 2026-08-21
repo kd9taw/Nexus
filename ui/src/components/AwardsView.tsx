@@ -1,3 +1,10 @@
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
+// string comes from the catalog; a hardcoded one fails CI. What does NOT come from it: the
+// AWARD NAMES in AWARD_NAMES below (DXCC, Honor Roll, WAZ, VUCC, IOTA… are the names of ARRL/CQ
+// programmes, not words), the DXCC entity names, band names, mode names, CQ zones and US state
+// codes the tables print (data), and the achievement titles/details and diagnosis explanations,
+// which the backend writes. See the invariant-token rule in `i18n/index.ts`.
+
 import { useEffect, useRef, useState } from 'react'
 import { Trophy, CheckCircle2, Radio, Target, Layers, Send, Globe2, Award, Flag, UploadCloud, Grid3x3, Satellite } from 'lucide-react'
 import type { AwardSummary, EntityNeed, DiagnosticsReport, DiagAction, QsoDiagnosis, UploadReport, LoggedQso } from '../types'
@@ -10,7 +17,22 @@ import {
   clublogPushQso,
   eqslPushQso,
 } from '../api'
+import { t } from '../i18n'
 import { StateBlock } from './StateBlock'
+
+/** The programmes' own names. Award names are invariant tokens — DXCC is DXCC in every
+ * language, and a translated one names no award anybody can apply for. */
+const AWARD_NAMES = {
+  dxcc: 'DXCC',
+  honorRoll: 'Honor Roll',
+  challenge: 'Challenge',
+  fiveBandDxcc: '5-Band DXCC',
+  waz: 'WAZ',
+  was: 'WAS',
+  vucc: 'VUCC',
+  satVucc: 'Sat VUCC',
+  iota: 'IOTA',
+}
 
 /** Confirmed entities for the basic DXCC award. */
 const DXCC_BASIC = 100
@@ -50,29 +72,29 @@ function NeedList({ items, empty }: { items: EntityNeed[]; empty: string }) {
           className="aw-needfilter"
           type="text"
           value={q}
-          placeholder="filter entities…"
-          aria-label="Filter entities"
+          placeholder={t('awards.needList.filter.placeholder')}
+          aria-label={t('awards.needList.filter.label')}
           onChange={(e) => setQ(e.target.value)}
         />
         <button
           type="button"
           className={`aw-needsort${sort === 'entity' ? ' active' : ''}`}
           onClick={() => setSort('entity')}
-          title="Sort A–Z"
+          title={t('awards.needList.sort.alpha.title')}
         >
-          A–Z
+          {t('awards.needList.sort.alpha.label')}
         </button>
         <button
           type="button"
           className={`aw-needsort${sort === 'bands' ? ' active' : ''}`}
           onClick={() => setSort('bands')}
-          title="Sort by number of bands needed"
+          title={t('awards.needList.sort.bands.title')}
         >
-          # bands
+          {t('awards.needList.sort.bands.label')}
         </button>
       </div>
       {rows.length === 0 ? (
-        <p className="aw-empty">No entities match “{q.trim()}”.</p>
+        <p className="aw-empty">{t('awards.needList.noMatch', { query: q.trim() })}</p>
       ) : (
         <ul className="aw-needed">
           {rows.map((n) => (
@@ -117,19 +139,23 @@ function uploadMessage(r: UploadReport): string {
   const n = r.dispatched
   switch (r.outcome) {
     case 'pending':
-      return `Signed and sent ${n} to LoTW — awaiting confirmation.`
+      return t('awards.upload.pending', { count: n })
     case 'duplicate':
-      return `Already on LoTW (${n}) — nothing to re-send.`
+      return t('awards.upload.duplicate', { count: n })
     case 'rejected':
-      return `LoTW rejected the upload${r.detail ? `: ${r.detail}` : ''}.`
+      // Two whole sentences rather than one with an optional ": detail" tail — where the
+      // server's own words belong is a decision for each language.
+      return r.detail
+        ? t('awards.upload.rejectedDetail', { detail: r.detail })
+        : t('awards.upload.rejected')
     case 'authfail':
-      return 'LoTW rejected your certificate / Station Location — fix it in TQSL, then retry.'
+      return t('awards.upload.authFailed')
     case 'retry':
-      return 'LoTW was unreachable — your log is unchanged; try again shortly.'
+      return t('awards.upload.retry')
     case 'none':
-      return 'Nothing to upload.'
+      return t('awards.upload.none')
     default:
-      return `Upload finished (${r.outcome}).`
+      return t('awards.upload.finished', { outcome: r.outcome })
   }
 }
 
@@ -177,7 +203,11 @@ function RowAction({
         disabled={busyKey !== null}
         onClick={() => onUpload([d.index], key)}
       >
-        {busyKey === key ? 'Uploading…' : a.kind === 'reUpload' ? 'Re-upload' : 'Upload to LoTW'}
+        {busyKey === key
+          ? t('awards.conf.uploading')
+          : a.kind === 'reUpload'
+            ? t('awards.conf.reupload')
+            : t('awards.conf.uploadToLotw')}
       </button>
     )
   }
@@ -186,16 +216,19 @@ function RowAction({
   // logbook, NOT ARRL DXCC/WAS credit — only the LoTW button is the award pill.
   const svc = pushService(a)
   if (svc) {
-    const label = a.kind === 'reUpload' ? `Re-push to ${svc}` : `Push to ${svc}`
+    const label =
+      a.kind === 'reUpload'
+        ? t('awards.conf.repush', { service: svc })
+        : t('awards.conf.push', { service: svc })
     if (!canPush) return <span className="conf-act">{label}</span>
     return (
       <button
         className="conf-btn conf-btn-push"
         disabled={busyKey !== null}
-        title={`Pushes this QSO to your ${svc} logbook — does not count for ARRL DXCC/WAS (LoTW only)`}
+        title={t('awards.conf.push.title', { service: svc })}
         onClick={() => onPush(d.index, svc, key)}
       >
-        {busyKey === key ? 'Pushing…' : label}
+        {busyKey === key ? t('awards.conf.pushing') : label}
       </button>
     )
   }
@@ -204,22 +237,35 @@ function RowAction({
   // operator is when they learn the login is stale — so it takes them there.
   if (a.kind === 'reauthenticate') {
     const src = a.source ?? 'LoTW'
-    if (src === 'LoTW') return <span className="conf-act">Fix cert in TQSL</span>
-    if (!onOpenSettings) return <span className="conf-act">Fix {src} login in Settings</span>
+    if (src === 'LoTW') return <span className="conf-act">{t('awards.conf.fixCert')}</span>
+    if (!onOpenSettings)
+      return (
+        <span className="conf-act">{t('awards.conf.fixLoginInSettings', { service: src })}</span>
+      )
     return (
       <button
         className="conf-btn"
-        title={`Opens Settings ▸ Confirmations, where the ${src} login is saved`}
+        title={t('awards.conf.fixLogin.title', { service: src })}
         onClick={() => onOpenSettings('confirmations')}
       >
-        Fix {src} login
+        {t('awards.conf.fixLogin', { service: src })}
       </button>
     )
   }
-  if (a.kind === 'nudgePartner') return <span className="conf-act">Waiting on {a.call}</span>
-  if (a.kind === 'mergeDuplicate') return <span className="conf-act">Review dup #{(a.otherIndex ?? 0) + 1}</span>
-  if (a.kind === 'fixField') return <span className="conf-act">Fix {a.field}</span>
-  if (a.kind === 'correctBustedCall') return <span className="conf-act">Was it {a.suggested}?</span>
+  if (a.kind === 'nudgePartner')
+    return <span className="conf-act">{t('awards.conf.waitingOn', { call: a.call ?? '' })}</span>
+  if (a.kind === 'mergeDuplicate')
+    return (
+      <span className="conf-act">
+        {t('awards.conf.reviewDup', { number: (a.otherIndex ?? 0) + 1 })}
+      </span>
+    )
+  if (a.kind === 'fixField')
+    return <span className="conf-act">{t('awards.conf.fixField', { field: a.field ?? '' })}</span>
+  if (a.kind === 'correctBustedCall')
+    return (
+      <span className="conf-act">{t('awards.conf.bustedCall', { call: a.suggested ?? '' })}</span>
+    )
   return null
 }
 
@@ -283,35 +329,41 @@ export function AwardsView({
   async function push(index: number, service: PushService, key: string) {
     const q = log?.[index]
     if (!q) {
-      setUploadMsg('Could not find that QSO in the log — reload Awards and try again.')
+      setUploadMsg(t('awards.push.noQso'))
       return
     }
     setBusyKey(key)
     setUploadMsg(null)
     try {
+      // One whole sentence per outcome — the shipped text spliced " (already there)" into
+      // the middle of one, which no language with another word order can reproduce.
       let msg: string
       if (service === 'QRZ') {
         const r = await qrzPushQso(q)
         msg =
           r.result === 'ok' || r.result === 'replace'
-            ? `✓ ${q.call} pushed to your QRZ logbook.`
+            ? t('awards.push.qrz.ok', { call: q.call })
             : r.result === 'duplicate'
-              ? `✓ ${q.call} already in your QRZ logbook (duplicate) — nothing to re-send.`
-              : `✗ QRZ rejected ${q.call}: ${r.reason ?? r.result}`
+              ? t('awards.push.qrz.duplicate', { call: q.call })
+              : t('awards.push.qrz.rejected', { call: q.call, reason: r.reason ?? r.result })
       } else if (service === 'ClubLog') {
         const r = await clublogPushQso(q)
         msg =
-          r.result === 'ok' || r.result === 'modified' || r.result === 'duplicate'
-            ? `✓ ${q.call} on ClubLog${r.result === 'duplicate' ? ' (already there)' : ''}.`
-            : `✗ ClubLog rejected ${q.call}: ${r.message ?? r.result}`
+          r.result === 'duplicate'
+            ? t('awards.push.clublog.duplicate', { call: q.call })
+            : r.result === 'ok' || r.result === 'modified'
+              ? t('awards.push.clublog.ok', { call: q.call })
+              : t('awards.push.clublog.rejected', { call: q.call, reason: r.message ?? r.result })
       } else {
         // eQSL's classify_upload returns 'accepted' on success (never 'pending' —
         // that's the LoTW/TQSL batch convention on the shared DTO).
         const r = await eqslPushQso(q)
         msg =
-          r.outcome === 'accepted' || r.outcome === 'duplicate'
-            ? `✓ ${q.call} sent to eQSL${r.outcome === 'duplicate' ? ' (already there)' : ''}.`
-            : `✗ eQSL: ${r.detail ?? r.outcome}`
+          r.outcome === 'duplicate'
+            ? t('awards.push.eqsl.duplicate', { call: q.call })
+            : r.outcome === 'accepted'
+              ? t('awards.push.eqsl.ok', { call: q.call })
+              : t('awards.push.eqsl.rejected', { detail: r.detail ?? r.outcome })
       }
       const fresh = await getConfirmationDiagnostics().catch(() => null)
       if (!mounted.current) return
@@ -319,7 +371,12 @@ export function AwardsView({
       if (fresh) setDiag(fresh)
     } catch (e) {
       if (mounted.current)
-        setUploadMsg(`✗ ${service} push failed: ${e instanceof Error ? e.message : String(e)}`)
+        setUploadMsg(
+          t('awards.push.failed', {
+            service,
+            detail: e instanceof Error ? e.message : String(e),
+          }),
+        )
     } finally {
       if (mounted.current) setBusyKey(null)
     }
@@ -328,14 +385,22 @@ export function AwardsView({
   if (err) {
     return (
       <section className="awards">
-        <StateBlock kind="error" title="Couldn't load awards" detail="The award tally failed to compute." />
+        <StateBlock
+          kind="error"
+          title={t('awards.load.failed.title')}
+          detail={t('awards.load.failed.detail')}
+        />
       </section>
     )
   }
   if (!aw) {
     return (
       <section className="awards">
-        <StateBlock kind="empty" title="Tallying awards…" detail="Resolving your log against the DXCC entity list." />
+        <StateBlock
+          kind="empty"
+          title={t('awards.loading.title')}
+          detail={t('awards.loading.detail')}
+        />
       </section>
     )
   }
@@ -344,8 +409,8 @@ export function AwardsView({
       <section className="awards">
         <StateBlock
           kind="empty"
-          title="No contacts yet"
-          detail="Log contacts or import an ADIF (Logbook → Import ADIF) to start tracking DXCC."
+          title={t('awards.empty.title')}
+          detail={t('awards.empty.detail')}
         />
       </section>
     )
@@ -355,10 +420,10 @@ export function AwardsView({
   const hr = aw.honorRoll
   const hrPct = hr.currentTotal > 0 ? Math.min(100, (hr.confirmed / hr.currentTotal) * 100) : 0
   const hrNote = hr.numberOne
-    ? `#1 Honor Roll ✓ — all ${hr.currentTotal} entities`
+    ? t('awards.honorRoll.note.numberOne', { total: hr.currentTotal })
     : hr.achieved
-      ? `Honor Roll ✓ · ${hr.numberOneNeeded} to #1`
-      : `${hr.needed} more confirmed needed — Honor Roll entry at ${hr.threshold}`
+      ? t('awards.honorRoll.note.achieved', { needed: hr.numberOneNeeded })
+      : t('awards.honorRoll.note.toGo', { needed: hr.needed, threshold: hr.threshold })
   const dxccPct = Math.min(100, Math.round((aw.dxccConfirmed / DXCC_BASIC) * 100))
   const challengePct = Math.min(100, Math.round((aw.slotsConfirmed / CHALLENGE_AWARD) * 100))
   const bandMax = Math.max(1, ...aw.bands.map((b) => b.worked))
@@ -369,15 +434,15 @@ export function AwardsView({
     <section className="awards">
       <div className="awards-head">
         <h2>
-          <Trophy size={16} aria-hidden="true" /> Awards
+          <Trophy size={16} aria-hidden="true" /> {t('awards.title')}
         </h2>
-        <span className="awards-sub">DXCC · computed from your log</span>
+        <span className="awards-sub">{t('awards.subtitle')}</span>
       </div>
 
       <div className="awards-cards">
         <div className="aw-card">
           <span className="aw-k">
-            <Trophy size={13} aria-hidden="true" /> DXCC
+            <Trophy size={13} aria-hidden="true" /> {AWARD_NAMES.dxcc}
           </span>
           <span className="aw-v">
             {aw.dxccConfirmed}
@@ -388,16 +453,24 @@ export function AwardsView({
           </div>
           <span className="aw-note">
             {aw.dxccConfirmed >= DXCC_BASIC
-              ? `DXCC achieved ✓ · ${aw.dxccConfirmed} entities`
-              : `${DXCC_BASIC - aw.dxccConfirmed} confirmed to go`}{' '}
-            · {aw.dxccWorked} worked · {aw.dxccCredited} credited
-            {aw.readyToSubmit > 0 && ` · ${aw.readyToSubmit} ready to submit`}
+              ? t('awards.dxcc.note.achieved', {
+                  confirmed: aw.dxccConfirmed,
+                  worked: aw.dxccWorked,
+                  credited: aw.dxccCredited,
+                })
+              : t('awards.dxcc.note.toGo', {
+                  remaining: DXCC_BASIC - aw.dxccConfirmed,
+                  worked: aw.dxccWorked,
+                  credited: aw.dxccCredited,
+                })}
+            {aw.readyToSubmit > 0 &&
+              t('awards.dxcc.note.readyToSubmit', { count: aw.readyToSubmit })}
           </span>
         </div>
 
         <div className={`aw-card${hr.achieved ? ' aw-card-elite' : ''}`}>
           <span className="aw-k">
-            <Award size={13} aria-hidden="true" /> Honor Roll
+            <Award size={13} aria-hidden="true" /> {AWARD_NAMES.honorRoll}
           </span>
           <span className="aw-v">
             {hr.confirmed}
@@ -411,7 +484,7 @@ export function AwardsView({
 
         <div className="aw-card">
           <span className="aw-k">
-            <Radio size={13} aria-hidden="true" /> Challenge
+            <Radio size={13} aria-hidden="true" /> {AWARD_NAMES.challenge}
           </span>
           <span className="aw-v">
             {aw.slotsConfirmed}
@@ -420,26 +493,25 @@ export function AwardsView({
           <div className="aw-bar">
             <div className="aw-fill good" style={{ width: `${challengePct}%` }} />
           </div>
-          <span className="aw-note">{aw.slotsWorked} entity×band slots worked</span>
+          <span className="aw-note">{t('awards.challenge.note', { worked: aw.slotsWorked })}</span>
         </div>
 
         <div className="aw-card">
           <span className="aw-k">
-            <CheckCircle2 size={13} aria-hidden="true" /> Confirmed
+            <CheckCircle2 size={13} aria-hidden="true" /> {t('awards.confirmed.label')}
           </span>
           <span className="aw-v">
             {confRate}
             <span className="aw-of">%</span>
           </span>
           <span className="aw-note">
-            {aw.confirmedQsos} of {aw.qsos} QSOs confirmed via LoTW or card (eQSL / QRZ
-            matches don&rsquo;t count toward ARRL awards)
+            {t('awards.confirmed.note', { confirmed: aw.confirmedQsos, total: aw.qsos })}
           </span>
         </div>
 
         <div className="aw-card">
           <span className="aw-k">
-            <Layers size={13} aria-hidden="true" /> 5-Band DXCC
+            <Layers size={13} aria-hidden="true" /> {AWARD_NAMES.fiveBandDxcc}
           </span>
           <span className="aw-v">
             {aw.fiveBandConfirmed}
@@ -449,14 +521,13 @@ export function AwardsView({
             <div className="aw-fill good" style={{ width: `${Math.min(100, aw.fiveBandConfirmed)}%` }} />
           </div>
           <span className="aw-note">
-            weakest of the 5 classic bands (ARRL counts each band on its own) ·{' '}
-            {aw.fiveBandWorked} worked
+            {t('awards.fiveBand.note', { worked: aw.fiveBandWorked })}
           </span>
         </div>
 
         <div className="aw-card">
           <span className="aw-k">
-            <Globe2 size={13} aria-hidden="true" /> WAZ
+            <Globe2 size={13} aria-hidden="true" /> {AWARD_NAMES.waz}
           </span>
           <span className="aw-v">
             {aw.wazConfirmed}
@@ -470,15 +541,17 @@ export function AwardsView({
           </div>
           <span className="aw-note">
             {aw.wazConfirmed >= WAZ_ZONES
-              ? 'Worked All Zones ✓'
-              : `${WAZ_ZONES - aw.wazConfirmed} zones to go`}{' '}
-            · {aw.wazWorked} worked
+              ? t('awards.waz.note.achieved', { worked: aw.wazWorked })
+              : t('awards.waz.note.toGo', {
+                  remaining: WAZ_ZONES - aw.wazConfirmed,
+                  worked: aw.wazWorked,
+                })}
           </span>
         </div>
 
         <div className={`aw-card${aw.was.confirmed >= WAS_STATES ? ' aw-card-elite' : ''}`}>
           <span className="aw-k">
-            <Flag size={13} aria-hidden="true" /> WAS
+            <Flag size={13} aria-hidden="true" /> {AWARD_NAMES.was}
           </span>
           <span className="aw-v">
             {aw.was.confirmed}
@@ -492,9 +565,15 @@ export function AwardsView({
           </div>
           <span className="aw-note">
             {aw.was.confirmed >= WAS_STATES
-              ? 'Worked All States ✓'
-              : `${WAS_STATES - aw.was.confirmed} states to go`}{' '}
-            · {aw.was.worked} worked · 5BWAS weakest band {aw.was.fiveBandConfirmed}/50
+              ? t('awards.was.note.achieved', {
+                  worked: aw.was.worked,
+                  fiveBand: aw.was.fiveBandConfirmed,
+                })
+              : t('awards.was.note.toGo', {
+                  remaining: WAS_STATES - aw.was.confirmed,
+                  worked: aw.was.worked,
+                  fiveBand: aw.was.fiveBandConfirmed,
+                })}
           </span>
         </div>
 
@@ -511,7 +590,7 @@ export function AwardsView({
           return (
             <div className={`aw-card${achieved.length > 0 ? ' aw-card-elite' : ''}`}>
               <span className="aw-k">
-                <Grid3x3 size={13} aria-hidden="true" /> VUCC
+                <Grid3x3 size={13} aria-hidden="true" /> {AWARD_NAMES.vucc}
               </span>
               {best ? (
                 <>
@@ -532,9 +611,15 @@ export function AwardsView({
                   </div>
                   <span className="aw-note">
                     {achieved.length > 0
-                      ? `VUCC ✓ ${achieved.map((x) => x.band).join(' · ')}`
-                      : `${best.threshold - best.confirmed} grids to go on ${best.band}`}{' '}
-                    · {aw.vucc.confirmed} grids confirmed on all bands (tracker)
+                      ? t('awards.vucc.note.achieved', {
+                          bands: achieved.map((x) => x.band).join(' · '),
+                          confirmed: aw.vucc.confirmed,
+                        })
+                      : t('awards.vucc.note.toGo', {
+                          remaining: best.threshold - best.confirmed,
+                          band: best.band,
+                          confirmed: aw.vucc.confirmed,
+                        })}
                   </span>
                 </>
               ) : (
@@ -543,8 +628,7 @@ export function AwardsView({
                     0<span className="aw-of"> / {VUCC_GRIDS}</span>
                   </span>
                   <span className="aw-note">
-                    No 6 m-and-up grids yet · {aw.vucc.confirmed} grids confirmed on all
-                    bands (tracker — VUCC itself is 50 MHz and up)
+                    {t('awards.vucc.note.none', { confirmed: aw.vucc.confirmed })}
                   </span>
                 </>
               )}
@@ -561,7 +645,7 @@ export function AwardsView({
             stay untagged. */}
         <div className={`aw-card${aw.vucc.satConfirmed >= VUCC_GRIDS ? ' aw-card-elite' : ''}`}>
           <span className="aw-k">
-            <Satellite size={13} aria-hidden="true" /> Sat VUCC
+            <Satellite size={13} aria-hidden="true" /> {AWARD_NAMES.satVucc}
           </span>
           <span className="aw-v">
             {aw.vucc.satConfirmed}
@@ -575,14 +659,17 @@ export function AwardsView({
           </div>
           <span className="aw-note">
             {aw.vucc.satConfirmed >= VUCC_GRIDS
-              ? 'Satellite VUCC ✓'
-              : `${VUCC_GRIDS - aw.vucc.satConfirmed} more to confirm`}{' '}
-            · {aw.vucc.satWorked} grids worked · Sat DXCC {aw.satDxccConfirmed ?? 0} confirmed
+              ? t('awards.satVucc.note.achieved', {
+                  worked: aw.vucc.satWorked,
+                  satDxcc: aw.satDxccConfirmed ?? 0,
+                })
+              : t('awards.satVucc.note.toGo', {
+                  remaining: VUCC_GRIDS - aw.vucc.satConfirmed,
+                  worked: aw.vucc.satWorked,
+                  satDxcc: aw.satDxccConfirmed ?? 0,
+                })}
           </span>
-          <span className="aw-note">
-            Pass contacts are tagged automatically when logged on the bird&rsquo;s
-            downlink (ISS excepted — no LoTW designator to derive)
-          </span>
+          <span className="aw-note">{t('awards.satVucc.note.tagging')}</span>
         </div>
 
         {/* The ✓ gates on CARD-confirmed groups: the IOTA programme credits QSL cards
@@ -592,7 +679,7 @@ export function AwardsView({
           className={`aw-card${(aw.iota.cardConfirmed ?? 0) >= IOTA_ISLANDS ? ' aw-card-elite' : ''}`}
         >
           <span className="aw-k">
-            <Globe2 size={13} aria-hidden="true" /> IOTA
+            <Globe2 size={13} aria-hidden="true" /> {AWARD_NAMES.iota}
           </span>
           <span className="aw-v">
             {aw.iota.confirmed}
@@ -606,10 +693,11 @@ export function AwardsView({
           </div>
           <span className="aw-note">
             {(aw.iota.cardConfirmed ?? 0) >= IOTA_ISLANDS
-              ? 'IOTA ✓ (card-confirmed)'
-              : `${aw.iota.worked} worked`}{' '}
-            · {aw.iota.cardConfirmed ?? 0} on cards — IOTA credits cards / Club Log, not
-            LoTW
+              ? t('awards.iota.note.achieved', { cards: aw.iota.cardConfirmed ?? 0 })
+              : t('awards.iota.note.worked', {
+                  worked: aw.iota.worked,
+                  cards: aw.iota.cardConfirmed ?? 0,
+                })}
           </span>
         </div>
       </div>
@@ -617,12 +705,15 @@ export function AwardsView({
       <div className="awards-body">
         <div className="aw-left">
           <div className="aw-panel">
-            <h3>DXCC by band</h3>
+            <h3>{t('awards.bands.head')}</h3>
             <div className="aw-bands">
               {aw.bands.map((b) => (
                 <div className="aw-bandrow" key={b.band}>
                   <span className="aw-band">{b.band}</span>
-                  <div className="aw-bandbar" title={`${b.confirmed} confirmed / ${b.worked} worked`}>
+                  <div
+                    className="aw-bandbar"
+                    title={t('awards.bar.title', { confirmed: b.confirmed, worked: b.worked })}
+                  >
                     <div className="aw-worked" style={{ width: `${(b.worked / bandMax) * 100}%` }}>
                       <div
                         className="aw-confirmed"
@@ -641,12 +732,18 @@ export function AwardsView({
 
           {aw.vucc.bands.length > 0 && (
             <div className="aw-panel">
-              <h3>Grids by band (VUCC)</h3>
+              <h3>{t('awards.grids.head')}</h3>
               <div className="aw-bands">
                 {aw.vucc.bands.map((b) => (
                   <div className="aw-bandrow" key={b.band}>
                     <span className="aw-band">{b.band}</span>
-                    <div className="aw-bandbar" title={`${b.confirmed} confirmed / ${b.worked} worked grids`}>
+                    <div
+                      className="aw-bandbar"
+                      title={t('awards.bar.titleGrids', {
+                        confirmed: b.confirmed,
+                        worked: b.worked,
+                      })}
+                    >
                       <div className="aw-worked" style={{ width: `${(b.worked / gridBandMax) * 100}%` }}>
                         <div
                           className="aw-confirmed"
@@ -665,12 +762,15 @@ export function AwardsView({
           )}
 
           <div className="aw-panel">
-            <h3>DXCC by mode</h3>
+            <h3>{t('awards.modes.head')}</h3>
             <div className="aw-bands aw-modes">
               {aw.modes.map((m) => (
                 <div className="aw-bandrow" key={m.mode}>
                   <span className="aw-band">{m.mode}</span>
-                  <div className="aw-bandbar" title={`${m.confirmed} confirmed / ${m.worked} worked`}>
+                  <div
+                    className="aw-bandbar"
+                    title={t('awards.bar.title', { confirmed: m.confirmed, worked: m.worked })}
+                  >
                     <div className="aw-worked" style={{ width: `${(m.worked / modeMax) * 100}%` }}>
                       <div
                         className="aw-confirmed"
@@ -691,28 +791,32 @@ export function AwardsView({
         <div className="aw-chases">
           <div className="aw-panel">
             <h3>
-              <Target size={14} aria-hidden="true" /> Confirm for a new one ({aw.needed.length})
+              <Target size={14} aria-hidden="true" />{' '}
+              {t('awards.chase.entities.head', { count: aw.needed.length })}
             </h3>
-            <NeedList items={aw.needed} empty="Every worked entity is confirmed. 🎉" />
+            <NeedList items={aw.needed} empty={t('awards.chase.entities.empty')} />
           </div>
           <div className="aw-panel">
             <h3>
-              <Radio size={14} aria-hidden="true" /> Confirm for a Challenge slot ({aw.slotNeeded.length})
+              <Radio size={14} aria-hidden="true" />{' '}
+              {t('awards.chase.slots.head', { count: aw.slotNeeded.length })}
             </h3>
-            <NeedList items={aw.slotNeeded} empty="No worked-but-unconfirmed band slots." />
+            <NeedList items={aw.slotNeeded} empty={t('awards.chase.slots.empty')} />
           </div>
           <div className="aw-panel">
             <h3>
-              <Send size={14} aria-hidden="true" /> Work for a band slot ({aw.bandTargets.length})
+              <Send size={14} aria-hidden="true" />{' '}
+              {t('awards.chase.bandTargets.head', { count: aw.bandTargets.length })}
             </h3>
-            <NeedList items={aw.bandTargets} empty="No almost-complete entities to chase." />
+            <NeedList items={aw.bandTargets} empty={t('awards.chase.bandTargets.empty')} />
           </div>
           <div className="aw-panel">
             <h3>
-              <Flag size={14} aria-hidden="true" /> WAS — states needed ({aw.was.needed.length})
+              <Flag size={14} aria-hidden="true" />{' '}
+              {t('awards.chase.was.head', { count: aw.was.needed.length })}
             </h3>
             {aw.was.needed.length === 0 ? (
-              <p className="aw-empty">All 50 states confirmed. 🎉</p>
+              <p className="aw-empty">{t('awards.chase.was.empty')}</p>
             ) : (
               <span className="aw-needbands">
                 {aw.was.needed.map((s) => (
@@ -729,27 +833,36 @@ export function AwardsView({
       {diag && (diag.diagnoses.length > 0 || diag.pendingLag > 0 || diag.waitingOnPartner > 0) && (
         <div className="aw-panel conf-panel">
           <h3>
-            <CheckCircle2 size={14} aria-hidden="true" /> Confirmations — why isn't this credited?
+            <CheckCircle2 size={14} aria-hidden="true" /> {t('awards.conf.head')}
           </h3>
           {(diag.oneAway ?? []).length > 0 && (
             <div className="conf-oneaway">
-              <span className="conf-oneaway-label">One fix away:</span>
+              <span className="conf-oneaway-label">{t('awards.conf.oneAway.label')}</span>
               {diag.oneAway.slice(0, 8).map((o) => (
                 <span
                   key={o.entity}
                   className={`conf-oneaway-chip${o.newEntity ? ' conf-oneaway-new' : ''}`}
-                  title={`${o.entity} (${o.bands.join(', ')}): one LoTW upload / data fix puts ${
+                  title={
                     o.newEntity
-                      ? 'a NEW DXCC entity'
-                      : `${o.bands.length} Challenge slot${o.bands.length === 1 ? '' : 's'}`
-                  } in play — the partner's confirmation still decides`}
+                      ? t('awards.conf.oneAway.newEntity.title', {
+                          entity: o.entity,
+                          bands: o.bands.join(', '),
+                        })
+                      : t('awards.conf.oneAway.slots.title', {
+                          entity: o.entity,
+                          bands: o.bands.join(', '),
+                          count: o.bands.length,
+                        })
+                  }
                 >
                   {o.newEntity && <span className="conf-oneaway-star">★</span>}
                   {o.entity} <span className="conf-oneaway-bands">{o.bands.join(' ')}</span>
                 </span>
               ))}
               {diag.oneAway.length > 8 && (
-                <span className="conf-muted">+{diag.oneAway.length - 8} more</span>
+                <span className="conf-muted">
+                  {t('awards.conf.oneAway.more', { count: diag.oneAway.length - 8 })}
+                </span>
               )}
             </div>
           )}
@@ -780,7 +893,9 @@ export function AwardsView({
                             onClick={() => upload(b.qsoIndices, key)}
                           >
                             <UploadCloud size={12} aria-hidden="true" />
-                            {busyKey === key ? 'Uploading…' : `Upload ${b.count}`}
+                            {busyKey === key
+                              ? t('awards.conf.uploading')
+                              : t('awards.conf.bucket.upload', { count: b.count })}
                           </button>
                         )}
                       </div>
@@ -798,7 +913,9 @@ export function AwardsView({
                   <li className="conf-row" key={d.index}>
                     <span className={`conf-code conf-${r?.code ?? 'x'}`}>{(r?.code ?? '').toUpperCase()}</span>
                     <span className="conf-expl">{r?.explanation}</span>
-                    {r?.confidence === 'likely' && <span className="conf-likely">likely</span>}
+                    {r?.confidence === 'likely' && (
+                      <span className="conf-likely">{t('awards.conf.likely')}</span>
+                    )}
                     <RowAction
                       d={d}
                       busyKey={busyKey}
@@ -815,14 +932,12 @@ export function AwardsView({
           {uploadMsg && <p className="conf-msg">{uploadMsg}</p>}
           {diag.waitingOnPartner > 0 && (
             <p className="conf-muted">
-              {diag.waitingOnPartner} QSO{diag.waitingOnPartner === 1 ? '' : 's'} uploaded to LoTW —
-              waiting on the other operator to confirm.
+              {t('awards.conf.waitingOnPartner', { count: diag.waitingOnPartner })}
             </p>
           )}
           {diag.pendingLag > 0 && (
             <p className="conf-muted">
-              {diag.pendingLag} recently-worked QSO{diag.pendingLag === 1 ? '' : 's'} still awaiting a
-              confirmation — not a problem, just give it time.
+              {t('awards.conf.pendingLag', { count: diag.pendingLag })}
             </p>
           )}
         </div>
@@ -831,8 +946,11 @@ export function AwardsView({
       {showGamification && (
       <div className="aw-panel aw-achievements">
         <h3>
-          <Trophy size={14} aria-hidden="true" /> Achievements (
-          {aw.achievements.filter((a) => a.unlocked).length}/{aw.achievements.length})
+          <Trophy size={14} aria-hidden="true" />{' '}
+          {t('awards.achievements.head', {
+            unlocked: aw.achievements.filter((a) => a.unlocked).length,
+            total: aw.achievements.length,
+          })}
         </h3>
         <div className="aw-badges">
           {aw.achievements.map((a) => (

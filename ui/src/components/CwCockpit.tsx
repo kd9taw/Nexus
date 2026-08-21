@@ -1,3 +1,11 @@
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): every
+// operator-visible string in it is in the catalog under `cw.*`. Nothing was deferred —
+// CW's stop line is Stop TX (→ stopCw + haltTx) and Tune, both drawn by CockpitHeader, plus
+// Esc, a window keydown with no string at all. The F-key macros and the send bar are
+// SENDERS and move normally; the keyer back-end, speed and pitch are CONFIGURATION on the
+// transmit path and move exactly as PTT Method did. WPM, pitch and filter width in Hz, the
+// scope spans and reference levels, the macro TEXTS with their {MYCALL}/{RST}/{NAME}/{EXCH}
+// tokens and every <select> value are invariant tokens and stay in the code.
 import { useEffect, useRef, useState } from 'react'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
@@ -10,6 +18,7 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { MemoryStrip } from './MemoryStrip'
+import { IS_MAC, FN_KEY_HINT } from '../platform'
 import type { Memory } from '../features/memories'
 import { Splitter, SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from './Splitter'
 import { PanelsMenu } from './PanelsMenu'
@@ -59,13 +68,65 @@ import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeWindow, isRfScopeSource, sidebandSign, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
+import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 
-/** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit). */
+/** This cockpit's INVARIANT vocabulary — the words that are the mode's own technical tokens
+ *  rather than prose, gathered here so the i18n guard reads them as the deliberate constants
+ *  they are: the mode name in the badge, the units the readouts print, the rig's own control
+ *  group names, the two back-end names that are a protocol and a product, and the split and
+ *  record plates. */
+const CW = 'CW'
+const WPM = 'WPM'
+const DB = 'dB'
+const DBM = 'dBm'
+const DSP = 'DSP'
+const NR = 'NR'
+const AGC = 'AGC'
+const BW = 'BW'
+const CAT = 'CAT'
+const WINKEYER = 'WinKeyer'
+const SPLIT_PLATE = 'SPLIT ▲'
+const REC = 'REC'
+/** The BW nudge and the AI decoder's audio window, as the tooltips print them — figures, so
+ *  they are supplied to the message rather than written in it. */
+const FILTER_STEP_HZ = 50
+const AI_WINDOW_HZ = '400–1200'
+
+/** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit).
+ *  The ± labels are measurements and stay written here; `Full` is a word. Both it and every
+ *  title resolve when the row RENDERS (a module constant would freeze the first locale
+ *  loaded), so the chips are keyed and compared on `id` — the preset itself rather than the
+ *  word printed on it. */
 const RF_SPANS = [
-  { label: 'Full', lo: -1e9, hi: 1e9, title: "The rig's whole scope sweep (set the width on the radio)" },
-  { label: '±25k', lo: -25_000, hi: 25_000, title: '±25 kHz around your dial' },
-  { label: '±10k', lo: -10_000, hi: 10_000, title: '±10 kHz around your dial' },
-  { label: '±5k', lo: -5_000, hi: 5_000, title: '±5 kHz around your dial' },
+  {
+    id: 'full',
+    lo: -1e9,
+    hi: 1e9,
+    label: () => t('cw.rfZoom.full.label'),
+    title: () => t('cw.rfZoom.full.title'),
+  },
+  {
+    id: '±25k',
+    lo: -25_000,
+    hi: 25_000,
+    label: () => '±25k',
+    title: () => t('cw.rfZoom.span.title', { khz: 25 }),
+  },
+  {
+    id: '±10k',
+    lo: -10_000,
+    hi: 10_000,
+    label: () => '±10k',
+    title: () => t('cw.rfZoom.span.title', { khz: 10 }),
+  },
+  {
+    id: '±5k',
+    lo: -5_000,
+    hi: 5_000,
+    label: () => '±5k',
+    title: () => t('cw.rfZoom.span.title', { khz: 5 }),
+  },
 ] as const
 
 /** RIG scope-span presets (native Icom CI-V) — command the RADIO's real panadapter sweep width
@@ -94,16 +155,13 @@ const FLEX_SPANS = [
  *  buttons the header's keyer <select> replaced (2026-08-04 density pass). This is operating
  *  information, not chrome: the soundcard entry is the one that stops an operator keying a tone
  *  through SSB with nothing routed and the drive over ALC, so it is carried on the select AND
- *  on each option rather than dropped with the buttons. */
-const KEYER_HELP = {
-  cat: 'CAT keyer — the rig generates CW (rig in CW). Zero extra hardware.',
-  serial:
-    "Serial keyline — Nexus toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal). The clean N1MM/fldigi method for rigs without CAT CW. Set the keyline port + line in Settings ▸ CW.",
-  winkeyer:
-    'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings ▸ CW.',
-  soundcard:
-    "Soundcard keyer — a keyed audio tone through SSB (rig in USB). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
-} as const
+ *  on each option rather than dropped with the buttons. Resolved when the header renders. */
+const keyerHelp = (): Record<'cat' | 'soundcard' | 'winkeyer' | 'serial', string> => ({
+  cat: t('cw.keyer.cat.title'),
+  serial: t('cw.keyer.serial.title'),
+  winkeyer: t('cw.keyer.winkeyer.title'),
+  soundcard: t('cw.keyer.soundcard.title'),
+})
 
 interface Props {
   snap: AppSnapshot
@@ -142,35 +200,51 @@ interface Props {
   panels?: PanelLayoutApi<CwPanelId>
 }
 
-/** Display labels for the CW removable panels (the ⊞ Panels menu). */
-const CW_PANEL_LABELS: Record<CwPanelId, string> = {
+/** Display labels for the CW removable panels (the ⊞ Panels menu). Resolved when the menu is
+ *  BUILT — a module constant would freeze the first locale loaded. */
+const cwPanelLabels = (): Record<CwPanelId, string> => ({
   // The strip itself — the CW-narrow audio view (or the rig's RF panadapter when one
   // streams). `scopeCtl` right below commands the RADIO's scope and is a separate pane in
   // the region; the two entries sit adjacent in the menu, so the labels have to distinguish
   // the display from the controls for it.
-  scope: 'Scope',
-  scopeCtl: 'Scope Controls',
-  dsp: 'DSP Toggles',
-  txmeters: 'TX Meters',
-  rxdsp: 'RX DSP Levels',
-  bandActivity: 'Band Activity',
-  copilot: 'CW Copilot',
-  decode: 'CW Decode',
-  sent: 'Sent Echo',
-}
+  scope: t('cw.panel.scope'),
+  scopeCtl: t('cw.panel.scopeCtl'),
+  dsp: t('cw.panel.dsp'),
+  txmeters: t('cw.panel.txmeters'),
+  rxdsp: t('cw.panel.rxdsp'),
+  bandActivity: t('cw.panel.bandActivity'),
+  copilot: t('cw.panel.copilot'),
+  decode: t('cw.panel.decode'),
+  sent: t('cw.panel.sent'),
+})
+
+/** One F-key macro row as the dock renders it.
+ *
+ * A macro from an operator's own named profile carries `label` — his words, never
+ * translated. The BUILT-IN sets below carry `label` where the caption is on-air shorthand
+ * (CQ, 73, AGN, TU, CQ FD, ?) and `labelKey` where it is a word, resolved when the row
+ * renders. ⚠️ Both built-in sets are PARSED OUT OF THIS SOURCE by `docs-match-code.test.ts`
+ * and compared with the tables docs/manual/CW.md publishes, so a caption is written here as
+ * a plain literal or named by a key — never assembled. */
+type CwMacro = { key: string; label?: string; labelKey?: MessageKey; text: string }
 
 /** Default CASUAL/ragchew macro set (no contest serial/exchange). Standard CW QSO flow:
  * F1 CQ → F2 Call (answer a CQ with just your call, so they copy it — no report yet) →
  * F3 Reply (send your report + name, once they've come back to you) → F4 73. Overs end
  * `KN` ("go ahead, you only"). The engine expands the tokens ({MYCALL}/{NAME}/{RST}/! =
- * worked call) with the live QSO context, so we just send the template. */
-const DEFAULT_MACROS: { key: string; label: string; text: string }[] = [
+ * worked call) with the live QSO context, so we just send the template — every character
+ * of `text` goes on the air and is invariant. */
+const DEFAULT_MACROS: CwMacro[] = [
   { key: 'F1', label: 'CQ', text: 'CQ CQ DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', label: 'Call', text: '! DE {MYCALL} {MYCALL} K' },
-  { key: 'F3', label: 'Reply', text: '! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? KN' },
+  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} {MYCALL} K' },
+  {
+    key: 'F3',
+    labelKey: 'cw.macro.reply.label',
+    text: '! DE {MYCALL} UR {RST} {RST} NAME {NAME} {NAME} HW? KN',
+  },
   { key: 'F4', label: '73', text: '! DE {MYCALL} TU 73 SK' },
-  { key: 'F5', label: 'My Call', text: '{MYCALL}' },
-  { key: 'F6', label: 'His Call', text: '! ' },
+  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
+  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
   { key: 'F7', label: 'AGN', text: 'AGN AGN' },
   { key: 'F8', label: '?', text: '? ' },
 ]
@@ -179,13 +253,13 @@ const DEFAULT_MACROS: { key: string; label: string; text: string }[] = [
  * The engine fills {EXCH} = "{CLASS} {SECTION}" (e.g. "3A WI") from the FD settings, so
  * one template serves both events. Contest cadence: F1 CQ FD → F2 answer with your call →
  * F3 send the exchange (twice, for copy) → F4 confirm + TU. */
-const DEFAULT_FD_MACROS: { key: string; label: string; text: string }[] = [
+const DEFAULT_FD_MACROS: CwMacro[] = [
   { key: 'F1', label: 'CQ FD', text: 'CQ FD DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', label: 'Call', text: '! DE {MYCALL} K' },
-  { key: 'F3', label: 'Exch', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
+  { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
+  { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },
   { key: 'F4', label: 'TU', text: '! TU {EXCH} DE {MYCALL} K' },
-  { key: 'F5', label: 'My Call', text: '{MYCALL}' },
-  { key: 'F6', label: 'His Call', text: '! ' },
+  { key: 'F5', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
+  { key: 'F6', labelKey: 'cw.macro.hisCall.label', text: '! ' },
   { key: 'F7', label: 'AGN', text: 'AGN AGN' },
   { key: 'F8', label: '?', text: '? ' },
 ]
@@ -202,9 +276,9 @@ const WPM_MAX = 50
 /** DSP funcs relevant to CW — NB (impulse noise), NR (broadband hiss), Notch/ANF (carriers).
  * COMP/VOX are voice-only, so they're deliberately absent here. Capability-gated like Phone. */
 const CW_DSP_FUNCS = [
-  { key: 'nb', label: 'NB', title: 'Noise Blanker — kills impulse/ignition noise (RX)' },
-  { key: 'nr', label: 'NR', title: 'Noise Reduction — pulls a tone out of broadband hiss (RX, DSP)' },
-  { key: 'notch', label: 'Notch', title: 'Auto-Notch (ANF) — nulls a competing carrier (RX, DSP)' },
+  { key: 'nb', label: 'NB', titleKey: 'cw.dsp.nb.title' },
+  { key: 'nr', label: 'NR', titleKey: 'cw.dsp.nr.title' },
+  { key: 'notch', label: 'Notch', titleKey: 'cw.dsp.notch.title' },
 ] as const
 
 export function CwCockpit({
@@ -255,7 +329,11 @@ export function CwCockpit({
     const fn = recording ? stopQsoRecording : startQsoRecording
     fn()
       .then((snapshot) => onSnap?.(snapshot))
-      .catch(() => pushToast(`Could not ${recording ? 'stop' : 'start'} recording`, 'error'))
+      // Two whole sentences, not a stem with the verb spliced in: word order is not
+      // universal and a sentence assembled from fragments cannot be translated.
+      .catch(() =>
+        pushToast(recording ? t('cw.record.stopFailed') : t('cw.record.startFailed'), 'error'),
+      )
       .finally(() => setRecBusy(false))
   }
   useEffect(() => {
@@ -300,7 +378,7 @@ export function CwCockpit({
     if ((deltaHz > 0 && next <= base) || (deltaHz < 0 && next >= base)) return
     void setFilterWidth(next)
       .then((s) => onSnap?.(s))
-      .catch(() => pushToast('Could not set filter width', 'error'))
+      .catch(() => pushToast(t('cw.filter.failed'), 'error'))
   }
   // Source of truth = the engine's actual keyer speed (survives navigation; the
   // old hard-coded 25 silently re-keyed at the wrong speed after a nav round-trip).
@@ -347,6 +425,13 @@ export function CwCockpit({
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
   const civScope = scopeFeed?.source === 'civ'
   const flexScope = scopeFeed?.source === 'flex'
+  // The sub-plate under the scope title: the fed span in MHz — a MEASUREMENT, so it is
+  // assembled here rather than in the catalog — or the word for what the audio view centres
+  // on. The `·` separator is chrome and belongs to neither.
+  const scopeSub =
+    nativeRf && scopeFeed
+      ? `· ${(scopeFeed.loHz / 1e6).toFixed(4)}–${(scopeFeed.hiHz / 1e6).toFixed(4)} MHz`
+      : `· ${t('cw.scope.audio.sub')}`
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
     setFlexRefDbm(dbm)
@@ -431,7 +516,7 @@ export function CwCockpit({
         menu: CW_PANEL_IDS,
         side: [],
         main: 'decode',
-        labels: CW_PANEL_LABELS,
+        labels: cwPanelLabels(),
         notes: {
           scopeCtl: civScope || flexScope ? undefined : NO_NATIVE_SCOPE_REASON,
           dsp: cwDspFuncs.length > 0 ? undefined : NO_DSP_FUNCS_REASON,
@@ -491,7 +576,9 @@ export function CwCockpit({
     }
   }, [])
   const profileMacros = profiles[activeProfile]?.macros
-  const macros =
+  // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
+  // operator's own words, a built-in's is either on-air shorthand or a catalog key.
+  const macros: CwMacro[] =
     profileMacros && profileMacros.length ? profileMacros : fieldDay ? DEFAULT_FD_MACROS : DEFAULT_MACROS
   // Switch the active macro profile from the cockpit (optimistic) and persist it.
   const switchProfile = (i: number) => {
@@ -501,7 +588,7 @@ export function CwCockpit({
     setCwSettings(next)
     void setSettings(next)
       .then((s) => onSnap?.(s))
-      .catch(() => pushToast('Could not switch macro profile', 'error'))
+      .catch(() => pushToast(t('cw.macroProfile.failed'), 'error'))
   }
   const macrosRef = useRef(macros)
   macrosRef.current = macros
@@ -566,6 +653,9 @@ export function CwCockpit({
   useEffect(() => {
     if (snap.radio.cwKeyer) setKeyer(snap.radio.cwKeyer as 'cat' | 'soundcard' | 'winkeyer' | 'serial')
   }, [snap.radio.cwKeyer])
+  // The four back-end descriptions, read once per render — the select wears the SELECTED
+  // one's and each <option> wears its own.
+  const keyerHelpText = keyerHelp()
   const [text, setText] = useState('')
   // Sidetone pitch — local for instant marker response; persisted via set_cw_keyer.
   const [pitch, setPitch] = useState(pitchHz)
@@ -597,14 +687,16 @@ export function CwCockpit({
   // TX-allowed privilege state through send() — not whatever existed at mount.
   const snapRef = useRef(snap)
   snapRef.current = snap
-  const send = (t: string) => {
-    if (!t.trim()) return
+  // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
+  // that name would shadow it here and nowhere else.
+  const send = (line: string) => {
+    if (!line.trim()) return
     // The engine blocks keying outside privileges anyway; surface why up front.
     if (!snapRef.current.radio.txAllowed) {
-      pushToast('TX locked — this frequency is outside your license privileges', 'info', 3500)
+      pushToast(t('cw.send.txLocked'), 'info', 3500)
       return
     }
-    void withErrorToast(() => sendCw(t), 'CW send failed')
+    void withErrorToast(() => sendCw(line), t('cw.send.failed'))
   }
   const sendTyped = () => {
     send(text)
@@ -745,19 +837,19 @@ export function CwCockpit({
   // CwCockpit.density.test.tsx rather than asserted here.
   const decodeActions = (
     <>
-      <span className="cw-ai-beta">AI</span>
-      {decoded.wpm > 0 && <span className="cw-decode-wpm">{decoded.wpm} WPM</span>}
+      <span className="cw-ai-beta">{t('cw.decode.ai.badge')}</span>
+      {decoded.wpm > 0 && (
+        <span className="cw-decode-wpm">
+          {decoded.wpm} {WPM}
+        </span>
+      )}
       <button
         type="button"
         role="switch"
         aria-checked={snap.aiCw?.enabled ?? false}
         className={`toggle${snap.aiCw?.enabled ? ' on' : ''}`}
         onClick={() => void setAiCw(!(snap.aiCw?.enabled ?? false))}
-        title={
-          snap.aiCw?.enabled
-            ? 'AI decoder on — click for the classic pitch decoder'
-            : 'AI decoder off (classic pitch decoder) — click to turn AI on'
-        }
+        title={snap.aiCw?.enabled ? t('cw.decode.ai.on.title') : t('cw.decode.ai.off.title')}
       >
         <span className="toggle-knob" />
       </button>
@@ -776,19 +868,16 @@ export function CwCockpit({
           decodePin.repin()
           sentPin.repin()
         }}
-        title="Clear the decoded + sent transcript"
+        title={t('cw.decode.clear.title')}
       >
-        Clear
+        {t('cw.decode.clear.label')}
       </button>
     </>
   )
 
   const decodePane = hasDecodePane ? (
-    <CockpitPaneFrame title="Decode" paneId="decode" weight={3} actions={decodeActions}>
-      <div
-        className="cw-decode panel"
-        title="Live CW decode — the AI (neural-net) decoder reads the whole 400–1200 Hz window, far better weak-signal copy than a pitch-tracking decoder. Turn AI off to fall back to the classic decoder."
-      >
+    <CockpitPaneFrame title={t('cw.pane.decode.title')} paneId="decode" weight={3} actions={decodeActions}>
+      <div className="cw-decode panel" title={t('cw.decode.title', { window: AI_WINDOW_HZ })}>
         {/* The visible transcript animates character-by-character (typewriter) —
             aria-hidden so a screen reader doesn't announce every keystroke; the
             hidden role=log mirror below receives whole batches instead (a log
@@ -798,11 +887,11 @@ export function CwCockpit({
             revealedText
           ) : (
             <span className="cw-decode-idle">
-              {(snap.aiCw?.enabled && snap.aiCw.status) || 'listening…'}
+              {(snap.aiCw?.enabled && snap.aiCw.status) || t('cw.decode.listening')}
             </span>
           )}
         </div>
-        <div className="sr-only" role="log" aria-label="Decoded CW">
+        <div className="sr-only" role="log" aria-label={t('cw.decode.log.aria')}>
           {decoded.text}
         </div>
       </div>
@@ -810,17 +899,14 @@ export function CwCockpit({
   ) : null
 
   const sentPane = hasSentPane ? (
-    <CockpitPaneFrame title="Sent" paneId="sent" fit="content">
+    <CockpitPaneFrame title={t('cw.pane.sent.title')} paneId="sent" fit="content">
       {/* No head row: it held ONE span reading "SENT ▲" under a frame head reading "Sent", and
           what makes the echo readable as YOUR transmissions at a glance is the accent stripe
           (`.pane-body > .cw-sent-panel`), which stays. Deleting it also lets the framed floor
           come down from 6em to 4em with the SAME number of visible lines — the 26px the row
           was taking is 26px the transcript gets back (styles.css, `.pane-body >
           .cw-sent-panel`). */}
-      <div
-        className="cw-decode cw-sent-panel panel"
-        title="What you've transmitted (F-key macros expanded to the real text)"
-      >
+      <div className="cw-decode cw-sent-panel panel" title={t('cw.sent.title')}>
         <div className="cw-decode-text" ref={sentPin.ref} onScroll={sentPin.onScroll}>
           {sent.map((line, i) => (
             <div key={i} className="cw-sent-line">
@@ -851,14 +937,14 @@ export function CwCockpit({
      The frame itself carries `paneId="rigctl"`, which is NOT in CW_PANEL_IDS — the same
      sanctioned spelling `assist` already uses for a frame the menu does not own. */
   const rigCtlPane = hasRigCtlPane ? (
-    <CockpitPaneFrame title="Rig controls" paneId="rigctl" fit="content">
+    <CockpitPaneFrame title={t('cw.pane.rigctl.title')} paneId="rigctl" fit="content">
       <div className="cw-rigctl">
       {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter:
           span sets the hardware sweep width, ref sets weak-signal visibility. Parity with Phone. */}
       {hasScopeCtlPane && civScope && (
-          <div className="ph-rigscope" role="group" aria-label="Rig scope control">
-            <span className="ph-rigscope-lbl" title="These command the radio's own scope, not just the on-screen zoom">
-              Rig&nbsp;scope
+          <div className="ph-rigscope" role="group" aria-label={t('cw.rigScope.aria')}>
+            <span className="ph-rigscope-lbl" title={t('cw.rigScope.title')}>
+              {t('cw.rigScope.label')}
             </span>
             <div className="ph-span">
               {RIG_SPANS.map((sp) => (
@@ -866,15 +952,15 @@ export function CwCockpit({
                   key={sp.label}
                   type="button"
                   className="theme-chip"
-                  title={`Set the radio's scope span to ${sp.label}`}
+                  title={t('cw.rigScope.span.title', { span: sp.label })}
                   onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
                 >
                   {sp.label}
                 </button>
               ))}
             </div>
-            <label className="ph-rigscope-ref" title="Scope reference level — lower to lift weak signals out of the noise">
-              <span>Ref</span>
+            <label className="ph-rigscope-ref" title={t('cw.rigScope.ref.title')}>
+              <span>{t('cw.scope.ref.label')}</span>
               <input
                 type="range"
                 min={-200}
@@ -882,18 +968,20 @@ export function CwCockpit({
                 step={5}
                 value={scopeRefTenths}
                 onChange={(e) => changeScopeRef(Number(e.target.value))}
-                aria-label="Scope reference level (dB)"
+                aria-label={t('cw.rigScope.ref.aria')}
               />
-              <span className="ph-power-val">{(scopeRefTenths / 10).toFixed(1)} dB</span>
+              <span className="ph-power-val">
+                {(scopeRefTenths / 10).toFixed(1)} {DB}
+              </span>
             </label>
           </div>
       )}
 
       {/* FlexRadio SmartSDR panadapter controls — bandwidth + reference. Parity with Phone. */}
       {hasScopeCtlPane && flexScope && (
-          <div className="ph-rigscope" role="group" aria-label="Flex panadapter control">
-            <span className="ph-rigscope-lbl" title="These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom">
-              Flex&nbsp;pan
+          <div className="ph-rigscope" role="group" aria-label={t('cw.flexPan.aria')}>
+            <span className="ph-rigscope-lbl" title={t('cw.flexPan.title')}>
+              {t('cw.flexPan.label')}
             </span>
             <div className="ph-span">
               {FLEX_SPANS.map((sp) => (
@@ -901,15 +989,15 @@ export function CwCockpit({
                   key={sp.label}
                   type="button"
                   className="theme-chip"
-                  title={`Set the Flex panadapter bandwidth to ${sp.label}`}
+                  title={t('cw.flexPan.span.title', { span: sp.label })}
                   onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(() => {})}
                 >
                   {sp.label}
                 </button>
               ))}
             </div>
-            <label className="ph-rigscope-ref" title="Panadapter reference level (dBm) — lower to lift weak signals out of the noise">
-              <span>Ref</span>
+            <label className="ph-rigscope-ref" title={t('cw.flexPan.ref.title')}>
+              <span>{t('cw.scope.ref.label')}</span>
               <input
                 type="range"
                 min={-140}
@@ -917,17 +1005,19 @@ export function CwCockpit({
                 step={5}
                 value={flexRefDbm}
                 onChange={(e) => changeFlexRef(Number(e.target.value))}
-                aria-label="Flex panadapter reference level (dBm)"
+                aria-label={t('cw.flexPan.ref.aria')}
               />
-              <span className="ph-power-val">{flexRefDbm} dBm</span>
+              <span className="ph-power-val">
+                {flexRefDbm} {DBM}
+              </span>
             </label>
           </div>
       )}
 
       {/* DSP toggles (NB/NR/Notch) — capability-gated; only funcs the rig reports render. */}
       {hasDspPane && (
-          <div className="ph-dsp" role="group" aria-label="Rig DSP functions">
-            <span className="ph-dsp-label">DSP</span>
+          <div className="ph-dsp" role="group" aria-label={t('cw.dsp.aria')}>
+            <span className="ph-dsp-label">{DSP}</span>
             {cwDspFuncs.map((f) => {
               const on = snap.radio[f.key] === true
               return (
@@ -936,11 +1026,11 @@ export function CwCockpit({
                   type="button"
                   className={`ph-dsp-btn${on ? ' on' : ''}`}
                   aria-pressed={on}
-                  title={f.title}
+                  title={t(f.titleKey)}
                   onClick={() =>
                     void setRigFunc(f.key, !on)
                       .then((s) => onSnap?.(s))
-                      .catch(() => pushToast(`Could not toggle ${f.label}`, 'error'))
+                      .catch(() => pushToast(t('cw.dsp.toggleFailed', { func: f.label }), 'error'))
                   }
                 >
                   {f.label}
@@ -953,10 +1043,10 @@ export function CwCockpit({
       {/* RX DSP levels — NR depth + AGC speed, each shown only when the rig reports it. Parity
           with the Phone cockpit; a CW op leans on AGC speed and NR depth heavily. */}
       {hasRxDspPane && (
-          <div className="ph-dsp-levels" role="group" aria-label="RX DSP levels">
+          <div className="ph-dsp-levels" role="group" aria-label={t('cw.rxDsp.aria')}>
             {snap.radio.nrLevel != null && (
-              <label className="ph-dsplev" title="Noise-reduction depth — raise until the noise floor drops, back off if the tone gets watery">
-                <span>NR</span>
+              <label className="ph-dsplev" title={t('cw.rxDsp.nr.title')}>
+                <span>{NR}</span>
                 <input
                   type="range"
                   min={0}
@@ -969,14 +1059,19 @@ export function CwCockpit({
                   onPointerUp={() => {
                     nrDragging.current = false
                   }}
-                  aria-label="Noise-reduction level"
+                  aria-label={t('cw.rxDsp.nr.aria')}
                 />
                 <span className="ph-power-val">{nr}%</span>
               </label>
             )}
             {snap.radio.agc != null && (
-              <div className="ph-agc" role="group" aria-label="AGC speed" title="AGC time constant — Fast for CW/pileups, Slow for steady copy">
-                <span className="ph-dsplev-lbl">AGC</span>
+              <div
+                className="ph-agc"
+                role="group"
+                aria-label={t('cw.rxDsp.agc.aria')}
+                title={t('cw.rxDsp.agc.title')}
+              >
+                <span className="ph-dsplev-lbl">{AGC}</span>
                 {(['fast', 'mid', 'slow'] as const).map((sp) => (
                   <button
                     key={sp}
@@ -985,7 +1080,11 @@ export function CwCockpit({
                     aria-pressed={agc === sp}
                     onClick={() => changeAgc(sp)}
                   >
-                    {sp === 'fast' ? 'Fast' : sp === 'mid' ? 'Mid' : 'Slow'}
+                    {sp === 'fast'
+                      ? t('cw.rxDsp.agc.fast')
+                      : sp === 'mid'
+                        ? t('cw.rxDsp.agc.mid')
+                        : t('cw.rxDsp.agc.slow')}
                   </button>
                 ))}
               </div>
@@ -1002,7 +1101,7 @@ export function CwCockpit({
 
       {/* CW spot band-activity strip; ⧉ pops the vertical band map into its own window. */}
       {hasBandPane && onWorkSpot && (
-        <CockpitPaneFrame title="Band activity" paneId="bandActivity" fit="content">
+        <CockpitPaneFrame title={t('cw.pane.bandActivity.title')} paneId="bandActivity" fit="content">
           <BandStrip
             band={snap.radio.band}
             dialMhz={snap.radio.dialMhz}
@@ -1013,6 +1112,12 @@ export function CwCockpit({
             typeByCall={typeByCall}
             onWorkSpot={onWorkSpot}
             onPopOut={() => void openPanelWindow('bandmapCw')}
+            // Wheel-tune from the strip (#96): same step + sensitivity + gate as the scope above.
+            sideband={snap.radio.sideband || 'USB'}
+            tuneEnabled={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting}
+            stepHz={tuneStep}
+            wheelSensitivity={wheelSensitivity}
+            onSnap={onSnap}
           />
         </CockpitPaneFrame>
       )}
@@ -1021,18 +1126,18 @@ export function CwCockpit({
           new hams (Guided: plain-English prompts + the next key highlighted) vs experienced
           ops (Expert: just the chips). Nothing here transmits — the operator always keys. */}
       {hasCopilotPane && (
-        <CockpitPaneFrame title="Copilot" paneId="copilot" fit="content">
+        <CockpitPaneFrame title={t('cw.pane.copilot.title')} paneId="copilot" fit="content">
           <div className="cw-copilot panel expert">
             <div className="cw-copilot-chips">
               {guide.workedCall ? (
-                <span className="cw-copilot-label">Working</span>
+                <span className="cw-copilot-label">{t('cw.copilot.working.label')}</span>
               ) : cand.length > 0 ? (
-                <span className="cw-copilot-label">Heard</span>
+                <span className="cw-copilot-label">{t('cw.copilot.heard.label')}</span>
               ) : (
-                <span className="cw-copilot-label dim">Decoded calls appear here…</span>
+                <span className="cw-copilot-label dim">{t('cw.copilot.empty')}</span>
               )}
               {guide.workedCall && (
-                <span className="cw-chip worked" title="The station you're working — the F-keys + log use this">
+                <span className="cw-chip worked" title={t('cw.copilot.worked.title')}>
                   {guide.workedCall}
                   {guide.rst ? ` · ${guide.rst}` : ''}
                   {guide.name ? ` · ${guide.name}` : ''}
@@ -1046,7 +1151,7 @@ export function CwCockpit({
                     type="button"
                     className={`cw-chip${c.best ? ' best' : ''}`}
                     onClick={() => workCall(c.call)}
-                    title={`Work ${c.call} — set it for the F-keys + log`}
+                    title={t('cw.copilot.work.title', { call: c.call })}
                   >
                     {c.call}
                   </button>
@@ -1059,7 +1164,7 @@ export function CwCockpit({
   )
 
   const logPane = (
-    <CockpitPaneFrame title="Log" paneId="log">
+    <CockpitPaneFrame title={t('cw.pane.log.title')} paneId="log">
       {/* compactRecall died here (2026-07-31) — same reasoning as PhoneCockpit's log pane: the
           pane grid made this pane's .pane-body the scroller, so the FULL recall card (photo /
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
@@ -1094,11 +1199,8 @@ export function CwCockpit({
         snap={snap}
         onSnap={onSnap}
         modeIndicator={
-          <span
-            className="cw-mode-badge"
-            title={snap.radio.catDetail || "The rig is set to CW while you're in this section"}
-          >
-            CW
+          <span className="cw-mode-badge" title={snap.radio.catDetail || t('cw.header.mode.title')}>
+            {CW}
           </span>
         }
         bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} />}
@@ -1136,8 +1238,13 @@ export function CwCockpit({
         }
         onStopTx={abort}
       >
-        <label className="cw-wpm" title="Keyer speed — PgUp/PgDn to nudge (Shift = ±4)">
-          <span>Speed</span>
+        <label
+          className="cw-wpm"
+          // Compact Mac keyboards have no PgUp/PgDn keys — Fn+↑/↓ is what sends them, which is
+          // a second statement rather than a tail on the first: one whole sentence each.
+          title={IS_MAC ? t('cw.wpm.title.mac') : t('cw.wpm.title')}
+        >
+          <span>{t('cw.wpm.label')}</span>
           <input
             type="range"
             min={WPM_MIN}
@@ -1147,9 +1254,11 @@ export function CwCockpit({
               wpmTouched.current = true
               changeWpm(Number(e.target.value))
             }}
-            aria-label="CW keyer speed (WPM)"
+            aria-label={t('cw.wpm.aria')}
           />
-          <span className="cw-wpm-val">{wpm} WPM</span>
+          <span className="cw-wpm-val">
+            {wpm} {WPM}
+          </span>
         </label>
         {/* THE KEYER BACK-END, one select (2026-08-04 density pass — the move Operate's header
             made with its DXped chips). Four always-visible option buttons stood ~292px wide in
@@ -1161,30 +1270,32 @@ export function CwCockpit({
             of the SELECTED back-end is on the select itself, so the one an operator is
             actually keying with is one hover away — including the soundcard warning, which is
             the one that matters on the air (route audio to the rig, keep drive below ALC). */}
-        <label className="cw-wpm" title={KEYER_HELP[keyer]}>
-          <span>Keyer</span>
+        <label className="cw-wpm" title={keyerHelpText[keyer]}>
+          <span>{t('cw.keyer.label')}</span>
           <select
             className="settings-input cw-keyer-select"
             value={keyer}
             onChange={(e) => changeKeyer(e.target.value as typeof keyer)}
-            aria-label="CW keyer back-end"
+            aria-label={t('cw.keyer.aria')}
           >
-            <option value="cat" title={KEYER_HELP.cat}>
-              CAT
+            {/* Every `value` is the stored token. Two of the four LABELS are tokens as well —
+                CAT is a protocol and WinKeyer K1EL's product — and the other two are words. */}
+            <option value="cat" title={keyerHelpText.cat}>
+              {CAT}
             </option>
-            <option value="serial" title={KEYER_HELP.serial}>
-              Serial
+            <option value="serial" title={keyerHelpText.serial}>
+              {t('cw.keyer.serial.label')}
             </option>
-            <option value="winkeyer" title={KEYER_HELP.winkeyer}>
-              WinKeyer
+            <option value="winkeyer" title={keyerHelpText.winkeyer}>
+              {WINKEYER}
             </option>
-            <option value="soundcard" title={KEYER_HELP.soundcard}>
-              Soundcard
+            <option value="soundcard" title={keyerHelpText.soundcard}>
+              {t('cw.keyer.soundcard.label')}
             </option>
           </select>
         </label>
-        <label className="cw-wpm" title="Sidetone / zero-beat pitch (Hz) — the scope's dashed marker">
-          <span>Pitch</span>
+        <label className="cw-wpm" title={t('cw.pitch.title')}>
+          <span>{t('cw.pitch.label')}</span>
           <input
             type="number"
             className="settings-input cw-pitch"
@@ -1193,34 +1304,36 @@ export function CwCockpit({
             step={10}
             value={pitch}
             onChange={(e) => changePitch(Number(e.target.value))}
-            aria-label="CW pitch (Hz)"
+            aria-label={t('cw.pitch.aria')}
           />
         </label>
         {profiles.length > 1 && (
-          <label className="cw-wpm" title="CW macro profile — your active F-key set (edit sets in Settings ▸ CW)">
-            <span>Macros</span>
+          <label className="cw-wpm" title={t('cw.macroProfile.title')}>
+            <span>{t('cw.macroProfile.label')}</span>
             <select
               className="settings-input"
               value={activeProfile}
               onChange={(e) => switchProfile(Number(e.target.value))}
-              aria-label="CW macro profile"
+              aria-label={t('cw.macroProfile.aria')}
             >
               {profiles.map((p, i) => (
                 <option key={i} value={i}>
-                  {p.name || `Profile ${i + 1}`}
+                  {/* The operator's own profile NAME, never translated; only what an unnamed
+                      one is called is prose. */}
+                  {p.name || t('cw.macroProfile.unnamed', { n: i + 1 })}
                 </option>
               ))}
             </select>
           </label>
         )}
         {catOk && (
-          <div className="ph-filter" title="RX filter / passband width (CAT) — narrow to dig CW out of QRM">
-            <span className="ph-filter-lbl">BW</span>
+          <div className="ph-filter" title={t('cw.filter.title')}>
+            <span className="ph-filter-lbl">{BW}</span>
             <button
               type="button"
               className="ph-filter-step"
-              onClick={() => bumpFilter(-50)}
-              title="Narrower (−50 Hz)"
+              onClick={() => bumpFilter(-FILTER_STEP_HZ)}
+              title={t('cw.filter.narrower.title', { step: FILTER_STEP_HZ })}
             >
               −
             </button>
@@ -1228,8 +1341,8 @@ export function CwCockpit({
             <button
               type="button"
               className="ph-filter-step"
-              onClick={() => bumpFilter(50)}
-              title="Wider (+50 Hz)"
+              onClick={() => bumpFilter(FILTER_STEP_HZ)}
+              title={t('cw.filter.wider.title', { step: FILTER_STEP_HZ })}
             >
               +
             </button>
@@ -1248,13 +1361,23 @@ export function CwCockpit({
           targetCall={guide.workedCall}
           onPointAt={(call) =>
             pointRotatorAtCall(call)
-              .then((bearing) => pushToast(`Rotator → ${call}: ${Math.round(bearing)}°`, 'info'))
-              .catch((e) => pushToast(`Rotator: ${e instanceof Error ? e.message : e}`, 'error'))
+              .then((bearing) =>
+                pushToast(t('cw.rotator.pointed', { call, bearing: Math.round(bearing) }), 'info'),
+              )
+              .catch((e) =>
+                pushToast(
+                  t('cw.rotator.failed', { error: e instanceof Error ? e.message : String(e) }),
+                  'error',
+                ),
+              )
           }
         />
         {snap.radio.splitTxMhz != null && (
-          <span className="cw-mode-badge" title={`Split — TX ${snap.radio.splitTxMhz.toFixed(4)} MHz`}>
-            SPLIT ▲
+          <span
+            className="cw-mode-badge"
+            title={t('cw.split.title', { freq: snap.radio.splitTxMhz.toFixed(4) })}
+          >
+            {SPLIT_PLATE}
           </span>
         )}
         {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
@@ -1269,17 +1392,13 @@ export function CwCockpit({
           className={`ph-rec${recording ? ' on' : ''}`}
           onClick={toggleRecord}
           disabled={recBusy}
-          aria-label={recording ? 'Stop recording this QSO' : 'Record QSO audio'}
-          title={
-            recording
-              ? 'Recording — click to stop recording this QSO'
-              : 'Record the received audio to a WAV in the recordings folder'
-          }
+          aria-label={recording ? t('cw.record.stop.aria') : t('cw.record.start.aria')}
+          title={recording ? t('cw.record.on.title') : t('cw.record.off.title')}
         >
           <span className="ph-rec-dot" aria-hidden="true">
             {recording ? '■' : '●'}
           </span>
-          REC
+          {REC}
         </button>
       </CockpitHeader>
 
@@ -1302,7 +1421,7 @@ export function CwCockpit({
           hook's mount — which it did not do until this change; see the note there. */}
       {shown('scope') && (
         <>
-      <section className="ph-scope-panel" ref={scopeRef} title="Scroll here to tune the VFO">
+      <section className="ph-scope-panel" ref={scopeRef} title={t('cw.scope.tuneHint')}>
         <div className="ph-scope-head">
           {/* When a native panadapter drives the scope, name it honestly (real RF spectrum);
               otherwise it's the CW-narrow audio view for zero-beating. */}
@@ -1310,33 +1429,29 @@ export function CwCockpit({
             className="ph-scope-title"
             title={
               nativeRf
-                ? 'Native RF panadapter — the real RF spectrum around your dial.'
-                : `Receiver AUDIO centered on your CW pitch (${cwView.loHz}–${cwView.hiHz} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.`
+                ? t('cw.scope.nativeRf.title')
+                : t('cw.scope.audio.title', { lo: cwView.loHz, hi: cwView.hiHz })
             }
           >
-            {nativeRf ? 'RF Panadapter' : 'CW audio'}{' '}
-            <span className="ph-scope-sub">
-              {nativeRf && scopeFeed
-                ? `· ${(scopeFeed.loHz / 1e6).toFixed(4)}–${(scopeFeed.hiHz / 1e6).toFixed(4)} MHz`
-                : '· zero-beat'}
-            </span>
+            {nativeRf ? t('cw.scope.nativeRf.label') : t('cw.scope.audio.label')}{' '}
+            <span className="ph-scope-sub">{scopeSub}</span>
           </span>
-          <span className="ph-scope-head-label">Colors</span>
+          <span className="ph-scope-head-label">{t('cw.scope.colors.label')}</span>
           <PalettePicker />
         </div>
         {nativeRf && (
           // Native RF panadapter: client-side RF-width zoom around the dial (mirror of Phone).
-          <div className="ph-span" role="group" aria-label="Panadapter zoom">
+          <div className="ph-span" role="group" aria-label={t('cw.rfZoom.aria')}>
             {RF_SPANS.map((sp) => (
               <button
-                key={sp.label}
+                key={sp.id}
                 type="button"
-                className={`theme-chip${rfSpan.label === sp.label ? ' active' : ''}`}
-                aria-pressed={rfSpan.label === sp.label}
-                title={sp.title}
+                className={`theme-chip${rfSpan.id === sp.id ? ' active' : ''}`}
+                aria-pressed={rfSpan.id === sp.id}
+                title={sp.title()}
                 onClick={() => setRfSpan(sp)}
               >
-                {sp.label}
+                {sp.label()}
               </button>
             ))}
           </div>
@@ -1370,7 +1485,7 @@ export function CwCockpit({
         min={SCOPE_SPLIT_MIN}
         max={SCOPE_SPLIT_MAX}
         defaultPct={13}
-        label="scope height"
+        label={t('cw.scope.splitter.label')}
       />
         </>
       )}
@@ -1442,17 +1557,22 @@ export function CwCockpit({
             and only the meters the rig reports. A CW op wants SWR + Po as they send. */}
         {shown('txmeters') && <TxMeters radio={snap.radio} />}
 
-        <div className="cw-macros" role="group" aria-label="CW macros">
+        <div className="cw-macros" role="group" aria-label={t('cw.macros.aria')}>
+          {/* The buttons ADVERTISE their F-keys, and default Mac keyboards eat bare F-keys
+              as media keys — the tooltip carries the cure there (mac QA audit). */}
           {macros.map((m) => (
             <button
               key={m.key}
               type="button"
               className="cw-macro"
               onClick={() => send(m.text)}
-              title={previews[m.key] || m.text}
+              title={`${previews[m.key] || m.text}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
             >
               <span className="cw-macro-key">{m.key}</span>
-              <span className="cw-macro-label">{m.label || m.key}</span>
+              {/* A built-in caption that is a WORD arrives as a key; one that is on-air
+                  shorthand (CQ, 73, AGN, TU) and an operator's own profile label are both
+                  written as they stand. */}
+              <span className="cw-macro-label">{m.labelKey ? t(m.labelKey) : m.label || m.key}</span>
             </button>
           ))}
         </div>
@@ -1468,12 +1588,12 @@ export function CwCockpit({
                 sendTyped()
               }
             }}
-            placeholder="Type CW to send… (Enter)"
+            placeholder={t('cw.compose.placeholder')}
             autoComplete="off"
             spellCheck={false}
           />
           <button type="button" className="cw-send-btn" onClick={sendTyped} disabled={!text.trim()}>
-            Send
+            {t('cw.compose.send.label')}
           </button>
         </div>
       </div>

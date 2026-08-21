@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search } from 'lucide-react'
+import { t } from '../i18n'
 import { searchSettings, type SettingsHit } from '../settings/registry'
 
 /**
@@ -74,8 +75,8 @@ export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void
       <input
         type="search"
         className="settings-search-input"
-        placeholder="Find a setting…"
-        aria-label="Find a setting"
+        placeholder={t('settings.search.placeholder')}
+        aria-label={t('settings.search.label')}
         role="combobox"
         aria-expanded={open && hits.length > 0}
         aria-controls={listId}
@@ -94,8 +95,7 @@ export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void
             // Never a bare empty box: say what was searched, so "no results" reads as an answer
             // rather than as the control being broken.
             <li className="settings-search-empty" role="presentation">
-              Nothing matches “{q.trim()}”. Try the words on the control — “sound card”, “COM
-              port”, “WPM”.
+              {t('settings.search.empty', { query: q.trim() })}
             </li>
           ) : (
             hits.map((h, i) => (
@@ -114,7 +114,9 @@ export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void
                   {/* Why this result is here. A search that cannot explain a hit trains the
                       operator to distrust it. */}
                   {h.matched.toLowerCase() !== h.section.label.toLowerCase() && (
-                    <span className="settings-search-hit-why">matched “{h.matched}”</span>
+                    <span className="settings-search-hit-why">
+                      {t('settings.search.matched', { term: h.matched })}
+                    </span>
                   )}
                 </button>
               </li>

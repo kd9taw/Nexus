@@ -222,6 +222,13 @@ jobs:
       - name: docs/launch/wiki/ is generated from docs/
         run: node scripts/gen-wiki.mjs --check
 
+      # docs/shipped.json is read by the WEBSITE, in another repo, to check that its
+      # features page still lists everything Nexus ships. A stale manifest there is a
+      # website that quietly under-claims — which is how PSK31 went four releases and
+      # FT2 two without appearing on the page whose job is listing them.
+      - name: docs/shipped.json is generated from the app's own lists
+        run: node scripts/gen-shipped.mjs --check
+
   # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
   # (Cargo.toml [workspace.package] rust-version = "1.91"). Build-only check,
   # incl. the propagation `live` feature (the heaviest dep set).
@@ -422,26 +429,19 @@ jobs:
           --target x86_64-pc-windows-gnu
           --features radio,custom-protocol
 
-  # Job 5b — macOS compile check. ⚠️ A COMPILE CHECK, NOT A SUPPORTED PLATFORM.
+  # Job 5b — macOS compile check (fast feedback; the SHIPPING mac build lives in release.yml).
   #
-  # READ THIS BEFORE TREATING A GREEN RUN HERE AS ANYTHING: Nexus does not ship a macOS
-  # build. There is no release artifact, no SourceForge file, no version.json entry, no
-  # code signing identity and no notarization. This job exists for exactly one reason —
-  # two macOS fixes landed from an operator running Nexus on a Mac from source (a Hamlib
-  # PATH search and the microphone usage string), and without a job here the next change
-  # that breaks the darwin build would not be noticed until someone else tried it.
+  # Since 1.5.0 macOS IS a supported platform: release.yml's `macos` job does the signed,
+  # notarized, statically-linked .dmg (and `smoke-macos` proves it on a clean runner). This
+  # job stays deliberately the same shape as `windows-cross` above — prove it LINKS on every
+  # push, ship nothing. No `cargo tauri build`, no signing secrets here; a compile check
+  # that needed secrets would stop running on forks and PRs, which is where it earns its keep.
   #
-  # It is deliberately the same shape as `windows-cross` above: prove it LINKS, ship
-  # nothing. No `cargo tauri build`, no .app bundle, no .dmg, no signing secrets. Making
-  # macOS supported is a separate decision with three gates on it (an Apple Developer ID
-  # carries a legal entity name into every signed binary, the signing secrets are
-  # credential handling, and a published artifact is a publish) — see issue #6. Do not
-  # add a bundle step here as an increment; that decision is not this job's to make.
-  #
-  # Unsigned and hardened-runtime-off is fine for a compile check. A SIGNED macOS build
-  # would additionally need `bundle.macOS.entitlements` with
-  # com.apple.security.device.audio-input, or the microphone is unreachable at runtime
-  # however good the Info.plist is. That belongs with the decision, not here.
+  # Unsigned and hardened-runtime-off is fine for a compile check. The SIGNED build needs
+  # `bundle.macOS.entitlements` with com.apple.security.device.audio-input, or the microphone
+  # is unreachable at runtime however good the Info.plist is — that lives in
+  # src-tauri/tauri.conf.json + Entitlements.plist (added 2026-08-17; this comment warned
+  # about the gap from the day the job was added, and the 1.5.x/1.6.0 DMGs shipped with it).
   #
   # NATIVE arch only (aarch64), not a universal binary and not x86_64. libtempo is a Fortran +
   # FFTW + Boost CMake project, so a universal build means building that native tree twice and

@@ -16,6 +16,7 @@ import type {
   CwDecodeResult,
   MeterReadout,
   SkimHit,
+  PskState,
   RttyState,
   SstvState,
   ClubLogPushResult,
@@ -559,9 +560,11 @@ export async function qsoFreetext(text: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('qso_freetext', { text })
 }
 
-/** Operator "Log QSO": log the active QSO's contact now. Returns fresh snapshot. */
-export async function logCurrentQso(): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('log_current_qso', {})
+/** Operator "Log QSO": log the active QSO's contact now. `logged` is the engine's verdict
+ *  (#100) — false when nothing was loggable (already logged / no QSO / no report yet), and
+ *  the UI must not claim success then. Snapshot is fresh either way. */
+export async function logCurrentQso(): Promise<{ logged: boolean; snapshot: AppSnapshot }> {
+  return invoke<{ logged: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
 }
 
 /** Append a contact to the ADIF logbook. Returns the fresh snapshot. */
@@ -815,14 +818,30 @@ export async function getFeedHealth(): Promise<FeedHealth> {
   return invoke<FeedHealth>('get_feed_health')
 }
 
-/** Export the general logbook as ADIF or CSV text. */
-export async function exportGeneralLog(format: 'adif' | 'csv'): Promise<string> {
-  return invoke<string>('export_general_log', { format })
+/** Export the general logbook as ADIF or CSV text. Optional `from`/`to` are UTC
+ *  "YYYY-MM-DD" dates bounding the QSO time inclusively (#98); empty/absent = all. */
+export async function exportGeneralLog(
+  format: 'adif' | 'csv',
+  from?: string,
+  to?: string,
+): Promise<string> {
+  return invoke<string>('export_general_log', { format, from: from || null, to: to || null })
 }
 
 /** The absolute path where the ALL.TXT decode log is written (to show in Settings). */
 export async function allTxtLocation(): Promise<string> {
   return invoke<string>('all_txt_location')
+}
+
+/** Where `nexus-diag.log` lives — the file we ask an operator to send when something goes
+ * wrong. Always written, no toggle. */
+export async function diagLogLocation(): Promise<string> {
+  return invoke<string>('diag_log_location')
+}
+
+/** Reveal `nexus-diag.log` in the file manager (falls back to opening its folder). */
+export async function revealDiagLog(): Promise<void> {
+  return invoke<void>('reveal_diag_log')
 }
 
 /** The absolute folder where per-QSO recordings land (to show in Settings). Per-PROFILE: a second
@@ -842,6 +861,24 @@ export async function appVersion(): Promise<string> {
  * click, and installing restarts the app. */
 export async function updateInstallBlock(): Promise<string | null> {
   return invoke<string | null>('update_install_block')
+}
+
+/** Flush the conversations, the Field Day log, the open propagation episodes and the window
+ * geometry to disk before a self-update hands off to the installer. Called immediately BEFORE
+ * the plugin's `install()`, because on Windows that call ends the process outright
+ * (`ShellExecuteW` then `exit(0)`) and the ordinary quit cleanup never runs. A no-op on
+ * macOS/Linux, where `restartApp()` takes the normal exit path. */
+export async function prepareUpdateInstall(): Promise<void> {
+  return invoke<void>('prepare_update_install')
+}
+
+/** Restart Nexus after a self-update install — through the backend's ordinary quit cleanup
+ * (TX unkey, journal flushes, window geometry), never a hard kill. The updater plugin's
+ * `install()` restarts nothing on macOS/Linux, so this call is what makes "Nexus will
+ * restart…" true there; on Windows the installer already exited the process before
+ * `install()` resolves, so this is never reached. */
+export async function restartApp(): Promise<void> {
+  return invoke<void>('restart_app')
 }
 
 /** One selectable radio in the launch picker. */
@@ -918,6 +955,26 @@ export async function setSkipTx1(enabled: boolean): Promise<void> {
  *  WebView2 window where a browser `<a download>` blob may silently fail. */
 export async function saveTextToDownloads(filename: string, text: string): Promise<string> {
   return invoke<string>('save_text_to_downloads', { filename, text })
+}
+
+/** Binary sibling of saveTextToDownloads for the share-card PNG (base64-encoded bytes) —
+ *  on macOS wry cancels `<a download>` navigations outright, so a blob anchor saves nothing. */
+export async function savePngToDownloads(filename: string, base64: string): Promise<string> {
+  return invoke<string>('save_png_to_downloads', { filename, base64 })
+}
+
+/** Open an external http(s) link in the system browser. Backing for the app-wide
+ *  `target="_blank"` anchor interceptor (externalLinks.ts) — raw `_blank` anchors are dead
+ *  in the Tauri webview (the opener plugin's injected handler is ACL-denied). */
+export async function openExternalUrl(url: string): Promise<void> {
+  await invoke('open_external_url', { url })
+}
+
+/** Fire an OS notification through the Rust notification plugin — WKWebView has no web
+ *  Notification API, so this is the only path that exists on macOS. Rejects when the OS
+ *  refuses; the caller decides what a miss means (Pounce: nothing — sound is primary). */
+export async function osNotify(title: string, body: string): Promise<void> {
+  await invoke('os_notify', { title, body })
 }
 
 /**
@@ -999,7 +1056,7 @@ export async function pickBand(band: string, mode?: string): Promise<AppSnapshot
  * on the current band (phone segment / CW segment / FT8 watering hole). Pass false for
  * incidental nav and the Needed click (which sets the spot's exact frequency itself). */
 export async function setOperatingMode(
-  mode: 'digital' | 'phone' | 'cw' | 'rtty',
+  mode: 'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard',
   followFreq: boolean,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_operating_mode', { mode, followFreq })
@@ -1321,6 +1378,10 @@ export interface RadioProfilePatch {
   baud: number
   rigConn: string
   rigAddr: string
+  /** Which OmniRig slot this radio drives when rigConn === "omnirig" (1 = RIG 1, 2 = RIG 2).
+   * On the patch because the per-radio Edit flow saves through it — a per-radio field missing
+   * here is silently dropped on Save (the 2026-08-17 Flex-three data loss, exactly). */
+  omnirigSlot: number
   rigctldPort: number
   icomNativeCat: boolean
   dataModesPlainSsb: boolean
@@ -1334,6 +1395,15 @@ export interface RadioProfilePatch {
   rotatorHost: string
   rotctldPort: number
   nativeScope: string
+  /** THIS radio's FlexRadio LAN IP (SmartSDR API, port 4992) for the native panadapter/DAX
+   * workers. Per-radio since 2026-08-18: it was flat-only, so the per-radio Edit flow — which
+   * saves through THIS patch — silently dropped it, and two Flexes could not both be configured
+   * (2026-08-17 Flex audit). */
+  flexRadioIp: string
+  /** This radio's native-panadapter opt-in (per-radio, as above). */
+  flexNativePan: boolean
+  /** This radio's native-DAX-audio opt-in (per-radio, as above). */
+  flexNativeAudio: boolean
 }
 
 /** Edit one radio's CAT/audio/PTT/rotator/native config IN PLACE without changing the active radio
@@ -1747,6 +1817,77 @@ export async function rttyAutoAbort(): Promise<RttyState> {
   return invoke<RttyState>('rtty_auto_abort')
 }
 
+/** Arm/disarm the PSK31 RX decoder (session-only; RX decode — arming never
+ * keys, TX starts only from an explicit send). Stopping it is remembered for
+ * the session, so the view-entry auto-arm cannot restart it behind the
+ * operator. */
+export async function pskArm(on: boolean): Promise<PskState> {
+  return invoke<PskState>('psk_arm', { on })
+}
+
+/** Arm the decoder because the operator ENTERED the PSK view (the APRS/SSTV
+ * auto-arm doctrine). Receive-only by construction; the engine owns the policy
+ * (only upgrades from off, honours the session decline + the Settings opt-out). */
+export async function pskAutoArm(): Promise<PskState> {
+  return invoke<PskState>('psk_auto_arm')
+}
+
+/** Live PSK state (poll while the PSK cockpit is visible). */
+export async function getPskState(): Promise<PskState> {
+  return invoke<PskState>('get_psk_state')
+}
+
+/** Clear the decoded-PSK transcript (display only). */
+export async function pskClear(): Promise<PskState> {
+  return invoke<PskState>('psk_clear')
+}
+
+/** Drop + rebuild the PSK demodulator (a fresh slew-limited AFC pull from the
+ * netted center). RX only. */
+export async function pskAfcReset(): Promise<PskState> {
+  return invoke<PskState>('psk_afc_reset')
+}
+
+/** Net the PSK decoder onto a new audio center (Hz) — a waterfall click, the
+ * single-signal click-to-tune. Moves the DECODER, never the rig. RX only. */
+export async function pskNet(hz: number): Promise<PskState> {
+  return invoke<PskState>('psk_net', { hz })
+}
+
+/** Select the PSK sub-mode ('psk31' | 'qpsk31') + the QPSK sideband-reverse
+ * polarity — the cockpit's selector and Reverse toggle. The engine refuses a
+ * switch while any PSK transmission is active (returns why); a change
+ * re-acquires the RX demodulator on the new mode. */
+export async function pskSetMode(mode: string, reverse: boolean): Promise<PskState> {
+  return invoke<PskState>('psk_set_mode', { mode, reverse })
+}
+
+/** Queue PSK31 text to transmit — an explicit operator send, the only way PSK
+ * TX starts. The engine re-validates every gate (TX-enable, privileges, the
+ * Keyboard section) and returns why a send was refused. While continuous TX is
+ * latched a send types into the live stream (the RTTY macro semantic). */
+export async function pskSend(text: string): Promise<PskState> {
+  return invoke<PskState>('psk_send', { text })
+}
+
+/** Continuous TX on/off — the PSK cockpit's TX button (the MMTTY-style latch).
+ * ON runs the same gate a send runs; OFF lets what was typed finish keying.
+ * NOT the emergency stop: Stop TX / Esc / the TX-enable latch cut instantly. */
+export async function pskSetLatched(on: boolean): Promise<PskState> {
+  return invoke<PskState>('psk_set_latched', { on })
+}
+
+/** Feed typed characters into the live latched transmission (one insertion at
+ * a time — PSK has no un-send). Refused unless continuous TX is latched. */
+export async function pskType(text: string): Promise<PskState> {
+  return invoke<PskState>('psk_type', { text })
+}
+
+/** Stop PSK now: abort the over in progress, drop the queue, unkey. */
+export async function pskStop(): Promise<PskState> {
+  return invoke<PskState>('psk_stop')
+}
+
 /** Arm/disarm the SSTV RX decoder by an EXPLICIT operator act (session-only; RX
  * decode, never TX). Stopping it here is remembered for the session — opening the
  * view again will not restart it behind the operator. */
@@ -1847,9 +1988,10 @@ export async function setBlockedCalls(calls: string[]): Promise<AppSnapshot> {
 
 /** Set (or clear, with '') who is at the key — the ONE write path for the seat-swap chip,
  * the Field Day panel's Operator field and the pop-out scoreboard. Narrow write: never the
- * heavyweight settings save, which resets the mode, clears the TX queue and re-derives the
- * TX cycle from the struct the caller happened to be holding (#54). A seat swap is a
- * mid-QSO act by definition. The engine trims + uppercases. */
+ * heavyweight settings save, which clears the TX queue and re-derives the TX cycle from the
+ * struct the caller happened to be holding (#54). A seat swap is a mid-QSO act by
+ * definition. (Since #100 that save no longer resets the operating mode — the other two
+ * effects are reason enough.) The engine trims + uppercases. */
 export async function setFdOperator(call: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_fd_operator', { call })
 }
@@ -2086,7 +2228,8 @@ export async function getScopeRow(
 export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
 
 /** Set the MSK144 T/R period (5/10/15/30 s) — the cockpit's narrow write. Deliberately not a
- * full settings save, which resets the mode and clears the TX queue (#54). */
+ * full settings save, which clears the TX queue and re-derives the TX cycle (#54; the mode
+ * reset it also used to do was narrowed to Field Day by #100). */
 export async function setMsk144Period(secs: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_msk144_period', { secs })
 }

@@ -1,3 +1,11 @@
+// ⚠️ THIS FILE IS ON THE **PARTIAL** LIST (i18n/hardcoded-strings.test.ts), and for one
+// reason only: four controls that STOP a transmission are still written in English here —
+// the dock's Esc/Stop macro, the auto-sequencer's Abort, the `stream` pane's Auto toggle
+// (its off-click aborts the QSO and unkeys) and the continuous-TX latch, plus the TX pill's
+// tooltip, which is the wording that states what Stop TX does to an over in flight. Those
+// move in the transmit-path batch, with the stop-line sweeps re-run. Everything else is in
+// the catalog under `rtty.*`; the baud, shift, tone and AFC figures, the F-key macro TEXTS
+// and the mode/direction plates are invariant tokens and stay in the code.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, RttyState } from '../types'
 import { CockpitHeader } from './CockpitHeader'
@@ -8,6 +16,7 @@ import { RTTY_PANEL_IDS, type RttyPanelId, type PanelLayoutApi } from '../featur
 import { FrequencyControl } from './FrequencyControl'
 import { Waterfall } from './Waterfall'
 import {
+  atuTune,
   getLicensedBandPlan,
   getRttyState,
   haltTx,
@@ -23,10 +32,14 @@ import {
   rttySetLatched,
   rttyStop,
   rttyType,
+  setRfPower,
+  setTune,
 } from '../api'
 import { bandLabelForMhz } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
+import { t } from '../i18n'
 
 interface Props {
   /** Live snapshot — may be absent while the app is still connecting; the shell
@@ -54,88 +67,52 @@ interface Props {
   panels?: PanelLayoutApi<RttyPanelId>
 }
 
-/** Display labels for the RTTY removable panels (the ⊞ Panels menu). */
-const RTTY_PANEL_LABELS: Record<RttyPanelId, string> = {
+/** This cockpit's INVARIANT vocabulary — the words that are the mode's own technical
+ *  tokens rather than prose, gathered here so the i18n guard reads them as the deliberate
+ *  constants they are: the mode name in the badge, the RX/TX direction plates, and the
+ *  Q-code the CQ macro is named for. */
+const RTTY = 'RTTY'
+/** Baud · shift as the badge prints them before the decoder has answered — the HF standard
+ *  pair, figures and unit both, so it is a token exactly as the live reading is. */
+const DEFAULT_TONES = '45.45 · 170 Hz'
+const RX_PLATE = 'RX ▼'
+const TX_PLATE = 'TX ▲'
+const CQ = 'CQ'
+const SEVENTY_THREE = '73'
+
+/** Display labels for the RTTY removable panels (the ⊞ Panels menu). Resolved when the
+ *  menu is BUILT — a module constant would freeze the first locale loaded. */
+const rttyPanelLabels = (): Record<RttyPanelId, string> => ({
   // "Waterfall", not "Scope": this strip is a band waterfall carrying the mark/space cursors,
   // and the operator's own word for it here is waterfall. The shared id is `scope` because it
   // is the same ENTRY in every cockpit; only the label is local.
-  scope: 'Waterfall',
-  stream: 'Decoded Text',
-}
+  scope: t('rtty.panel.waterfall'),
+  stream: t('rtty.panel.stream'),
+})
 
 /** Standard casual RTTY F-key set (599-not-5NN comes with the contest schemas).
  * Simple templates for now — {MYCALL} from the snapshot, {CALL} from the
  * their-call field; the full auto-sequencer wiring is a later wave. The engine
- * re-validates every gate (TX-enable, privileges, RTTY section) on each send. */
-const MACROS: { key: string; label: string; text: string }[] = [
-  { key: 'F1', label: 'CQ', text: 'CQ CQ CQ DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', label: 'Answer', text: '{CALL} DE {MYCALL} {MYCALL} K' },
-  { key: 'F3', label: 'Exchange', text: '{CALL} DE {MYCALL} UR 599 599 K' },
-  { key: 'F4', label: '73', text: '{CALL} DE {MYCALL} TU 73 SK' },
+ * re-validates every gate (TX-enable, privileges, RTTY section) on each send.
+ *
+ * `text` is what goes ON THE AIR and is invariant, every character of it. The LABELS are
+ * mixed: `CQ` is a Q-code and `73` a number, both invariant; the other two are words, so
+ * the label is resolved when the row renders rather than at import. */
+const MACROS: { key: string; label: () => string; text: string }[] = [
+  { key: 'F1', label: () => CQ, text: 'CQ CQ CQ DE {MYCALL} {MYCALL} K' },
+  { key: 'F2', label: () => t('rtty.macro.answer.label'), text: '{CALL} DE {MYCALL} {MYCALL} K' },
+  { key: 'F3', label: () => t('rtty.macro.exchange.label'), text: '{CALL} DE {MYCALL} UR 599 599 K' },
+  { key: 'F4', label: () => SEVENTY_THREE, text: '{CALL} DE {MYCALL} TU 73 SK' },
 ]
 
-/** Hard ceiling on the spans the transcript renders, whatever the copy quality
- * (the decodeHistory MAX_HISTORY precedent: a live feed gets a named cap, not a
- * hope). See `confidenceRuns`. */
-export const RTTY_MAX_RUNS = 200
-
-/** Group the decoded text into runs of quantized confidence so the transcript
- * renders a handful of spans, not one per character (the ring holds up to
- * RTTY_TEXT_CAP = 4000 chars at a 500 ms poll). Low-confidence copy renders
- * FAINT — the ATC soft metric carried per character (the D3 differentiator
- * seam). Missing confidence renders solid: never hide text we decoded.
- *
- * PER CHARACTER FIRST, always: that is the honest fade and it is what every
- * transcript an operator actually reads produces. Only when the exact grouping
- * would exceed RTTY_MAX_RUNS spans does it re-group over equal BLOCKS scored by
- * their MEAN confidence. Confidence is a continuous slicer margin, so on
- * marginal copy it crosses the 75/50/25 thresholds constantly and the exact
- * grouping ran to ~1000–1900 spans (one per character in the worst case) that
- * the front-draining ring rewrote WHOLE twice a second — the field hang. Clean
- * copy always collapsed to a single span, which is why it never showed on the
- * bench.
- *
- * The fallback is LOSSY about the fade and only about the fade — every decoded
- * character still prints, in order. Averaging can hide a short bad burst inside
- * an otherwise-good block (at a full 4000-char ring the block is 20 characters,
- * so a run of up to ~10 marginal characters can average back above a
- * threshold). That is the price of the cap, and it is charged ONLY on a
- * transcript already carrying more than RTTY_MAX_RUNS quality changes — copy so
- * broken that per-character fading is noise anyway. Anything cleaner keeps
- * character-exact fidelity. */
-export function confidenceRuns(
-  text: string,
-  conf: number[],
-): { text: string; opacity: number }[] {
-  const level = (c: number) => {
-    if (c >= 75) return 1
-    if (c >= 50) return 0.75
-    if (c >= 25) return 0.5
-    return 0.3
-  }
-  const n = text.length
-  const group = (block: number) => {
-    const runs: { text: string; opacity: number }[] = []
-    for (let i = 0; i < n; i += block) {
-      const end = Math.min(i + block, n)
-      let sum = 0
-      // A missing entry is full confidence — the decoder reported no doubt.
-      for (let k = i; k < end; k++) sum += conf[k] ?? 100
-      const op = level(sum / (end - i))
-      const last = runs[runs.length - 1]
-      if (last && last.opacity === op) last.text += text.slice(i, end)
-      else runs.push({ text: text.slice(i, end), opacity: op })
-    }
-    return runs
-  }
-  // block = 1 is the exact per-character grouping (a one-character mean is the
-  // character). Both passes are O(n) over a 4000-char ring and the caller
-  // memoizes, so the second pass only runs on copy that already blew the cap.
-  const exact = group(1)
-  if (exact.length <= RTTY_MAX_RUNS) return exact
-  // ceil: the block count can never exceed RTTY_MAX_RUNS.
-  return group(Math.max(1, Math.ceil(n / RTTY_MAX_RUNS)))
-}
+/** The transcript renderer is SHARED with the PSK cockpit (and every keyboard
+ * mode after it) — lifted verbatim to `../transcript` in Keyboard Modes
+ * Phase 1. Re-exported here under RTTY's original names so this cockpit's
+ * tests and call sites read exactly as they did when it was the only keyboard
+ * mode. The full design story (per-character-first, the RTTY_MAX_RUNS cap, the
+ * field hang it fixed) lives with the function. */
+export { confidenceRuns, TRANSCRIPT_MAX_RUNS as RTTY_MAX_RUNS } from '../transcript'
+import { confidenceRuns } from '../transcript'
 
 /** "+12 Hz" (signed) AFC readout. */
 function fmtAfc(hz: number): string {
@@ -143,21 +120,22 @@ function fmtAfc(hz: number): string {
   return `${r >= 0 ? '+' : ''}${r} Hz`
 }
 
-/** Human label for the auto-sequencer's state string. */
+/** Human label for the auto-sequencer's state string (the wire value is the switch's
+ *  subject and never moves; only the word the operator reads does). */
 function seqLabel(s: string): string {
   switch (s) {
     case 'calling_cq':
-      return 'Calling CQ'
+      return t('rtty.seq.callingCq')
     case 'answering':
-      return 'Answering'
+      return t('rtty.seq.answering')
     case 'exchange_sent':
-      return 'Exchange sent'
+      return t('rtty.seq.exchangeSent')
     case 'confirmed':
-      return 'Confirmed'
+      return t('rtty.seq.confirmed')
     case 'done':
-      return 'Done'
+      return t('rtty.seq.done')
     default:
-      return 'Idle'
+      return t('rtty.seq.idle')
   }
 }
 
@@ -177,7 +155,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
   // a real stop (see the pane comment below). What is pinned is this cockpit's stop-line census.
   const host = panels
-    ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: RTTY_PANEL_LABELS })
+    ? panelHost(panels, { menu: RTTY_PANEL_IDS, side: [], main: 'stream', labels: rttyPanelLabels() })
     : null
   const shown = (id: RttyPanelId) => (host ? host.shown(id) : true)
   // Live decoder state — polled at 2 Hz while this is the visible view. The
@@ -206,7 +184,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const toggleArm = () => {
     void rttyArm(!armed)
       .then(setRtty)
-      .catch(() => pushToast('Could not switch the RTTY decoder', 'error'))
+      .catch(() => pushToast(t('rtty.arm.failed'), 'error'))
   }
 
   // Auto-sequencer: the pure RTTY QSO state machine wired to TX + the logbook.
@@ -220,16 +198,16 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const toggleAuto = () => {
     void rttySetAuto(!auto)
       .then(setRtty)
-      .catch(() => pushToast('Could not switch the RTTY auto-sequencer', 'error'))
+      .catch(() => pushToast(t('rtty.auto.failed'), 'error'))
   }
   const autoCq = () => {
-    void withErrorToast(() => rttyAutoCq(), 'Auto CQ refused').then((s) => {
+    void withErrorToast(() => rttyAutoCq(), t('rtty.autoCq.failed')).then((s) => {
       if (s) setRtty(s)
     })
   }
   const autoAnswer = () => {
     if (!heardCq) return
-    void withErrorToast(() => rttyAutoAnswer(heardCq), 'Auto answer refused').then((s) => {
+    void withErrorToast(() => rttyAutoAnswer(heardCq), t('rtty.autoAnswer.failed')).then((s) => {
       if (s) setRtty(s)
     })
   }
@@ -245,6 +223,21 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   useEffect(() => {
     void getLicensedBandPlan('rtty').then(setPlan).catch(() => {})
   }, [])
+
+  // RF POWER. RTTY is a 100%-duty-cycle mode — the carrier is on for the whole over
+  // with no let-up — so most rigs want it run well below their SSB rating or the finals
+  // and the ALC both suffer. That is a decision the operator makes per over, at the
+  // radio, which is why the control belongs in the header beside Tune rather than in a
+  // settings page. Mirrors the rig's read-back and never fights an in-flight drag.
+  const [power, setPower] = useState(100)
+  const powerDrag = useRef(false)
+  useEffect(() => {
+    const rb = snap?.radio.rfPower
+    if (rb != null && !powerDrag.current) {
+      const pct = Math.round(rb * 100)
+      setPower((p) => (Math.abs(p - pct) >= 2 ? pct : p))
+    }
+  }, [snap?.radio.rfPower])
 
   // Commit a typed dial from the shared header readout (same path as the
   // band-plan QSY); rejects out-of-plan frequencies with a toast.
@@ -265,26 +258,28 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // as the CW cockpit's keyboard handler).
   const snapRef = useRef(snap)
   snapRef.current = snap
-  const send = (t: string) => {
-    if (!t.trim()) return
+  // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter
+  // by that name would shadow it here and nowhere else.
+  const send = (line: string) => {
+    if (!line.trim()) return
     const mycall = snapRef.current?.mycall?.trim() ?? ''
-    if (t.includes('{MYCALL}') && !mycall) {
-      pushToast('Set your callsign in Settings before transmitting', 'info', 3500)
+    if (line.includes('{MYCALL}') && !mycall) {
+      pushToast(t('rtty.send.noCallsign'), 'info', 3500)
       return
     }
-    if (t.includes('{CALL}') && !hisCall.trim()) {
-      pushToast('Enter their call first (the {CALL} field)', 'info', 3000)
+    if (line.includes('{CALL}') && !hisCall.trim()) {
+      pushToast(t('rtty.send.noTheirCall'), 'info', 3000)
       return
     }
     // The engine blocks keying outside privileges anyway; surface why up front.
     if (snapRef.current && !snapRef.current.radio.txAllowed) {
-      pushToast('TX locked — this frequency is outside your license privileges', 'info', 3500)
+      pushToast(t('rtty.send.txLocked'), 'info', 3500)
       return
     }
-    const expanded = t
+    const expanded = line
       .replace(/\{MYCALL\}/g, mycall)
       .replace(/\{CALL\}/g, hisCall.trim().toUpperCase())
-    void withErrorToast(() => rttySend(expanded), 'RTTY send failed').then((s) => {
+    void withErrorToast(() => rttySend(expanded), t('rtty.send.failed')).then((s) => {
       if (s) setRtty(s)
     })
   }
@@ -303,6 +298,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
 
   const sending = rtty?.sending === true
   const backend = (rtty?.backend ?? 'afsk').toUpperCase()
+  // The badge's figures — invariant tokens, assembled here rather than in the JSX so the
+  // i18n guard reads them as the measurements they are.
+  const tones = rtty ? `${rtty.baud} · ${rtty.shiftHz} Hz` : DEFAULT_TONES
 
   // --- CONTINUOUS TX (the MMTTY "TX" latch) -----------------------------------
   // Stay keyed and type into a live transmission (the air carries LTRS diddle
@@ -314,7 +312,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const latchedRef = useRef(latched)
   latchedRef.current = latched
   const toggleLatch = () => {
-    void withErrorToast(() => rttySetLatched(!latched), 'Continuous TX refused').then((s) => {
+    void withErrorToast(() => rttySetLatched(!latched), t('rtty.latch.failed')).then((s) => {
       if (s) setRtty(s)
     })
     // Latching off leaves the compose field holding text that has already been
@@ -336,9 +334,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       if (!latchedRef.current) return
       if (ev.inputType === 'insertText' && ev.data) {
         ev.preventDefault()
-        const t = ev.data
-        setText((prev) => prev + t)
-        void withErrorToast(() => rttyType(t), 'RTTY typing refused').then((s) => {
+        const ch = ev.data
+        setText((prev) => prev + ch)
+        void withErrorToast(() => rttyType(ch), t('rtty.type.failed')).then((s) => {
           if (s) setRtty(s)
         })
       } else {
@@ -391,27 +389,53 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           txActiveLabel="▲ RTTY"
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}
+          power={{
+            value: power,
+            unit: '%',
+            onChange: (pct: number) => {
+              setPower(pct)
+              void setRfPower(pct / 100)
+            },
+            label: t('rtty.header.power.label'),
+            title: t('rtty.header.power.title'),
+            onPointerDown: () => {
+              powerDrag.current = true
+            },
+            onPointerUp: () => {
+              powerDrag.current = false
+            },
+          }}
+          // TUNE — the steady carrier you set power and load the antenna against. It is a
+          // stop control (it stops the carrier it started) and is on this cockpit's
+          // stop-line census and its sweep; MAX_TUNE_MS bounds it regardless.
+          onTune={(on) => void setTune(on).then((s) => onSnap?.(s))}
+          // The RIG's own ATU, rendered by the header only when the rig reports a tuner.
+          onAtuTune={() =>
+            void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
           modeIndicator={
             <>
-              <span
-                className="cw-mode-badge"
-                title="RTTY — Baudot/ITA2 at the configured baud + shift (45.45 / 170 Hz is the HF standard; change it in Settings → RTTY)"
-              >
-                RTTY {rtty ? `${rtty.baud} · ${rtty.shiftHz} Hz` : '45.45 · 170 Hz'}
+              <span className="cw-mode-badge" title={t('rtty.header.mode.title')}>
+                {RTTY} {tones}
               </span>
               <span
                 className="rtty-backend-pill"
                 title={
                   backend === 'FSK'
-                    ? 'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.'
-                    : 'AFSK — soundcard tones through the rig in LSB (soundcard-clocked, the robust default). Change the backend in Settings → RTTY.'
+                    ? t('rtty.header.backend.fsk.title')
+                    : t('rtty.header.backend.afsk.title')
                 }
               >
                 {backend}
               </span>
               {sending && (
+                // ⚠️ NOT MIGRATED, and it is the transmit-path deferral, not an oversight:
+                // this tooltip states what Stop TX does to an over in flight. It moves with
+                // the stop controls, in the transmit-path batch, with the sweeps re-run.
                 <span className="rtty-tx-pill" title="RTTY transmission on the air (Stop TX aborts)">
-                  TX ▲
+                  {TX_PLATE}
                 </span>
               )}
             </>
@@ -429,7 +453,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 onSet={onSetFrequency}
               />
             ) : (
-              <span className="cockpit-ph-pill" title="Showing the rig's current band">
+              <span className="cockpit-ph-pill" title={t('rtty.header.band.title')}>
                 {bandLabelForMhz(snap.radio.dialMhz) || '— band —'}
               </span>
             )
@@ -479,7 +503,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             { hz: rtty.markHz, color: '#3ddc8c', label: 'M' },
             { hz: rtty.spaceHz, color: '#ffb347', label: 'S' },
           ]}
-          hint="click nets the decoder"
+          hint={t('rtty.waterfall.hint')}
           onTune={(hz) => void rttyNet(hz).then(setRtty).catch(() => {})}
         />
       )}
@@ -515,26 +539,24 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           itself. Do NOT add the Auto toggle to stop-line.test.tsx's RTTY stopControls; that
           would demand this cockpit's only ⊞ entry be unhideable. */}
       {shown('stream') && (
-      <CockpitPaneFrame title="Decoded text" paneId="stream">
-      <div
-        className="cw-decode rtty-stream"
-        title="Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)"
-      >
+      <CockpitPaneFrame title={t('rtty.pane.stream.title')} paneId="stream">
+      <div className="cw-decode rtty-stream" title={t('rtty.stream.title')}>
         <div className="cw-decode-head">
-          <span className="cw-decode-label">RX ▼</span>
+          <span className="cw-decode-label">{RX_PLATE}</span>
           <button
             type="button"
             className={`rtty-arm${armed ? ' on' : ''}`}
             aria-pressed={armed}
             onClick={toggleArm}
-            title={
-              armed
-                ? 'RX armed — decoding the receive audio (RX only, never keys the rig). Click to disarm.'
-                : 'Arm RX — start decoding RTTY from the receive audio (RX only, never keys the rig)'
-            }
+            title={armed ? t('rtty.arm.on.title') : t('rtty.arm.off.title')}
           >
-            {armed ? 'RX armed' : 'Arm RX'}
+            {armed ? t('rtty.arm.on.label') : t('rtty.arm.off.label')}
           </button>
+          {/* ⚠️ NOT MIGRATED, and deliberately: clicking this toggle OFF is
+              rttySetAuto(false) → seq.abort() + Engine::rtty_stop() — the queue is cleared
+              and the rig unkeyed. It is a real stop control (a pane-resident one, which is
+              why no sweep lists it), and this batch moves no control that stops a
+              transmission. Its label and both tooltips move with the rest of them. */}
           <button
             type="button"
             className={`rtty-arm${auto ? ' on' : ''}`}
@@ -551,11 +573,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           {armed && rtty && (
             <span
               className={`rtty-afc-pill${rtty.afcLocked ? ' locked' : ''}`}
-              title={
-                rtty.afcLocked
-                  ? 'AFC locked — acquired the mark/space pair and frozen on it (offset from the nominal tones)'
-                  : 'AFC offset from the nominal mark/space tone pair — locks once a signal is acquired'
-              }
+              title={rtty.afcLocked ? t('rtty.afc.locked.title') : t('rtty.afc.title')}
             >
               {fmtAfc(rtty.afcHz)}
               {rtty.afcLocked ? ' 🔒' : ''}
@@ -570,9 +588,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                   .then(setRtty)
                   .catch(() => {})
               }}
-              title="Re-acquire AFC — drop and rebuild the demodulator (use when it froze on the wrong signal)"
+              title={t('rtty.afcReset.title')}
             >
-              Re-tune
+              {t('rtty.afcReset.label')}
             </button>
           )}
           <button
@@ -585,9 +603,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               // follow the next copy even if the operator had scrolled up.
               streamPin.repin()
             }}
-            title="Clear the decoded transcript"
+            title={t('rtty.clear.title')}
           >
-            Clear
+            {t('rtty.clear.label')}
           </button>
         </div>
         <div className="cw-decode-text" ref={streamPin.ref} onScroll={streamPin.onScroll}>
@@ -599,7 +617,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             ))
           ) : (
             <span className="cw-decode-idle">
-              {armed ? 'listening…' : 'Arm RX to decode RTTY from the receive audio'}
+              {armed ? t('rtty.stream.listening') : t('rtty.stream.idle')}
             </span>
           )}
         </div>
@@ -634,17 +652,17 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           control the operator pressed. */}
       <div className="cockpit-txdock">
       {auto && (
-        <div className="cw-macros rtty-auto-row" role="group" aria-label="RTTY auto-sequencer">
+        <div className="cw-macros rtty-auto-row" role="group" aria-label={t('rtty.seq.aria')}>
           {seqState === 'idle' ? (
             <>
               <button
                 type="button"
                 className="cw-macro rtty-auto-cq"
                 onClick={autoCq}
-                title="Call CQ and auto-run the QSO — the engine keys only after you click, never on its own"
+                title={t('rtty.autoCq.title')}
               >
-                <span className="cw-macro-key">CQ</span>
-                <span className="cw-macro-label">Auto call</span>
+                <span className="cw-macro-key">{CQ}</span>
+                <span className="cw-macro-label">{t('rtty.autoCq.label')}</span>
               </button>
               <button
                 type="button"
@@ -653,11 +671,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                 disabled={!heardCq}
                 title={
                   heardCq
-                    ? `Answer ${heardCq} and auto-run the exchange (search & pounce)`
-                    : 'No CQ heard yet — Answer lights up when the decoder surfaces one'
+                    ? t('rtty.autoAnswer.title', { call: heardCq })
+                    : t('rtty.autoAnswer.none.title')
                 }
               >
-                <span className="cw-macro-key">Answer</span>
+                <span className="cw-macro-key">{t('rtty.autoAnswer.label')}</span>
                 <span className="cw-macro-label">{heardCq ?? '—'}</span>
               </button>
             </>
@@ -672,6 +690,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
                   </span>
                 )}
               </span>
+              {/* ⚠️ NOT MIGRATED — the sequencer's Abort is on RTTY's stop-line census
+                  (features/panelState.ts). It moves in the transmit-path batch. */}
               <button
                 type="button"
                 className="cw-macro rtty-auto-stop"
@@ -686,30 +706,37 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       )}
 
-      <div className="cw-macros rtty-macros" role="group" aria-label="RTTY macros">
+      <div className="cw-macros rtty-macros" role="group" aria-label={t('rtty.macros.aria')}>
         <input
           className="settings-input rtty-hiscall"
           value={hisCall}
           onChange={(e) => setHisCall(e.target.value.toUpperCase())}
-          placeholder="Their call…"
-          aria-label="Worked station callsign (the {CALL} macro token)"
+          placeholder={t('rtty.hisCall.placeholder')}
+          aria-label={t('rtty.hisCall.aria')}
           autoComplete="off"
           spellCheck={false}
         />
+        {/* The buttons ADVERTISE their F-keys; default Mac keyboards eat bare F-keys as
+            media keys, so the tooltip carries the cure there (mac QA audit). */}
         {MACROS.map((m) => (
           <button
             key={m.key}
             type="button"
             className="cw-macro"
             onClick={() => send(m.text)}
-            title={m.text
+            title={`${m.text
               .replace(/\{MYCALL\}/g, snap?.mycall ?? '{MYCALL}')
-              .replace(/\{CALL\}/g, hisCall.trim().toUpperCase() || '{CALL}')}
+              .replace(/\{CALL\}/g, hisCall.trim().toUpperCase() || '{CALL}')}${
+              IS_MAC ? `\n${FN_KEY_HINT}` : ''
+            }`}
           >
             <span className="cw-macro-key">{m.key}</span>
-            <span className="cw-macro-label">{m.label}</span>
+            <span className="cw-macro-label">{m.label()}</span>
           </button>
         ))}
+        {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
+            tooltip is the wording that states what clicking it off does NOT do (it lets
+            what was typed finish keying). Label and tooltips move with the stop line. */}
         <button
           type="button"
           className={`cw-macro rtty-tx-latch${latched ? ' on' : ''}`}
@@ -724,6 +751,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           <span className="cw-macro-key">TX</span>
           <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
         </button>
+        {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on RTTY's stop-line census and is found
+            by ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans
+            and the tooltip move in the transmit-path batch, with that sweep re-run. */}
         <button
           type="button"
           className="cw-macro rtty-stop"
@@ -761,17 +791,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               // Latched, Enter is a NEW LINE on the air (CR LF — both live in
               // both ITA2 planes), not a send: the transmitter is already up.
               setText('')
-              void withErrorToast(() => rttyType('\r\n'), 'RTTY typing refused').then((s) => {
+              void withErrorToast(() => rttyType('\r\n'), t('rtty.type.failed')).then((s) => {
                 if (s) setRtty(s)
               })
             } else {
               sendTyped()
             }
           }}
-          placeholder={latched ? 'Typing on the air…' : 'Type RTTY to send… (Enter)'}
+          placeholder={
+            latched ? t('rtty.compose.placeholder.latched') : t('rtty.compose.placeholder')
+          }
           autoComplete="off"
           spellCheck={false}
-          aria-label="RTTY compose"
+          aria-label={t('rtty.compose.aria')}
         />
         <button
           type="button"
@@ -781,7 +813,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           // typed and the macros type into the live transmission too.
           disabled={latched || !text.trim()}
         >
-          Send
+          {t('rtty.compose.send.label')}
         </button>
       </div>
       </div>

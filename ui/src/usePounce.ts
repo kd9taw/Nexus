@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { doubleBeep } from './alerts'
+import { osNotify as osNotifyCommand } from './api'
 import type { NeedTag } from './types'
 
 export interface PounceAlert {
@@ -33,20 +34,34 @@ function pounceEarcon(): void {
   window.setTimeout(() => doubleBeep(1320), 260)
 }
 
-/** Fire a desktop notification if — and only if — the OS has already granted permission.
- * Never prompts: a permission dialog thrown at an operator mid-QSO because a spot arrived is
- * exactly the wrong moment to ask. */
+/** Fire a desktop notification through the OS (the Rust-side notification plugin).
+ *
+ * Why not the web Notification API it used to call: WKWebView does not implement it — macOS
+ * had NO notification path at all — and nothing ever called `requestPermission()`, so even on
+ * WebView2 the permission could never reach 'granted'; the OS half of Pounce was dead on
+ * every platform (mac QA audit, 2026-08-17). The Rust route works everywhere, and permission
+ * is the OS's own ask, made lazily at the FIRST alert — never at launch. That first-alert
+ * prompt replaces the old "never prompts" stance, which in practice meant "never notifies":
+ * the sound has already played and the in-app banner is up while the dialog stands, so
+ * nothing is lost. The web API stays as the fallback for a browser-hosted dev view, and a
+ * refusal anywhere is fine by design — the earcon is the primary channel and the banner
+ * fires unconditionally, so a muted notification never takes the alert down with it. */
 function osNotify(a: PounceAlert): void {
-  try {
-    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
-    const where = a.freqMhz ? `${a.freqMhz.toFixed(3)} MHz` : a.band
-    new Notification(`New one: ${a.entity || a.call}`, {
-      body: `${a.call} — ${where} ${a.mode}`,
-      tag: `pounce-${a.call}-${a.band}-${a.mode}`, // collapse duplicates in the OS tray
-    })
-  } catch {
-    // A notification failing must never take the alert down with it — the sound already played.
-  }
+  const where = a.freqMhz ? `${a.freqMhz.toFixed(3)} MHz` : a.band
+  const title = `New one: ${a.entity || a.call}`
+  const body = `${a.call} — ${where} ${a.mode}`
+  osNotifyCommand(title, body).catch(() => {
+    // No bridge (browser dev view) or the OS refused — try the web API where it exists.
+    try {
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+      new Notification(title, {
+        body,
+        tag: `pounce-${a.call}-${a.band}-${a.mode}`, // collapse duplicates in the OS tray
+      })
+    } catch {
+      // A notification failing must never take the alert down with it — the sound already played.
+    }
+  })
 }
 
 /**

@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { OpeningEpisode } from '../../types'
 import { getOpeningsLog } from '../../api'
+import { t } from '../../i18n'
 
 /** Compact duration: 47m / 2h05. */
 function durLabel(secs: number): string {
@@ -106,7 +107,7 @@ export function OpeningsLogPane() {
           s0.key === key ? { key, asc: !s0.asc } : { key, asc: key === 'band' || key === 'mode' },
         )
       }
-      title={`Sort by ${label}`}
+      title={t('prop.openingsLog.sort.title', { column: label })}
     >
       {label}
       {opSort.key === key ? (opSort.asc ? ' ▲' : ' ▼') : ''}
@@ -114,7 +115,7 @@ export function OpeningsLogPane() {
   )
   return (
     <div className="openings-log">
-      <div className="openings-log-filters" role="group" aria-label="Filter openings by band">
+      <div className="openings-log-filters" role="group" aria-label={t('prop.openingsLog.filter.aria')}>
         {FILTERS.map((f) => (
           <button
             key={f}
@@ -123,24 +124,25 @@ export function OpeningsLogPane() {
             aria-pressed={filter === f}
             onClick={() => setFilter(f)}
           >
-            {f}
+            {/* The filter VALUES are band tokens; only "All" is a word. */}
+            {f === 'All' ? t('prop.openingsLog.filter.all') : f}
           </button>
         ))}
         <span className="openings-log-count">
-          {shown.length} opening{shown.length === 1 ? '' : 's'}
+          {t('prop.openingsLog.count', { count: shown.length })}
         </span>
       </div>
       {shown.length === 0 ? (
-        <p className="openings-log-empty">No {filter} openings recorded yet.</p>
+        <p className="openings-log-empty">{t('prop.openingsLog.empty', { filter })}</p>
       ) : (
         <ul className="openings-log-list">
           <li className="openings-log-row openings-log-head" aria-hidden="false">
-            {opTh('Band', 'band')}
-            {opTh('Mode', 'mode')}
-            {opTh('When', 'when')}
-            {opTh('Dur', 'dur')}
-            {opTh('DX', 'dx')}
-            {opTh('Stns', 'stns')}
+            {opTh(t('prop.openingsLog.column.band'), 'band')}
+            {opTh(t('prop.openingsLog.column.mode'), 'mode')}
+            {opTh(t('prop.openingsLog.column.when'), 'when')}
+            {opTh(t('prop.openingsLog.column.duration'), 'dur')}
+            {opTh(t('prop.openingsLog.column.dx'), 'dx')}
+            {opTh(t('prop.openingsLog.column.stations'), 'stns')}
           </li>
           {shown.map((e, i) => (
             <li key={`${e.band}-${e.startedUtc}-${i}`} className="openings-log-row">
@@ -149,16 +151,16 @@ export function OpeningsLogPane() {
               <span className="openings-log-when">{whenLabel(e.startedUtc)}</span>
               <span
                 className="openings-log-dur"
-                title={e.onsetKnown ? undefined : 'Already open at app start — duration under-counts'}
+                title={e.onsetKnown ? undefined : t('prop.openingsLog.duration.partial.title')}
               >
                 {durLabel(e.durationSecs)}
                 {e.onsetKnown ? '' : '+'}
               </span>
-              <span className="openings-log-dx" title="Longest path seen during the opening">
-                ~{Math.round(e.maxKm)} km {e.octant}
+              <span className="openings-log-dx" title={t('prop.openingsLog.dx.title')}>
+                {t('prop.openingsLog.dx', { km: Math.round(e.maxKm), octant: e.octant })}
               </span>
-              <span className="openings-log-stns" title="Most stations heard in one window">
-                {e.peakStations} stns
+              <span className="openings-log-stns" title={t('prop.openingsLog.stations.title')}>
+                {t('prop.openingsLog.stations', { count: e.peakStations })}
               </span>
             </li>
           ))}

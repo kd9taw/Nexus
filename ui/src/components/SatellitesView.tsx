@@ -16,6 +16,16 @@
 // rows carry Phase 2 `earn` (needed grids/entities) in the app's one need-chip
 // vocabulary. Arming stays the operator's click, every time: nothing here
 // moves a rotor or takes a dial on its own.
+//
+// ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The
+// WORDS come from the catalog (`sat.*` in i18n/en.ts); everything a radio or a
+// log is set from does not. Staying here as data or as named constants: bird
+// names, NORAD ids, TLE ages, every uplink/downlink frequency and offset, the
+// SatNOGS transponder descriptions and their per-leg mode names, azimuths,
+// elevations, ranges, altitudes, the compass letters, the mode names the radio
+// binding prints (MODE_FM/MODE_SSB below), and the sky dome's own plate text —
+// those plates are SIZED from the string by the viewBox arithmetic this file
+// documents at length, so they are instrument tick labels, not prose.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppSnapshot,
@@ -70,6 +80,8 @@ import {
 import { tleRefreshMessage } from '../features/tleMessages'
 import { heatPulse } from '../features/pulse'
 import { pushToast } from '../toast'
+import { t } from '../i18n'
+import { T } from '../i18n/T'
 import { MapView } from './MapView'
 import { LogEntry } from './LogEntry'
 import { Dialog } from './ui/Dialog'
@@ -88,6 +100,17 @@ interface Props {
 }
 
 const SCHEDULE_HOURS = 48
+
+/** The station's mode, folded to the closed ADIF Mode enumeration for the radio
+ * binding line. Mode names are invariant technical tokens — the same two
+ * letters on every rig's display, in every language — so they live here rather
+ * than in the catalog (see the invariant-token rule in `i18n/index.ts`). */
+const MODE_FM = 'FM'
+const MODE_SSB = 'SSB'
+/** The satellite's catalog number, as its own catalogs name it. */
+const NORAD_LABEL = 'NORAD'
+/** The passband plot's centre tick — a bare unit, not a sentence about one. */
+const PB_ZERO_TICK = '0 kHz'
 
 /** How many ALIVE transmitter cards the chooser shows before a "show N more"
  * disclosure — the DISCOVERY_ROW_CAP idiom, for the same reason.
@@ -163,9 +186,11 @@ const hhmm = (unix: number) => {
 
 /** "in 38 min" / "in 3.2 h" / "NOW" for a pass relative to now (secs). */
 function countdown(p: SatPass, nowSecs: number): string {
-  if (p.aosUnix <= nowSecs && nowSecs <= p.losUnix) return 'NOW'
+  if (p.aosUnix <= nowSecs && nowSecs <= p.losUnix) return t('sat.countdown.now')
   const min = Math.round((p.aosUnix - nowSecs) / 60)
-  return min < 90 ? `in ${Math.max(1, min)} min` : `in ${(min / 60).toFixed(1)} h`
+  return min < 90
+    ? t('sat.countdown.mins', { mins: Math.max(1, min) })
+    : t('sat.countdown.hours', { hours: (min / 60).toFixed(1) })
 }
 
 /** Geometry-first pass quality: max elevation dominates (a 70° pass is a
@@ -182,7 +207,13 @@ function passScore(p: SatPass): number {
  * discovery band reuses it (as a tooltip on the elevation cell) so there is
  * one language for "how good is this pass", never a second dialect. */
 const qualityWord = (el: number) =>
-  el >= 60 ? 'overhead pass' : el >= 30 ? 'high pass' : el >= 15 ? 'workable pass' : 'low horizon pass'
+  el >= 60
+    ? t('sat.quality.overhead')
+    : el >= 30
+      ? t('sat.quality.high')
+      : el >= 15
+        ? t('sat.quality.workable')
+        : t('sat.quality.low')
 
 /** Plain-language "why" line for the Next/Best strip. aosClamped passes get
  * the backscan honesty (report what was DONE): "already up", never the scan
@@ -191,15 +222,23 @@ const qualityWord = (el: number) =>
 function whyLine(p: SatPass, nowSecs: number): string {
   const el = Math.round(p.maxElDeg)
   const dur = Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))
-  const quality = qualityWord(el)
   const status =
     p.status === 'alive'
-      ? ' · reported alive (SatNOGS)'
+      ? t('sat.why.alive')
       : p.status === 'dead' || p.status === 're-entered'
-        ? ` · reported ${p.status.toUpperCase()} (SatNOGS)`
+        ? // The upstream status word, printed as it arrived (uppercased for the
+          // line's voice) — the source's report, not ours to reword.
+          t('sat.why.reported', { status: p.status.toUpperCase() })
         : ''
-  const when = p.aosClamped ? 'already up' : `${hhmm(p.aosUnix)} ${countdown(p, nowSecs)}`
-  return `${when} — ${el}° ${quality}, ${dur}${p.aosClamped ? '+' : ''} min, ${wind8(p.aosAzDeg)}→${wind8(p.losAzDeg)}${status}`
+  return t('sat.why', {
+    when: p.aosClamped ? t('sat.why.alreadyUp') : `${hhmm(p.aosUnix)} ${countdown(p, nowSecs)}`,
+    el,
+    quality: qualityWord(el),
+    dur: `${dur}${p.aosClamped ? '+' : ''}`,
+    aos: wind8(p.aosAzDeg),
+    los: wind8(p.losAzDeg),
+    status,
+  })
 }
 
 /** What a pass would EARN, in the app's one need-chip vocabulary (NEED_CHIP +
@@ -215,7 +254,11 @@ function EarnChips({ earn }: { earn?: SatPassEarn | null }) {
       {earn.newEntities > 0 && (
         <span
           className={`need-chip need-${NEED_CHIP.NewEntity.cls}`}
-          title={`${earn.newEntities} never-worked ${earn.newEntities === 1 ? 'entity' : 'entities'} reachable through this pass's footprint: ${earn.entitySample.join(', ')}${entityMore > 0 ? ` +${entityMore} more` : ''}`}
+          title={t('sat.earn.entities.title', {
+            count: earn.newEntities,
+            names: earn.entitySample.join(', '),
+            more: entityMore > 0 ? t('sat.earn.more', { count: entityMore }) : '',
+          })}
         >
           {NEED_CHIP.NewEntity.label}
           {earn.newEntities > 1 ? ` ×${earn.newEntities}` : ''}
@@ -224,7 +267,11 @@ function EarnChips({ earn }: { earn?: SatPassEarn | null }) {
       {earn.newGrids > 0 && (
         <span
           className={`need-chip need-${NEED_CHIP.NewGrid.cls}`}
-          title={`${earn.newGrids} new Satellite VUCC grid${earn.newGrids === 1 ? '' : 's'} reachable through this pass's footprint: ${earn.gridSample.join(' ')}${gridMore > 0 ? ` +${gridMore} more` : ''}`}
+          title={t('sat.earn.grids.title', {
+            count: earn.newGrids,
+            grids: earn.gridSample.join(' '),
+            more: gridMore > 0 ? t('sat.earn.more', { count: gridMore }) : '',
+          })}
         >
           {NEED_CHIP.NewGrid.label} ×{earn.newGrids}
         </span>
@@ -684,14 +731,25 @@ function SkyDome({
     rotor == null || (rotor.mode !== 'rotor+doppler' && rotor.mode !== 'rotor-only')
       ? null
       : cmdAz == null
-        ? 'armed — no rotor command sent yet'
+        ? t('sat.dome.antenna.noCommand')
         : cmdEl == null
-          ? `az ${deg(cmdAz)} · elevation not commanded (az-only rotator)`
-          : `az ${deg(cmdAz)} el ${deg(cmdEl)}${errDeg != null ? ` · Δ ${errDeg.toFixed(1)}°` : ''}`
+          ? t('sat.dome.antenna.azOnly', { az: deg(cmdAz) })
+          : // The Δ tail is pure geometry — a symbol, a number and a degree
+            // sign — so it is appended here rather than made into words.
+            `${t('sat.dome.azEl', { az: deg(cmdAz), el: deg(cmdEl) })}${errDeg != null ? ` · Δ ${errDeg.toFixed(1)}°` : ''}`
 
   const label = bird
-    ? `Sky dome for ${name}, north up. Satellite at azimuth ${Math.round(bird.az)} degrees, elevation ${Math.round(bird.el)} degrees.`
-    : `Sky dome for ${name}, north up. Pass track from azimuth ${Math.round(pass.aosAzDeg)} to ${Math.round(pass.losAzDeg)} degrees, maximum elevation ${Math.round(pass.maxElDeg)} degrees.`
+    ? t('sat.dome.aria.bird', {
+        name,
+        az: Math.round(bird.az),
+        el: Math.round(bird.el),
+      })
+    : t('sat.dome.aria.track', {
+        name,
+        aos: Math.round(pass.aosAzDeg),
+        los: Math.round(pass.losAzDeg),
+        maxEl: Math.round(pass.maxElDeg),
+      })
 
   return (
     <div className={`sat-sky${live ? ' live' : ''}`}>
@@ -716,7 +774,13 @@ function SkyDome({
         <text x={DOME_C - DOME_R - 10} y={DOME_C + 4} className="sat-dome-compass" textAnchor="middle">W</text>
         {segs}
         <path d={triPath(aosPt[0], aosPt[1], 5, true)} className="sat-dome-aos">
-          <title>AOS — rises at {deg(pass.aosAzDeg)} ({wind8(pass.aosAzDeg)}) {hhmm(pass.aosUnix)}</title>
+          <title>
+            {t('sat.dome.aos.title', {
+              az: deg(pass.aosAzDeg),
+              wind: wind8(pass.aosAzDeg),
+              time: hhmm(pass.aosUnix),
+            })}
+          </title>
         </path>
         {/* Hollow on purpose — shape, not colour, tells rise from set. But an
             SVG path with no fill hit-tests its 1.4 u outline and nothing else,
@@ -724,7 +788,13 @@ function SkyDome({
             `all` hit-tests the whole triangle, so the title below is reachable
             without threading a mouse onto a hairline. */}
         <path d={triPath(losPt[0], losPt[1], 5, false)} className="sat-dome-los" pointerEvents="all">
-          <title>LOS — sets at {deg(pass.losAzDeg)} ({wind8(pass.losAzDeg)}) {hhmm(pass.losUnix)}</title>
+          <title>
+            {t('sat.dome.los.title', {
+              az: deg(pass.losAzDeg),
+              wind: wind8(pass.losAzDeg),
+              time: hhmm(pass.losUnix),
+            })}
+          </title>
         </path>
         {/* The rise and set bearings, ON the marks. Drawn after the track so the
             opaque plate wins where it crosses it, and before the ghost and the
@@ -736,7 +806,7 @@ function SkyDome({
             it is what stops a legitimate deadband from looking like a fault. */}
         {ghostPt && (
           <g className="sat-dome-ghost" data-testid="sat-ghost">
-            <title>Antenna: commanded az/el (not a rotator read-back)</title>
+            <title>{t('sat.dome.ghost.title')}</title>
             {birdPt && (
               <line x1={ghostPt[0]} y1={ghostPt[1]} x2={birdPt[0]} y2={birdPt[1]} className="sat-dome-err" />
             )}
@@ -749,13 +819,15 @@ function SkyDome({
             exactly that — a ghost dot would invent an elevation. */}
         {ghostRim && cmdAz != null && (
           <g className="sat-dome-ghost az-only" data-testid="sat-ghost-az">
-            <title>Antenna: azimuth {deg(cmdAz)} commanded — az-only rotator, no elevation sent</title>
+            <title>{t('sat.dome.ghost.azOnly.title', { az: deg(cmdAz) })}</title>
             <line x1={DOME_C} y1={DOME_C} x2={ghostRim[0]} y2={ghostRim[1]} className="sat-dome-azspoke" />
           </g>
         )}
         {birdPt && bird && (
           <g className="sat-dome-bird" data-testid="sat-bird">
-            <title>{name} — az {deg(bird.az)} el {deg(bird.el)}</title>
+            <title>
+              {t('sat.dome.bird.title', { name, az: deg(bird.az), el: deg(bird.el) })}
+            </title>
             {live && (
               <circle
                 cx={birdPt[0]}
@@ -808,21 +880,23 @@ function SkyDome({
       <dl className="sat-dome-readout">
         {bird && (
           <div>
-            <dt>Satellite</dt>
-            <dd>
-              az {deg(bird.az)} el {deg(bird.el)}
-            </dd>
+            <dt>{t('sat.dome.readout.satellite')}</dt>
+            <dd>{t('sat.dome.azEl', { az: deg(bird.az), el: deg(bird.el) })}</dd>
           </div>
         )}
         {rotor?.rangeKm != null && (
           <div>
-            <dt title="Slant range — how far the bird is FROM YOU.">Range</dt>
+            <dt title={t('sat.dome.readout.range.title')}>{t('sat.dome.readout.range')}</dt>
             <dd>
-              {Math.round(rotor.rangeKm)} km
+              {t('sat.dome.readout.km', { km: Math.round(rotor.rangeKm) })}
               {rotor.rangeRateKmS != null &&
-                ` · ${rotor.rangeRateKmS >= 0 ? '+' : ''}${rotor.rangeRateKmS.toFixed(2)} km/s ${
-                  rotor.rangeRateKmS < 0 ? 'closing' : 'opening'
-                }`}
+                t('sat.dome.readout.rangeRate', {
+                  rate: `${rotor.rangeRateKmS >= 0 ? '+' : ''}${rotor.rangeRateKmS.toFixed(2)}`,
+                  trend:
+                    rotor.rangeRateKmS < 0
+                      ? t('sat.dome.readout.closing')
+                      : t('sat.dome.readout.opening'),
+                })}
             </dd>
           </div>
         )}
@@ -835,22 +909,20 @@ function SkyDome({
             like the range above it: no row rather than 0 km. */}
         {rotor?.altKm != null && (
           <div>
-            <dt title="Altitude — how far above the earth the bird is. Not range (its distance from you).">
-              Altitude
+            <dt title={t('sat.dome.readout.altitude.title')}>
+              {t('sat.dome.readout.altitude')}
             </dt>
-            <dd>{Math.round(rotor.altKm)} km</dd>
+            <dd>{t('sat.dome.readout.km', { km: Math.round(rotor.altKm) })}</dd>
           </div>
         )}
         {ghostText && (
           <div>
-            <dt title="What the rotator was COMMANDED — not a read-back. Δ is the true angular gap to the bird.">
-              Antenna
-            </dt>
+            <dt title={t('sat.dome.readout.antenna.title')}>{t('sat.dome.readout.antenna')}</dt>
             <dd className={ghost === 'az-only' ? 'partial' : undefined}>{ghostText}</dd>
           </div>
         )}
         <div>
-          <dt>Rise / set</dt>
+          <dt>{t('sat.dome.readout.riseSet')}</dt>
           <dd>
             ▲ {deg(pass.aosAzDeg)} {wind8(pass.aosAzDeg)} · ▼ {deg(pass.losAzDeg)} {wind8(pass.losAzDeg)}
           </dd>
@@ -889,14 +961,21 @@ function PassTimeline({
         {live && <div className="sat-tl-now" style={{ left: pct(nowSecs) }} />}
       </div>
       <div className="sat-tl-labels">
-        <span>AOS {hhmm(pass.aosUnix)}</span>
+        <span>{t('sat.timeline.aos', { time: hhmm(pass.aosUnix) })}</span>
         <span className="sat-tl-tca-label">
-          {tcaUnix != null ? `TCA ${hhmm(tcaUnix)} · ` : ''}max {Math.round(pass.maxElDeg)}°
+          {/* TCA leads the peak when the track knows one — one label, with the
+              optional half interpolated, never two glued fragments. */}
+          {t('sat.timeline.peak', {
+            tca: tcaUnix != null ? t('sat.timeline.tca', { time: hhmm(tcaUnix) }) : '',
+            maxEl: Math.round(pass.maxElDeg),
+          })}
         </span>
-        <span>LOS {hhmm(pass.losUnix)}</span>
+        <span>{t('sat.timeline.los', { time: hhmm(pass.losUnix) })}</span>
       </div>
       <div className="sat-tl-state">
-        {live ? `IN PASS — ${minsLeft} min to LOS` : `next pass ${countdown(pass, nowSecs)}`}
+        {live
+          ? t('sat.state.inPass', { mins: minsLeft })
+          : t('sat.timeline.nextPass', { countdown: countdown(pass, nowSecs) })}
       </div>
       {/* Phase 2's visual home (sat-visual-design §3.4): what the pass is WORTH
           — the needed grids its footprint crosses — on the timeline itself, not
@@ -909,7 +988,7 @@ function PassTimeline({
             <span className="sat-tl-earn-grids">
               {earn.gridSample.join(' ')}
               {earn.newGrids > earn.gridSample.length
-                ? ` +${earn.newGrids - earn.gridSample.length} more`
+                ? t('sat.earn.more', { count: earn.newGrids - earn.gridSample.length })
                 : ''}
             </span>
           )}
@@ -969,35 +1048,32 @@ function DopplerReadout({
   const any = rotor.downlinkHz != null || rotor.uplinkHz != null
   if (!any) {
     const why = !dopplerOn
-      ? 'Doppler is off — nothing is being tuned (Settings ▸ Radio ▸ Satellite Doppler).'
+      ? t('sat.doppler.none.off')
       : !held
         ? uplinkOnly
           ? // Confirmation-aware (round 4), same rule as the rail's waiting
             // copy: an unconfirmed mapping must not promise the drive.
             rotor.uplinkOffer === 'confirm-mapping'
-            ? 'No transponder selected — pick one below; once your mapping is confirmed for this radio, Doppler tunes your uplink and the dial stays yours.'
-            : 'No transponder selected — pick one below and Doppler tunes your uplink; the dial stays yours.'
-          : 'No transponder selected — pick one below to put the dial under Doppler.'
+            ? t('sat.doppler.none.pickConfirm')
+            : t('sat.doppler.none.pickUplink')
+          : t('sat.doppler.none.pick')
         : !rotor.dopplerDownlink && !rotor.dopplerUplink
           ? undrivableUplink
-            ? 'Your uplink-only mapping has nothing to drive here — this bird has no separate uplink. Nothing is being tuned.'
-            : 'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned.'
+            ? t('sat.uplinkOnly.noLeg')
+            : t('sat.doppler.none.unconfirmed')
           : rotor.state !== 'tracking'
-            ? 'Doppler corrects from AOS — nothing to correct until the bird is up.'
-            : 'Doppler has not reported a tuning for this pass yet.'
+            ? t('sat.doppler.none.beforeAos')
+            : t('sat.doppler.none.noTuning')
     return <div className="sat-doppler none">{why}</div>
   }
   return (
     <div className="sat-doppler">
       <div className="sat-dop-head">
-        <span className="sat-dop-title">Doppler</span>
+        <span className="sat-dop-title">{t('sat.doppler.head')}</span>
         {rotor.transponder && <span className="sat-dop-tp">{rotor.transponder}</span>}
         {rotor.inverting && (
-          <span
-            className="sat-invert"
-            title="Inverting linear transponder: tune the downlink UP and your uplink goes DOWN, and the sidebands swap (LSB up, USB down)."
-          >
-            INVERTING
+          <span className="sat-invert" title={t('sat.inverting.title')}>
+            {t('sat.inverting.label')}
           </span>
         )}
         {/* Lock on used to live here, beside these numbers. It moved out — see
@@ -1007,7 +1083,7 @@ function DopplerReadout({
       <dl className="sat-dop-legs">
         {rotor.downlinkHz != null && (
           <div>
-            <dt>↓ Downlink</dt>
+            <dt>{t('sat.leg.downlink')}</dt>
             <dd>
               {fmtMHz(rotor.downlinkHz)}
               {rotor.downlinkShiftHz != null && (
@@ -1018,7 +1094,7 @@ function DopplerReadout({
         )}
         {rotor.uplinkHz != null && (
           <div>
-            <dt>↑ Uplink</dt>
+            <dt>{t('sat.leg.uplink')}</dt>
             <dd>
               {fmtMHz(rotor.uplinkHz)}
               {rotor.uplinkShiftHz != null && (
@@ -1027,7 +1103,7 @@ function DopplerReadout({
               {txMode != null && (
                 <span
                   className="sat-dop-txmode"
-                  title={`The TX (split) VFO's sideband — this bird's uplink runs ${txMode} while the downlink does not, and the radio's TX leg is set to match. Commanded by the engine with the Doppler tuning; shown here so a swapped sideband is never a surprise.`}
+                  title={t('sat.doppler.txMode.title', { mode: txMode })}
                 >
                   {' '}
                   {txMode}
@@ -1125,7 +1201,7 @@ function PassbandLane({
   const labelY = down ? 8 : 42
   const trackY = down ? 19 : 53
   const glyph = down ? '↓' : '↑'
-  const name = down ? 'Downlink' : 'Uplink'
+  const name = down ? t('sat.passband.lane.downlink') : t('sat.passband.lane.uplink')
   const x = pbX(offsetHz, halfHz)
   // Outside the passband the mark parks on the edge; the tooltip says so
   // rather than letting the picture quietly disagree with the numbers.
@@ -1171,11 +1247,13 @@ function PassbandLane({
             and this box never shrinks below about 24 px of real target. */}
         <rect className="sat-pb-hit" x={-13} y={down ? 2 : 40} width={26} height={32}>
           <title>
-            {`${glyph} ${name}${freqHz != null ? ` — ${freqHz} Hz` : ''} — offset ${fmtShift(
-              offsetHz,
-            )} from passband centre${
-              clamped ? ' (outside the passband — the mark is parked on the edge)' : ''
-            }`}
+            {t('sat.passband.mark.title', {
+              glyph,
+              leg: name,
+              freq: freqHz != null ? t('sat.passband.mark.freq', { hz: freqHz }) : '',
+              offset: fmtShift(offsetHz),
+              clamped: clamped ? t('sat.passband.mark.clamped') : '',
+            })}
           </title>
         </rect>
       </g>
@@ -1204,26 +1282,31 @@ function PassbandStrip({ rotor }: { rotor: SatTrackStatus }) {
   /** Exact numbers for the text equivalent: Hz, unrounded, absent when absent. */
   const legText = (freq: number | null, shift: number | null, off: number) =>
     [
+      // The exact dial in Hz — a bare reading, printed as it is.
       freq != null ? `${freq} Hz` : null,
-      shift != null ? `Doppler ${fmtShift(shift)}` : null,
-      `offset ${fmtShift(off)}`,
+      shift != null ? t('sat.passband.readout.doppler', { shift: fmtShift(shift) }) : null,
+      t('sat.passband.readout.offset', { offset: fmtShift(off) }),
     ]
       .filter((part) => part != null)
       .join(' · ')
-  const label =
-    `Transponder passband, ${rotor.inverting ? 'inverting' : 'non-inverting'}, ` +
-    `±${pbKHz(half)} kHz either side of centre. ` +
-    `Downlink ${fmtShift(offset)} from centre, uplink ${fmtShift(upOffset)} from centre.`
+  // ONE sentence: three glued fragments could not be reordered by a language
+  // that words "either side of centre" differently.
+  const label = t('sat.passband.aria', {
+    mode: rotor.inverting
+      ? t('sat.passband.inverting.word')
+      : t('sat.passband.nonInverting.word'),
+    half: pbKHz(half),
+    down: fmtShift(offset),
+    up: fmtShift(upOffset),
+  })
   return (
     <div className="sat-pb" data-testid="sat-passband">
       <div className="sat-pb-head">
-        <span className="sat-pb-title">Passband</span>
+        <span className="sat-pb-title">{t('sat.passband.head')}</span>
         {/* The mirror is drawn, but it is also said in words — a picture is a
             poor place to learn a rule nobody has told you. */}
         <span className={`sat-pb-mode${rotor.inverting ? ' inv' : ''}`}>
-          {rotor.inverting
-            ? 'inverting — tune up, transmit down'
-            : 'non-inverting — both legs move the same way'}
+          {rotor.inverting ? t('sat.passband.inverting') : t('sat.passband.nonInverting')}
         </span>
       </div>
       {half > 0 ? (
@@ -1248,13 +1331,13 @@ function PassbandStrip({ rotor }: { rotor: SatTrackStatus }) {
             −{pbKHz(half)}
           </text>
           <text className="sat-pb-ticklabel" x={PB_CX} y={88} textAnchor="middle">
-            0 kHz
+            {PB_ZERO_TICK}
           </text>
           <text className="sat-pb-ticklabel" x={PB_W - PB_PAD} y={88} textAnchor="end">
             +{pbKHz(half)}
           </text>
           <text className="sat-pb-axistitle" x={PB_CX} y={99} textAnchor="middle">
-            kHz from passband centre
+            {t('sat.passband.axis.title')}
           </text>
         </svg>
       ) : (
@@ -1266,8 +1349,7 @@ function PassbandStrip({ rotor }: { rotor: SatTrackStatus }) {
               carries no upper edge looks identical here. Blaming the database
               for a channel would be wrong for the satellites most people
               work. */}
-          No passband to tune inside — this is a single channel, or SatNOGS carries no width for it.
-          There is no axis to draw; the offsets below are still exact.
+          {t('sat.passband.noWidth')}
         </div>
       )}
       {/* The text equivalent, the same way the sky dome carries one: an SVG
@@ -1278,14 +1360,14 @@ function PassbandStrip({ rotor }: { rotor: SatTrackStatus }) {
       <dl className="sat-pb-readout">
         {legs.map((l) => (
           <div key={l.down ? 'down' : 'up'}>
-            <dt>{l.down ? '↓ Downlink' : '↑ Uplink'}</dt>
+            <dt>{l.down ? t('sat.leg.downlink') : t('sat.leg.uplink')}</dt>
             <dd>{legText(l.freq, l.shift, l.off)}</dd>
           </div>
         ))}
         {half > 0 && (
           <div>
-            <dt>Passband</dt>
-            <dd>±{pbKHz(half)} kHz from centre</dd>
+            <dt>{t('sat.passband.head')}</dt>
+            <dd>{t('sat.passband.readout.width', { half: pbKHz(half) })}</dd>
           </div>
         )}
       </dl>
@@ -1306,11 +1388,11 @@ const fmtLeg = (lowHz: number | null, highHz: number | null) => {
  * — never guess a kind. */
 const kindWord = (k: string | null) =>
   k === 'Transmitter'
-    ? 'beacon'
+    ? t('sat.kind.beacon')
     : k === 'Transponder'
-      ? 'linear'
+      ? t('sat.kind.linear')
       : k === 'Transceiver'
-        ? 'FM repeater'
+        ? t('sat.kind.fmRepeater')
         : null
 
 /* ======================= the readiness rail (top-5 ①) =======================
@@ -1417,16 +1499,16 @@ function TrackRail({
   const passText =
     track.state === 'armed'
       ? nowSecs < track.aosUnix
-        ? `armed — AOS in ${minsToAos} min`
-        : 'armed'
+        ? t('sat.rail.pass.armedIn', { mins: minsToAos })
+        : t('sat.rail.pass.armed')
       : track.state === 'prepositioning'
-        ? 'slewing to the AOS azimuth'
-        : `IN PASS — ${minsToLos} min to LOS`
+        ? t('sat.state.prepositioning')
+        : t('sat.state.inPass', { mins: minsToLos })
   // THE DOPPLER ROW's sentence. Six states, so it is computed rather than
   // nested into the JSX: what is being driven right now (from the track, never
   // re-derived here), and — when the transmit leg is not ours — what it would
   // take, in the words of the radio the split would actually land on.
-  const offerRig = track.uplinkRadio.trim() || 'your radio'
+  const offerRig = track.uplinkRadio.trim() || t('sat.rail.doppler.yourRadio')
   const offerPair = track.uplinkOfferMap ? satVfoPair(track.uplinkOfferMap) : null
   // Three confirmable offers, and the copy must not conflate them: 'confirm'
   // is a mapping DERIVED from the rig model; 'confirm-mapping' is the mapping
@@ -1450,95 +1532,101 @@ function TrackRail({
     offerPair != null
   const uplinkNext =
     track.uplinkOffer === 'confirm' && offerPair != null
-      ? `Confirm the uplink and Doppler drives ${offerRig} as ${offerPair}.`
+      ? t('sat.rail.uplink.confirm', { rig: offerRig, pair: offerPair })
       : track.uplinkOffer === 'confirm-mapping' && track.uplinkOfferMap != null
-        ? `Confirm ${satVfoLabel(track.uplinkOfferMap)} for ${offerRig} and Doppler drives its uplink.`
+        ? t('sat.rail.uplink.confirmMapping', {
+            mapping: satVfoLabel(track.uplinkOfferMap),
+            rig: offerRig,
+          })
         : switchMapping && offerPair != null
-          ? `Your mapping cannot carry this pass on ${offerRig} — switch it to ${offerPair} and Doppler drives the uplink.`
+          ? t('sat.rail.uplink.switchMapping', { rig: offerRig, pair: offerPair })
           : track.uplinkOffer === 'ask'
-            ? 'Pick which VFO carries your uplink to have Doppler tune that too.'
-            : 'The transmit VFO stays yours.'
+            ? t('sat.rail.uplink.ask')
+            : t('sat.rail.uplink.yours')
   // SIMPLEX before the leg pairs: a one-channel bird has no uplink leg, so the
   // honest wire reports dopplerUplink false there even under a confirmed
   // mapping — and the offer sentence must never render (confirming would
   // record a permanent consent for a split the engine refuses on this bird).
   const dopplerText = !dopplerOn
-    ? 'off — nothing is being tuned'
+    ? t('sat.rail.doppler.off')
     : heldDesc == null
       ? vfoMap === 'uplink-only'
         ? // Confirmation-aware (round 4): while the mapping in force is not
           // confirmed for the radio in play (the DTO's offer says so), "then
           // Doppler tunes your uplink" promises an unconsented drive.
           track.uplinkOffer === 'confirm-mapping'
-          ? 'waiting for a transponder — once your mapping is confirmed for this radio, Doppler tunes your uplink; the dial stays yours'
-          : 'waiting for a transponder — then Doppler tunes your uplink; the dial stays yours'
-        : 'waiting for a transponder — then the downlink follows the bird'
+          ? t('sat.rail.doppler.waitingConfirm')
+          : t('sat.rail.doppler.waitingUplink')
+        : t('sat.rail.doppler.waiting')
       : simplex
         ? track.dopplerDownlink
-          ? 'on — one channel: both legs ride the same dial'
-          : 'one channel and an uplink-only mapping — nothing is being tuned; the dial stays yours'
+          ? t('sat.rail.doppler.simplex')
+          : t('sat.rail.doppler.simplexUplinkOnly')
         : // `dopplerUplink` says the engine is CORRECTING the uplink, which it
           // is — and under 'switch-mapping' the split apply then refuses to
           // write it, every tick. The row reports what is DONE, so the uplink
           // is not claimed here; the pass rail's note and the CAT status carry
           // the refusal itself.
           track.dopplerDownlink && track.dopplerUplink && !switchMapping
-          ? 'correcting the downlink and the uplink'
+          ? t('sat.rail.doppler.both')
           : track.dopplerDownlink
-            ? `correcting the downlink. ${uplinkNext}`
+            ? t('sat.rail.doppler.downlink', { next: uplinkNext })
             : track.dopplerUplink && !switchMapping
-              ? 'correcting the uplink — the dial stays yours'
-              : `uplink-only mapping, nothing is being tuned. ${uplinkNext}`
+              ? t('sat.rail.doppler.uplink')
+              : t('sat.rail.doppler.uplinkOnly', { next: uplinkNext })
   const rotorText = track.rotorLost
     ? // It QUIT — a different fact from "not in this track", and the row must
       // not let the demoted mode blur the two. Says what the operator now owns
       // (the pointing) and what he still does not have to think about.
-      'stopped answering — pointing is yours; the pass, Doppler and your transponder keep running'
+      t('sat.rail.rotor.lost')
     : !rotorInTrack
     ? rotorOn
-      ? 'not in this track — re-arm to take the rotor'
-      : 'no rotator configured — Settings ▸ Radio ▸ Rotator'
+      ? t('sat.rail.rotor.notInTrack')
+      : t('sat.rail.rotor.none')
     : track.azDeg != null
-      ? `tracking · cmd az ${deg(track.azDeg)}${track.elDeg == null ? ' (az only)' : ` el ${deg(track.elDeg)}`}`
-      : 'armed — takes the rotor 5 min before AOS'
+      ? t('sat.rail.rotor.tracking', {
+          az: deg(track.azDeg),
+          // An az-only rotor was never sent an elevation and must not print
+          // one; with a real one the pair is a bare reading.
+          el: track.elDeg == null ? t('sat.rail.rotor.azOnly') : ` el ${deg(track.elDeg)}`,
+        })
+      : t('sat.rail.rotor.armed')
   return (
     <div className="sat-rail" data-testid="sat-rail" ref={scrollRef}>
       <div className="sat-rail-row">
         {railDot(true)}
-        <span className="sat-rail-name">Pass</span>
+        <span className="sat-rail-name">{t('sat.rail.gate.pass')}</span>
         {/* The gate cells ellipsize in the arm bar (styles.css .sat-rail-state),
             so every state sentence carries itself on `title`. Nothing is
             unreachable — the ● / ○ is what has to survive at a glance. */}
         <span className="sat-rail-state" title={passText}>
           {passText}
         </span>
-        <button
-          className="sat-rail-fix"
-          onClick={onStop}
-          title="Stop this track (rotor halts if it holds one; the dial is handed back)"
-        >
-          ■ stop
+        <button className="sat-rail-fix" onClick={onStop} title={t('sat.rail.stop.title')}>
+          {t('sat.track.stop')}
         </button>
       </div>
       <div className="sat-rail-row">
         {railDot(rotorInTrack, !track.rotorLost && !rotorInTrack && !rotorOn)}
-        <span className="sat-rail-name">Rotor</span>
+        <span className="sat-rail-name">{t('sat.rail.gate.rotor')}</span>
         <span className="sat-rail-state" title={rotorText}>
           {rotorText}
         </span>
       </div>
       <div className="sat-rail-row">
         {railDot(heldDesc != null)}
-        <span className="sat-rail-name">Transponder</span>
-        <span className="sat-rail-state" title={heldDesc ?? 'none — the dial stays yours'}>
+        <span className="sat-rail-name">{t('sat.rail.gate.transponder')}</span>
+        <span className="sat-rail-state" title={heldDesc ?? t('sat.rail.transponder.none')}>
           {heldDesc != null ? (
             <>
               {heldDesc}
-              {heldInverting && <span className="sat-invert">INVERTING</span>}
-              {autoPicked && <span className="sat-rail-auto"> picked for you</span>}
+              {heldInverting && <span className="sat-invert">{t('sat.inverting.label')}</span>}
+              {autoPicked && (
+                <span className="sat-rail-auto">{t('sat.rail.transponder.auto')}</span>
+              )}
             </>
           ) : (
-            'none — the dial stays yours'
+            t('sat.rail.transponder.none')
           )}
         </span>
         <button
@@ -1547,16 +1635,16 @@ function TrackRail({
           disabled={!canPick}
           title={
             canPick
-              ? 'Go to the transponder chooser below'
-              : 'No transmitters listed for this bird (SatNOGS) — nothing to pick'
+              ? t('sat.rail.transponder.goTo')
+              : t('sat.rail.transponder.nothingToPick')
           }
         >
-          {heldDesc != null ? 'change' : 'pick'}
+          {heldDesc != null ? t('sat.rail.transponder.change') : t('sat.rail.transponder.pick')}
         </button>
       </div>
       <div className="sat-rail-row">
         {railDot(dopplerLive)}
-        <span className="sat-rail-name">Doppler</span>
+        <span className="sat-rail-name">{t('sat.rail.gate.doppler')}</span>
         {/* The CURRENT mapping is deliberately not named here. The select at
             the end of this row is both the live value and the control for it,
             so spelling it out in the state text printed the same sentence
@@ -1572,9 +1660,9 @@ function TrackRail({
           <button
             className="sat-rail-fix"
             onClick={onDopplerOn}
-            title="Turn Doppler correction back on (the same switch as Settings ▸ Radio ▸ Satellite Doppler)"
+            title={t('sat.rail.doppler.turnOn.title')}
           >
-            turn on
+            {t('sat.rail.doppler.turnOn')}
           </button>
         )}
         {/* The one-time confirmation, where the operator already is. Rendered
@@ -1612,21 +1700,29 @@ function TrackRail({
             }
             title={
               switchMapping
-                ? `Switch ${offerRig} to ${offerPair}. Your mapping cannot carry this pass on this radio — nothing was written to it — and this is the layout Nexus drives here. Nothing changes until you click, and a wrong mapping transmits on your own downlink.`
+                ? t('sat.rail.uplink.switch.title', { rig: offerRig, pair: offerPair ?? '' })
                 : track.uplinkOffer === 'confirm'
-                  ? `Confirm ${offerPair} for ${offerRig}. Nexus read this from your radio model; nothing reaches your transmit VFO until you confirm it, and a wrong mapping transmits on your own downlink.`
-                  : `Confirm ${satVfoLabel(track.uplinkOfferMap ?? 'off')} — your chosen mapping — for ${offerRig}. Nothing reaches its transmit VFO until you confirm it for this radio, and a wrong mapping transmits on your own downlink.`
+                  ? t('sat.rail.uplink.confirm.title', {
+                      pair: offerPair ?? '',
+                      rig: offerRig,
+                    })
+                  : t('sat.rail.uplink.confirmMapping.title', {
+                      mapping: satVfoLabel(track.uplinkOfferMap ?? 'off'),
+                      rig: offerRig,
+                    })
             }
           >
-            {switchMapping ? 'switch mapping' : 'confirm uplink'}
+            {switchMapping
+              ? t('sat.rail.uplink.switch.label')
+              : t('sat.rail.uplink.confirm.label')}
           </button>
         )}
         <select
           className="sat-rail-vfo"
           value={vfoMap}
           onChange={(e) => onVfoMap(e.target.value as SatVfoMap, track.uplinkRadioId)}
-          aria-label="Satellite VFO mapping"
-          title="Which VFO carries your uplink — match it to how your radio is wired. A wrong mapping transmits on your own downlink, into the satellite's output passband, on top of everyone else working the bird. Picking one confirms it for the radio Doppler is driving. Every mapping except Uplink only keeps the downlink corrected; Uplink only hands your one VFO to the transmit leg."
+          aria-label={t('sat.rail.vfoMap.aria')}
+          title={t('sat.rail.vfoMap.title')}
         >
           {SAT_VFO_MAPS.map((m) => (
             <option key={m.value} value={m.value}>
@@ -1642,26 +1738,26 @@ function TrackRail({
           STALE number, worn as a gate. */}
       <div className="sat-rail-row">
         {railDot(track.elementAgeDays <= 14)}
-        <span className="sat-rail-name">Elements</span>
+        <span className="sat-rail-name">{t('sat.rail.gate.elements')}</span>
         <span
           className="sat-rail-state"
           title={
             track.elementAgeDays <= 14
-              ? `${track.elementAgeDays.toFixed(1)} d old — current`
-              : `${Math.round(track.elementAgeDays)} days old — pointing and Doppler drift`
+              ? t('sat.rail.elements.current', { age: track.elementAgeDays.toFixed(1) })
+              : t('sat.rail.elements.stale', { days: Math.round(track.elementAgeDays) })
           }
         >
           {track.elementAgeDays <= 14
-            ? `${track.elementAgeDays.toFixed(1)} d old — current`
-            : `${Math.round(track.elementAgeDays)} days old — pointing and Doppler drift`}
+            ? t('sat.rail.elements.current', { age: track.elementAgeDays.toFixed(1) })
+            : t('sat.rail.elements.stale', { days: Math.round(track.elementAgeDays) })}
         </span>
         {track.elementAgeDays > 14 && (
           <button
             className="sat-rail-fix"
             onClick={onRefreshElements}
-            title="Fetch fresh orbital elements now. This armed pass keeps its frozen set — re-arm to track with the fresh one."
+            title={t('sat.rail.elements.refresh.title')}
           >
-            refresh
+            {t('sat.rail.elements.refresh')}
           </button>
         )}
       </div>
@@ -1716,7 +1812,7 @@ function SatRadioBinding({
     <div className="sat-bind" data-testid="sat-radio-binding">
       <div className="sat-rail-row">
         {railDot(confirmed && !pending)}
-        <span className="sat-rail-name">Radio</span>
+        <span className="sat-rail-name">{t('sat.binding.name')}</span>
         <span className="sat-rail-state">
           {/* No RIG = a refusal that returned before routing resolved one, so
               the reason stands alone — never "this radio · · SSB" beside a rig
@@ -1730,32 +1826,32 @@ function SatRadioBinding({
               absent, and it is the one thing here we genuinely do not know. */}
           {binding.radioId != null && (
             <>
-              {binding.radioName || 'this radio'}
+              {binding.radioName || t('sat.binding.thisRadio')}
               <span className="sat-bind-why">
                 {binding.band !== '' ? ` · ${binding.band}` : ''} ·{' '}
-                {binding.fm ? 'FM' : 'SSB'}
+                {binding.fm ? MODE_FM : MODE_SSB}
               </span>
             </>
           )}
           {/* A note can accompany surviving legs (e.g. the split refused while
-              the dial landed) — print both rather than letting either win. */}
+              the dial landed) — print both rather than letting either win. The
+              note itself is the ENGINE's prose, interpolated as a value. */}
           {legs.length > 0
-            ? ` — ${legs.join(' · ')} MHz${binding.note ? ` — ${binding.note}` : ''}`
+            ? t('sat.binding.legs', {
+                legs: legs.join(' · '),
+                note: binding.note ? t('sat.binding.note', { note: binding.note }) : '',
+              })
             : binding.radioId != null
-              ? ` — ${binding.note ?? ''}`
+              ? t('sat.binding.note', { note: binding.note ?? '' })
               : (binding.note ?? '')}
         </span>
         <button
           className={`sat-rail-fix${pegged ? ' on' : ''}`}
           aria-pressed={pegged}
           onClick={() => onTogglePeg(!pegged)}
-          title={
-            pegged
-              ? 'Peg-lock is ON — this bird stays on the active radio; band+mode routing will not hand it to another rig. Click to unlock.'
-              : 'Peg-lock is OFF — a pick routes to the radio that owns the band and mode class. Click to pin the active radio instead.'
-          }
+          title={pegged ? t('sat.binding.pegged.title') : t('sat.binding.unpegged.title')}
         >
-          {pegged ? '🔒 pinned' : '🔓 pin this radio'}
+          {pegged ? t('sat.binding.pegged') : t('sat.binding.unpegged')}
         </button>
       </div>
     </div>
@@ -1809,10 +1905,8 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
   return (
     <div className="sat-lockon" data-testid="sat-lockon">
       <div className="sat-rail-row">
-        <span className="sat-rail-name">Dial</span>
-        <span className="sat-rail-state">
-          moved off the transponder? put the radio back on the bird
-        </span>
+        <span className="sat-rail-name">{t('sat.lockOn.name')}</span>
+        <span className="sat-rail-state">{t('sat.lockOn.state')}</span>
         {/* The rail's own fix pill — this IS a fix ("the dial is off the bird;
             put it back"), so it wears the same affordance as the gate fixes
             directly below it rather than inventing a second button style. */}
@@ -1820,9 +1914,9 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
           type="button"
           className="sat-rail-fix"
           onClick={onLockOn}
-          title="Re-run your transponder pick — routes, sets the band and mode, writes both legs, and re-centres you in the passband. Use it after moving the dial off the transponder by hand, or when the rig came back somewhere else."
+          title={t('sat.lockOn.title')}
         >
-          Lock on
+          {t('sat.lockOn.label')}
         </button>
       </div>
     </div>
@@ -2166,7 +2260,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             s0.key === key ? { key, asc: !s0.asc } : { key, asc: key === 'bird' || key === 'status' },
           )
         }
-        title={`Sort by ${label}`}
+        title={t('sat.schedule.sortBy', { label })}
       >
         {label}
         {schedSort.key === key ? (schedSort.asc ? ' ▲' : ' ▼') : ''}
@@ -2478,25 +2572,27 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
 
   const armTrack = (name: string, aosUnix: number) => {
     startSatTrack(name, aosUnix)
-      .then((t) => {
-        setTrack(t)
-        if (t) {
+      .then((armed) => {
+        setTrack(armed)
+        if (armed) {
           // The toast says what THIS track drives — the DTO's `mode` is the
           // engine's own answer, so a rotor-less arm never claims a rotor.
           const doing =
-            t.state === 'armed'
-              ? t.mode === 'rotor+doppler' || t.mode === 'rotor-only'
-                ? 'armed — the rotor stays yours until 5 min before AOS'
-                : t.mode === 'doppler-only'
-                  ? 'armed — no rotor in this track; Doppler takes the dial at AOS'
-                  : 'armed — pass timing only; the dial stays yours'
-              : t.state === 'prepositioning'
-                ? 'slewing to the AOS azimuth'
-                : 'following the pass'
-          pushToast(`Pass track ${t.name}: ${doing}`, 'success', 5000)
-        } else pushToast('Nothing to track — no matching pass to arm', 'info', 6000)
+            armed.state === 'armed'
+              ? armed.mode === 'rotor+doppler' || armed.mode === 'rotor-only'
+                ? t('sat.toast.track.rotor')
+                : armed.mode === 'doppler-only'
+                  ? t('sat.toast.track.doppler')
+                  : t('sat.toast.track.passOnly')
+              : armed.state === 'prepositioning'
+                ? t('sat.state.prepositioning')
+                : t('sat.toast.track.following')
+          pushToast(t('sat.toast.track', { name: armed.name, doing }), 'success', 5000)
+        } else pushToast(t('sat.toast.track.nothing'), 'info', 6000)
       })
-      .catch((e) => pushToast(`Track failed: ${e instanceof Error ? e.message : e}`, 'error'))
+      .catch((e) =>
+        pushToast(t('sat.toast.track.failed', { error: `${e instanceof Error ? e.message : e}` }), 'error'),
+      )
   }
   const disarmTrack = () => {
     stopSatTrack()
@@ -2574,9 +2670,13 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
         // was announced as a success. The binding note is the toast now.
         if (index == null) {
           setBinding(null)
-          pushToast('Transponder cleared — the dial is yours', 'success', 4000)
+          pushToast(t('sat.toast.transponder.cleared'), 'success', 4000)
         } else {
-          const working = `Working ${name} ${label}${auto ? ' (picked for you — change below)' : ''}`
+          const working = t('sat.toast.transponder.working', {
+            name,
+            label,
+            auto: auto ? t('sat.toast.transponder.working.auto') : '',
+          })
           getSatTransponder()
             .then((h) => {
               const b = h?.binding ?? null
@@ -2596,7 +2696,12 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
           })
           .catch(() => {})
       })
-      .catch((e) => pushToast(`Transponder not selected: ${e instanceof Error ? e.message : e}`, 'error'))
+      .catch((e) =>
+        pushToast(
+          t('sat.toast.transponder.failed', { error: `${e instanceof Error ? e.message : e}` }),
+          'error',
+        ),
+      )
       .finally(() => {
         pickBusy.current = false
       })
@@ -2612,7 +2717,9 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
     getSettings()
       .then((s: Settings) => setSettings({ ...s, satDopplerOff: false }))
       .then(() => setDopplerOn(true))
-      .catch((e) => pushToast(`Doppler setting: ${e instanceof Error ? e.message : e}`, 'error'))
+      .catch((e) =>
+        pushToast(t('sat.toast.doppler.failed', { error: `${e instanceof Error ? e.message : e}` }), 'error'),
+      )
       .finally(() => {
         settingsWriteBusy.current = false
       })
@@ -2633,7 +2740,9 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
     settingsWriteBusy.current = true
     setPegLock(on)
       .then(() => setPegged(on))
-      .catch((e) => pushToast(`Peg-lock: ${e instanceof Error ? e.message : e}`, 'error'))
+      .catch((e) =>
+        pushToast(t('sat.toast.peg.failed', { error: `${e instanceof Error ? e.message : e}` }), 'error'),
+      )
       .finally(() => {
         settingsWriteBusy.current = false
       })
@@ -2657,7 +2766,9 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
       // `v` undefined = confirming the mapping already in force (round 4):
       // the mapping did not change, so the mirror has nothing to learn.
       .then(() => v != null && setVfoMap(v))
-      .catch((e) => pushToast(`VFO mapping: ${e instanceof Error ? e.message : e}`, 'error'))
+      .catch((e) =>
+        pushToast(t('sat.toast.vfoMap.failed', { error: `${e instanceof Error ? e.message : e}` }), 'error'),
+      )
       .finally(() => {
         settingsWriteBusy.current = false
       })
@@ -2731,14 +2842,12 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
   })
 
   /** Title for the work affordances — honest about what an arm will drive. */
-  const workTitle = rotorOn
-    ? 'Work this pass: opens the bird, picks its transponder, arms rotor auto-track + the pass clock (Doppler tunes when its switches are on)'
-    : 'Work this pass: opens the bird, picks its transponder, starts the pass clock + Doppler (no rotator configured — nothing will move)'
+  const workTitle = rotorOn ? t('sat.work.title.rotor') : t('sat.work.title.noRotor')
 
   return (
     <div className="sats-view">
       <header className="sats-head">
-        <h1>Satellites</h1>
+        <h1>{t('sat.head.title')}</h1>
         {/* ONE LINE (2026-08-03 pass rebuild). The header used to wrap to two
             lines at the 1024×768 floor — and it wrapped EXACTLY when a pass went
             live, because the tracking badge pushed it over. The badge moved to
@@ -2746,7 +2855,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             Celestrak elements, N d old") folded into the refresh chip's own
             tooltip: FT8-console technique 7, density won by changing the
             control type rather than the type size. */}
-        <span className="sats-sub">passes over your grid</span>
+        <span className="sats-sub">{t('sat.head.sub')}</span>
         {/* The birds the age does not speak for — drifting, or held back past
             30 d — as a share of the catalog, so "30 of 367 sit out" cannot
             read like "51 of 100". Dim: it is a fact about a working catalog,
@@ -2755,7 +2864,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
           <span
             className="sats-sub"
             data-testid="sat-element-bands"
-            title="Elements past the 14-day line still fly the pass, with drifting times; elements past 30 days are not used at all — each of those birds is listed, with its reason, in the Birds list."
+            title={t('sat.head.bands.title')}
           >
             {bandNote}
           </span>
@@ -2771,13 +2880,13 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             className="sat-chip stale"
             disabled={tleRefreshing}
             onClick={() => void refreshTles()}
-            title={`Orbital elements are ${view.tleAgeDays.toFixed(1)} days old — pass times and Doppler drift with element age. Click to refresh now; they also refresh automatically every 6 h when the network allows.`}
+            title={t('sat.head.stale.title', { days: view.tleAgeDays.toFixed(1) })}
           >
             {/* Unit spelled out: the chip voice is uppercase, and "9 d" would
                 render as the wrong unit "9 D". Always plural — stale starts
                 past 14 days. */}
-            TLE {Math.round(view.tleAgeDays)} days — STALE{' '}
-            {tleRefreshing ? '· refreshing…' : '· refresh'}
+            {t('sat.head.stale.chip', { days: Math.round(view.tleAgeDays) })}{' '}
+            {tleRefreshing ? t('sat.head.stale.refreshing') : t('sat.head.stale.refresh')}
           </button>
         )}
         {/* THE SECTION'S MANUAL REFRESH when nothing is wrong. The amber chip
@@ -2797,15 +2906,18 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             onClick={() => void refreshTles()}
             title={
               view
-                ? `Orbital elements are ${view.tleAgeDays.toFixed(1)} days old (the median of the ${view.usableCount} sets in use). They refresh automatically every 6 h when the network allows; click to refresh now.`
-                : 'No usable orbital elements are cached. Click to fetch them now; you can also import a file under Settings ▸ Radio ▸ Orbital elements.'
+                ? t('sat.head.quiet.title', {
+                    days: view.tleAgeDays.toFixed(1),
+                    sets: view.usableCount,
+                  })
+                : t('sat.head.quiet.titleEmpty')
             }
           >
-            {tleRefreshing ? '⟳ refreshing…' : '⟳ refresh elements'}
+            {tleRefreshing ? t('sat.head.quiet.refreshing') : t('sat.head.quiet.refresh')}
           </button>
         )}
         {onPopOut && (
-          <button className="pane-popout" onClick={onPopOut} title="Open in its own window">⧉</button>
+          <button className="pane-popout" onClick={onPopOut} title={t('sat.head.popOut.title')}>⧉</button>
         )}
         {/* THE SEED NOTICE. The app starred birds on the operator's behalf, so
             it says so — a silent mutation of their ★ set would be the app
@@ -2815,16 +2927,13 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             column-1 item would push the schedule out of the grower row. */}
         {seedNotice && (
           <div className="sats-seed-notice">
-            <span>
-              Starred {seedNotice.names.length} active birds to get you started — change
-              them any time with the ★ beside any bird.
-            </span>
+            <span>{t('sat.head.seed.notice', { count: seedNotice.names.length })}</span>
             <button
               type="button"
               // The glyph is not a name a screen reader can use, and this is
               // the notice's only control.
-              aria-label="Dismiss the starred-birds notice"
-              title="Dismiss — your ★ birds stay exactly as they are"
+              aria-label={t('sat.head.seed.dismiss.aria')}
+              title={t('sat.head.seed.dismiss.title')}
               onClick={() => {
                 ackSatSeedNotice()
                 setSeedNotice(null)
@@ -2865,7 +2974,12 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
           {selected != null && detail != null && (
             <div className="sats-arm-id">
               <b>{detail.name}</b>
-              {detail.norad != null && <span className="sat-norad"> · NORAD {detail.norad}</span>}
+              {detail.norad != null && (
+                <span className="sat-norad">
+                  {' · '}
+                  {NORAD_LABEL} {detail.norad}
+                </span>
+              )}
               {detail.status && (
                 <span className={`sat-chip ${detail.status === 'alive' ? 'alive' : 'dead'}`}>
                   {detail.status}
@@ -2918,27 +3032,27 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
               // first: its mode is demoted, so nothing below can tell it apart
               // from a track that never had one.
               track.rotorLost
-                ? 'The rotator stopped answering, so this track let it go — point the antenna yourself. The pass clock, the transponder and Doppler carry on to LOS.'
+                ? t('sat.badge.rotorLost.title')
                 : track.mode === 'pass-only'
-                ? 'Pass timing only — nothing is driven: no rotor in this track, and Doppler is not driving the dial (correction switched off, no transponder held, or an uplink-only mapping that is not driving this pass). The pass clock and geometry still run.'
+                ? t('sat.badge.passOnly.title')
                 : track.mode === 'doppler-only'
                   ? // Dial ownership keys on the DOWNLINK leg — the leg that
                     // writes the dial. An uplink-only track drives only the
                     // TX (split) VFO, and claiming the dial for it would
                     // contradict the rail's own "the dial stays yours" on
                     // the same screen (round 3, defect 5).
-                    `No rotator in this track — Doppler ${
-                      track.dopplerDownlink
+                    t('sat.badge.dopplerOnly.title', {
+                      what: track.dopplerDownlink
                         ? track.downlinkHz != null
-                          ? 'is steering the radio dial'
-                          : 'takes the radio dial at AOS'
+                          ? t('sat.badge.dopplerOnly.dialNow')
+                          : t('sat.badge.dopplerOnly.dialAtAos')
                         : track.uplinkHz != null
-                          ? 'is steering the TX (split) VFO — the dial stays yours'
-                          : 'takes the TX (split) VFO at AOS — the dial stays yours'
-                    }; nothing moves an antenna`
+                          ? t('sat.badge.dopplerOnly.splitNow')
+                          : t('sat.badge.dopplerOnly.splitAtAos'),
+                    })
                   : track.azDeg == null
-                    ? 'The rotor has NOT been commanded yet — auto-track takes it 5 min before AOS'
-                    : 'Auto-track is driving the rotor — angles shown are what was COMMANDED (rotctld read-back lives on the rotor strip/pane)'
+                    ? t('sat.badge.rotorWaiting.title')
+                    : t('sat.badge.rotorDriving.title')
             }
           >
             {/* TWO SEPARATE FACTS, and they must be read from two separate
@@ -2963,37 +3077,45 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             <button
               className="sats-badge-open"
               onClick={() => setSelected(track.name)}
-              title="Open this pass's detail (sky dome, readiness rail) — tracking is not affected"
+              title={t('sat.badge.open.title')}
             >
-              ⟳ {track.state === 'armed' ? 'armed' : 'tracking'} {track.name}
+              ⟳ {track.state === 'armed' ? t('sat.badge.armed') : t('sat.badge.tracking')}{' '}
+              {track.name}
               {/* The MODE word, only when a surface is missing: the full
                   rotor+doppler track is the unmarked case; every partial one
                   names what it actually drives. A rotator that QUIT says so
                   instead — the operator armed a track with a mast, and the
                   demoted mode alone would read as though he never had one. */}
               {track.rotorLost
-                ? ' · rotor stopped answering'
+                ? t('sat.badge.mode.rotorLost')
                 : track.mode === 'doppler-only'
-                  ? ' · Doppler only'
+                  ? t('sat.badge.mode.dopplerOnly')
                   : track.mode === 'pass-only'
-                    ? ' · pass timing only'
+                    ? t('sat.badge.mode.passOnly')
                     : track.mode === 'rotor-only'
-                      ? ' · rotor only'
+                      ? t('sat.badge.mode.rotorOnly')
                       : ''}{' '}
               ·{' '}
               {track.azDeg == null
-                ? `rises az ${Math.round(track.aosAzDeg)}°`
-                : `cmd az ${Math.round(track.azDeg)}° ${track.elDeg == null ? '(az only)' : `el ${Math.round(track.elDeg)}°`}`}
+                ? t('sat.badge.risesAz', { az: Math.round(track.aosAzDeg) })
+                : t('sat.badge.cmdAz', {
+                    az: Math.round(track.azDeg),
+                    // Never an invented elevation: an az-only rotor was sent none.
+                    el:
+                      track.elDeg == null
+                        ? t('sat.badge.azOnly')
+                        : `el ${Math.round(track.elDeg)}°`,
+                  })}
             </button>
             <button
               onClick={disarmTrack}
               title={
                 track.mode === 'rotor+doppler' || track.mode === 'rotor-only'
-                  ? 'Stop auto-tracking (rotor halts)'
-                  : 'Stop this track (no rotor involved; the dial is handed back)'
+                  ? t('sat.track.stop.rotor.title')
+                  : t('sat.track.stop.noRotor.title')
               }
             >
-              ■ stop
+              {t('sat.track.stop')}
             </button>
           </span>
           )}
@@ -3001,8 +3123,8 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
             <button
               type="button"
               className="sats-detail-close"
-              aria-label="Close this bird's detail"
-              title="Close — a tracked pass keeps tracking; the badge on this bar brings you back"
+              aria-label={t('sat.detail.close.aria')}
+              title={t('sat.detail.close.title')}
               onClick={() => setSelected(null)}
             >
               ✕
@@ -3041,10 +3163,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
           empty ★ set is an inline line INSIDE the schedule now, with the
           discovery band open beneath it carrying the actual answer. */}
       {!gridSet ? (
-        <div className="sats-empty">
-          Set your grid square (Settings ▸ Station) first — passes are computed over
-          YOUR location, and without a locator there is nothing honest to show.
-        </div>
+        <div className="sats-empty">{t('sat.noGrid')}</div>
       ) : (
         /* THE PLANNING COLUMN — a bounded flex shell: the Next/Best strip
            (fit), the schedule (THE grower, and the section's one column-1
@@ -3091,16 +3210,8 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
           <section className="sats-best">
             {(
               [
-                [
-                  'Next',
-                  'The two soonest workable passes (10° peak or better), any bird — a pass already in progress leads',
-                  strip.next,
-                ],
-                [
-                  'Best 24 h',
-                  'The two highest-quality passes in the next 24 h — max elevation first, duration breaking ties',
-                  strip.best,
-                ],
+                [t('sat.strip.next.label'), t('sat.strip.next.why'), strip.next],
+                [t('sat.strip.best.label'), t('sat.strip.best.why'), strip.best],
               ] as const
             )
               .filter(([, , rows]) => rows.length > 0)
@@ -3129,10 +3240,13 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                                `title`, and the numbers an operator picks a pass
                                by (time, countdown, elevation) are at the front
                                of the sentence where the ellipsis never reaches. */
-                            title={`${p.name} — ${whyLine(p, nowSecs)}`}
+                            title={t('sat.strip.row.title', {
+                              name: p.name,
+                              why: whyLine(p, nowSecs),
+                            })}
                           >
                             {fav && (
-                              <span className="sat-fav-mark" title="One of your ★ birds">
+                              <span className="sat-fav-mark" title={t('sat.strip.fav.title')}>
                                 ★
                               </span>
                             )}
@@ -3145,7 +3259,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                             onClick={() => workPass(p)}
                             title={workTitle}
                           >
-                            ▶ Work this pass
+                            {t('sat.work.label')}
                           </button>
                         </div>
                       )
@@ -3163,7 +3277,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 and its live count is the discoverability mechanism: a number
                 that moves is what peripheral vision catches. */}
             <div className="sats-sched-strip">
-              <h2>Schedule — favorites, next {SCHEDULE_HOURS} h</h2>
+              <h2>{t('sat.schedule.head', { hours: SCHEDULE_HOURS })}</h2>
               <button
                 type="button"
                 className="sats-more-chip"
@@ -3172,9 +3286,9 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                   setDiscOpen(!discoveryOpen)
                   if (discoveryOpen) setDiscAll(false)
                 }}
-                title="Birds outside your ★ set flying a workable pass (10° peak or better) over your grid in the next 24 h — one row per bird, its best pass. Star one to move it into your schedule."
+                title={t('sat.discovery.chip.title')}
               >
-                Other birds overhead · {discovery.length} workable · 24 h{' '}
+                {t('sat.discovery.chip', { count: discovery.length })}{' '}
                 {discoveryOpen ? '▴' : '▾'}
               </button>
             </div>
@@ -3183,16 +3297,16 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
               <thead>
                 <tr>
                   <th>★</th>
-                  {schedTh('Bird', 'bird')}
-                  {schedTh('AOS local', 'aos')}
+                  {schedTh(t('sat.schedule.column.bird'), 'bird')}
+                  {schedTh(t('sat.schedule.column.aos'), 'aos')}
                   <th></th>
-                  {schedTh('Max el', 'el')}
-                  {schedTh('Dur', 'dur')}
-                  <th>Path</th>
-                  {schedTh('Status', 'status')}
+                  {schedTh(t('sat.schedule.column.maxEl'), 'el')}
+                  {schedTh(t('sat.schedule.column.dur'), 'dur')}
+                  <th>{t('sat.schedule.column.path')}</th>
+                  {schedTh(t('sat.schedule.column.status'), 'status')}
                   {/* Phase 2: a SORT KEY the operator clicks — never a silent
                       reorder. Default order stays soonest-AOS. */}
-                  {schedTh('Needed', 'need')}
+                  {schedTh(t('sat.schedule.column.needed'), 'need')}
                   <th>⏰</th>
                   {/* The work column renders for EVERYONE — the rotor gate on
                       this column hid the entire tracking arc from the
@@ -3208,12 +3322,14 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                   <tr className="sats-inline-empty">
                     <td colSpan={11}>
                       {favs.size === 0
-                        ? 'No ★ birds yet — star a bird (☆ in the rows below, or in the Birds list) and its passes, alarms and needed-grid chips appear here.'
-                        : `No upcoming passes for your favorites in the next ${SCHEDULE_HOURS} h${
-                            view == null
-                              ? ' — waiting for orbital elements (first fetch needs the network once)'
-                              : ' (birds whose elements are older than 30 days are excluded until a refresh)'
-                          }.`}
+                        ? t('sat.schedule.empty.noFavs')
+                        : t('sat.schedule.empty.noPasses', {
+                            hours: SCHEDULE_HOURS,
+                            why:
+                              view == null
+                                ? t('sat.schedule.empty.noElements')
+                                : t('sat.schedule.empty.excluded'),
+                          })}
                     </td>
                   </tr>
                 )}
@@ -3234,7 +3350,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                             e.stopPropagation()
                             onToggleFav(p.name, p.norad)
                           }}
-                          title="Unstar removes the bird from this schedule and disarms its alarm"
+                          title={t('sat.schedule.unstar.title')}
                         >
                           ★
                         </button>
@@ -3251,9 +3367,15 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                       <td>{Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))} m</td>
                       <td>{wind8(p.aosAzDeg)}→{wind8(p.losAzDeg)}</td>
                       <td>
-                        {p.status === 'alive' && <span className="sat-chip alive" title="SatNOGS community reports it transmitting">alive</span>}
+                        {p.status === 'alive' && (
+                          <span className="sat-chip alive" title={t('sat.schedule.alive.title')}>
+                            {t('sat.schedule.alive.label')}
+                          </span>
+                        )}
                         {(p.status === 'dead' || p.status === 're-entered') && (
-                          <span className="sat-chip dead" title="SatNOGS reports it silent/re-entered — geometry still shown, working it is unlikely">{p.status}</span>
+                          <span className="sat-chip dead" title={t('sat.schedule.dead.title')}>
+                            {p.status}
+                          </span>
                         )}
                       </td>
                       {/* Earn chips: absent when the pass earns nothing. */}
@@ -3267,7 +3389,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                             e.stopPropagation()
                             onToggleAlarm(p.name)
                           }}
-                          title={armed ? 'Alarm armed — click to disarm' : 'Wake me before this bird rises (per-bird, survives restarts)'}
+                          title={armed ? t('sat.schedule.alarm.on') : t('sat.schedule.alarm.off')}
                         >
                           ⏰
                         </button>
@@ -3280,7 +3402,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                               setSatAlarmLead(p.name, Number(e.target.value))
                               setAlarms(satAlarmMap())
                             }}
-                            title="Lead time before AOS"
+                            title={t('sat.schedule.alarm.lead.title')}
                           >
                             {[5, 15, 30, 60].map((m) => (
                               <option key={m} value={m}>−{m}m</option>
@@ -3293,7 +3415,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                           <button
                             className="sat-track on"
                             onClick={(e) => { e.stopPropagation(); disarmTrack() }}
-                            title="Stop this track"
+                            title={t('sat.schedule.stop.title')}
                           >
                             ■
                           </button>
@@ -3306,7 +3428,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                             }}
                             title={workTitle}
                           >
-                            ▶ Work
+                            {t('sat.work.short')}
                           </button>
                         )}
                       </td>
@@ -3327,10 +3449,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 {discoveryOpen && (
                   <>
                     <tr className="sats-more-bar">
-                      <td colSpan={11}>
-                        Other birds — each row is that bird's best pass in the
-                        next 24 h · ☆ moves it into your schedule
-                      </td>
+                      <td colSpan={11}>{t('sat.discovery.bar')}</td>
                     </tr>
                     {discShown.map((b) => {
                       const p = b.best
@@ -3348,7 +3467,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                                 e.stopPropagation()
                                 onToggleFav(b.name, b.norad)
                               }}
-                              title="Star to move this bird into your schedule above — it gains needed-grid chips, the pass alarm and the 48 h view"
+                              title={t('sat.discovery.star.title')}
                             >
                               ★
                             </button>
@@ -3358,13 +3477,16 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                             {pill && <span className="sat-mode-pill">{pill}</span>}
                             <span
                               className="sats-disc-note"
-                              title="Workable passes (10° peak or better) in the next 24 h"
+                              title={t('sat.discovery.workable.title')}
                             >
-                              {b.workable} in 24 h
+                              {t('sat.discovery.workable', { count: b.workable })}
                             </span>
                             {b.altKm != null && (
-                              <span className="sats-disc-note" title="Current altitude">
-                                {Math.round(b.altKm)} km up
+                              <span
+                                className="sats-disc-note"
+                                title={t('sat.discovery.altitude.title')}
+                              >
+                                {t('sat.discovery.altitude', { km: Math.round(b.altKm) })}
                               </span>
                             )}
                           </td>
@@ -3375,8 +3497,8 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                               the duration is then a lower bound, marked +. */}
                           <td>
                             {p.aosClamped ? (
-                              <span title="Rose before the 6 h scan window — its true rise time is unknown here">
-                                already up
+                              <span title={t('sat.discovery.clamped.title')}>
+                                {t('sat.why.alreadyUp')}
                               </span>
                             ) : (
                               hhmm(p.aosUnix)
@@ -3418,7 +3540,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                               }}
                               title={workTitle}
                             >
-                              ▶ Work
+                              {t('sat.work.short')}
                             </button>
                           </td>
                         </tr>
@@ -3431,17 +3553,14 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                               never hide the best thing — and the remainder is
                               always on screen. */}
                           <button type="button" onClick={() => setDiscAll(true)}>
-                            show all {discovery.length} ▾
+                            {t('sat.discovery.showAll', { count: discovery.length })}
                           </button>
                         </td>
                       </tr>
                     )}
                     {discovery.length === 0 && (
                       <tr className="sats-inline-empty">
-                        <td colSpan={11}>
-                          no other birds with a workable pass (10° peak or better) over your
-                          grid in the next 24 h
-                        </td>
+                        <td colSpan={11}>{t('sat.discovery.empty')}</td>
                       </tr>
                     )}
                   </>
@@ -3465,7 +3584,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
               an unusual number of transmitters should show up. */}
           <section className="sats-radio">
             <div className="sats-radio-cell">
-              <h2 className="sats-radio-title">Frequencies</h2>
+              <h2 className="sats-radio-title">{t('sat.radio.frequencies.head')}</h2>
               {detailTrack ? (
                 <>
                   <DopplerReadout
@@ -3485,14 +3604,12 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 </>
               ) : (
                 <p className="sats-radio-idle">
-                  {detail == null
-                    ? 'Open a bird to see its transponders; arm a pass and the live dial, the Doppler shift and your place in the passband read out here.'
-                    : 'Arm a pass (▶ Work this pass) and the live dial, the Doppler shift and your place in the passband read out here.'}
+                  {detail == null ? t('sat.radio.idle.noBird') : t('sat.radio.idle.noTrack')}
                 </p>
               )}
             </div>
             <div className="sats-radio-cell">
-              <h2 className="sats-radio-title">Transponder</h2>
+              <h2 className="sats-radio-title">{t('sat.transponder.head')}</h2>
               {detail != null && detail.transmitters.length > 0 ? (
                 <>
                   {/* THE TRANSPONDER CHOOSER — the most consequential control in
@@ -3506,7 +3623,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                     className="sat-tp-list"
                     data-testid="sat-tp-list"
                     role="radiogroup"
-                    aria-label="Transponder — where Doppler puts the dial"
+                    aria-label={t('sat.transponder.list.aria')}
                     ref={pickerRef}
                   >
                     <label className="sat-tp-card">
@@ -3515,13 +3632,13 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                         name="sat-transponder"
                         checked={heldIndex == null}
                         onChange={() => pickTransponder(detail.name, null)}
-                        aria-label="Work no transponder — leave the dial to me"
+                        aria-label={t('sat.transponder.none.aria')}
                       />
-                      <span className="sat-tp-desc">None — leave the dial to me</span>
+                      <span className="sat-tp-desc">{t('sat.transponder.none.label')}</span>
                     </label>
-                    {aliveShown.map(({ t, aliveIndex }) => (
+                    {aliveShown.map(({ t: tx, aliveIndex }) => (
                         <label
-                          key={aliveIndex ?? t.description}
+                          key={aliveIndex ?? tx.description}
                           className={`sat-tp-card${heldIndex === aliveIndex ? ' held' : ''}`}
                         >
                           <input
@@ -3530,42 +3647,39 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                             checked={heldIndex === aliveIndex}
                             onChange={() =>
                               aliveIndex != null &&
-                              pickTransponder(detail.name, aliveIndex, t.description)
+                              pickTransponder(detail.name, aliveIndex, tx.description)
                             }
-                            aria-label={`Work ${t.description}`}
+                            aria-label={t('sat.transponder.card.aria', {
+                              description: tx.description,
+                            })}
                           />
                           <span className="sat-tp-main">
                             <span className="sat-tp-desc">
-                              {t.description}
-                              {t.invert && (
-                                <span
-                                  className="sat-invert"
-                                  title="Inverting linear transponder: tune the downlink UP and your uplink goes DOWN, and the sidebands swap (LSB up, USB down)."
-                                >
-                                  INVERTING
+                              {tx.description}
+                              {tx.invert && (
+                                <span className="sat-invert" title={t('sat.inverting.title')}>
+                                  {t('sat.inverting.label')}
                                 </span>
                               )}
-                              {kindWord(t.kind) && (
-                                <span className="sat-tp-kind">{kindWord(t.kind)}</span>
+                              {kindWord(tx.kind) && (
+                                <span className="sat-tp-kind">{kindWord(tx.kind)}</span>
                               )}
-                              {t.downlinkMode == null && t.uplinkMode == null && t.mode != null && (
-                                <span className="sat-tp-kind">{t.mode}</span>
-                              )}
+                              {tx.downlinkMode == null &&
+                                tx.uplinkMode == null &&
+                                tx.mode != null && <span className="sat-tp-kind">{tx.mode}</span>}
                             </span>
                             <span className="sat-tp-legs">
                               <span className="sat-tp-leg">
-                                ↓ <b>{fmtLeg(t.downlinkLowHz, t.downlinkHighHz)}</b>
-                                {t.downlinkMode ? ` ${t.downlinkMode}` : ''}
+                                ↓ <b>{fmtLeg(tx.downlinkLowHz, tx.downlinkHighHz)}</b>
+                                {tx.downlinkMode ? ` ${tx.downlinkMode}` : ''}
                               </span>
                               <span className="sat-tp-leg">
-                                ↑ <b>{fmtLeg(t.uplinkLowHz, t.uplinkHighHz)}</b>
-                                {t.uplinkMode ? ` ${t.uplinkMode}` : ''}
+                                ↑ <b>{fmtLeg(tx.uplinkLowHz, tx.uplinkHighHz)}</b>
+                                {tx.uplinkMode ? ` ${tx.uplinkMode}` : ''}
                               </span>
                             </span>
                             {heldIndex === aliveIndex && tuned?.auto && (
-                              <span className="sat-tp-auto">
-                                picked for you — change it here if this is not the one
-                              </span>
+                              <span className="sat-tp-auto">{t('sat.transponder.auto')}</span>
                             )}
                           </span>
                         </label>
@@ -3575,33 +3689,31 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                         type="button"
                         className="sat-tp-more"
                         onClick={() => setTpAll(true)}
-                        title="Show every workable transmitter SatNOGS lists for this bird"
+                        title={t('sat.transponder.showAll.title')}
                       >
-                        show all {aliveRows.length} ▾
+                        {t('sat.transponder.showAll', { count: aliveRows.length })}
                       </button>
                     )}
                     {tpRows.some((r) => !r.t.alive) &&
                       (showDead ? (
                         tpRows
                           .filter((r) => !r.t.alive)
-                          .map(({ t }, k) => (
+                          .map(({ t: tx }, k) => (
                             <div key={`dead-${k}`} className="sat-tp-card off">
                               <span className="sat-tp-deadmark" aria-hidden>
                                 ○
                               </span>
                               <span className="sat-tp-main">
                                 <span className="sat-tp-desc">
-                                  {t.description}
-                                  <span className="sat-tp-kind">
-                                    reported dead (SatNOGS) — not workable
-                                  </span>
+                                  {tx.description}
+                                  <span className="sat-tp-kind">{t('sat.transponder.dead')}</span>
                                 </span>
                                 <span className="sat-tp-legs">
                                   <span className="sat-tp-leg">
-                                    ↓ <b>{fmtLeg(t.downlinkLowHz, t.downlinkHighHz)}</b>
+                                    ↓ <b>{fmtLeg(tx.downlinkLowHz, tx.downlinkHighHz)}</b>
                                   </span>
                                   <span className="sat-tp-leg">
-                                    ↑ <b>{fmtLeg(t.uplinkLowHz, t.uplinkHighHz)}</b>
+                                    ↑ <b>{fmtLeg(tx.uplinkLowHz, tx.uplinkHighHz)}</b>
                                   </span>
                                 </span>
                               </span>
@@ -3612,9 +3724,11 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                           type="button"
                           className="sat-tp-more"
                           onClick={() => setShowDead(true)}
-                          title="Transmitters SatNOGS reports dead/re-entered — shown for the record, never workable"
+                          title={t('sat.transponder.showDead.title')}
                         >
-                          show {tpRows.filter((r) => !r.t.alive).length} inactive
+                          {t('sat.transponder.showDead', {
+                            count: tpRows.filter((r) => !r.t.alive).length,
+                          })}
                         </button>
                       ))}
                   </div>
@@ -3630,35 +3744,34 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                     <div className="sat-tp-txmode" data-testid="sat-tp-txmode">
                       {detailTrack != null ? (
                         detailTrack.txMode != null ? (
-                          <>
-                            TX sideband: the uplink (split) VFO is set to{' '}
-                            <b>{detailTrack.txMode}</b> — the downlink stays{' '}
-                            {heldT.downlinkMode} while Doppler runs this pass.
-                          </>
+                          <T
+                            k="sat.transponder.txMode.commanded"
+                            tags={{ b: <b /> }}
+                            vals={{
+                              tx: detailTrack.txMode,
+                              down: heldT.downlinkMode ?? '',
+                            }}
+                          />
                         ) : (
                           // The component KNOWS the cause — name the live one
                           // instead of an enumeration whose first entry
                           // ("Doppler off") is false in the default state, one
                           // row under "correcting the downlink".
-                          <>
-                            This bird lists {txSwapMode} up / {heldT.downlinkMode} down
-                            (SatNOGS) — the TX sideband is not being commanded for this
-                            pass (
-                            {!dopplerOn
-                              ? 'Doppler correction is off'
+                          t('sat.transponder.txMode.notCommanded', {
+                            up: txSwapMode,
+                            down: heldT.downlinkMode ?? '',
+                            why: !dopplerOn
+                              ? t('sat.transponder.txMode.why.dopplerOff')
                               : !detailTrack.dopplerUplink
-                                ? 'Doppler is not driving the uplink on this radio'
-                                : 'the legs share a sideband, or the mode is yours'}
-                            ).
-                          </>
+                                ? t('sat.transponder.txMode.why.notDriving')
+                                : t('sat.transponder.txMode.why.shared'),
+                          })
                         )
                       ) : (
-                        <>
-                          TX sideband: this bird runs {txSwapMode} up /{' '}
-                          {heldT.downlinkMode} down (SatNOGS). Once your uplink mapping is
-                          confirmed for the radio in use, the TX (split) VFO is set to
-                          match while a tracked pass runs.
-                        </>
+                        t('sat.transponder.txMode.forecast', {
+                          up: txSwapMode,
+                          down: heldT.downlinkMode ?? '',
+                        })
                       )}
                     </div>
                   )}
@@ -3672,33 +3785,32 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                   {heldIndex != null && (
                     <div className={`sat-tp-state${dopplerLive ? '' : ' warn'}`}>
                       {!dopplerOn
-                        ? 'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.'
+                        ? t('sat.transponder.state.dopplerOff')
                         : vfoMap === 'uplink-only'
                           ? heldSimplex || heldT?.uplinkLowHz == null
-                            ? 'Your uplink-only mapping has nothing to drive here — this bird has no separate uplink. Nothing is being tuned.'
+                            ? t('sat.uplinkOnly.noLeg')
                             : detailTrack != null
                               ? detailTrack.dopplerUplink
-                                ? 'Your uplink-only mapping keeps the dial yours — only the transmit VFO is tuned.'
-                                : 'Your uplink-only mapping is not confirmed for this radio — nothing is being tuned. Confirm it on the pass rail.'
-                              : 'Your uplink-only mapping keeps the dial yours — the transmit VFO is tuned once it is confirmed for the radio in use and a tracked pass runs.'
-                          : 'Doppler tunes this transponder while auto-track is following the pass.'}
+                                ? t('sat.transponder.state.uplinkOnly.driving')
+                                : t('sat.transponder.state.uplinkOnly.unconfirmed')
+                              : t('sat.transponder.state.uplinkOnly.pending')
+                          : t('sat.transponder.state.tuning')}
                     </div>
                   )}
                   {tuned && tuned.name !== detail.name && (
                     <div className="sat-tp-state warn">
-                      Doppler holds a transponder on {tuned.name}. Picking one here takes the dial
-                      from it.
+                      {t('sat.transponder.otherBird', { name: tuned.name })}
                     </div>
                   )}
-                  <div className="sats-credit">frequencies & status: SatNOGS DB (CC-BY-SA 4.0)</div>
+                  <div className="sats-credit">{t('sat.credit.satnogs')}</div>
                 </>
               ) : (
                 <div className="sats-credit">
                   {detail == null
-                    ? 'Open a bird to choose which transponder Doppler puts the dial on.'
+                    ? t('sat.credit.noBird')
                     : detail.dataFetchedAt == null
-                    ? 'no transponder data yet — fetched from SatNOGS DB when online'
-                    : 'no transmitters listed for this bird (SatNOGS DB)'}
+                    ? t('sat.credit.noData')
+                    : t('sat.credit.noTransmitters')}
                 </div>
               )}
             </div>
@@ -3738,11 +3850,13 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 />
               ) : nextBeyond ? (
                 <div className="sat-passline">
-                  next pass over you rises {hhmm(nextBeyond.aosUnix)} (
-                  {countdown(nextBeyond, nowSecs)})
+                  {t('sat.passline.beyond', {
+                    time: hhmm(nextBeyond.aosUnix),
+                    countdown: countdown(nextBeyond, nowSecs),
+                  })}
                 </div>
               ) : (
-                <div className="sat-passline">no pass over you in the next 24 h</div>
+                <div className="sat-passline">{t('sat.passline.none')}</div>
               )}
               <div
                 /* The ground-track globe, PROMOTED to the dome's side (it used
@@ -3846,25 +3960,22 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
               /* Clamped to ONE line in styles.css (`line-clamp: 1`) — the full
                  sentence stays in the DOM for a screen reader, and is here for a
                  pointer. */
-              title="Logs an ordinary contact from your dial, exactly as the Phone and CW log panels do. It is NOT tagged as a satellite QSO: Nexus does not write the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward neither LoTW satellite credit nor Nexus's own satellite totals. Add BOTH fields yourself if you want that credit — one without the other is refused at signing, and on 2 m the grid otherwise counts toward your terrestrial VUCC, which a satellite contact does not earn."
+              title={t('sat.log.note.title')}
             >
-              Logs an ordinary contact from your dial, exactly as the Phone and CW log
-              panels do. It is <b>not</b> tagged as a satellite QSO: Nexus does not write
-              the ADIF PROP_MODE and SAT_NAME fields yet, so the contact counts toward
-              neither LoTW satellite credit <b>nor Nexus&rsquo;s own satellite totals</b>.
-              Add <b>both</b> fields yourself if you want that credit — one without the
-              other is refused at signing, and on 2 m the grid otherwise counts toward
-              your terrestrial VUCC, which a satellite contact does not earn.
+              {/* ONE sentence-set with its emphasis as markers: the four <b>
+                  spans sit mid-sentence, and a language that orders the clause
+                  differently cannot be served by gluing five fragments. */}
+              <T k="sat.log.note" tags={{ b: <b /> }} />
             </p>
           </div>
         )}
 
         <section className="sats-favmgr">
-          <h2>Birds ({allBirds.length})</h2>
+          <h2>{t('sat.birds.head', { count: allBirds.length })}</h2>
           <input
             className="sats-search"
             type="text"
-            placeholder="search…"
+            placeholder={t('sat.birds.search.placeholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             spellCheck={false}
@@ -3884,7 +3995,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                   <button
                     className={`sat-star${isSatChased(b.name, b.norad, chaseKeys) ? ' on' : ''}`}
                     onClick={() => onToggleFav(b.name, b.norad)}
-                    title="★ favorites drive the schedule, the map emphasis, and alarms"
+                    title={t('sat.birds.star.title')}
                   >
                     ★
                   </button>
@@ -3908,17 +4019,14 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                       elements has no subpoint and so shows nothing at all —
                       never 0 km. */}
                   {b.altKm != null && (
-                    <span
-                      className="sat-row-alt"
-                      title="Altitude — how far above the earth the bird is right now. Not range (its distance from you)."
-                    >
-                      alt {Math.round(b.altKm)} km
+                    <span className="sat-row-alt" title={t('sat.birds.alt.title')}>
+                      {t('sat.birds.alt', { km: Math.round(b.altKm) })}
                     </span>
                   )}
                 </li>
               )
             })}
-            {view == null && <li className="sats-empty">no elements yet — first fetch needs the network once</li>}
+            {view == null && <li className="sats-empty">{t('sat.birds.empty')}</li>}
           </ul>
         </section>
       </aside>
@@ -3933,10 +4041,13 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
         onOpenChange={(o) => {
           if (!o) setArmConfirm(null)
         }}
-        title="Stale orbital elements"
+        title={t('sat.armConfirm.title')}
         description={
           armConfirm
-            ? `${armConfirm.pass.name}: elements are ${Math.round(armConfirm.ageDays)} days old — pointing and Doppler will be off.`
+            ? t('sat.armConfirm.body', {
+                name: armConfirm.pass.name,
+                days: Math.round(armConfirm.ageDays),
+              })
             : ''
         }
       >
@@ -3958,7 +4069,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
               void refreshTles().then(() => workPass(c.pass))
             }}
           >
-            {tleRefreshing ? 'Refreshing…' : 'Refresh elements'}
+            {tleRefreshing ? t('sat.armConfirm.refreshing') : t('sat.armConfirm.refresh')}
           </button>
           <button
             type="button"
@@ -3968,10 +4079,10 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
               c?.proceed()
             }}
           >
-            Arm anyway
+            {t('sat.armConfirm.armAnyway')}
           </button>
           <button type="button" onClick={() => setArmConfirm(null)}>
-            Cancel
+            {t('sat.armConfirm.cancel')}
           </button>
         </div>
       </Dialog>

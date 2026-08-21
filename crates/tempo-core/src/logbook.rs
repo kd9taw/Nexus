@@ -5,6 +5,31 @@
 //! Stored as an ADIF file the operator can import into any logger. This is the
 //! general logbook for Chat/QSO contacts — Field Day keeps its own contest log
 //! ([`crate::fieldday`]).
+//!
+//! # The log is the one thing here that cannot be regenerated
+//!
+//! Two safety copies, and they answer different questions:
+//!
+//! - **The anchor** — `log.adi.bak`, beside the log, written by [`Logbook::backup_once`] the
+//!   first time a non-empty log is loaded and **never touched again**. It answers "what did
+//!   this log look like before this build ever wrote to it", which is the only question that
+//!   helps when the PARSER is what lost the records. It is never rotated and never deleted.
+//! - **The ring** — dated snapshots in a `backups/` folder beside the log, taken on the SAVE
+//!   path by [`Logbook::snapshot_before_save`]. It answers "what did the log look like last
+//!   week", and it is bounded three ways so it cannot grow without limit.
+//!
+//! **The snapshot trigger is SAVE, never LOAD, and that is deliberate.** [`Logbook::save`]
+//! already rewrites the whole file, so one extra copy costs one more pass over a file the OS
+//! is touching anyway — and launch pays nothing. Snapshotting at load time would put a
+//! whole-file copy of a multi-MB log on the startup path, which is exactly what the operator
+//! ruled out (2026-08: "a big log must not make launch slow"). `load` writes at most the
+//! one-time anchor and, after that, nothing at all.
+//!
+//! **Why the snapshot is a COPY and not a hard link.** A link would be free, but
+//! [`Logbook::append`] opens the log with `.append(true)` and mutates it **in place** — a
+//! hard link is the same inode, so it would follow every later append instead of freezing
+//! the bytes, and the "snapshot" would silently be a second name for the live file. Do not
+//! "optimise" the copy into a link.
 
 use std::path::Path;
 
@@ -775,11 +800,31 @@ impl Logbook {
     /// understands every third-party ADIF dialect, so this is the backstop: the FIRST time this
     /// build loads a non-empty log, the raw bytes are copied verbatim to a sibling `.bak` that
     /// is never overwritten. Whatever the parser did, the original survives.
+    ///
+    /// # Why this reads BYTES, not a String (the Greek-Windows report, 2026-08)
+    ///
+    /// `read_to_string` fails on a file that is not valid UTF-8 — and a `log.adi` written by a
+    /// Greek/German/French Windows logger holds CP1253/CP1252 bytes in `NAME`, `QTH` and
+    /// `COMMENT` routinely. `unwrap_or_default()` turned that `Err` into `""`: the logbook
+    /// loaded as EMPTY, [`backup_once`](Self::backup_once) skipped (an empty body has nothing
+    /// to lose), and the next [`save`](Self::save) rewrote the file from zero records. The
+    /// operator's whole log, gone, with no copy — the single worst failure this module can
+    /// have. So: read bytes, convert with [`String::from_utf8_lossy`], and never fail a load
+    /// over an encoding.
+    ///
+    /// The conversion is lossy on purpose and it is bounded: the ADIF structure is ASCII, so
+    /// every RECORD survives. Only the offending field's text degrades — `<NAME:7>` counts
+    /// BYTES, and each bad byte widens to a 3-byte `U+FFFD`, so the length prefix now
+    /// under-runs the value and the field reads back short or empty. The parser resyncs at the
+    /// next `<` (which can never appear inside a UTF-8 multi-byte sequence), so the desync
+    /// cannot spill into the following record. Losing the spelling of a name is a paper cut;
+    /// losing the QSO is not. The anchor `.bak` keeps the original bytes either way, so nothing
+    /// is destroyed.
     pub fn load(path: &Path) -> Self {
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        Self::backup_once(path, &text);
+        let bytes = std::fs::read(path).unwrap_or_default();
+        Self::backup_once(path, &bytes);
         Self {
-            records: parse_adif(&text),
+            records: parse_adif(&String::from_utf8_lossy(&bytes)),
         }
     }
 
@@ -788,24 +833,164 @@ impl Logbook {
     /// ever shrink the file), and never fails the load: a backup that can't be written is logged
     /// and ignored, because refusing to open the logbook would be a worse failure than a missing
     /// safety copy.
-    fn backup_once(path: &Path, text: &str) {
+    ///
+    /// Takes BYTES, and every test here is on bytes: gating on a decoded `&str` is what made a
+    /// non-UTF-8 log look empty and skip its own backup (see [`load`](Self::load)).
+    fn backup_once(path: &Path, bytes: &[u8]) {
         // Protect only a file that actually carries records. The body is whatever follows
-        // `<EOH>` (the whole text when there is no header) — the same split `parse_adif` uses,
+        // `<EOH>` (the whole file when there is no header) — the same split `parse_adif` uses,
         // so "has something to lose" here means exactly "the parser has something to read". A
-        // missing file (read → "") and a header-only log both have an empty body and skip.
-        let body = match text.to_ascii_uppercase().find("<EOH>") {
-            Some(i) => &text[i + 5..],
-            None => text,
-        };
-        if body.trim().is_empty() {
+        // missing file (read → empty) and a header-only log both have an empty body and skip.
+        // "Empty" is ASCII whitespace only: a byte that is not valid UTF-8 is not whitespace,
+        // it is content, and it is the case that must NOT skip.
+        let body = body_after_eoh(bytes);
+        if body.iter().all(|b| b.is_ascii_whitespace()) {
             return;
         }
         let bak = path.with_extension("adi.bak");
         if bak.exists() {
             return; // earliest = most complete; do not clobber with a later (possibly truncated) file
         }
-        if let Err(e) = std::fs::write(&bak, text) {
+        if let Err(e) = std::fs::write(&bak, bytes) {
             eprintln!("tempo: could not back up logbook to {}: {e}", bak.display());
+        }
+    }
+
+    /// Take a dated snapshot of the log **as it is on disk right now**, into a `backups/`
+    /// folder beside it, and rotate the folder back inside its bounds. Called from
+    /// [`save`](Self::save) with the byte length the save is ABOUT to write.
+    ///
+    /// Everything here is best-effort: every failure path returns quietly, because a backup
+    /// that cannot be written must never stop the operator saving their log.
+    ///
+    /// # When a snapshot is taken
+    ///
+    /// - **Unconditionally, before a save that SHRINKS the file.** This is the valuable one:
+    ///   shrinking is precisely the failure that lost the operator's oldest QSOs (see
+    ///   `a_lossy_load_then_save_cannot_destroy_the_original`), and a calendar rule would sail
+    ///   straight past it — the truncating save usually lands on a day that already has its
+    ///   snapshot.
+    /// - **Otherwise at most once per UTC calendar day**, at the first qualifying save of that
+    ///   day, and only when the bytes actually differ from the newest snapshot we hold.
+    ///
+    /// ## Why BYTES are the shrink signal, not record count
+    ///
+    /// Record count would be the more direct statement of "QSOs disappeared", but it is not
+    /// honestly available here: we hold the new count in memory, and the OLD count could only
+    /// come from re-parsing the file on disk — on **every save**, of a log that reaches tens of
+    /// thousands of QSOs, and through the very parser whose lossiness is the hazard we are
+    /// insuring against. Byte length comes from one `stat`, costs nothing, and is independent
+    /// of the parser. It is also strictly wider: every dropped record shrinks the file (records
+    /// are never empty), and it additionally catches field-level loss that leaves the count
+    /// alone. The cost is the occasional false positive — a benign edit that shortens a
+    /// COMMENT — which spends one snapshot out of a bounded ring.
+    ///
+    /// # The three bounds
+    ///
+    /// `keep` most recent snapshots, a `total_cap` byte ceiling over the folder, and the
+    /// one-per-day rule that limits how fast the ring can turn over. Oldest go first. The
+    /// ANCHOR is not in this folder at all — it is `log.adi.bak`, beside the log — so "the
+    /// anchor is never eligible for rotation" holds by construction rather than by a check
+    /// someone could delete.
+    fn snapshot_before_save(path: &Path, new_len: u64, now_unix: u64, keep: usize, total_cap: u64) {
+        // No file yet (first ever save) or an empty one: nothing to preserve.
+        let Ok(meta) = std::fs::metadata(path) else {
+            return;
+        };
+        let cur_len = meta.len();
+        if cur_len == 0 {
+            return;
+        }
+        let shrinking = new_len < cur_len;
+
+        let dir = match path.parent() {
+            Some(p) => p.join("backups"),
+            None => return,
+        };
+        // Snapshot names are prefixed with the LOG's own stem, so a folder holding two logs
+        // keeps two independent rings — and so rotation can never reach a file it did not
+        // write.
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "log".to_string());
+        let (y, mo, d, h, mi, s) = datetime_utc(now_unix);
+        let day = format!("{y:04}{mo:02}{d:02}");
+
+        let mut snaps = Self::snapshot_names(&dir, &stem);
+        if !shrinking {
+            // One per calendar day…
+            let today = format!("{stem}-{day}-");
+            if snaps.iter().any(|n| n.starts_with(&today)) {
+                return;
+            }
+            // …and only if the log has actually changed since the newest one we hold.
+            // Length first (a `stat` each); only equal lengths pay for a byte compare, and
+            // this whole branch runs at most once a day.
+            if let Some(newest) = snaps.last() {
+                if same_file_contents(path, &dir.join(newest)) {
+                    return;
+                }
+            }
+        }
+
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let name = if shrinking {
+            // A distinct suffix so the operator can see WHICH copy was taken because the log
+            // was about to get smaller — that is the one they will want.
+            format!("{stem}-{day}-{h:02}{mi:02}{s:02}-shrink.adi")
+        } else {
+            format!("{stem}-{day}-{h:02}{mi:02}{s:02}.adi")
+        };
+        if std::fs::copy(path, dir.join(&name)).is_err() {
+            return;
+        }
+        snaps.push(name);
+        Self::rotate_snapshots(&dir, snaps, keep, total_cap);
+    }
+
+    /// The snapshot file names in `dir` for the log named `stem`, oldest first. The name
+    /// carries `YYYYMMDD-HHMMSS`, so lexicographic order IS chronological order — deliberately
+    /// not mtime, which a copy tool or a restore can rewrite.
+    fn snapshot_names(dir: &Path, stem: &str) -> Vec<String> {
+        let prefix = format!("{stem}-");
+        let mut names: Vec<String> = match std::fs::read_dir(dir) {
+            Ok(rd) => rd
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(&prefix) && n.ends_with(".adi"))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        names.sort();
+        names
+    }
+
+    /// Drop the oldest snapshots until the folder is inside BOTH bounds. Best-effort.
+    fn rotate_snapshots(dir: &Path, snaps: Vec<String>, keep: usize, total_cap: u64) {
+        let mut live: Vec<(String, u64)> = snaps
+            .into_iter()
+            .map(|n| {
+                let len = std::fs::metadata(dir.join(&n))
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                (n, len)
+            })
+            .collect();
+        let drop_oldest = |live: &mut Vec<(String, u64)>| {
+            let (name, _) = live.remove(0);
+            let _ = std::fs::remove_file(dir.join(name));
+        };
+        while live.len() > keep {
+            drop_oldest(&mut live);
+        }
+        // The newest snapshot is never dropped, even if it ALONE exceeds the ceiling:
+        // deleting the copy we just took to satisfy a disk-space rule would be strictly
+        // worse than being over it, and the operator would have no snapshot at all.
+        while live.len() > 1 && live.iter().map(|(_, n)| n).sum::<u64>() > total_cap {
+            drop_oldest(&mut live);
         }
     }
 
@@ -841,15 +1026,34 @@ impl Logbook {
     /// NAS log is a supported deployment — and a same-tick sibling write would
     /// otherwise be invisible.
     pub fn save(&self, path: &Path) -> std::io::Result<Option<(std::time::SystemTime, u64)>> {
+        self.save_at(path, now_unix(), BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+    }
+
+    /// [`save`](Self::save) with the clock and the backup bounds injected. The snapshot rules
+    /// are CALENDAR-day rules over a bounded ring, and a test can neither wait a day nor write
+    /// 64 MiB of fixtures to watch the ceiling bite.
+    fn save_at(
+        &self,
+        path: &Path,
+        now_unix: u64,
+        keep: usize,
+        total_cap: u64,
+    ) -> std::io::Result<Option<(std::time::SystemTime, u64)>> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
+        let body = self.adif();
+        // Snapshot the file we are about to replace, BEFORE the rename publishes the new one.
+        // This is the only trigger — load takes no snapshot, so launch stays free of it (see
+        // the module header). Best-effort by construction: it returns `()`, so nothing here can
+        // fail a save.
+        Self::snapshot_before_save(path, body.len() as u64, now_unix, keep, total_cap);
         // Per-PROCESS tmp name: two instances sharing one log.adi can each be mid-save at the
         // same instant; a fixed "log.adi.tmp" would let them interleave writes into one tmp and
         // publish a corrupted file on rename. `log.adi.<pid>.tmp` gives each its own scratch, and
         // the rename onto the final path stays atomic (last writer wins the whole file, intact).
         let tmp = path.with_extension(format!("adi.{}.tmp", std::process::id()));
-        std::fs::write(&tmp, self.adif())?;
+        std::fs::write(&tmp, &body)?;
         let stamp = std::fs::metadata(&tmp)
             .ok()
             .and_then(|m| m.modified().ok().map(|t| (t, m.len())));
@@ -1012,11 +1216,31 @@ impl Logbook {
 
     /// The whole logbook as ADIF text (header + records).
     pub fn adif(&self) -> String {
+        self.adif_in_range(None, None)
+    }
+
+    /// The logbook as ADIF, restricted to QSOs whose start time falls in
+    /// `[from_unix, to_unix]` (inclusive; either bound absent = unbounded, both
+    /// absent = the whole log, byte-identical to [`Self::adif`]). The date-range
+    /// export (#98): an operator uploading "just this weekend's activation" was
+    /// hand-editing the full file.
+    pub fn adif_in_range(&self, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
         let mut s = adif_header();
-        for r in &self.records {
+        for r in self.records_in_range(from_unix, to_unix) {
             s.push_str(&adif_record(r));
         }
         s
+    }
+
+    /// Records whose start time falls in `[from, to]` (inclusive; absent = unbounded).
+    fn records_in_range(
+        &self,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> impl Iterator<Item = &QsoRecord> {
+        self.records.iter().filter(move |r| {
+            from.is_none_or(|f| r.when_unix >= f) && to.is_none_or(|t| r.when_unix <= t)
+        })
     }
 
     /// Every distinct operator in the log, uppercased and sorted (#25).
@@ -1068,9 +1292,14 @@ impl Logbook {
 
     /// The whole logbook as RFC-4180 CSV (for spreadsheet / quick export).
     pub fn csv(&self) -> String {
+        self.csv_in_range(None, None)
+    }
+
+    /// CSV restricted to `[from_unix, to_unix]` — same contract as [`Self::adif_in_range`].
+    pub fn csv_in_range(&self, from_unix: Option<u64>, to_unix: Option<u64>) -> String {
         let mut s =
             String::from("Call,Grid,Band,Freq_MHz,Mode,RST_Sent,RST_Rcvd,Name,QTH,Comment,DateTimeUTC,Confirmed\n");
-        for r in &self.records {
+        for r in self.records_in_range(from_unix, to_unix) {
             let (y, mo, d, h, mi, se) = datetime_utc(r.when_unix);
             let dt = format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}Z");
             let cells = [
@@ -1154,20 +1383,23 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if r.freq_mhz.is_finite() && r.freq_mhz > 0.0 {
         out.push_str(&field("FREQ", &format!("{:.6}", r.freq_mhz)));
     }
-    // Novel Tempo protocols ride as MFSK submodes. The ADIF Mode enumeration is CLOSED
-    // (47 values; "DATA" is not among them — that exists only inside LoTW), so a bare
-    // <MODE:9>TempoFast is rejected outright by TQSL: its cascade is MODE%SUBMODE ->
-    // SUBMODE -> MODE, all three miss, and the record is dropped with "Invalid MODE".
-    // SUBMODE is data type String and is explicitly NOT validated against its enumeration,
-    // so MODE=MFSK + an unregistered SUBMODE is spec-legal today with no coordination.
-    // MFSK is the honest family, not a flag of convenience: TempoFast is 4-CPM h=1/2 BT=0.3,
-    // the same continuous-phase FSK family as FST4 (4-GFSK), which already lives under MFSK.
+    // A mode whose own spelling is not in the ADIF Mode enumeration rides as its REGISTERED
+    // PARENT + a SUBMODE. The enumeration is CLOSED (47 values; "DATA" is not among them —
+    // that exists only inside LoTW), so a bare <MODE:9>TempoFast is rejected outright by
+    // TQSL: its cascade is MODE%SUBMODE -> SUBMODE -> MODE, all three miss, and the record
+    // is dropped with "Invalid MODE". SUBMODE is data type String and is explicitly NOT
+    // validated against its enumeration, so a parent MODE + an unregistered SUBMODE is
+    // spec-legal today with no coordination.
+    // The parent comes from the table, it is NOT always MFSK: MFSK is the honest family for
+    // the Tempo protocols and FT2 (TempoFast is 4-CPM h=1/2 BT=0.3, the same continuous-phase
+    // FSK family as FST4 (4-GFSK), which already lives under MFSK), but FreeDV's parent is
+    // DIGITALVOICE and the VARA family's is DYNAMIC — see `adif_submode` for #68.
     // APP_TEMPO_MODE preserves the exact protocol for round-trip fidelity into our own log;
     // it is never the primary carrier, because an APP_-only mode is invisible to every
     // uploader.
     match adif_submode(&r.mode) {
-        Some(sub) => {
-            out.push_str(&field("MODE", "MFSK"));
+        Some((parent, sub)) => {
+            out.push_str(&field("MODE", parent));
             out.push_str(&field("SUBMODE", sub));
             out.push_str(&field("APP_TEMPO_MODE", &r.mode));
         }
@@ -1361,15 +1593,23 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
 /// Emit the ADIF fields for one OTA side. SOTA uses its dedicated `*_SOTA_REF` field;
 /// every other program (POTA, WWFF) uses the generic `SIG`/`SIG_INFO` pair. Empty
 /// when not activating/hunting that side.
-/// ADIF SUBMODE for a Nexus-native protocol, or `None` for anything already in the ADIF
-/// Mode enumeration (FT8, CW, SSB, RTTY, ...), which is emitted verbatim.
+/// The ADIF `(MODE, SUBMODE)` pair for a mode whose OWN spelling is not in the ADIF Mode
+/// enumeration, or `None` for anything already in it (FT8, CW, SSB, RTTY, ...), which is
+/// emitted verbatim.
+///
+/// A PAIR, not a bare submode: the parent used to be hardcoded to `MODE=MFSK` at the call
+/// site, which is right for the Tempo protocols and FT2 and wrong for everything else.
+/// #68 (rogerloxton) is exactly that gap — FreeDV and VarAC QSOs exported as
+/// `<MODE:6>FREEDV` / `<MODE:7>VARA HF`, spellings that miss the Mode enumeration and get
+/// the record dropped by TQSL for the same reason a bare `<MODE:9>TempoFast` is, and
+/// neither of their registered parents is MFSK.
 ///
 /// Uppercase on the wire: TQSL uppercases everything anyway, ADIF enumeration values are
 /// case-insensitive, and house style for new submodes is uppercase (FST4W, SCAMP_FAST).
-fn adif_submode(mode: &str) -> Option<&'static str> {
+fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
     match mode.trim().to_ascii_uppercase().as_str() {
-        "TEMPOFAST" => Some("TEMPOFAST"),
-        "TEMPODEEP" => Some("TEMPODEEP"),
+        "TEMPOFAST" => Some(("MFSK", "TEMPOFAST")),
+        "TEMPODEEP" => Some(("MFSK", "TEMPODEEP")),
         // ⭐ FT2 RIDES HERE FOR THE SAME REASON THE TEMPO MODES DO, and leaving it
         // out would have LOST CONTACTS. FT2 is Decodium's mode, not WSJT-X's, so it
         // is in neither the ADIF MODE enumeration nor TQSL's own mode table — a
@@ -1380,7 +1620,29 @@ fn adif_submode(mode: &str) -> Option<&'static str> {
         // MFSK is the honest family here too, not a flag of convenience: FT2 is
         // 4-GFSK at 41.67 baud — the same continuous-phase FSK family as FST4,
         // which already lives under MFSK, and as FT4, whose symbol time it halves.
-        "FT2" => Some("FT2"),
+        "FT2" => Some(("MFSK", "FT2")),
+        // -- #68 (rogerloxton): FreeDV and VarAC ------------------------------------
+        // Neither program's mode name is a MODE value; both are SUBMODE values whose
+        // parent IS in the enumeration. FreeDV's parent is DIGITALVOICE (it is digital
+        // voice, and the awards/propagation side already classes FREEDV as Phone —
+        // that classification reads `QsoRecord::mode`, which this does not touch).
+        "FREEDV" | "FREE DV" => Some(("DIGITALVOICE", "FREEDV")),
+        // Every VARA variant hangs off DYNAMIC. The registered submode spellings carry
+        // the variant, and VARA FM carries its SPEED as part of the name — so an exact
+        // typed spelling gets the exact registered submode.
+        "VARA HF" | "VARAHF" => Some(("DYNAMIC", "VARA HF")),
+        "VARA FM 1200" | "VARAFM1200" => Some(("DYNAMIC", "VARA FM 1200")),
+        "VARA FM 9600" | "VARAFM9600" => Some(("DYNAMIC", "VARA FM 9600")),
+        "VARA SATELLITE" | "VARASATELLITE" | "VARA SAT" => Some(("DYNAMIC", "VARA SATELLITE")),
+        // Bare "VARA" / "VARA FM": the PARENT is certain (all of them are DYNAMIC), the
+        // registered submode is not — bare "VARA" does not say HF, FM or satellite, and
+        // "VARA FM" is registered only with a speed. Guessing one would put a bit rate
+        // nobody measured in somebody else's database, so the operator's own words ride
+        // as an unregistered SUBMODE instead: MODE=DYNAMIC is what makes the record land
+        // (TQSL's cascade falls through an unmatched SUBMODE to it), which is the same
+        // ground TEMPOFAST stands on.
+        "VARA" => Some(("DYNAMIC", "VARA")),
+        "VARA FM" | "VARAFM" => Some(("DYNAMIC", "VARA FM")),
         _ => None,
     }
 }
@@ -1488,6 +1750,59 @@ fn dedup_mode(mode: &str) -> String {
         // over-retention remains the failure this module prefers.
         "BPSK31" => "PSK31".to_string(),
         _ => m,
+    }
+}
+
+/// How many dated snapshots the `backups/` ring keeps. Ten is roughly a fortnight of an
+/// active operator's saves — long enough that "my log looks wrong" is still recoverable when
+/// they notice, short enough that the folder stays something a person can read. It is the
+/// bound that normally binds; the byte ceiling below takes over for a very large log.
+const BACKUP_KEEP: usize = 10;
+
+/// Byte ceiling over the whole `backups/` ring. The biggest logs seen here are ~26,000 QSOs
+/// at roughly 250 bytes a record — about 7 MB — so 64 MiB is ~9 snapshots of a log that
+/// large: the ceiling binds before the count does exactly when a snapshot is expensive, and
+/// the count binds first for the ordinary few-thousand-QSO log (~600 KB, well under). Either
+/// way the folder is bounded by a number, not by "prune when it feels big".
+const BACKUP_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Wall clock, Unix seconds. `0` if the system clock is before the epoch — a nonsense stamp
+/// is still a usable file name, and a backup must never fail over a clock.
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Whether two files hold the same bytes. Length first (one `stat` each), so only a genuine
+/// length match pays for the read. Any IO error answers `false` — "cannot prove they match"
+/// must fall through to taking the snapshot, never to skipping it.
+fn same_file_contents(a: &Path, b: &Path) -> bool {
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    if ma.len() != mb.len() {
+        return false;
+    }
+    match (std::fs::read(a), std::fs::read(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// Everything after the ADIF header's `<EOH>` — i.e. the QSO records — or the whole slice
+/// when there is no header. Byte-level (and case-insensitive, as ADIF tags are) so it can
+/// answer "does this file carry records?" for a log whose text is NOT valid UTF-8: that
+/// question is what [`Logbook::backup_once`] gates on, and answering it on a decoded string
+/// is what made a CP1253 log look empty and skip its own safety copy.
+fn body_after_eoh(bytes: &[u8]) -> &[u8] {
+    match bytes
+        .windows(5)
+        .position(|w| w.eq_ignore_ascii_case(b"<EOH>"))
+    {
+        Some(i) => &bytes[i + 5..],
+        None => bytes,
     }
 }
 
@@ -1763,7 +2078,17 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         })
         .or_else(|| mode_field.clone())
         .unwrap_or_default();
-    if let Some(sub) = submode.filter(|s| promoted_submode(s).is_none()) {
+    // #68 (rogerloxton): "the writer re-derives them" is only true for a submode the
+    // PROMOTION consumes. FREEDV / VARA are deliberately not promoted (see
+    // `promoted_submode`), so their SUBMODE used to park in `extra` and be emitted a
+    // SECOND time next to the one `adif_submode` regenerates — a two-SUBMODE record on
+    // the re-export of our own file. Drop a submode the writer will re-derive from the
+    // resolved mode; a foreign one (Log4OM's SSB+USB, an imported VarAC row whose MODE
+    // we keep as DYNAMIC) is untouched and still round-trips verbatim.
+    if let Some(sub) = submode.filter(|s| {
+        promoted_submode(s).is_none()
+            && !adif_submode(&mode).is_some_and(|(_, w)| w.eq_ignore_ascii_case(s.trim()))
+    }) {
         f.insert("SUBMODE".to_string(), sub);
     }
     let rec = QsoRecord {
@@ -1900,6 +2225,24 @@ pub fn datetime_utc(unix: u64) -> (i32, u32, u32, u32, u32, u32) {
     (year, m, d, h, mi, s)
 }
 
+/// Inclusive Unix bounds of one UTC calendar day, from `"YYYY-MM-DD"` (the wire format of an
+/// HTML date input) — `(00:00:00, 23:59:59)` of that day. `None` for anything unparseable,
+/// and the CALLER must treat that as an error, never as "no bound": a malformed bound that
+/// silently exported the whole log would ship a file the operator believes is filtered (#98).
+pub fn day_bounds_utc(date: &str) -> Option<(u64, u64)> {
+    let mut it = date.split('-');
+    let y: i32 = it.next()?.parse().ok()?;
+    let m: u32 = it.next()?.parse().ok()?;
+    let d: u32 = it.next()?.parse().ok()?;
+    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some((
+        unix_from_ymdhms(y, m, d, 0, 0, 0),
+        unix_from_ymdhms(y, m, d, 23, 59, 59),
+    ))
+}
+
 /// Inverse of [`datetime_utc`] — (y,m,d,h,mi,s) UTC → Unix seconds.
 fn unix_from_ymdhms(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> u64 {
     let y = y as i64 - if m <= 2 { 1 } else { 0 };
@@ -2005,6 +2348,71 @@ mod tests {
             station_callsign: None,
             extra: Vec::new(),
         }
+    }
+
+    // #98 — the date-range export. Three QSOs on three UTC days: the range keeps exactly the
+    // in-range ones (bounds inclusive, whole-day), and NO range is byte-identical to the
+    // unbounded export — the pre-#98 behavior, which callers with no dates must still get.
+    #[test]
+    fn export_range_keeps_exactly_the_in_range_days_and_no_range_is_the_whole_log() {
+        let mut lb = Logbook::new();
+        // 2026-08-10, -11, -12, each mid-day UTC.
+        let (d10, _) = day_bounds_utc("2026-08-10").unwrap();
+        let (d11, _) = day_bounds_utc("2026-08-11").unwrap();
+        let (d12, _) = day_bounds_utc("2026-08-12").unwrap();
+        lb.add(rec("W1AAA", "20m", d10 + 43_200));
+        lb.add(rec("W2BBB", "20m", d11 + 43_200));
+        lb.add(rec("W3CCC", "20m", d12 + 43_200));
+
+        // Middle day only: exactly the one QSO, not its neighbours.
+        let (from, to) = day_bounds_utc("2026-08-11").unwrap();
+        let one = lb.adif_in_range(Some(from), Some(to));
+        assert!(one.contains("W2BBB"), "the in-range QSO is kept");
+        assert!(
+            !one.contains("W1AAA") && !one.contains("W3CCC"),
+            "out-of-range days are excluded"
+        );
+
+        // From-only and to-only bound one side each.
+        let tail = lb.adif_in_range(Some(day_bounds_utc("2026-08-11").unwrap().0), None);
+        assert!(!tail.contains("W1AAA") && tail.contains("W2BBB") && tail.contains("W3CCC"));
+        let head = lb.adif_in_range(None, Some(day_bounds_utc("2026-08-11").unwrap().1));
+        assert!(head.contains("W1AAA") && head.contains("W2BBB") && !head.contains("W3CCC"));
+
+        // No range at all = the whole log, byte-identical to the unbounded export.
+        assert_eq!(lb.adif_in_range(None, None), lb.adif());
+        assert_eq!(lb.csv_in_range(None, None), lb.csv());
+
+        // CSV takes the same filter (one header line + one row).
+        let csv = lb.csv_in_range(Some(from), Some(to));
+        assert_eq!(csv.trim_end().lines().count(), 2);
+        assert!(csv.contains("W2BBB"));
+    }
+
+    // #98 — a malformed bound must parse to None (the command turns that into an ERROR;
+    // silently exporting the whole log under a filter the operator believes applied is
+    // the failure this guards).
+    #[test]
+    fn day_bounds_rejects_malformed_dates() {
+        assert!(day_bounds_utc("2026-08-11").is_some());
+        for bad in [
+            "",
+            "2026",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-08-32",
+            "2026-08-11-05",
+            "next-tuesday",
+        ] {
+            assert!(day_bounds_utc(bad).is_none(), "{bad:?} must not parse");
+        }
+        // The bounds cover the whole UTC day, inclusive.
+        let (lo, hi) = day_bounds_utc("2023-11-14").unwrap();
+        assert_eq!(hi - lo, 86_399);
+        assert!(
+            lo <= 1_700_000_000 && 1_700_000_000 <= hi,
+            "22:13:20 UTC falls inside its day"
+        );
     }
 
     #[test]
@@ -2252,6 +2660,104 @@ mod tests {
         );
         // Round-trip fidelity: our own log can still tell TempoFast from TempoDeep.
         assert!(adif.contains("APP_TEMPO_MODE"), "app field missing: {adif}");
+    }
+
+    /// #68 (rogerloxton): FreeDV and VarAC QSOs exported with an invalid ADIF mode.
+    /// The typed spelling went straight into MODE — `<MODE:6>FREEDV`, `<MODE:7>VARA HF` —
+    /// and neither is in the ADIF Mode enumeration, so TQSL drops the record exactly as it
+    /// drops a bare `<MODE:9>TempoFast`. Both have a REGISTERED parent that is NOT MFSK:
+    /// FreeDV is a DIGITALVOICE submode, the whole VARA family is DYNAMIC.
+    #[test]
+    fn freedv_and_vara_ride_as_their_registered_parent_mode_plus_submode() {
+        for (typed, parent, submode) in [
+            ("FreeDV", "DIGITALVOICE", "FREEDV"),
+            ("FREEDV", "DIGITALVOICE", "FREEDV"),
+            ("VARA HF", "DYNAMIC", "VARA HF"),
+            ("VARAHF", "DYNAMIC", "VARA HF"),
+            ("VARA FM 1200", "DYNAMIC", "VARA FM 1200"),
+            ("VARA FM 9600", "DYNAMIC", "VARA FM 9600"),
+            ("VARA SATELLITE", "DYNAMIC", "VARA SATELLITE"),
+            // No registered submode says which VARA this was, so the operator's own
+            // words ride as an unregistered SUBMODE — the parent is what makes the
+            // record land, and nothing invents a speed or a band nobody measured.
+            ("VARA", "DYNAMIC", "VARA"),
+            ("VARA FM", "DYNAMIC", "VARA FM"),
+        ] {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.mode = typed.into();
+            let adif = adif_record(&r);
+            assert!(
+                adif.contains(&field("MODE", parent)),
+                "{typed} must ride as MODE={parent}: {adif}"
+            );
+            assert!(
+                adif.contains(&field("SUBMODE", submode)),
+                "{typed} must carry SUBMODE={submode}: {adif}"
+            );
+            assert!(
+                !adif.contains(&field("MODE", typed)),
+                "{typed} must NOT emit the bare invalid mode: {adif}"
+            );
+            // Round-trip: our own file must still say what was actually worked, with the
+            // operator's own spelling intact (APP_TEMPO_MODE, same cascade the Tempo modes use).
+            let back = &parse_adif(&(adif_header() + &adif))[0];
+            assert_eq!(back.mode, typed, "the typed mode must survive our own file");
+            // ...and re-exporting that record must not emit the SUBMODE twice. FREEDV/VARA are
+            // deliberately NOT in `promoted_submode`, so without the writer-derived filter in
+            // `record_from` the parsed submode parks in `extra` and is re-emitted alongside the
+            // one the writer regenerates — a malformed two-SUBMODE record on the second export.
+            let again = adif_record(back);
+            assert_eq!(
+                again.matches("<SUBMODE:").count(),
+                1,
+                "{typed}: exactly one SUBMODE on re-export: {again}"
+            );
+        }
+    }
+
+    /// #68 guard: `adif_submode` returning a (MODE, SUBMODE) pair instead of a bare submode
+    /// sits on the path EVERY export and EVERY upload crosses, so no mode that already worked
+    /// may move a single byte. These goldens are the pre-#68 writer's exact output.
+    #[test]
+    fn existing_modes_emit_byte_identical_adif_mode_blocks() {
+        for (mode, golden) in [
+            ("FT8", "<MODE:3>FT8"),
+            ("FT4", "<MODE:3>FT4"),
+            ("CW", "<MODE:2>CW"),
+            ("SSB", "<MODE:3>SSB"),
+            ("RTTY", "<MODE:4>RTTY"),
+            ("PSK31", "<MODE:5>PSK31"),
+            ("SSTV", "<MODE:4>SSTV"),
+            ("MFSK", "<MODE:4>MFSK"),
+            ("Q65", "<MODE:3>Q65"),
+            ("WSPR", "<MODE:4>WSPR"),
+            (
+                "TempoFast",
+                "<MODE:4>MFSK<SUBMODE:9>TEMPOFAST<APP_TEMPO_MODE:9>TempoFast",
+            ),
+            (
+                "TempoDeep",
+                "<MODE:4>MFSK<SUBMODE:9>TEMPODEEP<APP_TEMPO_MODE:9>TempoDeep",
+            ),
+            ("FT2", "<MODE:4>MFSK<SUBMODE:3>FT2<APP_TEMPO_MODE:3>FT2"),
+        ] {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.mode = mode.into();
+            let adif = adif_record(&r);
+            assert!(
+                adif.contains(golden),
+                "{mode}: the mode block moved — expected {golden} in {adif}"
+            );
+            // One MODE field, and a SUBMODE exactly when the golden has one (a mode that
+            // never carried a submode must not grow one). `<APP_TEMPO_MODE:` does not
+            // contain `<MODE:`, so the count is honest.
+            assert_eq!(adif.matches("<MODE:").count(), 1, "{mode}: {adif}");
+            assert_eq!(
+                adif.matches("<SUBMODE:").count(),
+                usize::from(golden.contains("<SUBMODE:")),
+                "{mode}: {adif}"
+            );
+        }
     }
 
     #[test]
@@ -3158,6 +3664,335 @@ mod tests {
         let _ = Logbook::load(&path);
         assert!(!bak.exists(), "an empty log needs no backup");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// ★ THE GREEK-WINDOWS DATA DESTROYER (operator report, 2026-08: a Greek Windows 11
+    /// user could not launch at all, and the investigation found this on the way past).
+    ///
+    /// A `log.adi` holding ANY non-UTF-8 byte — exactly what a Greek/German/French Windows
+    /// logger writes into `NAME`/`QTH`/`COMMENT` in CP1253/CP1252 — made `read_to_string`
+    /// return `Err`. `unwrap_or_default()` turned that into `""`, so the logbook loaded as
+    /// EMPTY, `backup_once` skipped (empty body → nothing to lose), and the next `save()`
+    /// rewrote `log.adi` from zero records. Every QSO gone, silently, with no copy.
+    ///
+    /// Two things are pinned here, and both are load-bearing: the records still PARSE, and
+    /// the anchor `.bak` still gets the ORIGINAL BYTES. The fixture is real CP1253 —
+    /// `Γιώργος` / `Αθήνα` / `Καλή επιτυχία` in NAME/QTH/COMMENT of the middle QSO.
+    #[test]
+    fn a_non_utf8_log_loads_its_records_and_is_still_backed_up() {
+        // Committed fixture, not a string literal: a `&str` in this file cannot hold the
+        // invalid bytes that ARE the bug.
+        const CP1253: &[u8] = include_bytes!("../tests/fixtures/logbook-cp1253.adi");
+        // clippy's `invalid_from_utf8` fires because it can evaluate the fixture at compile
+        // time and sees the call can only ever return Err. That is EXACTLY the assertion: this
+        // is the positive control proving the fixture really is non-UTF-8, without which the
+        // rest of the test would pass just as happily against a plain-ASCII file and prove
+        // nothing. The lint is right in general and wrong here, so it is allowed at the one
+        // call site with the reason, never crate-wide. (It is a rustc lint, not a clippy one —
+        // `clippy::invalid_from_utf8` is not a real lint name and `-D warnings` rejects it.)
+        #[allow(invalid_from_utf8)]
+        let fixture_is_not_utf8 = std::str::from_utf8(CP1253).is_err();
+        assert!(
+            fixture_is_not_utf8,
+            "positive control: the fixture must actually be non-UTF-8, or this test proves nothing"
+        );
+
+        let path = scratch_adi();
+        let bak = path.with_extension("adi.bak");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak);
+        std::fs::write(&path, CP1253).unwrap();
+
+        let lb = Logbook::load(&path);
+        let calls: Vec<&str> = lb.records().iter().map(|r| r.call.as_str()).collect();
+        assert_eq!(
+            calls,
+            ["W1AW", "SV1AB", "SV2XYZ"],
+            "every QSO must survive a log with non-UTF-8 bytes in it"
+        );
+
+        // …and the untouched original is on disk, byte for byte, before any save can run.
+        let saved = std::fs::read(&bak).expect(".bak was written at load time");
+        assert_eq!(
+            saved, CP1253,
+            ".bak holds the ORIGINAL bytes — including the ones that are not UTF-8"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak);
+    }
+
+    // ── The bounded backup ring (operator request, 2026-08: "periodic logbook backups, and
+    //    they must not accumulate forever — and launch must not pay for a big log") ──────────
+
+    /// A unique, EMPTY scratch DIRECTORY to hold one `log.adi`. The ring lives in a `backups/`
+    /// folder beside the log, so each test needs its own parent or they would rotate each
+    /// other's snapshots. (Under the OS temp dir; nothing here touches the checkout.)
+    fn scratch_log_dir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("tempo_logbak_{}_{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 2026-01-01T00:00:00Z — a fixed epoch so "day N" in these tests is a real calendar day.
+    const D0: u64 = 1_767_225_600;
+    const DAY: u64 = 86_400;
+
+    /// The snapshot file names in `<dir>/backups`, oldest first.
+    fn snaps(dir: &Path) -> Vec<String> {
+        Logbook::snapshot_names(&dir.join("backups"), "log")
+    }
+
+    /// A log seeded on disk with `n` records, loaded back (which writes the anchor `.bak`).
+    fn seeded(dir: &Path, n: usize) -> (Logbook, std::path::PathBuf) {
+        let path = dir.join("log.adi");
+        let mut raw = adif_header();
+        for i in 0..n {
+            raw.push_str(&adif_record(&rec(
+                &format!("W{i}AAA"),
+                "20m",
+                1_700_000_000 + i as u64,
+            )));
+        }
+        std::fs::write(&path, &raw).unwrap();
+        let lb = Logbook::load(&path);
+        assert_eq!(lb.records().len(), n, "seed loaded");
+        (lb, path)
+    }
+
+    /// ★ THE LOAD PATH WRITES NOTHING. The operator's constraint on this whole batch: a big
+    /// log must not make launch slow, so no snapshot may be taken at load time. Once the
+    /// one-time anchor exists, opening the logbook must touch the disk for reads only — and
+    /// it must NEVER create the `backups/` ring, on any load.
+    #[test]
+    fn loading_the_logbook_writes_nothing_and_never_creates_the_ring() {
+        let dir = scratch_log_dir();
+        let (_, path) = seeded(&dir, 3); // first load writes the anchor, and only the anchor
+
+        let after_first: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        let mut sorted = after_first.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            ["log.adi", "log.adi.bak"],
+            "the first load writes the anchor and nothing else — no backups/ folder"
+        );
+
+        // A second (and third) load, with the anchor already there: nothing at all.
+        let before = std::fs::metadata(&path).unwrap().len();
+        let _ = Logbook::load(&path);
+        let _ = Logbook::load(&path);
+        let mut now: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        now.sort();
+        assert_eq!(now, sorted, "a load with the anchor present writes no file");
+        assert!(
+            !dir.join("backups").exists(),
+            "LOAD must never create the backup ring — that is the startup cost the operator ruled out"
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            before,
+            "load does not rewrite log.adi either"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Rotation drops the OLDEST dated snapshot, and the anchor is untouchable. Twelve daily
+    /// saves against the SHIPPED bounds: ten survive, and they are the ten most recent.
+    #[test]
+    fn the_ring_keeps_the_newest_and_never_touches_the_anchor() {
+        let dir = scratch_log_dir();
+        let (mut lb, path) = seeded(&dir, 1);
+        let anchor = dir.join("log.adi.bak");
+        let anchor_bytes = std::fs::read(&anchor).unwrap();
+
+        // One save a day for twelve days, each adding a QSO so the content genuinely changes.
+        for day in 0..12u64 {
+            lb.add(rec(&format!("K{day}XX"), "40m", 1_800_000_000 + day));
+            lb.save_at(&path, D0 + day * DAY, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+                .unwrap();
+        }
+
+        let kept = snaps(&dir);
+        assert_eq!(
+            kept.len(),
+            BACKUP_KEEP,
+            "the ring is capped at {BACKUP_KEEP}"
+        );
+        // Days 0 and 1 snapshotted the file as it stood BEFORE those saves; they are the two
+        // that must have been dropped, and every survivor is newer.
+        assert!(
+            !kept
+                .iter()
+                .any(|n| n.contains("20260101") || n.contains("20260102")),
+            "the two oldest were dropped, not two arbitrary ones: {kept:?}"
+        );
+        assert!(
+            kept.iter().any(|n| n.contains("20260112")),
+            "the newest survives: {kept:?}"
+        );
+        assert_eq!(
+            std::fs::read(&anchor).unwrap(),
+            anchor_bytes,
+            "the anchor is not in backups/ and is never eligible for rotation"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The byte ceiling bites: with a cap smaller than the ring would otherwise fill, the
+    /// oldest go until the folder is back under it — and the newest is never the one dropped.
+    #[test]
+    fn the_total_size_ceiling_drops_the_oldest_until_it_fits() {
+        let dir = scratch_log_dir();
+        let (mut lb, path) = seeded(&dir, 4);
+        // Cap chosen against a real snapshot size so the ceiling, not the count, is what bites.
+        let one = std::fs::metadata(&path).unwrap().len();
+        let cap = one * 3;
+
+        for day in 0..8u64 {
+            lb.add(rec(&format!("N{day}YY"), "15m", 1_900_000_000 + day));
+            lb.save_at(&path, D0 + day * DAY, 100, cap).unwrap(); // count bound deliberately slack
+        }
+
+        let kept = snaps(&dir);
+        let total: u64 = kept
+            .iter()
+            .map(|n| {
+                std::fs::metadata(dir.join("backups").join(n))
+                    .unwrap()
+                    .len()
+            })
+            .sum();
+        assert!(!kept.is_empty(), "the ceiling never empties the ring");
+        assert!(
+            total <= cap,
+            "ring is {total} bytes, over the {cap}-byte cap: {kept:?}"
+        );
+        assert!(kept.len() < 8, "the ceiling actually bit: {kept:?}");
+        assert!(
+            kept.last().unwrap().contains("20260108"),
+            "the survivors are the NEWEST: {kept:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A second save on the SAME calendar day takes no second snapshot — that is the rule that
+    /// keeps a busy logging session from filling the ring in an afternoon.
+    #[test]
+    fn a_second_save_on_the_same_day_takes_no_second_snapshot() {
+        let dir = scratch_log_dir();
+        let (mut lb, path) = seeded(&dir, 2);
+
+        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
+        assert_eq!(snaps(&dir).len(), 1, "the day's first save snapshots");
+
+        lb.add(rec("W9ZZZ", "20m", 1_700_500_000));
+        lb.save_at(&path, D0 + 3 * 3600, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
+        assert_eq!(
+            snaps(&dir).len(),
+            1,
+            "a later save the same day adds nothing"
+        );
+
+        // Positive control: the NEXT day does snapshot, so the rule is a day gate and not a
+        // "one snapshot ever" bug.
+        lb.add(rec("W8ZZZ", "20m", 1_700_600_000));
+        lb.save_at(&path, D0 + DAY, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
+        assert_eq!(snaps(&dir).len(), 2, "a new day snapshots again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A new day whose content is IDENTICAL to the newest snapshot takes no snapshot — the
+    /// ring holds versions, not days, so an idle week must not push real history out of it.
+    #[test]
+    fn an_unchanged_log_takes_no_second_snapshot() {
+        let dir = scratch_log_dir();
+        let (mut lb, path) = seeded(&dir, 2);
+
+        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
+        assert_eq!(snaps(&dir).len(), 1);
+
+        // Three more days of saves with nothing changed.
+        for day in 1..4u64 {
+            lb.save_at(&path, D0 + day * DAY, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+                .unwrap();
+        }
+        assert_eq!(
+            snaps(&dir).len(),
+            1,
+            "identical bytes are never snapshotted twice"
+        );
+
+        // Positive control — and it says exactly what the ring holds. A snapshot preserves the
+        // file the save is ABOUT TO REPLACE, so adding a QSO is not visible to the check until
+        // that save has landed: day 4 still sees the old bytes on disk and skips, day 5 sees
+        // the four-record file and copies it. The ring lags one save behind by design; the
+        // shrink trigger is what makes that safe.
+        lb.add(rec("VE3ABC", "40m", 1_700_700_000));
+        lb.save_at(&path, D0 + 4 * DAY, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
+        assert_eq!(
+            snaps(&dir).len(),
+            1,
+            "the day-4 save had nothing new ON DISK to preserve yet"
+        );
+        lb.save_at(&path, D0 + 5 * DAY, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
+        assert_eq!(snaps(&dir).len(), 2, "changed content does snapshot");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE MOST VALUABLE TRIGGER. A save that SHRINKS the log snapshots unconditionally —
+    /// same day, same minute, doesn't matter. Shrinking is exactly the shape of the failure
+    /// that lost the operator's oldest QSOs, and the calendar rule would have sailed past it
+    /// because the day already had its snapshot.
+    #[test]
+    fn a_shrinking_save_snapshots_even_on_a_day_already_snapshotted() {
+        let dir = scratch_log_dir();
+        let (mut lb, path) = seeded(&dir, 5);
+
+        lb.save_at(&path, D0, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
+        assert_eq!(snaps(&dir).len(), 1, "the day's ordinary snapshot");
+        let before = std::fs::read(&path).unwrap();
+
+        // The truncating save: four QSOs vanish from memory, and the rewrite takes them off
+        // disk. Same calendar day as the snapshot above.
+        lb.records.truncate(1);
+        lb.save_at(&path, D0 + 600, BACKUP_KEEP, BACKUP_TOTAL_BYTES)
+            .unwrap();
+
+        let kept = snaps(&dir);
+        assert_eq!(
+            kept.len(),
+            2,
+            "the shrink is snapshotted regardless: {kept:?}"
+        );
+        let shrink = kept.iter().find(|n| n.contains("-shrink")).expect(
+            "the shrink snapshot is named so the operator can see which copy is the interesting one",
+        );
+        assert_eq!(
+            std::fs::read(dir.join("backups").join(shrink)).unwrap(),
+            before,
+            "and it holds the log as it was BEFORE the truncating save"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

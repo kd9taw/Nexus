@@ -4,6 +4,15 @@
 // per the rotor-pane honesty rule, renders NOTHING when no rotator answers: a
 // needle with no daemon behind it would be an ornament. Optional targetCall +
 // onPointAt adds a "→ CALL" one-click slew for the cockpit's selected station.
+//
+// ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): the prose is in the
+// catalog under `rotor.strip.*`. Its ■ buttons stop the ROTATOR and the satellite track, never a
+// transmission — they are on no cockpit's stop-line census and no sweep looks for them — so
+// nothing here is deferred.
+//
+// The units rule lands on the SKY AND THE MAST: bird names, the track's own state word, every
+// azimuth in degrees and the true/magnetic marks are data, and the three annunciator plates
+// below are the instrument's own vocabulary.
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import {
   getDeclination,
@@ -18,6 +27,13 @@ import {
 import type { SatTrackStatus, SatTransponderHeld } from '../types'
 import { magneticDeg } from '../grid'
 import { pushToast } from '../toast'
+import { t } from '../i18n'
+
+/** The strip's annunciator plates — what the chip is, in the shortest form that fits a cockpit
+ *  header bar. Instrument marks rather than sentences (the CwCockpit `SPLIT ▲` / `REC` class),
+ *  named so the catalog guard reads them as the deliberate constants they are. */
+const SAT_PLATE = 'SAT'
+const ROTOR_PLATE = 'ROTOR'
 
 export interface RotorStripProps {
   /** Poll/render only while the host cockpit is the active view (defaults on). */
@@ -140,34 +156,39 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
       held == null ? null : (
         <span
           role="group"
-          aria-label="A satellite transponder holds the dial"
-          title={`${held.name} holds the dial — picked in Satellites; the dial stays on the bird through section changes. ■ releases the hold and hands the dial back`}
+          aria-label={t('rotor.strip.held.aria')}
+          title={t('rotor.strip.held.title', { bird: held.name })}
           style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
         >
           <span
             style={{ fontSize: '0.65em', letterSpacing: '0.08em', opacity: 0.55, fontWeight: 600 }}
             aria-hidden
           >
-            SAT
+            {SAT_PLATE}
           </span>
           <span
             className="mono"
             style={{ fontSize: '0.9em', fontWeight: 600, whiteSpace: 'nowrap' }}
           >
-            ⟳ {held.name} · bird holds the dial
+            {t('rotor.strip.held.chip', { bird: held.name })}
           </span>
           <button
             type="button"
             style={chipStyle}
-            aria-label="Release the transponder hold"
+            aria-label={t('rotor.strip.release.aria')}
             onClick={() => {
               setSatTransponder(held.name, null)
                 .then(() => setHeld(null))
                 .catch((e) =>
-                  pushToast(`Release: ${e instanceof Error ? e.message : e}`, 'error'),
+                  pushToast(
+                    t('rotor.strip.release.failed', {
+                      error: e instanceof Error ? e.message : String(e),
+                    }),
+                    'error',
+                  ),
                 )
             }}
-            title="Release the transponder NOW — the dial is yours again"
+            title={t('rotor.strip.release.title')}
           >
             ■
           </button>
@@ -178,12 +199,27 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
         <span
           role="group"
           aria-label={
-            dopplerOwnsDial ? 'Satellite Doppler owns the dial' : 'Satellite Doppler owns the TX VFO'
+            dopplerOwnsDial ? t('rotor.strip.doppler.dial.aria') : t('rotor.strip.doppler.tx.aria')
           }
+          // The clause that says WHAT Doppler is doing is interpolated whole (the
+          // `sat.badge.dopplerOnly` shape), so the sentence stays one sentence per surface
+          // instead of four near-copies.
           title={
             dopplerOwnsDial
-              ? `Satellite Doppler is ${steering ? 'steering the radio dial' : 'armed to take the radio dial at AOS'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and hands the dial back`
-              : `Satellite Doppler is ${steering ? 'steering the TX (split) VFO — the dial stays yours' : 'armed to take the TX (split) VFO at AOS — the dial stays yours'} for ${satTrack.name} (${satTrack.state}) — ■ stops the track and releases the split`
+              ? t('rotor.strip.doppler.dial.title', {
+                  what: steering
+                    ? t('rotor.strip.doppler.dial.steering')
+                    : t('rotor.strip.doppler.dial.atAos'),
+                  bird: satTrack.name,
+                  state: satTrack.state,
+                })
+              : t('rotor.strip.doppler.tx.title', {
+                  what: steering
+                    ? t('rotor.strip.doppler.tx.steering')
+                    : t('rotor.strip.doppler.tx.atAos'),
+                  bird: satTrack.name,
+                  state: satTrack.state,
+                })
           }
           style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
         >
@@ -191,33 +227,37 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
             style={{ fontSize: '0.65em', letterSpacing: '0.08em', opacity: 0.55, fontWeight: 600 }}
             aria-hidden
           >
-            SAT
+            {SAT_PLATE}
           </span>
           <span
             className="mono"
             style={{ fontSize: '0.9em', fontWeight: 600, whiteSpace: 'nowrap' }}
           >
-            ⟳ {satTrack.name} ·{' '}
             {dopplerOwnsDial
               ? steering
-                ? 'Doppler holds the dial'
-                : 'dial at AOS'
+                ? t('rotor.strip.doppler.chip.dial', { bird: satTrack.name })
+                : t('rotor.strip.doppler.chip.dialAtAos', { bird: satTrack.name })
               : steering
-                ? 'Doppler holds the TX VFO'
-                : 'TX VFO at AOS'}
+                ? t('rotor.strip.doppler.chip.tx', { bird: satTrack.name })
+                : t('rotor.strip.doppler.chip.txAtAos', { bird: satTrack.name })}
           </span>
           <button
             type="button"
             style={chipStyle}
-            aria-label="Stop the satellite track"
+            aria-label={t('rotor.strip.trackStop.aria')}
             onClick={() => {
               stopSatTrack()
                 .then(() => setSatTrack(null))
                 .catch((e) =>
-                  pushToast(`Track stop: ${e instanceof Error ? e.message : e}`, 'error'),
+                  pushToast(
+                    t('rotor.strip.trackStop.failed', {
+                      error: e instanceof Error ? e.message : String(e),
+                    }),
+                    'error',
+                  ),
                 )
             }}
-            title="Stop the satellite track NOW — Doppler releases the dial"
+            title={t('rotor.strip.trackStop.title')}
           >
             ■
           </button>
@@ -230,10 +270,14 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
     // the text is the Rotator SECTION on the Radio tab; it was written as a child of Rig
     // Control, which it has never been.
     const lost = satTrack?.rotorLost === true
-    const lostName = lost ? 'Rotator stopped answering' : 'Rotator not answering'
+    const lostName = lost ? t('rotor.strip.lost.stopped') : t('rotor.strip.lost.silent')
+    // Name the LIKELIEST cause, not just the place to look. A rotator at the wrong line rate
+    // never answers and reads exactly like dead hardware, and until 1.7.0 every model was
+    // handed the same 9600 — so "check the baud" is the first thing to say to the operator
+    // whose SPID or Green Heron has never worked.
     const lostTitle = lost
-      ? 'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model/port in Settings ▸ Radio ▸ Rotator, or the external rotctld, and the Connections log'
-      : 'A rotator is configured but not answering — check the model/port in Settings ▸ Radio ▸ Rotator, or the external rotctld, and the Connections log'
+      ? t('rotor.strip.lost.stopped.title')
+      : t('rotor.strip.lost.silent.title')
     const lostStyle: CSSProperties = {
       display: 'inline-flex',
       alignItems: 'center',
@@ -244,7 +288,7 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
     const lostBody = (
       <>
         <span style={{ fontSize: '0.65em', letterSpacing: '0.08em', fontWeight: 600 }} aria-hidden>
-          ROTOR
+          {ROTOR_PLATE}
         </span>
         <span className="mono" style={{ fontSize: '0.9em' }}>—</span>
       </>
@@ -254,8 +298,10 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
         {onOpenSettings ? (
           <button
             type="button"
-            aria-label={`${lostName} — open the rotator settings`}
-            title={`${lostTitle}. Click to open it`}
+            // Both are the state's own whole sentence with the "and you can click it" clause
+            // interpolated after it, carrying its own separator — never two glued fragments.
+            aria-label={t('rotor.strip.lost.open.aria', { state: lostName })}
+            title={t('rotor.strip.lost.open.title', { detail: lostTitle })}
             // Button reset inline, the same reason chipStyle exists above: it must still read
             // as the dim indicator it replaced, not as a control this header never had.
             style={{
@@ -286,8 +332,12 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
   return (
     <span
       role="group"
-      aria-label="Rotator"
-      title={mag != null ? `Rotator at ${deg}° true · ${mag}° magnetic (WMM)` : `Rotator at ${deg}° true`}
+      aria-label={t('rotor.strip.aria')}
+      title={
+        mag != null
+          ? t('rotor.strip.az.title.magnetic', { deg, mag })
+          : t('rotor.strip.az.title', { deg })
+      }
       style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'inherit' }}
     >
       <span
@@ -299,7 +349,7 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
         }}
         aria-hidden
       >
-        ROTOR
+        {ROTOR_PLATE}
       </span>
       {/* Live azimuth needle — north-up, rotated clockwise by the true bearing. */}
       <svg width={GLYPH} height={GLYPH} viewBox={`0 0 ${GLYPH} ${GLYPH}`} aria-hidden style={{ flex: '0 0 auto' }}>
@@ -316,19 +366,32 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
         <span
           className="mono"
           style={{ fontSize: '0.75em', opacity: 0.8, whiteSpace: 'nowrap' }}
-          title={`Auto-tracking ${satTrack.name} (${satTrack.state}) — the Satellites section owns the rotor until LOS${dopplerOwnsDial ? '; Doppler owns the radio dial too' : dopplerInTrack ? '; Doppler drives the TX (split) VFO too — the dial stays yours' : ''}`}
+          // What Doppler ALSO drives is an optional clause carrying its own `; ` separator,
+          // interpolated whole — the tracking sentence stays one sentence.
+          title={t('rotor.strip.track.title', {
+            bird: satTrack.name,
+            state: satTrack.state,
+            doppler: dopplerOwnsDial
+              ? t('rotor.strip.track.title.dial')
+              : dopplerInTrack
+                ? t('rotor.strip.track.title.tx')
+                : '',
+          })}
         >
-          ⟳ {satTrack.name}
-          {dopplerOwnsDial ? ' +dial' : dopplerInTrack ? ' +uplink' : ''}
+          {dopplerOwnsDial
+            ? t('rotor.strip.track.chip.dial', { bird: satTrack.name })
+            : dopplerInTrack
+              ? t('rotor.strip.track.chip.uplink', { bird: satTrack.name })
+              : t('rotor.strip.track.chip', { bird: satTrack.name })}
         </span>
       )}
       {!satTrack && held && (
         <span
           className="mono"
           style={{ fontSize: '0.75em', opacity: 0.8, whiteSpace: 'nowrap' }}
-          title={`${held.name} holds the dial — picked in Satellites; the dial stays on the bird through section changes. Release it there or with the strip's ■`}
+          title={t('rotor.strip.held.title.here', { bird: held.name })}
         >
-          ⟳ {held.name} +dial
+          {t('rotor.strip.held.chip.dial', { bird: held.name })}
         </span>
       )}
       {targetCall && onPointAt && (
@@ -336,7 +399,7 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
           type="button"
           style={chipStyle}
           onClick={() => onPointAt(targetCall)}
-          title={`Point the antenna at ${targetCall}`}
+          title={t('rotor.strip.pointAt.title', { call: targetCall })}
         >
           → {targetCall}
         </button>
@@ -354,10 +417,13 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
               return stopRotator()
             })
             .catch((e) =>
-              pushToast(`Rotator stop: ${e instanceof Error ? e.message : e}`, 'error'),
+              pushToast(
+                t('rotor.stop.failed', { error: e instanceof Error ? e.message : String(e) }),
+                'error',
+              ),
             )
         }}
-        title="Stop rotation NOW (mid-pass: stops the satellite track too)"
+        title={t('rotor.strip.stop.title')}
       >
         ■
       </button>
