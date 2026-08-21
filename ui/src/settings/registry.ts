@@ -182,8 +182,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'transmit-limits',
     label: 'Transmit limits & sharing',
     tab: 'radio',
+    // Backup, restore and reset all MOVED to the Config tab, so their keywords went with them —
+    // a search term that lands the operator on a section no longer holding the control is worse
+    // than no keyword at all. What stays here is what this section still does.
     keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
-      'backup', 'restore', 'export settings', 'share rig', 'rigctld address', 'other programs',
+      'share rig', 'rigctld address', 'other programs',
       'foreign ptt', 'wsjt-x share', 'n1mm share'],
   },
 
@@ -423,8 +426,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Backup & reset',
     tab: 'configurations',
     keywords: ['backup', 'back up', 'restore', 'reset', 'factory', 'defaults', 'start over',
-      'export', 'import', 'new computer', 'migrate', 'move to a new laptop', 'wipe',
-      'clean slate', 'settings file'],
+      'export', 'import', 'export settings', 'new computer', 'migrate', 'move to a new laptop',
+      'wipe', 'clean slate', 'start again', 'settings file'],
   },
 ]
 

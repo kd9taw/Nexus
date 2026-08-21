@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reset all settings to factory defaults.** There was no reset at all: a clean start meant
+  finding `settings.json` in a config folder and deleting it — and doing that while Nexus is
+  running resets nothing, because the app holds the old configuration in memory and writes it
+  straight back on the next save. The new control is in Settings → Config, beside Back up.
+  It asks first, and the dialog says what SURVIVES: your contact log
+  is untouched, and stored passwords stay in your keychain — clearing those stays a separate,
+  deliberate act rather than a surprise buried in a reset.
+
 - **Backup and Restore moved to their own Config tab.** They existed, but sat under **Radio ▸
   Transmit limits & sharing**, which is why operators did not find them: backing up a whole
   station has nothing to do with transmit limits. Same controls, same behaviour — a findable

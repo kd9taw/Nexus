@@ -7,7 +7,7 @@
 // model and audio devices onto radio 1's profile, persisted. Operator report, 2026-07-25: with
 // two radios configured, both ended up on one set of comm ports.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -169,9 +169,12 @@ beforeEach(() => {
 afterEach(cleanup)
 
 
-describe('Config tab: backup, restore and reset', () => {
+describe('Config tab: a findable home for backup and restore', () => {
   const openTab = async () => fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
 
+  // The RESET cases that used to live here are now SettingsPanel.reset.test.tsx, which drives
+  // the real confirm dialog. They were written against `window.confirm` — inert in this webview
+  // — so they passed while the button they described would have done nothing on macOS.
   it('exists as its own tab — Backup and Restore were unfindable under Radio > Transmit limits', async () => {
     renderPanel()
     await openTab()
@@ -180,39 +183,23 @@ describe('Config tab: backup, restore and reset', () => {
     expect(await screen.findByRole('button', { name: /reset all settings/i })).toBeTruthy()
   })
 
-  it('Reset asks first, and does nothing when declined', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('takes them OUT of Radio — a move that leaves a copy behind is not a move', async () => {
+    // The duplicate is the failure mode a merge produces on its own: both parents render the
+    // block, both look right in isolation, and the operator gets two of everything.
     renderPanel()
-    await openTab()
-    fireEvent.click(await screen.findByRole('button', { name: /reset all settings/i }))
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled())
-    expect(api.get('resetSettings')).not.toHaveBeenCalled()
-    confirmSpy.mockRestore()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    await screen.findByText('Transmit limits & sharing')
+    expect(screen.queryByRole('button', { name: 'Back up' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Restore…' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /reset all settings/i })).toBeNull()
   })
 
-  it('the confirmation states what survives — the logbook and the keychain', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('says where they moved from, once — an operator who knew the old place is not left hunting', async () => {
     renderPanel()
     await openTab()
-    fireEvent.click(await screen.findByRole('button', { name: /reset all settings/i }))
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalled())
-    // "Reset" is the word an operator fears for their QSOs. The prompt must answer that before
-    // they have to wonder.
-    const msg = String(confirmSpy.mock.calls[0]?.[0] ?? '')
-    expect(msg).toMatch(/LOGBOOK is not touched/i)
-    expect(msg).toMatch(/keychain/i)
-    expect(msg).toMatch(/cannot be undone/i)
-    confirmSpy.mockRestore()
-  })
-
-  it('accepted, it resets through the backend verb', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
-    renderPanel()
-    await openTab()
-    fireEvent.click(await screen.findByRole('button', { name: /reset all settings/i }))
-    await waitFor(() => expect(api.get('resetSettings')).toHaveBeenCalled())
-    // Never by deleting the settings file: a running app holds the old config in memory and
-    // writes it straight back, so a file-delete "reset" silently un-resets itself.
-    confirmSpy.mockRestore()
+    const note = document.querySelector('#settings-configurations .settings-note')?.textContent ?? ''
+    expect(note).toMatch(/Transmit limits & sharing/)
+    // Rendered through <T>, so an entity in the catalog would surface as literal characters.
+    expect(note).not.toContain('&amp;')
   })
 })

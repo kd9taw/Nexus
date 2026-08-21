@@ -11856,6 +11856,15 @@ select.settings-input {
   text-decoration: underline;
 }
 
+/* The destructive variant. Without this the Reset control renders IDENTICALLY to the "Back up"
+   link beside it — same accent, same weight — which is the wrong affordance for the one action
+   in this block that cannot be undone. `--state-bad` is not defined by either theme; every other
+   use in this file supplies the same literal fallback, so this one does too rather than inventing
+   a token half the tree would not resolve. */
+.settings-linkbtn.danger {
+  color: var(--state-bad, #e5484d);
+}
+
 /* ===========================================================================
    Band activity / broadcast feed
    =========================================================================== */
