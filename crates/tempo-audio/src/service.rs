@@ -11061,6 +11061,22 @@ mod tests {
     /// the field, then move the slider with NOTHING queued. It reads the ACTUAL BYTES off
     /// a pty standing in for the keyer rather than a flag saying bytes were meant — the
     /// whole bug was a speed the app believed it had already sent.
+    ///
+    /// ⚠️ LINUX ONLY, and the reason is the STAND-IN rather than the behaviour (#148,
+    /// on8st, measured on macOS 15 / Apple Silicon). This scene opens a PTY and lets
+    /// Nexus treat it as a serial port. On Linux that works; on macOS `serialport` 4.9
+    /// issues a tcgetattr-family ioctl that a pts rejects with ENOTTY, so the keyer open
+    /// fails before the scene begins and the assertion fires on its own precondition —
+    /// "the stand-in keyer must open cleanly" — rather than on the thing being pinned.
+    /// The operator-facing error is doing its job there; it is the port that is not a
+    /// real serial device.
+    ///
+    /// Gated rather than deleted, and rather than papered over: the coverage is real
+    /// where it runs, and a macOS contributor running the feature-gated suite should not
+    /// meet a deterministic failure that says nothing about their change. A stand-in that
+    /// works on both — a fake transport behind a trait rather than a real pty — is the
+    /// proper fix and is tracked on #148.
+    #[cfg(target_os = "linux")]
     #[cfg(all(unix, feature = "serial"))]
     #[test]
     fn a_speed_change_with_nothing_queued_still_reaches_the_winkeyer() {
@@ -11199,6 +11215,22 @@ mod tests {
     /// So: a configured keyer, CW mode, and NOTHING SENT. The speed must still reach the
     /// wire. The sibling test above covers the send path and cannot see this at all — it
     /// opens the port by sending.
+    ///
+    /// ⚠️ LINUX ONLY, and the reason is the STAND-IN rather than the behaviour (#148,
+    /// on8st, measured on macOS 15 / Apple Silicon). This scene opens a PTY and lets
+    /// Nexus treat it as a serial port. On Linux that works; on macOS `serialport` 4.9
+    /// issues a tcgetattr-family ioctl that a pts rejects with ENOTTY, so the keyer open
+    /// fails before the scene begins and the assertion fires on its own precondition —
+    /// "the stand-in keyer must open cleanly" — rather than on the thing being pinned.
+    /// The operator-facing error is doing its job there; it is the port that is not a
+    /// real serial device.
+    ///
+    /// Gated rather than deleted, and rather than papered over: the coverage is real
+    /// where it runs, and a macOS contributor running the feature-gated suite should not
+    /// meet a deterministic failure that says nothing about their change. A stand-in that
+    /// works on both — a fake transport behind a trait rather than a real pty — is the
+    /// proper fix and is tracked on #148.
+    #[cfg(target_os = "linux")]
     #[cfg(feature = "serial")]
     #[test]
     fn a_configured_winkeyer_learns_the_speed_without_being_sent_to() {
