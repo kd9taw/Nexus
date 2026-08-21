@@ -783,6 +783,20 @@ const DIAL_SET_MAX_TRIES: u32 = 3;
 /// notch, which is what "notch" means to most operators. Each renders only when the rig
 /// reports it, so a radio with one of the two still shows one button rather than a dead pair.
 const RIG_FUNCS: [&str; 6] = ["NB", "NR", "ANF", "COMP", "VOX", "MN"];
+
+/// How many per-func slots the loop keeps, DERIVED from the table above rather than
+/// written out beside it.
+///
+/// ⚠️ THIS EXISTS BECAUSE HAND-KEPT LENGTHS DRIFTED AND CRASHED THE RADIO. Adding `MN`
+/// took the table from five entries to six; four of the five parallel arrays were
+/// widened and `func_retry_backoff` was not. Nothing failed to compile — an array index
+/// is a RUNTIME bound — and no test reached it, because the round-robin only visits slot
+/// 5 on one tick in six of a live CAT poll. It shipped in a tester build and panicked
+/// with "index out of bounds: the len is 5 but the index is 5", which killed the radio
+/// loop: TX and RX dead until restart.
+///
+/// Length-by-derivation makes that unrepresentable. A seventh func is now ONE edit.
+const N_FUNCS: usize = RIG_FUNCS.len();
 /// First re-probe delay for a DSP func that latched unsupported, in heavy polls (40 × 750 ms
 /// ≈ 30 s — the old fixed cadence, now only the FIRST retry).
 const FUNC_RETRY_BACKOFF_BASE: u32 = 40;
@@ -807,6 +821,9 @@ const LVL_COMP: usize = 4;
 /// MANUAL-NOTCH FREQUENCY (Hz, not a 0..1 fraction — see `read_level_hz`). The other half of
 /// `MN` above: a notch you cannot place is not a notch.
 const LVL_NOTCHF: usize = 5;
+/// Per-level slot count, derived from the highest index above for the same reason
+/// [`N_FUNCS`] is derived — these arrays grew from 4 to 6 in the same change.
+const N_LEVELS: usize = LVL_NOTCHF + 1;
 
 /// Record one extended-level read outcome into its `supported`/`misses` slot, with the same
 /// miss-tolerance as the S-meter: a hit resets the counter and confirms support; three consecutive
@@ -2607,12 +2624,12 @@ struct RadioLoop {
     /// Per-func DSP capability ([nb, nr, notch, comp, vox], same as [`RIG_FUNCS`]), mirroring
     /// `smeter_supported`: `None` = unprobed, `Some(true)` = rig reports the func, `Some(false)`
     /// = confirmed absent (stop polling → toggle hidden). Reset on CAT re-confirm / breaker trip.
-    func_supported: [Option<bool>; 6],
+    func_supported: [Option<bool>; N_FUNCS],
     /// Consecutive get-miss counters per func — the same miss-tolerance as `smeter_misses`.
-    func_misses: [u8; 6],
+    func_misses: [u8; N_FUNCS],
     /// Last-known func states, mirrored to the engine each sub-cadence poll; a read miss on a
     /// supported func keeps the last value so the toggle never flickers.
-    func_state: [Option<bool>; 6],
+    func_state: [Option<bool>; N_FUNCS],
     /// Earliest `rig_poll_ticks` at which a func latched `Some(false)` may be re-probed, and the
     /// backoff (in heavy polls) applied when it fails again.
     ///
@@ -2630,8 +2647,8 @@ struct RadioLoop {
     /// repeat. That is the operator's "then it might be fine again, then we get a small lag".
     /// Transient-hiccup recovery is still worth having, so the retry is kept but BACKED OFF
     /// (40 → 80 → 160 … heavy polls, capped), and reset on a successful read.
-    func_retry_at: [u32; 6],
-    func_retry_backoff: [u32; 5],
+    func_retry_at: [u32; N_FUNCS],
+    func_retry_backoff: [u32; N_FUNCS],
     /// Whether the rig's BUILT-IN ATU (Hamlib `TUNER`) has been probed for the current CAT
     /// confirmation. Probed ONCE per confirmation like [`Self::rx_ranges`] rather than round-robin
     /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on,
@@ -2653,9 +2670,9 @@ struct RadioLoop {
     /// same miss-tolerant caching as `func_supported`: `Some(false)` after 3 get-misses → stop
     /// issuing that read, so a rig slow/silent on it doesn't churn the CAT socket every poll
     /// (the K4/QK4 "hangs up every 5 s" bug). Reset on CAT re-confirm / rig rebuild.
-    level_supported: [Option<bool>; 6],
+    level_supported: [Option<bool>; N_LEVELS],
     /// Consecutive get-miss counters per extended level — same tolerance as `smeter_misses`.
-    level_misses: [u8; 6],
+    level_misses: [u8; N_LEVELS],
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -2810,17 +2827,17 @@ impl RadioLoop {
             smeter_retry_at: 0,
             smeter_retry_backoff: FUNC_RETRY_BACKOFF_BASE,
             rig_poll_ticks: 0,
-            func_supported: [None; 6],
-            func_misses: [0; 6],
-            func_state: [None; 6],
-            func_retry_at: [0; 6],
-            func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; 5],
+            func_supported: [None; N_FUNCS],
+            func_misses: [0; N_FUNCS],
+            func_state: [None; N_FUNCS],
+            func_retry_at: [0; N_FUNCS],
+            func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_FUNCS],
             tuner_probed: false,
             spectrum_feed: cfg.spectrum_feed.clone(),
             rx_tap: cfg.rx_tap.clone(),
             meter_feed: cfg.meter_feed.clone(),
-            level_supported: [None; 6],
-            level_misses: [0; 6],
+            level_supported: [None; N_LEVELS],
+            level_misses: [0; N_LEVELS],
 
             clock_offset_ms: 0,
             decode: DecodeWorker::spawn(),
@@ -3544,12 +3561,12 @@ impl RadioLoop {
         self.smeter_retry_at = 0;
         // The NEW radio hasn't reported STRENGTH yet — show "—", not the old rig's needle.
         self.meter_feed.set_smeter_db(None);
-        self.func_supported = [None; 6];
-        self.func_misses = [0; 6];
-        self.func_state = [None; 6];
+        self.func_supported = [None; N_FUNCS];
+        self.func_misses = [0; N_FUNCS];
+        self.func_state = [None; N_FUNCS];
         self.tuner_probed = false;
-        self.level_supported = [None; 6];
-        self.level_misses = [0; 6];
+        self.level_supported = [None; N_LEVELS];
+        self.level_misses = [0; N_LEVELS];
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -4675,12 +4692,12 @@ impl RadioLoop {
                     self.smeter_misses = 0;
                     self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
                     self.smeter_retry_at = 0;
-                    self.func_supported = [None; 6];
-                    self.func_misses = [0; 6];
-                    self.func_state = [None; 6];
+                    self.func_supported = [None; N_FUNCS];
+                    self.func_misses = [0; N_FUNCS];
+                    self.func_state = [None; N_FUNCS];
                     self.tuner_probed = false;
-                    self.level_supported = [None; 6];
-                    self.level_misses = [0; 6];
+                    self.level_supported = [None; N_LEVELS];
+                    self.level_misses = [0; N_LEVELS];
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
@@ -4782,12 +4799,12 @@ impl RadioLoop {
                             self.smeter_misses = 0;
                             self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
                             self.smeter_retry_at = 0;
-                            self.func_supported = [None; 6];
-                            self.func_misses = [0; 6];
-                            self.func_state = [None; 6];
+                            self.func_supported = [None; N_FUNCS];
+                            self.func_misses = [0; N_FUNCS];
+                            self.func_state = [None; N_FUNCS];
                             self.tuner_probed = false;
-                            self.level_supported = [None; 6];
-                            self.level_misses = [0; 6];
+                            self.level_supported = [None; N_LEVELS];
+                            self.level_misses = [0; N_LEVELS];
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -5231,9 +5248,9 @@ impl RadioLoop {
                             }
                             self.cat_retry_at = now + self.cat_retry_ms;
                             // Re-probe funcs on recovery; don't leave stale toggle states shown.
-                            self.func_supported = [None; 6];
-                            self.func_misses = [0; 6];
-                            self.func_state = [None; 6];
+                            self.func_supported = [None; N_FUNCS];
+                            self.func_misses = [0; N_FUNCS];
+                            self.func_state = [None; N_FUNCS];
                             self.tuner_probed = false;
                             // Name the rig config in the diagnostic too, so a capture taken while
                             // the fault is ongoing records model/port/baud (the spawn note may
@@ -10334,6 +10351,57 @@ mod tests {
             !width_is_close_enough(3751, 3000),
             "one Hz past the quarter is not"
         );
+    }
+
+    /// THE 1.7.6-test1 RADIO CRASH, pinned so it cannot come back.
+    ///
+    /// Adding the manual notch took `RIG_FUNCS` from five entries to six. Four of the five
+    /// parallel per-func arrays were widened; `func_retry_backoff` was not. Nothing failed to
+    /// compile, because an array index is a RUNTIME bound — and no test reached it, because
+    /// the round-robin visits slot 5 on ONE TICK IN SIX of a live CAT poll. It shipped, and
+    /// the operator's own diagnostic log caught it:
+    ///
+    ///   panic: index out of bounds: the len is 5 but the index is 5
+    ///   RADIO ENGINE CRASHED — TX/RX is dead until you restart Nexus.
+    ///
+    /// Every length is now DERIVED from its table (`N_FUNCS` / `N_LEVELS`), which makes the
+    /// drift unrepresentable rather than merely fixed. This walks every slot the loop can
+    /// index anyway: a derivation is only as good as the indices staying inside it, and the
+    /// cost of proving that is nothing.
+    #[test]
+    fn every_func_and_level_slot_the_loop_can_reach_is_in_bounds() {
+        let st = loop_state();
+        assert_eq!(
+            RIG_FUNCS.len(),
+            N_FUNCS,
+            "the per-func arrays are sized by the table, not beside it"
+        );
+        // The exact expression the radio loop indexes with, over a full round-robin and then
+        // some — this is what produced index 5 on a five-slot array.
+        for tick in 0u64..(N_FUNCS as u64 * 4 * 3) {
+            let i = ((tick / 4) as usize) % RIG_FUNCS.len();
+            assert!(i < st.func_supported.len(), "func_supported slot {i}");
+            assert!(i < st.func_misses.len(), "func_misses slot {i}");
+            assert!(i < st.func_state.len(), "func_state slot {i}");
+            assert!(i < st.func_retry_at.len(), "func_retry_at slot {i}");
+            // The one that was missed.
+            assert!(
+                i < st.func_retry_backoff.len(),
+                "func_retry_backoff slot {i}"
+            );
+        }
+        // Levels are indexed by name rather than round-robin, so assert the highest.
+        for (name, idx) in [
+            ("RFPOWER", LVL_RFPOWER),
+            ("MICGAIN", LVL_MICGAIN),
+            ("NR", LVL_NR),
+            ("AGC", LVL_AGC),
+            ("COMP", LVL_COMP),
+            ("NOTCHF", LVL_NOTCHF),
+        ] {
+            assert!(idx < st.level_supported.len(), "level_supported {name}");
+            assert!(idx < st.level_misses.len(), "level_misses {name}");
+        }
     }
 
     #[test]
