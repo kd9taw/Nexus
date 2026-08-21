@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
+import { rigModeTransition, type RigMode } from './rigModeForView'
 import {
   callStation as apiCallStation,
   overrideNextTx as apiOverrideNextTx,
@@ -329,7 +330,20 @@ export default function App() {
   // click still QSYs. `followFreq` is true only for the three explicit mode tabs (Phone / CW /
   // Digital-Operate) — entering one drops the rig to that mode's home freq; the other digital
   // cockpits (chat/qso/…) set the mode only and keep their own band picker's frequency.
-  const lastOpModeRef = useRef<'digital' | 'phone' | 'cw' | 'rtty' | 'keyboard'>('digital')
+  // TWO REFS, AND THEY ANSWER DIFFERENT QUESTIONS. Conflating them was #143.
+  //
+  // `lastOpModeRef` — the last mode ASSERTED. Every operating view advances it, Tempo
+  // included, because it is what tells the manual-log form and the memories panel which mode
+  // the operator is actually running. Getting that wrong silently wrote "FT8" on phone
+  // contacts and corrupted awards, so it must keep tracking every assert.
+  //
+  // `lastHomedModeRef` — the last mode we RE-HOMED THE DIAL FOR. Only views that own a
+  // frequency advance it. Tempo asserts the digital mode but keeps its own band picker's
+  // frequency, so under the old single ref it advanced the guard without homing and the FT
+  // screen then saw "no change" and left FT8 on the CW dial. `rigModeForView.ts` has the
+  // whole reasoning; do not merge these back together.
+  const lastOpModeRef = useRef<RigMode>('digital')
+  const lastHomedModeRef = useRef<RigMode>('digital')
   // Guard refs for the rig-mode effect below. `opModeSeeded` is set once, by whichever comes
   // first: the persisted-operating-mode seed (that effect lives further down, where `settings`
   // is in scope) or a genuine view change — an operator's click outranks any seed, because the
@@ -360,36 +374,21 @@ export default function App() {
       return
     }
     opModeSeeded.current = true // an explicit view change outranks the booted-mode seed
-    // ⚠️ AN EXPLICIT MAP, NOT A FALLTHROUGH. This used to be
-    //   `featureById(view)?.workspace || view === 'cw' | 'phone' | 'rtty'`, then
-    //   `… : 'digital'` for everything else — so ANY view carrying a `workspace` that was not
-    //   one of the three named modes silently commanded the rig into DATA. POTA/SOTA declares
-    //   `workspace: 'dx'` for LAYOUT reasons and is not a mode at all: it is a hunting board,
-    //   and you work a park on whatever the activator is running. Opening it flipped an FT-991A
-    //   from USB to D-U with no operator action and no way to tell why (#80).
-    //   Listing the views that OWN a rig mode makes that class of bug unrepresentable: a new
-    //   workspace view now asserts NOTHING until someone deliberately adds it here.
-    const RIG_MODE_BY_VIEW: Partial<Record<string, 'cw' | 'phone' | 'rtty' | 'keyboard' | 'digital'>> = {
-      cw: 'cw',
-      phone: 'phone',
-      rtty: 'rtty',
-      psk: 'keyboard', // the Keyboard Modes cockpit (PSK31) — one flat section
-      operate: 'digital', // the FT8/FT4 cockpit
-      chat: 'digital', // Tempo is a digital mode
-    }
-    const mode = RIG_MODE_BY_VIEW[view]
-    if (!mode) return
+    // The map, the home-on-entry rule and the guard bookkeeping all live in
+    // `rigModeForView.ts` — pure, so the SEQUENCE of views can be tested. That matters:
+    // #143 was a sequence bug (CW → Tempo → FT left FT8 on the CW dial) and no single
+    // transition in it is wrong, so nothing that looked at one transition could see it.
+    // Read that module's header before changing any of this; it carries #80's history too.
+    //
     // ALWAYS (re)assert the rig mode on entering an operating view. We must NOT skip it with a
     // same-value guard: the guard ref drifts out of sync with the real rig (handleDigitalMode
     // and the Needed click set the mode without going through here), which left the rig stuck
     // in the wrong mode while the VFO read-back kept working. The backend is idempotent and
-    // re-arms an immediate retune, so re-asserting is cheap. Only RE-HOME the frequency on a
-    // genuine mode change, so returning to a mode you were already in never yanks the VFO.
-    const changed = mode !== lastOpModeRef.current
-    lastOpModeRef.current = mode
-    const followFreq =
-      changed &&
-      (view === 'operate' || view === 'cw' || view === 'phone' || view === 'rtty' || view === 'psk')
+    // re-arms an immediate retune, so re-asserting is cheap.
+    const { mode, followFreq, nextHomed } = rigModeTransition(view, lastHomedModeRef.current)
+    lastHomedModeRef.current = nextHomed
+    if (!mode) return
+    lastOpModeRef.current = mode // every assert advances THIS one, including Tempo
     void setOperatingMode(mode, followFreq)
       .then((s) => s && setSnap(s))
       .catch(() => {})
@@ -819,6 +818,7 @@ export default function App() {
     // the segment start, yanking the rig OFF the exact spot frequency the
     // workSpot click just tuned (review-caught on the pop-out path).
     lastOpModeRef.current = target === 'operate' ? 'digital' : target
+    lastHomedModeRef.current = lastOpModeRef.current
     setView(target)
     // Prefill the log Call from a work action fired in ANOTHER window (e.g. the pop-out band
     // map), matching the prefill an in-window click gets via handleWorkNeeded. Digital
@@ -896,6 +896,7 @@ export default function App() {
     const booted = settings?.operatingMode
     if (booted === 'phone' || booted === 'cw' || booted === 'rtty' || booted === 'digital') {
       lastOpModeRef.current = booted
+      lastHomedModeRef.current = booted // the rig is where the operator left it
       opModeSeeded.current = true
     }
   }, [settings?.operatingMode])
@@ -1524,6 +1525,7 @@ export default function App() {
           }
           // Keep the rig-mode effect's guard in sync so the nav doesn't re-home the dial.
           lastOpModeRef.current = opMode
+          lastHomedModeRef.current = opMode // recalled to an EXACT dial — do not re-home
           setView(target)
           memoriesStore.update((b) => markRecalled(b, m.id, Math.floor(Date.now() / 1000)))
           // The phone policy commands only SSB/FM; AM/WFM/DV/DN can't be set there, so for a
@@ -1674,8 +1676,10 @@ export default function App() {
         // (atomic), so the view-effect can still apply the mode on a later nav.
         if (!s) return
         setSnap(s)
-        // Keep the rig-mode effect's guard in sync so it doesn't re-fire on the nav.
+        // Keep the rig-mode effect's guards in sync so it doesn't re-fire on the nav — and
+        // the HOMED guard too, because this landed the dial on purpose (#143).
         lastOpModeRef.current = opMode
+        lastHomedModeRef.current = opMode
         // CW/Phone log forms consume a prefill; the digital + RTTY cockpits don't (digital
         // auto-sequences on a decode double-click, RTTY has its own net picker) — just the QSY.
         if (target.view === 'cw' || target.view === 'phone') {
