@@ -20,7 +20,7 @@
 // reasoning the settings registry and its 228 deep links were built on.
 //
 // WHY THIS IMPORTS THE REGISTRY INSTEAD OF PARSING IT. The first version of this check
-// regex-scanned registry.ts and found FIVE sections; there are eight. A parser that silently
+// regex-scanned registry.ts and found FIVE sections; there are twenty-two. A parser that silently
 // under-reports turns this guard into a green light for the exact gap it exists to catch, so
 // the list comes from the module itself and cannot drift from what the app ships.
 import { describe, it, expect } from 'vitest'
@@ -113,7 +113,7 @@ describe('the manual covers what the app ships', () => {
 
   it('every recorded gap names a section that still exists', () => {
     // A gap for a section that has since been renamed or removed is a note about nothing.
-    const ids = new Set(sectionFeatures().map((f) => f.id))
+    const ids = new Set<string>(sectionFeatures().map((f) => f.id))
     const stale = Object.keys(KNOWN_GAPS).filter((id) => !ids.has(id))
     expect(stale, `KNOWN_GAPS names sections the registry no longer has: ${stale.join(', ')}`).toEqual([])
   })

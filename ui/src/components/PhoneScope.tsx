@@ -819,6 +819,54 @@ export function PhoneScope({
         ctx.fillText(DIAL_PLATE, cx + 3 * scaleY, 2 * scaleY)
       }
 
+      // ---- Dial line (native RF panadapter): where the VFO actually is ----
+      //
+      // Operator request from an IC-7300 user, 2026-08-20: "The RF Panadapter is now
+      // displayed! Is there a way to place a dial indicator on the freq tuned?" There was
+      // not. The carrier line above is explicitly `!isRfScopeSource`, because it marks audio
+      // axis 0 — a coordinate a real RF row does not have — so a native panadapter drew a
+      // spectrum with nothing saying which part of it you were listening to. Every other
+      // panadapter in the hobby marks the dial, and the rig's own screen does.
+      //
+      // The dial is an ABSOLUTE RF frequency here and so are lo/hi, which is what makes this
+      // three lines: the same projection the row itself was painted with. It is NOT assumed
+      // to be the middle. scopeView centres the window on the dial only when the dial is
+      // inside the row and no marker moves it, so on a rig in FIXED scope mode — where the
+      // span is a band segment and the VFO sits wherever you tuned it — the line lands where
+      // the VFO really is, off-centre, which is the whole point of that mode.
+      //
+      // DRAWN ONLY WHEN IT IS GENUINELY IN VIEW. A dial outside the window is not clamped to
+      // an edge: a line pinned to the left of a panadapter saying DIAL, while the dial is a
+      // megahertz further down, is worse than no line. scopeView already falls back to the
+      // row centre when the dial is outside the row, and this refuses to draw on that
+      // fallback rather than marking a frequency nobody is tuned to.
+      if (isRfScopeSource(src) && dialRef.current != null) {
+        const dialHz = dialRef.current
+        const dx = Math.round(((dialHz - lo) / (hi - lo)) * Wd)
+        // The CW pitch marker below lands EXACTLY here on an RF row (scopeView maps the
+        // marker through the dial), so drawing both would stack a solid line under a dashed
+        // one. Where they coincide the marker wins: it carries the extra meaning.
+        const mAt = view.markerAtHz
+        const mx = mAt == null ? null : Math.round(((mAt - lo) / (hi - lo)) * Wd)
+        // INCLUSIVE bounds, and that is not a rounding detail. On USB a plain audio window
+        // projects onto RF as dial → dial+span, so the dial IS the window's left edge (its
+        // right edge on LSB); only the symmetric modes (FM/AM) centre it. An exclusive test
+        // would therefore refuse to draw in exactly the case an SSB operator is in.
+        if (dialHz >= lo && dialHz <= hi && (mx == null || Math.abs(mx - dx) > 1)) {
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'
+          ctx.lineWidth = Math.max(1, scaleY)
+          ctx.beginPath()
+          ctx.moveTo(dx, 0)
+          ctx.lineTo(dx, devH)
+          ctx.stroke()
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
+          ctx.font = `${Math.max(8, Math.round(10 * scaleY))}px system-ui, sans-serif`
+          ctx.textAlign = 'left'
+          ctx.textBaseline = 'top'
+          ctx.fillText(DIAL_PLATE, dx + 3 * scaleY, 2 * scaleY)
+        }
+      }
+
       // ---- Pitch marker (CW): tune a carrier onto the hairline = zero-beat ----
       // (on a native RF row scopeView puts the marker exactly ON the dial)
       const markerAt = view.markerAtHz
