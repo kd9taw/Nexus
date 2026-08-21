@@ -3258,6 +3258,46 @@ impl RadioLoop {
     /// radio's rigctld wire log: `a_contended_switch_never_keys_the_outgoing_radio` (mic),
     /// `a_deferred_switch_stops_the_tune_carrier_and_the_slot_over_too`, and the six
     /// `a_contended_switch_never_…_on_the_outgoing_radio` scenes.
+    /// Open the WinKeyer on `port` if it is not already open there, clearing the cached
+    /// speed first. Returns the operator-facing error when the open failed, `None` otherwise.
+    ///
+    /// ONE open path, called from two places (#135). It used to live inline inside the
+    /// send-a-word branch, which is what made the bug: a keyer that is never opened is never
+    /// told the speed, and PADDLE keying does not pass through Nexus at all — so the paddle
+    /// ran at the keyer's own pot while the cockpit showed a number nobody had sent it.
+    ///
+    /// The cache is cleared BEFORE the open, and that ordering is deliberate: `WinKeyer::open`
+    /// sends Host Open and no speed setup, so a freshly-opened keyer is back on its own
+    /// pot/power-on default and whatever we believe it was last told is now false. Clearing
+    /// first also leaves a FAILED open with a clear cache, so the retry pushes too.
+    #[cfg(feature = "serial")]
+    fn ensure_winkeyer(&mut self, port: &str) -> Option<String> {
+        let reopen = self
+            .winkeyer
+            .as_ref()
+            .map(|(p, _)| p != port)
+            .unwrap_or(true);
+        if !reopen {
+            return None;
+        }
+        self.last_winkeyer_wpm = 0;
+        match crate::winkeyer::WinKeyer::open(port) {
+            Ok((wk, _rev)) => {
+                self.winkeyer = Some((port.to_string(), wk));
+                None
+            }
+            // What the SYSTEM said, verbatim — `self.winkeyer` stays None so the next tick
+            // retries.
+            Err(e) => {
+                self.winkeyer = None;
+                Some(format!(
+                    "WinKeyer on {port}: {e}. If the port name is right, check that the keyer \
+                     is powered and that nothing else (CAT, another logger) has it open."
+                ))
+            }
+        }
+    }
+
     fn may_key(&self) -> bool {
         !self.handoff_deferred && !self.cat_hold_active
     }
@@ -5637,8 +5677,33 @@ impl RadioLoop {
             // whether a unit with its speed POT enabled honours a host speed at all — on
             // WK2/WK3 the pot can own the speed, in which case the fix is correct and the
             // keyer still ignores it. Bench a real keyer both idle and mid-macro.
+            //
+            // ⚠️ 2026-08-21 — THE ABOVE IS NOW HALF THE FIX, AND THE SECOND BULLET IS REVERSED.
+            // swinn tested 1.7.5 and reported precisely: after launch the slider reads 20 while
+            // the PADDLE keys at 30-something; moving the slider does nothing; send one
+            // character from the keyboard and the paddle becomes 20 and the slider starts
+            // working. That is this block doing exactly what it says — pushing only to an
+            // ALREADY-OPEN keyer — meeting a port that is opened on demand by the first word.
+            // Until you send, there is no keyer to push to.
+            //
+            // The paddle is the part that makes it matter: paddle keying never passes through
+            // Nexus at all, so the ONLY thing that can put the operator's speed under it is a
+            // Set Speed we sent to the keyer. A keyer we never opened never got one, and the
+            // cockpit's number was a claim about hardware nobody had told.
+            //
+            // So the port is now opened when one is CONFIGURED, not when the first word needs
+            // it. The cost is a dedicated COM port held from the moment CW can key rather than
+            // from the first character — which is what a keyer configured for use is for, and
+            // what other loggers do. The benefit is that the slider stops lying about hardware
+            // it has never spoken to.
             #[cfg(feature = "serial")]
             if self.may_key() {
+                if let Some(port) = &winkeyer_port {
+                    if let Some(err) = self.ensure_winkeyer(port) {
+                        let mut eng = engine_lock(engine);
+                        eng.set_cw_keyer_error(Some(err));
+                    }
+                }
                 if let Some((_, wk)) = self.winkeyer.as_mut() {
                     if wpm != self.last_winkeyer_wpm && wk.set_wpm(wpm).is_ok() {
                         self.last_winkeyer_wpm = wpm;
@@ -5661,35 +5726,11 @@ impl RadioLoop {
                 // own error — if it produced one — pointed at the wrong backend.
                 #[cfg(feature = "serial")]
                 if let Some(port) = &winkeyer_port {
-                    let reopen = self
-                        .winkeyer
-                        .as_ref()
-                        .map(|(p, _)| p != port)
-                        .unwrap_or(true);
-                    let mut open_err = None;
-                    if reopen {
-                        // ISSUE #135: a keyer we are about to open knows nothing of the
-                        // speed we sent the LAST one — it is back on its own pot /
-                        // power-on default, because `WinKeyer::open` sends Host Open and
-                        // no speed setup. Forget what we think it has been told, so the
-                        // push below always fires on a fresh port. Reset before the open,
-                        // so a FAILED open leaves the cache clear for the retry too.
-                        self.last_winkeyer_wpm = 0;
-                        match crate::winkeyer::WinKeyer::open(port) {
-                            Ok((wk, _rev)) => self.winkeyer = Some((port.clone(), wk)),
-                            // What the SYSTEM said, verbatim. `self.winkeyer` stays None, so
-                            // the next word retries the open — a keyer plugged in late, or a
-                            // port briefly held by another app, still recovers on its own.
-                            Err(e) => {
-                                self.winkeyer = None;
-                                open_err = Some(format!(
-                                    "WinKeyer on {port}: {e}. If the port name is right, check \
-                                     that the keyer is powered and that nothing else (CAT, \
-                                     another logger) has it open."
-                                ));
-                            }
-                        }
-                    }
+                    // Usually a no-op now: the tick above already opened it. Still here for
+                    // the port-changed case and for the retry after a failed open — a keyer
+                    // plugged in late, or a port briefly held by another app, recovers on
+                    // its own without the operator touching anything.
+                    let open_err = self.ensure_winkeyer(port);
                     if let Some((_, wk)) = self.winkeyer.as_mut() {
                         // Still here after the per-tick push above, and NOT redundant with
                         // it: on the tick that OPENS the port there was no keyer for that
@@ -11141,6 +11182,105 @@ mod tests {
             after.windows(2).any(|w| w == crate::winkeyer::wpm_cmd(35)),
             "issue #135: a speed change with nothing queued must reach the keyer — the \
              wire carried {after:02x?}"
+        );
+    }
+
+    /// ISSUE #135, THE HALF THE FIRST FIX MISSED — swinn on 1.7.5, and his words are the
+    /// spec: "After starting Nexus the slider is set at 20 wpm. If I use the paddle it really
+    /// is at something probably over 30 wpm. Adjusting the slider then does not change the
+    /// speed. If I send a single character from the keyboard it goes out at 20 wpm and after
+    /// that the paddle is 20 wpm."
+    ///
+    /// PADDLE KEYING NEVER PASSES THROUGH NEXUS. The only thing that can put the operator's
+    /// speed under it is a Set Speed we sent the keyer — and the port used to open on demand
+    /// from the send-a-word branch, so until you typed something there was no keyer to send
+    /// it to. The cockpit's number was a claim about hardware nobody had told.
+    ///
+    /// So: a configured keyer, CW mode, and NOTHING SENT. The speed must still reach the
+    /// wire. The sibling test above covers the send path and cannot see this at all — it
+    /// opens the port by sending.
+    #[cfg(feature = "serial")]
+    #[test]
+    fn a_configured_winkeyer_learns_the_speed_without_being_sent_to() {
+        use serialport::SerialPort;
+        use std::io::{Read, Write};
+
+        let (mut keyer, slave) = serialport::TTYPort::pair().expect("a pty pair");
+        let port = slave
+            .name()
+            .expect("the pts side has a path to open by name");
+        keyer
+            .set_timeout(Duration::from_millis(250))
+            .expect("a bounded read, so a silent wire ends the test instead of hanging it");
+        // Answer Host Open exactly as a real WK does — the host blocks on that byte.
+        let mut responder = keyer
+            .try_clone()
+            .expect("clone the pty master to answer on");
+        responder
+            .set_timeout(Duration::from_millis(3000))
+            .expect("bound the answering read too");
+        std::thread::spawn(move || {
+            let mut host_open = [0u8; 2];
+            if responder.read_exact(&mut host_open).is_ok() {
+                let _ = responder.write_all(&[0x17]); // WK2, revision 23
+                let _ = responder.flush();
+            }
+        });
+        fn drain(k: &mut serialport::TTYPort) -> Vec<u8> {
+            let mut out = Vec::new();
+            let mut buf = [0u8; 64];
+            while let Ok(n) = k.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
+            out
+        }
+
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.winkeyer_port = port.clone();
+            e.apply_settings(s);
+            e.set_cw_keyer("winkeyer", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.set_cw_wpm(20);
+            // AND NOTHING IS SENT. No send_cw, no macro, no character — the operator has
+            // launched into CW and reached for the paddle, which is the reported scene.
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        // Control first: if the stand-in keyer never opened, the assertion below would be
+        // reporting the wrong thing entirely.
+        assert_eq!(
+            engine.lock().unwrap().cw_keyer_error(),
+            None,
+            "the stand-in keyer must open cleanly, or this scene proves nothing"
+        );
+        let wire = drain(&mut keyer);
+        assert!(
+            wire.windows(2).any(|w| w == crate::winkeyer::wpm_cmd(20)),
+            "a configured keyer must be told the operator's speed without waiting to be sent \
+             to — the paddle has no other way to learn it: {wire:02x?}"
         );
     }
 
