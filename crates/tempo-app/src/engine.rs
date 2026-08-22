@@ -1953,7 +1953,7 @@ pub struct Engine {
     /// HZ, not a 0..1 fraction.
     notch_freq_hz: Option<f32>,
     rig_notch_freq_hz: Option<f32>,
-    /// Desired / read-back AGC time constant as "fast"|"mid"|"slow" (the loop maps it to the
+    /// Desired / read-back AGC time constant, one of [`Engine::AGC_SPEEDS`] (the loop maps it to the
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
     rig_agc: Option<String>,
@@ -6638,6 +6638,19 @@ impl Engine {
         }
     }
 
+    /// The AGC time constants Nexus offers, in the order the cockpit shows them.
+    ///
+    /// AUTO and OFF joined the original three on 2026-08-17. They were missing while the radios
+    /// have them — an FT-710 offers both on the front panel — and worse, they read back as "mid"
+    /// (see `service::agc_from_hamlib`), so the cockpit misreported the rig's actual setting.
+    ///
+    /// Offered for every rig rather than gated on capability, deliberately: Hamlib does not
+    /// enumerate which AGC constants a backend accepts (`--dump-caps` reports `AGC(0..0/0)` on both
+    /// Yaesus tested), so there is nothing to gate on. A rig that refuses one answers the SET with an
+    /// error, which `agc_refused` already surfaces, and the next read-back shows what the radio
+    /// actually did — an honest failure the operator can see, rather than a chip we hid on a guess.
+    pub const AGC_SPEEDS: [&str; 5] = ["auto", "fast", "mid", "slow", "off"];
+
     /// Speech-processor depth (0..1). #95 — the COMP toggle had no level behind it.
     pub fn set_comp_level(&mut self, frac: f32) {
         self.comp_level = Some(frac.clamp(0.0, 1.0));
@@ -6665,10 +6678,10 @@ impl Engine {
         }
     }
 
-    /// Set desired AGC speed ("fast"|"mid"|"slow") — an OPERATOR PICK, which the radio loop
+    /// Set desired AGC speed — an OPERATOR PICK, which the radio loop
     /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
-        if matches!(speed, "fast" | "mid" | "slow") {
+        if Self::AGC_SPEEDS.contains(&speed) {
             self.agc = Some(speed.to_string());
             self.agc_picked = true;
         }
@@ -6692,7 +6705,7 @@ impl Engine {
         Some((speed, std::mem::take(&mut self.agc_picked)))
     }
     pub fn observe_rig_agc(&mut self, speed: String) {
-        if matches!(speed.as_str(), "fast" | "mid" | "slow") {
+        if Self::AGC_SPEEDS.contains(&speed.as_str()) {
             self.rig_agc = Some(speed);
         }
     }

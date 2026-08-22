@@ -840,20 +840,37 @@ fn note_ext_read(supported: &mut Option<bool>, misses: &mut u8, ok: bool) {
     }
 }
 
-/// AGC speed <-> Hamlib enum int (FAST=2, MEDIUM=5, SLOW=3). The UI/engine speak
-/// "fast"/"mid"/"slow"; the rigctld `AGC` level carries the enum int.
+/// AGC speed <-> Hamlib enum int (`rig_agc_level_e`: OFF=0, SUPERFAST=1, FAST=2, SLOW=3,
+/// USER=4, MEDIUM=5, AUTO=6). The UI/engine speak "auto"/"fast"/"mid"/"slow"/"off".
+///
+/// AUTO AND OFF USED TO READ BACK AS "mid", AND THAT MISREPRESENTED THE RADIO. The fold was
+/// `_ => "mid"`, so a rig sitting on AUTO — an ordinary setting on an FT-710, and the one an
+/// operator is most likely to leave it on — displayed as Mid, as did AGC switched OFF. Verified
+/// on an FT-710 (2026-08-17): the rig on AUTO, the cockpit showing Mid.
+///
+/// That is worse than a cosmetic slip, because the display invites the correction that does the
+/// damage: seeing the wrong chip lit, the operator clicks the right one, and THAT reaches the
+/// radio (`Engine::agc_to_command` — one click is one command), so a reading error turns into
+/// the loss of the AGC setting they actually had.
+///
+/// SUPERFAST folds to "fast" rather than "mid" — it is a faster constant than FAST, so "mid" was
+/// never the nearest answer. USER (4) has no fixed meaning to fold honestly, so it stays "mid".
 fn agc_to_hamlib(speed: &str) -> u8 {
     match speed {
+        "off" => 0,
         "fast" => 2,
         "slow" => 3,
+        "auto" => 6,
         _ => 5, // mid
     }
 }
 fn agc_from_hamlib(v: u8) -> &'static str {
     match v {
-        2 => "fast",
+        0 => "off",
+        1 | 2 => "fast", // 1 = SUPERFAST: faster than FAST, so never "mid"
         3 => "slow",
-        _ => "mid", // 5 medium (and off/superfast fold to mid for display)
+        6 => "auto",
+        _ => "mid", // 5 MEDIUM, and USER (4) which has no honest nearest
     }
 }
 /// Max consecutive `set_mode` retries for one target mode before giving up (so a rig
@@ -9961,6 +9978,32 @@ mod tests {
     }
     use super::*;
     use crate::backend::MockBackend;
+
+    /// AUTO and OFF must survive the round trip, and must NEVER come back as "mid".
+    ///
+    /// The old fold was `_ => "mid"`, so a radio sitting on AUTO — ordinary on an FT-710 — showed
+    /// as Mid. Confirmed against the rig on 2026-08-17. The display error is the dangerous half:
+    /// the operator clicks the chip that looks wrong to correct it, and THAT command reaches the
+    /// radio, so a misread costs them the setting they had.
+    #[test]
+    fn agc_auto_and_off_round_trip_and_are_never_shown_as_mid() {
+        for speed in tempo_app::engine::Engine::AGC_SPEEDS {
+            let back = agc_from_hamlib(agc_to_hamlib(speed));
+            assert_eq!(back, speed, "{speed} must survive the round trip");
+        }
+        // The two that used to be lost, named explicitly — a round-trip loop alone would still
+        // pass if both mapped to the same wrong number.
+        assert_eq!(agc_to_hamlib("auto"), 6, "Hamlib RIG_AGC_AUTO");
+        assert_eq!(agc_to_hamlib("off"), 0, "Hamlib RIG_AGC_OFF");
+        assert_eq!(agc_from_hamlib(6), "auto");
+        assert_eq!(agc_from_hamlib(0), "off");
+
+        // SUPERFAST is faster than FAST, so "mid" was never the nearest reading.
+        assert_eq!(agc_from_hamlib(1), "fast");
+        // USER has no honest nearest, and MEDIUM is mid — both keep the old answer.
+        assert_eq!(agc_from_hamlib(4), "mid");
+        assert_eq!(agc_from_hamlib(5), "mid");
+    }
 
     /// What `sat_tune_nominal` is told the bird needs the radio to be in —
     /// named for the same reason the engine's tests name them: the argument's

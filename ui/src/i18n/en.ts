@@ -6905,10 +6905,13 @@ export const EN = {
   'cw.rxDsp.nr.aria': 'Noise-reduction level',
   'cw.rxDsp.agc.aria': 'AGC speed',
   'cw.rxDsp.agc.title': 'AGC time constant — Fast for CW/pileups, Slow for steady copy',
-  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  // The five chips are words over stored tokens ('auto' / 'fast' / 'mid' / 'slow' /
+  // 'off' — `Engine::AGC_SPEEDS`, and the order they render in).
+  'cw.rxDsp.agc.auto': 'Auto',
   'cw.rxDsp.agc.fast': 'Fast',
   'cw.rxDsp.agc.mid': 'Mid',
   'cw.rxDsp.agc.slow': 'Slow',
+  'cw.rxDsp.agc.off': 'Off',
 
   // ── CW ▸ the decode pane and the sent echo ──────────────────────────────────────────
   // `{{window}}` is the AI decoder's audio window in Hz, supplied by the call site.
@@ -7108,10 +7111,13 @@ export const EN = {
   'phone.rxDsp.notchFreq.aria': 'Manual notch frequency in hertz',
   'phone.rxDsp.agc.aria': 'AGC speed',
   'phone.rxDsp.agc.title': 'AGC time constant',
-  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  // The five chips are words over stored tokens ('auto' / 'fast' / 'mid' / 'slow' /
+  // 'off' — `Engine::AGC_SPEEDS`, and the order they render in).
+  'phone.rxDsp.agc.auto': 'Auto',
   'phone.rxDsp.agc.fast': 'Fast',
   'phone.rxDsp.agc.mid': 'Mid',
   'phone.rxDsp.agc.slow': 'Slow',
+  'phone.rxDsp.agc.off': 'Off',
 
   // ── Phone ▸ the voice keyer pane ─────────────────────────────────────────────────────
   // F1–F6 are key names and `{{slot}}` is the number one of them carries; `{{label}}` is the
