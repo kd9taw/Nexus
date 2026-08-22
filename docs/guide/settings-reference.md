@@ -1,6 +1,6 @@
 # Settings reference
 
-Settings is organized into nine tabs. Only the active tab renders, so typing in
+Settings is organized into ten tabs. Only the active tab renders, so typing in
 one field doesn't lag the whole panel. **Save** at the bottom applies your
 changes; most take effect live (a few say "takes effect on restart", and a few
 apply the instant you touch them — those say so too).
@@ -14,12 +14,12 @@ The tabs, in the order they appear:
 [Station](#station) · [Radio](#radio) · [Phone](#phone) · [CW](#cw) ·
 [Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
 [Logging & Connectors](#logging--connectors) · [Contesting](#contesting) ·
-[Appearance](#appearance)
+[Appearance](#appearance) · [Config](#config)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
 took) and a **Check for updates** button.
 
-![The Settings panel with the Radio tab open on a fresh install. The nine tabs — Station, Radio, Phone, CW, Digital, Spots & Alerts, Logging & Connectors, Contesting, Appearance — run across the top beside a "Find a setting" box, and the header carries the build stamp and Check for updates. Below them a Setup health strip, the Radios roster holding a single radio badged ACTIVE with an Add radio button, Profiles, and the Rig & CAT section laid out in columns across the full width of the window: PTT Method, Zero-config setup with a Detect my radio button, Rig Model, Connection, Serial Port with Refresh and Auto-test, Baud, and Antenna Rotator. Each control has its explanation printed under it.](../img/manual/settings-radio.webp)
+![The Settings panel with the Radio tab open on a fresh install. The ten tabs — Station, Radio, Phone, CW, Digital, Spots & Alerts, Logging & Connectors, Contesting, Appearance, Config — run across the top beside a "Find a setting" box, and the header carries the build stamp and Check for updates. Below them a Setup health strip, the Radios roster holding a single radio badged ACTIVE with an Add radio button, Profiles, and the Rig & CAT section laid out in columns across the full width of the window: PTT Method, Zero-config setup with a Detect my radio button, Rig Model, Connection, Serial Port with Refresh and Auto-test, Baud, and Antenna Rotator. Each control has its explanation printed under it.](../img/manual/settings-radio.webp)
 
 ---
 
@@ -319,9 +319,6 @@ the bottom of Rig & CAT.
     beside the other port settings, and appears only once sharing is on. Hamlib
     NET rigctl default 4532; change it only if something else on this computer
     already owns the port.
-
-<!-- TODO(settings-reference): the setup-backup control on this section has no
-     prose yet — describe it once its behaviour is confirmed against the panel. -->
 
 ---
 
@@ -1140,6 +1137,36 @@ of the speakers.
   know your TX state by ear."
 - **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
   band's rhythm, eyes-free."
+
+---
+
+## Config
+
+Your whole setup in one file, and the way back to a clean slate. These were
+previously under *Radio → Transmit limits & sharing*, where they were effectively
+undiscoverable: backing up a whole station has nothing to do with transmit
+limits.
+
+### Backup & reset
+
+- **Back up** — writes your radios, operating preferences, memory channels,
+  watchlist and chase sets to a single `.json`. For a new computer, or before a
+  rebuild. **It holds no passwords or API keys** — those stay in your operating
+  system's keychain, so a restore asks for them again and the file is safe to
+  keep on a USB stick, or to attach to a support thread. Your contact log is
+  separate; export that from the Logbook.
+- **Restore…** — replaces your current setup from a file written by *Back up*. It
+  refuses anything that is not one of ours, by name and by schema: a partial
+  restore of a mangled file is worse than a refusal, because you would believe
+  you were configured when you were not.
+- **Reset all settings…** — returns everything to factory defaults: radios, audio
+  devices, callsign, preferences. **Your logbook is not touched** (it lives
+  outside the settings), and **stored passwords stay in your keychain** — clear
+  those individually under *Logging & Connectors*. Confirms first, and cannot be
+  undone, so back up if you have not. Use this rather than deleting
+  `settings.json` by hand: deleting the file while Nexus is running resets
+  nothing, because the app holds your old configuration in memory and writes it
+  straight back on the next save.
 
 ---
 

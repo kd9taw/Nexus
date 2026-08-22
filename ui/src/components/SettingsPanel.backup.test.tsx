@@ -168,7 +168,10 @@ afterEach(cleanup)
 /** Click "Edit" on the non-active radio (the IC-9700) so the flat rig form describes it. */
 describe('backing up the station', () => {
   async function backupRow() {
-    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    // Backup and Restore moved to their own Config tab. They used to sit under
+    // Radio ▸ "Transmit limits & sharing", which is why operators did not find them: backing up a
+    // whole station has nothing to do with transmit limits.
+    fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
     const label = await screen.findByText('Back up your setup')
     return label.closest('.settings-field') as HTMLElement
   }
@@ -183,7 +186,11 @@ describe('backing up the station', () => {
   // tested this path at all -- there was not one reference to importSettingsBundle in the suite.
   it('re-reads the settings after a restore, so the panel cannot show stale values', async () => {
     const { container } = renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    // CONFIG, not Radio. This test arrived with the restore fix (#85), when Backup and Restore
+    // still lived under Radio ▸ Transmit limits & sharing; this branch is the one that moves them.
+    // Left pointing at Radio it fails on an absent file input — a real signal, not a flake, and
+    // the reason the tab is named here rather than the input hunted for across the panel.
+    fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
 
     // NOT the first file input: the TLE importer is also one and comes first in the DOM.
     // Pick the restore input by what it accepts, or this drives the wrong feature entirely.
