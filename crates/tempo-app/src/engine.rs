@@ -16804,15 +16804,6 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 #[cfg(test)]
 mod tests {
 
-    /// A RESTORE takes the bundle's roster; a form save keeps the engine's. Getting these the same
-    /// way round loses radios.
-    ///
-    /// `apply_settings` deliberately preserves the live roster so a stale Settings form cannot
-    /// revert a rig you just added. Routing a restore through it discards the bundle's roster
-    /// instead — and on the case the feature exists for, a backup carried to another machine, that
-    /// is radios 2..n, the routing rules and the blocked-call list gone, written durably, under a
-    /// dialog that says "This cannot be undone".
-    #[test]
     /// The contract a factory RESET depends on, pinned from the engine side.
     ///
     /// Same asymmetry #85 fixed for restore, arriving from the other side. A reset builds a factory
@@ -16866,6 +16857,14 @@ mod tests {
         );
     }
 
+    /// A RESTORE takes the bundle's roster; a form save keeps the engine's. Getting these the same
+    /// way round loses radios.
+    ///
+    /// `apply_settings` deliberately preserves the live roster so a stale Settings form cannot
+    /// revert a rig you just added. Routing a restore through it discards the bundle's roster
+    /// instead — and on the case the feature exists for, a backup carried to another machine, that
+    /// is radios 2..n, the routing rules and the blocked-call list gone, written durably, under a
+    /// dialog that says "This cannot be undone".
     #[test]
     fn a_restored_bundle_brings_its_own_roster_and_a_form_save_does_not() {
         // A station with ONE radio, live.
