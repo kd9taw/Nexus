@@ -2410,6 +2410,9 @@ struct RadioLoop {
     /// change (used when the voice-mic notice cleared a line the monitor may
     /// still be entitled to — its guard/failure state gets re-surfaced).
     monitor_reapply: bool,
+    /// Last TX-mute state pushed to the audio backend, so the loop only speaks on a CHANGE.
+    /// `false` initially, which matches a monitor that starts unmuted.
+    monitor_tx_muted: bool,
     /// One-shot: force the RX-audio backend to rebuild on the next tick even if `audio_differs` is
     /// false. Set by a dual-radio handoff — the new radio's audio device MUST be (re)opened, and a
     /// radio whose audio is "system default" (empty) would otherwise compare equal to another empty
@@ -2779,6 +2782,7 @@ impl RadioLoop {
             voice_mic_open: false,
             voice_mic_failed: false,
             monitor_reapply: false,
+            monitor_tx_muted: false,
             force_audio_rebuild: false,
             audio_retry_at: None,
             audio_suspect: None,
@@ -4242,6 +4246,26 @@ impl RadioLoop {
                 }
                 if (want.rx_gain - self.applied.rx_gain).abs() > f32::EPSILON {
                     backend.set_rx_gain(want.rx_gain);
+                }
+            }
+
+            // MUTE THE MONITOR WHILE THE OPERATOR IS TALKING. Independent of the block below,
+            // which reacts to SETTINGS changes — this reacts to KEYING, and the two are unrelated
+            // events. Edge-triggered so the loop speaks to the backend once per transition rather
+            // than every tick.
+            //
+            // SCOPE, stated rather than implied: `manual_ptt` is the operator holding PTT (or the
+            // CAT broker holding it for them) — a PHONE over. It is the case this exists for,
+            // because that is when the rig's own delayed MONI lands on top of the voice the
+            // operator is still speaking. An FT slot, a CW over or an RTTY stream also key the rig
+            // and are NOT covered here; nobody is talking through those, and widening this to
+            // every transmission means finding a signal that covers them all, which is a larger
+            // change than the problem needs today.
+            {
+                let keyed = engine_lock(engine).manual_ptt();
+                if keyed != self.monitor_tx_muted {
+                    self.monitor_tx_muted = keyed;
+                    backend.set_monitor_tx_mute(keyed);
                 }
             }
 

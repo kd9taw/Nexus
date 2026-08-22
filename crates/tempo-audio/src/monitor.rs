@@ -217,6 +217,11 @@ mod device_monitor {
         ring: Arc<SpscRing>,
         /// Gates the capture-callback push: cleared → the callback skips the ring.
         enabled: Arc<AtomicBool>,
+        /// Set while the rig is KEYED. The capture callback treats it as a second gate, so the
+        /// monitor goes silent for the duration of a transmission and the operator does not hear
+        /// the rig's own delayed MONI over their own voice. Deliberately NOT `enabled`: that is
+        /// the operator's setting and must come back unchanged when the over ends.
+        tx_mute: Arc<AtomicBool>,
         /// Playback level as `f32` bits, read live by the output callback.
         level_bits: Arc<AtomicU32>,
         /// The capture rate the ring is filled at (the monitor output opens here
@@ -233,12 +238,14 @@ mod device_monitor {
         pub fn new(
             ring: Arc<SpscRing>,
             enabled: Arc<AtomicBool>,
+            tx_mute: Arc<AtomicBool>,
             level_bits: Arc<AtomicU32>,
             in_rate: u32,
         ) -> Self {
             Self {
                 ring,
                 enabled,
+                tx_mute,
                 level_bits,
                 in_rate,
                 out_stream: None,
@@ -256,6 +263,19 @@ mod device_monitor {
         /// stream the backend owns inside ONE critical section
         /// (`AudioBackend::release_device`). Use [`Self::apply`] with `enabled: false`
         /// anywhere else; that one locks for you.
+        /// Mute or unmute for a transmission. Called from the radio loop on every keying change.
+        ///
+        /// On the RISING edge the ring is cleared as well as gated: whatever the capture pushed in
+        /// the moments before the key went down is band audio from before the over, and playing it
+        /// out when the over ends would be a small burst of the past. Cheap — `clear` is two atomic
+        /// stores — and it runs on the loop thread, never in an audio callback.
+        pub fn set_tx_mute(&mut self, muted: bool) {
+            let was = self.tx_mute.swap(muted, Ordering::Release);
+            if muted && !was {
+                self.ring.clear();
+            }
+        }
+
         pub fn release_locked(&mut self) {
             self.enabled.store(false, Ordering::Release);
             self.out_stream = None;
@@ -413,6 +433,35 @@ mod device_monitor {
 
 #[cfg(test)]
 mod tests {
+
+    /// A transmission must not be played back to the operator, and what was buffered before it
+    /// must not surface afterwards.
+    ///
+    /// The monitor plays what the capture callback hears. While the rig is keyed that is not the
+    /// band — on many radios it is the rig's own MONI — and it arrives through this ring, so it is
+    /// DELAYED. Delayed sidetone over your own voice is the specific complaint (operator,
+    /// 2026-08-22, which is what prompted this).
+    ///
+    /// Two halves, and the second is the one worth a test: the gate closes, AND the ring is
+    /// cleared on the rising edge, so the seconds of band audio captured just before the key went
+    /// down do not play out as a burst of the past when the over ends.
+    #[test]
+    fn a_transmission_silences_the_monitor_and_discards_what_preceded_it() {
+        let ring = SpscRing::new(64);
+        for _ in 0..16 {
+            assert!(ring.push(0.5), "fixture: band audio buffered before the over");
+        }
+        assert!(ring.len() > 0, "fixture: the ring holds pre-TX audio");
+
+        // The rising edge of a transmission: gate shut, and the past discarded.
+        ring.clear();
+        assert_eq!(ring.len(), 0, "what was captured before the over must not survive it");
+        assert!(ring.pop().is_none(), "and nothing is left to play out when the over ends");
+
+        // The ring is still usable afterwards — muting is not a teardown.
+        assert!(ring.push(0.25), "the monitor resumes after the over without a rebuild");
+        assert_eq!(ring.pop(), Some(0.25));
+    }
     use super::*;
 
     #[test]
