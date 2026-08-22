@@ -394,6 +394,45 @@ function checkVersionProse() {
 }
 
 // ---------------------------------------------------------------------------
+// Is every manual chapter actually ON the live site?
+// ---------------------------------------------------------------------------
+//
+// The site's copy of the manual is synced by hand (`scripts/sync-manual.mjs` needs a Nexus
+// checkout, which no runner has), so it only moves when somebody remembers. It had drifted for
+// FOUR releases before anyone noticed, and what finally noticed was 1.7.6's release notes
+// advertising a Tempo chapter that 404'd on the live site — i.e. an operator following the
+// release notes would have found the promise empty.
+//
+// This used to be a line in the BY HAND list below. A note is what let it rot: it says "go and
+// check" and nothing happens if you don't. So it is a CHECK now, and it asks the live site
+// rather than the repo, because the repo has been right the whole time — the site was wrong.
+try {
+  const chapters = readdirSync(path.join(ROOT, 'docs', 'guide'))
+    .filter((f) => f.endsWith('.md') && f !== 'index.md')
+    .map((f) => f.replace(/\.md$/, ''))
+  const res = await fetch('https://hamradiotools.io/manual/', { redirect: 'follow' })
+  const html = res.ok ? await res.text() : ''
+  const live = new Set([...html.matchAll(/href="\/manual\/([a-z0-9-]+)"?/g)].map((m) => m[1]))
+  if (!res.ok || live.size === 0) {
+    // A "nothing found" here would otherwise read as "every chapter is missing" and cry wolf.
+    REVIEW('site manual vs docs/guide', [`could not read the live manual index (HTTP ${res.status})`],
+      'Not a verdict about the manual — the CHECK could not run. Try again, or look by hand.')
+  } else {
+    const missing = chapters.filter((c) => !live.has(c))
+    if (missing.length) {
+      FAIL('site manual vs docs/guide', missing.map((c) => `${c} — docs/guide/${c}.md is not on hamradiotools.io/manual/`),
+        'Run scripts/sync-manual.mjs in the site checkout, commit, push it to the site repo main, ' +
+        'then re-deploy (gh workflow run publish.yml -f tag=v<version>) and re-run this.')
+    } else {
+      OK('site manual vs docs/guide', `all ${chapters.length} chapters are live (${live.size} pages on the index)`)
+    }
+  }
+} catch (e) {
+  REVIEW('site manual vs docs/guide', [String(e && e.message ? e.message : e)],
+    'The check itself failed (offline?). That is not evidence the manual is fine.')
+}
+
+// ---------------------------------------------------------------------------
 // The steps no script can do
 // ---------------------------------------------------------------------------
 

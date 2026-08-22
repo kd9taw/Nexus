@@ -23,8 +23,26 @@ NEW="${1:-}"
 [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "usage: scripts/release-prep X.Y.Z" >&2; exit 1; }
 
 CUR=$(grep -om1 '"version": *"[^"]*"' src-tauri/tauri.conf.json | grep -o '[0-9][^"]*')
-[ "$(printf '%s\n%s\n' "$CUR" "$NEW" | sort -V | tail -1)" = "$NEW" ] && [ "$CUR" != "$NEW" ] \
-  || { echo "error: new version $NEW is not greater than current $CUR (tauri.conf.json)" >&2; exit 1; }
+
+# ⚠️ A PRERELEASE OF THE SAME VERSION IS LOWER, AND `sort -V` DISAGREES WITH SEMVER ABOUT IT.
+# `sort -V` puts 1.7.6-test2 ABOVE 1.7.6 (it sorts the longer string later); semver puts it
+# below, because a prerelease precedes its release. That is not academic: the project's own
+# convention is that tester builds take a prerelease suffix on the version they are heading
+# for (1.7.6-test1 → 1.7.6), so the guard refused the exact transition every release makes.
+# It went unnoticed only because earlier testers were numbered off the PREVIOUS patch
+# (1.7.1-test9 while heading to 1.7.5), where the plain comparison happens to agree.
+#
+# So: strip a `-suffix` from the current version before comparing, and treat
+# "same base, current is a prerelease" as a legitimate step up.
+CUR_BASE="${CUR%%-*}"
+CUR_PRE=""
+[ "$CUR_BASE" != "$CUR" ] && CUR_PRE="yes"
+if [ "$CUR_BASE" = "$NEW" ] && [ -n "$CUR_PRE" ]; then
+  : # 1.7.6-test2 → 1.7.6 — releasing the version its own testers were cut against.
+else
+  [ "$(printf '%s\n%s\n' "$CUR_BASE" "$NEW" | sort -V | tail -1)" = "$NEW" ] && [ "$CUR_BASE" != "$NEW" ] \
+    || { echo "error: new version $NEW is not greater than current $CUR (tauri.conf.json)" >&2; exit 1; }
+fi
 
 [ -z "$(git status --porcelain)" ] || echo "note: working tree is dirty — the bump will mix with existing changes." >&2
 
