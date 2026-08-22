@@ -171,12 +171,25 @@ impl std::fmt::Display for OmniError {
             OmniError::RigOffline(s) => write!(f, "OmniRig says: {s}"),
             OmniError::NeedsElevation => write!(
                 f,
-                "Windows would not let Nexus start OmniRig — it is set to run as \
-                 administrator, and Nexus is not (0x800702E4). Start OmniRig yourself and \
-                 leave it running, then try again: Nexus attaches to the copy already up. \
-                 If it still refuses, right-click OmniRig.exe → Properties → Compatibility \
-                 and clear \"Run this program as an administrator\" — or run both as \
-                 administrator, so the two are at the same level."
+                "Windows would not let Nexus start OmniRig, because OmniRig.exe is MARKED to \
+                 run as administrator and Nexus is not (0x800702E4). OmniRig does not need \
+                 administrator to talk to a radio — a serial port never has — so the mark is \
+                 almost always left over from old troubleshooting, or added by Windows itself \
+                 after a crash. Clearing it fixes this for good and needs no elevation at all:\n\
+                 \n\
+                 1. Right-click OmniRig.exe → Properties → Compatibility, and clear \"Run this \
+                 program as an administrator\".\n\
+                 2. If that box is ALREADY clear, the mark is in the compatibility registry, \
+                 which that dialog does not always show. In a Command Prompt:\n\
+                 \x20  reg query \"HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\\
+                 AppCompatFlags\\Layers\" /s | findstr /i omnirig\n\
+                 \x20  reg query \"HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\\
+                 AppCompatFlags\\Layers\" /s | findstr /i omnirig\n\
+                 A line containing RUNASADMIN is the cause — delete that value.\n\
+                 \n\
+                 Running BOTH as administrator also works and is the worse cure: it leaves a \
+                 station application permanently elevated to work around a flag that should \
+                 not be set."
             ),
             OmniError::Com(s) => write!(f, "OmniRig COM call failed: {s}"),
         }
@@ -880,6 +893,48 @@ mod tests {
     /// seven "did not finish starting within the call budget" failures, and he found that
     /// starting JTDX first made Nexus connect every time — because after that Nexus only
     /// attaches to a server already running, which always fitted in 1.5 s.
+    /// THE ELEVATION MESSAGE MUST LEAD WITH THE CURE THAT WORKS.
+    ///
+    /// It used to open with "start OmniRig yourself and leave it running — Nexus attaches to
+    /// the copy already up". That is not reliable advice: if OmniRig is running ELEVATED and
+    /// Nexus is not, Windows blocks COM across integrity levels, so attaching can fail exactly
+    /// like launching did. An operator who follows the first sentence and still fails learns
+    /// that the message does not know either.
+    ///
+    /// The reliable cure is clearing the RUNASADMIN mark, and it must come first — including
+    /// the registry location, because the Properties checkbox does not always reflect a flag
+    /// set in the per-user compatibility layers and "the box is already unticked" is where
+    /// people give up. Running both elevated is named LAST and named as the worse option.
+    #[test]
+    fn the_elevation_message_leads_with_clearing_the_flag() {
+        let m = OmniError::NeedsElevation.to_string();
+        let clear_at = m
+            .find("Run this program as an administrator")
+            .expect("names the checkbox");
+        let both_at = m
+            .find("Running BOTH as administrator")
+            .expect("names the fallback");
+        assert!(
+            clear_at < both_at,
+            "the cure must come before the workaround"
+        );
+        assert!(
+            m.contains("AppCompatFlags"),
+            "must name the registry location — an unticked checkbox is where people give up"
+        );
+        assert!(
+            m.contains("RUNASADMIN"),
+            "must name what they are looking for"
+        );
+        assert!(m.contains("0x800702E4"), "keep the code searchable");
+        // The advice that may not work is gone: it sent operators down a path that fails for
+        // the same reason the launch did.
+        assert!(
+            !m.contains("attaches to the copy already up"),
+            "cross-integrity COM can refuse this too — do not present it as the first cure"
+        );
+    }
+
     #[test]
     fn starting_the_server_gets_a_far_longer_budget_than_calling_it() {
         assert!(
@@ -1071,9 +1126,21 @@ mod tests {
             msg.contains("0x800702E4"),
             "keeps the code support asks for: {msg}"
         );
+        // ⚠️ THIS ASSERTION WAS REVERSED ON 2026-08-21, deliberately. It used to require the
+        // message to lead with "start OmniRig yourself and leave it running — Nexus attaches to
+        // the copy already up". That advice is not reliable: when OmniRig is running ELEVATED
+        // and Nexus is not, Windows blocks COM across integrity levels, so attaching can fail
+        // for the very same reason launching did. An FT-890 operator hit this repeatedly.
+        // What actually cures it is clearing the RUNASADMIN mark, so that leads now, and the
+        // registry location goes with it because the Properties checkbox does not always show a
+        // flag set in the per-user compatibility layers.
         assert!(
-            lower.contains("start omnirig yourself"),
-            "leads with the thing to try first: {msg}"
+            lower.contains("run this program as an administrator"),
+            "leads with the cure that works — clearing the mark: {msg}"
+        );
+        assert!(
+            lower.contains("appcompatflags"),
+            "names where the flag hides when the checkbox looks clear: {msg}"
         );
         // It must NOT read as a broken install — that is the other arm, with the other cure.
         assert!(
