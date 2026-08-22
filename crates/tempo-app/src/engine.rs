@@ -10968,6 +10968,25 @@ impl Engine {
     /// Declaring an unassisted entry drops any AI transcript already on screen — leaving the
     /// model's copy visible after the model has been switched off would be stale text
     /// presented as live decode.
+    /// Set the headphone MONITOR — where received audio is heard, and how loud.
+    ///
+    /// A NARROW SETTER (#54): the PTT row's output pill changes one of these mid-QSO, and a whole
+    /// settings save from a cockpit control would write the panel's possibly-stale copy of
+    /// everything else back over the engine. `enabled == false` means the operator is listening on
+    /// the RIG, which is how this ships and what the pill shows as "RIG".
+    ///
+    /// The device is NOT validated here against the rig's own TX device — the caller decides what
+    /// it may offer, because the guard needs the device LISTS to say anything useful and the engine
+    /// has none. Monitoring into the rig's transmit device would put the received band back on the
+    /// air, so the picker refuses to offer it; see `PttAudioPills::forbiddenOutput`.
+    pub fn set_monitor(&mut self, enabled: bool, device: String, level: f32) {
+        self.settings.monitor_enabled = enabled;
+        self.settings.monitor_device = device;
+        // Clamped rather than trusted: this arrives from a slider, and a level outside 0..1 is a
+        // multiplier on live audio going to the operator's ears.
+        self.settings.monitor_level = level.clamp(0.0, 1.0);
+    }
+
     pub fn set_unassisted_mode(&mut self, on: bool) {
         self.settings.unassisted_mode = on;
         if on {

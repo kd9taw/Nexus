@@ -182,6 +182,11 @@ const sstvState = {
 // One api mock for four cockpits — the union of what they call on mount.
 vi.mock('../api', () => ({
   setPtt: vi.fn(async () => {}),
+  // The PTT row's audio pills read these on mount. A hand-kept mock list goes stale the moment a
+  // cockpit calls a verb nobody added to it (upstream #79 made the same point about SettingsPanel),
+  // and here the failure was a crash inside an effect rather than a missing-mock message.
+  getAudioDevices: vi.fn(async () => ({ input: [], output: [] })),
+  setMonitor: vi.fn(async () => ({})),
   setRfPower: vi.fn(async () => {}),
   setMicGain: vi.fn(async () => {}),
   setNrLevel: vi.fn(async () => {}),

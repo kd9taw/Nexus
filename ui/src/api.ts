@@ -1321,6 +1321,21 @@ export async function setTxLevel(level: number): Promise<AppSnapshot> {
 }
 
 /** Set the RX capture gain (≥1.0 multiplier on received audio before decode). Returns the snapshot. */
+/**
+ * Set the headphone monitor: whether receive audio plays on this computer, on which device, and
+ * how loud. `enabled: false` = listening on the RIG, which is the default and how Nexus ships.
+ *
+ * One call for the trio because the PTT row's output pill changes them together, and because a
+ * cockpit control must not push a whole Settings back over the engine's copy.
+ */
+export async function setMonitor(
+  enabled: boolean,
+  device: string,
+  level: number,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_monitor', { enabled, device, level })
+}
+
 export async function setRxGain(gain: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_rx_gain', { gain })
 }

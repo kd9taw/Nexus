@@ -9,10 +9,11 @@
 // reading, split offset, filter and scope width, reference level, percentage, band and mode
 // name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
 // and stay in the code.
+import { PttAudioPills } from './PttAudioPills'
 import { useEffect, useState, useRef } from 'react'
 import { PHONE_PANEL_IDS, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { panelHost, NO_DSP_FUNCS_REASON, NO_DSP_LEVELS_REASON } from '../features/panelHost'
-import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
+import type { AppSnapshot, AudioDevices, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
@@ -31,6 +32,9 @@ import {
   setPtt,
   setRfPower,
   setMicGain,
+  setMonitor,
+  getSettings,
+  getAudioDevices,
   setNrLevel,
   setCompLevel,
   setNotchFreq,
@@ -451,6 +455,41 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       .then((s) => onSnap?.(s))
       .catch(() => {})
   }
+  // The PTT row's audio pills need the SETTINGS (the monitor trio, and the rig's TX device so the
+  // picker can refuse it) and the DEVICE LISTS. Fetched here rather than threaded through App:
+  // this is the only cockpit that shows them today, and it remounts on nav anyway.
+  const [audioSettings, setAudioSettings] = useState<Settings | null>(null)
+  const [audioDevices, setAudioDevices] = useState<AudioDevices | null>(null)
+  useEffect(() => {
+    let alive = true
+    // WRAPPED, and this is not defensive habit. This effect runs inside the cockpit that owns
+    // Phone's stop line: a throw here unmounts the row carrying PTT, so the operator loses the
+    // control that stops a transmission because a device enumeration failed. The pills are worth
+    // having and they are not worth that, so every failure here degrades to "no pills" and the
+    // rest of the cockpit is untouched. (`.catch` alone is not enough — a verb that is missing
+    // entirely throws synchronously, which is how this was found.)
+    const load = async () => {
+      try {
+        const v = await getSettings()
+        if (alive) setAudioSettings(v)
+      } catch {
+        /* pills stay inert */
+      }
+      try {
+        // Enumerated once on mount. A stale list costs the operator one reopen; polling it costs
+        // every operator a CoreAudio round trip on a timer.
+        const d = await getAudioDevices()
+        if (alive) setAudioDevices(d)
+      } catch {
+        /* pills stay inert */
+      }
+    }
+    void load()
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const [lock, setLock] = useState(false) // hands-free PTT (toggle instead of hold)
   const [recBusy, setRecBusy] = useState(false) // in-flight guard for the record toggle
   const [spotOpen, setSpotOpen] = useState(false) // spot-to-cluster popup
@@ -1501,6 +1540,37 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           the stop-line sweeps re-run. The TOASTS this row's handler raises did move (see
           `key` above): a toast is not a control, and no sweep can see one. */}
       <div className="ph-ptt-row">
+        <PttAudioPills
+          settings={audioSettings}
+          devices={audioDevices}
+          micGain={snap.radio.micGain ?? null}
+          onMicGain={(g) => {
+            void setMicGain(g)
+              .then((sn) => onSnap?.(sn))
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onOutput={(enabled, device) => {
+            void setMonitor(enabled, device, audioSettings?.monitorLevel ?? 0.5)
+              .then((sn) => {
+                onSnap?.(sn)
+                setAudioSettings((p) =>
+                  p ? { ...p, monitorEnabled: enabled, monitorDevice: device } : p,
+                )
+              })
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onVolume={(level) => {
+            // Optimistic locally so the slider tracks the drag; the engine remains the record.
+            setAudioSettings((p) => (p ? { ...p, monitorLevel: level } : p))
+            void setMonitor(
+              audioSettings?.monitorEnabled ?? false,
+              audioSettings?.monitorDevice ?? '',
+              level,
+            )
+              .then((sn) => onSnap?.(sn))
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+        />
         {fdExchange && (
           <span
             className="ph-fd-give"

@@ -8084,6 +8084,96 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   padding: 1px var(--space-1);
 }
+/* THE AUDIO PILLS, left of PTT (operator design 2026-08-22). Deliberately OUTSIDE the PTT button:
+   a hit target inside it could swallow a key, and in Phone that button carries the stop line.
+   `flex: 0 0 auto` for the same reason the row itself has it — these sit between the operator and
+   the key, so they must not grow, wrap or shove the button. */
+.ph-audio-pills {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+.ph-pill-wrap {
+  position: relative;
+}
+.ph-audio-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78em;
+  cursor: pointer;
+}
+.ph-audio-pill-tag {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* The one thing these exist to say, at a glance: rig or computer. Distinct enough to read
+   without focusing on it, since the operator is looking at the button beside it. */
+.ph-audio-pill.on-rig {
+  color: var(--text-dim, var(--text));
+}
+.ph-audio-pill.on-computer {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ph-audio-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 210px;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-panel, var(--bg-elev));
+  box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+}
+/* Opens UPWARD: the dock is at the bottom of the cockpit, so a downward panel would be clipped
+   by the window edge exactly when the operator is about to key. */
+.ph-audio-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.ph-audio-row input[type='range'] {
+  flex: 1 1 auto;
+  min-width: 90px;
+}
+.ph-audio-item {
+  text-align: left;
+  padding: var(--space-1) 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.ph-audio-item.sel {
+  background: var(--bg-elev);
+  font-weight: 600;
+}
+.ph-audio-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ph-audio-note {
+  font-size: 0.78em;
+  color: var(--text-dim, var(--text));
+}
+
 .ph-ptt-row {
   display: flex;
   align-items: center;

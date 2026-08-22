@@ -9721,6 +9721,27 @@ fn set_tx_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapsho
 /// Set the RX capture gain (≥1.0 multiplier on received audio before decode) — headroom for a
 /// quiet interface. Applied live by the audio service; persisted so it survives restart. Returns
 /// the refreshed snapshot.
+/// Set the headphone MONITOR trio — on/off, device, level — from the PTT row's output pill.
+///
+/// One command for the three because they only ever change together from that control, and
+/// because each is a separate settings save otherwise. A NARROW setter (#54): a cockpit control
+/// must not push a whole `Settings` back, which would write the panel's stale copy of everything
+/// else over the engine's.
+#[tauri::command(async)]
+fn set_monitor(
+    state: State<'_, SharedEngine>,
+    enabled: bool,
+    device: String,
+    level: f32,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_monitor(enabled, device, level);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist the monitor setting: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 #[tauri::command(async)]
 fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
@@ -17643,6 +17664,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_tx_level,
             set_msk144_period,
             set_rx_gain,
+            set_monitor,
             set_active_radio,
             set_peg_lock,
             confirm_sat_uplink,
