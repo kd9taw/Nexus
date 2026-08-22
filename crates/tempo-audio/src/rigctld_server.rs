@@ -191,6 +191,39 @@ fn dump_state(backend: &dyn RigBackend) -> String {
     out
 }
 
+/// The reply an unrecognised verb gets. Named because the connection loop counts them.
+const NOT_IMPLEMENTED: &str = "RPRT -11\n";
+
+/// Does this line begin an HTTP request rather than a rigctld command?
+///
+/// ⚠️ THE REASON THIS EXISTS IS A BROWSER, NOT A HAM. The broker listens on loopback with no
+/// authentication, which is fine against the network — but a WEB PAGE the operator merely
+/// visits can POST to `http://127.0.0.1:4532/` with `enctype="text/plain"`. That is a
+/// CORS-simple request, so there is no preflight to refuse, and 4532 is not on the browsers'
+/// blocked-port list. The response is opaque to the page, but the BYTES ARRIVE — and the old
+/// loop answered every unrecognised line with `RPRT -11` and kept reading, so the HTTP verb and
+/// each header were absorbed one at a time and then the request BODY dispatched as rigctld
+/// commands. `F 14313000`, `T 1` and `b CQ CQ DE PIRATE` all landed, verified against a copy of
+/// this module.
+///
+/// A real rigctld client never sends this. Hamlib's own protocol has no line ending in
+/// ` HTTP/1.x`, so refusing one costs nothing and closes the whole class.
+fn looks_like_http(line: &str) -> bool {
+    let l = line.trim_end();
+    // "GET / HTTP/1.1", "POST /x HTTP/1.0" — the version token is the tell, and it is what a
+    // browser must send. Matching the METHOD alone would be wrong: `G` is a real rigctld verb.
+    l.ends_with(" HTTP/1.1") || l.ends_with(" HTTP/1.0") || l.ends_with(" HTTP/0.9")
+}
+
+/// How many unrecognised lines a client may send before the connection is dropped.
+///
+/// A real client sends commands this server understands, or asks once for something it does not
+/// implement and moves on. A run of them means the peer is not speaking this protocol at all —
+/// an HTTP body, a TLS ClientHello, a port scanner — and continuing to read it is what let a web
+/// page walk its payload past the parser one line at a time. Three is generous enough that a
+/// client probing two or three optional verbs at startup is unaffected.
+const MAX_CONSECUTIVE_UNKNOWN: u32 = 3;
+
 fn rprt(ok: bool) -> String {
     if ok {
         "RPRT 0\n".into()
@@ -203,7 +236,7 @@ fn rprt(ok: bool) -> String {
 /// `RPRT -11` (not implemented), otherwise RPRT 0/-1.
 fn rprt_ext(r: Option<bool>) -> String {
     match r {
-        None => "RPRT -11\n".into(),
+        None => NOT_IMPLEMENTED.into(),
         Some(ok) => rprt(ok),
     }
 }
@@ -437,13 +470,37 @@ pub fn serve_connection(stream: TcpStream, backend: Arc<dyn RigBackend>) {
     // crashing / closing mid-transmit) can't leave the rig keyed forever — the
     // original code only ever unkeyed on an explicit `T 0`.
     let mut asserted_ptt = false;
+    // See `looks_like_http` and MAX_CONSECUTIVE_UNKNOWN: a peer that is not speaking this
+    // protocol must be hung up on, not patiently answered line after line while its payload
+    // walks past the parser.
+    let mut unknown_run: u32 = 0;
     for line in reader.lines() {
         let Ok(line) = line else { break };
+        if looks_like_http(&line) {
+            crate::civ::diag::note(
+                "rigctld_server: HTTP request line on the broker port — dropping (a web page, not a rig client)",
+            );
+            break;
+        }
         if let Some(v) = parse_ptt_set(&line) {
             asserted_ptt = v;
         }
         match handle_command(&line, backend.as_ref()) {
             Handled::Reply(r) => {
+                // Count only NOT-IMPLEMENTED. A command that ran and failed (`RPRT -1`) is a
+                // real client having a bad day — a rig that refused, a busy port — and must
+                // never cost it the connection.
+                if r == NOT_IMPLEMENTED {
+                    unknown_run += 1;
+                    if unknown_run >= MAX_CONSECUTIVE_UNKNOWN {
+                        crate::civ::diag::note(
+                            "rigctld_server: too many unrecognised lines in a row — dropping the connection",
+                        );
+                        break;
+                    }
+                } else {
+                    unknown_run = 0;
+                }
                 if !r.is_empty() && writer.write_all(r.as_bytes()).is_err() {
                     break;
                 }
@@ -631,14 +688,14 @@ pub fn probe_rigctld(addr: &str, timeout: std::time::Duration) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    struct MockRig {
-        freq: Mutex<u64>,
-        ptt: Mutex<bool>,
-        mode: Mutex<(String, u32)>,
+    pub(crate) struct MockRig {
+        pub(crate) freq: Mutex<u64>,
+        pub(crate) ptt: Mutex<bool>,
+        pub(crate) mode: Mutex<(String, u32)>,
     }
     impl Default for MockRig {
         fn default() -> Self {
@@ -1339,5 +1396,110 @@ mod tests {
             REPLY_SNIPPET_MAX + 1,
             "capped, with an ellipsis"
         );
+    }
+}
+
+#[cfg(test)]
+mod browser_smuggling_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    /// A WEB PAGE THE OPERATOR VISITS COULD DRIVE THE RADIO, and this is the regression test.
+    ///
+    /// The broker listens on loopback with no authentication — fine against the network, but a
+    /// page can POST to `http://127.0.0.1:4532/` with `enctype="text/plain"`. That is a
+    /// CORS-simple request (no preflight to refuse), 4532 is not on the browsers' blocked-port
+    /// list, and although the response is opaque to the page, the BYTES ARRIVE. The old loop
+    /// answered each unrecognised line with `RPRT -11` and kept reading, so the verb and headers
+    /// were absorbed one at a time and the request BODY then dispatched as rigctld commands:
+    /// `F 14313000`, `T 1` and `b CQ CQ DE PIRATE` all landed.
+    ///
+    /// This sends the exact bytes a browser would and asserts the radio was NOT touched.
+    #[test]
+    fn an_http_post_from_a_web_page_cannot_drive_the_radio() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let before_freq = rig.freq_hz();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let backend: Arc<dyn RigBackend> = rig.clone();
+        let h = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            serve_connection(sock, backend);
+        });
+
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        // Byte-for-byte what a `<form enctype="text/plain">` auto-submit produces.
+        c.write_all(
+            b"POST / HTTP/1.1\r\n\
+              Host: 127.0.0.1\r\n\
+              Content-Type: text/plain;charset=UTF-8\r\n\
+              Content-Length: 44\r\n\
+              \r\n\
+              F 14313000\nT 1\nb CQ CQ DE PIRATE\nx=y\n",
+        )
+        .unwrap();
+        let _ = c.flush();
+        // ⚠️ BOUNDED, and the reason is the other half of this defect. With the guards removed
+        // the server NEVER closes the connection — it answers each line and reads on forever —
+        // so a `read_to_end` here hangs instead of failing, and the regression would show up as
+        // a stuck test suite rather than a red one. Shutting our write side and giving the
+        // server a moment lets the assertions below be the thing that speaks.
+        let _ = c.shutdown(std::net::Shutdown::Write);
+        c.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+            .unwrap();
+        let mut sink = Vec::new();
+        let _ = c.read_to_end(&mut sink);
+        drop(c);
+        let _ = h.join();
+
+        assert_eq!(
+            rig.freq_hz(),
+            before_freq,
+            "a web page must not move the dial"
+        );
+        assert!(
+            !*rig.ptt.lock().unwrap(),
+            "a web page must NEVER key the transmitter"
+        );
+    }
+
+    /// The control, and it is the one that stops this fix from being a denial of service on the
+    /// operator's own logger: a REAL rigctld client must still be served normally.
+    #[test]
+    fn a_real_client_is_still_served() {
+        let rig = Arc::new(super::tests::MockRig::default());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let backend: Arc<dyn RigBackend> = rig.clone();
+        let h = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            serve_connection(sock, backend);
+        });
+
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.write_all(b"f\nF 21074000\nf\nq\n").unwrap();
+        let _ = c.flush();
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        let _ = h.join();
+
+        assert!(
+            out.contains("21074000"),
+            "a real client's set+read must work: {out:?}"
+        );
+        assert_eq!(rig.freq_hz(), 21_074_000);
+    }
+
+    /// `G` is a genuine rigctld verb (vfo_op) and must not be mistaken for HTTP's GET.
+    #[test]
+    fn the_http_test_does_not_catch_real_verbs() {
+        assert!(looks_like_http("GET / HTTP/1.1"));
+        assert!(looks_like_http("POST /x HTTP/1.0"));
+        assert!(!looks_like_http("G UP"), "G is vfo_op, not GET");
+        assert!(!looks_like_http("F 14074000"));
+        assert!(!looks_like_http("\\dump_state"));
+        assert!(!looks_like_http(""), "a blank line is not HTTP");
     }
 }
