@@ -16380,6 +16380,11 @@ impl Engine {
         self.station.mark_qsl_sent(index, via)
     }
 
+    /// See [`StationCore::mark_qsl_card`].
+    pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
+        self.station.mark_qsl_card(index, received)
+    }
+
     /// See [`StationCore::delete_qso`].
     pub fn delete_qso(&mut self, index: usize) -> bool {
         self.station.delete_qso(index)

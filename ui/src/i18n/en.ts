@@ -727,6 +727,10 @@ export const EN = {
   'logbook.row.qslSent.title':
     "Mark a QSL request sent to {{call}} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.",
   'logbook.row.qslSent.aria': 'Mark QSL sent to {{call}}',
+  'logbook.qsl.cardMarked': 'QSL card recorded for {{call}}',
+  'logbook.qsl.cardCleared': 'QSL card cleared for {{call}}',
+  'logbook.row.qslRcvd.card': 'Card received',
+  'logbook.row.qslRcvd.clear': 'Card NOT received',
   'logbook.row.qslSent.bureau': 'Bureau',
   'logbook.row.qslSent.direct': 'Direct',
   'logbook.row.qslSent.electronic': 'Electronic',
