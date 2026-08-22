@@ -1548,6 +1548,13 @@ pub struct Engine {
     /// WALL-CLOCK elapsed since this (`tx_watchdog_min` minutes), like WSJT-X — not on
     /// TX air-time, which fired ~2x too late since FT8/FT4 transmit every other slot.
     tx_watchdog_start: Option<u64>,
+    /// When an unanswered CQ run may start calling again (unix seconds). `Some` only while a
+    /// run is serving out `Settings::cq_pause_secs`; cleared the moment the run resumes or the
+    /// sequencer leaves `CallingCq` (somebody answered — the whole point).
+    ///
+    /// The pause withholds the OUTGOING CQ and nothing else. The sequencer stays in CallingCq
+    /// and keeps decoding, so a station that calls during the quiet spell is worked normally.
+    cq_pause_until: Option<u64>,
     /// Recent decode `|dt|` magnitudes (seconds), most-recent-last, for the
     /// DT-derived time-sync health estimate.
     recent_dt: VecDeque<f32>,
@@ -3589,6 +3596,7 @@ impl Engine {
             tuning: false,
             tx_watchdog: false,
             tx_watchdog_start: None,
+            cq_pause_until: None,
             recent_dt: VecDeque::new(),
             seen_decode: false,
             rig_confirmed: false,
@@ -14639,6 +14647,11 @@ impl Engine {
                 station.call_cap = self.settings.directed_max_calls;
                 match station.outgoing_rv() {
                     Some((m, rv)) => {
+                        // Something is going out, so no pause is in force — either the run just
+                        // resumed, or (the case that matters) somebody ANSWERED and this is the
+                        // reply. Clearing it here rather than only on resume means a stale
+                        // deadline cannot survive into the next run and silence its first calls.
+                        self.cq_pause_until = None;
                         station.after_tx();
                         // Stock "Disable Tx after sending 73": the over leaving
                         // NOW is our final 73 (after_tx just cleared pending at
@@ -14669,6 +14682,36 @@ impl Engine {
                         // slot". Reading it here rather than re-deriving the cap keeps one
                         // definition of capped in tempo-core.
                         withheld_by_call_cap = station.stalled();
+                        // An unanswered CQ run serves out its pause and then calls again
+                        // (operator ruling: eight CQs, three minutes, repeat). Only a CQ run —
+                        // a directed step that has spent its budget stays spent, because that
+                        // budget exists to stop calling a station that has gone silent.
+                        if withheld_by_call_cap && station.state == QsoState::CallingCq {
+                            let now = now_unix_secs();
+                            match self.settings.cq_pause_secs.unwrap_or(0) {
+                                // 0 (or None) keeps the pre-existing behaviour: the run simply
+                                // stops. Somebody who set it that way meant it.
+                                0 => {}
+                                pause => {
+                                    let until =
+                                        *self.cq_pause_until.get_or_insert(now + pause as u64);
+                                    if now >= until {
+                                        station.resume_cq_run();
+                                        self.cq_pause_until = None;
+                                        // ⚠️ THE WATCHDOG CLOCK MUST BE RESTARTED HERE, or this
+                                        // feature quietly kills itself. `tx_watchdog_start` is
+                                        // set on the first withheld slot and never cleared while
+                                        // we keep being withheld, so across repeated pauses it
+                                        // would reach `tx_watchdog_min` and set tx_enabled =
+                                        // false — disarming the operator mid-run for being idle
+                                        // in exactly the way this feature asks them to be. The
+                                        // watchdog is NOT weakened: it still bounds a genuinely
+                                        // stuck run, it simply stops counting a pause we chose.
+                                        self.tx_watchdog_start = None;
+                                    }
+                                }
+                            }
+                        }
                         None
                     }
                 }

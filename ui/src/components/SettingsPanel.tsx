@@ -5238,10 +5238,33 @@ export function SettingsPanel({
                     />
                   </label>
                   <span className="settings-hint">
-                    Blank = WSJT-X behavior: CQ repeats until you stop it (the TX watchdog is the
-                    backstop). Set a number to auto-stop an unanswered CQ run after that many calls.
-                    The Tempo chat CQ run always stops (default 10 unanswered) — this number
-                    overrides that budget too.
+                    How many unanswered CQs before Nexus pauses. Default 8, then it waits and calls
+                    again — a run that nobody answers stops holding the frequency. Blank = WSJT-X
+                    behaviour: CQ repeats until you stop it, with the TX watchdog as the only
+                    backstop. The Tempo chat CQ run always stops (default 10 unanswered) — this
+                    number overrides that budget too.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label>
+                    <span className="settings-label">Wait before calling CQ again</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={0}
+                      max={3600}
+                      value={form.cqPauseSecs ?? ''}
+                      placeholder="180"
+                      onChange={(e) => updateNullableNum('cqPauseSecs', e.target.value, 0)}
+                    />
+                  </label>
+                  <span className="settings-hint">
+                    Seconds off the air after an unanswered run, before the next one starts.
+                    Default 180 (three minutes). 0 = do not resume: the run just stops, which is
+                    what happened before this setting existed. You are still LISTENING through the
+                    pause — a station that calls you is worked as normal, and answering anyone
+                    resets the count, so a busy run never pauses at all.
                   </span>
                 </div>
 

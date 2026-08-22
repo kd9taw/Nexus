@@ -51,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An unanswered CQ run takes a breather instead of holding the frequency.** Nexus now calls
+  CQ eight times, waits three minutes, and calls again — both numbers are yours to change in
+  Settings ▸ Auto-CQ, and clearing the call count restores the old behaviour of calling until
+  you stop it. You are still listening throughout the pause: anyone who calls you is worked
+  normally, and answering resets the count, so a run that is getting replies never pauses at
+  all. This is a deliberate difference from WSJT-X, which repeats CQ indefinitely.
+
 - **You can record a QSL card that arrived in the post.** The Logbook could already note a
   card you had SENT, but there was no way to say one had come back — even though a paper card
   is one of only two confirmations that count towards DXCC, and the only one no online service

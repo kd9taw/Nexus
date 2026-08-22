@@ -686,6 +686,30 @@ impl Station {
             .map(|m| (self.hashed_form(m), self.rv_count))
     }
 
+    /// Begin the CQ run again after a pause, by forgetting the calls already made.
+    ///
+    /// A CQ run that hits `cq_call_cap` goes quiet. Nexus waits (the engine owns that clock,
+    /// `Settings::cq_pause_secs`) and then calls this to start calling again — eight CQs, a
+    /// breather, eight more, which is band courtesy rather than holding a frequency until
+    /// something answers.
+    ///
+    /// ⚠️ ONLY IN `CallingCq`, and that restriction is the safety of it. `tx_count` is what
+    /// stops a DIRECTED step being re-sent forever at a station that has gone silent; clearing
+    /// it in `AwaitReport`/`AwaitRoger`/`AwaitRr73` would hand back a budget the operator's
+    /// `directed_max_calls` deliberately spent, and Nexus would call a dead station until the
+    /// watchdog noticed. Returns false when the state is anything else, so a caller that gets
+    /// its condition wrong is a no-op rather than a transmit bug.
+    ///
+    /// Nothing else is touched: not the state, not the pending message, not the partner. The
+    /// run resumes; it does not restart from a different place.
+    pub fn resume_cq_run(&mut self) -> bool {
+        if self.state != State::CallingCq {
+            return false;
+        }
+        self.tx_count = 0;
+        true
+    }
+
     /// True when the current step has hit its transmission budget without the partner
     /// advancing — i.e. we have an outgoing message but [`outgoing_rv`] is withholding
     /// it. The app may time out the QSO at this point (stop the CQ run, or abandon a
@@ -1617,6 +1641,54 @@ mod start_context_tests {
         assert_eq!(s.dxcall.as_deref(), Some("W9XYZ"));
         assert_eq!(s.rx_report, Some(-15), "captured the report they gave us");
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW R-10"));
+    }
+
+    /// EIGHT CQs, A BREATHER, EIGHT MORE — the resume half of the operator's auto-CQ ruling.
+    /// `resume_cq_run` is the state part; the engine owns the clock.
+    #[test]
+    fn a_capped_cq_run_can_be_started_again() {
+        let mut s = Station::calling_cq("KD9TAW", "EN52");
+        s.cq_call_cap = Some(3);
+        for _ in 0..3 {
+            assert!(s.outgoing_rv().is_some());
+            s.after_tx();
+        }
+        assert!(s.outgoing_rv().is_none(), "the budget is spent");
+        assert!(s.stalled(), "and that is what stalled() means");
+
+        assert!(s.resume_cq_run(), "a CQ run may be resumed");
+        assert!(s.outgoing_rv().is_some(), "and it calls again");
+        assert_eq!(
+            s.state,
+            State::CallingCq,
+            "still a CQ run — not restarted elsewhere"
+        );
+        // The full budget is back, not one call: a pause buys another RUN.
+        for _ in 0..2 {
+            s.after_tx();
+            assert!(s.outgoing_rv().is_some());
+        }
+    }
+
+    /// ⚠️ THE RESTRICTION IS THE SAFETY. A directed step's budget exists to stop calling a
+    /// station that has gone silent; handing it back would call a dead station indefinitely,
+    /// which is exactly what `directed_max_calls` was added to prevent.
+    #[test]
+    fn a_directed_call_budget_is_never_handed_back() {
+        for state in [State::AwaitReport, State::AwaitRoger, State::AwaitRr73] {
+            let mut s = Station::calling_cq("KD9TAW", "EN52");
+            s.state = state;
+            s.call_cap = Some(2);
+            s.tx_count = 2;
+            assert!(!s.resume_cq_run(), "{state:?} must refuse");
+            assert_eq!(s.tx_count, 2, "{state:?} keeps its spent budget");
+        }
+        // Control: the one state it DOES serve still works, so the guard above is
+        // discriminating by state rather than refusing everything.
+        let mut cq = Station::calling_cq("KD9TAW", "EN52");
+        cq.tx_count = 5;
+        assert!(cq.resume_cq_run());
+        assert_eq!(cq.tx_count, 0);
     }
 
     #[test]

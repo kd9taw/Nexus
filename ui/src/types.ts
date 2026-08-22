@@ -2632,6 +2632,7 @@ export interface Settings {
   /** Stop a CQ run after N unanswered calls; null/undefined = stock WSJT-X
    * (CQ repeats until you stop it — the Tx watchdog is the backstop). */
   cqMaxCalls?: number | null
+  cqPauseSecs?: number | null
   /** Tempo chat: max transmit cycles per message before terminal no-ack (null = default 3). */
   chatMaxCycles?: number | null
   /** Tempo chat: a peer's completed reply implicitly confirms in-flight messages (default on). */
