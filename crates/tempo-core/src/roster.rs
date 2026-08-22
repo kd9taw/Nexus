@@ -36,6 +36,15 @@ pub struct HeardStation {
     /// same treatment `freq_hz` gets — so it reads as CQ until a structured frame
     /// says otherwise.
     pub calling: Option<String>,
+    /// The CQ MODIFIER of the last frame, when that frame was a CQ: `DX`, `NA`, `POTA`,
+    /// `TEST`, a zone number… `None` when the station is not calling CQ, or is calling an
+    /// undirected one.
+    ///
+    /// Operator request 2026-08-21: the roster said only "CQ", so a CQ **DX** looked exactly
+    /// like a general call. He clicked one from CONUS, then saw "CQ DX" over in Band Activity
+    /// — a call that DX station will ignore, and one it is a little rude to answer. The
+    /// parser has carried `dir` all along; nothing forwarded it.
+    pub cq_dir: Option<String>,
 }
 
 /// Roster of heard stations, keyed by callsign.
@@ -64,13 +73,14 @@ impl Roster {
         // recent-decodes feed has carried this special-case since #55; this ingest
         // was still guessing. WSPR rows parse by the WSPR field order, and a
         // beacon addresses nobody.
-        let (sender, grid, calling) = if d.mode == Some(ModeKind::Wspr) {
+        let (sender, grid, calling, cq_dir) = if d.mode == Some(ModeKind::Wspr) {
             let mut t = d.message.split_whitespace();
             let Some(call) = t.next() else { return };
             (
                 call.to_string(),
                 t.next().filter(|g| !g.is_empty()).map(str::to_string),
                 None,
+                None, // a beacon addresses nobody and directs at nobody
             )
         } else {
             let m = Msg::parse(&d.message);
@@ -83,7 +93,19 @@ impl Roster {
                 }
                 _ => None,
             };
-            (sender.to_string(), grid, m.addressee().map(str::to_string))
+            // The modifier only when THIS frame is a CQ, so a station that stops calling
+            // CQ DX and answers somebody clears it — the same last-frame-wins rule `calling`
+            // follows below.
+            let cq_dir = match &m {
+                Msg::Cq { dir, .. } if !dir.is_empty() => Some(dir.clone()),
+                _ => None,
+            };
+            (
+                sender.to_string(),
+                grid,
+                m.addressee().map(str::to_string),
+                cq_dir,
+            )
         };
         let entry = self
             .stations
@@ -97,6 +119,7 @@ impl Roster {
                 mode: d.mode,
                 freq_hz: None,
                 calling: None,
+                cq_dir: None,
             });
         entry.snr = d.snr;
         entry.last_heard_slot = slot;
@@ -104,6 +127,7 @@ impl Roster {
         // Last frame wins, INCLUDING back to None: a station that finished its QSO and is
         // calling CQ again must stop showing the call it was working.
         entry.calling = calling;
+        entry.cq_dir = cq_dir; // same rule, including back to None
         entry.mode = d.mode; // last-heard protocol wins (FT8→FT1 re-tags as Tempo)
         entry.freq_hz = Some(d.freq.round() as i32); // last heard HERE on the waterfall
         if grid.is_some() {
@@ -132,6 +156,7 @@ impl Roster {
                 mode,
                 freq_hz: None,
                 calling: None,
+                cq_dir: None,
             });
         entry.snr = snr;
         entry.last_heard_slot = slot;

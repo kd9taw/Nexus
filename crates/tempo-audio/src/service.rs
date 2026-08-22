@@ -769,10 +769,34 @@ const CAT_RETRY_MAX_MS: f64 = 30_000.0;
 /// whereas a rejected FREQUENCY is nearly always a hard fact about the radio's range — and each
 /// retry costs a full CAT round-trip on a link that is already unhappy.
 const DIAL_SET_MAX_TRIES: u32 = 3;
-/// Hamlib func tokens for the Expert DSP toggles, in the engine's `[nb, nr, notch, comp, vox]`
-/// order. `ANF` (auto-notch) is the notch we expose — it works as a bare on/off toggle, unlike
-/// `MN` (manual notch) which needs a separate NOTCHF frequency level.
-const RIG_FUNCS: [&str; 5] = ["NB", "NR", "ANF", "COMP", "VOX"];
+/// Hamlib func tokens for the Expert DSP toggles, in the engine's
+/// `[nb, nr, notch, comp, vox, manual_notch]` order.
+///
+/// TWO NOTCHES, BECAUSE THEY ARE TWO DIFFERENT CONTROLS and a radio may have either, both or
+/// neither. `ANF` is the AUTOMATIC notch: it hunts a carrier down on its own and is a bare
+/// on/off. `MN` is the MANUAL notch, the one an operator parks on a heterodyne by ear, and it
+/// is useless without a frequency to park it at — which is why it arrives here together with
+/// the `NOTCHF` level (see [`LVL_NOTCHF`]).
+///
+/// Only `ANF` was exposed, under the label "Notch", and #95 is what that cost: an FT-991A
+/// operator found a Notch button that did nothing he could hear and no way at all to place a
+/// notch, which is what "notch" means to most operators. Each renders only when the rig
+/// reports it, so a radio with one of the two still shows one button rather than a dead pair.
+const RIG_FUNCS: [&str; 6] = ["NB", "NR", "ANF", "COMP", "VOX", "MN"];
+
+/// How many per-func slots the loop keeps, DERIVED from the table above rather than
+/// written out beside it.
+///
+/// ⚠️ THIS EXISTS BECAUSE HAND-KEPT LENGTHS DRIFTED AND CRASHED THE RADIO. Adding `MN`
+/// took the table from five entries to six; four of the five parallel arrays were
+/// widened and `func_retry_backoff` was not. Nothing failed to compile — an array index
+/// is a RUNTIME bound — and no test reached it, because the round-robin only visits slot
+/// 5 on one tick in six of a live CAT poll. It shipped in a tester build and panicked
+/// with "index out of bounds: the len is 5 but the index is 5", which killed the radio
+/// loop: TX and RX dead until restart.
+///
+/// Length-by-derivation makes that unrepresentable. A seventh func is now ONE edit.
+const N_FUNCS: usize = RIG_FUNCS.len();
 /// First re-probe delay for a DSP func that latched unsupported, in heavy polls (40 × 750 ms
 /// ≈ 30 s — the old fixed cadence, now only the FIRST retry).
 const FUNC_RETRY_BACKOFF_BASE: u32 = 40;
@@ -791,6 +815,15 @@ const LVL_RFPOWER: usize = 0;
 const LVL_MICGAIN: usize = 1;
 const LVL_NR: usize = 2;
 const LVL_AGC: usize = 3;
+/// Speech-processor depth. #95: COMP toggled the rig's PROC and there was no way to set how
+/// hard it worked, which is the half of a compressor that matters.
+const LVL_COMP: usize = 4;
+/// MANUAL-NOTCH FREQUENCY (Hz, not a 0..1 fraction — see `read_level_hz`). The other half of
+/// `MN` above: a notch you cannot place is not a notch.
+const LVL_NOTCHF: usize = 5;
+/// Per-level slot count, derived from the highest index above for the same reason
+/// [`N_FUNCS`] is derived — these arrays grew from 4 to 6 in the same change.
+const N_LEVELS: usize = LVL_NOTCHF + 1;
 
 /// Record one extended-level read outcome into its `supported`/`misses` slot, with the same
 /// miss-tolerance as the S-meter: a hit resets the counter and confirms support; three consecutive
@@ -1430,7 +1463,7 @@ fn open_monitor(t: &Transport) -> (Rig, Option<CatDaemon>, Option<bool>) {
             rig.set_slow_transport(
                 network || native_civ_addr(t).is_some() || t.is_slow_serial_link(),
             );
-            let ok = probe_cat(&mut rig, t.rigctld_port).ok;
+            let ok = probe_cat(&mut rig, t).ok;
             (rig, Some(proc), ok)
         }
         Err(_) => (Rig::vox(), None, Some(false)),
@@ -2343,6 +2376,10 @@ struct RadioLoop {
     last_mic_gain: Option<f32>,
     /// Last NR level / AGC speed we pushed to the rig — only set on change.
     last_nr_level: Option<f32>,
+    /// #95: the last COMP depth and manual-notch frequency actually accepted, and the
+    /// value each rig refused — same give-up idiom as `nr_level_giveup`.
+    last_comp_level: Option<f32>,
+    last_notch_freq_hz: Option<f32>,
     last_agc: Option<String>,
     /// The AGC speed this rig REFUSED, so it stops being re-sent. Hamlib carries AGC as an
     /// enum (OFF/SUPERFAST/FAST/SLOW/USER/MEDIUM/AUTO) and backends do not all implement every
@@ -2373,6 +2410,8 @@ struct RadioLoop {
     rf_power_giveup: Option<f32>,
     mic_gain_giveup: Option<f32>,
     nr_level_giveup: Option<f32>,
+    comp_level_giveup: Option<f32>,
+    notch_freq_giveup: Option<f32>,
     /// Open WAV sink while a QSO recording is streaming live RX capture to disk (audio
     /// bridge). The loop owns the file handle so the audio never has to live in RAM.
     qso_sink: Option<crate::voice::WavSink>,
@@ -2602,12 +2641,12 @@ struct RadioLoop {
     /// Per-func DSP capability ([nb, nr, notch, comp, vox], same as [`RIG_FUNCS`]), mirroring
     /// `smeter_supported`: `None` = unprobed, `Some(true)` = rig reports the func, `Some(false)`
     /// = confirmed absent (stop polling → toggle hidden). Reset on CAT re-confirm / breaker trip.
-    func_supported: [Option<bool>; 5],
+    func_supported: [Option<bool>; N_FUNCS],
     /// Consecutive get-miss counters per func — the same miss-tolerance as `smeter_misses`.
-    func_misses: [u8; 5],
+    func_misses: [u8; N_FUNCS],
     /// Last-known func states, mirrored to the engine each sub-cadence poll; a read miss on a
     /// supported func keeps the last value so the toggle never flickers.
-    func_state: [Option<bool>; 5],
+    func_state: [Option<bool>; N_FUNCS],
     /// Earliest `rig_poll_ticks` at which a func latched `Some(false)` may be re-probed, and the
     /// backoff (in heavy polls) applied when it fails again.
     ///
@@ -2625,8 +2664,8 @@ struct RadioLoop {
     /// repeat. That is the operator's "then it might be fine again, then we get a small lag".
     /// Transient-hiccup recovery is still worth having, so the retry is kept but BACKED OFF
     /// (40 → 80 → 160 … heavy polls, capped), and reset on a successful read.
-    func_retry_at: [u32; 5],
-    func_retry_backoff: [u32; 5],
+    func_retry_at: [u32; N_FUNCS],
+    func_retry_backoff: [u32; N_FUNCS],
     /// Whether the rig's BUILT-IN ATU (Hamlib `TUNER`) has been probed for the current CAT
     /// confirmation. Probed ONCE per confirmation like [`Self::rx_ranges`] rather than round-robin
     /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on,
@@ -2648,9 +2687,9 @@ struct RadioLoop {
     /// same miss-tolerant caching as `func_supported`: `Some(false)` after 3 get-misses → stop
     /// issuing that read, so a rig slow/silent on it doesn't churn the CAT socket every poll
     /// (the K4/QK4 "hangs up every 5 s" bug). Reset on CAT re-confirm / rig rebuild.
-    level_supported: [Option<bool>; 4],
+    level_supported: [Option<bool>; N_LEVELS],
     /// Consecutive get-miss counters per extended level — same tolerance as `smeter_misses`.
-    level_misses: [u8; 4],
+    level_misses: [u8; N_LEVELS],
     /// Whether we last surfaced the "monitor refused — would transmit into the TX
     /// device" note on the audio-error line, so we clear only our OWN message.
     /// The monitor block currently OWNS the audio-error line (it wrote either
@@ -2743,11 +2782,15 @@ impl RadioLoop {
             last_rf_power: None,
             last_mic_gain: None,
             last_nr_level: None,
+            last_comp_level: None,
+            last_notch_freq_hz: None,
             last_agc: None,
             agc_giveup: None,
             rf_power_giveup: None,
             mic_gain_giveup: None,
             nr_level_giveup: None,
+            comp_level_giveup: None,
+            notch_freq_giveup: None,
             qso_sink: None,
             qso_started_ms: None,
             voice_mic_open: false,
@@ -2801,17 +2844,17 @@ impl RadioLoop {
             smeter_retry_at: 0,
             smeter_retry_backoff: FUNC_RETRY_BACKOFF_BASE,
             rig_poll_ticks: 0,
-            func_supported: [None; 5],
-            func_misses: [0; 5],
-            func_state: [None; 5],
-            func_retry_at: [0; 5],
-            func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; 5],
+            func_supported: [None; N_FUNCS],
+            func_misses: [0; N_FUNCS],
+            func_state: [None; N_FUNCS],
+            func_retry_at: [0; N_FUNCS],
+            func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_FUNCS],
             tuner_probed: false,
             spectrum_feed: cfg.spectrum_feed.clone(),
             rx_tap: cfg.rx_tap.clone(),
             meter_feed: cfg.meter_feed.clone(),
-            level_supported: [None; 4],
-            level_misses: [0; 4],
+            level_supported: [None; N_LEVELS],
+            level_misses: [0; N_LEVELS],
 
             clock_offset_ms: 0,
             decode: DecodeWorker::spawn(),
@@ -3249,6 +3292,46 @@ impl RadioLoop {
     /// radio's rigctld wire log: `a_contended_switch_never_keys_the_outgoing_radio` (mic),
     /// `a_deferred_switch_stops_the_tune_carrier_and_the_slot_over_too`, and the six
     /// `a_contended_switch_never_…_on_the_outgoing_radio` scenes.
+    /// Open the WinKeyer on `port` if it is not already open there, clearing the cached
+    /// speed first. Returns the operator-facing error when the open failed, `None` otherwise.
+    ///
+    /// ONE open path, called from two places (#135). It used to live inline inside the
+    /// send-a-word branch, which is what made the bug: a keyer that is never opened is never
+    /// told the speed, and PADDLE keying does not pass through Nexus at all — so the paddle
+    /// ran at the keyer's own pot while the cockpit showed a number nobody had sent it.
+    ///
+    /// The cache is cleared BEFORE the open, and that ordering is deliberate: `WinKeyer::open`
+    /// sends Host Open and no speed setup, so a freshly-opened keyer is back on its own
+    /// pot/power-on default and whatever we believe it was last told is now false. Clearing
+    /// first also leaves a FAILED open with a clear cache, so the retry pushes too.
+    #[cfg(feature = "serial")]
+    fn ensure_winkeyer(&mut self, port: &str) -> Option<String> {
+        let reopen = self
+            .winkeyer
+            .as_ref()
+            .map(|(p, _)| p != port)
+            .unwrap_or(true);
+        if !reopen {
+            return None;
+        }
+        self.last_winkeyer_wpm = 0;
+        match crate::winkeyer::WinKeyer::open(port) {
+            Ok((wk, _rev)) => {
+                self.winkeyer = Some((port.to_string(), wk));
+                None
+            }
+            // What the SYSTEM said, verbatim — `self.winkeyer` stays None so the next tick
+            // retries.
+            Err(e) => {
+                self.winkeyer = None;
+                Some(format!(
+                    "WinKeyer on {port}: {e}. If the port name is right, check that the keyer \
+                     is powered and that nothing else (CAT, another logger) has it open."
+                ))
+            }
+        }
+    }
+
     fn may_key(&self) -> bool {
         !self.handoff_deferred && !self.cat_hold_active
     }
@@ -3459,11 +3542,15 @@ impl RadioLoop {
         self.last_rf_power = None;
         self.last_mic_gain = None;
         self.last_nr_level = None;
+        self.last_comp_level = None;
+        self.last_notch_freq_hz = None;
         self.last_agc = None;
         self.agc_giveup = None; // a fresh rig may well take the step the old one refused
         self.rf_power_giveup = None; // …and so may it take the level this one refused
         self.mic_gain_giveup = None;
         self.nr_level_giveup = None;
+        self.comp_level_giveup = None;
+        self.notch_freq_giveup = None;
         self.fake_it_restore = None;
         self.audio_rig_split = false;
         self.rig_split_restore = None; // the OLD radio's split is not the new one's to restore
@@ -3491,12 +3578,12 @@ impl RadioLoop {
         self.smeter_retry_at = 0;
         // The NEW radio hasn't reported STRENGTH yet — show "—", not the old rig's needle.
         self.meter_feed.set_smeter_db(None);
-        self.func_supported = [None; 5];
-        self.func_misses = [0; 5];
-        self.func_state = [None; 5];
+        self.func_supported = [None; N_FUNCS];
+        self.func_misses = [0; N_FUNCS];
+        self.func_state = [None; N_FUNCS];
         self.tuner_probed = false;
-        self.level_supported = [None; 4];
-        self.level_misses = [0; 4];
+        self.level_supported = [None; N_LEVELS];
+        self.level_misses = [0; N_LEVELS];
         // The audio device must be (re)opened for the new radio even if its device name matches
         // (e.g. both "system default") — force it, since `audio_differs` alone would skip an
         // empty-vs-empty compare and leave the OLD radio's sound-card stream running.
@@ -4622,17 +4709,19 @@ impl RadioLoop {
                     self.smeter_misses = 0;
                     self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
                     self.smeter_retry_at = 0;
-                    self.func_supported = [None; 5];
-                    self.func_misses = [0; 5];
-                    self.func_state = [None; 5];
+                    self.func_supported = [None; N_FUNCS];
+                    self.func_misses = [0; N_FUNCS];
+                    self.func_state = [None; N_FUNCS];
                     self.tuner_probed = false;
-                    self.level_supported = [None; 4];
-                    self.level_misses = [0; 4];
+                    self.level_supported = [None; N_LEVELS];
+                    self.level_misses = [0; N_LEVELS];
                     // The level give-ups are a rate limit, not a verdict: a write refused while
                     // the link was half-open must be retried once the link is proven alive.
                     self.rf_power_giveup = None;
                     self.mic_gain_giveup = None;
                     self.nr_level_giveup = None;
+                    self.comp_level_giveup = None;
+                    self.notch_freq_giveup = None;
                     {
                         let mut eng = engine_lock(engine);
                         eng.set_cat_status(
@@ -4727,12 +4816,12 @@ impl RadioLoop {
                             self.smeter_misses = 0;
                             self.smeter_retry_backoff = FUNC_RETRY_BACKOFF_BASE;
                             self.smeter_retry_at = 0;
-                            self.func_supported = [None; 5];
-                            self.func_misses = [0; 5];
-                            self.func_state = [None; 5];
+                            self.func_supported = [None; N_FUNCS];
+                            self.func_misses = [0; N_FUNCS];
+                            self.func_state = [None; N_FUNCS];
                             self.tuner_probed = false;
-                            self.level_supported = [None; 4];
-                            self.level_misses = [0; 4];
+                            self.level_supported = [None; N_LEVELS];
+                            self.level_misses = [0; N_LEVELS];
                             self.agc_giveup = None; // the refusal may have been the dead link
                             self.rf_power_giveup = None; // …and so may these three have been
                             self.mic_gain_giveup = None;
@@ -4832,6 +4921,46 @@ impl RadioLoop {
                             note_ext_read(
                                 &mut self.level_supported[LVL_MICGAIN],
                                 &mut self.level_misses[LVL_MICGAIN],
+                                ok,
+                            );
+                        }
+                        // #95's two new reads, gated by the same capability cache as the rest:
+                        // three consecutive misses and the loop stops issuing them, so a rig
+                        // that has neither never pays a CAT timeout for asking.
+                        if self.level_supported[LVL_COMP] != Some(false) && have_budget() {
+                            let ok = match rig.read_level("COMP") {
+                                Ok(frac) => {
+                                    let mut eng = engine_lock(engine);
+                                    eng.observe_rig_comp_level(frac);
+                                    true
+                                }
+                                Err(_) => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_COMP],
+                                &mut self.level_misses[LVL_COMP],
+                                ok,
+                            );
+                        }
+                        if self.level_supported[LVL_NOTCHF] != Some(false) && have_budget() {
+                            // NOTCHF is HZ, not a 0..1 fraction — `read_level` normalises the
+                            // fractional levels, so this one goes through the raw reader or the
+                            // number comes back meaningless. Getting that wrong would put the
+                            // notch marker at 0.4 Hz and look like a rig fault.
+                            // `read_meter_f32` is the RAW reader (it is what read_agc uses);
+                            // `read_level` would reject this outright, since it filters to
+                            // 0.0..=1.0 and a notch frequency is hundreds of Hz.
+                            let ok = match rig.read_meter_f32("NOTCHF") {
+                                Some(hz) => {
+                                    let mut eng = engine_lock(engine);
+                                    eng.observe_rig_notch_freq_hz(hz);
+                                    true
+                                }
+                                None => false,
+                            };
+                            note_ext_read(
+                                &mut self.level_supported[LVL_NOTCHF],
+                                &mut self.level_misses[LVL_NOTCHF],
                                 ok,
                             );
                         }
@@ -5136,9 +5265,9 @@ impl RadioLoop {
                             }
                             self.cat_retry_at = now + self.cat_retry_ms;
                             // Re-probe funcs on recovery; don't leave stale toggle states shown.
-                            self.func_supported = [None; 5];
-                            self.func_misses = [0; 5];
-                            self.func_state = [None; 5];
+                            self.func_supported = [None; N_FUNCS];
+                            self.func_misses = [0; N_FUNCS];
+                            self.func_state = [None; N_FUNCS];
                             self.tuner_probed = false;
                             // Name the rig config in the diagnostic too, so a capture taken while
                             // the fault is ongoing records model/port/baud (the spawn note may
@@ -5582,8 +5711,33 @@ impl RadioLoop {
             // whether a unit with its speed POT enabled honours a host speed at all — on
             // WK2/WK3 the pot can own the speed, in which case the fix is correct and the
             // keyer still ignores it. Bench a real keyer both idle and mid-macro.
+            //
+            // ⚠️ 2026-08-21 — THE ABOVE IS NOW HALF THE FIX, AND THE SECOND BULLET IS REVERSED.
+            // swinn tested 1.7.5 and reported precisely: after launch the slider reads 20 while
+            // the PADDLE keys at 30-something; moving the slider does nothing; send one
+            // character from the keyboard and the paddle becomes 20 and the slider starts
+            // working. That is this block doing exactly what it says — pushing only to an
+            // ALREADY-OPEN keyer — meeting a port that is opened on demand by the first word.
+            // Until you send, there is no keyer to push to.
+            //
+            // The paddle is the part that makes it matter: paddle keying never passes through
+            // Nexus at all, so the ONLY thing that can put the operator's speed under it is a
+            // Set Speed we sent to the keyer. A keyer we never opened never got one, and the
+            // cockpit's number was a claim about hardware nobody had told.
+            //
+            // So the port is now opened when one is CONFIGURED, not when the first word needs
+            // it. The cost is a dedicated COM port held from the moment CW can key rather than
+            // from the first character — which is what a keyer configured for use is for, and
+            // what other loggers do. The benefit is that the slider stops lying about hardware
+            // it has never spoken to.
             #[cfg(feature = "serial")]
             if self.may_key() {
+                if let Some(port) = &winkeyer_port {
+                    if let Some(err) = self.ensure_winkeyer(port) {
+                        let mut eng = engine_lock(engine);
+                        eng.set_cw_keyer_error(Some(err));
+                    }
+                }
                 if let Some((_, wk)) = self.winkeyer.as_mut() {
                     if wpm != self.last_winkeyer_wpm && wk.set_wpm(wpm).is_ok() {
                         self.last_winkeyer_wpm = wpm;
@@ -5606,35 +5760,11 @@ impl RadioLoop {
                 // own error — if it produced one — pointed at the wrong backend.
                 #[cfg(feature = "serial")]
                 if let Some(port) = &winkeyer_port {
-                    let reopen = self
-                        .winkeyer
-                        .as_ref()
-                        .map(|(p, _)| p != port)
-                        .unwrap_or(true);
-                    let mut open_err = None;
-                    if reopen {
-                        // ISSUE #135: a keyer we are about to open knows nothing of the
-                        // speed we sent the LAST one — it is back on its own pot /
-                        // power-on default, because `WinKeyer::open` sends Host Open and
-                        // no speed setup. Forget what we think it has been told, so the
-                        // push below always fires on a fresh port. Reset before the open,
-                        // so a FAILED open leaves the cache clear for the retry too.
-                        self.last_winkeyer_wpm = 0;
-                        match crate::winkeyer::WinKeyer::open(port) {
-                            Ok((wk, _rev)) => self.winkeyer = Some((port.clone(), wk)),
-                            // What the SYSTEM said, verbatim. `self.winkeyer` stays None, so
-                            // the next word retries the open — a keyer plugged in late, or a
-                            // port briefly held by another app, still recovers on its own.
-                            Err(e) => {
-                                self.winkeyer = None;
-                                open_err = Some(format!(
-                                    "WinKeyer on {port}: {e}. If the port name is right, check \
-                                     that the keyer is powered and that nothing else (CAT, \
-                                     another logger) has it open."
-                                ));
-                            }
-                        }
-                    }
+                    // Usually a no-op now: the tick above already opened it. Still here for
+                    // the port-changed case and for the retry after a failed open — a keyer
+                    // plugged in late, or a port briefly held by another app, recovers on
+                    // its own without the operator touching anything.
+                    let open_err = self.ensure_winkeyer(port);
                     if let Some((_, wk)) = self.winkeyer.as_mut() {
                         // Still here after the per-tick push above, and NOT redundant with
                         // it: on the tick that OPENS the port there was no keyer for that
@@ -6814,10 +6944,40 @@ impl RadioLoop {
                 }
             }
             // RX DSP levels: NR level (0..1) + AGC speed — applied on change like mic gain.
-            let (nr, agc) = {
+            let (nr, agc, comp, notchf) = {
                 let mut e = engine_lock(engine);
-                (e.nr_level(), e.agc_to_command())
+                (
+                    e.nr_level(),
+                    e.agc_to_command(),
+                    e.comp_level(),
+                    e.notch_freq_hz(),
+                )
             };
+            // #95's two writes. Same shape as NR below — a refusal is remembered against THAT
+            // value so a rig that will not take it is asked once, not on every pass, and a
+            // different value from the operator is still tried.
+            if let Some(c) = comp {
+                if Some(c) != self.last_comp_level && self.comp_level_giveup != Some(c) {
+                    match rig.set_rx_level("COMP", c) {
+                        Ok(()) => {
+                            self.last_comp_level = Some(c);
+                            self.comp_level_giveup = None;
+                        }
+                        Err(_) => self.comp_level_giveup = Some(c),
+                    }
+                }
+            }
+            if let Some(hz) = notchf {
+                if Some(hz) != self.last_notch_freq_hz && self.notch_freq_giveup != Some(hz) {
+                    match rig.set_notch_freq_hz(hz) {
+                        Ok(()) => {
+                            self.last_notch_freq_hz = Some(hz);
+                            self.notch_freq_giveup = None;
+                        }
+                        Err(_) => self.notch_freq_giveup = Some(hz),
+                    }
+                }
+            }
             if let Some(n) = nr {
                 // Same give-up, same reason — see the RF-power leg above. NR is the one of the
                 // three a Flex on model 2036 is most likely to refuse outright.
@@ -9644,12 +9804,13 @@ fn finish_cat_open(rig: &mut Rig, t: &Transport) -> CatProbe {
     // app. The first genuine command happens when the operator enters a cockpit,
     // clicks a spot, or keys up (ensure_commanded / the retune paths). Do NOT re-add
     // a command here: launch_never_commands_the_rig pins this.
-    probe_cat(rig, t.rigctld_port)
+    probe_cat(rig, t)
 }
 
 /// Probe a CAT rig by reading its frequency, mapping failures to a concrete,
 /// operator-actionable message (rigctld unreachable vs. rig not answering).
-fn probe_cat(rig: &mut Rig, port: u16) -> CatProbe {
+fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
+    let port = t.rigctld_port;
     match rig.read_freq() {
         Ok(hz) => CatProbe {
             ok: Some(true),
@@ -9664,8 +9825,35 @@ fn probe_cat(rig: &mut Rig, port: u16) -> CatProbe {
             Some(false),
             format!("rigctld is not reachable on 127.0.0.1:{port}."),
         ),
+        // ⚠️ THE ADVICE MUST MATCH THE TRANSPORT (#144, vsboost, v1.7.5). `read_freq`'s
+        // message ends "check the serial port, baud rate, and that CAT/CI-V is enabled on the
+        // rig" — which is right for a serial rig and actively misleading on OmniRig, where
+        // Nexus opens no serial port and uses no baud AT ALL. His own Settings page says so
+        // two inches above the error: "the Rig Model, Serial Port and Baud above are not
+        // used." He was sent to check three things that do not exist in his setup, while the
+        // thing that does — which OmniRig slot, and whether OmniRig itself has that rig
+        // online — went unmentioned.
+        Err(e) if t.is_omnirig() => CatProbe::status(
+            Some(false),
+            format!(
+                "OmniRig answered, but {} is not reporting a frequency. Open OmniRig's own \
+                 window and check that {} is the radio you mean and that it shows ONLINE — a \
+                 slot that is configured but not talking to the rig reads exactly like this. \
+                 If your radio is on OmniRig's other slot, change OmniRig Radio in Settings ▸ \
+                 Radio. Nexus opens no serial port of its own on this connection, so the Serial \
+                 Port and Baud settings are not the cause. ({e})",
+                omnirig_slot_label(t),
+                omnirig_slot_label(t),
+            ),
+        ),
         Err(e) => CatProbe::status(Some(false), format!("CAT error: {e}")),
     }
+}
+
+/// "RIG 1" / "RIG 2" — what OmniRig's OWN window calls the slot, so the message names the
+/// thing the operator is being asked to look at rather than an internal number.
+fn omnirig_slot_label(t: &Transport) -> &'static str {
+    crate::omnirig::RigSlot::from_setting(t.omnirig_slot).label()
 }
 
 /// Build a serial-PTT rig and verify the control line opens (unkeyed = safe).
@@ -9690,7 +9878,7 @@ fn probe_serial(port: &str, line: SerialLine) -> RigOpen {
 /// doesn't fight the running rigctld for the serial port.
 fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
     match t.ptt_method.as_str() {
-        "cat" if t.cat_available() => probe_cat_or_explain(rig, t.rigctld_port),
+        "cat" if t.cat_available() => probe_cat_or_explain(rig, t),
         "cat" => (
             Some(false),
             "CAT selected but no rig model is set — pick your rig in Settings.".to_string(),
@@ -9698,7 +9886,7 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
         // Shared CAT+keying port: rigctld owns the port and there IS a live control channel, so
         // Test CAT must probe it. Reporting "Serial PTT on COM5" here would contradict what the
         // app is actually doing and hide a genuinely broken CAT link behind a green pill.
-        _ if keys_on_the_cat_port(t) => probe_cat_or_explain(rig, t.rigctld_port),
+        _ if keys_on_the_cat_port(t) => probe_cat_or_explain(rig, t),
         "rts" | "dtr" => {
             let shown = if t.ptt_port().is_empty() {
                 "(no port set)"
@@ -9725,7 +9913,7 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
         }
         // VOX with a CAT rig configured: keying is VOX, but CAT control is live, so the
         // Test-CAT button must probe the (real) control channel — not report "no CAT".
-        "vox" if t.cat_available() => probe_cat_or_explain(rig, t.rigctld_port),
+        "vox" if t.cat_available() => probe_cat_or_explain(rig, t),
         _ => (None, "VOX — no CAT.".to_string()),
     }
 }
@@ -9734,9 +9922,9 @@ fn reprobe(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
 /// back to a control-less rig: serial-port conflict, or rigctld failed to launch),
 /// `read_freq` would return a misleading "not a CAT rig" error. Detect that up front
 /// and explain the real cause instead.
-fn probe_cat_or_explain(rig: &mut Rig, port: u16) -> (Option<bool>, String) {
+fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) {
     if rig.has_control() {
-        let p = probe_cat(rig, port);
+        let p = probe_cat(rig, t);
         (p.ok, p.detail)
     } else {
         (
@@ -10206,6 +10394,57 @@ mod tests {
             !width_is_close_enough(3751, 3000),
             "one Hz past the quarter is not"
         );
+    }
+
+    /// THE 1.7.6-test1 RADIO CRASH, pinned so it cannot come back.
+    ///
+    /// Adding the manual notch took `RIG_FUNCS` from five entries to six. Four of the five
+    /// parallel per-func arrays were widened; `func_retry_backoff` was not. Nothing failed to
+    /// compile, because an array index is a RUNTIME bound — and no test reached it, because
+    /// the round-robin visits slot 5 on ONE TICK IN SIX of a live CAT poll. It shipped, and
+    /// the operator's own diagnostic log caught it:
+    ///
+    ///   panic: index out of bounds: the len is 5 but the index is 5
+    ///   RADIO ENGINE CRASHED — TX/RX is dead until you restart Nexus.
+    ///
+    /// Every length is now DERIVED from its table (`N_FUNCS` / `N_LEVELS`), which makes the
+    /// drift unrepresentable rather than merely fixed. This walks every slot the loop can
+    /// index anyway: a derivation is only as good as the indices staying inside it, and the
+    /// cost of proving that is nothing.
+    #[test]
+    fn every_func_and_level_slot_the_loop_can_reach_is_in_bounds() {
+        let st = loop_state();
+        assert_eq!(
+            RIG_FUNCS.len(),
+            N_FUNCS,
+            "the per-func arrays are sized by the table, not beside it"
+        );
+        // The exact expression the radio loop indexes with, over a full round-robin and then
+        // some — this is what produced index 5 on a five-slot array.
+        for tick in 0u64..(N_FUNCS as u64 * 4 * 3) {
+            let i = ((tick / 4) as usize) % RIG_FUNCS.len();
+            assert!(i < st.func_supported.len(), "func_supported slot {i}");
+            assert!(i < st.func_misses.len(), "func_misses slot {i}");
+            assert!(i < st.func_state.len(), "func_state slot {i}");
+            assert!(i < st.func_retry_at.len(), "func_retry_at slot {i}");
+            // The one that was missed.
+            assert!(
+                i < st.func_retry_backoff.len(),
+                "func_retry_backoff slot {i}"
+            );
+        }
+        // Levels are indexed by name rather than round-robin, so assert the highest.
+        for (name, idx) in [
+            ("RFPOWER", LVL_RFPOWER),
+            ("MICGAIN", LVL_MICGAIN),
+            ("NR", LVL_NR),
+            ("AGC", LVL_AGC),
+            ("COMP", LVL_COMP),
+            ("NOTCHF", LVL_NOTCHF),
+        ] {
+            assert!(idx < st.level_supported.len(), "level_supported {name}");
+            assert!(idx < st.level_misses.len(), "level_misses {name}");
+        }
     }
 
     #[test]
@@ -10961,6 +11200,22 @@ mod tests {
     /// the field, then move the slider with NOTHING queued. It reads the ACTUAL BYTES off
     /// a pty standing in for the keyer rather than a flag saying bytes were meant — the
     /// whole bug was a speed the app believed it had already sent.
+    ///
+    /// ⚠️ LINUX ONLY, and the reason is the STAND-IN rather than the behaviour (#148,
+    /// on8st, measured on macOS 15 / Apple Silicon). This scene opens a PTY and lets
+    /// Nexus treat it as a serial port. On Linux that works; on macOS `serialport` 4.9
+    /// issues a tcgetattr-family ioctl that a pts rejects with ENOTTY, so the keyer open
+    /// fails before the scene begins and the assertion fires on its own precondition —
+    /// "the stand-in keyer must open cleanly" — rather than on the thing being pinned.
+    /// The operator-facing error is doing its job there; it is the port that is not a
+    /// real serial device.
+    ///
+    /// Gated rather than deleted, and rather than papered over: the coverage is real
+    /// where it runs, and a macOS contributor running the feature-gated suite should not
+    /// meet a deterministic failure that says nothing about their change. A stand-in that
+    /// works on both — a fake transport behind a trait rather than a real pty — is the
+    /// proper fix and is tracked on #148.
+    #[cfg(target_os = "linux")]
     #[cfg(all(unix, feature = "serial"))]
     #[test]
     fn a_speed_change_with_nothing_queued_still_reaches_the_winkeyer() {
@@ -11082,6 +11337,177 @@ mod tests {
             after.windows(2).any(|w| w == crate::winkeyer::wpm_cmd(35)),
             "issue #135: a speed change with nothing queued must reach the keyer — the \
              wire carried {after:02x?}"
+        );
+    }
+
+    /// ISSUE #135, THE HALF THE FIRST FIX MISSED — swinn on 1.7.5, and his words are the
+    /// spec: "After starting Nexus the slider is set at 20 wpm. If I use the paddle it really
+    /// is at something probably over 30 wpm. Adjusting the slider then does not change the
+    /// speed. If I send a single character from the keyboard it goes out at 20 wpm and after
+    /// that the paddle is 20 wpm."
+    ///
+    /// PADDLE KEYING NEVER PASSES THROUGH NEXUS. The only thing that can put the operator's
+    /// speed under it is a Set Speed we sent the keyer — and the port used to open on demand
+    /// from the send-a-word branch, so until you typed something there was no keyer to send
+    /// it to. The cockpit's number was a claim about hardware nobody had told.
+    ///
+    /// So: a configured keyer, CW mode, and NOTHING SENT. The speed must still reach the
+    /// wire. The sibling test above covers the send path and cannot see this at all — it
+    /// opens the port by sending.
+    ///
+    /// ⚠️ LINUX ONLY, and the reason is the STAND-IN rather than the behaviour (#148,
+    /// on8st, measured on macOS 15 / Apple Silicon). This scene opens a PTY and lets
+    /// Nexus treat it as a serial port. On Linux that works; on macOS `serialport` 4.9
+    /// issues a tcgetattr-family ioctl that a pts rejects with ENOTTY, so the keyer open
+    /// fails before the scene begins and the assertion fires on its own precondition —
+    /// "the stand-in keyer must open cleanly" — rather than on the thing being pinned.
+    /// The operator-facing error is doing its job there; it is the port that is not a
+    /// real serial device.
+    ///
+    /// Gated rather than deleted, and rather than papered over: the coverage is real
+    /// where it runs, and a macOS contributor running the feature-gated suite should not
+    /// meet a deterministic failure that says nothing about their change. A stand-in that
+    /// works on both — a fake transport behind a trait rather than a real pty — is the
+    /// proper fix and is tracked on #148.
+    #[cfg(target_os = "linux")]
+    #[cfg(feature = "serial")]
+    #[test]
+    fn a_configured_winkeyer_learns_the_speed_without_being_sent_to() {
+        use serialport::SerialPort;
+        use std::io::{Read, Write};
+
+        let (mut keyer, slave) = serialport::TTYPort::pair().expect("a pty pair");
+        let port = slave
+            .name()
+            .expect("the pts side has a path to open by name");
+        keyer
+            .set_timeout(Duration::from_millis(250))
+            .expect("a bounded read, so a silent wire ends the test instead of hanging it");
+        // Answer Host Open exactly as a real WK does — the host blocks on that byte.
+        let mut responder = keyer
+            .try_clone()
+            .expect("clone the pty master to answer on");
+        responder
+            .set_timeout(Duration::from_millis(3000))
+            .expect("bound the answering read too");
+        std::thread::spawn(move || {
+            let mut host_open = [0u8; 2];
+            if responder.read_exact(&mut host_open).is_ok() {
+                let _ = responder.write_all(&[0x17]); // WK2, revision 23
+                let _ = responder.flush();
+            }
+        });
+        fn drain(k: &mut serialport::TTYPort) -> Vec<u8> {
+            let mut out = Vec::new();
+            let mut buf = [0u8; 64];
+            while let Ok(n) = k.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                out.extend_from_slice(&buf[..n]);
+            }
+            out
+        }
+
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.winkeyer_port = port.clone();
+            e.apply_settings(s);
+            e.set_cw_keyer("winkeyer", 600.0);
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.03, "40m", "CW");
+            e.set_cw_wpm(20);
+            // AND NOTHING IS SENT. No send_cw, no macro, no character — the operator has
+            // launched into CW and reached for the paddle, which is the reported scene.
+        }
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        // Control first: if the stand-in keyer never opened, the assertion below would be
+        // reporting the wrong thing entirely.
+        assert_eq!(
+            engine.lock().unwrap().cw_keyer_error(),
+            None,
+            "the stand-in keyer must open cleanly, or this scene proves nothing"
+        );
+        let wire = drain(&mut keyer);
+        assert!(
+            wire.windows(2).any(|w| w == crate::winkeyer::wpm_cmd(20)),
+            "a configured keyer must be told the operator's speed without waiting to be sent \
+             to — the paddle has no other way to learn it: {wire:02x?}"
+        );
+    }
+
+    /// #144 (vsboost, v1.7.5): OmniRig connected, Test CAT answered
+    /// `rig did not return a frequency (reply "0\n") — check the serial port, baud rate, and
+    /// that CAT/CI-V is enabled on the rig`.
+    ///
+    /// Every one of those three is meaningless on an OmniRig connection: Nexus opens no
+    /// serial port and uses no baud, and his own Settings page says so two inches above the
+    /// error. The advice must match the transport, and it must name the thing that IS the
+    /// likely cause — which OmniRig slot, and whether OmniRig has that rig online.
+    #[test]
+    fn an_omnirig_probe_failure_does_not_send_the_operator_to_a_serial_port() {
+        let mut t = Transport::from_settings(&test_settings());
+        t.rig_conn = "omnirig".into();
+        t.omnirig_slot = 1;
+        // The message the operator actually sees, built from a rig with no control channel so
+        // the read fails the way it did for him.
+        let mut rig = Rig::vox();
+        let detail = probe_cat(&mut rig, &t).detail;
+        let lower = detail.to_ascii_lowercase();
+        // NOT "contains the word baud" — the message mentions the Serial Port and Baud
+        // settings deliberately, to say they are NOT the cause, which is the correction. What
+        // must be gone is the ADVICE to go and check them, which is what he was given.
+        assert!(
+            !lower.contains("check the serial port, baud rate"),
+            "must not send an OmniRig operator to check a serial port: {detail}"
+        );
+        assert!(
+            lower.contains("not the cause") || lower.contains("are not"),
+            "and should say plainly that those settings are not it: {detail}"
+        );
+        assert!(
+            lower.contains("omnirig"),
+            "the message must name the transport it is about: {detail}"
+        );
+        assert!(
+            detail.contains("RIG 1"),
+            "and the SLOT, by the name OmniRig's own window uses: {detail}"
+        );
+
+        // CONTROL, and it is the discrimination that matters: a SERIAL rig must not be handed
+        // the OmniRig sentence. Without this, a branch that fired for every transport would
+        // pass all three assertions above.
+        //
+        // It deliberately does NOT assert the serial ADVICE is present: a rig with no control
+        // channel fails at "not a CAT rig" long before the zero-frequency message that carries
+        // it, and manufacturing a live rigctld here would be testing Hamlib rather than this
+        // branch. What is provable without one is that the OmniRig text is transport-gated.
+        let mut serial_t = Transport::from_settings(&test_settings());
+        serial_t.rig_conn = "serial".into();
+        let mut rig2 = Rig::vox();
+        let serial_detail = probe_cat(&mut rig2, &serial_t).detail;
+        assert!(
+            !serial_detail.to_ascii_lowercase().contains("omnirig"),
+            "a serial rig must not be told about OmniRig slots: {serial_detail}"
         );
     }
 

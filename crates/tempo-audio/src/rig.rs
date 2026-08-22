@@ -315,6 +315,24 @@ pub struct Rig {
     slow_transport: bool,
 }
 
+/// Does this read error mean "nothing was read, try again" rather than "the stream is broken"?
+///
+/// `WouldBlock`/`TimedOut` are the per-read window expiring. **`Interrupted` is EINTR**: the
+/// syscall was cut short by a signal before it waited at all, which says nothing whatever about
+/// the peer. Treating it as a hard error surfaced as a spurious CAT failure — and it is not
+/// theoretical, it took CI's own `slow_fragmented_reply_still_reads_whole_line` down on a loaded
+/// runner (2026-08-21), which is the same thing that would happen to an operator whose machine
+/// is busy mid-QSO. `std::io::Read::read` does not retry EINTR for you; `read_exact` does, which
+/// is why this only bites the hand-rolled loops.
+fn read_should_retry(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::Interrupted
+    )
+}
+
 impl Rig {
     /// General constructor: an optional CAT control channel + a PTT method. This is
     /// the seam that decouples control from keying — pass `Some(addr)` for a CAT rig
@@ -477,11 +495,7 @@ impl Rig {
                         return Ok(String::from_utf8_lossy(&out).to_string());
                     }
                 }
-                Err(ref e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) => {} // per-read timeout tick — keep waiting to the deadline
+                Err(ref e) if read_should_retry(e.kind()) => {} // nothing read — wait out the deadline
                 Err(e) => return Err(e), // hard error — caller drops the stream
             }
             if std::time::Instant::now() >= deadline {
@@ -527,6 +541,11 @@ impl Rig {
             match stream.read(&mut buf) {
                 Ok(0) => break, // peer closed — parse what we have
                 Ok(n) => out.extend_from_slice(&buf[..n]),
+                // A per-read window that expired with nothing in it means the peer has gone
+                // quiet, so the reply is complete. EINTR is NOT that: the syscall was cut
+                // short by a signal without waiting, so breaking here would truncate a reply
+                // that is still arriving. Retry it instead; the deadline below still bounds us.
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(ref e)
                     if matches!(
                         e.kind(),
@@ -989,6 +1008,15 @@ impl Rig {
     pub fn set_rx_level(&mut self, name: &str, frac: f32) -> std::io::Result<()> {
         self.cat(&level_line(name, &format!("{:.3}", frac.clamp(0.0, 1.0))))
     }
+    /// Set the MANUAL-NOTCH FREQUENCY in Hz (Hamlib `NOTCHF`). Not a 0.0–1.0 level: this one
+    /// is an absolute frequency in the audio passband, which is why it does not go through
+    /// [`Rig::set_rx_level`] — that clamps to a fraction and would command a notch at 1 Hz.
+    pub fn set_notch_freq_hz(&mut self, hz: f32) -> std::io::Result<()> {
+        self.cat(&level_line(
+            "NOTCHF",
+            &format!("{}", hz.max(0.0).round() as i32),
+        ))
+    }
     /// Set the AGC time constant by Hamlib enum int (FAST=2, MEDIUM=5, SLOW=3, OFF=0).
     pub fn set_agc(&mut self, hamlib_val: u8) -> std::io::Result<()> {
         self.cat(&level_line("AGC", &hamlib_val.to_string()))
@@ -1293,6 +1321,39 @@ mod tests {
             } else {
                 "RPRT 0\n".to_string()
             }
+        }
+    }
+
+    /// EINTR IS NOT "THE PEER WENT QUIET". A signal can cut a blocking read short before it
+    /// has waited at all, and both reply loops used to treat that as a hard error: the
+    /// single-line one returned it (and the caller dropped the stream), the multi-line one
+    /// would have ended the reply early. On a busy machine that is a CAT failure with no cause
+    /// an operator could ever find. CI hit exactly this on 2026-08-21.
+    ///
+    /// Both directions, because a classifier proven one way is half a test: the transient kinds
+    /// must retry, and the genuinely broken ones must NOT — retrying a reset connection forever
+    /// is the opposite failure and it hangs the radio loop instead of erroring.
+    #[test]
+    fn eintr_is_retried_but_a_broken_stream_is_not() {
+        use std::io::ErrorKind::*;
+        for k in [WouldBlock, TimedOut, Interrupted] {
+            assert!(
+                read_should_retry(k),
+                "{k:?} means nothing was read — retry it"
+            );
+        }
+        for k in [
+            ConnectionReset,
+            ConnectionAborted,
+            BrokenPipe,
+            UnexpectedEof,
+            NotConnected,
+            PermissionDenied,
+        ] {
+            assert!(
+                !read_should_retry(k),
+                "{k:?} is a broken stream — must NOT retry"
+            );
         }
     }
 

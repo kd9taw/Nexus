@@ -227,6 +227,7 @@
 // are all census-only for that reason); and that a NEWLY ADDED stop control reached its
 // cockpit's sweep list is a human step, named in each sweep.
 import { useCallback, useMemo, useState } from 'react'
+import { durableGet, durableSet } from './durableStore'
 import { windowInstance } from './windowScope'
 
 export type PanelState = 'docked' | 'popped' | 'removed'
@@ -312,7 +313,10 @@ export function coercePanelLayout<P extends string>(
 
 export function savePanelLayout<P extends string>(key: string, layout: PanelLayout<P>): void {
   try {
-    window.localStorage.setItem(key, JSON.stringify(layout))
+    // The MAIN window's layout is durable (it survives a reinstall); a detached panel's is
+    // not. `durableSet` decides from the key itself — see `isMainWindowPanelLayout` — so this
+    // call site does not have to know which surface it is on, and cannot get it wrong.
+    durableSet(key, JSON.stringify(layout))
   } catch {
     /* full/unavailable — in-memory state still applies this session */
   }
@@ -360,7 +364,7 @@ export function loadPanelLayout<P extends string>(
   const key = panelStorageKey(spec.view, instance)
   let layout = emptyPanelLayout<P>()
   try {
-    const raw = window.localStorage.getItem(key)
+    const raw = durableGet(key)
     if (raw != null) layout = coercePanelLayout(spec, JSON.parse(raw))
   } catch {
     /* malformed — fall through (matches loadPlacement) */

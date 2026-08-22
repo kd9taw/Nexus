@@ -1145,7 +1145,9 @@ export async function swapVfo(): Promise<AppSnapshot> {
 /** Toggle a rig DSP function ('nb'|'nr'|'notch'|'comp'|'vox') on/off; the radio loop applies it.
  * The returned snapshot reflects the request optimistically (the loop's read-back reconciles). */
 export async function setRigFunc(
-  func: 'nb' | 'nr' | 'notch' | 'comp' | 'vox',
+  // 'notch' is the AUTOMATIC notch (ANF); 'manualNotch' is the one you place (MN). Two
+  // different rig functions — see engine.rs func_index, where they are indices 2 and 5.
+  func: 'nb' | 'nr' | 'notch' | 'comp' | 'vox' | 'manualNotch',
   on: boolean,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_rig_func', { func, on })
@@ -1208,6 +1210,16 @@ export async function setMicGain(gain: number): Promise<AppSnapshot> {
 export async function setNrLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_nr_level', { level })
 }
+/** Set the speech-processor depth as a 0.0–1.0 fraction (#95). */
+export async function setCompLevel(level: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_comp_level', { level })
+}
+
+/** Set the MANUAL-notch frequency in HZ (#95). The engine clamps it to the audio passband. */
+export async function setNotchFreq(hz: number): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_notch_freq', { hz })
+}
+
 /** Set the AGC speed — `Engine::AGC_SPEEDS`, in the order the cockpits show them. */
 export async function setAgc(speed: 'auto' | 'fast' | 'mid' | 'slow' | 'off'): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_agc', { speed })
@@ -2364,6 +2376,6 @@ export async function exportSettingsBundle(): Promise<string> {
 
 /** Restore a bundle written by `exportSettingsBundle`. Refuses anything that is not one, by
  *  name and schema — a partial restore is worse than a refusal. */
-export async function importSettingsBundle(text: string): Promise<void> {
-  return invoke<void>('import_settings_bundle', { text })
+export async function importSettingsBundle(text: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('import_settings_bundle', { text })
 }

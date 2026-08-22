@@ -942,6 +942,10 @@ export interface Station {
   /** Who this station is calling — the addressee of its last decoded frame. Null when
    * it addressed nobody, i.e. it is calling CQ (the roster renders that as "CQ"). */
   calling?: string | null
+  /** The CQ modifier when the last frame was a CQ — 'DX', 'NA', 'POTA', 'TEST', a zone
+   *  number. Null for a plain CQ or a station working somebody. Shown beside "CQ" so a
+   *  directed call is not mistaken for one you can answer. */
+  cqDir?: string | null
   /** Primary administrative subdivision as its ADIF `STATE` code — a US state from the
    * callsign (FCC index) or the heard grid, or a Canadian province from the regional
    * numeral. The same hint the needed board uses. Null elsewhere in the world, or when
@@ -1039,6 +1043,13 @@ export interface RadioStatus {
   micGain?: number | null
   /** Noise-reduction level 0.0–1.0 (rig read-back or commanded); absent when unsupported. */
   nrLevel?: number | null
+  /** Speech-processor depth 0..1 (#95 — the COMP toggle had no level behind it). */
+  compLevel?: number | null
+  /** MANUAL-notch frequency in HZ — not a 0..1 level. Null when the rig has no NOTCHF. */
+  notchFreqHz?: number | null
+  /** MANUAL notch (Hamlib MN), distinct from `notch` which is the AUTOMATIC notch (ANF).
+   *  A radio may report either, both or neither; each toggle renders only when non-null. */
+  manualNotch?: boolean | null
   /** AGC time constant, one of `Engine::AGC_SPEEDS` ("auto" | "fast" | "mid" | "slow" |
    * "off"); absent when the rig doesn't report it. */
   agc?: string | null
