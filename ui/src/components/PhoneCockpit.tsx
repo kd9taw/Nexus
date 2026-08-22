@@ -57,6 +57,7 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
+import type { MessageKey } from '../i18n'
 
 /** This cockpit's INVARIANT vocabulary — the words that are technical tokens rather than
  *  prose, gathered here so the i18n guard reads them as the deliberate constants they are:
@@ -80,6 +81,19 @@ const autoPlate = (sideband: string) => `AUTO·${sideband}`
  *  supplied to the message rather than written in it. */
 const FILTER_STEP_HZ = 100
 const SPLIT_STEP_KHZ = 1
+
+/** The AGC chips, in the order `Engine::AGC_SPEEDS` lists them: AUTO left of the three time
+ *  constants, OFF right of them — most-automatic through to no AGC at all. The `id` is the
+ *  token that goes on the wire and the label is a KEY, not a word: `t()` runs when the row
+ *  RENDERS, so a locale switch relabels the chips and the chip is still compared on its id
+ *  (the same split RF_SPANS makes, and for the same reason). */
+const AGC_CHIPS = [
+  { id: 'auto', labelKey: 'phone.rxDsp.agc.auto' },
+  { id: 'fast', labelKey: 'phone.rxDsp.agc.fast' },
+  { id: 'mid', labelKey: 'phone.rxDsp.agc.mid' },
+  { id: 'slow', labelKey: 'phone.rxDsp.agc.slow' },
+  { id: 'off', labelKey: 'phone.rxDsp.agc.off' },
+] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
 interface Props {
   /** Which panels this cockpit shows or hides (⊞ Panels). Owned by the HOST (App), never
@@ -411,7 +425,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
-  const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
+  const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -1055,19 +1069,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {snap.radio.agc != null && (
               <div className="ph-agc" role="group" aria-label={t('phone.rxDsp.agc.aria')} title={t('phone.rxDsp.agc.title')}>
                 <span className="ph-dsplev-lbl">{AGC}</span>
-                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                {AGC_CHIPS.map(({ id, labelKey }) => (
                   <button
-                    key={sp}
+                    key={id}
                     type="button"
-                    className={`theme-chip${agc === sp ? ' active' : ''}`}
-                    aria-pressed={agc === sp}
-                    onClick={() => changeAgc(sp)}
+                    className={`theme-chip${agc === id ? ' active' : ''}`}
+                    aria-pressed={agc === id}
+                    onClick={() => changeAgc(id)}
                   >
-                    {sp === 'fast'
-                      ? t('phone.rxDsp.agc.fast')
-                      : sp === 'mid'
-                        ? t('phone.rxDsp.agc.mid')
-                        : t('phone.rxDsp.agc.slow')}
+                    {t(labelKey)}
                   </button>
                 ))}
               </div>

@@ -11681,6 +11681,25 @@ fn mark_qsl_sent(
     Ok(eng.snapshot())
 }
 
+/// Record whether a PAPER QSL card arrived for logbook entry `index` (#152).
+///
+/// The operator is the only authority for this: LoTW, eQSL and QRZ report their own
+/// confirmations and Nexus syncs those, but nothing knows a card reached a letterbox. It is
+/// award-eligible — `QslRcvd::award` is card OR LoTW — so leaving it unrecordable left the
+/// awards view understating what the operator can actually claim.
+#[tauri::command(async)]
+fn mark_qsl_card(
+    state: State<'_, SharedEngine>,
+    index: usize,
+    received: bool,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if !eng.mark_qsl_card(index, received) {
+        return Err("That contact no longer exists — reload the log and try again.".into());
+    }
+    Ok(eng.snapshot())
+}
+
 /// Delete logbook entry `index` (oldest-first, as returned by `get_log`). Returns
 /// the refreshed snapshot. Indices shift after a delete — the UI reloads the log.
 #[tauri::command(async)]
@@ -17779,6 +17798,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             resolve_entity,
             edit_qso,
             mark_qsl_sent,
+            mark_qsl_card,
             delete_qso,
             purge_log,
             get_awards,

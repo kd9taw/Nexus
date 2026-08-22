@@ -1327,11 +1327,31 @@ pub struct Settings {
     /// of the combined `RR73`. Off by default (RR73 — modern FT8 practice).
     #[serde(default)]
     pub prefer_rrr: bool,
-    /// Stop a CQ run after this many unanswered calls. `None` (default) = stock
-    /// WSJT-X behavior: CQ repeats indefinitely, the Tx watchdog is the backstop.
-    /// The earlier always-on 6-call cap is preserved as this opt-in.
-    #[serde(default)]
+    /// Stop a CQ run after this many unanswered calls, then wait [`Self::cq_pause_secs`]
+    /// and start again. `Some(8)` by default (operator ruling); `None` = stock WSJT-X,
+    /// which repeats CQ indefinitely with only the Tx watchdog as a backstop.
+    ///
+    /// ⚠️ A DELIBERATE DIVERGENCE FROM WSJT-X, and it is worth saying because an operator
+    /// running both will see the difference and read it as a fault. WSJT-X calls CQ until
+    /// something stops it; Nexus calls eight times, breathes, and calls again. The reason is
+    /// band courtesy — an unanswered run holds a frequency other people could be using — and
+    /// it costs nothing, because the pause still ANSWERS anyone who calls: only the outgoing
+    /// CQ is withheld, never the sequencer's ability to reply.
+    ///
+    /// Counting is per-STEP, so it never bites a working run: `tx_count` resets the moment a
+    /// QSO advances, which is why "if stations keep calling back, it keeps working them" is
+    /// the behaviour rather than a special case.
+    #[serde(default = "default_cq_max_calls")]
     pub cq_max_calls: Option<u32>,
+    /// How long to wait after a CQ run hits [`Self::cq_max_calls`] before calling again,
+    /// in seconds. 180 (three minutes) by default; `Some(0)` or `None` means do not resume —
+    /// the run simply stops, which is what happened before this setting existed.
+    ///
+    /// The pause is a TRANSMIT pause only. The sequencer stays in `CallingCq` and keeps
+    /// listening, so a station that answers during it is worked normally — a pause that made
+    /// the operator deaf would defeat the point of running CQ at all.
+    #[serde(default = "default_cq_pause_secs")]
+    pub cq_pause_secs: Option<u32>,
     /// Stop calling a specific station after this many unanswered overs of a directed
     /// in-QSO step (AwaitReport/Roger/Rr73) — prevents endless recalling a station that
     /// went silent in FT8/FT4 S&P. `Some(8)` by default (operator preference); `None`
@@ -1806,6 +1826,17 @@ fn default_tune_timeout() -> u32 {
 
 fn default_directed_max_calls() -> Option<u32> {
     Some(8)
+}
+
+/// Eight unanswered CQs before a breather (operator ruling). Enough to be heard through a
+/// fade, short enough not to hold a frequency for a quarter of an hour.
+fn default_cq_max_calls() -> Option<u32> {
+    Some(8)
+}
+
+/// Three minutes off the air after an unanswered run, then call again.
+fn default_cq_pause_secs() -> Option<u32> {
+    Some(180)
 }
 
 /// A G-5500's own resolution is about this; below it a command is noise rather
@@ -2908,7 +2939,12 @@ impl Default for Settings {
             prompt_to_log: false,
             save_qso_wav: false,
             prefer_rrr: false,
-            cq_max_calls: None,
+            // Both of these MUST match their serde defaults above. A struct default that
+            // disagrees with the serde one means a fresh install and a settings.json missing
+            // the field behave differently — the same operator, two answers, and no way to
+            // tell which they got.
+            cq_max_calls: default_cq_max_calls(),
+            cq_pause_secs: default_cq_pause_secs(),
             directed_max_calls: Some(8),
             chat_max_cycles: None,
             chat_implicit_ack: true,
@@ -6824,5 +6860,49 @@ mod tests {
             s.ai_cw_active(),
             "a fresh install keeps its shipped AI CW decoder"
         );
+    }
+}
+
+#[cfg(test)]
+mod cq_pause_wire_tests {
+    use super::*;
+
+    /// The UI reads `cqPauseSecs`; the Rust field is `cq_pause_secs`. That only lines up because
+    /// of the container's rename_all, and a mismatch here is invisible in both languages — the
+    /// setting silently reverts to its default on every save, which is exactly the shape of bug
+    /// the settings-plumbing notes warn about. So the WIRE NAME is asserted, not assumed.
+    #[test]
+    fn the_auto_cq_settings_use_the_names_the_ui_sends() {
+        let json = serde_json::to_value(Settings::default()).expect("serialises");
+        assert!(
+            json.get("cqPauseSecs").is_some(),
+            "cqPauseSecs must be on the wire"
+        );
+        assert!(
+            json.get("cqMaxCalls").is_some(),
+            "cqMaxCalls must be on the wire"
+        );
+        assert!(
+            json.get("cq_pause_secs").is_none(),
+            "snake_case on the wire would mean the UI never sees it"
+        );
+    }
+
+    /// The operator's ruling: eight CQs, then three minutes. Defaults are the whole feature for
+    /// anyone who never opens Settings, which is most people.
+    #[test]
+    fn the_defaults_are_eight_calls_and_three_minutes() {
+        let d = Settings::default();
+        assert_eq!(d.cq_max_calls, Some(8));
+        assert_eq!(d.cq_pause_secs, Some(180));
+        // And a settings.json written before these existed must load with the same values —
+        // otherwise an upgrading operator gets different behaviour from a fresh install.
+        let old: Settings = serde_json::from_str("{}").expect("an empty settings file loads");
+        assert_eq!(
+            old.cq_max_calls,
+            Some(8),
+            "serde default must match the struct default"
+        );
+        assert_eq!(old.cq_pause_secs, Some(180));
     }
 }

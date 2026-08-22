@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Band Activity list marks each period once again, not every decode.** Once about
+  three hundred decodes had built up, the dim time-and-band bar that separates one T/R
+  period from the next started appearing between every single line. It was comparing each
+  decode against one from the far end of the buffer instead of the row above it, so the
+  period looked different every time — which is why it began "after a while" and why
+  switching the All/CQ filters shuffled it without fixing it.
+
+- **A station answering your CQ makes a sound again.** The alert for somebody calling you
+  was being held back for the whole time you were calling CQ — the one stretch where it is
+  the only thing you are listening for. It stays quiet once you are into the exchange, which
+  is what it was always meant to do.
+
+- **Nexus stops interrogating the system keyring every few seconds.** On Fedora it could
+  crash GNOME's keyring service over and over for as long as Nexus was open, once any online
+  service had been set up. Nexus was asking the keyring whether each password was still there
+  every five seconds; it now asks once and then only when you actually save or clear one.
+
+- **OmniRig gets time to start.** If OmniRig was not already running, Nexus gave Windows a
+  second and a half to launch it and gave up — but a cold start takes longer than that, so
+  the connection failed for no visible reason and then worked later. Starting another program
+  that uses OmniRig first appeared to "fix" it, because that program had done the launching.
+  Nexus now waits twenty seconds for a start, while keeping the short timeout for ordinary
+  commands so a stuck server still cannot hang the radio.
+
+- **The OmniRig "needs administrator" message points at the fix.** It used to suggest
+  starting OmniRig yourself, which can fail for the same reason the launch did. OmniRig does
+  not need administrator to reach a radio, so the message now explains how to clear that flag
+  — including where Windows hides it when the checkbox already looks clear — and treats
+  running everything as administrator as the last resort it is.
+
+- **Nexus starts properly on a system with no regional settings.** On a machine running with
+  a plain `C` locale the FT screen came up as an error instead of a cockpit.
+
+- **A busy PC can no longer produce a phantom CAT failure.** A rig reply interrupted by the
+  operating system was being read as a dead radio, and on a longer reply it could be cut
+  short and accepted as complete.
+
+- **Linux: the AppImage no longer carries its own copy of a system graphics library**, which
+  is what left Nexus showing a blank white window on Fedora 44.
+
 ### Added
 
 - **Reset all settings to factory defaults.** There was no reset at all: a clean start meant
@@ -16,6 +58,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sharing, beside Back up. It asks first, and the dialog says what SURVIVES: your contact log
   is untouched, and stored passwords stay in your keychain — clearing those stays a separate,
   deliberate act rather than a surprise buried in a reset.
+
+- **An unanswered CQ run takes a breather instead of holding the frequency.** Nexus now calls
+  CQ eight times, waits three minutes, and calls again — both numbers are yours to change in
+  Settings ▸ Auto-CQ, and clearing the call count restores the old behaviour of calling until
+  you stop it. You are still listening throughout the pause: anyone who calls you is worked
+  normally, and answering resets the count, so a run that is getting replies never pauses at
+  all. This is a deliberate difference from WSJT-X, which repeats CQ indefinitely.
+
+- **You can record a QSL card that arrived in the post.** The Logbook could already note a
+  card you had SENT, but there was no way to say one had come back — even though a paper card
+  is one of only two confirmations that count towards DXCC, and the only one no online service
+  can tell Nexus about. It is in the QSL menu on each row, and it can be unticked again.
+
+- **"Hide worked" explains itself.** It hides stations you have worked EXCEPT those that still
+  fill a need, which is why a B4 chip can survive it — you worked that call on another band,
+  and it is still a new slot here. The checkbox now says so.
 
 ## [1.7.6] — 2026-08-21
 
@@ -90,6 +148,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chapter and Tempo never had one. Both now cover the tour, the workflows and the honest
   limits — and a test now fails the build if a shipped section has no chapter, so the next
   mode cannot reach a release undocumented.
+
+- **AGC now offers AUTO and OFF, and stops reporting them as Mid.** The Phone and CW cockpits gave
+  three AGC settings — Fast, Mid, Slow — while the radios have five: an FT-710 offers AUTO and OFF
+  on its own front panel. Worse than missing, they were *misreported*: a rig sitting on AUTO, which
+  is where many operators leave it, displayed as **Mid**, and so did AGC switched off, because
+  anything Nexus did not recognise folded to "mid". So the cockpit could state a setting the radio
+  was not on. AUTO now appears to the left of Fast and OFF to the right of Slow, and a read-back of
+  either shows what the rig is actually doing. Offered for every rig rather than guessed at:
+  Hamlib does not report which AGC constants a backend accepts, so a rig that refuses one says so
+  and the read-back shows what it really did.
 
 ## [1.7.5] — 2026-08-20
 

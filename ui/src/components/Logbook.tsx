@@ -29,6 +29,7 @@ import {
   logQso,
   markLotwUploaded,
   markQslSent,
+  markQslCard,
   purgeLog,
   qrzLookup,
   saveTextToDownloads,
@@ -543,6 +544,25 @@ export function Logbook({
     const snap = await withErrorToast(() => markQslSent(i, via), t('logbook.qsl.markFailed'))
     if (snap) {
       pushToast(t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via }), 'success')
+      load()
+    }
+  }
+
+  const onMarkQslCard = async (q: LoggedQso, i: number, received: boolean) => {
+    const snap = await withErrorToast(
+      () => markQslCard(i, received),
+      t('logbook.qsl.markFailed'),
+    )
+    if (snap) {
+      // Two literal keys, not one interpolated one: the i18n orphan guard scans for literal
+      // `t('key')` references and a ternary inside the call is invisible to it — it flagged
+      // both of these as unused catalog entries, which is exactly its job.
+      pushToast(
+        received
+          ? t('logbook.qsl.cardMarked', { call: q.call })
+          : t('logbook.qsl.cardCleared', { call: q.call }),
+        'success',
+      )
       load()
     }
   }
@@ -1353,8 +1373,14 @@ export function Logbook({
                       style={{ fontSize: '0.85em' }}
                       value=""
                       onChange={(e) => {
-                        const v = e.target.value as 'B' | 'D' | 'E' | ''
-                        if (v) void onMarkQslSent(q, i, v)
+                        const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | ''
+                        // R/r are NOT ADIF letters — they are this menu's own two entries for
+                        // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
+                        // is not a send at all. Kept in the same menu because an operator
+                        // handling a card thinks about one row, not two controls.
+                        if (v === 'R') void onMarkQslCard(q, i, true)
+                        else if (v === 'r') void onMarkQslCard(q, i, false)
+                        else if (v) void onMarkQslSent(q, i, v as 'B' | 'D' | 'E')
                       }}
                       title={t('logbook.row.qslSent.title', { call: q.call })}
                       aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
@@ -1364,6 +1390,14 @@ export function Logbook({
                       <option value="B">{t('logbook.row.qslSent.bureau')}</option>
                       <option value="D">{t('logbook.row.qslSent.direct')}</option>
                       <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                      {/* INBOUND: the paper card that arrived. Nothing on the internet can
+                          report this, so the operator is the only source — and it is
+                          award-eligible (card OR LoTW), which is why its absence understated
+                          the awards view. The clear entry exists for a mis-tick. */}
+                      <option value="R">{t('logbook.row.qslRcvd.card')}</option>
+                      {q.qslRcvd?.card && (
+                        <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
+                      )}
                     </select>
                   )}
                   <button

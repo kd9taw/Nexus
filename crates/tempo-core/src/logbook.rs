@@ -547,6 +547,28 @@ impl Logbook {
         }
     }
 
+    /// Record that a PAPER card for `index` did or did not arrive (ADIF `QSL_RCVD`).
+    ///
+    /// The operator is the only possible authority here: LoTW, eQSL and QRZ report their own
+    /// confirmations and Nexus syncs those, but nothing on the internet knows a card landed in
+    /// somebody's letterbox. Until this existed a paper QSL could not be entered at all (#152),
+    /// which mattered more than it sounds: `QslRcvd::award` counts card OR LoTW, so a card that
+    /// makes a DXCC entity countable was unrecordable and the award view stayed wrong.
+    ///
+    /// Unlike [`QslRcvd::merge`], which is monotonic because a service only ever ADDS what it
+    /// has matched, this can also clear — an operator who ticks the wrong row must be able to
+    /// untick it. A later service sync cannot silently undo the correction either: merge ORs
+    /// per source, and no service reports the card field.
+    pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
+        match self.records.get_mut(index) {
+            Some(rec) => {
+                rec.qsl_rcvd.card = received;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Remove the record at `index` (a mis-logged contact). Returns false if out of
     /// range. NOTE: this shifts the indices of all later records — callers that hold
     /// indices must reload after a delete.
@@ -4838,6 +4860,118 @@ mod operator_split_tests {
         assert!(
             out.contains("<EOH>"),
             "still a valid ADIF file, just an empty one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod qsl_card_tests {
+    use super::*;
+
+    /// A minimal record. `QsoRecord` has no `Default`, and spelling every field here would bury
+    /// what these tests are about — the two QSL fields.
+    fn rec() -> QsoRecord {
+        QsoRecord {
+            call: "K1ABC".into(),
+            grid: None,
+            country: None,
+            state: None,
+            band: "20m".into(),
+            freq_mhz: 14.074,
+            mode: "FT8".into(),
+            rst_sent: Some("-10".into()),
+            rst_rcvd: Some("-12".into()),
+            name: None,
+            comment: None,
+            notes: None,
+            qth: None,
+            tx_power: None,
+            when_unix: 1_700_000_000,
+            time_off_unix: None,
+            confirmed: false,
+            award_confirmed: false,
+            qsl_rcvd: Default::default(),
+            qsl_sent: Default::default(),
+            credit_granted: Vec::new(),
+            credit_submitted: Vec::new(),
+            upload: Default::default(),
+            ota: Default::default(),
+            time_known: true,
+            dxcc: None,
+            prop_mode: None,
+            sat_name: None,
+            operator: None,
+            station_callsign: None,
+            extra: Vec::new(),
+        }
+    }
+
+    /// #152 (rgoiko): "I can't edit the QSL status in the Logbook. There's no field where I can
+    /// select, for example, whether I received the QSL card on paper."
+    ///
+    /// He was right, and it cost more than a checkbox. `QslRcvd::award` is card OR LoTW, so a
+    /// paper card is one of only two things that make a contact countable for DXCC — and it was
+    /// the one channel no service can report and the operator could not enter.
+    #[test]
+    fn an_operator_can_record_a_paper_card_and_it_counts_for_awards() {
+        let mut lb = Logbook::default();
+        lb.records.push(rec());
+        assert!(!lb.records[0].qsl_rcvd.card, "starts unconfirmed");
+        assert!(!lb.records[0].qsl_rcvd.award(), "and unclaimable");
+
+        assert!(lb.mark_qsl_card(0, true));
+        assert!(lb.records[0].qsl_rcvd.card);
+        assert!(
+            lb.records[0].qsl_rcvd.award(),
+            "a card is award-eligible — that is the whole point of being able to enter it"
+        );
+        assert!(lb.records[0].qsl_rcvd.any());
+    }
+
+    /// A mis-tick must be correctable. This is the one confirmation channel with no service
+    /// behind it, so if the operator cannot undo it, nothing can.
+    #[test]
+    fn a_mistaken_card_can_be_taken_back() {
+        let mut lb = Logbook::default();
+        lb.records.push(rec());
+        assert!(lb.mark_qsl_card(0, true));
+        assert!(lb.mark_qsl_card(0, false));
+        assert!(!lb.records[0].qsl_rcvd.card);
+        assert!(!lb.records[0].qsl_rcvd.award());
+    }
+
+    /// It must touch ONLY the card, and only the row asked for. A confirmation is the operator's
+    /// award evidence; a write that reached further than the row they clicked would be silent
+    /// corruption of exactly the data they cannot reconstruct.
+    #[test]
+    fn it_touches_only_the_card_field_of_only_that_row() {
+        let mut lb = Logbook::default();
+        let mut with_lotw = rec();
+        with_lotw.qsl_rcvd.lotw = true;
+        lb.records.push(with_lotw);
+        lb.records.push(rec());
+
+        assert!(lb.mark_qsl_card(0, true));
+        assert!(
+            lb.records[0].qsl_rcvd.lotw,
+            "LoTW's own confirmation is untouched"
+        );
+        assert!(!lb.records[0].qsl_rcvd.eqsl);
+        assert!(!lb.records[1].qsl_rcvd.card, "the other row is untouched");
+        // A card is not a request: marking one received must not claim we sent one.
+        assert!(!lb.records[0].qsl_sent.sent);
+    }
+
+    /// Out of range is false, not a panic — the UI holds indices that shift under it.
+    #[test]
+    fn an_index_that_is_gone_reports_false() {
+        let mut lb = Logbook::default();
+        assert!(!lb.mark_qsl_card(0, true));
+        lb.records.push(rec());
+        assert!(!lb.mark_qsl_card(7, true));
+        assert!(
+            lb.mark_qsl_card(0, true),
+            "control: a real index still works"
         );
     }
 }

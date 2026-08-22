@@ -93,6 +93,19 @@ const REC = 'REC'
 const FILTER_STEP_HZ = 50
 const AI_WINDOW_HZ = '400–1200'
 
+/** The AGC chips, in the order `Engine::AGC_SPEEDS` lists them: AUTO left of the three time
+ *  constants, OFF right of them — most-automatic through to no AGC at all. The `id` is the
+ *  token that goes on the wire and the label is a KEY, not a word: `t()` runs when the row
+ *  RENDERS, so a locale switch relabels the chips and the chip is still compared on its id
+ *  (the same split RF_SPANS makes, and for the same reason). */
+const AGC_CHIPS = [
+  { id: 'auto', labelKey: 'cw.rxDsp.agc.auto' },
+  { id: 'fast', labelKey: 'cw.rxDsp.agc.fast' },
+  { id: 'mid', labelKey: 'cw.rxDsp.agc.mid' },
+  { id: 'slow', labelKey: 'cw.rxDsp.agc.slow' },
+  { id: 'off', labelKey: 'cw.rxDsp.agc.off' },
+] as const satisfies readonly { id: string; labelKey: MessageKey }[]
+
 /** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit).
  *  The ± labels are measurements and stay written here; `Full` is a word. Both it and every
  *  title resolve when the row RENDERS (a module constant would freeze the first locale
@@ -410,7 +423,7 @@ export function CwCockpit({
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
-  const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
+  const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -1072,19 +1085,15 @@ export function CwCockpit({
                 title={t('cw.rxDsp.agc.title')}
               >
                 <span className="ph-dsplev-lbl">{AGC}</span>
-                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                {AGC_CHIPS.map(({ id, labelKey }) => (
                   <button
-                    key={sp}
+                    key={id}
                     type="button"
-                    className={`theme-chip${agc === sp ? ' active' : ''}`}
-                    aria-pressed={agc === sp}
-                    onClick={() => changeAgc(sp)}
+                    className={`theme-chip${agc === id ? ' active' : ''}`}
+                    aria-pressed={agc === id}
+                    onClick={() => changeAgc(id)}
                   >
-                    {sp === 'fast'
-                      ? t('cw.rxDsp.agc.fast')
-                      : sp === 'mid'
-                        ? t('cw.rxDsp.agc.mid')
-                        : t('cw.rxDsp.agc.slow')}
+                    {t(labelKey)}
                   </button>
                 ))}
               </div>

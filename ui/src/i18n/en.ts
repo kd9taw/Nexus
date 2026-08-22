@@ -727,6 +727,10 @@ export const EN = {
   'logbook.row.qslSent.title':
     "Mark a QSL request sent to {{call}} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.",
   'logbook.row.qslSent.aria': 'Mark QSL sent to {{call}}',
+  'logbook.qsl.cardMarked': 'QSL card recorded for {{call}}',
+  'logbook.qsl.cardCleared': 'QSL card cleared for {{call}}',
+  'logbook.row.qslRcvd.card': 'Card received',
+  'logbook.row.qslRcvd.clear': 'Card NOT received',
   'logbook.row.qslSent.bureau': 'Bureau',
   'logbook.row.qslSent.direct': 'Direct',
   'logbook.row.qslSent.electronic': 'Electronic',
@@ -6327,6 +6331,8 @@ export const EN = {
   'operate.roster.title': 'Call Roster',
   'operate.roster.filter.neededOnly': 'Needed only',
   'operate.roster.filter.hideWorked': 'Hide worked',
+  'operate.roster.filter.hideWorked.title':
+    'Hide stations you have already worked — EXCEPT the ones that still fill a need, which stay on the list. That is why a B4 chip can survive this filter: you worked that call on another band or mode, and it is still a new slot here. Turn on Needed only to see just those.',
   'operate.roster.filter.hideBlocked': 'Hide blocked',
   'operate.roster.filter.hideBlocked.title':
     'Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.',
@@ -6916,10 +6922,13 @@ export const EN = {
   'cw.rxDsp.nr.aria': 'Noise-reduction level',
   'cw.rxDsp.agc.aria': 'AGC speed',
   'cw.rxDsp.agc.title': 'AGC time constant — Fast for CW/pileups, Slow for steady copy',
-  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  // The five chips are words over stored tokens ('auto' / 'fast' / 'mid' / 'slow' /
+  // 'off' — `Engine::AGC_SPEEDS`, and the order they render in).
+  'cw.rxDsp.agc.auto': 'Auto',
   'cw.rxDsp.agc.fast': 'Fast',
   'cw.rxDsp.agc.mid': 'Mid',
   'cw.rxDsp.agc.slow': 'Slow',
+  'cw.rxDsp.agc.off': 'Off',
 
   // ── CW ▸ the decode pane and the sent echo ──────────────────────────────────────────
   // `{{window}}` is the AI decoder's audio window in Hz, supplied by the call site.
@@ -7119,10 +7128,13 @@ export const EN = {
   'phone.rxDsp.notchFreq.aria': 'Manual notch frequency in hertz',
   'phone.rxDsp.agc.aria': 'AGC speed',
   'phone.rxDsp.agc.title': 'AGC time constant',
-  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  // The five chips are words over stored tokens ('auto' / 'fast' / 'mid' / 'slow' /
+  // 'off' — `Engine::AGC_SPEEDS`, and the order they render in).
+  'phone.rxDsp.agc.auto': 'Auto',
   'phone.rxDsp.agc.fast': 'Fast',
   'phone.rxDsp.agc.mid': 'Mid',
   'phone.rxDsp.agc.slow': 'Slow',
+  'phone.rxDsp.agc.off': 'Off',
 
   // ── Phone ▸ the voice keyer pane ─────────────────────────────────────────────────────
   // F1–F6 are key names and `{{slot}}` is the number one of them carries; `{{label}}` is the
