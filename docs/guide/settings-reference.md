@@ -208,15 +208,23 @@ With two or more radios, a banner names which radio these devices belong to.
   meter responds as you release the slider. Leave at ×1.0 unless the meter reads
   low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
 
-### Headphone monitor
+### Receive audio on this computer
 
-- **Enable monitor** — plays "the exact audio the decoder hears — for level / RFI
-  diagnosis and listening to the band. Off by default; UNVERIFIED on-air until
-  the attended session." It guards against the rig's TX device by name; if your
-  devices go by multiple names, pick your headphones explicitly rather than
-  System default.
-- **Monitor Output Device** — "must NOT be the rig's TX output device."
-- **Monitor Level** — "Headphone listening volume (does not affect TX)."
+This plays the audio your radio is RECEIVING out of a device on this computer — headphones
+or speakers — so you can hear the band, or check levels and RFI, without listening on the
+rig itself.
+
+**It is not a transmit monitor.** In amateur usage "monitor" usually means hearing your own
+transmitted audio, which is what MONI on the radio does. This never plays your voice back;
+these controls used to be called "monitor" and the word was doing real harm, so it is gone
+from the labels. (The search still knows it — look for "monitor" and you will land here.)
+
+- **Play receive audio here** — off by default, and UNVERIFIED on-air until the attended
+  session. It guards against the rig's TX device by name; if your devices go by multiple
+  names, pick your headphones explicitly rather than System default.
+- **Output device** — your headphones or speakers, and "must NOT be the rig's TX output
+  device": playing the received band into the transmitter would put it back on the air.
+- **Listening level** — playback volume, with no effect on transmit.
 
 ### Satellite Doppler
 
