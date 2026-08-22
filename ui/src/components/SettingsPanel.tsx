@@ -90,6 +90,7 @@ import {
   getAssistanceJournal,
   getConnectionLog,
   getCredentialsStatus,
+  CREDENTIALS_CHANGED,
   setUnassistedMode,
 } from '../api'
 import { AssistanceNote } from './AssistanceNote'
@@ -1019,10 +1020,10 @@ export function SettingsPanel({
   // The assistance journal is the operator's EVIDENCE of what was running during an event, so
   // it is shown next to the switch rather than hidden in a file. Same poll as the conn log.
   const [assistLog, setAssistLog] = useState<AssistanceEvent[]>([])
+  // The two LOGS are live and belong on a timer: they grow while the operator watches.
   useEffect(() => {
     let live = true
     const load = () => {
-      getCredentialsStatus().then((c) => live && setCreds(c)).catch(() => {})
       getConnectionLog().then((l) => live && setConnLog(l)).catch(() => {})
       getAssistanceJournal().then((l) => live && setAssistLog(l ?? [])).catch(() => {})
     }
@@ -1031,6 +1032,24 @@ export function SettingsPanel({
     return () => {
       live = false
       window.clearInterval(id)
+    }
+  }, [])
+  // ⚠️ CREDENTIAL STATUS IS NOT ON THAT TIMER, and must not go back on it (#154). Answering
+  // "is a password stored?" opens an OS-keychain session PER CONNECTOR; doing it every 5 s
+  // crashed gnome-keyring-daemon on Fedora 44 in a restart loop that lasted as long as the app
+  // was open — the operator's journal caught it aborting in `service_method_open_session`.
+  // The answer changes only when a secret is saved or cleared, and `api.ts` raises
+  // CREDENTIALS_CHANGED when that happens, so this reads once and then only on real news.
+  useEffect(() => {
+    let live = true
+    const pull = () => {
+      getCredentialsStatus().then((c) => live && setCreds(c)).catch(() => {})
+    }
+    pull()
+    window.addEventListener(CREDENTIALS_CHANGED, pull)
+    return () => {
+      live = false
+      window.removeEventListener(CREDENTIALS_CHANGED, pull)
     }
   }, [])
   // LoTW/eQSL passwords are write-only (kept in the OS keychain, never read back),
