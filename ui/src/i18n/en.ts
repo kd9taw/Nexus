@@ -6310,6 +6310,8 @@ export const EN = {
   'operate.roster.title': 'Call Roster',
   'operate.roster.filter.neededOnly': 'Needed only',
   'operate.roster.filter.hideWorked': 'Hide worked',
+  'operate.roster.filter.hideWorked.title':
+    'Hide stations you have already worked — EXCEPT the ones that still fill a need, which stay on the list. That is why a B4 chip can survive this filter: you worked that call on another band or mode, and it is still a new slot here. Turn on Needed only to see just those.',
   'operate.roster.filter.hideBlocked': 'Hide blocked',
   'operate.roster.filter.hideBlocked.title':
     'Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.',

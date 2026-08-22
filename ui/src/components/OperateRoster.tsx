@@ -379,7 +379,12 @@ export function OperateRoster({
             onChange={(e) => setFilter({ neededOnly: e.target.checked })}
           /> {t('operate.roster.filter.neededOnly')}
         </label>
-        <label className="or-filter">
+        {/* The tooltip is not decoration. Two operators read a surviving B4 chip as this
+            filter being broken (field reports, 2026-08-22) — it is not: `hideWorked` keeps a
+            worked station that still fills a need, which is the whole point for a band-slot
+            chaser. The neighbouring Hide blocked has always explained itself; the filter with
+            the genuinely non-obvious rule was the one saying nothing. */}
+        <label className="or-filter" title={t('operate.roster.filter.hideWorked.title')}>
           <input
             type="checkbox"
             checked={hideWorked}
