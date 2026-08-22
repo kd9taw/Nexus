@@ -464,6 +464,110 @@ fn cat_port_conflict(t: &Transport) -> Option<String> {
 /// names a program. (b) names one and quotes the greeting as its evidence, because the
 /// program is the only thing a banner establishes — the rest of a Thetis banner is a
 /// compile-time build label, so no hardware is read out of it.
+/// Is the rigctld already on `addr` driving a DIFFERENT radio than this profile describes? If
+/// so, the operator-facing reason to refuse it; `None` to go ahead and share it.
+///
+/// COEXISTING IS A FEATURE, and this must not break it: an external rigctld on the port is the
+/// manual's own NET-rigctl station, and it is how WSJT-X and Nexus share one rig. What was
+/// missing is the question "is it MY rig?", which the monitor path answers by never coexisting at
+/// all and the active path did not answer at all.
+///
+/// TWO SOURCES OF IDENTITY, strongest first:
+///  1. The daemon's own ARGUMENTS (`-m` model, `-r` device). Local processes only, and it is the
+///     only evidence that separates two IDENTICAL rigs — both answer the same model, but they
+///     cannot be on the same serial device.
+///  2. `\dump_state`'s served model. Works for a daemon on another machine, where no process
+///     list can reach, but cannot tell two same-model rigs apart.
+///
+/// REFUSING NEEDS EVIDENCE. Every "cannot tell" answers `None`: no reply, an unparseable reply,
+/// a remote daemon with no readable process, an unsupported platform. A guard that refused on
+/// silence would take CAT away from exactly the shared setups it is meant to protect.
+///
+/// EXEMPT: a profile whose model is Hamlib's own NET/dummy/software class (`<= 4`, or a
+/// software-CAT profile). "NET rigctl" means "whatever serves this address" — that IS the
+/// Is the daemon `d` driving a DIFFERENT radio than this profile describes?
+///
+/// The whole decision of the argv branch, as a pure function, so the thing that can key the wrong
+/// radio is testable without a `ps`, a daemon or a rig. `foreign_daemon_refusal` around it does the
+/// reading and the wording; this does the judging.
+///
+/// TWO INDEPENDENT WITNESSES, and either one is enough. The MODEL differing is the obvious case. The
+/// DEVICE differing catches the case the model cannot: two identical rigs — the same model on two
+/// serial ports — where a stray daemon for radio B looks exactly like radio A's until you compare
+/// what it is attached to.
+///
+/// WHAT IS DELIBERATELY NOT EVIDENCE. An unknown field is never a difference:
+/// * `d.model == None` — argv did not carry a model, so it says nothing either way.
+/// * `d.device == None` — likewise.
+/// * an empty `want_port` — this profile has no port configured, so there is nothing to disagree
+///   with; a network rig's "port" is an address the daemon's `-r` will not match either, hence
+///   `is_network`.
+///
+/// The bias is deliberate and it is the opposite of the usual one: this guard REFUSES a working
+/// setup when it fires, so it must only fire on evidence. Silence means share.
+fn daemon_is_foreign(
+    want_model: u32,
+    want_port: &str,
+    is_network: bool,
+    d: &crate::rigctld_proc::ServedRig,
+) -> bool {
+    let model_differs = d.model.is_some_and(|m| m != want_model);
+    let device_differs = match (&d.device, want_port) {
+        (Some(dev), want) if !want.is_empty() && !is_network => dev != want,
+        _ => false,
+    };
+    model_differs || device_differs
+}
+
+/// operator's instruction, and comparing it against the real rig behind the daemon would refuse
+/// the manual's documented setup.
+fn foreign_daemon_refusal(t: &Transport, addr: &str) -> Option<String> {
+    if t.rig_model <= 4 || crate::rigmodels::is_software_cat_profile(t.rig_model) {
+        return None;
+    }
+    // 1. Process arguments — model AND device.
+    if let Some(d) = crate::rigctld_proc::daemon_serving_port(t.rigctld_port) {
+        if daemon_is_foreign(t.rig_model, &t.serial_port, t.is_network(), &d) {
+            return Some(format!(
+                "The rigctld on :{} is driving a different radio — {} — not this one ({} on {}). \
+                 Nexus did not connect to it, because it would have been reading and commanding \
+                 the wrong rig. Stop that daemon, or give this radio its own rigctld port in \
+                 Settings ▸ Radio.",
+                t.rigctld_port,
+                d.describe(),
+                t.rig_model,
+                if t.serial_port.is_empty() {
+                    "no serial port"
+                } else {
+                    &t.serial_port
+                },
+            ));
+        }
+        // Arguments matched: it IS this rig's daemon (ours, or a restart of it). Share it.
+        return None;
+    }
+    // 2. No local process to read (remote daemon, or a platform without the lookup) — fall back
+    //    to the protocol. Model only, which is weaker but reaches further.
+    let served = crate::rigctld_server::served_rig_model(addr, Duration::from_millis(400))?;
+    // A daemon that answers with Hamlib's own NET/dummy/software class is a RELAY, not a radio:
+    // `rigctld -m 2 -r otherhost:4532` chains to a rig whose real model it never reports, and a
+    // test harness or a broker answers the same way. Its model is therefore not evidence about
+    // the rig at the far end, and "cannot tell" is the only honest reading. The LOCAL case that
+    // motivated all of this is not lost by this: a stray daemon on this machine is identified by
+    // its arguments above, which carry the model AND the device.
+    if served <= 4 || crate::rigmodels::is_software_cat_profile(served) {
+        return None;
+    }
+    (served != t.rig_model).then(|| {
+        format!(
+            "The rigctld on :{} is serving Hamlib model {served}, but this radio is model {}. \
+             Nexus did not connect to it — it would have been commanding a different rig. Stop \
+             that daemon, or give this radio its own rigctld port in Settings ▸ Radio.",
+            t.rigctld_port, t.rig_model,
+        )
+    })
+}
+
 ///
 /// Detection INFORMS. Nothing here switches an operator's rig model.
 fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
@@ -9615,6 +9719,11 @@ fn open_cat(
     };
     match listening {
         crate::rigctld_server::PortReply::Rigctld => {
+            // A rigctld is there — but WHICH RADIO is it driving? Adopting it without asking is
+            // how CAT and keying end up on the wrong rig; see `foreign_daemon_refusal`.
+            if let Some(detail) = foreign_daemon_refusal(t, &addr) {
+                return (Rig::vox(), None, CatProbe::status(Some(false), detail));
+            }
             // Auto-coexist: connect THROUGH it instead of fighting for the serial port.
             let mut rig = Rig::with_control(Some(addr.clone()), ptt_mode);
             rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
@@ -11605,6 +11714,84 @@ mod tests {
             tx_level: 0.8,
             ..Settings::default()
         }
+    }
+
+    /// THE DECISION THAT CAN KEY THE WRONG RADIO, and it is a warning as well as a guard: when this
+    /// says true, Nexus REFUSES a rigctld it could otherwise have shared. So the cases that must
+    /// come back false matter as much as the ones that must come back true.
+    #[test]
+    fn a_daemon_is_foreign_only_on_evidence() {
+        use crate::rigctld_proc::ServedRig;
+        let d = |model: Option<u32>, device: Option<&str>| ServedRig {
+            model,
+            device: device.map(str::to_string),
+        };
+
+        // ── FIRES: either witness alone is enough ────────────────────────────────────────────
+        assert!(
+            daemon_is_foreign(
+                1049,
+                "/dev/cu.usbserial-A",
+                false,
+                &d(Some(1051), Some("/dev/cu.usbserial-A"))
+            ),
+            "a different MODEL on the same device is a different radio"
+        );
+        assert!(
+            daemon_is_foreign(
+                1049,
+                "/dev/cu.usbserial-A",
+                false,
+                &d(Some(1049), Some("/dev/cu.usbserial-B"))
+            ),
+            "the device witness is what catches TWO IDENTICAL RIGS — same model, other port, and \
+             the model alone cannot tell them apart"
+        );
+
+        // ── SILENT: it IS this radio's daemon ────────────────────────────────────────────────
+        assert!(
+            !daemon_is_foreign(
+                1049,
+                "/dev/cu.usbserial-A",
+                false,
+                &d(Some(1049), Some("/dev/cu.usbserial-A"))
+            ),
+            "both witnesses agree — ours, or a restart of ours. Share it"
+        );
+
+        // ── SILENT: an unknown field is NOT a difference ─────────────────────────────────────
+        // Each of these would refuse a working setup if absence were read as disagreement.
+        assert!(
+            !daemon_is_foreign(
+                1049,
+                "/dev/cu.usbserial-A",
+                false,
+                &d(None, Some("/dev/cu.usbserial-A"))
+            ),
+            "argv carried no model — that is silence, not a mismatch"
+        );
+        assert!(
+            !daemon_is_foreign(1049, "/dev/cu.usbserial-A", false, &d(Some(1049), None)),
+            "argv carried no device — likewise"
+        );
+        assert!(
+            !daemon_is_foreign(1049, "", false, &d(Some(1049), Some("/dev/cu.usbserial-B"))),
+            "this profile has NO port configured, so there is nothing for a device to disagree with"
+        );
+        assert!(
+            !daemon_is_foreign(
+                1049,
+                "192.168.1.50:4992",
+                true,
+                &d(Some(1049), Some("/dev/cu.usbserial-B"))
+            ),
+            "a network rig's 'port' is an address; a daemon's -r will never match it, and reading \
+             that as foreign would refuse every network rig sharing a daemon"
+        );
+        assert!(
+            !daemon_is_foreign(1049, "/dev/cu.usbserial-A", false, &d(None, None)),
+            "nothing known at all — the honest answer is share, and let the CAT probe judge"
+        );
     }
 
     #[test]

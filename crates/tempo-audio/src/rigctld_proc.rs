@@ -1647,6 +1647,119 @@ fn parse_settable_lines(show_conf: &str) -> SettableLines {
 ///
 /// `want` is the operator's per-line control-line choice ([`ControlLines`]); it is narrowed
 /// to what this rig's Hamlib will actually accept before anything is emitted.
+/// What a rigctld found on the process list says it is serving.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ServedRig {
+    /// Hamlib model from `-m`. `None` if the daemon was launched without one.
+    pub model: Option<u32>,
+    /// Serial device (or network address) from `-r` — the fact that separates two IDENTICAL rigs.
+    pub device: Option<String>,
+}
+
+impl ServedRig {
+    /// A phrase for an operator-facing sentence: what this daemon is actually driving.
+    pub fn describe(&self) -> String {
+        match (self.model, &self.device) {
+            (Some(m), Some(d)) => format!("Hamlib model {m} on {d}"),
+            (Some(m), None) => format!("Hamlib model {m}"),
+            (None, Some(d)) => format!("a rig on {d}"),
+            (None, None) => "an unidentified rig".to_string(),
+        }
+    }
+}
+
+/// Run `cmd` and capture its stdout, giving up after `timeout`.
+///
+/// ⚠️ READS AND WAITS TOGETHER, and that is the whole point of it existing. The obvious shape —
+/// spawn, poll `try_wait` to a deadline, then read stdout — DEADLOCKS on any command whose output
+/// exceeds the ~64 KB pipe buffer: the child blocks writing, never exits, and the deadline kills
+/// it. The caller then gets `None` and reads it as "nothing to find".
+///
+/// That is not hypothetical. `daemon_serving_port` shipped with exactly that shape and answered
+/// `None` for EVERY port on a live station — `ps -axo command=` runs well past 64 KB there — so
+/// the crossed-CAT guard silently never fired while all of its unit tests passed, because they
+/// exercise the parser and this is what feeds it.
+///
+/// `output()` drains the pipes while it waits; the bound lives on the receive, so a wedged child
+/// still cannot hold up a rig open (the thread is left to finish on its own).
+fn capture_bounded(cmd: &mut Command, timeout: std::time::Duration) -> Option<String> {
+    let mut owned = Command::new(cmd.get_program());
+    owned.args(cmd.get_args());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(
+            owned
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok(),
+        );
+    });
+    let out = rx.recv_timeout(timeout).ok().flatten()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Which rig is the local rigctld on `tcp_port` serving, read from ITS OWN LAUNCH ARGUMENTS?
+///
+/// A daemon's argv states both facts that identify a radio: `-m <model>` is the rig type and
+/// `-r <device>` is the physical port. That is strictly more than the protocol can tell us —
+/// `\dump_state` gives the model alone, so it cannot separate two IDENTICAL rigs, and two FT-710s
+/// on one station is an ordinary configuration. They cannot share a serial device.
+///
+/// `None` = no local daemon on that port could be identified, which is NOT the same as "foreign":
+/// a daemon on another machine has no process here to read, and the caller must treat the absence
+/// as "cannot tell" rather than as grounds to refuse.
+///
+/// Unix only for now. Windows would need a process-list call of its own
+/// (`CreateToolhelp32Snapshot`), and until it has one the protocol check in
+/// `service::foreign_daemon_refusal` is what covers it — weaker, but universal.
+#[cfg(unix)]
+pub fn daemon_serving_port(tcp_port: u16) -> Option<ServedRig> {
+    // `ps` rather than a crate: this reads the process list once per CAT open, and it is the one
+    // thing every Unix exposes the same way.
+    let out = capture_bounded(
+        Command::new("ps").args(["-axo", "pid=,command="]),
+        std::time::Duration::from_millis(1_500),
+    )?;
+    parse_ps_for_port(&out, tcp_port)
+}
+
+#[cfg(not(unix))]
+pub fn daemon_serving_port(_tcp_port: u16) -> Option<ServedRig> {
+    None
+}
+
+/// Find the `rigctld` line serving `-t <tcp_port>` in `ps` output and read its `-m` / `-r`.
+///
+/// Split out from the `ps` call so it is testable against fixed text — the parsing, not the
+/// process list, is what a change to the argument order would break.
+pub fn parse_ps_for_port(ps_output: &str, tcp_port: u16) -> Option<ServedRig> {
+    for line in ps_output.lines() {
+        if !line.contains("rigctld") {
+            continue;
+        }
+        let args: Vec<&str> = line.split_whitespace().collect();
+        // `-t <port>` is what makes this the daemon on the port in question. Matched as a
+        // whole token so :4534 never matches :45340.
+        let serves_port = args
+            .windows(2)
+            .any(|w| w[0] == "-t" && w[1].parse::<u16>() == Ok(tcp_port));
+        if !serves_port {
+            continue;
+        }
+        let val = |flag: &str| -> Option<String> {
+            args.windows(2)
+                .find(|w| w[0] == flag)
+                .map(|w| w[1].to_string())
+        };
+        return Some(ServedRig {
+            model: val("-m").and_then(|m| m.parse::<u32>().ok()),
+            device: val("-r"),
+        });
+    }
+    None
+}
+
 pub fn spawn_rigctld(
     model: u32,
     addr: &str,
@@ -3152,5 +3265,41 @@ mod rts_declaration_tests {
             !rts_is_deliberate(None, false, "COM3"),
             "an operator who ticks nothing must get exactly the behaviour they have today"
         );
+    }
+
+    /// A daemon states which radio it serves in its own launch arguments — the model AND the
+    /// device. Real `ps` output from the station this was written on (2026-08-17).
+    const PS: &str = "\
+  501 /Users/x/.local/bin/rigctld -m 1 -T 127.0.0.1 -t 4534
+  502 rigctld -vvv -m 1049 -r /dev/cu.usbserial-01AF7FED0 -s 38400 -T 127.0.0.1 -t 4533
+  503 rigctld -vvv -m 1051 -r /dev/cu.usbserial-01A98F800 -s 38400 -T 127.0.0.1 -t 45340
+  504 /Applications/Nexus.app/Contents/MacOS/Nexus";
+    #[test]
+    fn a_daemons_arguments_say_which_radio_it_is_driving() {
+        let ft710 = parse_ps_for_port(PS, 4533).expect("the daemon on 4533");
+        assert_eq!(ft710.model, Some(1049));
+        assert_eq!(
+            ft710.device.as_deref(),
+            Some("/dev/cu.usbserial-01AF7FED0"),
+            "the DEVICE is what separates two identical rigs"
+        );
+
+        // The stray that caused this: a dummy, launched with no -r at all.
+        let stray = parse_ps_for_port(PS, 4534).expect("the daemon on 4534");
+        assert_eq!(stray.model, Some(1));
+        assert_eq!(stray.device, None);
+        assert_eq!(stray.describe(), "Hamlib model 1");
+
+        // `-t 4534` must not match `-t 45340` — a substring match would have called the FTX-1's
+        // daemon the stray's and refused a perfectly good rig.
+        assert_eq!(
+            parse_ps_for_port(PS, 45340).and_then(|d| d.model),
+            Some(1051)
+        );
+
+        // A port nothing serves is "cannot tell", NOT "foreign".
+        assert!(parse_ps_for_port(PS, 4599).is_none());
+        // And a process list with no rigctld in it at all is the same answer.
+        assert!(parse_ps_for_port("  1 /sbin/launchd\n  2 /usr/bin/ssh-agent", 4533).is_none());
     }
 }
