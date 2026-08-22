@@ -57,6 +57,25 @@ pub const PROGID: &str = "OmniRig.OmniRigX";
 /// radio loop — it is not a rig timeout.
 const CALL_TIMEOUT: Duration = Duration::from_millis(1500);
 
+/// How long the FIRST `CoCreateInstance` may take — a different question entirely, and reusing
+/// `CALL_TIMEOUT` for it was a bug.
+///
+/// A property read talks to a server that is already up. Creating the object may have to START
+/// one: Windows launches `OmniRig.exe`, which loads its Delphi runtime, reads its rig-definition
+/// INI files and opens the serial port before it answers. On a cold machine that is seconds, not
+/// milliseconds, and 1.5 s of budget meant Nexus gave up while OmniRig was still coming up.
+///
+/// Field report (FT-890, 2026-08-20/21): the diagnostic log shows "OmniRig did not finish
+/// starting within the call budget" seven times, interleaved with successes minutes later — and
+/// the operator found that launching JTDX first made Nexus work every time. That is the same
+/// fact from the other side: once JTDX has started OmniRig, Nexus only ATTACHES to the running
+/// server, which is fast and always fit inside 1.5 s.
+///
+/// This is deliberately NOT the loop's budget. It is spent once, on the connect path, where the
+/// operator has just asked for a connection and is willing to wait; `CALL_TIMEOUT` still guards
+/// every subsequent call, so a wedged server can never hang the radio loop.
+const START_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// OmniRig's `RigParamX` bit values, verbatim from `OmniRig_TLB.pas`. They are a BITMASK,
 /// so every value is a distinct power of two and `PM_UNKNOWN` is 1, not 0 — a detail worth
 /// writing down, because "unknown is zero" is the natural guess and it is wrong here.
@@ -456,7 +475,9 @@ impl OmniWorker {
             })
             .map_err(|e| OmniError::Com(format!("could not start the OmniRig thread: {e}")))?;
         // A start error must be the START's error, so wait for the factory's verdict.
-        match orx.recv_timeout(CALL_TIMEOUT) {
+        // START_TIMEOUT, not CALL_TIMEOUT: this waits for the SERVER TO EXIST, which may mean
+        // Windows launching it. See the constant for the field report that measured it.
+        match orx.recv_timeout(START_TIMEOUT) {
             Ok(Ok(())) => Ok((
                 OmniLink {
                     tx: Mutex::new(jtx),
@@ -473,9 +494,12 @@ impl OmniWorker {
             }
             Err(_) => {
                 stop.store(true, Ordering::Relaxed);
-                Err(OmniError::Com(
-                    "OmniRig did not finish starting within the call budget".into(),
-                ))
+                Err(OmniError::Com(format!(
+                    "OmniRig did not finish starting within {} s. If OmniRig was not already \
+                     running, Windows had to launch it — start OmniRig yourself, wait for its \
+                     window to show the rig, and try again.",
+                    START_TIMEOUT.as_secs()
+                )))
             }
         }
     }
@@ -849,6 +873,35 @@ mod tests {
 
     /// The core verbs, end to end through the SHARED rigctld encoder — no second protocol
     /// implementation exists here, and this is what proves it.
+    /// STARTING a COM server and CALLING one are different questions, and one budget served
+    /// both until 2026-08-21. A property read hits a server that is already up (microseconds);
+    /// creating the object may make Windows LAUNCH OmniRig.exe, which loads a Delphi runtime,
+    /// reads its rig files and opens a serial port first. An FT-890 operator's log carried
+    /// seven "did not finish starting within the call budget" failures, and he found that
+    /// starting JTDX first made Nexus connect every time — because after that Nexus only
+    /// attaches to a server already running, which always fitted in 1.5 s.
+    #[test]
+    fn starting_the_server_gets_a_far_longer_budget_than_calling_it() {
+        assert!(
+            START_TIMEOUT > CALL_TIMEOUT,
+            "the activation budget must not be the per-call budget"
+        );
+        // Generous enough to cover a cold launch on a slow machine. The exact figure is a
+        // judgement, but anything in the low seconds is the bug again with a bigger number.
+        assert!(
+            START_TIMEOUT >= Duration::from_secs(10),
+            "a cold OmniRig launch takes seconds, not milliseconds"
+        );
+        // And still BOUNDED: this is spent on the connect path, but an operator must not be
+        // left staring at a frozen dialog if OmniRig never comes up at all.
+        assert!(
+            START_TIMEOUT <= Duration::from_secs(60),
+            "an operator will not wait a minute to be told it failed"
+        );
+        // The loop's guard is unchanged — that was never the broken half.
+        assert_eq!(CALL_TIMEOUT, Duration::from_millis(1500));
+    }
+
     #[test]
     fn omnirig_round_trips_frequency_mode_and_ptt_through_the_rigctld_protocol() {
         let mock = Arc::new(MockOmni::online());
