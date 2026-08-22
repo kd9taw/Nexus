@@ -4100,6 +4100,15 @@ export const EN = {
   'settings.rigControl.flexPan.label': 'Flex native panadapter (early access)',
   'settings.rigControl.flexPan.hint':
     "Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref controls. <b>Unverified on hardware</b>, so it's opt-in: needs the Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the scope stays blank or the app hitches, turn it back off. Save to apply.",
+
+  // The FT-710's own RF panadapter. The hint names BOTH preconditions, because a silent scope has
+  // exactly two causes and only one of them is on the radio — the other is a library this
+  // application is not allowed to ship (see `yaesu_wf::YAESU_WF_NO_LIBRARY`).
+  'settings.rigControl.yaesuScope.label': 'FT-710 RF scope (spectrum over USB)',
+  'settings.rigControl.yaesuScope.title':
+    "Read the FT-710's own spectrum over its internal USB-SPI bridge instead of the sound card",
+  'settings.rigControl.yaesuScope.hint':
+    "Draws the radio's own band scope instead of the sound card's 4 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
   'settings.rigControl.flexAudio.label': 'Flex native DAX audio (early access)',
   'settings.rigControl.flexAudio.hint':
     'Carry this FlexRadio\'s audio straight over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices — which are <b>invisible under Remote Desktop</b>. <b>Both directions:</b> the decoders read the rig\'s receive audio directly, and transmit audio goes out over DAX too, which disconnects the rig\'s microphone while this is on. Turning it off, switching radio or quitting Nexus puts the mic back. <b>Unverified on hardware</b>, opt-in: needs the Flex IP set and SmartSDR reachable. If decodes or transmit stop, turn it back off. Save to apply.',
@@ -7035,6 +7044,19 @@ export const EN = {
   // passband otherwise, so each state names itself. `{{khz}}` and `{{hz}}` are the preset
   // widths — figures, supplied by the call site rather than written into the sentence.
   'phone.scope.tuneHint': 'Scroll here to tune the VFO',
+  // The FT-710's own panadapter controls, in the Phone and CW cockpits. `pos.title` says the FIX
+  // window is DERIVED: the radio reports its own FIX start nowhere, so the app computes it from
+  // the band edge and the operator is told to check it rather than left to trust it silently.
+  'phone.scope.yaesu.aria': 'Panadapter',
+  'phone.scope.yaesu.span.aria': 'Panadapter span (sets the radio)',
+  'phone.scope.yaesu.span.title':
+    'Sweep width on the RADIO — the app draws what it reports back',
+  'phone.scope.yaesu.pos.aria': 'Panadapter position (sets the radio)',
+  'phone.scope.yaesu.pos.title':
+    "Where the sweep sits. FIX is derived from the band edge — the CAT protocol does not report the radio's own FIX window, so check it against the rig's scale.",
+  'phone.scope.yaesu.pos.center': 'Center',
+  'phone.scope.yaesu.pos.cursor': 'Cursor',
+  'phone.scope.yaesu.pos.fix': 'Fix',
   'phone.scope.nativeRf.label': 'RF Panadapter',
   'phone.scope.nativeRf.title':
     'Native RF panadapter — the real RF spectrum around your dial, not the demodulated audio passband.',

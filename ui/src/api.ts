@@ -1108,6 +1108,14 @@ export async function setFilterWidth(hz: number): Promise<AppSnapshot> {
 export async function setScopeSpan(hz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_scope_span', { hz })
 }
+/** Set the FT-710 scope POSITION — 'center' | 'cursor' | 'fix'.
+ *
+ * The position travels by name and the rig's display family (3DSS / W-F EXPAND / W-F NORMAL) is
+ * resolved next to the radio from what it reports, so centring the sweep never drags a 3DSS
+ * operator out of 3DSS. */
+export async function setYaesuScopeMode(position: 'center' | 'cursor' | 'fix'): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_yaesu_scope_mode', { position })
+}
 /** Set the native Icom scope REFERENCE level in tenths of a dB (−200..+200). */
 export async function setScopeRef(tenthsDb: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_scope_ref', { tenthsDb })
@@ -1414,6 +1422,8 @@ export interface RadioProfilePatch {
   flexRadioIp: string
   /** This radio's native-panadapter opt-in (per-radio, as above). */
   flexNativePan: boolean
+  /** See RadioProfile.yaesuRfScope — the FT-710's USB-SPI spectrum, per radio. */
+  yaesuRfScope: boolean
   /** This radio's native-DAX-audio opt-in (per-radio, as above). */
   flexNativeAudio: boolean
 }

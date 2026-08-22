@@ -642,6 +642,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // that fails when a per-radio field is added without a home in this patch.
     flexRadioIp: s.flexRadioIp ?? '',
     flexNativePan: s.flexNativePan ?? false,
+    yaesuRfScope: s.yaesuRfScope ?? false,
     flexNativeAudio: s.flexNativeAudio ?? false,
   }
 }
@@ -3986,6 +3987,29 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+
+              {/* The FT-710's own RF panadapter, per radio. Model-gated: 1049 is the only rig
+                  whose bridge this speaks, and offering it on anything else would be an invitation
+                  to a setting that cannot work. The hint names the TWO preconditions, because a
+                  silent scope has exactly two causes and one of them is not on the radio. */}
+              {form.rigModel === 1049 && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.yaesuScope.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.yaesuRfScope ?? false}
+                    className={`toggle${form.yaesuRfScope ? ' on' : ''}`}
+                    onClick={() => updateBool('yaesuRfScope', !form.yaesuRfScope)}
+                    title={t('settings.rigControl.yaesuScope.title')}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">
+                    <T k="settings.rigControl.yaesuScope.hint" tags={{ b: <strong /> }} />
+                  </span>
+                </label>
+              )}
 
               {/* Same model-number gate as the panadapter above — see the note there. */}
               {form.rigConn === 'network' &&
