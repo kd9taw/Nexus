@@ -1050,7 +1050,8 @@ export interface RadioStatus {
   /** MANUAL notch (Hamlib MN), distinct from `notch` which is the AUTOMATIC notch (ANF).
    *  A radio may report either, both or neither; each toggle renders only when non-null. */
   manualNotch?: boolean | null
-  /** AGC time constant: "fast" | "mid" | "slow"; absent when the rig doesn't report it. */
+  /** AGC time constant, one of `Engine::AGC_SPEEDS` ("auto" | "fast" | "mid" | "slow" |
+   * "off"); absent when the rig doesn't report it. */
   agc?: string | null
   /** CAT S-meter in dB relative to S9 (S9 = 0, S1 ≈ -48, S9+20 = +20). Absent when
    * the rig doesn't report STRENGTH over CAT (RX-only; not updated during TX). */
@@ -1132,7 +1133,7 @@ export interface RadioStatus {
   rxRangesMhz?: [number, number][]
   /** The dial (MHz) the radio most recently REFUSED, so the UI can name it. */
   refusedDialMhz?: number | null
-  /** The AGC speed ('fast'|'mid'|'slow') the radio most recently REFUSED. Hamlib's AGC is an
+  /** The AGC speed (`Engine::AGC_SPEEDS`) the radio most recently REFUSED. Hamlib's AGC is an
    * enum and not every backend implements every step (MEDIUM least of all), so a pick can be
    * rejected outright. The cockpits' segmented AGC chip is optimistic — the rig read-back lags
    * a poll — and this is what stops it claiming a speed the radio never took. */

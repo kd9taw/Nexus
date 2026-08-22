@@ -51,6 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reset all settings to factory defaults.** There was no reset at all: a clean start meant
+  finding `settings.json` in a config folder and deleting it — and doing that while Nexus is
+  running resets nothing, because the app holds the old configuration in memory and writes it
+  straight back on the next save. The new control is in Settings → Radio → Transmit limits &
+  sharing, beside Back up. It asks first, and the dialog says what SURVIVES: your contact log
+  is untouched, and stored passwords stay in your keychain — clearing those stays a separate,
+  deliberate act rather than a surprise buried in a reset.
+
 - **An unanswered CQ run takes a breather instead of holding the frequency.** Nexus now calls
   CQ eight times, waits three minutes, and calls again — both numbers are yours to change in
   Settings ▸ Auto-CQ, and clearing the call count restores the old behaviour of calling until
@@ -127,6 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whistle is. COMP gained the control it was missing: how hard the compressor works. Each
   appears only if your radio reports it, so nothing grows a slider with nothing behind it.
 
+### Added
+
 - **The dial is marked on a native RF panadapter.** If your radio streams its own spectrum
   (Icom CI-V, FlexRadio), the tuned frequency now has a line and a DIAL label on it. It is
   drawn only where the dial genuinely is: on a rig in FIXED scope mode, where the span is a
@@ -138,6 +148,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chapter and Tempo never had one. Both now cover the tour, the workflows and the honest
   limits — and a test now fails the build if a shipped section has no chapter, so the next
   mode cannot reach a release undocumented.
+
+- **AGC now offers AUTO and OFF, and stops reporting them as Mid.** The Phone and CW cockpits gave
+  three AGC settings — Fast, Mid, Slow — while the radios have five: an FT-710 offers AUTO and OFF
+  on its own front panel. Worse than missing, they were *misreported*: a rig sitting on AUTO, which
+  is where many operators leave it, displayed as **Mid**, and so did AGC switched off, because
+  anything Nexus did not recognise folded to "mid". So the cockpit could state a setting the radio
+  was not on. AUTO now appears to the left of Fast and OFF to the right of Slow, and a read-back of
+  either shows what the rig is actually doing. Offered for every rig rather than guessed at:
+  Hamlib does not report which AGC constants a backend accepts, so a rig that refuses one says so
+  and the read-back shows what it really did.
 
 ## [1.7.5] — 2026-08-20
 

@@ -1953,7 +1953,7 @@ pub struct Engine {
     /// HZ, not a 0..1 fraction.
     notch_freq_hz: Option<f32>,
     rig_notch_freq_hz: Option<f32>,
-    /// Desired / read-back AGC time constant as "fast"|"mid"|"slow" (the loop maps it to the
+    /// Desired / read-back AGC time constant, one of [`Engine::AGC_SPEEDS`] (the loop maps it to the
     /// rig's value). Commanded until the poll confirms; `None` when the rig doesn't report it.
     agc: Option<String>,
     rig_agc: Option<String>,
@@ -6638,6 +6638,19 @@ impl Engine {
         }
     }
 
+    /// The AGC time constants Nexus offers, in the order the cockpit shows them.
+    ///
+    /// AUTO and OFF joined the original three on 2026-08-17. They were missing while the radios
+    /// have them — an FT-710 offers both on the front panel — and worse, they read back as "mid"
+    /// (see `service::agc_from_hamlib`), so the cockpit misreported the rig's actual setting.
+    ///
+    /// Offered for every rig rather than gated on capability, deliberately: Hamlib does not
+    /// enumerate which AGC constants a backend accepts (`--dump-caps` reports `AGC(0..0/0)` on both
+    /// Yaesus tested), so there is nothing to gate on. A rig that refuses one answers the SET with an
+    /// error, which `agc_refused` already surfaces, and the next read-back shows what the radio
+    /// actually did — an honest failure the operator can see, rather than a chip we hid on a guess.
+    pub const AGC_SPEEDS: [&str; 5] = ["auto", "fast", "mid", "slow", "off"];
+
     /// Speech-processor depth (0..1). #95 — the COMP toggle had no level behind it.
     pub fn set_comp_level(&mut self, frac: f32) {
         self.comp_level = Some(frac.clamp(0.0, 1.0));
@@ -6665,10 +6678,10 @@ impl Engine {
         }
     }
 
-    /// Set desired AGC speed ("fast"|"mid"|"slow") — an OPERATOR PICK, which the radio loop
+    /// Set desired AGC speed — an OPERATOR PICK, which the radio loop
     /// honours even when it is the speed the loop last wrote (see [`Self::agc_to_command`]).
     pub fn set_agc(&mut self, speed: &str) {
-        if matches!(speed, "fast" | "mid" | "slow") {
+        if Self::AGC_SPEEDS.contains(&speed) {
             self.agc = Some(speed.to_string());
             self.agc_picked = true;
         }
@@ -6692,7 +6705,7 @@ impl Engine {
         Some((speed, std::mem::take(&mut self.agc_picked)))
     }
     pub fn observe_rig_agc(&mut self, speed: String) {
-        if matches!(speed.as_str(), "fast" | "mid" | "slow") {
+        if Self::AGC_SPEEDS.contains(&speed.as_str()) {
             self.rig_agc = Some(speed);
         }
     }
@@ -16851,6 +16864,59 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 #[cfg(test)]
 mod tests {
+
+    /// The contract a factory RESET depends on, pinned from the engine side.
+    ///
+    /// Same asymmetry #85 fixed for restore, arriving from the other side. A reset builds a factory
+    /// `Settings` and applies it — and if that goes through the FORM-SAVE path the engine keeps its
+    /// live roster on purpose (so a stale panel cannot revert a rig you just added), and every radio
+    /// the dialog promised to erase survives. Worse than the restore case in one respect: there the
+    /// bundle at least carried radios of its own, so the result was somebody's real roster. Here the
+    /// promise on screen and the outcome disagree outright.
+    ///
+    /// LIMIT OF THIS TEST, stated because it looks like it covers more than it does: the routing
+    /// lives in the command layer (`reset_settings` → `apply_and_persist(.., authoritative = true)`)
+    /// and the engine cannot see it. What this pins is that the authoritative path does what a reset
+    /// needs and that the form path deliberately does not — so a change to either CONTRACT fails
+    /// here, while a change that re-routes reset to the wrong one does not.
+    #[test]
+    fn the_authoritative_path_lands_a_factory_roster_and_the_form_path_keeps_the_live_one() {
+        let factory = {
+            let mut fresh = Settings::default();
+            fresh.ensure_radio_profiles();
+            fresh.ensure_distinct_radio_ports();
+            fresh.ensure_routing_targets();
+            fresh
+        };
+        let expected = factory.radios.len();
+
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        eng.add_radio();
+        assert!(
+            eng.settings().radios.len() > expected,
+            "fixture: a station with more radios than a fresh install"
+        );
+        eng.apply_restored_settings(factory.clone());
+        assert_eq!(
+            eng.settings().radios.len(),
+            expected,
+            "a reset must land the FACTORY roster, not the one it promised to erase"
+        );
+
+        // And the form path must still KEEP the live roster. That is not a bug to fix; it is
+        // exactly why routing a reset through it was wrong.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        eng.add_radio();
+        let live = eng.settings().radios.len();
+        eng.apply_settings(factory);
+        assert_eq!(
+            eng.settings().radios.len(),
+            live,
+            "a form save keeps the engine's roster — a stale panel must not revert a new rig"
+        );
+    }
 
     /// A RESTORE takes the bundle's roster; a form save keeps the engine's. Getting these the same
     /// way round loses radios.

@@ -182,7 +182,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'radio',
     keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
       'backup', 'restore', 'export settings', 'share rig', 'rigctld address', 'other programs',
-      'foreign ptt', 'wsjt-x share', 'n1mm share'],
+      'foreign ptt', 'wsjt-x share', 'n1mm share',
+      // Reset lives beside Backup because the confirm offers a backup first. Wide on purpose:
+      // this is what an operator searches for in a panic, and none of those words are 'transmit'.
+      'reset', 'factory', 'defaults', 'start over', 'clean slate', 'wipe', 'start again'],
   },
 
   // ---- Modes -------------------------------------------------------------------

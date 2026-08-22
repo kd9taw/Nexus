@@ -320,6 +320,18 @@ the bottom of Rig & CAT.
     NET rigctl default 4532; change it only if something else on this computer
     already owns the port.
 
+- **Start over** — **Reset all settings…** returns every setting to factory
+  defaults: radios, audio devices, callsign, preferences. Two things it does
+  **not** touch, and it says so before you answer: your **contact log**, which
+  lives outside the settings entirely, and your **stored passwords**, which stay
+  in your operating system's keychain (clear those one at a time under Logging &
+  Connectors). It asks first, and the dialog names what survives. Back up before
+  you use it — this cannot be undone.
+
+  Use this rather than deleting `settings.json` by hand. Deleting the file while
+  Nexus is running resets nothing: the app holds your old configuration in
+  memory and writes it straight back on the next save.
+
 <!-- TODO(settings-reference): the setup-backup control on this section has no
      prose yet — describe it once its behaviour is confirmed against the panel. -->
 
