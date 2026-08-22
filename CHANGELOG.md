@@ -5,9 +5,35 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.7.6] — 2026-08-21
 
 ### Fixed
+
+- **The Call Roster shows the full CQ, not just "CQ".** A station calling `CQ DX` looked
+  exactly like one calling a general CQ, so you could click to work him and only find out
+  from the Band Activity pane that he wants DX and will ignore you. The roster now shows
+  `CQ DX`, `CQ POTA`, `CQ NA` and the rest, in a colour that stands out while you are
+  scanning, with a note on hover about what it means for answering.
+
+- **A failed OmniRig connection stops telling you to check a serial port.** If Test CAT
+  could not read a frequency over OmniRig, the message advised checking the serial port,
+  baud rate and CI-V — none of which Nexus uses on an OmniRig connection, as that same
+  Settings page says. It now points at what actually matters: which OmniRig slot, and
+  whether OmniRig's own window shows that radio online.
+
+- **Special-event callsigns are recognised as CQs again, so double-click works on them.**
+  A call like `II7MGBR` or `EN3SUKR` does not fit the standard callsign shape, so FT8 sends
+  it in a form that carries no grid — and Nexus was only treating the *compound* kind (the
+  ones with a `/`) as real CQs. The rest were read as free text: no CQ chip, and
+  double-clicking them did nothing, while the Work button in the Stations list started a QSO
+  perfectly well. Both now behave the same way.
+
+- **Your hidden panes and disabled modes survive an upgrade.** If you had turned off modes
+  you do not use, or hidden panels with the ⊞ menu, an upgrade could put them all back —
+  those two choices were kept in browser storage rather than beside your settings, so
+  anything that cleared it took them with it. They now live with your settings, per profile,
+  and are included in the backup. A popped-out panel's own layout stays per-window, as it
+  should.
 
 - **Switching from CW to the FT screen left the rig on the CW frequency.** FT8 came up on
   wherever CW had been — the mode changed to DIGU correctly, the dial did not. It only
@@ -15,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Tempo is a digital mode and asserts the rig mode, but it keeps its own band picker's
   frequency, and it was being counted as though it had already moved the dial for you. The
   FT screen then thought there was nothing to do.
+
+- **A hardware CW keyer learns your speed before you send anything.** With a WinKeyer, the
+  speed slider only reached the keyer once you had sent something — so after launch the
+  paddle ran at whatever speed the keyer itself was set to, and moving the slider did
+  nothing until you typed a character. The keyer is now opened and told your speed as soon
+  as it can key.
 
 - **The filter width the radio actually took is now checked, not assumed.** Some rigs accept
   a mode change with a filter width, answer "done", and quietly keep their own filter — so
@@ -37,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is coexisting with an external NET-rigctl station.
 
 ### Added
+
+- **A manual notch you can actually place, and a depth for the speech processor.** The Notch
+  button was driving the radio's *automatic* notch — the one that hunts a carrier down by
+  itself — which is not what most operators mean by the word. The manual notch, the one you
+  park on a whistle by ear, is now there too, with a frequency slider to put it where the
+  whistle is. COMP gained the control it was missing: how hard the compressor works. Each
+  appears only if your radio reports it, so nothing grows a slider with nothing behind it.
 
 - **The dial is marked on a native RF panadapter.** If your radio streams its own spectrum
   (Icom CI-V, FlexRadio), the tuned frequency now has a line and a DIAL label on it. It is

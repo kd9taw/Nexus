@@ -6348,6 +6348,8 @@ export const EN = {
   'operate.roster.lotw.title': 'Uploads to LoTW — this contact should confirm',
   'operate.roster.calling.title': 'Working {{call}}',
   'operate.roster.calling.cq.title': 'Calling CQ — not in a QSO',
+  'operate.roster.calling.cqDir.title':
+    'Calling CQ {{dir}} — a DIRECTED call. He is asking for {{dir}} only, so answering from anywhere else will usually be ignored.',
   'operate.roster.state.title': '{{call}} is in {{state}}',
   // The Age column. The unit letter rides inside the message with its number, so a
   // translation can never separate the two (the Now-Bar's rule, batch 15).
@@ -7084,12 +7086,20 @@ export const EN = {
   'phone.dsp.nr.title': 'Noise Reduction — pulls voice out of broadband hiss (RX, DSP)',
   'phone.dsp.notch.title': 'Auto-Notch (ANF) — nulls carriers/heterodynes (RX, DSP)',
   'phone.dsp.comp.title': 'Speech Compressor — more average talk power (TX)',
+  'phone.dsp.manualNotch.title':
+    'Manual notch — the one you place yourself on a whistle, using the notch frequency slider. Distinct from Notch, which hunts a carrier automatically.',
   'phone.dsp.vox.title': 'Voice-Operated Transmit — hands-free keying (TX)',
   'phone.dsp.toggleFailed': 'Could not toggle {{func}}',
   'phone.rxDsp.aria': 'RX DSP levels',
   'phone.rxDsp.nr.title':
     'Noise-reduction depth — raise until the noise floor drops, back off if audio gets watery',
   'phone.rxDsp.nr.aria': 'Noise-reduction level',
+  'phone.rxDsp.comp.title':
+    'Speech processor depth — how hard the compressor works. Raise it for punch on a weak path; too much sounds harsh and splatters.',
+  'phone.rxDsp.comp.aria': 'Speech processor depth',
+  'phone.rxDsp.notchFreq.title':
+    'Manual notch frequency — slide it onto the whistle you want gone. This is the notch you place yourself, not the automatic one.',
+  'phone.rxDsp.notchFreq.aria': 'Manual notch frequency in hertz',
   'phone.rxDsp.agc.aria': 'AGC speed',
   'phone.rxDsp.agc.title': 'AGC time constant',
   // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').

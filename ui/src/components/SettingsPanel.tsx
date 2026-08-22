@@ -815,7 +815,16 @@ export function SettingsPanel({
       return
     }
     await withErrorToast(async () => {
-      await importSettingsBundle(await f.text())
+      const snap = await importSettingsBundle(await f.text())
+      if (!snap) return
+      // Re-read and re-seed the form. Without this the panel goes on rendering the PRE-restore
+      // values, so a restore looks like it did nothing — and the stale form is still live, so the
+      // next Save writes the old values straight back over the restored ones.
+      const fresh = await getSettings()
+      setForm(fresh)
+      setEditingRadioId(fresh.activeRadio)
+      dirtyRef.current = false
+      onSaved?.()
       pushToast(t('settings.backup.restore.done'), 'success')
     }, t('settings.backup.restore.failed'))
   }
