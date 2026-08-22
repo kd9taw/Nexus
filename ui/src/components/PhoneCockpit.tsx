@@ -32,6 +32,8 @@ import {
   setRfPower,
   setMicGain,
   setNrLevel,
+  setCompLevel,
+  setNotchFreq,
   setAgc,
   setScopeSpan,
   setScopeRef,
@@ -62,6 +64,11 @@ import { t } from '../i18n'
 const DSP = 'DSP'
 const NR = 'NR'
 const AGC = 'AGC'
+// The rig's own names for the two controls #95 completed. COMP is the speech processor
+// (PROC on a Yaesu front panel); NOTCH is the MANUAL notch, not the automatic one.
+const COMP = 'COMP'
+const NOTCH = 'NOTCH'
+const HZ = 'Hz'
 const BW = 'BW'
 const DB = 'dB'
 const DBM = 'dBm'
@@ -198,6 +205,11 @@ const DSP_FUNCS = [
   { key: 'notch', label: 'Notch', titleKey: 'phone.dsp.notch.title' },
   { key: 'comp', label: 'COMP', titleKey: 'phone.dsp.comp.title' },
   { key: 'vox', label: 'VOX', titleKey: 'phone.dsp.vox.title' },
+  // #95. TWO notches, and they are different controls: `notch` above is the AUTOMATIC
+  // notch (Hamlib ANF), which hunts a carrier on its own; this is the MANUAL one you
+  // park on a heterodyne, and it is what most operators mean by "notch". Each renders
+  // only when the rig reports it, so a radio with one shows one button.
+  { key: 'manualNotch', label: 'MN', titleKey: 'phone.dsp.manualNotch.title' },
 ] as const
 
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
@@ -355,6 +367,37 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
       setNr((n) => (Math.abs(n - pct) >= 2 ? pct : n))
     }
   }, [snap.radio.nrLevel])
+  // #95's two additions, both the same shape as NR above: mirror the rig's own value so the
+  // slider shows where the knob really is, and never fight an in-flight drag.
+  const [comp, setComp] = useState(50)
+  const compDragging = useRef(false)
+  useEffect(() => {
+    const rb = snap.radio.compLevel
+    if (rb != null && !compDragging.current) {
+      const pct = Math.round(rb * 100)
+      setComp((c) => (Math.abs(c - pct) >= 2 ? pct : c))
+    }
+  }, [snap.radio.compLevel])
+  const changeComp = (pct: number) => {
+    setComp(pct)
+    void setCompLevel(pct / 100)
+  }
+  // HZ, not a percentage — the notch sits at an audio frequency and the operator is placing it
+  // on a heterodyne by ear. A 10 Hz step is fine enough to null a tone and coarse enough to
+  // sweep the passband without a hundred CAT writes.
+  const [notchHz, setNotchHz] = useState(1000)
+  const notchDragging = useRef(false)
+  useEffect(() => {
+    const rb = snap.radio.notchFreqHz
+    if (rb != null && !notchDragging.current) {
+      const hz = Math.round(rb)
+      setNotchHz((n) => (Math.abs(n - hz) >= 10 ? hz : n))
+    }
+  }, [snap.radio.notchFreqHz])
+  const changeNotch = (hz: number) => {
+    setNotchHz(hz)
+    void setNotchFreq(hz)
+  }
   const changeNr = (pct: number) => {
     setNr(pct)
     void setNrLevel(pct / 100)
@@ -685,7 +728,16 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // before the rig first reported stuck with a dead entry once it does.
   const canDsp = liveDspFuncs.length > 0 || seenDspFuncs.current.length > 0
   const canDspLevels =
-    seenDspLevels.current || snap.radio.nrLevel != null || snap.radio.agc != null
+    seenDspLevels.current ||
+    snap.radio.nrLevel != null ||
+    snap.radio.agc != null ||
+    // #95's two, and leaving them out is not a detail: this boolean decides whether the pane
+    // EXISTS. A rig reporting a speech-processor depth or a notch frequency but no NR and no
+    // AGC would have had both new controls built and then never rendered — the dead-entry
+    // failure this whole block is written against, arriving from the other side. Caught by
+    // PhoneCockpit.notch.test.tsx before it shipped.
+    snap.radio.compLevel != null ||
+    snap.radio.notchFreqHz != null
   // ⊞ Panels. `main`/`side` are unused here (Phone has no two-column pane grid), so the
   // host is only supplying `shown` + the menu items.
   //
@@ -952,6 +1004,52 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                   aria-label={t('phone.rxDsp.nr.aria')}
                 />
                 <span className="ph-power-val">{nr}%</span>
+              </label>
+            )}
+            {/* #95: the speech processor's DEPTH. The toggle switched PROC on and there was
+                no way to say how hard it worked, which is the half that matters. */}
+            {snap.radio.compLevel != null && (
+              <label className="ph-dsplev" title={t('phone.rxDsp.comp.title')}>
+                <span>{COMP}</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={comp}
+                  onChange={(e) => changeComp(Number(e.target.value))}
+                  onPointerDown={() => {
+                    compDragging.current = true
+                  }}
+                  onPointerUp={() => {
+                    compDragging.current = false
+                  }}
+                  aria-label={t('phone.rxDsp.comp.aria')}
+                />
+                <span className="ph-power-val">{comp}%</span>
+              </label>
+            )}
+            {/* #95: WHERE the manual notch sits. Shown only when the rig reports NOTCHF, so a
+                radio with an auto-notch and nothing else never grows a slider that does
+                nothing. Hz, not a percentage — you are placing it on a tone you can hear. */}
+            {snap.radio.notchFreqHz != null && (
+              <label className="ph-dsplev" title={t('phone.rxDsp.notchFreq.title')}>
+                <span>{NOTCH}</span>
+                <input
+                  type="range"
+                  min={300}
+                  max={3400}
+                  step={10}
+                  value={notchHz}
+                  onChange={(e) => changeNotch(Number(e.target.value))}
+                  onPointerDown={() => {
+                    notchDragging.current = true
+                  }}
+                  onPointerUp={() => {
+                    notchDragging.current = false
+                  }}
+                  aria-label={t('phone.rxDsp.notchFreq.aria')}
+                />
+                <span className="ph-power-val">{notchHz} {HZ}</span>
               </label>
             )}
             {snap.radio.agc != null && (

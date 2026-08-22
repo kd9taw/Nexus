@@ -14029,6 +14029,13 @@ button.cq-skiptx1.on {
   color: var(--text);
   font-weight: 700;
 }
+/* A DIRECTED CQ (CQ DX, CQ NA, CQ POTA…) is not a call you can answer from just anywhere, so
+   it must not read like a plain CQ at a glance — that mistake is the whole reason the modifier
+   is shown. --alert-warning, which both themes define: noticeable while scanning a roster,
+   and already the colour this app uses for "look before you act". */
+.or-calling.cq.directed {
+  color: var(--alert-warning);
+}
 .or-snr {
   font-weight: 700;
   text-align: right;
