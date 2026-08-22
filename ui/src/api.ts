@@ -1243,7 +1243,6 @@ export async function setMicGain(gain: number): Promise<AppSnapshot> {
 export async function setNrLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_nr_level', { level })
 }
-
 /** Set the speech-processor depth as a 0.0–1.0 fraction (#95). */
 export async function setCompLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_comp_level', { level })
@@ -1253,8 +1252,9 @@ export async function setCompLevel(level: number): Promise<AppSnapshot> {
 export async function setNotchFreq(hz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_notch_freq', { hz })
 }
-/** Set the AGC speed ("fast" | "mid" | "slow"). */
-export async function setAgc(speed: 'fast' | 'mid' | 'slow'): Promise<AppSnapshot> {
+
+/** Set the AGC speed — `Engine::AGC_SPEEDS`, in the order the cockpits show them. */
+export async function setAgc(speed: 'auto' | 'fast' | 'mid' | 'slow' | 'off'): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_agc', { speed })
 }
 
