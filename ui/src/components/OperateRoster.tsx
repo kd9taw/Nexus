@@ -531,14 +531,21 @@ export function OperateRoster({
                 {/* Who they are working right now — a station mid-exchange will not answer a
                     call, and "CQ" (addressing nobody) is the row to double-click. */}
                 <span
-                  className={`or-calling${s.calling ? '' : ' cq'}`}
+                  className={`or-calling${s.calling ? '' : ' cq'}${!s.calling && s.cqDir ? ' directed' : ''}`}
                   title={
                     s.calling
                       ? t('operate.roster.calling.title', { call: s.calling })
-                      : t('operate.roster.calling.cq.title')
+                      : s.cqDir
+                        ? // A DIRECTED CQ is not a call you can answer from the wrong place.
+                          // Operator request: the roster said only "CQ", so he clicked a CQ DX
+                          // from CONUS and found out over in Band Activity.
+                          t('operate.roster.calling.cqDir.title', { dir: s.cqDir })
+                        : t('operate.roster.calling.cq.title')
                   }
                 >
-                  {s.calling ?? ROSTER_TOKENS.cq}
+                  {/* `CQ DX`, not a translated phrase: the modifier is what went on the air,
+                      and CQ is a Q-code. Both are invariant tokens. */}
+                  {s.calling ?? (s.cqDir ? `${ROSTER_TOKENS.cq} ${s.cqDir}` : ROSTER_TOKENS.cq)}
                 </span>
                 <span
                   className="or-need"

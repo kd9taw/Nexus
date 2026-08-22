@@ -87,6 +87,12 @@ pub struct Station {
     /// operator see who is already engaged before double-clicking a row.
     #[serde(default)]
     pub calling: Option<String>,
+    /// The CQ modifier when this station's last frame was a CQ — `DX`, `NA`, `POTA`, `TEST`,
+    /// a zone number. `None` for a plain CQ or a station working somebody. The roster shows
+    /// it beside "CQ" so a CQ DX is not mistaken for a call you can answer (operator request
+    /// 2026-08-21: he clicked one from CONUS and only then saw the DX in Band Activity).
+    #[serde(default)]
+    pub cq_dir: Option<String>,
     /// Primary administrative subdivision — a US state or a Canadian province, as the ADIF
     /// `STATE` code either way. From the callsign (the FCC index / the Canadian regional
     /// numeral) or the heard grid: the SAME hint the needed board and WAS use, never a
@@ -592,6 +598,14 @@ pub struct RadioStatus {
     /// Noise-reduction level (0.0–1.0) — rig read-back or commanded; `None` when unsupported.
     #[serde(default)]
     pub nr_level: Option<f32>,
+    /// Speech-processor depth (0.0–1.0) — the COMP toggle's level. `None` when unsupported.
+    /// #95: the toggle switched the rig's PROC and nothing set how hard it worked.
+    #[serde(default)]
+    pub comp_level: Option<f32>,
+    /// MANUAL-NOTCH FREQUENCY IN HZ — not a 0..1 fraction, which is why it is an f32 of Hz and
+    /// not a level like the others. This is where the notch actually sits in the passband.
+    #[serde(default)]
+    pub notch_freq_hz: Option<f32>,
     /// AGC time constant as "fast"|"mid"|"slow"; `None` when the rig doesn't report it.
     #[serde(default)]
     pub agc: Option<String>,
@@ -643,6 +657,13 @@ pub struct RadioStatus {
     pub comp: Option<bool>,
     #[serde(default)]
     pub vox: Option<bool>,
+    /// MANUAL notch (Hamlib `RIG_FUNC_MN`) — the one you park on a heterodyne, distinct from
+    /// `notch` above, which is the AUTOMATIC notch (ANF). A radio may report either, both or
+    /// neither; each toggle renders only when its own field is non-null, so a rig with one
+    /// shows one button. #95: only ANF was exposed, labelled "Notch", so an operator whose rig
+    /// wanted a manual notch had a button that did nothing he could hear.
+    #[serde(default)]
+    pub manual_notch: Option<bool>,
     /// The rig's BUILT-IN ANTENNA TUNER (Hamlib `RIG_FUNC_TUNER`): `None` = the radio doesn't
     /// report one, so no ATU control is offered at all; `Some(bool)` = it has one, and the bool is
     /// whether the tuner is currently switched in-line. Same `None = can't do it` idiom as the DSP

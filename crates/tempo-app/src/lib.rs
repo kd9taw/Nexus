@@ -275,6 +275,9 @@ impl AppState {
                 notch: None,
                 comp: None,
                 vox: None,
+                manual_notch: None,
+                comp_level: None,
+                notch_freq_hz: None,
                 atu: None, // engine fills from the CAT TUNER probe (None = no ATU on this rig)
                 filter_width_hz: None, // engine fills from the CAT `m` passband read-back
                 rit_hz: 0,
@@ -873,6 +876,7 @@ impl AppState {
             grid_rarity: None,
             freq_hz: h.freq_hz,
             calling: h.calling.clone(),
+            cq_dir: h.cq_dir.clone(),
             // Stamped by the engine from the subdivision resolver; None at this layer.
             state: None,
         }
