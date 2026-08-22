@@ -177,7 +177,7 @@ describe('Linux: the picker reads like the operator’s own system', () => {
     // same enumerated lists and were just as unreadable.
     renderPanel()
     await openRadioTab()
-    for (const name of ['Input Device (RX)', 'Output Device (TX)', 'Monitor Output Device']) {
+    for (const name of ['Input Device (RX)', 'Output Device (TX)', 'Output device']) {
       const sel = await picker(name)
       expect([...sel.options].map((o) => o.textContent?.trim())).toContain('USB AUDIO CODEC')
     }
