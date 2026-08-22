@@ -11,9 +11,17 @@
 // memory — and in Phone it is part of the stop line. Beside it, the button keeps its whole surface
 // and every handler it had.
 //
-// WHAT IS LIVE AND WHAT IS NOT. The OUTPUT pill is complete: it drives `monitor_enabled` /
-// `monitor_device` / `monitor_level`, which already exist — "Rig" is the monitor OFF (you hear the
-// radio itself, today's default and how it ships), a computer device is the monitor ON. The MIC
+// A WORD ABOUT THE WORD "MONITOR". The settings this pill drives are called `monitor_enabled` /
+// `monitor_device` / `monitor_level`, and NONE of the operator-facing strings here use that word.
+// In amateur practice MONITOR means listening to your own TRANSMITTED audio — it is what the MONI
+// control on the rig does. What these settings actually do is play the RECEIVED audio out of a
+// computer device (`monitor.rs`: "a live pass-through of the RX audio the decoder hears"). An
+// experienced operator read the field name and reasonably assumed the opposite (2026-08-22), which
+// is the whole argument for the UI saying "receive" wherever the code says "monitor".
+//
+// WHAT IS LIVE AND WHAT IS NOT. The OUTPUT pill is complete: it drives that trio — "Rig" is the
+// pass-through OFF (you hear the radio itself, today's default and how it ships), a computer
+// device is it ON. The MIC
 // pill's GAIN is live too (`setMicGain`). Its SOURCE selector is deliberately not wired to a live
 // microphone yet: streaming a computer mic into the transmitter is a transmit-path change and
 // needs the maintainer's sign-off (kd9taw/Nexus#149). Until then the computer entries are shown
@@ -179,7 +187,7 @@ export function PttAudioPills({
         </button>
 
         {open === 'vol' && (
-          <div className="ph-audio-pop" role="group" aria-label="Monitor volume">
+          <div className="ph-audio-pop" role="group" aria-label="Receive volume">
             <label className="ph-audio-row">
               <span>Volume</span>
               <input
@@ -188,7 +196,7 @@ export function PttAudioPills({
                 max="1"
                 step="0.01"
                 value={vol}
-                aria-label="Monitor volume"
+                aria-label="Receive volume"
                 disabled={!onComputer}
                 onChange={(e) => onVolume(Number(e.target.value))}
               />
