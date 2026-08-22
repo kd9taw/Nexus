@@ -427,6 +427,12 @@ principal third-party components, not a substitute for that gate:
 - **alsa** (Linux only: reading ALSA's PCM device hints, so the audio picker can show the
   card description the operator's own system shows — cpal keeps only the raw PCM name) —
   Apache-2.0 OR MIT. Already present as cpal's own dependency at the same version.
+- **io-kit-sys**, **core-foundation-sys**, **coreaudio-sys** (macOS only: reading USB
+  topology from the IO registry, so the pickers can say WHICH RADIO a serial port or a sound
+  card belongs to — two rigs with the same bridge and codec chips are otherwise identical
+  strings) — MIT / Apache-2.0, MIT OR Apache-2.0, and MIT respectively (coreaudio-sys is MIT
+  only). All three were already present as dependencies of serialport and cpal at these
+  versions; they are direct dependencies only so the registry lookups can be called.
 - **serialport** (serial CAT / RTS-DTR keying) — MPL-2.0.
 - **sgp4** (SGP4/SDP4 orbital propagation for satellite geometry) — MIT.
 - **keyring** (OS-native credential vault for LoTW / QRZ / ClubLog / eQSL

@@ -59,6 +59,26 @@ alsa = { version = "0.9", optional = true }
 
 # Windows-only: assign the launched rigctld to a Job Object so the OS kills it
 # (freeing the serial/COM port) whenever Tempo exits — even on a crash.
+# macOS-only: read USB port paths so the pickers can say WHICH RIG a device belongs to. Two
+# identical rig codecs report the identical CoreAudio name (a pair of C-Media dongles both
+# enumerate as "USB Audio Device"), and two ports of one bridge look alike too, so string matching
+# can only offer a bare name and a " #2". `usbtopo` matches each device to a radio by USB topology
+# instead — as a TIE-BREAK behind the existing string matching, never in place of it.
+#
+# All three crates are ALREADY in Cargo.lock at these requirements, as dependencies of cpal
+# (`coreaudio-sys`, `core-foundation-sys`) and serialport (`io-kit-sys`) — exactly like the `alsa`
+# entry above, and for the same reason: this adds no new code to the tree and they are direct
+# dependencies only so we can call the registry/property lookups ourselves.
+# Licences, read PER CRATE from each one's own Cargo.toml rather than assumed alike:
+# io-kit-sys "MIT / Apache-2.0", core-foundation-sys "MIT OR Apache-2.0", coreaudio-sys "MIT"
+# (MIT only — not dual). All three are GPL-3.0-only compatible and all three are already on
+# `deny.toml`'s allowlist today, because cargo-deny reads the whole lockfile with no target
+# filter and they have been in it as transitive deps all along. NOTICE entries filed.
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-sys = "0.2"
+core-foundation-sys = "0.8"
+io-kit-sys = "0.4"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

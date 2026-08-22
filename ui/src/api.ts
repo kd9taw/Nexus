@@ -2045,6 +2045,32 @@ export interface SerialPortInfo {
   name: string
   /** USB product string, e.g. "USB-Enhanced-SERIAL-B CH342" ("" for non-USB ports). */
   label: string
+  /**
+   * Which interface of a multi-interface bridge this is. A CP2105 is DUAL and only interface 0
+   * carries CAT on the rigs this targets; interface 1 answers nothing and looks exactly like a
+   * dead radio. `undefined`/`null` means UNKNOWN (one interface, or no topology source) — never
+   * read it as 0.
+   */
+  interfaceIndex?: number | null
+  /**
+   * How many serial interfaces this USB device exposes in total.
+   *
+   * ⚠️ `interfaceIndex` is not usable without this. Plenty of single-interface devices number
+   * their one interface something other than 0 — an LG monitor's control port enumerates as
+   * interface 2 — so "index > 0" alone would tell an operator their only port is the wrong one.
+   * The advice only means something when there IS another port to have picked.
+   */
+  siblingPorts?: number | null
+  /**
+   * A sound card on the same physical USB device — i.e. inside the same radio. `null` for a plain
+   * serial adapter, which is correct, and `undefined` wherever topology is unavailable; both mean
+   * "nothing proven", so nothing may be refused on it.
+   *
+   * ⚠️ Weaker than `siblingPorts`: a rig's CAT bridge and its codec are separate USB devices
+   * behind the rig's own internal hub, so they can only be related by their PARENT — and two
+   * unrelated things in one external hub share a parent too. Warning-only for that reason.
+   */
+  pairedAudio?: string | null
 }
 
 /** Serial ports with a descriptive USB-product label (to tell dual-serial rigs apart). */
