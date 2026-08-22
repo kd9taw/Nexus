@@ -22534,7 +22534,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// THE GLITCH, pinned. A poll that learns the MODE but drops the SPAN must keep the sweep
     /// placeable — the fresh mode is used, the span falls back — because "unknown" publishes no RF
     /// row, the RF slot goes stale after a second, and the waterfall shows AUDIO instead.
@@ -22588,6 +22587,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn a_failed_span_or_mode_read_makes_the_sweep_unknown_rather_than_stale() {
         // The dangerous branch. Keeping the previous CENTER pair after the operator switched the
         // rig's scope to FIX means every row keeps a centred assumption that is now false, and
