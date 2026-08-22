@@ -16804,6 +16804,59 @@ fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 #[cfg(test)]
 mod tests {
 
+    /// The contract a factory RESET depends on, pinned from the engine side.
+    ///
+    /// Same asymmetry #85 fixed for restore, arriving from the other side. A reset builds a factory
+    /// `Settings` and applies it — and if that goes through the FORM-SAVE path the engine keeps its
+    /// live roster on purpose (so a stale panel cannot revert a rig you just added), and every radio
+    /// the dialog promised to erase survives. Worse than the restore case in one respect: there the
+    /// bundle at least carried radios of its own, so the result was somebody's real roster. Here the
+    /// promise on screen and the outcome disagree outright.
+    ///
+    /// LIMIT OF THIS TEST, stated because it looks like it covers more than it does: the routing
+    /// lives in the command layer (`reset_settings` → `apply_and_persist(.., authoritative = true)`)
+    /// and the engine cannot see it. What this pins is that the authoritative path does what a reset
+    /// needs and that the form path deliberately does not — so a change to either CONTRACT fails
+    /// here, while a change that re-routes reset to the wrong one does not.
+    #[test]
+    fn the_authoritative_path_lands_a_factory_roster_and_the_form_path_keeps_the_live_one() {
+        let factory = {
+            let mut fresh = Settings::default();
+            fresh.ensure_radio_profiles();
+            fresh.ensure_distinct_radio_ports();
+            fresh.ensure_routing_targets();
+            fresh
+        };
+        let expected = factory.radios.len();
+
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        eng.add_radio();
+        assert!(
+            eng.settings().radios.len() > expected,
+            "fixture: a station with more radios than a fresh install"
+        );
+        eng.apply_restored_settings(factory.clone());
+        assert_eq!(
+            eng.settings().radios.len(),
+            expected,
+            "a reset must land the FACTORY roster, not the one it promised to erase"
+        );
+
+        // And the form path must still KEEP the live roster. That is not a bug to fix; it is
+        // exactly why routing a reset through it was wrong.
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        eng.add_radio();
+        let live = eng.settings().radios.len();
+        eng.apply_settings(factory);
+        assert_eq!(
+            eng.settings().radios.len(),
+            live,
+            "a form save keeps the engine's roster — a stale panel must not revert a new rig"
+        );
+    }
+
     /// A RESTORE takes the bundle's roster; a form save keeps the engine's. Getting these the same
     /// way round loses radios.
     ///

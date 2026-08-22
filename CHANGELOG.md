@@ -5,6 +5,18 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Reset all settings to factory defaults.** There was no reset at all: a clean start meant
+  finding `settings.json` in a config folder and deleting it — and doing that while Nexus is
+  running resets nothing, because the app holds the old configuration in memory and writes it
+  straight back on the next save. The new control is in Settings → Radio → Transmit limits &
+  sharing, beside Back up. It asks first, and the dialog says what SURVIVES: your contact log
+  is untouched, and stored passwords stay in your keychain — clearing those stays a separate,
+  deliberate act rather than a surprise buried in a reset.
+
 ## [1.7.6] — 2026-08-21
 
 ### Fixed
@@ -64,6 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   park on a whistle by ear, is now there too, with a frequency slider to put it where the
   whistle is. COMP gained the control it was missing: how hard the compressor works. Each
   appears only if your radio reports it, so nothing grows a slider with nothing behind it.
+
+### Added
 
 - **The dial is marked on a native RF panadapter.** If your radio streams its own spectrum
   (Icom CI-V, FlexRadio), the tuned frequency now has a line and a DIAL label on it. It is
