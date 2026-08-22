@@ -139,6 +139,21 @@ fn is_cq_dir(s: &str) -> bool {
 /// every portable station down i3=4, which carries neither a grid nor a report.
 /// Its jobs are receive-side (recognising a call token while parsing) and hash-table
 /// seeding — never choosing what we transmit.
+/// A callsign the 77-bit protocol cannot put in its standard 28-bit field, so it travels
+/// hashed in an i3=4 message: compound calls (`EA1/PE5X`, `KD9TAW/QRP`) AND non-conforming
+/// shapes (`II7MGBR`, `EN3SUKR`, `YW18FIFA` — special-event calls whose suffix is longer than
+/// the standard three letters).
+///
+/// Deliberately built from the two predicates that already exist rather than a new pattern:
+/// it must LOOK like a callsign ([`is_callsign`], which also rejects a bracketed hash token
+/// like `<...>` and anything punctuated) and must NOT be a standard one ([`is_std_call`]).
+/// Nonstandard is not a shape of its own — it is the complement of the standard field, which
+/// is precisely how the protocol defines it.
+pub fn is_nonstandard_call(call: &str) -> bool {
+    let c = call.trim();
+    is_callsign(c) && !is_std_call(c)
+}
+
 pub fn is_compound(call: &str) -> bool {
     let c = call.trim().trim_start_matches('<').trim_end_matches('>');
     c.contains('/') && c.split('/').any(is_callsign)
@@ -438,10 +453,29 @@ impl Msg {
                 dir: t[1].to_string(),
             };
         }
-        // i3=4 compound CQ: "CQ <compound-call>" with NO grid (a compound call can't
-        // carry one). Only a real COMPOUND call qualifies — "CQ W1AW" (a grid-less plain
-        // call) stays free text, and "CQ <...>" is invalid (the modem rejects it).
-        if t.len() == 2 && t[0] == "CQ" && is_compound(t[1]) {
+        // i3=4 NONSTANDARD CQ: "CQ <call>" with NO grid, because the i3=4 message cannot
+        // carry one. Two shapes reach it, and only one of them used to be accepted here.
+        //
+        // ⚠️ COMPOUND IS NOT THE WHOLE OF NONSTANDARD, and that gap is the bug (operator
+        // report 2026-08-21, v1.7.5, with screenshots): `CQ II7MGBR` and `CQ EN3SUKR` got no
+        // CQ chip and could not be double-clicked to work them, while `CQ IU7VOL JN81` right
+        // above them worked fine. Neither special-event call contains a `/`, so `is_compound`
+        // said no and the message fell to free text — invisible to the sequencer, which is
+        // why double-click did nothing. The roster's Work button still started a QSO, because
+        // that path never asked whether it was a CQ, and the split between the two is exactly
+        // what the report describes.
+        //
+        // `is_std_call`'s own doc already names this class: "every non-conforming shape
+        // (`YW18FIFA`) is nonstandard and must be HASHED". II7MGBR is YW18FIFA — a four-letter
+        // suffix where the standard field allows three. So the test is the protocol's own:
+        // it LOOKS like a callsign and is NOT a standard one, therefore it can only have
+        // arrived as i3=4, therefore a bare "CQ" in front of it is a CQ.
+        //
+        // The guard rails the old comment named are kept by construction rather than by
+        // narrowness: "CQ W1AW" stays free text because W1AW IS standard (a standard call
+        // would have carried its grid), and "CQ <...>" is still rejected because a bracketed
+        // or punctuated token is not a callsign to `is_callsign`.
+        if t.len() == 2 && t[0] == "CQ" && is_nonstandard_call(t[1]) {
             return Msg::Cq {
                 de: t[1].to_string(),
                 grid: String::new(),
@@ -631,6 +665,70 @@ pub fn is_callsign(s: &str) -> bool {
 #[cfg(test)]
 mod fidelity_tests {
     use super::*;
+
+    /// OPERATOR REPORT 2026-08-21 (v1.7.5, screenshots): "with special calls it doesn't
+    /// recognize them as CQ calls. Hence the double click does not work." `CQ II7MGBR` and
+    /// `CQ EN3SUKR` printed with no CQ chip and could not be double-clicked to work them,
+    /// while `CQ IU7VOL JN81` on the line above behaved normally. The roster's Work button
+    /// still started a QSO — that path never asks whether it is a CQ — and the difference
+    /// between the two is the whole report.
+    #[test]
+    fn a_gridless_cq_from_a_special_event_call_is_a_cq() {
+        // THE REPORT. Neither has a slash, so the old `is_compound` test said no.
+        for msg in ["CQ II7MGBR", "CQ EN3SUKR"] {
+            match Msg::parse(msg) {
+                Msg::Cq { de, grid, dir } => {
+                    assert_eq!(grid, "", "i3=4 carries no grid");
+                    assert_eq!(dir, "");
+                    assert!(!de.is_empty(), "{msg} must name its sender");
+                }
+                other => panic!("{msg} must parse as a CQ, got {other:?}"),
+            }
+        }
+        // The compound form that already worked must keep working.
+        assert!(matches!(Msg::parse("CQ EA1/PE5X"), Msg::Cq { .. }));
+    }
+
+    /// The guard rails the narrow rule used to provide by being narrow. They are now held by
+    /// construction — a standard call is excluded because it IS standard — so they are worth
+    /// asserting directly rather than trusting the shape of the predicate.
+    #[test]
+    fn a_gridless_cq_still_refuses_what_it_always_refused() {
+        // A STANDARD call with no grid is free text: a standard sender would have carried one.
+        assert!(
+            !matches!(Msg::parse("CQ W1AW"), Msg::Cq { .. }),
+            "a grid-less STANDARD call stays free text"
+        );
+        assert!(!matches!(Msg::parse("CQ KD9TAW"), Msg::Cq { .. }));
+        // A hashed placeholder is not a callsign and never names a station.
+        assert!(!matches!(Msg::parse("CQ <...>"), Msg::Cq { .. }));
+        // Not a callsign at all.
+        assert!(!matches!(Msg::parse("CQ ..."), Msg::Cq { .. }));
+        assert!(!matches!(Msg::parse("CQ ?"), Msg::Cq { .. }));
+    }
+
+    /// The predicate on its own, because it is the thing that decides and it is easier to see
+    /// wrong here than through a parse.
+    #[test]
+    fn nonstandard_is_the_complement_of_the_standard_field() {
+        // Non-conforming shapes — a suffix longer than the standard three letters.
+        assert!(is_nonstandard_call("II7MGBR"));
+        assert!(is_nonstandard_call("EN3SUKR"));
+        assert!(is_nonstandard_call("YW18FIFA")); // the example is_std_call's own doc names
+                                                  // Compound, which was already handled and must not regress.
+        assert!(is_nonstandard_call("EA1/PE5X"));
+        assert!(is_nonstandard_call("KD9TAW/QRP"));
+        // Standard calls are NOT nonstandard — including the two suffixes that ride their own
+        // bit and are therefore standard by protocol, not by shape.
+        assert!(!is_nonstandard_call("W1AW"));
+        assert!(!is_nonstandard_call("KD9TAW"));
+        assert!(!is_nonstandard_call("F4CYH/P"));
+        assert!(!is_nonstandard_call("F4CYH/R"));
+        // Not callsigns at all.
+        assert!(!is_nonstandard_call("<...>"));
+        assert!(!is_nonstandard_call("599"));
+        assert!(!is_nonstandard_call(""));
+    }
 
     #[test]
     fn valid_grid_accepts_4_and_6_char_rejects_blank_and_malformed() {

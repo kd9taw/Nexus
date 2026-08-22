@@ -7537,8 +7537,19 @@ fn reset_settings(
     fresh.ensure_radio_profiles();
     fresh.ensure_distinct_radio_ports();
     fresh.ensure_routing_targets();
-    // Reuse the ordinary save path in full rather than reimplementing its side effects.
-    set_settings(state, spots, live_paths, region_paths, health, cache, fresh)
+    // The ordinary save path in full — its persistence, its feed handling and the process-global
+    // state it resets — but with the ROSTER CONTRACT of a restore. Routing a reset through a form
+    // save keeps the engine's live roster, so every radio the dialog promised to erase survives it.
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        fresh,
+        true,
+    )
 }
 /// Apply + persist new settings. Returns the refreshed snapshot.
 ///
@@ -7555,7 +7566,43 @@ fn set_settings(
     region_paths: State<'_, SharedRegionPaths>,
     health: State<'_, SharedHealth>,
     cache: State<'_, PropCache>,
+    settings: Settings,
+) -> Result<AppSnapshot, String> {
+    // A form save: the ENGINE's roster wins, so a stale panel cannot revert a rig just added.
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        settings,
+        false,
+    )
+}
+
+/// The body of a settings save, with ONE thing parameterised: who owns the roster.
+///
+/// `authoritative_roster == false` is a form save — `apply_settings` keeps the engine's live
+/// roster, active radio, peg and tune, so a stale panel cannot revert a rig you just added.
+///
+/// `true` is for settings that REPLACE the station rather than edit it: today the factory reset.
+/// It routes through `apply_restored_settings`, the contract #85 established for backups, because
+/// a reset has a restore's shape and not a save's — the incoming settings are the whole truth.
+///
+/// Everything else is shared deliberately. A reset must also reset the PROCESS-GLOBAL state a save
+/// touches — the LoTW recency window and the unassisted-mode atomic — and must go through the same
+/// persistence and feed handling. Reimplementing that beside this function is how the two drift.
+#[allow(clippy::too_many_arguments)]
+fn apply_and_persist(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
     mut settings: Settings,
+    authoritative_roster: bool,
 ) -> Result<AppSnapshot, String> {
     // Mirror the legacy single `cluster_host` to the list head (empty when the list is
     // empty), so clearing the node list to go RBN-only actually sticks — otherwise `load`'s
@@ -7633,7 +7680,13 @@ fn set_settings(
         // copies), so saving the raw form here would write a roster that diverges from the engine and
         // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
         // light verb does.
-        eng.apply_settings(settings);
+        if authoritative_roster {
+            // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
+            // live roster here would leave a factory reset with every radio it promised to erase.
+            eng.apply_restored_settings(settings);
+        } else {
+            eng.apply_settings(settings);
+        }
         if let Err(e) = eng.settings().save(&settings_path()) {
             eprintln!("tempo: failed to persist settings: {e}");
         }
@@ -7900,12 +7953,26 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
 /// with a file that happens to be JSON — a partial restore of a mangled file is worse than a
 /// refusal, because the operator believes they are configured and they are not.
 ///
-/// Applies through `apply_settings`, the same path the Settings panel uses, so every side effect
-/// a settings change normally has (the radio loop reconfiguring, the profile mirrors) happens
-/// exactly as it would have. Writing the file directly would leave a running app disagreeing with
-/// its own config until the next restart.
+/// Applies through `apply_restored_settings`, NOT the panel's `apply_settings`. The two have
+/// opposite contracts: a form save deliberately keeps the engine's live roster so a stale form
+/// cannot revert a rig you just added, and a restore must take the bundle's roster instead. Going
+/// through the form path would silently drop radios 2..n, the routing rules and the blocked-call
+/// list on the case this feature exists for — a backup carried to another machine.
+///
+/// It also PERSISTS. Applying to the running engine alone left the restore to evaporate on the
+/// next relaunch, and left the panel's form stale so the next Save wrote the old values back over
+/// it — a silent revert of an explicit, confirmed, "this cannot be undone" action.
+///
+/// NOT done here, deliberately: the lazy live-feed start that `set_settings` performs. A bundle
+/// carrying a different callsign therefore reaches the cluster/RBN/PSKR feeds on the next launch
+/// rather than immediately. Duplicating that here would mean reimplementing the form path's side
+/// effects, which is what taking the form path wrongly was meant to avoid; a restore is a rare,
+/// confirmed, whole-configuration act and a relaunch after one is reasonable.
 #[tauri::command(async)]
-fn import_settings_bundle(text: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn import_settings_bundle(
+    text: String,
+    state: State<'_, SharedEngine>,
+) -> Result<AppSnapshot, String> {
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
@@ -7931,11 +7998,23 @@ fn import_settings_bundle(text: String, state: State<'_, SharedEngine>) -> Resul
             ui_state_save(map);
         }
     }
+    // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
+    // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
+    // which is right for a form and wrong for a restore.
     {
         let mut eng = engine_lock(&state);
-        eng.apply_settings(settings);
+        eng.apply_restored_settings(settings);
+        // PERSIST. Applying to the running engine alone is what made the restore evaporate on the
+        // next launch while looking like it had worked.
+        if let Err(e) = eng.settings().save(&settings_path()) {
+            return Err(format!("The settings were restored but could not be saved: {e}"));
+        }
+        // ...and into the base config, or the launch picker keeps offering the OLD roster.
+        persist_roster_to_base(&eng.settings().radios);
+        persist_routing_to_base(eng.settings());
     }
-    Ok(())
+    let snap = { engine_lock(&state).snapshot() };
+    Ok(snap)
 }
 
 /// the UI uses to decide whether a per-operator export is worth offering at all.
@@ -10635,6 +10714,23 @@ fn set_mic_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot
 fn set_nr_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_nr_level(level);
+    Ok(eng.snapshot())
+}
+
+/// Set the speech-processor depth as a 0.0–1.0 fraction (#95 — the COMP toggle had no level).
+#[tauri::command(async)]
+fn set_comp_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_comp_level(level);
+    Ok(eng.snapshot())
+}
+
+/// Set the MANUAL-NOTCH frequency in Hz (#95 — a notch you cannot place is not a notch).
+/// Clamped by the engine to the audio passband a notch can usefully sit in.
+#[tauri::command(async)]
+fn set_notch_freq(state: State<'_, SharedEngine>, hz: f32) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_notch_freq_hz(hz);
     Ok(eng.snapshot())
 }
 
@@ -17603,6 +17699,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_rf_power,
             set_mic_gain,
             set_nr_level,
+            set_comp_level,
+            set_notch_freq,
             set_agc,
             set_split,
             set_rig_func,
@@ -18494,6 +18592,7 @@ mod tests {
             lotw_user: false,
             freq_hz: None,
             calling: None,
+            cq_dir: None,
             state: None,
         };
         let spots = |stations: &[tempo_app::dto::Station], clock: &SlotClock, period: f64| {
@@ -18584,6 +18683,7 @@ mod tests {
             lotw_user: false,
             freq_hz: None,
             calling: None,
+            cq_dir: None,
             state: None,
         };
         // The renumbering, measured rather than asserted from memory: the FT4 index of

@@ -57,6 +57,25 @@ pub const PROGID: &str = "OmniRig.OmniRigX";
 /// radio loop — it is not a rig timeout.
 const CALL_TIMEOUT: Duration = Duration::from_millis(1500);
 
+/// How long the FIRST `CoCreateInstance` may take — a different question entirely, and reusing
+/// `CALL_TIMEOUT` for it was a bug.
+///
+/// A property read talks to a server that is already up. Creating the object may have to START
+/// one: Windows launches `OmniRig.exe`, which loads its Delphi runtime, reads its rig-definition
+/// INI files and opens the serial port before it answers. On a cold machine that is seconds, not
+/// milliseconds, and 1.5 s of budget meant Nexus gave up while OmniRig was still coming up.
+///
+/// Field report (FT-890, 2026-08-20/21): the diagnostic log shows "OmniRig did not finish
+/// starting within the call budget" seven times, interleaved with successes minutes later — and
+/// the operator found that launching JTDX first made Nexus work every time. That is the same
+/// fact from the other side: once JTDX has started OmniRig, Nexus only ATTACHES to the running
+/// server, which is fast and always fit inside 1.5 s.
+///
+/// This is deliberately NOT the loop's budget. It is spent once, on the connect path, where the
+/// operator has just asked for a connection and is willing to wait; `CALL_TIMEOUT` still guards
+/// every subsequent call, so a wedged server can never hang the radio loop.
+const START_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// OmniRig's `RigParamX` bit values, verbatim from `OmniRig_TLB.pas`. They are a BITMASK,
 /// so every value is a distinct power of two and `PM_UNKNOWN` is 1, not 0 — a detail worth
 /// writing down, because "unknown is zero" is the natural guess and it is wrong here.
@@ -152,12 +171,25 @@ impl std::fmt::Display for OmniError {
             OmniError::RigOffline(s) => write!(f, "OmniRig says: {s}"),
             OmniError::NeedsElevation => write!(
                 f,
-                "Windows would not let Nexus start OmniRig — it is set to run as \
-                 administrator, and Nexus is not (0x800702E4). Start OmniRig yourself and \
-                 leave it running, then try again: Nexus attaches to the copy already up. \
-                 If it still refuses, right-click OmniRig.exe → Properties → Compatibility \
-                 and clear \"Run this program as an administrator\" — or run both as \
-                 administrator, so the two are at the same level."
+                "Windows would not let Nexus start OmniRig, because OmniRig.exe is MARKED to \
+                 run as administrator and Nexus is not (0x800702E4). OmniRig does not need \
+                 administrator to talk to a radio — a serial port never has — so the mark is \
+                 almost always left over from old troubleshooting, or added by Windows itself \
+                 after a crash. Clearing it fixes this for good and needs no elevation at all:\n\
+                 \n\
+                 1. Right-click OmniRig.exe → Properties → Compatibility, and clear \"Run this \
+                 program as an administrator\".\n\
+                 2. If that box is ALREADY clear, the mark is in the compatibility registry, \
+                 which that dialog does not always show. In a Command Prompt:\n\
+                 \x20  reg query \"HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\\
+                 AppCompatFlags\\Layers\" /s | findstr /i omnirig\n\
+                 \x20  reg query \"HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\\
+                 AppCompatFlags\\Layers\" /s | findstr /i omnirig\n\
+                 A line containing RUNASADMIN is the cause — delete that value.\n\
+                 \n\
+                 Running BOTH as administrator also works and is the worse cure: it leaves a \
+                 station application permanently elevated to work around a flag that should \
+                 not be set."
             ),
             OmniError::Com(s) => write!(f, "OmniRig COM call failed: {s}"),
         }
@@ -456,7 +488,9 @@ impl OmniWorker {
             })
             .map_err(|e| OmniError::Com(format!("could not start the OmniRig thread: {e}")))?;
         // A start error must be the START's error, so wait for the factory's verdict.
-        match orx.recv_timeout(CALL_TIMEOUT) {
+        // START_TIMEOUT, not CALL_TIMEOUT: this waits for the SERVER TO EXIST, which may mean
+        // Windows launching it. See the constant for the field report that measured it.
+        match orx.recv_timeout(START_TIMEOUT) {
             Ok(Ok(())) => Ok((
                 OmniLink {
                     tx: Mutex::new(jtx),
@@ -473,9 +507,12 @@ impl OmniWorker {
             }
             Err(_) => {
                 stop.store(true, Ordering::Relaxed);
-                Err(OmniError::Com(
-                    "OmniRig did not finish starting within the call budget".into(),
-                ))
+                Err(OmniError::Com(format!(
+                    "OmniRig did not finish starting within {} s. If OmniRig was not already \
+                     running, Windows had to launch it — start OmniRig yourself, wait for its \
+                     window to show the rig, and try again.",
+                    START_TIMEOUT.as_secs()
+                )))
             }
         }
     }
@@ -849,6 +886,77 @@ mod tests {
 
     /// The core verbs, end to end through the SHARED rigctld encoder — no second protocol
     /// implementation exists here, and this is what proves it.
+    /// STARTING a COM server and CALLING one are different questions, and one budget served
+    /// both until 2026-08-21. A property read hits a server that is already up (microseconds);
+    /// creating the object may make Windows LAUNCH OmniRig.exe, which loads a Delphi runtime,
+    /// reads its rig files and opens a serial port first. An FT-890 operator's log carried
+    /// seven "did not finish starting within the call budget" failures, and he found that
+    /// starting JTDX first made Nexus connect every time — because after that Nexus only
+    /// attaches to a server already running, which always fitted in 1.5 s.
+    /// THE ELEVATION MESSAGE MUST LEAD WITH THE CURE THAT WORKS.
+    ///
+    /// It used to open with "start OmniRig yourself and leave it running — Nexus attaches to
+    /// the copy already up". That is not reliable advice: if OmniRig is running ELEVATED and
+    /// Nexus is not, Windows blocks COM across integrity levels, so attaching can fail exactly
+    /// like launching did. An operator who follows the first sentence and still fails learns
+    /// that the message does not know either.
+    ///
+    /// The reliable cure is clearing the RUNASADMIN mark, and it must come first — including
+    /// the registry location, because the Properties checkbox does not always reflect a flag
+    /// set in the per-user compatibility layers and "the box is already unticked" is where
+    /// people give up. Running both elevated is named LAST and named as the worse option.
+    #[test]
+    fn the_elevation_message_leads_with_clearing_the_flag() {
+        let m = OmniError::NeedsElevation.to_string();
+        let clear_at = m
+            .find("Run this program as an administrator")
+            .expect("names the checkbox");
+        let both_at = m
+            .find("Running BOTH as administrator")
+            .expect("names the fallback");
+        assert!(
+            clear_at < both_at,
+            "the cure must come before the workaround"
+        );
+        assert!(
+            m.contains("AppCompatFlags"),
+            "must name the registry location — an unticked checkbox is where people give up"
+        );
+        assert!(
+            m.contains("RUNASADMIN"),
+            "must name what they are looking for"
+        );
+        assert!(m.contains("0x800702E4"), "keep the code searchable");
+        // The advice that may not work is gone: it sent operators down a path that fails for
+        // the same reason the launch did.
+        assert!(
+            !m.contains("attaches to the copy already up"),
+            "cross-integrity COM can refuse this too — do not present it as the first cure"
+        );
+    }
+
+    #[test]
+    fn starting_the_server_gets_a_far_longer_budget_than_calling_it() {
+        assert!(
+            START_TIMEOUT > CALL_TIMEOUT,
+            "the activation budget must not be the per-call budget"
+        );
+        // Generous enough to cover a cold launch on a slow machine. The exact figure is a
+        // judgement, but anything in the low seconds is the bug again with a bigger number.
+        assert!(
+            START_TIMEOUT >= Duration::from_secs(10),
+            "a cold OmniRig launch takes seconds, not milliseconds"
+        );
+        // And still BOUNDED: this is spent on the connect path, but an operator must not be
+        // left staring at a frozen dialog if OmniRig never comes up at all.
+        assert!(
+            START_TIMEOUT <= Duration::from_secs(60),
+            "an operator will not wait a minute to be told it failed"
+        );
+        // The loop's guard is unchanged — that was never the broken half.
+        assert_eq!(CALL_TIMEOUT, Duration::from_millis(1500));
+    }
+
     #[test]
     fn omnirig_round_trips_frequency_mode_and_ptt_through_the_rigctld_protocol() {
         let mock = Arc::new(MockOmni::online());
@@ -1018,9 +1126,21 @@ mod tests {
             msg.contains("0x800702E4"),
             "keeps the code support asks for: {msg}"
         );
+        // ⚠️ THIS ASSERTION WAS REVERSED ON 2026-08-21, deliberately. It used to require the
+        // message to lead with "start OmniRig yourself and leave it running — Nexus attaches to
+        // the copy already up". That advice is not reliable: when OmniRig is running ELEVATED
+        // and Nexus is not, Windows blocks COM across integrity levels, so attaching can fail
+        // for the very same reason launching did. An FT-890 operator hit this repeatedly.
+        // What actually cures it is clearing the RUNASADMIN mark, so that leads now, and the
+        // registry location goes with it because the Properties checkbox does not always show a
+        // flag set in the per-user compatibility layers.
         assert!(
-            lower.contains("start omnirig yourself"),
-            "leads with the thing to try first: {msg}"
+            lower.contains("run this program as an administrator"),
+            "leads with the cure that works — clearing the mark: {msg}"
+        );
+        assert!(
+            lower.contains("appcompatflags"),
+            "names where the flag hides when the checkbox looks clear: {msg}"
         );
         // It must NOT read as a broken install — that is the other arm, with the other cure.
         assert!(
