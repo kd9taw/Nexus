@@ -6479,6 +6479,57 @@ impl Engine {
     /// Whether the operator is holding manual PTT (live phone) — read by the loop. Also
     /// masks on read, so a key that became out-of-privilege (knob turned to a locked
     /// segment while holding PTT) drops the next loop pass.
+    /// The device name of the LIVE MICROPHONE this radio transmits with, or `None` for the rig's
+    /// own mic — which is the default, and what happens today.
+    pub fn live_mic_device(&self) -> Option<&str> {
+        let id = self.settings.active_radio;
+        let p = self.settings.radios.iter().find(|p| p.id == id)?;
+        let d = p.live_mic_device.trim();
+        (!d.is_empty()).then_some(d)
+    }
+
+    /// MAY A LIVE MICROPHONE PUT AUDIO ON THE AIR RIGHT NOW?
+    ///
+    /// Asked on EVERY radio-loop tick, not once at the start of an over. A live mic is — like
+    /// RTTY's continuous TX and unlike every other transmission in this app — an over with no
+    /// precomputed end: it lasts as long as the operator holds the key. Everything else knows when
+    /// it will finish, which is why everything else can be gated once. This cannot.
+    ///
+    /// So the answer is recomputed from scratch each time, and every one of these is a live gate
+    /// rather than a remembered decision:
+    ///
+    ///  * the operator is actually holding PTT (`manual_ptt`, which itself re-checks `tx_enabled`
+    ///    and `tx_allowed` on read, so a knob turned into a locked segment mid-over drops it);
+    ///  * a live mic is actually chosen for this radio — the rig's own mic streams nothing;
+    ///  * the over has not outrun [`Self::LIVE_MIC_MAX_MS`].
+    ///
+    /// Starting audio beside the key and trusting the stop path to end it is how room audio
+    /// reaches the air. The stop path is not trusted here; the gate is.
+    pub fn live_mic_may_stream(&self, now_ms: f64, started_ms: Option<f64>) -> bool {
+        if !self.manual_ptt() {
+            return false;
+        }
+        if self.live_mic_device().is_none() {
+            return false;
+        }
+        // THE HARD CEILING, and it is deliberately not extendable by anything the operator does.
+        // A stuck PTT — a wedged pointer capture, a key held by a jammed foot switch, a UI that
+        // stopped getting pointerup — is indistinguishable from a long transmission except by the
+        // clock. `RTTY_MAX_LATCH_MS` exists for exactly this and this uses the same number, so the
+        // two open-ended transmissions in the app cannot drift apart.
+        match started_ms {
+            Some(t) if now_ms - t > Self::LIVE_MIC_MAX_MS as f64 => false,
+            _ => true,
+        }
+    }
+
+    /// The hard ceiling on ONE continuous live-mic over, in milliseconds.
+    ///
+    /// The same value as [`Self::RTTY_MAX_LATCH_MS`] and for the same reason: these are the only
+    /// two transmissions here with no precomputed end, so a stuck one must expire on a wall clock
+    /// rather than on anything the operator or the UI is still doing.
+    pub const LIVE_MIC_MAX_MS: u64 = Self::RTTY_MAX_LATCH_MS;
+
     pub fn manual_ptt(&self) -> bool {
         (self.manual_ptt || self.broker_ptt) && self.tx_enabled && self.tx_allowed()
     }
@@ -16831,6 +16882,68 @@ mod tests {
     /// instead — and on the case the feature exists for, a backup carried to another machine, that
     /// is radios 2..n, the routing rules and the blocked-call list gone, written durably, under a
     /// dialog that says "This cannot be undone".
+    /// Every gate on a live-mic over must be able to CLOSE it, not merely refuse to open it.
+    ///
+    /// This is the property that matters for an open-ended transmission. A gate checked once at the
+    /// start is a decision; a gate checked every tick is a guarantee — and the difference only
+    /// shows up when something changes mid-over, which is exactly when it matters.
+    #[test]
+    fn every_live_mic_gate_closes_mid_over_and_not_merely_at_the_start() {
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.add_radio();
+        let id = eng.settings().active_radio;
+        if let Some(p) = eng.settings.radios.iter_mut().find(|p| p.id == id) {
+            p.live_mic_device = "Headset".to_string();
+        }
+        eng.set_tx_enabled(true);
+        eng.set_ptt(true);
+        assert!(
+            eng.live_mic_may_stream(1_000.0, Some(0.0)),
+            "fixture: holding PTT with a live mic chosen, inside the ceiling"
+        );
+
+        // 1. THE KEY GOES UP. Nothing else changes.
+        eng.set_ptt(false);
+        assert!(
+            !eng.live_mic_may_stream(1_000.0, Some(0.0)),
+            "releasing PTT must stop the stream on the very next tick"
+        );
+        eng.set_ptt(true);
+
+        // 2. TRANSMIT IS SWITCHED OFF mid-over — Stop TX, the watchdog, a logger's Halt Tx.
+        eng.set_tx_enabled(false);
+        assert!(
+            !eng.live_mic_may_stream(1_000.0, Some(0.0)),
+            "TX going off must stop the stream, not merely prevent the next one"
+        );
+        eng.set_tx_enabled(true);
+        eng.set_ptt(true);
+
+        // 3. THE OPERATOR GOES BACK TO THE RIG'S MIC. No device, nothing to stream.
+        if let Some(p) = eng.settings.radios.iter_mut().find(|p| p.id == id) {
+            p.live_mic_device.clear();
+        }
+        assert!(
+            !eng.live_mic_may_stream(1_000.0, Some(0.0)),
+            "the rig's own mic streams nothing from this computer"
+        );
+        if let Some(p) = eng.settings.radios.iter_mut().find(|p| p.id == id) {
+            p.live_mic_device = "Headset".to_string();
+        }
+
+        // 4. THE CEILING. A stuck key is indistinguishable from a long over except by the clock,
+        //    and nothing the operator or the UI does may extend it.
+        let over = Engine::LIVE_MIC_MAX_MS as f64;
+        assert!(
+            eng.live_mic_may_stream(over, Some(0.0)),
+            "an over exactly at the ceiling is still legal"
+        );
+        assert!(
+            !eng.live_mic_may_stream(over + 1.0, Some(0.0)),
+            "past the ceiling the stream ends, however hard PTT is held"
+        );
+    }
+
     #[test]
     fn a_restored_bundle_brings_its_own_roster_and_a_form_save_does_not() {
         // A station with ONE radio, live.
@@ -28142,6 +28255,7 @@ mod tests {
             flex_radio_ip: p.flex_radio_ip.clone(),
             flex_native_pan: p.flex_native_pan,
             flex_native_audio: p.flex_native_audio,
+            live_mic_device: String::new(),
         };
 
         let mut e = Engine::new("KD9TAW", "EN52", 0);
