@@ -23,11 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   been saved at all. None of the three is editable in Settings; they only travelled in the form,
   so a save could only ever undo them. Restoring a backup still sets all three from the backup.
 
-- **The Needed board respects the New-grid band choice again.** With "New grid" set to VHF+, HF
-  grid needs were listed on the board anyway. The board had been switched to an unfiltered list
-  so that turning the CW or Phone features off would stop hiding needs there — right on its own
-  terms, but it dropped the band choice with it. The board's own mode filters still show
-  everything; the band choice applies again.
+- **The Needed board respects the New-grid band choice.** With "New grid" set to VHF+, HF grid
+  needs were still listed on the board. The band choice reached the roster and the decode rows
+  when it was added, but not the board, which had stopped sharing that code path earlier so that
+  turning the CW or Phone features off would not hide needs there. Both hold now: the board's own
+  mode filters still show everything, and the band choice applies.
 
 - **A contact the run gave up on can still be logged.** If a station answered you, exchanged
   reports and then went quiet — a club station working several people at once does this

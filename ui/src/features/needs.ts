@@ -247,12 +247,18 @@ export function visibleNeeds(
  * listed there — but "new grid on HF" is an operator INTENT that holds on every surface, the
  * board included.
  *
- * Asking for it by name is the point. This started as `visibleNeeds(needAlerts, modes, scopes)`
- * in App; when the mode half turned out to be wrong for the board it was replaced with the raw
- * `needAlerts`, and the band scopes went with it silently — one call did two jobs, and there was
- * no way to keep one and drop the other (operator, 2026-08-23: "I am seeing dx grids being shown
- * again on the needed board, even though I have new grid in settings set to VHF +6m"). Anyone
- * changing the board's mode behaviour again edits this function, where the scopes are visible.
+ * Asking for it by name is the point, and the ORDER of events is why. The board was handed the
+ * raw `needAlerts` on 2026-06-29, correctly, so that turning the CW or Phone features off would
+ * stop hiding needs there. The band scopes were added to `visibleNeeds` two months LATER
+ * (2026-08-18) for the roster and the decode rows — and the board, no longer calling it, never
+ * picked them up. Nobody broke it; one call grew a second job that a caller had already opted
+ * out of wholesale, and there was no way to take one without the other.
+ *
+ * That is the failure mode this name exists to prevent: anyone changing the board's mode
+ * behaviour edits THIS function, where the scopes are visible, instead of swapping a prop and
+ * silently dropping whatever else `visibleNeeds` has grown since. (Operator, 2026-08-23: "I am
+ * seeing dx grids being shown again on the needed board, even though I have new grid in settings
+ * set to VHF +6m" — reasonable to read as a regression, and it never was one.)
  */
 export function boardNeeds(alerts: NeedAlert[], scopes?: NeedBandScopes): NeedAlert[] {
   return visibleNeeds(alerts, { cw: true, phone: true }, scopes)

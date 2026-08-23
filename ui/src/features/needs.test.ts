@@ -642,12 +642,13 @@ describe('the mode label the Needed board shows never changes where a click land
 // on the needed board, even though I have new grid in settings set to VHF +6m. This seems
 // like this has broke from a fixed state before."
 //
-// It had, and this is the mechanism. The 2026-08-18 fix routed the surfaces through
-// `visibleNeeds`, which does TWO jobs in one pass: the CW/Phone mode-FEATURE gate and the
-// per-type band scopes. The Needed board was later handed the raw, un-gated list so that a
-// disabled CW/Phone feature would stop hiding rows there — correct on its own terms (the
-// board's own filter bar owns mode visibility) — but it dropped the band scopes with it,
-// because one call did both jobs and there was no way to ask for half of it.
+// It had not, quite — and the real order is the interesting part. The board was handed the raw,
+// un-gated list on 2026-06-29 so a disabled CW/Phone feature would stop hiding rows there, which
+// was right: the board's own filter bar owns mode visibility. The band scopes were added to
+// `visibleNeeds` two months LATER, for the roster and the decode rows, and the board — no longer
+// calling it — never picked them up. So it read as a regression to an operator who had watched
+// the icons get fixed elsewhere, and no commit ever broke it: one call grew a second job that
+// this caller had already opted out of wholesale.
 //
 // `boardNeeds` is that half, named: scopes intact, mode gate neutral. The board asks for it
 // by name now, so the next person fixing mode visibility cannot take the scopes along by
