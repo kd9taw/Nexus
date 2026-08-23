@@ -79,6 +79,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus tells you when the radio is armed to transmit at 0% power.** A rig at zero still keys,
+  still shows TX, and still looks like a perfectly normal over from where you are sitting — it is
+  silent only to the station you are working, so there is nothing to notice. The status lane now
+  says NO RF POWER while that is true, and the diagnostic log records it. Nothing is changed on
+  your behalf: the power is not raised, not clamped, and no transmission is held back. Worth
+  knowing on a Yaesu in particular, which keeps a separate power level for SSB, DATA, CW and AM,
+  so a level you set in one mode does not follow the rig into another.
+
 - **The log table shows your Comment, and marks rows carrying a private Note.** Both fields
   could be typed and saved, and neither was ever shown again — the only way to read a note was
   to open a contact you had no way of knowing held one. The Comment now has its own column, and
