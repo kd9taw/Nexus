@@ -1134,13 +1134,27 @@ fn runs_ok(bin: &std::ffi::OsStr) -> bool {
 fn runs_ok_within(bin: &std::ffi::OsStr, budget: std::time::Duration) -> bool {
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
-    // ⚠️ "COULD NOT FORK RIGHT NOW" IS NOT "THIS BINARY IS UNUSABLE", and collapsing the two is
-    // the same mistake EINTR was on the CAT read path. `fork` fails with EAGAIN when the system is
-    // briefly out of process or thread slots — nothing whatever to do with the candidate — and
-    // this function's verdict decides whether Nexus ABANDONS an operator's deliberately chosen
-    // rigctld and substitutes its own guess. Rust surfaces EAGAIN as `WouldBlock`; `Interrupted`
-    // is the signal case. Both are transient, so retry once after a moment rather than condemning
-    // the binary. ENOENT / EACCES / bad arch are real and still answer immediately.
+    // ⚠️ "COULD NOT EXEC RIGHT NOW" IS NOT "THIS BINARY IS UNUSABLE", and collapsing the two is
+    // the same mistake EINTR was on the CAT read path. This function's verdict decides whether
+    // Nexus ABANDONS an operator's deliberately chosen rigctld and substitutes its own guess, so
+    // every transient must be retried rather than answered.
+    //
+    // Three are transient, and the third is the one that was actually biting:
+    //   WouldBlock   EAGAIN from `fork` — the system is briefly out of process/thread slots.
+    //   Interrupted  EINTR — a signal landed mid-call.
+    //   ExecutableFileBusy  ETXTBSY — someone holds the file OPEN FOR WRITING. On Linux `execve`
+    //                refuses that, and the writer does not have to be us: a fork in ANOTHER
+    //                thread between a `File::create` and its close hands the child an inherited
+    //                write descriptor, and the exec fails until that child's fd goes away. So it
+    //                is a property of the moment, not of the binary — and it is exactly what a
+    //                fresh install hits, where Nexus has just unpacked rigctld and is probing it.
+    //
+    // ETXTBSY was found by a flaky test rather than reasoned out: the assertion prints the raw
+    // spawn error, and after 12 runs it said `kind=ExecutableFileBusy err=Text file busy`. An
+    // earlier pass had guessed a fork/timeout cause and its own control DISPROVED it. Retrying
+    // the wrong errno would have left this exactly as broken while looking fixed.
+    //
+    // ENOENT / EACCES / bad arch are real answers about the binary and still return immediately.
     let spawn = |_: ()| {
         Command::new(bin)
             .arg("--version")
@@ -1154,13 +1168,25 @@ fn runs_ok_within(bin: &std::ffi::OsStr, budget: std::time::Duration) -> bool {
         Err(e)
             if matches!(
                 e.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                std::io::ErrorKind::WouldBlock
+                    | std::io::ErrorKind::Interrupted
+                    | std::io::ErrorKind::ExecutableFileBusy
             ) =>
         {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            match spawn(()) {
-                Ok(c) => c,
-                Err(_) => return false,
+            // A few short retries, not one: ETXTBSY lasts as long as some other process holds
+            // the write descriptor, which is a fork's worth of time and can outlast a single
+            // 50 ms nap. Bounded so a genuinely busy file still answers quickly.
+            let mut got = None;
+            for _ in 0..5 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if let Ok(c) = spawn(()) {
+                    got = Some(c);
+                    break;
+                }
+            }
+            match got {
+                Some(c) => c,
+                None => return false,
             }
         }
         Err(_) => return false, // not executable at all (ENOENT / EACCES / bad arch)

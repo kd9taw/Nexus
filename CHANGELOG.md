@@ -5,9 +5,17 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] — 2026-08-23
 
 ### Fixed
+
+- **Nexus no longer gives up on the rigctld you chose because the machine was busy for a moment.**
+  Deciding whether a rigctld works meant running it once, and any failure to start it counted
+  against the binary — including the failures that say nothing about it at all. A system briefly
+  out of process slots, a signal landing mid-call, or the file still being held open by the
+  installer that had just written it would all read as "this rigctld is no good", and Nexus would
+  quietly substitute its own instead of the one you pointed it at. Those three are now retried;
+  a rigctld that genuinely is not there or not runnable still answers straight away.
 
 - **A station that sends you RR73 gets your 73 back.** If DXpedition "Hound" mode had been
   left switched on, every ordinary contact inherited the Fox rule — the QSO ended on the other
