@@ -4168,9 +4168,26 @@ impl Engine {
         self.app.set_radio(app_dial, &app_band, &app_sideband);
         // Re-derive the live timing/tuning state from the saved settings.
         self.tx_parity = if self.settings.tx_even { 0 } else { 1 };
-        self.tx_offset_hz = self.settings.tx_offset_hz;
-        self.rx_offset_hz = self.settings.rx_offset_hz;
-        self.hold_tx_freq = self.settings.hold_tx_freq;
+        // ...but NOT these three on a form save. They are COCKPIT controls — the waterfall's
+        // RX/TX markers and the Hold Tx button — and the Settings form does not edit any of
+        // them anywhere (verified against SettingsPanel.tsx); it only carries them. Their
+        // setters return an `AppSnapshot`, never `Settings`, so every open panel's copy goes
+        // stale the moment the operator drags a marker or presses Hold, and posting that copy
+        // back reverted the operator's live state and then PERSISTED the revert — which is why
+        // it looked like a failure to save (operator report 2026-08-23: "if I set hold tx in
+        // ft, it should survive a nexus restart"; the round trip through settings.json was
+        // fine all along). Same carve-out as the roster directly below, for the same reason: a
+        // stale panel must not revert what the operator just did. A RESTORE still takes all
+        // three from the bundle — there the incoming settings are the whole truth.
+        if keep_live_roster {
+            self.settings.tx_offset_hz = self.tx_offset_hz;
+            self.settings.rx_offset_hz = self.rx_offset_hz;
+            self.settings.hold_tx_freq = self.hold_tx_freq;
+        } else {
+            self.tx_offset_hz = self.settings.tx_offset_hz;
+            self.rx_offset_hz = self.settings.rx_offset_hz;
+            self.hold_tx_freq = self.settings.hold_tx_freq;
+        }
         // A settings save reconciles the operating mode with the Field Day
         // master switch `fd_active`, which is authoritative over whether the
         // engine operates in Field Day (spec §1). This is the one place a save
@@ -22092,6 +22109,103 @@ mod tests {
         assert_eq!(snap.radio.rx_offset_hz, 200.0);
         assert_eq!(snap.radio.tx_offset_hz, 4000.0);
         assert!(snap.radio.hold_tx_freq);
+    }
+
+    /// Operator report (2026-08-23): "if I set hold tx in ft, it should survive a nexus restart".
+    ///
+    /// The full round trip, because every link looked right in isolation and the loss had to be
+    /// at a seam: toggle -> Settings -> settings.json -> load -> a NEW engine -> the snapshot the
+    /// button actually reads. `with_settings` deliberately force-resets `beacon` at launch, so
+    /// "a launch reset eats it" was a live theory and this is what rules it in or out.
+    #[test]
+    fn hold_tx_freq_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("nexus-holdtx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        assert!(!e.snapshot().radio.hold_tx_freq, "control: it starts OFF");
+        e.set_hold_tx_freq(true);
+        e.settings().save(&path).unwrap();
+
+        // The restart.
+        let loaded = Settings::load(&path);
+        assert!(
+            loaded.hold_tx_freq,
+            "the setting must round-trip through settings.json"
+        );
+        let e2 = Engine::with_settings(loaded);
+        assert!(
+            e2.snapshot().radio.hold_tx_freq,
+            "and the engine must come up HOLDING — this is what the button reads"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Operator report (2026-08-23), the SAME report: Hold Tx does not survive a restart.
+    ///
+    /// The round trip above passes, so the loss is not persistence — it is a CLOBBER.
+    /// `set_hold_tx_freq` returns an `AppSnapshot`, never `Settings`, so every panel holding a
+    /// `Settings` copy keeps the value the toggle had when that copy was fetched. A form save
+    /// posts the WHOLE struct back, and `apply_settings_inner` re-derived all three of these
+    /// from it — so any settings save reverted the operator's cockpit state, and the reverted
+    /// value is what got persisted and came back after the restart.
+    ///
+    /// None of the three is editable anywhere in the Settings form (verified against
+    /// SettingsPanel.tsx): they ride in the payload as pure cargo, so a form save can only ever
+    /// revert them and can never legitimately set them. Same shape as the roster carve-out this
+    /// function already makes, and for the same reason.
+    #[test]
+    fn a_settings_form_save_cannot_revert_hold_tx_or_the_audio_offsets() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_hold_tx_freq(true);
+        e.set_tx_offset(1800.0);
+        e.set_rx_offset(900.0);
+
+        // The stale copy every panel holds.
+        let stale = Settings::default();
+        assert!(
+            !stale.hold_tx_freq,
+            "control: the stale form really does say OFF"
+        );
+        assert_eq!(
+            stale.tx_offset_hz, 1500.0,
+            "control: and really does carry the default offsets"
+        );
+        e.apply_settings(stale);
+
+        let snap = e.snapshot();
+        assert!(
+            snap.radio.hold_tx_freq,
+            "Hold Tx is a cockpit control — a form save must not revert it"
+        );
+        assert_eq!(snap.radio.tx_offset_hz, 1800.0, "nor the TX offset");
+        assert_eq!(snap.radio.rx_offset_hz, 900.0, "nor the RX offset");
+    }
+
+    /// The other direction, which is what makes the carve-out a carve-out and not a leak: a
+    /// RESTORED BACKUP is the authority for everything in it, these three included.
+    #[test]
+    fn a_restore_does_take_hold_tx_and_the_offsets_from_the_bundle() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_hold_tx_freq(true);
+        e.set_tx_offset(1800.0);
+
+        let bundle = Settings {
+            hold_tx_freq: false,
+            tx_offset_hz: 1200.0,
+            ..Settings::default()
+        };
+        e.apply_restored_settings(bundle);
+
+        let snap = e.snapshot();
+        assert!(
+            !snap.radio.hold_tx_freq,
+            "a restore replaces the station, so the bundle wins"
+        );
+        assert_eq!(snap.radio.tx_offset_hz, 1200.0);
     }
 
     #[test]
