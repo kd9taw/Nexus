@@ -11484,7 +11484,16 @@ select.settings-input {
      fractional share shrinks below the button cluster and .log-cell{overflow:hidden} + justify-end
      clip the leading QRZ/ClubLog push buttons off the LEFT, unclickable. A deterministic px floor
      (not max-content) keeps the empty header cell aligned with the button-filled data cells. */
-  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr minmax(160px, 0.8fr);
+  grid-template-columns: 1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1.6fr 0.9fr 0.7fr 1.4fr minmax(160px, 0.8fr);
+}
+.log-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.log-note-flag {
+  margin-right: var(--space-1);
 }
 .log-country {
   overflow: hidden;

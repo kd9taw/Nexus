@@ -222,3 +222,75 @@ describe('POTA park on logbook edit (#60)', () => {
     expect(record.ota.theirRef).toBe('US-1234')
   })
 })
+
+// OPERATOR REPORT (2026-08-23): "Notes (shared) are not visible in the program... They should
+// also be visible in the Log viewer. I've never found anywhere that 'Private' note show up
+// either."
+//
+// Half right, and this is the half that was wrong. Both fields were WRITE-ONLY in the log
+// table: the row editor took a Comment and multi-line Notes, saved them, and the table showed
+// neither back — so the only way to read a note was to open the row you had no way of knowing
+// held one. (The callsign-recall card DOES surface them, which is the other half of the
+// report; that path has its own tests in RecallPanel.test.tsx.)
+describe('the log table shows the comment and flags a private note', () => {
+  function withNotes(over: { comment?: string | null; notes?: string | null }) {
+    return [{ ...fakeLog(1)[0], ...over }]
+  }
+
+  it('shows the shared comment inline', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+      withNotes({ comment: 'Rag chew about his 6-el yagi' }),
+    )
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-note')).not.toBeNull())
+    expect((container.querySelector('.log-note') as HTMLElement).textContent).toContain(
+      'Rag chew about his 6-el yagi',
+    )
+  })
+
+  it('flags a private note with 📝 and carries the text in the tooltip', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+      withNotes({ comment: null, notes: 'Runs a KX3 at 5W from a sailboat' }),
+    )
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-note-flag')).not.toBeNull())
+    const cell = container.querySelector('.log-note') as HTMLElement
+    // The marker is visible; the multi-line text itself lives in the tooltip, because a
+    // multi-line note in a one-line table cell is how a row height starts fighting the
+    // virtualizer's measurement.
+    expect(cell.textContent).toContain('📝')
+    expect(cell.title).toContain('Runs a KX3 at 5W from a sailboat')
+  })
+
+  it('POSITIVE CONTROL — a row with neither shows no marker and no tooltip', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+      withNotes({ comment: null, notes: null }),
+    )
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-note')).not.toBeNull())
+    const cell = container.querySelector('.log-note') as HTMLElement
+    expect(container.querySelector('.log-note-flag')).toBeNull()
+    expect(cell.title).toBe('')
+  })
+
+  it('keeps the header and the data rows on the SAME track count', async () => {
+    // The row is a CSS grid with a fixed template; a header cell added without its data cell
+    // (or the reverse) silently shears every column after it. Counting both is the cheap guard
+    // that a rendered-structure test can actually make in jsdom.
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(2))
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+    const head = container.querySelectorAll('.logbook-row.head > .log-cell').length
+    const row = container.querySelectorAll('.logbook-row:not(.head)')[0].querySelectorAll(':scope > .log-cell').length
+    expect(row).toBe(head)
+  })
+})
+

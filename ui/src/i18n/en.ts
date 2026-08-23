@@ -666,6 +666,10 @@ export const EN = {
   'logbook.field.qth.label': 'QTH',
   // Also prose — QTH is free text, so the example is a place a reader recognises.
   'logbook.field.qth.placeholder': 'Dayton, OH',
+  'logbook.column.notes': 'Notes',
+  'logbook.row.notes.title': 'Comment (shared on the QSL)',
+  'logbook.row.notes.private': 'Private note',
+  'logbook.row.notes.aria': 'has a private note',
   'logbook.field.comment.label': 'Comment',
   'logbook.field.comment.placeholder': 'Shared on the QSL',
   'logbook.field.notes.label': 'Notes',

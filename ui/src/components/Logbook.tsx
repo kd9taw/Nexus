@@ -1203,6 +1203,9 @@ export function Logbook({
           {th(t('logbook.column.park'), 'park')}
           {/* The QSL column's header is the Q-code itself, not a word for it. */}
           {th('QSL', 'qsl')}
+          {/* Not sortable: free text, and sorting a log by remark answers no question an
+              operator asks. Plain header cell, same shape as the actions column's. */}
+          <span className="log-cell" role="columnheader">{t('logbook.column.notes')}</span>
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
@@ -1327,6 +1330,29 @@ export function Logbook({
                       ✉{q.qslSent.via ?? ''}
                     </span>
                   )}
+                </span>
+                {/* Comment + private note. Both were WRITE-ONLY here until 2026-08-23: the edit
+                    form took them and the table never showed them back, so the only way to see
+                    a note was to open the row you already had to guess held one (operator:
+                    "how else do you remember the things you talked about in the last QSOs?").
+                    The comment is short by design and shows inline; the private note is
+                    multi-line and gets a 📝 marker with the text in the tooltip, the same
+                    idiom the callsign-recall card already uses. */}
+                <span
+                  className="log-cell log-note"
+                  title={[
+                    (q.comment ?? '').trim() && `${t('logbook.row.notes.title')}: ${(q.comment ?? '').trim()}`,
+                    (q.notes ?? '').trim() && `${t('logbook.row.notes.private')}: ${(q.notes ?? '').trim()}`,
+                  ]
+                    .filter(Boolean)
+                    .join('\n\n')}
+                >
+                  {(q.notes ?? '').trim() && (
+                    <span className="log-note-flag" aria-label={t('logbook.row.notes.aria')}>
+                      📝
+                    </span>
+                  )}
+                  {(q.comment ?? '').trim() || ((q.notes ?? '').trim() ? '' : '—')}
                 </span>
                 <span className="log-cell log-rowactions">
                   <button
