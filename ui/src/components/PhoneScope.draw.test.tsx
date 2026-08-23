@@ -236,22 +236,24 @@ function peakTraceX(): number {
 
 // The row's carrier is bin 200 of 512 over 0–4000 Hz = 1565 Hz of receiver audio.
 //
-// The carrier-centered axis is ASYMMETRIC: W = 4000 Hz of occupied sideband plus a W/3 =
-// 1333.3 Hz guard band on the empty side, so 200 px carry 5333.3 Hz at 26.67 Hz/px. Axis 0
-// (the dial) is therefore 1333.3/5333.3 = the 1/4 mark on USB — x=50 — and its mirror x=150
-// on LSB. The 1565 Hz carrier lands at (1333.3+1565.6)/26.67 = x=109, and on LSB at its
-// reflection about the dial, 150−59 = x=91.
+// The carrier-centered axis is ASYMMETRIC: W = 4000 Hz of occupied sideband plus a W/8 =
+// 500 Hz guard band on the empty side, so 200 px carry 4500 Hz at 22.5 Hz/px. Axis 0 (the
+// dial) is therefore 500/4500 = the 1/9 mark on USB — x=22 — and its mirror x=178 on LSB.
+// The 1565.6 Hz carrier lands at (500+1565.6)/22.5 = x=92, and on LSB at its reflection
+// about the dial, (4000−1565.6)/22.5 = x=108.
 //
-// The numbers these rule out: x=100 for the dial and 139/61 for the peak (the OLD symmetric
-// ±4000 axis, which gave the voice ~30% of the panel), and x=78 for both sidebands (the
-// plain 0–4000 audio window, dial off the left edge).
-const DIAL_X_USB = 50
-const DIAL_X_LSB = 150
-const PEAK_X_USB = 109
-const PEAK_X_LSB = 91
+// The numbers these rule out: x=100 for the dial and 139/61 for the peak (the OLDEST
+// symmetric ±4000 axis, which gave the voice ~30% of the panel); x=50 and 109/91 (the W/3
+// guard that shipped 2026-08-16 to 1.8.0, which the operator read as the dial sitting off to
+// the left of its own signal); and x=78 for both sidebands (the plain 0–4000 audio window,
+// dial off the left edge entirely).
+const DIAL_X_USB = 22
+const DIAL_X_LSB = 178
+const PEAK_X_USB = 92
+const PEAK_X_LSB = 108
 
 describe('carrier-centered Phone axis', () => {
-  it('draws the dial at the 1/4 mark of the canvas (USB), labelled', async () => {
+  it('draws the dial at the 1/9 mark of the canvas (USB), labelled', async () => {
     stubRect()
     render(
       <PhoneScope transmitting={false} theme="dark" viewLoHz={0} viewHiHz={4000} carrierCentered />,
@@ -263,7 +265,7 @@ describe('carrier-centered Phone axis', () => {
 
     // The line is drawn from axis coordinate 0, not from a second placement constant — so
     // it CANNOT disagree with the axis the row is painted on, whichever mark that puts it at.
-    expect(verticalRules(), 'the carrier line lands on the 1/4 mark').toContain(DIAL_X_USB)
+    expect(verticalRules(), 'the carrier line lands on the 1/9 mark').toContain(DIAL_X_USB)
     const label = ops.filter((o) => o.op === 'fillText')
     expect(label.length, 'the line is labelled, like a rig marks its dial').toBeGreaterThan(0)
     expect(Math.abs(label[0].args[0] - DIAL_X_USB), 'the label sits at the line').toBeLessThan(12)
@@ -340,9 +342,9 @@ describe('carrier-centered Phone axis', () => {
     // The mirror itself, and not merely "something is on the left": the same carrier that
     // paints at x=109 on USB must paint at its reflection about the dial.
     expect(Math.abs(peakTraceX() - PEAK_X_LSB), `peak at ${peakTraceX()}, want ${PEAK_X_LSB}`).toBeLessThanOrEqual(1)
-    // …and the axis flips with it: the dial is at the 3/4 mark, so the guard band is the
+    // …and the axis flips with it: the dial is at the 8/9 mark, so the guard band is the
     // strip ABOVE it. Derived from axis 0 by the same code that drew the USB line at 1/4.
-    expect(verticalRules(), 'the dial is the 3/4 mark on LSB').toContain(DIAL_X_LSB)
+    expect(verticalRules(), 'the dial is the 8/9 mark on LSB').toContain(DIAL_X_LSB)
     // The AGC/readout window is indexed in ROW Hz, and a mirrored axis is not — its bounds
     // are the row's negated and swapped. A symmetric ±W axis hid that (it negates to
     // itself); an asymmetric one does not, and unwound it windows the wrong third of the

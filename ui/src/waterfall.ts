@@ -945,15 +945,24 @@ export function sidebandSign(sideband: string): 1 | -1 {
  * so an LSB signal paints LEFT of the dial. CW keeps the one-sided window (see cwScopeWindow),
  * so this stays an explicit opt-in.
  *
- * The axis is ASYMMETRIC — [−W/3, +W] on USB, mirrored on LSB — and that is the fix for the
+ * The axis is ASYMMETRIC — [−W/8, +W] on USB, mirrored on LSB — and that is the fix for the
  * second half of the same report (screenshot, 2026-08-16: "the voice is compressed into one
  * section"). It shipped as ±W, which reads well on a rig streaming real RF but not here: this
  * feed is DEMODULATED RECEIVER AUDIO, one-sided by construction, so half the panel was a side
- * that can never carry a signal and the voice got ~30% of the width. Giving the occupied
- * sideband 3/4 of the axis triples the detail; the W/3 guard band is what keeps the dial a
- * reference LINE rather than the edge it was before carrier-centering, and it is display-only —
- * the row is still requested (and read) as 0..W, so the guard has no data and paints as the
- * out-of-row floor (see PhoneScope's column loop).
+ * that can never carry a signal and the voice got ~30% of the width.
+ *
+ * The guard band is what keeps the dial a reference LINE rather than the edge it was before
+ * carrier-centering. It was W/3 until 2026-08-23, when the operator read the result as a fault
+ * in the opposite direction: "the dial looks off to the left... it looks mismatched from the
+ * signal I am tuned into." Nothing was wrong — on USB the dial IS the suppressed carrier, so the
+ * voice sits entirely above it and the dial is always at the LOW edge of the energy, never
+ * centred in it — but a third of the panel standing empty beside the marker reads as the marker
+ * being in the wrong place. W/8 keeps a clearly visible gap (the dial lands at the 1/9 mark, and
+ * on a 1900 px panel that is still ~210 px of space) while giving the voice 8/9 of the width
+ * instead of 3/4.
+ *
+ * It is display-only either way — the row is still requested (and read) as 0..W, so the guard has
+ * no data and paints as the out-of-row floor (see PhoneScope's column loop).
  *
  * Native-panadapter rows span ABSOLUTE RF Hz, but the row center only APPROXIMATES the
  * dial: the Flex pan recenters only after >500 Hz dial moves (RETUNE_EPS), and an Icom
@@ -980,12 +989,14 @@ export function scopeView(
 ): { loHz: number; hiHz: number; markerAtHz: number | null; mirrored: boolean } {
   if (!isRfScopeSource(source)) {
     if (carrierCentered) {
-      // W of occupied sideband + W/3 of guard on the empty side, hung on the sideband's hand
-      // (see the header). The dial is axis 0, so it falls at the 1/4 mark on USB and the 3/4
+      // W of occupied sideband + W/8 of guard on the empty side, hung on the sideband's hand
+      // (see the header). The dial is axis 0, so it falls at the 1/9 mark on USB and the 8/9
       // mark on LSB WITHOUT anyone stating that — every consumer derives its pixel from these
       // two bounds, and there is no second constant that could drift out of step with them.
+      // That is why the DIAL line, the frequency ticks and a click all agree by construction:
+      // there is exactly one definition of where the dial is.
       const width = Math.max(50, Math.abs(viewHiHz - viewLoHz))
-      const guard = width / 3
+      const guard = width / 8
       return {
         loHz: sign < 0 ? -width : -guard,
         hiHz: sign < 0 ? guard : width,
@@ -1019,7 +1030,7 @@ export function scopeView(
  *
  * ⚠️ THE AXIS MEANS TWO DIFFERENT THINGS AND THAT IS THE WHOLE OF THIS FUNCTION. For an AUDIO row
  * on the carrier-centred axis, [`scopeView`] returns RF OFFSETS from the dial — the dial is axis
- * zero, which is what puts it at the 1/4 mark on USB and the 3/4 mark on LSB. For a NATIVE RF
+ * zero, which is what puts it at the 1/9 mark on USB and the 8/9 mark on LSB. For a NATIVE RF
  * panadapter row it already returns absolute RF, because that branch built its bounds from
  * `center + sign*(f - anchor)` with the dial as centre. Adding the dial in the second case would
  * label a 14 MHz scope at 28 MHz.

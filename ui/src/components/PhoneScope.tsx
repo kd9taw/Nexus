@@ -105,11 +105,11 @@ interface Props {
    * (cwScopeWindow) so individual carriers are readable for tone placement. On a native
    * RF panadapter row the same window is mapped onto RF around the dial (scopeView), so
    * the width still applies. With `carrierCentered` the width is the OCCUPIED SIDEBAND's,
-   * and the axis adds a W/3 guard band on the empty side. */
+   * and the axis adds a W/8 guard band on the empty side. */
   viewLoHz?: number
   viewHiHz?: number
   /** PHONE only: draw the audio row on a rig-style axis — RF offset from the dial, with the
-   * dial (audio 0 Hz, the suppressed carrier) at the 1/4 mark on USB, the 3/4 mark on LSB,
+   * dial (audio 0 Hz, the suppressed carrier) at the 1/9 mark on USB, the 8/9 mark on LSB,
    * and the occupied sideband taking the other 3/4 of the panel. Off = the plain audio
    * window, which is what CW uses (its axis is centered on the PITCH instead — see
    * cwScopeWindow). Never applies to a native RF row; those are already dial-centered. */
@@ -791,15 +791,17 @@ export function PhoneScope({
       ctx.lineWidth = Math.max(1, scaleY)
       ctx.stroke()
 
-      // ---- Carrier line (Phone): the DIAL, at the 1/4 mark (USB) or the 3/4 mark (LSB) ----
+      // ---- Carrier line (Phone): the DIAL, at the 1/9 mark (USB) or the 8/9 mark (LSB) ----
       //
       // WHY THE GUARD BAND IS ALWAYS QUIET, and it is not a bug to be fixed later. This scope
       // is fed by DEMODULATED RECEIVER AUDIO, which is one-sided: an SSB detector folds the
       // wanted sideband down to 0–3 kHz and throws the image away, so there is no signal on
       // the other side of the carrier to draw. That is why the axis is not centered — a
       // centered dial spent half the panel on that side and squeezed the voice into ~30% of
-      // the width (operator screenshot, 2026-08-16). W/3 of empty is the whole cost of having
-      // the dial read as a line rather than an edge. A radio that streams its OWN panadapter
+      // the width (operator screenshot, 2026-08-16). The guard band is the whole cost of having
+      // the dial read as a line rather than an edge, and it was cut from W/3 to W/8 on 2026-08-23:
+      // a third of the panel standing empty beside the marker read as the marker being misplaced,
+      // when in fact a USB dial belongs at the LOW edge of its own voice. A radio that streams its OWN panadapter
       // (Flex, Icom CI-V) sends real RF and genuinely fills both sides; that feed takes the RF
       // branch in scopeView and never reaches this code.
       //

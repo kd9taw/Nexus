@@ -227,7 +227,7 @@ const DSP_FUNCS = [
 ] as const
 
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
- *  is the rig's: RF offset from the dial, dial at the 1/4 mark and the sideband filling the
+ *  is the rig's: RF offset from the dial, dial at the 1/9 mark and the sideband filling the
  *  rest (PhoneScope's `carrierCentered`). The engine is asked for exactly 0..width — receiver
  *  audio is one-sided — so the preset is both what is captured and 3/4 of what is shown; the
  *  remaining quarter is scopeView's guard band, which has no data by construction.

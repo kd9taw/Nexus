@@ -3,7 +3,7 @@
 //
 // The trap this pins: the scope axis means TWO DIFFERENT THINGS depending on the feed. On the
 // carrier-centred AUDIO axis, scopeView returns RF OFFSETS from the dial — that is what puts the
-// dial at the 1/4 mark on USB and the 3/4 mark on LSB. On a NATIVE RF panadapter it already
+// dial at the 1/9 mark on USB and the 8/9 mark on LSB. On a NATIVE RF panadapter it already
 // returns absolute RF. Adding the dial in the second case labels a 14 MHz scope at 28 MHz, which
 // is a scale an operator would tune by and be wrong.
 import { describe, it, expect } from 'vitest'
