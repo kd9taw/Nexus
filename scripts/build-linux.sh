@@ -116,12 +116,21 @@ if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   continue. Those are the LGPL license texts Hamlib requires us to distribute; restore with
   'git checkout -- src-tauri/resources/hamlib/'."
 fi
-# ⚠️ BUILT UNSIGNED ON PURPOSE — the AppImage is repacked below, and a signature made here would
-# be a signature over bytes that no longer exist. `latest.json` is generated FROM the `.sig`, so a
-# stale one does not fail the build: it ships, and every Linux self-update then fails verification.
-# Signing moved to after the repack; see `sign_appimage` at the end of this section.
-( cd "$REPO/src-tauri" && env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
-    cargo tauri build --features radio,custom-protocol --bundles deb,appimage )
+# The signature Tauri makes HERE is over bytes the repack below replaces, so it is deleted the
+# moment the build finishes and remade at the end over the final file. `latest.json` is generated
+# FROM the `.sig`, and a stale one does NOT fail anything: it ships, and every Linux self-update
+# then fails verification. Deleting it is what makes that unrepresentable rather than merely
+# avoided — after this point no `.sig` exists until the one made over the shipped bytes.
+#
+# ⚠️ DO NOT go back to withholding the key with `env -u` (which is what this file did until
+# 1.8.0, and it broke the release build). Tauri treats "a pubkey is configured but no private key
+# is present" as a FATAL error, not a warning — it bundles both artifacts and then exits 1 with
+# "A public key has been found, but no private key". Every other platform job passes the key
+# normally; the difference here was never intended.
+( cd "$REPO/src-tauri" && cargo tauri build --features radio,custom-protocol --bundles deb,appimage )
+# Kill the premature signature immediately — before the repack, so there is no window in which a
+# stale one could be picked up by anything.
+find "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true
 ok "Nexus .deb + AppImage"
 
 # --- The Wayland client library has to come from the HOST (#138) --------------------------------
@@ -179,8 +188,16 @@ rm -rf "$work"
 # --- Sign, now that the bytes are final ---------------------------------------------------------
 # Unsigned when no key is present, which is every developer build and was already true before.
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  # It must not exist yet: the build's own signature was deleted above, so anything here would be
+  # a signature over pre-repack bytes and every Linux self-update would fail verification.
+  [ ! -e "$appimage.sig" ] \
+    || die "a .sig already exists before signing — it would cover pre-repack bytes; refusing"
   ( cd "$REPO/src-tauri" && cargo tauri signer sign "$appimage" >/dev/null )
   [ -s "$appimage.sig" ] || die "signing produced no .sig beside the AppImage"
+  # Newer than the file it signs, which is the only cheap check that catches a signature made
+  # over the wrong bytes.
+  [ "$appimage.sig" -nt "$appimage" ] \
+    || die "the .sig is older than the AppImage it signs — refusing to publish it"
   ok "AppImage signed for self-update"
 else
   warn "no TAURI_SIGNING_PRIVATE_KEY — AppImage published unsigned (developer build)"
