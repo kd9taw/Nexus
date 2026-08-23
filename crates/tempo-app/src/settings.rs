@@ -1368,11 +1368,19 @@ pub struct Settings {
     /// the operator deaf would defeat the point of running CQ at all.
     #[serde(default = "default_cq_pause_secs")]
     pub cq_pause_secs: Option<u32>,
-    /// Stop calling a specific station after this many unanswered overs of a directed
-    /// in-QSO step (AwaitReport/Roger/Rr73) — prevents endless recalling a station that
-    /// went silent in FT8/FT4 S&P. `Some(8)` by default (operator preference); `None`
-    /// = stock WSJT-X (repeat until answered, only the Tx watchdog stops it). Distinct
-    /// from `cq_max_calls`, which governs a CQ run.
+    /// Stop calling a station that ANSWERED you and then went silent, after this many
+    /// unanswered overs of the exchange (AwaitRoger/AwaitRr73) — the club station that
+    /// works three people at once and drops you mid-contact. `Some(8)` by default
+    /// (operator preference); `None` = stock WSJT-X (repeat until answered, only the Tx
+    /// watchdog stops it). Distinct from `cq_max_calls`, which governs a CQ run.
+    ///
+    /// ⚠️ IT DOES NOT APPLY WHILE YOU ARE CALLING SOMEBODY WHO HAS NOT COME BACK
+    /// (operator ruling 2026-08-23: "make it not apply to a station I picked
+    /// deliberately"). It used to cover `AwaitReport` as well, which per
+    /// `Station::start` is only ever reached BEFORE the DX has addressed you — so eight
+    /// calls into a DXpedition pileup and Nexus went quiet, which is the whole of DX
+    /// chasing governed by a setting written for the opposite case. The Tx watchdog is
+    /// what bounds a call nobody answers, exactly as upstream.
     #[serde(default = "default_directed_max_calls")]
     pub directed_max_calls: Option<u32>,
     /// Tempo chat: max transmit cycles per directed message before it goes terminal

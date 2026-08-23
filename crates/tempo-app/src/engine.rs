@@ -34061,8 +34061,19 @@ mod tests {
     /// Drive a directed QSO until `call_cap` withholds the over, and return the next
     /// own-parity slot. Asserts the capped state was actually reached — a helper that
     /// silently failed to cap would make every assertion below vacuously true.
+    ///
+    /// ⚠️ THE DX MUST ANSWER FIRST, and that is the point rather than a detail. `call_cap`
+    /// stopped covering `AwaitReport` on 2026-08-23 — a station the operator picked and that
+    /// has never come back is now called for as long as they like, matching stock WSJT-X —
+    /// so the only way to reach a capped state at all is a partner that ENGAGED and then
+    /// stopped advancing. The engaging decode below puts us in `AwaitRr73`, which is still
+    /// capped, and the watchdog property these tests pin is unchanged there.
+    ///
+    /// Both callers run K2DEF working W9XYZ, so the message is written out rather than
+    /// parameterised.
     fn cap_a_directed_call(e: &mut Engine, cap: u32) -> u64 {
-        let mut slot = 0;
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -12", -8)], 0);
+        let mut slot = 1;
         let mut sent = 0;
         while sent < cap + 2 && slot < 40 {
             if !e.poll_tx(slot).is_empty() {

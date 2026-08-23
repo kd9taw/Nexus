@@ -655,21 +655,29 @@ impl Station {
     /// must be withheld. Two independent budgets, each governing its own state(s):
     /// `cq_call_cap` caps a CQ run (CallingCq only; `None` = stock indefinite), and
     /// `call_cap` caps a directed in-QSO step the partner has stopped advancing
-    /// (AwaitReport/AwaitRoger/AwaitRr73/Confirming; the engine defaults it to Some(8)
-    /// so a station that goes silent stops being called). A normal QSO never trips
-    /// `call_cap` because each step advances (resetting tx_count) within a few overs;
-    /// only a stuck/unanswered step accumulates to the cap. Listening/Done never send.
+    /// (AwaitRoger/AwaitRr73; the engine defaults it to Some(8) so a station that ANSWERED
+    /// and then went silent stops being called). A normal QSO never trips `call_cap`
+    /// because each step advances (resetting tx_count) within a few overs; only a stuck
+    /// step accumulates to the cap. Listening/Done never send.
+    ///
+    /// ⚠️ `AwaitReport` IS DELIBERATELY NOT CAPPED (operator ruling 2026-08-23: "make it not
+    /// apply to a station I picked deliberately"). Per [`Station::start`]'s table that state
+    /// is only ever reached when the DX has NOT addressed us yet — any reply starts us
+    /// further along (Grid → AwaitRoger, Report → AwaitRr73, RReport → Confirming). So
+    /// capping it governed the one case the setting was never written for: the operator
+    /// calling somebody who has not come back, which is the whole of DX chasing. It stopped
+    /// a real pileup call at eight overs and went silent (RI1FJL, 2026-08-23) where stock
+    /// WSJT-X repeats until answered. The Tx watchdog still bounds it, as it does upstream.
     fn tx_capped(&self) -> bool {
         match self.state {
             State::CallingCq => self.cq_call_cap.is_some_and(|cap| self.tx_count >= cap),
-            // The establishing steps of a directed QSO — calling a station and waiting for
-            // it to advance the exchange. Confirming is excluded: by then the QSO is made
-            // and auto-logged, so it is not "calling someone" (matches the engine's own
-            // abandon-stalled state set).
-            State::AwaitReport | State::AwaitRoger | State::AwaitRr73 => {
+            // A partner that engaged and then stopped advancing. Confirming is excluded: by
+            // then the QSO is made and auto-logged, so it is not "calling someone" (matches
+            // the engine's own abandon-stalled state set).
+            State::AwaitRoger | State::AwaitRr73 => {
                 self.call_cap.is_some_and(|cap| self.tx_count >= cap)
             }
-            State::Confirming | State::Listening | State::Done => false,
+            State::AwaitReport | State::Confirming | State::Listening | State::Done => false,
         }
     }
 
@@ -1666,6 +1674,61 @@ mod start_context_tests {
         assert_eq!(s.dxcall.as_deref(), Some("<...>"));
     }
 
+    /// FIELD REPORT 2026-08-23: calling RI1FJL, a Franz Josef Land DXpedition working a pileup.
+    /// Nexus sent `RI1FJL KD9TAW EN52` eight times, then went silent for three and a half
+    /// minutes until the operator re-armed it by hand. Eight calls into a pileup is nothing.
+    ///
+    /// `call_cap` exists for a real problem — a station that ANSWERED you and then went quiet
+    /// should not be recalled forever — and its own documentation says so: "a directed in-QSO
+    /// step the partner has stopped advancing". The fault was that it also covered
+    /// `AwaitReport`, and per `Station::start`'s own table that state is only ever reached
+    /// when the DX has NOT addressed us yet: a reply of any kind starts us further along
+    /// (Grid -> AwaitRoger, Report -> AwaitRr73, RReport -> Confirming). So the cap was
+    /// governing exactly the case it was not written for — the operator deliberately calling
+    /// somebody who has never come back — which is the whole of DX chasing.
+    ///
+    /// Operator ruling 2026-08-23: "make it not apply to a station I picked deliberately."
+    #[test]
+    fn a_station_i_picked_is_called_for_as_long_as_i_want() {
+        let mut s = Station::answering(ME, MY_GRID, DX);
+        s.call_cap = Some(8);
+        assert_eq!(
+            s.state,
+            State::AwaitReport,
+            "control: this is the calling state"
+        );
+
+        // Well past the cap, with nothing ever heard back.
+        for over in 1..=25 {
+            assert!(
+                s.outgoing_rv().is_some(),
+                "call {over} was withheld — a pileup takes as long as it takes"
+            );
+            s.after_tx();
+        }
+    }
+
+    /// The other half, which is what `call_cap` is actually for: a station that engaged and
+    /// then went quiet mid-exchange DOES stop being called, so a CQ run can move on.
+    #[test]
+    fn a_station_that_answered_then_vanished_still_stops_being_called() {
+        let mut s = Station::answering(ME, MY_GRID, DX);
+        s.call_cap = Some(8);
+        // They come back with a report — now we are mid-exchange, not calling into a pileup.
+        s.observe(&[dec("KD9TAW W9XYZ -12", -8)]);
+        assert_eq!(s.state, State::AwaitRr73, "control: the DX engaged us");
+
+        for _ in 0..8 {
+            assert!(s.outgoing_rv().is_some());
+            s.after_tx();
+        }
+        assert!(
+            s.outgoing_rv().is_none(),
+            "a partner that stopped advancing is abandoned, exactly as before"
+        );
+        assert!(s.stalled(), "and the engine sees it as stalled");
+    }
+
     #[test]
     fn locked_qso_ignores_a_different_station() {
         // Working W9XYZ (we sent our grid, awaiting their report). A REPORT from a
@@ -1830,12 +1893,20 @@ mod start_context_tests {
 
     #[test]
     fn capped_directed_call_stops_after_its_budget() {
-        // With `call_cap` set (the engine defaults it to Some(8)), a directed step the
-        // partner never advances STOPS after the budget instead of calling forever — the
-        // fix for "endless recalling a station that went silent" in FT8/FT4 S&P. A normal
-        // QSO never trips it because each step advances (resetting tx_count) within a few
-        // overs; only a stuck/unanswered step accumulates to the cap.
-        let mut s = Station::answering(ME, MY_GRID, DX); // AwaitReport: sending my grid
+        // With `call_cap` set (the engine defaults it to Some(8)), a step the partner
+        // stopped advancing STOPS after the budget instead of calling forever — the fix for
+        // "endless recalling a station that went silent" in FT8/FT4 S&P. A normal QSO never
+        // trips it because each step advances (resetting tx_count) within a few overs; only
+        // a stuck step accumulates to the cap.
+        //
+        // ⚠️ THE DX ANSWERS FIRST, and that is the contract, not scaffolding. Since
+        // 2026-08-23 the cap governs only a partner that ENGAGED and then went quiet —
+        // calling somebody who has never come back is uncapped, because that is a pileup and
+        // not a stuck exchange. `a_station_i_picked_is_called_for_as_long_as_i_want` pins the
+        // other side.
+        let mut s = Station::answering(ME, MY_GRID, DX);
+        s.observe(&[dec("KD9TAW W9XYZ -12", -8)]); // they engage → AwaitRr73
+        assert_eq!(s.state, State::AwaitRr73, "control: the partner answered");
         s.call_cap = Some(4);
         for _ in 0..4 {
             assert!(s.outgoing_rv().is_some(), "calls up to the budget");
@@ -1844,9 +1915,9 @@ mod start_context_tests {
         }
         assert!(
             s.outgoing_rv().is_none(),
-            "a capped directed call stops after its budget"
+            "a partner that stopped advancing is dropped after its budget"
         );
-        assert!(s.stalled(), "a capped directed call reports stalled");
+        assert!(s.stalled(), "and reports stalled so the engine can move on");
         // Operator Resend re-arms the step (resets the count) so it tries again.
         s.resend();
         assert!(!s.stalled(), "Resend clears the directed-call stall");
