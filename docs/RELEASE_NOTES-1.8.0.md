@@ -1,94 +1,120 @@
-# Nexus 1.8.0 — AM on phone, and the ones you told me about
+# Nexus 1.8.0
 
-*2026-08-23*
+*Released 23 August 2026 — everything new since 1.7.6*
 
-AM is the headline, and it is the reason this is 1.8 rather than another patch. Everything else
-came from somebody reporting it, and two of those are worth reading even if you skip the rest:
-one had Nexus going quiet at the end of a contact without telling anybody, and one is a warning
-about your radio that nothing in the app used to say out loud.
-
-**AM on the Phone screen.** Pick AM beside AUTO/USB/LSB/FM and the rig is commanded to AM with a
-6 kHz filter, because AM is double-sideband and an SSB-width filter cuts half of it off. Power
-drops to a quarter of your phone setting: a rig making 100 W PEP on SSB makes about 25 W of
-carrier on AM, the carrier is always there, and SSB drive clips the modulation peaks. That
-ceiling can only ever lower your power, never raise it past the cap you already set. AM is
-offered on the bands where it is actually worked — the windows below 10 MHz, and 10 m and up —
-so you will not find the button on 20 m.
-
-**A station that sends you RR73 gets your 73 back.** If DXpedition "Hound" mode had been left
-switched on, every ordinary contact quietly inherited the Fox rule: the QSO ended on the other
-station's RR73, Nexus sent no parting 73, and Enable-Tx switched off before it could. From your
-chair it looked like a normal contact. From theirs you simply vanished, and they sat there
-repeating RR73 at you. That is right against a real Fox, where a parting 73 lands as QRM in the
-Fox's own segment, and wrong against everybody else. Hound is a per-DXpedition mode now: off
-again at every launch, on when you turn it on for the DXpedition, with the amber HOUND badge
-marking the session. Working a real Fox is unchanged.
-
-**Nexus tells you when the radio is armed to transmit at 0% power.** A rig at zero still keys,
-still shows TX, and still looks like a perfectly normal over from where you are sitting. It is
-silent only to the station you are calling, so there is nothing to notice and no reason to
-suspect the radio. The status lane says NO RF POWER while that is true, and it goes in the
-diagnostic log. Nothing is changed for you — the power is not raised, not clamped, and no
-transmission is held back. Worth knowing on a Yaesu especially, which keeps a separate power
-level for SSB, DATA, CW and AM, so a level you set in one mode does not follow the rig into
-another. That is exactly how one operator spent an evening on a radio that was keying perfectly
-and putting out nothing.
-
-**Hold Tx, and the waterfall's RX and TX markers, survive a settings save.** Pressing Hold Tx or
-dragging a marker changed the setting, but any later save from the Settings window posted an
-older copy back over it and then stored that, so it looked as though it had never saved at all.
-None of the three is editable in Settings; they were only travelling in the form, so a save could
-only ever undo them. Restoring a backup still sets all three from the backup.
-
-**A contact the run gave up on can still be logged.** If a station answered you, exchanged
-reports and then went quiet — a club station working several people at once does this routinely
-— Nexus stopped calling them so your CQ run kept moving, which is right. But it threw the contact
-away, so when the station finally came back with RR73 the Log button said there was nothing to
-log about a QSO whose reports are sitting in your own ALL.TXT. The exchange is kept now, and Log
-writes it with the contact's own start time. Nothing is logged for you that wasn't before — only
-you saw them come back, so it stays your call.
-
-**The log table shows your Comment, and marks contacts carrying a private Note.** Both could be
-typed and saved, and neither was ever shown again, so the only way to read a note was to open a
-contact you had no way of knowing held one. The Comment has its own column now, and a contact
-with a private Note carries a 📝 you can hover for the full text.
-
-**The Phone waterfall has frequencies on it,** so a click is not a guess, and **the Needed list
-shows the frequency** rather than only the band — a rare one on 20 m is a different decision at
-14.025 than at 14.310.
-
-**The Needed board respects your New-grid band choice.** With New grid set to VHF+, HF grid needs
-were still listed there. The choice reached the roster and the decode rows when it was added, but
-not the board, which had stopped sharing that code path earlier so that turning the CW or Phone
-features off would not hide needs. Both hold now.
-
-**The Band Activity list marks each period once again, not every decode.** Once about three
-hundred decodes had built up, the dim time-and-band bar that separates one T/R period from the
-next started appearing between every single line — it was comparing each decode against one from
-the far end of the buffer instead of the row above it.
-
-**A station answering your CQ makes a sound again.** The alert was being held back for the whole
-time you were calling CQ, which is the one stretch where it is the only thing you are listening
-for. It stays quiet once you are into the exchange, as it always should have.
-
-**An unanswered CQ run takes a breather** instead of holding the frequency forever — how many
-calls, and how long it waits, are both yours to set. **You can record a QSL card that arrived in
-the post.** **There is a reset to factory defaults,** beside the backup that makes it safe to
-use. **"Hide worked" explains itself** — it hides stations you have worked except those that
-still owe you a confirmation.
-
-And the ones that were stopping people cold: **Nexus starts properly on a machine with no
-regional settings** (a `C` locale used to take down the Operate screen); **it stops interrogating
-the system keyring every few seconds**, which on Fedora could restart the keyring daemon in a
-loop for as long as Nexus was open; **a busy PC no longer produces a phantom CAT failure** when a
-rig reply is interrupted; **OmniRig gets time to start** if it was not already running, and its
-"needs administrator" message now points at the fix that works; and on Linux **the AppImage no
-longer carries its own copy of a system graphics library**, which is what kept it from starting
-on some desktops.
+AM is the headline. The rest came from people writing in, and two of them were costing
+contacts, so start there.
 
 ---
 
-Six installers as always — Windows, Linux AppImage and .deb, both Raspberry Pi builds, and macOS
-on Apple Silicon. If you are on a tester build, this outranks it and the updater will offer it.
+## AM on phone
+
+Pick **AM** in the Phone screen next to AUTO / USB / LSB / FM and the rig goes to AM.
+
+Nexus backs your power down to a quarter of your phone setting when you do. That is not
+Nexus being cautious — a rig that makes 100 W PEP on sideband makes about 25 W of carrier
+on AM, and if you leave the drive where SSB had it you will flat-top the modulation peaks
+and sound bad. It can only ever turn you down, never up past the limit you already set.
+It also opens the filter out, because AM is twice as wide as sideband and a sideband filter
+chops half your audio off.
+
+You will find AM on the bands where AM actually lives — the windows down on 160, 80 and 40,
+and 10 m and up for the 29 MHz crowd and 6 m. It is not offered on 20 m, and that is
+deliberate: there is no room for a 6 kHz signal there.
+
+## Two that were costing you contacts
+
+**If a station sent you RR73, you may not have been sending 73 back.**
+
+This one only bit if DXpedition **Hound** mode had been left switched on from some earlier
+session. With it on, every ordinary QSO you made finished the way a Fox QSO finishes: the
+other station's RR73 ended it, and Nexus went quiet and switched your transmit off without
+sending the closing 73.
+
+From your seat it looked like a completed contact. From theirs, you disappeared — so they
+sat there sending RR73 at you again and again, wondering where you went.
+
+Hound now switches itself off every time you start Nexus. Turn it on when you sit down to
+work a DXpedition, and it will be off again next time. The amber **HOUND** badge shows
+while it is on so you always know. Working a real Fox is exactly as it was.
+
+**Nexus now tells you when your radio is turned down to zero.**
+
+A rig with the power at 0 still keys up. The TX light comes on, the meter swings, and from
+where you sit the transmission looks completely normal. Nobody hears it. There is nothing
+to notice and no reason to blame the radio, so you can burn an evening calling into an
+empty band before you think to look at the power knob.
+
+If your transmit is armed and the rig is reporting no power, Nexus now says **NO RF POWER**
+and puts it in the log file. It does not touch your power — if you are running a hair above
+zero to drive an amplifier, that is your business.
+
+Worth knowing if you run a **Yaesu**: they keep a separate power setting for SSB, DATA, CW
+and AM. Set your power on sideband and it does not follow you into DATA. That is how the
+operator who reported this ended up transmitting into thin air on a radio that was working
+perfectly.
+
+## At the operating position
+
+**Hold Tx stays where you put it.** Same for the red and green markers on the waterfall.
+Saving anything in Settings used to quietly put them back the way they were.
+
+**A contact that went quiet can still be logged.** You call CQ, somebody answers, you trade
+reports — and then they vanish. Club stations working several people at once do this all
+day. Nexus stops calling them so your run keeps moving, which is right, but it used to throw
+the contact away too. When the station finally came back with RR73 the Log button told you
+there was nothing to log, about a QSO whose reports are sitting in your own ALL.TXT. It
+keeps the exchange now, and Log writes it with the right start time. It still will not log
+it for you — only you saw them come back.
+
+**You can read your own notes again.** The Comment box and the Notes box both saved fine and
+neither was ever shown to you anywhere afterwards. Comment now has its own column in the log,
+and a contact with a private note carries a 📝 — hover it to read the note. Which is the
+whole point of writing down what you talked about last time.
+
+**The Phone waterfall has frequencies across it now,** so clicking somewhere is a decision
+rather than a guess. **The Needed list shows the frequency too** — a rare one on 20 m is a
+very different proposition at 14.025 than at 14.310.
+
+**The Needed board honours your New-grid band setting.** If you have grids set to VHF and up,
+you were still getting HF grid needs listed on the board.
+
+**Band Activity marks each period once,** not between every single line. It started doing
+that after a few hundred decodes had built up.
+
+**A station answering your CQ makes a noise again.** The alert was being suppressed for the
+whole time you were calling CQ — which is the one stretch where it is the only thing you
+are listening for.
+
+**An unanswered CQ run takes a break** instead of calling into a dead band forever. You set
+how many calls and how long it waits.
+
+**You can log a QSL card that came in the post.** **There is a reset to factory defaults**
+now, next to the backup that makes it safe to press. **"Hide worked" tells you what it
+hides** — worked stations, except the ones that still owe you a confirmation.
+
+## Things that were stopping people getting started
+
+- Nexus starts on a machine with no regional settings configured. It used to take down the
+  Operate screen entirely.
+- It stops hammering the system keyring. On Fedora this could restart the keyring service
+  in a loop for as long as Nexus was open.
+- A busy PC no longer produces a CAT failure that was never real — a rig reply interrupted
+  at the wrong moment was being read as a dead radio.
+- OmniRig gets a moment to start if it was not already running, and the "needs
+  administrator" message now points at the fix that actually works.
+- Nexus no longer gives up on the rigctld you pointed it at because the machine was busy for
+  a second and substitutes its own.
+- **Linux:** the AppImage stopped carrying its own copy of a system graphics library, which
+  is what kept it from starting on some desktops.
+
+---
+
+## Downloads
+
+Windows · Linux AppImage · Linux .deb · Raspberry Pi (bookworm and trixie) · macOS on
+Apple Silicon.
+
+If you are running a test build, this one outranks it and the updater will offer it.
 
 73 — KD9TAW
