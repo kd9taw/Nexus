@@ -65,7 +65,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
-import { visibleNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
+import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
@@ -844,6 +844,8 @@ export default function App() {
     }),
     [settings?.alertDxccBands, settings?.alertGridBands, settings?.alertRareGridBands],
   )
+  // The Needed board's feed — band scopes honoured, mode-feature gate neutral (see boardNeeds).
+  const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   const visibleAlerts = useMemo(
     () => visibleNeeds(needAlerts, { cw: cwEnabled, phone: phoneEnabled }, needScopes),
     [needAlerts, cwEnabled, phoneEnabled, needScopes],
@@ -2305,10 +2307,11 @@ export default function App() {
     case 'needed':
       workspace = (
         <NeededPanel
-          // FULL un-gated list: the board's own per-mode toggles decide what shows, so a
-          // disabled CW/Phone *feature* no longer hides those needs here (the operator
-          // controls mode visibility in the Needed filter bar instead).
-          alerts={needAlerts}
+          // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
+          // so a disabled CW/Phone feature no longer hides those needs here — but STILL
+          // scoped by band: `boardNeeds` is that exact half, and it is a named function so
+          // the scopes cannot be dropped again by swapping this prop.
+          alerts={boardAlerts}
           bandPlan={bandPlan}
           selectedCall={activePeer}
           myGrid={snap.mygrid}

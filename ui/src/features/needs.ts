@@ -238,6 +238,26 @@ export function visibleNeeds(
   return out
 }
 
+/**
+ * The NEEDED BOARD's list: the operator's band scopes applied, the CW/Phone mode-FEATURE gate
+ * deliberately NOT applied.
+ *
+ * ⭐ The board is the one surface that wants exactly half of `visibleNeeds`. Its own filter bar
+ * owns mode visibility, so a station running digital-only must still see CW and Phone needs
+ * listed there — but "new grid on HF" is an operator INTENT that holds on every surface, the
+ * board included.
+ *
+ * Asking for it by name is the point. This started as `visibleNeeds(needAlerts, modes, scopes)`
+ * in App; when the mode half turned out to be wrong for the board it was replaced with the raw
+ * `needAlerts`, and the band scopes went with it silently — one call did two jobs, and there was
+ * no way to keep one and drop the other (operator, 2026-08-23: "I am seeing dx grids being shown
+ * again on the needed board, even though I have new grid in settings set to VHF +6m"). Anyone
+ * changing the board's mode behaviour again edits this function, where the scopes are visible.
+ */
+export function boardNeeds(alerts: NeedAlert[], scopes?: NeedBandScopes): NeedAlert[] {
+  return visibleNeeds(alerts, { cw: true, phone: true }, scopes)
+}
+
 /** A resolved click-to-work target: where to QSY and the cockpit to open. The CALLER
  * owns the rig sideband when it QSYs — the rig-mode policy derives the actual CAT mode
  * (CW, USB/LSB-by-band for phone, or DATA-U for digital) from the operating mode, so we

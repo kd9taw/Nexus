@@ -10,6 +10,7 @@ import {
   topNeedByCall,
   alertsByCall,
   visibleNeeds,
+  boardNeeds,
   workTarget,
 } from './needs'
 import type { BandChannel, NeedAlert, NeedTag } from '../types'
@@ -634,5 +635,49 @@ describe('the mode label the Needed board shows never changes where a click land
     expect(workTarget(alert('CW', null), [])?.view).toBe('cw')
     expect(workTarget(alert('Phone', null), [])?.view).toBe('phone')
     expect(workTarget(alert('RTTY'), [])?.view).toBe('rtty')
+  })
+})
+
+// OPERATOR REPORT (2026-08-23, running 1.7.7-test2): "I am seeing dx grids being shown again
+// on the needed board, even though I have new grid in settings set to VHF +6m. This seems
+// like this has broke from a fixed state before."
+//
+// It had, and this is the mechanism. The 2026-08-18 fix routed the surfaces through
+// `visibleNeeds`, which does TWO jobs in one pass: the CW/Phone mode-FEATURE gate and the
+// per-type band scopes. The Needed board was later handed the raw, un-gated list so that a
+// disabled CW/Phone feature would stop hiding rows there — correct on its own terms (the
+// board's own filter bar owns mode visibility) — but it dropped the band scopes with it,
+// because one call did both jobs and there was no way to ask for half of it.
+//
+// `boardNeeds` is that half, named: scopes intact, mode gate neutral. The board asks for it
+// by name now, so the next person fixing mode visibility cannot take the scopes along by
+// accident.
+describe('boardNeeds — the Needed board keeps its band scopes without the mode gate', () => {
+  /** The shipped defaults the operator is running: grids VHF+ only, DXCC everywhere. */
+  const DEFAULTS = { dxcc: 'all', grid: 'vhf', rareGrid: 'vhf' }
+  const mk = (tags: NeedTag[], mode: string, band: string): NeedAlert => ({
+    ...alert('K1GRID', mode, band),
+    tags,
+    priority: NEED_TIER[tags[0]],
+  })
+
+  it('drops an HF new-grid need — the report', () => {
+    expect(boardNeeds([mk(['NewGrid'], 'Digital', '20m')], DEFAULTS)).toEqual([])
+  })
+
+  it('POSITIVE CONTROL — the same need on 6 m survives', () => {
+    expect(boardNeeds([mk(['NewGrid'], 'Digital', '6m')], DEFAULTS)).toHaveLength(1)
+  })
+
+  it('keeps a CW need the mode gate would have dropped — what the un-gating was for', () => {
+    expect(boardNeeds([mk(['NewEntity'], 'CW', '20m')], DEFAULTS)).toHaveLength(1)
+  })
+
+  it('keeps a Phone need too', () => {
+    expect(boardNeeds([mk(['NewEntity'], 'Phone', '20m')], DEFAULTS)).toHaveLength(1)
+  })
+
+  it('no scopes yet (settings still loading) → permissive, as everywhere else', () => {
+    expect(boardNeeds([mk(['NewGrid'], 'Digital', '20m')], undefined)).toHaveLength(1)
   })
 })
