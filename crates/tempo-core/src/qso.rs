@@ -787,7 +787,10 @@ impl Station {
     pub fn observe(&mut self, decodes: &[Decode]) {
         let state_before = self.state;
         for d in decodes {
-            let m = Msg::parse(&d.message);
+            // Resolve a HASHED sender here, once, rather than in each arm: every reply below
+            // is built as `to: de.clone()` from the message it answers, so an unresolved
+            // bracket form would be echoed straight back onto the air (see Msg::unhashed).
+            let m = Msg::parse(&d.message).unhashed();
             let rpt = d.snr.clamp(-30, 49);
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm.
@@ -798,6 +801,10 @@ impl Station {
                 (State::CallingCq, Msg::Grid { to, de, grid })
                     if crate::message::same_call(to, &self.mycall) =>
                 {
+                    // `de` is already unhashed: `observe` runs every parsed message through
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
+                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
+                    // be laundered into one).
                     self.dxcall = Some(de.clone());
                     if !grid.is_empty() {
                         self.dxgrid = Some(grid.clone()); // i3=4 calls carry no grid
@@ -977,6 +984,10 @@ impl Station {
                 (State::CallingCq, Msg::Report { to, de, snr })
                     if crate::message::same_call(to, &self.mycall) =>
                 {
+                    // `de` is already unhashed: `observe` runs every parsed message through
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
+                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
+                    // be laundered into one).
                     self.dxcall = Some(de.clone());
                     self.rx_report = Some(*snr);
                     self.pending = Some(Msg::RReport {
@@ -1028,6 +1039,10 @@ impl Station {
                 (State::AwaitReport, Msg::Grid { to, de, grid })
                     if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
                 {
+                    // `de` is already unhashed: `observe` runs every parsed message through
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
+                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
+                    // be laundered into one).
                     self.dxcall.get_or_insert_with(|| de.clone());
                     if !grid.is_empty() {
                         self.dxgrid = Some(grid.clone());
@@ -1571,6 +1586,84 @@ mod start_context_tests {
             rv: None,
             mode: None,
         }
+    }
+
+    /// FIELD REPORT 2026-08-23 (KD9TAW working RI1FJL, a Franz Josef Land DXpedition running
+    /// multi-answering): Nexus transmitted `<RI1FJL> KD9TAW EN52` for two overs — the DX's call
+    /// in its i3=4 HASHED form, inside our own outgoing message.
+    ///
+    /// A station answering several callers at once sends its own call hashed to make room
+    /// (WSJT-X's Fox does it explicitly: `fox_tx.f90` formats `CALL RR73; CALL <FOXCALL> rpt`,
+    /// and MSHV's multi-answering has the same pressure on message bits). Matching already
+    /// copes — `base_call` strips the brackets, so the sequencer correctly recognises the
+    /// sender — but the raw token was STORED as `dxcall` and every message built from it then
+    /// rendered the brackets onto the air.
+    ///
+    /// That is wrong on the air and not what WSJT-X sends: the hashed form is a bit-saving
+    /// encoding of a call the receiver is expected to have already, not a way to address
+    /// somebody. `unhash_call` exists for exactly this and is documented for it; the adoption
+    /// sites simply were not using it.
+    #[test]
+    fn a_hashed_sender_is_never_adopted_as_the_dx_call() {
+        // The DX answers our CQ with its call hashed.
+        let mut s = Station::calling_cq(ME, MY_GRID);
+        s.observe(&[dec("KD9TAW <W9XYZ> EN37", -5)]);
+        assert_eq!(
+            s.dxcall.as_deref(),
+            Some("W9XYZ"),
+            "the brackets are an encoding, not part of the callsign"
+        );
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("W9XYZ KD9TAW -05"),
+            "and they must never reach the air"
+        );
+
+        // Same via a REPORT rather than a grid — the other unconditional adoption site.
+        let mut r = Station::calling_cq(ME, MY_GRID);
+        r.observe(&[dec("KD9TAW <W9XYZ> -12", -8)]);
+        assert_eq!(r.dxcall.as_deref(), Some("W9XYZ"));
+        assert!(
+            !r.pending_text().unwrap_or_default().contains('<'),
+            "no hashed token in an outgoing message, got {:?}",
+            r.pending_text()
+        );
+
+        // CONTROL: a plain call is untouched — this must not be mangling ordinary calls.
+        let mut p = Station::calling_cq(ME, MY_GRID);
+        p.observe(&[dec("KD9TAW W9XYZ EN37", -5)]);
+        assert_eq!(p.dxcall.as_deref(), Some("W9XYZ"));
+    }
+
+    /// The control that keeps the unhashing honest: an UNRESOLVED hash is not a callsign.
+    ///
+    /// `<...>` is what a decoder prints when it has not yet heard the full call. Stripping its
+    /// brackets would hand the sequencer the literal `...` as a station to work and to log.
+    #[test]
+    fn an_unresolved_hash_is_not_turned_into_a_callsign() {
+        assert_eq!(crate::message::resolve_hashed("<...>"), "<...>");
+        assert_eq!(
+            crate::message::resolve_hashed("<W9XYZ>"),
+            "W9XYZ",
+            "control: a real one IS resolved"
+        );
+        // ⚠️ ISSUE #84's RULE, and the one this change nearly broke: a COMPOUND call is hashed
+        // because it does not fit an ordinary frame. Unwrapping it would build a message the
+        // protocol cannot carry, so the brackets stay all the way to the air. (The LOG strips
+        // them separately, at the record boundary — a different question about the same token.)
+        assert_eq!(crate::message::resolve_hashed("<KH8/W1AW>"), "<KH8/W1AW>");
+        assert_eq!(crate::message::resolve_hashed("<PJ4/K1ABC>"), "<PJ4/K1ABC>");
+
+        let mut s = Station::calling_cq(ME, MY_GRID);
+        s.observe(&[dec("KD9TAW <...> EN37", -5)]);
+        assert_ne!(
+            s.dxcall.as_deref(),
+            Some("..."),
+            "an unknown station must never be adopted as the literal ellipsis"
+        );
+        // It stays visibly unresolved rather than becoming a plausible-looking call — which is
+        // the pre-existing behaviour, and the right one: nothing downstream can mistake it.
+        assert_eq!(s.dxcall.as_deref(), Some("<...>"));
     }
 
     #[test]

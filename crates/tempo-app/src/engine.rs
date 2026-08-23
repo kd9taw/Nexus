@@ -15716,30 +15716,40 @@ impl Engine {
         n
     }
 
-    /// Hound mode: a DXpedition Fox packs TWO payloads in one transmission
-    /// ("K1ABC RR73; W9XYZ <FOX> -08"). Split them so everything downstream —
-    /// rows, roster, the auto-sequencer — sees both halves as ordinary messages
-    /// (the standard sequencer then handles the whole hound exchange). Gated on
-    /// Hound so normal operation (where free text may carry ';') is untouched.
+    /// A DXpedition Fox packs TWO payloads in one transmission
+    /// ("K1ABC RR73; W9XYZ <FOX> -08" — WSJT-X `lib/ft8/foxgen.f90`, and `fox_tx.f90`
+    /// formats it literally as `a6,' RR73; ',a6,1x,'<FoxCall>',i4.2`). Split them so
+    /// everything downstream — rows, roster, the auto-sequencer — sees both halves as
+    /// ordinary messages, and the standard sequencer then handles the whole exchange.
+    ///
+    /// ⚠️ GATED ON HAVING AN ACTIVE QSO, not on the Hound SETTING (operator ruling
+    /// 2026-08-23). It was Hound-gated, and that tied a pure RECEIVE-side parsing job to a
+    /// switch whose other job is a TRANSMIT decision — suppressing the parting 73, which is
+    /// only ever right against a real Fox. An operator working a Fox without having flipped
+    /// Hound therefore could not read the very message that confirms their contact, while an
+    /// operator who left Hound on lost the parting 73 on every ordinary QSO. One switch, two
+    /// unrelated jobs; this is the receive half moving off it.
+    ///
+    /// An active QSO is the honest condition: the reattach below needs a Fox call to
+    /// reconstruct the implied sender, and without one there is nothing to reattach TO. It
+    /// also keeps the blast radius small — a bystander's free text containing ';' is only
+    /// ever split while we are mid-contact, and even then `reattach` fires on nothing but an
+    /// exact 2-token `<call> RR73/RRR/73` half.
     fn hound_split(&self, decodes: Vec<modes::Decode>) -> Vec<modes::Decode> {
         let fox_capable = self
             .tier_mode_kind(self.app.tier())
             .is_some_and(|k| modes::make_mode(k).capabilities().fox_hound);
-        if !matches!(
-            self.settings.special_op,
-            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
-        ) || !fox_capable
-        {
-            // Fox multiplexing is an FT8 DXpedition construct — the mode declares
-            // `fox_hound` (FT8 only, matching WSJT-X). Free text may legitimately
-            // contain ';' and must never be split.
-            return decodes;
-        }
-        // The Fox we're working (for reconstructing its implied sender below).
+        // The station we're working (for reconstructing the Fox's implied sender below).
         let fox: Option<String> = match &self.mode {
             Mode::Qso { station, .. } => station.dxcall.clone(),
             _ => None,
         };
+        if fox.is_none() || !fox_capable {
+            // Fox multiplexing is an FT8 DXpedition construct — the mode declares
+            // `fox_hound` (FT8 only, matching WSJT-X). Free text may legitimately
+            // contain ';' and must never be split when we are not working anybody.
+            return decodes;
+        }
         // A Fox confirm half is the SENDER-LESS 2-token "K1ABC RR73" — re-add
         // the Fox's call so it parses as a standard Rr73 and passes the
         // sequencer's sender lock. Only exact 2-token <call> RR73/RRR/73 forms.
@@ -23430,11 +23440,29 @@ mod tests {
     }
 
     #[test]
-    fn fox_split_is_gated_to_hound_mode() {
-        // Normal operation must never split on ';' (free text could carry it).
+    fn fox_split_needs_an_active_qso_not_the_hound_setting() {
+        // Not working anybody: never split on ';' — free text may legitimately carry one, and
+        // there is no Fox call to reattach a sender to even if we did.
         let mut e = Engine::new("W9XYZ", "EN37", 0);
         e.ingest_decodes_for_test(&[dec_snr("K1ABC RR73; W9XYZ PJ4DX -08", -10)], 1);
-        assert_eq!(e.last_decodes().len(), 1, "no split outside Hound mode");
+        assert_eq!(e.last_decodes().len(), 1, "no split while not in a QSO");
+
+        // Working someone — and WITHOUT the Hound setting, which is the point of the change
+        // (operator 2026-08-23: a Fox was unreadable unless you had remembered to flip Hound,
+        // and flipping it cost the parting 73 on every ordinary QSO).
+        let mut q = Engine::new("W9XYZ", "EN37", 0);
+        assert_eq!(
+            q.settings.special_op,
+            crate::settings::SpecialOp::None,
+            "control: the Hound setting is OFF for this half"
+        );
+        q.call_station("PJ4DX");
+        q.ingest_decodes_for_test(&[dec_snr("K1ABC RR73; W9XYZ PJ4DX -08", -10)], 1);
+        assert_eq!(
+            q.last_decodes().len(),
+            2,
+            "the Fox's two payloads are split without Hound being set"
+        );
     }
 
     /// A HASHED (BRACKETED) CALL MUST NOT REACH THE LOG — issue #84.
