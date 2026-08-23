@@ -433,34 +433,69 @@ mod device_monitor {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "device")]
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    #[cfg(feature = "device")]
+    use std::sync::Arc;
 
     /// A transmission must not be played back to the operator, and what was buffered before it
     /// must not surface afterwards.
     ///
-    /// The monitor plays what the capture callback hears. While the rig is keyed that is not the
-    /// band — on many radios it is the rig's own MONI — and it arrives through this ring, so it is
-    /// DELAYED. Delayed sidetone over your own voice is the specific complaint (operator,
-    /// 2026-08-22, which is what prompted this).
+    /// Drives the REAL thing — `Monitor::set_tx_mute` and the atomics the capture callback reads.
+    /// The first version of this test did not: it built a `SpscRing`, called `clear()` and checked
+    /// the ring was empty, which `SpscRing::clear` already has its own test for and which passes
+    /// with this whole feature deleted (kd9taw caught it on #158). A test that cannot fail when the
+    /// feature is removed is not evidence of the feature.
     ///
-    /// Two halves, and the second is the one worth a test: the gate closes, AND the ring is
-    /// cleared on the rising edge, so the seconds of band audio captured just before the key went
-    /// down do not play out as a burst of the past when the over ends.
+    /// `Monitor` needs no audio device to construct: `new` takes the shared `Arc`s and
+    /// `out_stream` starts `None`.
+    #[cfg(feature = "device")]
     #[test]
-    fn a_transmission_silences_the_monitor_and_discards_what_preceded_it() {
-        let ring = SpscRing::new(64);
+    fn muting_for_a_transmission_closes_the_gate_and_discards_the_audio_that_preceded_it() {
+        let ring = Arc::new(SpscRing::new(64));
+        let enabled = Arc::new(AtomicBool::new(true));
+        let tx_mute = Arc::new(AtomicBool::new(false));
+        let level = Arc::new(AtomicU32::new(0.5f32.to_bits()));
+        let mut m = Monitor::new(
+            ring.clone(),
+            enabled.clone(),
+            tx_mute.clone(),
+            level.clone(),
+            48_000,
+        );
+
         for _ in 0..16 {
-            assert!(ring.push(0.5), "fixture: band audio buffered before the over");
+            assert!(
+                ring.push(0.5),
+                "fixture: band audio buffered before the over"
+            );
         }
-        assert!(ring.len() > 0, "fixture: the ring holds pre-TX audio");
 
-        // The rising edge of a transmission: gate shut, and the past discarded.
-        ring.clear();
-        assert_eq!(ring.len(), 0, "what was captured before the over must not survive it");
-        assert!(ring.pop().is_none(), "and nothing is left to play out when the over ends");
+        // THE RISING EDGE. The gate the capture callback reads closes, and the audio captured
+        // before the key went down goes with it — otherwise it plays out as a burst of the past
+        // when the over ends, which is a stranger artefact than the one this fixes.
+        m.set_tx_mute(true);
+        assert!(tx_mute.load(Ordering::Relaxed), "the gate closed");
+        assert_eq!(ring.len(), 0, "and the pre-TX audio went with it");
 
-        // The ring is still usable afterwards — muting is not a teardown.
-        assert!(ring.push(0.25), "the monitor resumes after the over without a rebuild");
-        assert_eq!(ring.pop(), Some(0.25));
+        // EDGE-TRIGGERED, which is a claim the design makes and therefore has to be held to:
+        // muting again mid-over must not wipe anything a second time.
+        assert!(ring.push(0.25), "something arrives while still keyed");
+        m.set_tx_mute(true);
+        assert_eq!(ring.len(), 1, "muting again is not a second clear");
+
+        // AND THE OPERATOR'S OWN SETTING IS UNTOUCHED THROUGHOUT. This is the invariant the whole
+        // design rests on — the reason the mute is a second atomic rather than borrowing
+        // `enabled` — and nothing held us to it before.
+        m.set_tx_mute(false);
+        assert!(
+            !tx_mute.load(Ordering::Relaxed),
+            "the gate reopens when the over ends"
+        );
+        assert!(
+            enabled.load(Ordering::Relaxed),
+            "the operator's monitor setting survives a transmission unchanged"
+        );
     }
     use super::*;
 
