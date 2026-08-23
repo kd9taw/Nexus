@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A contact the run gave up on can still be logged.** If a station answered you, exchanged
+  reports and then went quiet — a club station working several people at once does this
+  routinely — Nexus stopped calling them after a few overs so your CQ run kept moving. That part
+  is right. But it also threw the contact away, so when the station finally came back with RR73
+  the Log button said "nothing to log" about a QSO whose reports are in your own ALL.TXT. The
+  exchange is kept now, and pressing Log writes it with the contact's own start time. Nothing is
+  logged automatically that wasn't before — only you saw them come back, so it stays your call.
+
 - **The Band Activity list marks each period once again, not every decode.** Once about
   three hundred decodes had built up, the dim time-and-band bar that separates one T/R
   period from the next started appearing between every single line. It was comparing each

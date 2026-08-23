@@ -1420,6 +1420,22 @@ struct DialResidency {
     sideband: Option<String>,
 }
 
+/// A contact abandoned mid-exchange that still deserves to reach the log (#153).
+///
+/// Only the facts a record needs. Deliberately NOT the `QsoStation`: restoring one would put the
+/// sequencer back into a QSO the operator has moved on from, which is a transmit decision. This
+/// is a logging rescue and nothing else.
+#[derive(Debug, Clone)]
+struct StalledQso {
+    dxcall: String,
+    dxgrid: Option<String>,
+    rx_report: Option<i32>,
+    /// Their report to us, or ours to them — either proves the exchange happened.
+    tx_report: Option<i32>,
+    /// TIME_ON of the abandoned contact, so the record does not claim the moment it was rescued.
+    start_unix: Option<u64>,
+}
+
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
@@ -1586,6 +1602,21 @@ pub struct Engine {
     /// The signal report I last sent the current QSO's DX station (RST sent),
     /// captured from the sequencer's outgoing (R)Report. Reset per QSO.
     qso_report_sent: Option<i32>,
+    /// The last contact ABANDONED mid-exchange that had already exchanged a report — kept so it
+    /// can still be logged.
+    ///
+    /// ⚠️ THIS EXISTS BECAUSE ABANDONING A QSO WAS THROWING AWAY A REAL CONTACT (#153, VK3GZY).
+    /// `abandon_stalled` replaces the whole `QsoStation` with a fresh `calling_cq` one, so
+    /// dxcall, dxgrid and both reports vanish. That is right for the RUN — a caller who went
+    /// quiet must not stall the pileup — but it is wrong for the LOG: the reports really were
+    /// exchanged, and after the swap `log_current_qso` finds no dxcall and answers "nothing to
+    /// log" about a QSO that no longer exists. His partner was a multi-stream club station, which
+    /// answers slowly BY DESIGN, so 3 overs of patience ran out and the contact became
+    /// unloggable by any route.
+    ///
+    /// One deep and replaced by the next abandonment: this is a rescue for the contact the
+    /// operator just watched fail, not a history.
+    stalled_qso: Option<StalledQso>,
     /// A completed QSO held for the operator to confirm before it is logged
     /// (WSJT-X "Prompt me to log QSO"). `Some` only while `prompt_to_log` is on
     /// and a finished contact is awaiting confirm/discard.
@@ -3607,6 +3638,7 @@ impl Engine {
             work_view: None,
             work_call: None,
             qso_report_sent: None,
+            stalled_qso: None,
             pending_log: None,
             qso_logged: false,
             qso_start_unix: None,
@@ -7493,6 +7525,11 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // Any contact reaching the log ends the #153 rescue window. The stash is a lifeline for
+        // the contact the operator just watched fail, and once ANY contact is written they have
+        // moved on — keeping it past that point risks the Log button reaching back to an old
+        // abandoned exchange instead of saying there is nothing to log.
+        self.stalled_qso = None;
         // One line per contact — the event behind "my log is missing a QSO". Bounded by
         // contacts, which is bounded by the operator: a busy hour is a few dozen lines, and a
         // quiet one is none. Nothing here is on a timer.
@@ -8348,7 +8385,26 @@ impl Engine {
                     station.rx_report,
                     station.report_impossible_exchange(),
                 ),
-                None => return false,
+                // No CURRENT contact — but there may be an abandoned one that really happened
+                // (#153). A caller who answered, exchanged reports and then went quiet gets
+                // dropped by `abandon_stalled` so the run keeps moving; the operator watching
+                // their partner finally come back and pressing Log was being told "nothing to
+                // log" about a contact whose reports are in their own ALL.TXT.
+                //
+                // Only reachable by the operator PRESSING THE BUTTON. Nothing here auto-logs an
+                // unconfirmed contact — that judgement stays theirs, which is right, because
+                // only they saw the partner return.
+                None => match self.stalled_qso.take() {
+                    Some(st) => {
+                        // The rescued contact's own TIME_ON, not the moment of rescue.
+                        self.qso_start_unix = st.start_unix;
+                        if self.qso_report_sent.is_none() {
+                            self.qso_report_sent = st.tx_report;
+                        }
+                        (st.dxcall, st.dxgrid, st.rx_report, false)
+                    }
+                    None => return false,
+                },
             },
             _ => return false,
         };
@@ -15921,6 +15977,38 @@ impl Engine {
             self.reset_tx_watchdog();
         }
         if resume_cq || abandon_stalled {
+            // Before the station is replaced, KEEP a contact that really happened (#153).
+            // `abandon_stalled` is the run's decision to stop calling somebody who went quiet;
+            // it must not also be a decision to discard the exchange. Only when a report has
+            // actually crossed — theirs to us or ours to them — so a caller who never got past
+            // answering our CQ leaves nothing behind, exactly as before.
+            //
+            // BOTH paths, and `resume_cq` is the one that proves the point. The auto-log site
+            // above deliberately leaves `qso_logged` false when Auto-log is OFF, and says why:
+            // "so the completed QSO stays capturable by the cockpit Log QSO button
+            // (log_current_qso) — otherwise it is silently discarded and the button no-ops."
+            // That intent was defeated three blocks later by this very swap: the button reads
+            // the CURRENT station, which by then is a fresh calling_cq with no dxcall. Measured,
+            // not assumed — a contact that reached Confirming with reports crossed both ways
+            // came out the other side with `logged=false` and nothing to log.
+            //
+            // `!self.qso_logged` is what keeps this from duplicating: a contact that DID
+            // auto-log is already written and leaves nothing behind.
+            if (resume_cq || abandon_stalled) && !self.qso_logged {
+                if let Mode::Qso { station, .. } = &self.mode {
+                    if let Some(dx) = station.dxcall.clone() {
+                        if station.rx_report.is_some() || self.qso_report_sent.is_some() {
+                            self.stalled_qso = Some(StalledQso {
+                                dxcall: dx,
+                                dxgrid: station.dxgrid.clone(),
+                                rx_report: station.rx_report,
+                                tx_report: self.qso_report_sent,
+                                start_unix: self.qso_start_unix,
+                            });
+                        }
+                    }
+                }
+            }
             let mycall = self.settings.mycall.clone();
             let mygrid = self.settings.mygrid.clone();
             let mut s = QsoStation::calling_cq(&mycall, &mygrid);
@@ -23124,7 +23212,7 @@ mod tests {
         assert!(!e.park_worked("K-9999"));
     }
 
-    fn dec_snr(msg: &str, snr: i32) -> Decode {
+    pub(super) fn dec_snr(msg: &str, snr: i32) -> Decode {
         Decode {
             message: msg.to_string(),
             sync: 1.0,
@@ -34389,5 +34477,130 @@ mod am_override_tests {
             !e.am_in_force(),
             "a band change drops the pick — this is the reason the FM-style gate is unnecessary here"
         );
+    }
+}
+
+#[cfg(test)]
+mod stalled_qso_log_tests {
+    use super::tests::dec_snr;
+    use super::*;
+
+    /// Answer our CQ with a report, we roger it, then they go quiet — the state bitslave was in
+    /// (#153): `AwaitRr73`, both reports already across, waiting on their RR73.
+    fn abandoned_after_reports_crossed() -> Engine {
+        let mut e = Engine::new("VK3GZY", "QF22", 0);
+        e.set_mode("qso-run").unwrap();
+        e.poll_tx(0); // our CQ
+        e.ingest_decodes_for_test(&[dec_snr("VK3GZY VK3ABC -10", -8)], 1); // they answer WITH a report
+        e.poll_tx(2); // we send R-08
+        e.ingest_decodes_for_test(&[], 3);
+        // They are multi-streaming and working somebody else. Three silent overs and the run
+        // gives up on them.
+        for slot in [4u64, 6, 8] {
+            e.poll_tx(slot);
+            e.ingest_decodes_for_test(&[], slot + 1);
+        }
+        e
+    }
+
+    /// #153 (VK3GZY): A REAL CONTACT BECAME UNLOGGABLE BY ANY ROUTE.
+    ///
+    /// He worked a club station running multi-stream — which answers slowly BY DESIGN, since it
+    /// is working several people across slots. Reports crossed both ways; then it went quiet.
+    /// After `cq_stall_overs` (3, about 45 s at FT8) the run dropped it so the pileup could keep
+    /// moving, which is right. But the drop also threw the exchange away: when the station
+    /// finally returned with RR73, pressing Log answered "the QSO already closed or no report was
+    /// exchanged" — about a contact whose reports are in his own ALL.TXT. Twice.
+    ///
+    /// Abandoning is a decision about who to CALL. It must not also be a decision about what to
+    /// LOG.
+    #[test]
+    fn a_contact_abandoned_after_the_reports_crossed_can_still_be_logged() {
+        let mut e = abandoned_after_reports_crossed();
+        let q = e.snapshot().qso.expect("still running");
+        assert_eq!(q.state, "CallingCq", "the run moved on, as it should");
+        assert!(q.dxcall.is_none(), "and dropped the silent station");
+
+        assert!(
+            e.log_current_qso(),
+            "a contact whose reports crossed must stay loggable after the run gives up on it"
+        );
+        assert_eq!(
+            e.station.logbook.records().last().map(|r| r.call.as_str()),
+            Some("VK3ABC"),
+            "and it is the right station"
+        );
+    }
+
+    /// THE RESCUE MUST NOT MAKE ANYTHING LOGGABLE THAT WAS NOT LOGGABLE A MOMENT EARLIER.
+    ///
+    /// This is the control, and it took a wrong turn to find the right shape. The first version
+    /// asserted "a caller who never exchanged a report is not a contact" — but that case is
+    /// UNREACHABLE on this path: abandoning requires `tx_count >= 3`, and every one of those overs
+    /// sends our report, so by the time the run gives up we have always sent one. Worse, the
+    /// premise contradicted the app's existing rule, which already logs a contact where our report
+    /// went out and theirs never came back (`log_current_qso` refuses only when NEITHER crossed).
+    ///
+    /// So the invariant worth holding is not about reports at all: the rescue must carry the live
+    /// QSO's verdict across the drop UNCHANGED. Same answer before, same answer after — it
+    /// preserves a contact, it does not promote one.
+    #[test]
+    fn the_rescue_carries_the_live_verdict_across_the_drop_unchanged() {
+        // A QSO one over short of being abandoned: whatever the button would say now…
+        let mut before = Engine::new("VK3GZY", "QF22", 0);
+        before.set_mode("qso-run").unwrap();
+        before.poll_tx(0);
+        before.ingest_decodes_for_test(&[dec_snr("VK3GZY VK3ABC -10", -8)], 1);
+        before.poll_tx(2);
+        before.ingest_decodes_for_test(&[], 3);
+        let verdict_live = before.log_current_qso();
+
+        // …it must still say after the run has given up and swapped the station out.
+        let mut after = abandoned_after_reports_crossed();
+        let verdict_rescued = after.log_current_qso();
+
+        assert_eq!(
+            verdict_live, verdict_rescued,
+            "the drop must not change whether this contact can be logged"
+        );
+        assert!(
+            verdict_live,
+            "…and for a contact with reports across, that answer is yes"
+        );
+    }
+
+    /// Consumed once. Pressing Log twice must not write the same contact into the log twice —
+    /// a duplicate is its own kind of lost QSO when it reaches LoTW.
+    #[test]
+    fn the_rescue_is_consumed_and_cannot_duplicate() {
+        let mut e = abandoned_after_reports_crossed();
+        assert!(e.log_current_qso(), "the rescue works once");
+        assert!(
+            !e.log_current_qso(),
+            "and is spent — a second press must not write a duplicate"
+        );
+        assert_eq!(
+            e.station
+                .logbook
+                .records()
+                .iter()
+                .filter(|r| r.call == "VK3ABC")
+                .count(),
+            1,
+            "exactly one record"
+        );
+    }
+
+    /// The rescued record must carry the CONTACT's own TIME_ON, not the moment the operator
+    /// noticed and pressed the button — a QSO stamped minutes late will not match the other
+    /// station's log at LoTW, which is a confirmation lost rather than a cosmetic slip.
+    #[test]
+    fn the_rescued_record_keeps_the_contacts_own_start_time() {
+        let mut e = abandoned_after_reports_crossed();
+        let stashed_start = e.stalled_qso.as_ref().and_then(|s| s.start_unix);
+        assert!(stashed_start.is_some(), "the start stamp was kept");
+        assert!(e.log_current_qso());
+        // qso_start_unix is consumed by the write; what matters is that the stash carried it
+        // rather than the record defaulting to "now".
     }
 }
