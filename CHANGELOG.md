@@ -5,6 +5,33 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Calling a DXpedition no longer gives up after eight tries.** Nexus would stop calling a
+  station you had picked yourself once eight overs went unanswered, and then sit silent until you
+  clicked it again — which in a pileup is exactly when you least want it to stop. That limit
+  exists for a real problem, but a different one: a station that answered you and then went quiet
+  mid-contact, which is worth abandoning so your CQ run can move on. That part is unchanged.
+  Calling somebody who has not come back is now open-ended, the way WSJT-X does it.
+
+- **A station's callsign is no longer sent back in its shortened form.** When a DX is working
+  several callers at once it sends its own call in FT8's abbreviated `<CALL>` form to make room,
+  and Nexus copied that form straight into its own replies — so overs went out addressed to
+  `<RI1FJL>` rather than `RI1FJL`. It sends the plain call now. Compound calls like `KH8/W1AW`
+  still go out abbreviated, because the protocol has no room for them any other way.
+
+- **A DXpedition running Fox mode is understood without turning Hound on.** A Fox packs two
+  replies into one transmission, and Nexus could only read that while the DXpedition setting was
+  switched on — which also stopped it sending the closing 73 on every ordinary contact. Reading
+  the Fox no longer depends on that switch; it applies whenever you are working someone.
+
+- **The Phone waterfall gives the voice more of the panel.** The dial marker sits on the
+  suppressed carrier, so on USB your voice always sits to the RIGHT of it — that is correct, but a
+  third of the display was being held empty beside the marker to make it read as a line, and that
+  empty third made the dial look misplaced. The gap is much smaller now and the signal is wider.
+
 ## [1.8.0] — 2026-08-23
 
 ### Fixed
