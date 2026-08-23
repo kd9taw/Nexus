@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A station that sends you RR73 gets your 73 back.** If DXpedition "Hound" mode had been
+  left switched on, every ordinary contact inherited the Fox rule — the QSO ended on the other
+  station's RR73 and Nexus sent no parting 73, then switched Enable-Tx off before it could. From
+  your side it looked like a normal contact; from theirs you simply vanished, and they went on
+  repeating RR73. Hound is a per-DXpedition mode now: it is off again at every launch, you turn
+  it on for the DXpedition, and the amber HOUND badge marks the session while it is on. Working
+  a real Fox is unchanged.
+
+- **Hold Tx, and the waterfall's RX/TX markers, survive a settings save.** Pressing Hold Tx or
+  dragging a marker changed the live setting, but any later save from the Settings window posted
+  an older copy back over it and then stored that — so the setting looked as though it had never
+  been saved at all. None of the three is editable in Settings; they only travelled in the form,
+  so a save could only ever undo them. Restoring a backup still sets all three from the backup.
+
+- **The Needed board respects the New-grid band choice again.** With "New grid" set to VHF+, HF
+  grid needs were listed on the board anyway. The board had been switched to an unfiltered list
+  so that turning the CW or Phone features off would stop hiding needs there — right on its own
+  terms, but it dropped the band choice with it. The board's own mode filters still show
+  everything; the band choice applies again.
+
 - **A contact the run gave up on can still be logged.** If a station answered you, exchanged
   reports and then went quiet — a club station working several people at once does this
   routinely — Nexus stopped calling them after a few overs so your CQ run kept moving. That part
@@ -58,6 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is what left Nexus showing a blank white window on Fedora 44.
 
 ### Added
+
+- **The log table shows your Comment, and marks rows carrying a private Note.** Both fields
+  could be typed and saved, and neither was ever shown again — the only way to read a note was
+  to open a contact you had no way of knowing held one. The Comment now has its own column, and
+  a contact with a private Note carries a 📝 you can hover for the full text. (The callsign
+  recall card beside the log entry already showed both; that is unchanged.)
 
 - **AM on the Phone screen.** Pick AM beside AUTO/USB/LSB/FM and Nexus commands the rig to AM
   with a 6 kHz filter — an SSB-width filter cuts half of a double-sideband signal away and the
