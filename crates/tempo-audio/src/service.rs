@@ -9107,6 +9107,12 @@ fn mode_is_fm_family(md: &str) -> bool {
 fn passband_for(md: &str) -> i32 {
     match md.trim().to_ascii_uppercase().as_str() {
         "PKTUSB" | "PKTLSB" => 3000,
+        // AM is DOUBLE-sideband: the carrier sits in the middle with a sideband either side, so
+        // an SSB-width filter cuts half the signal off and the audio comes out thin and distorted.
+        // 6 kHz is the AM filter every HF rig that has one offers. Rigs that round to their
+        // nearest own filter are fine — the read-back check treats a nearby width as the radio
+        // doing its job, not a fault.
+        "AM" => 6000,
         _ => -1,
     }
 }

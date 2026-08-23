@@ -1259,6 +1259,22 @@ pub struct Settings {
     pub max_power_cw: Option<f32>,
     #[serde(default)]
     pub max_power_digital: Option<f32>,
+    /// AM's ceiling, as a fraction of the rig's max. AM rides `OperatingMode::Phone`, so without
+    /// this it took the SSB cap — and AM is not SSB.
+    ///
+    /// ⚠️ A RIG MAKING 100 W PEP ON SSB MAKES ABOUT 25 W OF CARRIER ON AM, because AM's power is
+    /// in a carrier that is always there plus two sidebands, and PEP is reached on modulation
+    /// peaks. Run the SSB drive into AM and the peaks flat-top. Most rigs' manuals say a quarter,
+    /// which is where the 0.25 default comes from — it is a starting point, not a rule, and any
+    /// operator who knows their rig can raise it.
+    ///
+    /// Applied as the LOWER of this and the phone cap (see [`Settings::rf_power_ceiling`]), never
+    /// on its own: an operator who set AM above phone must not have AM lift their power past what
+    /// the phone cap allows. That min-shape is the same one `rf_power_ceiling_high_duty` uses for
+    /// SSTV, and for the same reason — it can only ever LOWER power, which is what makes it safe
+    /// without a bench.
+    #[serde(default = "default_max_power_am")]
+    pub max_power_am: Option<f32>,
     /// Path-prediction engine: "heuristic" (physics-lite, the default) or
     /// "p533" (the native ITU-R P.533 engine). Unknown values fall back to
     /// the heuristic in the factory, so old configs can never break.
@@ -1830,6 +1846,12 @@ fn default_directed_max_calls() -> Option<u32> {
 
 /// Eight unanswered CQs before a breather (operator ruling). Enough to be heard through a
 /// fade, short enough not to hold a frequency for a quarter of an hour.
+/// A quarter of the rig's maximum — what most manuals say for AM, because the carrier is always
+/// there and the peaks are what flat-top. A starting point an operator can raise.
+fn default_max_power_am() -> Option<f32> {
+    Some(0.25)
+}
+
 fn default_cq_max_calls() -> Option<u32> {
     Some(8)
 }
@@ -2923,6 +2945,7 @@ impl Default for Settings {
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,
+            max_power_am: default_max_power_am(),
             prop_engine: default_prop_engine(),
             save_wav: default_save_wav(),
             lotw_max_age_days: default_lotw_max_age_days(),
@@ -3818,6 +3841,23 @@ impl Settings {
             .map(|c| c.clamp(0.0, 1.0))
             .unwrap_or(1.0);
         digital.min(self.rf_power_ceiling())
+    }
+
+    /// The ceiling for an AM transmission, whatever the phone cap says.
+    ///
+    /// ⚠️ AM IS NOT SSB, AND THE SSB CAP LETS IT FLAT-TOP. A rig making 100 W PEP on SSB makes
+    /// about 25 W of carrier on AM: the power is in a carrier that is always present plus two
+    /// sidebands, and PEP is reached on modulation peaks. Run the SSB drive into AM and the peaks
+    /// clip. Most manuals say a quarter, which is the [`default_max_power_am`] default.
+    ///
+    /// The LOWER of the AM cap and the selected mode's own cap, never the AM one alone — an
+    /// operator who set AM above phone must not have AM lift their power past what the phone cap
+    /// allows. Identical in shape to [`Self::rf_power_ceiling_high_duty`], and for the identical
+    /// reason: enforcement here may only ever LOWER power, which is what makes it safe to apply
+    /// without bench proof.
+    pub fn rf_power_ceiling_am(&self) -> f32 {
+        let am = self.max_power_am.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0);
+        am.min(self.rf_power_ceiling())
     }
 
     pub fn rig_mode(&self) -> String {
@@ -6904,5 +6944,62 @@ mod cq_pause_wire_tests {
             "serde default must match the struct default"
         );
         assert_eq!(old.cq_pause_secs, Some(180));
+    }
+}
+
+#[cfg(test)]
+mod am_power_tests {
+    use super::*;
+
+    /// AM'S CAP MAY ONLY EVER LOWER POWER. That property is the whole reason this can ship
+    /// without a rig on the bench, exactly as `rf_power_ceiling_high_duty` did for SSTV.
+    ///
+    /// Why it needs a cap at all: a rig making 100 W PEP on SSB makes about 25 W of carrier on
+    /// AM. The power sits in a carrier that is always present plus two sidebands, and PEP is
+    /// reached on modulation peaks — so the SSB drive clips the peaks.
+    #[test]
+    fn am_lowers_the_phone_ceiling_and_never_lifts_it() {
+        let mut s = Settings {
+            operating_mode: OperatingMode::Phone,
+            // Default: a quarter, and below an uncapped phone.
+            max_power_phone: None,
+            ..Default::default()
+        };
+        assert_eq!(s.rf_power_ceiling(), 1.0, "phone uncapped");
+        assert_eq!(s.rf_power_ceiling_am(), 0.25, "AM still capped");
+
+        // An operator who set AM ABOVE phone must not have AM lift them past the phone cap.
+        s.max_power_phone = Some(0.30);
+        s.max_power_am = Some(0.90);
+        assert_eq!(
+            s.rf_power_ceiling_am(),
+            0.30,
+            "the LOWER of the two, always"
+        );
+
+        // And the ordinary case: AM below phone.
+        s.max_power_am = Some(0.20);
+        assert_eq!(s.rf_power_ceiling_am(), 0.20);
+    }
+
+    /// An operator who deliberately clears the AM cap gets the phone cap — not 1.0, and not a
+    /// silent re-imposition of the default.
+    #[test]
+    fn clearing_the_am_cap_falls_back_to_phone_not_to_full_power() {
+        let s = Settings {
+            operating_mode: OperatingMode::Phone,
+            max_power_am: None,
+            max_power_phone: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(s.rf_power_ceiling_am(), 0.5);
+    }
+
+    /// A settings.json written before AM existed must load with the cap ON. An upgrading
+    /// operator is exactly the person who has never thought about AM drive.
+    #[test]
+    fn an_old_settings_file_gains_the_am_cap() {
+        let old: Settings = serde_json::from_str("{}").expect("empty settings loads");
+        assert_eq!(old.max_power_am, Some(0.25));
     }
 }

@@ -5866,7 +5866,10 @@ impl Engine {
         // Whitelist the Phone voice modes — a broker/devtools caller can't smuggle "CW" etc. in.
         self.sideband_override = mode
             .map(|m| m.trim().to_ascii_uppercase())
-            .filter(|m| matches!(m.as_str(), "USB" | "LSB" | "FM"));
+            // AM joins the whitelist as a Phone voice mode (operator request, 2026-08-22). Still
+            // a whitelist: a broker or devtools caller cannot smuggle "CW" or a DATA submode in
+            // through the cockpit's mode verb.
+            .filter(|m| matches!(m.as_str(), "USB" | "LSB" | "FM" | "AM"));
         // Reaching for the mode by hand WHILE a pass owns the dial is the
         // operator taking it back: stop having an opinion about the uplink's
         // sideband for the rest of the pass rather than re-asserting a swap
@@ -6549,9 +6552,26 @@ impl Engine {
     fn active_power_ceiling(&self) -> f32 {
         if self.sstv_sending || self.sstv_tx.is_some() {
             self.settings.rf_power_ceiling_high_duty()
+        } else if self.am_in_force() {
+            self.settings.rf_power_ceiling_am()
         } else {
             self.settings.rf_power_ceiling()
         }
+    }
+
+    /// Is the rig being commanded to AM right now?
+    ///
+    /// ⚠️ READS THE OVERRIDE, NOT `settings.phone_mode`. AM is a COCKPIT pick — the transient
+    /// `sideband_override` that a band change clears — and `phone_mode` only ever holds "ssb" or
+    /// "fm". An earlier draft of this feature gated on `phone_mode` and was dead code that looked
+    /// exactly like working code: the AM power cap would silently never have applied, and the
+    /// first anyone knew would be a flat-topped signal.
+    pub(crate) fn am_in_force(&self) -> bool {
+        self.settings.operating_mode == crate::settings::OperatingMode::Phone
+            && self
+                .sideband_override
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case("am"))
     }
 
     pub fn set_rf_power(&mut self, frac: f32) {
@@ -34292,5 +34312,82 @@ mod tests {
         // Clipping is preserved rather than wrapping (±2.0 saturates, not overflows).
         assert_eq!(stored[6], i16::MAX);
         assert_eq!(stored[7], i16::MIN);
+    }
+}
+
+#[cfg(test)]
+mod am_override_tests {
+    use super::*;
+    use crate::settings::OperatingMode;
+
+    /// ⚠️ THE AM CAP MUST READ THE OVERRIDE, NOT `settings.phone_mode` — and this test exists
+    /// because the first draft of the feature read `phone_mode` and was DEAD CODE that looked
+    /// exactly like working code.
+    ///
+    /// `phone_mode` is the persistent station-wide sub-mode and only ever holds "ssb" or "fm";
+    /// AM is a COCKPIT pick, which lives in the transient `sideband_override`. Gating on the
+    /// wrong field means the AM power cap silently never applies, and the first anyone learns of
+    /// it is a flat-topped signal on the air.
+    #[test]
+    fn am_is_detected_from_the_cockpit_pick_not_the_station_setting() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.operating_mode = OperatingMode::Phone;
+
+        e.request_sideband_override(Some("AM"));
+        assert!(e.am_in_force(), "a cockpit AM pick is AM");
+
+        // The control that catches the original mistake: setting phone_mode alone must NOT read
+        // as AM, because that is not how AM is selected.
+        e.request_sideband_override(None);
+        e.settings.phone_mode = "am".into();
+        assert!(
+            !e.am_in_force(),
+            "phone_mode is not how AM is picked — gating on it is the dead-code bug"
+        );
+    }
+
+    /// The whitelist must admit AM, or the cockpit's pick is silently dropped and the rig stays
+    /// on sideband while the button looks selected.
+    #[test]
+    fn the_override_whitelist_admits_am_and_still_refuses_the_rest() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.operating_mode = OperatingMode::Phone;
+
+        for m in ["AM", "am", "USB", "LSB", "FM"] {
+            e.request_sideband_override(Some(m));
+            assert_eq!(
+                e.sideband_override().as_deref(),
+                Some(m.to_ascii_uppercase().as_str()),
+                "{m} is a Phone voice mode"
+            );
+        }
+        // Still a whitelist: a broker or devtools caller cannot smuggle a non-voice mode in.
+        for m in ["CW", "PKTUSB", "RTTY", "DATA-U"] {
+            e.request_sideband_override(Some(m));
+            assert_eq!(e.sideband_override(), None, "{m} must be refused");
+        }
+    }
+
+    /// AM leaves on a band change like every other cockpit pick — which is WHY it needs no
+    /// band gate in the engine: it cannot follow the operator onto a band they did not pick it
+    /// for. The picker simply does not offer it where AM is not worked.
+    #[test]
+    fn an_am_pick_does_not_survive_a_qsy_to_another_band() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.operating_mode = OperatingMode::Phone;
+        // BOTH fields: a fresh Engine starts on "20m", and `set_frequency` decides
+        // `band_changed` from the BAND label, not the dial. Setting only dial_mhz made the QSY
+        // below a 20m→20m move that correctly changed nothing — the test failed for its own
+        // reason and said the code was broken.
+        e.settings.band = "80m".into();
+        e.settings.dial_mhz = 3.885;
+        e.request_sideband_override(Some("AM"));
+        assert!(e.am_in_force());
+
+        e.set_frequency(14.200, "20m", "USB");
+        assert!(
+            !e.am_in_force(),
+            "a band change drops the pick — this is the reason the FM-style gate is unnecessary here"
+        );
     }
 }

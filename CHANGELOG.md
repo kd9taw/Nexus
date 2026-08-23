@@ -51,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AM on the Phone screen.** Pick AM beside AUTO/USB/LSB/FM and Nexus commands the rig to AM
+  with a 6 kHz filter — an SSB-width filter cuts half of a double-sideband signal away and the
+  audio comes out thin. It is offered on the bands AM is actually worked (the windows below
+  10 MHz, and 10 m / 6 m and up), not on 20 m where a 6 kHz signal has no room.
+
+  **Your power comes down automatically.** A rig making 100 W PEP on SSB makes about 25 W of
+  carrier on AM, so the same drive flat-tops the peaks. AM gets its own ceiling — a quarter by
+  default, adjustable — and it is always the LOWER of that and your phone cap, so it can only
+  ever reduce power, never raise it.
+
 - **The Phone waterfall has frequencies on it.** It showed you a signal without telling you
   where it was, so clicking to tune was a guess. There is a scale along the bottom now, in MHz
   to the kHz you would dial. It reads absolute frequency rather than an offset from your dial,

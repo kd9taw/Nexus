@@ -1128,7 +1128,7 @@ export async function setSplit(txMhz: number | null): Promise<AppSnapshot> {
 
 /** Set ('USB'|'LSB'|'FM') or clear (null = AUTO) the transient Phone mode override. The radio
  * loop applies it next cycle; a band change reverts to the band-auto sideband. */
-export async function setSidebandOverride(mode: 'USB' | 'LSB' | 'FM' | null): Promise<AppSnapshot> {
+export async function setSidebandOverride(mode: 'USB' | 'LSB' | 'FM' | 'AM' | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_sideband_override', { mode })
 }
 

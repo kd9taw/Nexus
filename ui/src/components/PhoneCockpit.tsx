@@ -511,8 +511,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // Transient operator override ("USB"/"LSB"/"FM") or null = AUTO. The COMMANDED mode (canonical
   // for TX/logging + what the rig is set to) is the override when set, else the band-auto sideband.
   const modeOverride = snap.radio.sidebandOverride ?? null
+  // Bands where AM is worked: the HF windows below 10 MHz, and 10 m / 6 m and up. Mirrors the
+  // comment on the picker's filter below.
+  const amBandOk = snap.radio.dialMhz > 0 && (snap.radio.dialMhz < 10 || snap.radio.dialMhz >= 28)
   const commandedMode = modeOverride ?? sidebandAuto
-  const pickMode = (m: 'USB' | 'LSB' | 'FM' | null) =>
+  const pickMode = (m: 'USB' | 'LSB' | 'FM' | 'AM' | null) =>
     void setSidebandOverride(m)
       .then((s) => onSnap?.(s))
       .catch(() => pushToast(t('phone.mode.failed'), 'error'))
@@ -1121,7 +1124,21 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         onSnap={onSnap}
         modeIndicator={
           <div className="ph-mode-pick" role="group" aria-label={t('phone.mode.aria')}>
-            {(['AUTO', 'USB', 'LSB', 'FM'] as const).map((m) => {
+            {(['AUTO', 'USB', 'LSB', 'FM', 'AM'] as const)
+              // AM IS OFFERED ONLY WHERE AM IS ACTUALLY WORKED — below 10 MHz (the 1.885,
+              // 3.870-3.890 and 7.290 windows) and at 28 MHz and up (29.0-29.2, 50.4 and above).
+              // 20/17/15/12 m are not AM territory, and a 6 kHz emission there has no room in the
+              // band plan.
+              //
+              // NOT OFFERING it rather than refusing it, deliberately. The cockpit pick is the
+              // operator's own CURRENT action and this app honours those — `sideband_override` is
+              // already cleared by a band change, a cross-band knob QSY, working a spot and an
+              // SSTV tune, so unlike the station-wide `phone_mode` it cannot follow anybody onto a
+              // band they did not choose it for. There is no stale state to protect against here;
+              // the only thing worth doing is not putting a button in front of somebody on a band
+              // where it makes no sense.
+              .filter((m) => m !== 'AM' || amBandOk)
+              .map((m) => {
               const active = m === 'AUTO' ? modeOverride === null : modeOverride === m
               return (
                 <button
