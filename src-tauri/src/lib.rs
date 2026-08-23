@@ -18274,6 +18274,14 @@ mod tests {
 
     /// A scratch file path unique to this test process (std-only — no tempfile
     /// dependency), cleaned up by the caller.
+    /// A per-test scratch directory.
+    ///
+    /// ⚠️ `name` MUST BE UNIQUE PER TEST. The pid separates concurrent cargo processes, not the
+    /// tests inside one — those run on threads and share it. Two tests on one name write into
+    /// each other's folder, and one of them `remove_dir_all`s it mid-run, so the pair fails
+    /// intermittently and by test ORDER: `--test-threads=1` is green, the ordinary parallel run
+    /// is red one time in several. Exactly that cost a red gate on 2026-08-23, where it read as a
+    /// fresh break in whatever had just been edited.
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("nexus-test-{}-{name}", std::process::id()))
     }
@@ -18440,7 +18448,7 @@ mod tests {
     /// from a bare file and stay zero rather than being invented.
     #[test]
     fn an_image_the_index_never_knew_about_is_adopted() {
-        let dir = scratch("sstv-adopt");
+        let dir = scratch("sstv-adopt-orphan");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let orphan = dir.join("20260717T153000Z_pd120.bmp");
