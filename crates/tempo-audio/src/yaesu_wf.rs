@@ -25,9 +25,17 @@
 //! ([`parse_wf1`], [`span_hz`], [`sweep_edges`]). The only part that needs FTDI's closed-source
 //! library sits behind the off-by-default `yaesu-wf` feature and behind [`WaterfallSource`], so
 //! the parsing is exercised by the suite on every platform and the FFI is the one thing a
-//! licensing decision gates. **No FTDI binary is vendored into this repo** — see FORK.md: D2XX /
-//! LibFT4222 is closed source and Nexus is GPL-3.0-only, which is an open question, not a settled
-//! one. Fork-local until it is answered.
+//! licensing decision gates. **No FTDI binary is vendored into this repo, and that is settled
+//! rather than pending** (maintainer ruling, kd9taw/Nexus#142): D2XX / LibFT4222 are closed source
+//! and Nexus is GPL-3.0-only, so bundling them is refused — not as a close call. The behaviour
+//! instead is DETECT AND INSTRUCT: name the missing library, say why it is not shipped, and link
+//! it, so one manual download stands between an operator and the scope rather than a panel that
+//! silently never appears.
+//!
+//! THE DESTINATION IS A DIRECT-USB IMPLEMENTATION — the FT4222 spoken to over `nusb`/libusb, with
+//! no FTDI library at all. That removes the download and the licence question together, and it is
+//! the version that could simply ship. Recorded here because a paragraph that reads like an open
+//! question is how a settled decision gets reopened by someone being helpful.
 //!
 //! HOW IT MEETS THE REST OF THE APP. The output shape is deliberately the same as the CI-V
 //! scope's [`crate::civ::scope::ScopeSweep`]: bins normalised 0..1 plus the absolute RF span, so
@@ -170,6 +178,24 @@ pub fn span_code_for_hz(hz: u32) -> Option<u8> {
 /// The raw CAT string that SETS the scope span. `SS<P1=0><P2=5><P3=code><P4..P7=0>;`
 ///
 /// The rig does not answer a set (measured), so this goes out through `Rig::send_raw_set`.
+///
+/// ⚠️ DO NOT WRAP THIS IN A VERIFY-AND-RETRY. `SS05;` — the READ — comes back EMPTY after any `SS`
+/// set, every time, and reads from roughly 0.2 s onward are normal (bench, FT-710, 2026-08-20).
+/// So a loop shaped
+///
+/// ```text
+///     set the span; read it back; if reported != wanted, set it again
+/// ```
+///
+/// never terminates: the write is what suppresses the report, so the condition is true on every
+/// pass and each pass re-suppresses it. That is the general shape — **a "reported != wanted" retry
+/// becomes a loop whenever the write disturbs the reporting** — and it is not specific to this
+/// radio or this command.
+///
+/// Nothing does this today; it was checked. It is written here rather than only beside the timer
+/// that avoids it (`YAESU_WF_SETTLE_MS` in `service.rs`, which waits before reading back) because
+/// THIS is where the next person adds the retry, and finding out costs a CAT reconnect storm and a
+/// lost rig-control session.
 pub fn set_span_command(code: u8) -> String {
     format!("SS05{}0000;", code as char)
 }
