@@ -4179,7 +4179,11 @@ export const EN = {
   'settings.headphoneMonitor.enable.aria': 'Play receive audio on this computer',
   'settings.headphoneMonitor.enable.hint':
     "Plays the RECEIVED audio — exactly what the decoder hears — out of a device on this computer, for level and RFI diagnosis or simply to listen to the band. This is not a transmit monitor: it never plays your own voice back. Off by default; UNVERIFIED on-air until the attended session.",
-  'settings.headphoneMonitor.device.label': 'Output device',
+  // NAMES THE DESTINATION, not the direction — "Output device" collided with
+  // `settings.audio.output.label` ("Output Device (TX)") on the same tab, so the Radio page
+  // showed two pickers differing by a parenthetical and a capital letter. Under the section
+  // heading it read clearly; scanning the tab it did not (kd9taw, #157).
+  'settings.headphoneMonitor.device.label': 'Headphones or speakers',
   'settings.headphoneMonitor.device.hint':
     "Your headphones or speakers — must NOT be the rig's TX output device.",
   'settings.headphoneMonitor.level.label': 'Listening level',

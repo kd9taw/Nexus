@@ -164,7 +164,7 @@ export const DE: PartialCatalog = {
   "settings.headphoneMonitor.enable.label": "Empfangsaudio hier wiedergeben",
   "settings.headphoneMonitor.enable.aria": "Empfangsaudio auf diesem Computer wiedergeben",
   "settings.headphoneMonitor.enable.hint": "Gibt das EMPFANGENE Audio aus — genau das, was der Dekoder hört — über ein Gerät an diesem Computer, zur Pegel- und HF-Störungsdiagnose oder einfach zum Hören des Bandes. Dies ist kein Sende-Mithörton: die eigene Stimme wird nie wiedergegeben. Standardmäßig aus; auf Sendung UNGEPRÜFT bis zur betreuten Sitzung.",
-  "settings.headphoneMonitor.device.label": "Ausgabegerät",
+  "settings.headphoneMonitor.device.label": "Kopfhörer oder Lautsprecher",
   "settings.headphoneMonitor.device.hint": "Ihr Kopfhörer oder Lautsprecher — darf NICHT das TX-Ausgabegerät des Funkgeräts sein.",
   "settings.headphoneMonitor.level.label": "Wiedergabepegel",
   "settings.headphoneMonitor.level.aria": "Wiedergabepegel für Empfangsaudio",

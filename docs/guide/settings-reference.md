@@ -222,7 +222,7 @@ from the labels. (The search still knows it — look for "monitor" and you will 
 - **Play receive audio here** — off by default, and UNVERIFIED on-air until the attended
   session. It guards against the rig's TX device by name; if your devices go by multiple
   names, pick your headphones explicitly rather than System default.
-- **Output device** — your headphones or speakers, and "must NOT be the rig's TX output
+- **Headphones or speakers** — and "must NOT be the rig's TX output
   device": playing the received band into the transmitter would put it back on the air.
 - **Listening level** — playback volume, with no effect on transmit.
 
