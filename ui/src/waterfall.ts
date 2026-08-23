@@ -1011,6 +1011,53 @@ export function scopeView(
   }
 }
 
+/**
+ * The ABSOLUTE frequency (Hz) at a point on a drawn scope axis — what the operator is pointing at.
+ *
+ * Added because the Phone waterfall had no numbers on it at all: an operator could see a signal
+ * and had no way to know where clicking would put them (operator, 2026-08-22).
+ *
+ * ⚠️ THE AXIS MEANS TWO DIFFERENT THINGS AND THAT IS THE WHOLE OF THIS FUNCTION. For an AUDIO row
+ * on the carrier-centred axis, [`scopeView`] returns RF OFFSETS from the dial — the dial is axis
+ * zero, which is what puts it at the 1/4 mark on USB and the 3/4 mark on LSB. For a NATIVE RF
+ * panadapter row it already returns absolute RF, because that branch built its bounds from
+ * `center + sign*(f - anchor)` with the dial as centre. Adding the dial in the second case would
+ * label a 14 MHz scope at 28 MHz.
+ *
+ * Returns null when there is nothing honest to say: an audio axis with no known dial has no
+ * absolute frequency, and a guessed one on a scale an operator tunes by is worse than a blank.
+ */
+export function axisAbsoluteHz(
+  axisHz: number,
+  source: string,
+  dialHz: number | null,
+): number | null {
+  if (isRfScopeSource(source)) return axisHz
+  if (dialHz == null || !Number.isFinite(dialHz) || dialHz <= 0) return null
+  return dialHz + axisHz
+}
+
+/**
+ * Tick positions for a frequency scale across `[loHz, hiHz]`, in the same axis units.
+ *
+ * Chooses a round step — 100 Hz to 100 kHz — so labels land on numbers an operator recognises
+ * rather than wherever an even division happened to fall. `maxTicks` is a budget, not a target:
+ * a narrow scope gets fewer ticks rather than a crowded axis, because an unreadable scale is the
+ * same as no scale.
+ */
+export function axisTicks(loHz: number, hiHz: number, maxTicks = 6): number[] {
+  const span = hiHz - loHz
+  if (!(span > 0) || !Number.isFinite(span)) return []
+  const STEPS = [100, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000]
+  const step = STEPS.find((s) => span / s <= maxTicks) ?? STEPS[STEPS.length - 1]
+  const out: number[] = []
+  // `+ 0` normalises NEGATIVE ZERO. `Math.ceil(-0.8) * 1000` is -0, which formats as "-0" and
+  // would put a minus sign on the dial's own tick — the one label an operator is most likely to
+  // be looking at.
+  for (let t = Math.ceil(loHz / step) * step; t <= hiHz; t += step) out.push(t + 0 === 0 ? 0 : t)
+  return out
+}
+
 /** Width of the CW cockpit's audio scope window (Hz) — 800 over 512 bins = 1.5625 Hz/bin. */
 export const CW_SCOPE_SPAN_HZ = 800
 

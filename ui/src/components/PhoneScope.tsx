@@ -31,6 +31,8 @@ import {
   // which shadows a bare import everywhere inside the component — including the one call site
   // below, where it resolved to a number and failed to compile.
   spanDb as rowSpanDb,
+  axisAbsoluteHz,
+  axisTicks,
 } from '../waterfall'
 import { boxEdges, boxWidthFor, clampBoxCenterHz, clickTuneTarget, dialFromBoxCenter } from '../tuneSnap'
 import type { ScopeTuneRequest } from '../useScopeTune'
@@ -864,6 +866,48 @@ export function PhoneScope({
           ctx.textAlign = 'left'
           ctx.textBaseline = 'top'
           ctx.fillText(DIAL_PLATE, dx + 3 * scaleY, 2 * scaleY)
+        }
+      }
+
+      // ---- Frequency scale: where a click will actually put you --------------------
+      //
+      // Operator, 2026-08-22: "can freq numbers be added to the phone waterfall? It's a bit
+      // difficult to see where a mouse click will take you." The Operate waterfall has had an
+      // axis all along; this one had the DIAL plate and nothing else, so a signal two thirds of
+      // the way across was a guess.
+      //
+      // ABSOLUTE frequency, not offset from the dial. The question being answered is "where will
+      // I land", and an operator reading "-3.2k" still has arithmetic to do mid-QSO.
+      //
+      // `axisAbsoluteHz` owns the one thing that is easy to get wrong here: on the carrier-centred
+      // AUDIO axis these bounds are offsets FROM the dial, while a native RF panadapter's are
+      // already absolute. It returns null when there is no honest answer (audio row, unknown
+      // dial), and then nothing is drawn — a wrong number on a scale someone tunes by is worse
+      // than a blank one.
+      {
+        const dialNow = dialRef.current
+        for (const t of axisTicks(lo, hi, 6)) {
+          const abs = axisAbsoluteHz(t, src, dialNow)
+          if (abs == null) break
+          const tx = Math.round(((t - lo) / (hi - lo)) * Wd)
+          // Skip a tick sitting on the dial line — its plate is already there and the two
+          // would overprint.
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)'
+          ctx.lineWidth = Math.max(1, scaleY)
+          ctx.beginPath()
+          ctx.moveTo(tx, devH - 10 * scaleY)
+          ctx.lineTo(tx, devH)
+          ctx.stroke()
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
+          ctx.font = `${Math.max(8, Math.round(9 * scaleY))}px system-ui, sans-serif`
+          ctx.textBaseline = 'bottom'
+          // Three decimals of MHz is the kHz an operator dials. Nudged inward at the edges so a
+          // label is never half-clipped — a truncated frequency is a misleading one.
+          const label = (abs / 1e6).toFixed(3)
+          const w = ctx.measureText(label).width
+          ctx.textAlign = 'left'
+          const lx = Math.min(Wd - w - 2 * scaleY, Math.max(2 * scaleY, tx + 3 * scaleY))
+          ctx.fillText(label, lx, devH - 2 * scaleY)
         }
       }
 

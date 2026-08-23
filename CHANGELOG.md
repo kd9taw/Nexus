@@ -51,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Phone waterfall has frequencies on it.** It showed you a signal without telling you
+  where it was, so clicking to tune was a guess. There is a scale along the bottom now, in MHz
+  to the kHz you would dial. It reads absolute frequency rather than an offset from your dial,
+  because the question it answers is "where will this click put me". If Nexus does not know your
+  dial — no CAT — it shows no numbers rather than invented ones.
+
 - **The Needed list shows the frequency, not just the band.** A rare one on 20 m is a different
   proposition from a rare one on 14.074 — the exact spot frequency is now a column, and you can
   sort by it to see what is worth swinging the dial for. Needs worked out from your log rather
