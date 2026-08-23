@@ -775,6 +775,15 @@ pub struct RadioStatus {
     /// A config warning (self-clears once the ports differ); surfaced in the status lane.
     #[serde(default)]
     pub radio_config_warning: Option<String>,
+    /// The radio reports essentially NO RF power while transmit is armed — it will key and put
+    /// nothing on the air. Deliberately a flag rather than a message: the UI owns the wording so
+    /// it can be translated, unlike `radio_config_warning`'s Rust-built string.
+    ///
+    /// This exists because the failure is invisible from the operator's own chair — the rig keys,
+    /// the meter shows TX, the over looks completely normal, and only the far end hears nothing
+    /// (operator, 2026-08-23: an FTDX10 whose per-mode power register sat at zero).
+    #[serde(default)]
+    pub tx_power_zero: bool,
     /// The last per-QSO recording failed, with the full path it failed at. Surfaced in the status
     /// lane and cleared by the next recording that succeeds.
     ///

@@ -96,6 +96,7 @@
     "txLevel": 0.8999999761581421,
     "txOffsetHz": 1500.0,
     "txPoW": null,
+    "txPowerZero": false,
     "txSwr": null,
     "txWatchdog": false,
     "vox": null,

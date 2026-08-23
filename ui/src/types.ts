@@ -1151,6 +1151,9 @@ export interface RadioStatus {
   audioError?: string | null
   /** Set when two radios are on the same serial COM port (explains a red pill). */
   radioConfigWarning?: string | null
+  /** The radio reports essentially no RF power while transmit is armed — it will key and put
+   *  nothing on the air. A flag, not a message: the wording lives in the UI so it translates. */
+  txPowerZero?: boolean
   /** The last per-QSO recording failed, with the path it failed at. Surfaced in the status lane;
    * cleared by the next recording that succeeds. */
   recordingWarning?: string | null

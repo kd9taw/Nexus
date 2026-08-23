@@ -504,6 +504,23 @@ export default function App() {
     )
   }, [snap?.radio.radioConfigWarning])
 
+  // A rig at 0% power KEYS, shows TX, and produces an over that looks entirely normal from the
+  // operator's chair — it is silent only to everyone else, which is why the report it came from
+  // ("opening cat but not sending audio out") cost an evening to chase. Notify, never act: the
+  // lane says so and nothing touches the power.
+  useEffect(() => {
+    setStatus(
+      'txPowerZero',
+      snap?.radio.txPowerZero
+        ? {
+            tier: 'warning',
+            message: t('shell.lane.txPowerZero.message'),
+            detail: t('shell.lane.txPowerZero.detail'),
+          }
+        : null,
+    )
+  }, [snap?.radio.txPowerZero])
+
   // A per-QSO recording that could not be written. The contact IS logged — only the audio failed —
   // so this is a warning in the lane rather than an error on the log action, and it names the full
   // path because "it did not save" without saying where is exactly the report that prompted it.

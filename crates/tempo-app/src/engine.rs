@@ -783,6 +783,12 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// actually hear a heterodyne in. A notch parked outside it is one you cannot hear and
 /// cannot find your way back from. 300 Hz is below any voice energy worth keeping; 3400 is
 /// the top of a wide SSB filter.
+/// At or below this the radio is not putting anything usable on the air (0.5%).
+///
+/// Deliberately well under the operator's own 2% — QRP is a legitimate way to operate, and a
+/// warning that fires on a level somebody is really using is one people learn to ignore, which
+/// costs more than it saves. Only a rig that rounds to 0% on the slider trips it.
+const ZERO_RF_POWER: f32 = 0.005;
 const NOTCH_MIN_HZ: f32 = 300.0;
 const NOTCH_MAX_HZ: f32 = 3400.0;
 
@@ -1967,6 +1973,9 @@ pub struct Engine {
     /// the commanded `rf_power` so a 750 ms poll can never clobber a just-issued
     /// set that the radio loop hasn't applied yet.
     rig_rf_power: Option<f32>,
+    /// Latch for the zero-power log line, so it is written once per transition and not once
+    /// per radio-loop tick.
+    zero_power_noted: bool,
     /// Desired MIC GAIN (0.0–1.0); `None` = leave the rig's mic gain alone. Same
     /// commanded-vs-read-back split as `rf_power`/`rig_mic_gain` so an in-flight drag wins.
     mic_gain: Option<f32>,
@@ -3738,6 +3747,7 @@ impl Engine {
             manual_ptt: false,
             rf_power: None,
             rig_rf_power: None,
+            zero_power_noted: false,
             mic_gain: None,
             rig_mic_gain: None,
             nr_level: None,
@@ -6686,7 +6696,43 @@ impl Engine {
     pub fn observe_rig_power(&mut self, frac: f32) {
         if frac.is_finite() {
             self.rig_rf_power = Some(frac.clamp(0.0, 1.0));
+            // ONE line per transition — this runs every radio-loop tick, and a line per tick
+            // would bury the log that the issue templates now ask reporters to attach. The
+            // whole point is that the NEXT report of "keys but no audio" arrives already
+            // carrying its own answer.
+            let zero = self.tx_power_is_zero();
+            if zero != self.zero_power_noted {
+                self.zero_power_noted = zero;
+                if zero {
+                    tempo_core::applog::info(
+                        "tx",
+                        "the radio reports 0% RF power while transmit is ARMED — an over will key and put nothing on the air",
+                    );
+                }
+            }
         }
+    }
+
+    /// Is the radio about to transmit with essentially nothing to transmit WITH?
+    ///
+    /// NOTIFY, NEVER ACT. This raises a flag and nothing else: it never clamps, raises or
+    /// commands power, and it never withholds an over. Driving an amplifier's input at a hair
+    /// above zero is a legitimate way to operate and the app does not know better than the
+    /// operator — see `feedback-alerts-notify-never-act`.
+    ///
+    /// Two conditions, and both matter:
+    ///
+    /// A REAL READ-BACK ONLY. `None` means the rig does not report power, or has not answered
+    /// yet — that is ignorance, not a zero, and warning on it would fire forever on every rig
+    /// whose level cannot be read.
+    ///
+    /// ARMED ONLY. A rig parked at zero with transmit off is just a rig sitting there; nothing
+    /// is about to go out and there is nothing to tell anybody.
+    pub(crate) fn tx_power_is_zero(&self) -> bool {
+        self.tx_enabled
+            && self
+                .rig_rf_power
+                .is_some_and(|observed| observed <= ZERO_RF_POWER)
     }
 
     /// Set desired mic gain (0.0–1.0). The radio loop applies it via the rig.
@@ -13969,6 +14015,7 @@ impl Engine {
         s.radio.tx_level = self.settings.tx_level;
         // Rig read-back wins (the knob's truth); else the last commanded value.
         s.radio.rf_power = self.rig_rf_power.or(self.rf_power);
+        s.radio.tx_power_zero = self.tx_power_is_zero();
         s.radio.mic_gain = self.rig_mic_gain.or(self.mic_gain);
         s.radio.nr_level = self.rig_nr_level.or(self.nr_level);
         s.radio.comp_level = self.rig_comp_level.or(self.comp_level);
@@ -22188,6 +22235,62 @@ mod tests {
         assert!(
             !e.poll_tx(4).is_empty(),
             "the parting 73 must transmit — this is the field bug"
+        );
+    }
+
+    /// OPERATOR REPORT 2026-08-23 (1.7.7-test4, FTDX10): "when transmitting, its opening cat
+    /// but not sending audio out... All audio comm ports havent changed and are set correctly."
+    /// The cause was the rig sitting at 0% RF power — a Yaesu keeps a SEPARATE power memory per
+    /// mode, so a level set on one mode does not follow the rig into another. Nexus was reporting
+    /// it faithfully the whole time; nothing in the code was wrong.
+    ///
+    /// That is exactly why it cost an evening: a rig at 0% KEYS, shows TX, and produces an over
+    /// that looks completely normal from the operator's chair. It is silent only to everybody
+    /// else. Nexus reads the level every tick and knows when transmit is armed, so it can say so.
+    ///
+    /// NOTIFY, NEVER ACT: this only ever raises a flag. It does not clamp, raise, or command
+    /// power, and it does not withhold an over — an operator deliberately driving an amplifier's
+    /// input at a hair above zero is doing something legitimate, and the app does not know better.
+    #[test]
+    fn a_rig_reporting_no_power_while_armed_is_flagged_but_nothing_is_changed() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true);
+        e.observe_rig_power(0.0);
+        assert!(
+            e.snapshot().radio.tx_power_zero,
+            "armed at 0% is the report"
+        );
+        assert_eq!(
+            e.rf_power(),
+            None,
+            "NOTIFY, NEVER ACT — the warning must not command a power"
+        );
+    }
+
+    #[test]
+    fn the_zero_power_warning_does_not_cry_wolf() {
+        // The operator's OWN working setting was 2%. A warning that fires on a level somebody is
+        // really using is a warning people learn to ignore, so this is the control that matters.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true);
+        e.observe_rig_power(0.02);
+        assert!(!e.snapshot().radio.tx_power_zero, "2% is a real QRP level");
+
+        // Idle at zero is not news — the rig is simply parked, and nothing is about to go out.
+        let mut idle = Engine::new("W9XYZ", "EN37", 0);
+        idle.observe_rig_power(0.0);
+        assert!(
+            !idle.snapshot().radio.tx_power_zero,
+            "not armed, so no over is coming"
+        );
+
+        // A rig whose power we cannot read at all tells us nothing, and a guess would fire on
+        // every such rig forever.
+        let mut unread = Engine::new("W9XYZ", "EN37", 0);
+        unread.set_tx_enabled(true);
+        assert!(
+            !unread.snapshot().radio.tx_power_zero,
+            "no read-back is not evidence of zero"
         );
     }
 

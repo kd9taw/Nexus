@@ -7225,6 +7225,9 @@ export const EN = {
   // data, never translated.
   'shell.lane.audio.message': 'RADIO STOPPED',
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
+  'shell.lane.txPowerZero.message': 'NO RF POWER',
+  'shell.lane.txPowerZero.detail':
+    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the Pwr slider, and the rig\u2019s own power for THIS mode: Yaesu rigs keep a separate level for SSB, DATA, CW and AM.',
   'shell.lane.recording.message': 'RECORDING',
   'shell.lane.prop.offline.message': 'Prop: no live data',
   'shell.lane.prop.offline.detail':

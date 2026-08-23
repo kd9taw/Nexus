@@ -301,6 +301,7 @@ impl AppState {
                 split_tx_mhz: None,
                 audio_error: None,
                 radio_config_warning: None,
+                tx_power_zero: false,
                 recording_warning: None,
                 tx_even: true,
                 tx_cycle_auto: true,
