@@ -13469,7 +13469,12 @@ button.cq-skiptx1.on {
 }
 .np-row {
   display: grid;
-  grid-template-columns: minmax(120px, 200px) minmax(72px, 1fr) minmax(90px, 1.4fr) 56px 64px 52px minmax(140px, 2fr);
+  /* need | call | entity | band | FREQ | mode | zone | why.
+     The frequency column is fixed at 66px: "14.074" is six glyphs at this size and the column
+     must not breathe, because a needs list is SCANNED down rather than read across — a ragged
+     decimal point is what makes a column of numbers slow to read. Taken from `why`, which is the
+     only flexible column with room to give at the 1024px floor. */
+  grid-template-columns: minmax(120px, 200px) minmax(72px, 1fr) minmax(90px, 1.4fr) 56px 66px 64px 52px minmax(110px, 2fr);
   align-items: center;
   gap: 10px;
   padding: 6px var(--space-3);
@@ -13500,6 +13505,14 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.np-freq {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  /* Dimmer than the call: the frequency is context for a row an operator has already picked out
+     by callsign, not the thing they are scanning for. */
+  color: var(--text-dim);
+}
+
 .np-row.np-header {
   position: sticky;
   top: 0;

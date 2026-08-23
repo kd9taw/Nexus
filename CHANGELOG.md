@@ -51,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Needed list shows the frequency, not just the band.** A rare one on 20 m is a different
+  proposition from a rare one on 14.074 — the exact spot frequency is now a column, and you can
+  sort by it to see what is worth swinging the dial for. Needs worked out from your log rather
+  than spotted have no exact frequency, and say so with a dash instead of an empty cell.
+
 - **Reset all settings to factory defaults.** There was no reset at all: a clean start meant
   finding `settings.json` in a config folder and deleting it — and doing that while Nexus is
   running resets nothing, because the app holds the old configuration in memory and writes it

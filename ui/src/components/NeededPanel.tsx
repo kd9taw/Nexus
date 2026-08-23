@@ -108,7 +108,7 @@ function RotatorWidget() {
   )
 }
 
-type SortKey = 'priority' | 'call' | 'band' | 'entity' | 'mode' | 'zone'
+type SortKey = 'priority' | 'call' | 'band' | 'entity' | 'mode' | 'zone' | 'freq'
 
 // Persisted filter state key. PER-SURFACE: what THIS board shows — an HF-DX board beside
 // a 2 m board wanting different filters is the whole point of a second window. (Note the
@@ -407,6 +407,12 @@ export function NeededPanel({
           // zone 0 = unknown → keep at the end of ascending.
           c = (a.zone || 99) - (b.zone || 99)
           break
+        case 'freq':
+          // A missing frequency sorts LAST in ascending, the same way zone 0 does — many needs
+          // are derived rather than spotted, so a band-level row is ordinary, not an error, and
+          // burying it above 1.8 MHz would put the least actionable rows first.
+          c = (a.freqMhz ?? Number.POSITIVE_INFINITY) - (b.freqMhz ?? Number.POSITIVE_INFINITY)
+          break
       }
       if (c === 0) c = b.priority - a.priority // tiebreak: hottest first
       return c * dir
@@ -622,6 +628,7 @@ export function NeededPanel({
           {th('call', t('needed.column.call'))}
           {th('entity', t('needed.column.entity'))}
           {th('band', t('needed.column.band'))}
+          {th('freq', t('needed.column.freq'))}
           {th('mode', t('needed.column.mode'))}
           {th('zone', t('needed.column.zone'))}
           <span className="np-th-static">{t('needed.column.why')}</span>
@@ -752,6 +759,14 @@ export function NeededPanel({
                   )}
                 </span>
                 <span className="np-band">{a.band}</span>
+                {/* The exact spot frequency when the source carried one. Band-level-only
+                    sources (many needs are derived, not spotted) get the same em-dash the zone
+                    cell uses, rather than a blank that reads as a rendering fault. Three
+                    decimals is the kHz an operator dials — trailing zeros kept, because a
+                    ragged column is harder to scan than a wide one. */}
+                <span className="np-freq" title={a.freqMhz ? t('needed.row.freq.title', { freq: a.freqMhz.toFixed(3) }) : t('needed.row.freq.none')}>
+                  {a.freqMhz ? a.freqMhz.toFixed(3) : '\u2014'}
+                </span>
                 <span
                   className={`np-mode-col np-mode-${a.mode.toLowerCase()}`}
                   title={t('needed.row.mode.title', { mode: a.mode })}
