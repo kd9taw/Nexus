@@ -3555,6 +3555,27 @@ impl Engine {
         // at all until the operator acts.
         let mut settings = settings;
         settings.beacon = false;
+        // Hound (DXpedition) is a PER-DXPEDITION mode, not a station setting, and it does not
+        // survive a launch. Left on by accident it takes every ordinary contact with it:
+        // `call_station` reads `quiet_finish` straight off this field, so each S&P QSO inherits
+        // the Fox rule — end on the partner's RR73, send NO parting 73 — and the stock "disable
+        // Tx after 73" one-shot fires on RECEIVING the RR73 instead of after sending ours, so
+        // Enable-Tx drops before the 73 can go out. Correct against a real Fox, where a 73 would
+        // land as QRM in the Fox's own segment; silently wrong against everybody else, and
+        // invisible from our side — the operator sees a normal QSO, the DX sees us vanish.
+        // (Field report 2026-08-23: four RR73s from the DX, no answer, our 73 finally escaping
+        // two minutes later when something re-armed TX.)
+        //
+        // Same passive-launch rule as `beacon` above, for a stronger reason: a beacon left on is
+        // audible on the next over, while this one is not observable without a partner telling
+        // you. The amber HOUND pill in the Operate header says so for the session the operator
+        // does opt in.
+        if matches!(
+            settings.special_op,
+            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+        ) {
+            settings.special_op = crate::settings::SpecialOp::None;
+        }
         // A settings.json persisted before band canonicalisation can still carry
         // a channel TOKEN ("2m-fm") as the band — a QSO logged before the first
         // QSY would inherit it. Same boundary rule as set_frequency: canonical
@@ -22117,6 +22138,59 @@ mod tests {
     /// at a seam: toggle -> Settings -> settings.json -> load -> a NEW engine -> the snapshot the
     /// button actually reads. `with_settings` deliberately force-resets `beacon` at launch, so
     /// "a launch reset eats it" was a live theory and this is what rules it in or out.
+    /// FIELD REPORT 2026-08-23 (PA0KGB, worked by M1DBB): the DX sent RR73 four times and
+    /// Nexus never answered with 73. Their diag log has the whole thing — the QSO logged and
+    /// "transmit disarmed" in the SAME second the RR73 decoded, then the 73 finally escaping
+    /// two minutes later when TX was re-armed, long after M1DBB had given up. Another contact
+    /// the same session then sent 73 eight times to nobody.
+    ///
+    /// The cause was a left-on Hound setting. `call_station` takes `quiet_finish` straight from
+    /// the persistent `special_op`, so EVERY ordinary S&P contact inherited the DXpedition rule
+    /// — end on the partner's RR73, send no parting 73 — and the stock "disable Tx after 73"
+    /// one-shot fired on RECEIVING RR73 rather than after sending the 73. Correct for a real
+    /// Fox (a 73 there is pure QRM in the Fox's own segment); silently wrong for everyone else.
+    ///
+    /// Hound is a per-DXpedition mode, not a station setting, so it does not survive a launch —
+    /// the same passive-launch rule `beacon` already follows, and for a stronger reason: beacon
+    /// left on is audible, whereas this failure is invisible from our side. The operator opts in
+    /// per session, and the amber HOUND pill says so while it is on.
+    #[test]
+    fn hound_mode_never_survives_a_launch() {
+        for saved in [
+            crate::settings::SpecialOp::Hound,
+            crate::settings::SpecialOp::SuperHound,
+        ] {
+            let e = Engine::with_settings(Settings {
+                special_op: saved,
+                ..Settings::default()
+            });
+            assert_eq!(
+                e.settings().special_op,
+                crate::settings::SpecialOp::None,
+                "{saved:?} must not survive a launch"
+            );
+        }
+    }
+
+    /// The end-to-end shape of the same report: a settings file with Hound saved, then an
+    /// ordinary S&P contact. The parting 73 must go out.
+    #[test]
+    fn an_ordinary_qso_sends_its_73_even_if_hound_was_saved() {
+        let mut e = Engine::with_settings(Settings {
+            mycall: "K2DEF".into(),
+            mygrid: "FN31".into(),
+            special_op: crate::settings::SpecialOp::Hound,
+            ..Settings::default()
+        });
+        e.call_station("W9XYZ");
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ RR73", -7)], 3);
+        assert!(
+            !e.poll_tx(4).is_empty(),
+            "the parting 73 must transmit — this is the field bug"
+        );
+    }
+
     #[test]
     fn hold_tx_freq_survives_a_restart() {
         let dir = std::env::temp_dir().join(format!("nexus-holdtx-{}", std::process::id()));

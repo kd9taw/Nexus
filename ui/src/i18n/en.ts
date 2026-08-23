@@ -6105,7 +6105,7 @@ export const EN = {
   'operate.dxped.off.label': 'Off',
   'operate.dxped.off.title': 'No DXpedition special mode',
   'operate.dxped.hound.title':
-    "DXpedition hound: calls go out above 1000 Hz; your R+report auto-moves to the Fox's frequency",
+    "DXpedition hound: calls go out above 1000 Hz, your R+report auto-moves to the Fox's frequency, and the QSO ends on the Fox's RR73 with NO parting 73 — a 73 there is QRM in the Fox's own segment. Off again at every launch: turn it on for the DXpedition, not for the day.",
 
   // The signal source. `{{active}}` is the backend's own `sourceLabel` and `{{addr}}` the
   // configured companion UDP address — both data. Two whole sentences, because the

@@ -3262,7 +3262,7 @@ export const DE: PartialCatalog = {
   "operate.header.dxped.aria": "DXpeditions-Modus",
   "operate.dxped.off.label": "Aus",
   "operate.dxped.off.title": "Kein DXpeditions-Sondermodus",
-  "operate.dxped.hound.title": "DXpedition-Hound: Anrufe gehen oberhalb 1000 Hz raus; Ihr R+Rapport wechselt automatisch auf die Frequenz des Fox",
+  "operate.dxped.hound.title": "DXpedition-Hound: Anrufe gehen oberhalb 1000 Hz raus, Ihr R+Rapport wechselt automatisch auf die Frequenz des Fox, und das QSO endet mit dem RR73 des Fox — ohne abschließendes 73, denn ein 73 wäre dort QRM im eigenen Segment des Fox. Wird bei jedem Programmstart wieder abgeschaltet: für die DXpedition einschalten, nicht für den ganzen Tag.",
   "operate.header.source.aria": "Signalquelle",
   "operate.header.source.title": "Woher die Dekodierungen kommen — aktiv: {{active}}. Native = Nexus dekodiert das lokale Audio; Companion = übernimmt den Dekodier-Datenstrom eines laufenden WSJT-X/JTDX/MSHV über UDP {{addr}}.",
   "operate.header.source.title.listening": "Woher die Dekodierungen kommen — aktiv: {{active}} · hört auf {{addr}}. Native = Nexus dekodiert das lokale Audio; Companion = übernimmt den Dekodier-Datenstrom eines laufenden WSJT-X/JTDX/MSHV über UDP {{addr}}.",
