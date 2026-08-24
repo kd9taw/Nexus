@@ -1215,7 +1215,7 @@ export const EN = {
     'New US state on this band (5BWAS) — a hint from the grid; confirm from the log',
   'need.badge.dxped.label': 'DXPED',
   'need.badge.dxped.title': 'Active DXpedition — limited-time window',
-  'need.badge.confirm.label': 'NEEDS QSL',
+  'need.badge.confirm.label': 'LoTW',
   'need.badge.confirm.title':
     'This entity/zone/grid is worked on this band but not yet confirmed — a LoTW match or a paper card would close it (eQSL and QRZ do not count toward awards, so they do not clear this). Not a claim about this callsign: B4 is the worked-this-call chip.',
   'need.badge.pota.title': 'Live POTA activator',
@@ -1243,8 +1243,8 @@ export const EN = {
   'need.chip.newState.label': 'STATE',
   'need.chip.newState.short': 'ST',
   'need.chip.newState.title': 'New US state on this band — best-guess from the grid',
-  'need.chip.confirm.label': 'NEEDS QSL',
-  'need.chip.confirm.short': 'QSL',
+  'need.chip.confirm.label': 'LoTW',
+  'need.chip.confirm.short': 'LoTW',
   'need.chip.confirm.title':
     'Worked on this band but not yet confirmed — a LoTW match or a paper card closes it; eQSL and QRZ do not count toward awards',
   'need.chip.dxped.label': 'DXPED',

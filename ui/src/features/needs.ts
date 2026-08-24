@@ -95,8 +95,34 @@ export function activityTypeByCall(alerts: NeedAlert[]): Map<string, 'Pota' | 'S
 }
 
 /**
+ * The APPENDED ACTIVITY tags. Not reasons to work somebody — labels for what they are doing.
+ *
+ * The backend is explicit that these are "appended post-scoring ... never the primary reason"
+ * (`needalert.rs`), and gives all three tier 0. They still travel in `tags` because that is how
+ * the activity BADGE (`activityTypeByCall`) and the board's own filter read them, so they cannot
+ * simply be dropped — but they must never be picked as a call's need, which is a different job.
+ *
+ * Operator, 2026-08-23, on a DXpedition already worked on the band in question: "why is it still
+ * showing grid, dxped ... what does that even mean when it's showing me an icon after I already
+ * have worked them?" Nothing — DXPED as a need chip claims there is something to gain, and being
+ * a DXpedition is not something you can need. It is already drawn separately as an activity
+ * badge, so it was saying it twice, once wrongly.
+ */
+const ACTIVITY_TAGS: ReadonlySet<string> = new Set(['Dxped', 'Pota', 'Sota'])
+
+/** True for a tag that only LABELS the station, rather than giving a reason to work it. */
+export function isActivityTag(tag: NeedTag | null | undefined): boolean {
+  return tag != null && ACTIVITY_TAGS.has(tag)
+}
+
+/**
  * Top need tag per UPPERCASE callsign, taken from each call's STRONGEST alert — the map the
  * roster, band strip and map colour their rows from.
+ *
+ * ⚠️ ACTIVITY TAGS ARE NOT NEEDS and are skipped here (see [`isActivityTag`]): a station whose
+ * only tag is DXped/POTA/SOTA gets NO need colour and NO need chip, because there is nothing
+ * about it to need. Its activity badge is drawn from the same tags by `activityTypeByCall` and
+ * is unaffected, as is the board's filter.
  *
  * The strongest, not an arbitrary one. A call heard on several bands carries one alert per
  * band/mode, and the map this replaces was built by writing every alert into the same slot
@@ -110,7 +136,9 @@ export function activityTypeByCall(alerts: NeedAlert[]): Map<string, 'Pota' | 'S
 export function topNeedByCall(alertsByCall: Map<string, NeedAlert[]>): Map<string, NeedTag> {
   const m = new Map<string, NeedTag>()
   for (const [call, alerts] of alertsByCall) {
-    const tag = strongestNeed(alerts)?.tags[0]
+    // The strongest alert's tags, minus the labels — its FIRST real need, if it has one. Taking
+    // `tags[0]` blindly handed back DXped whenever that was all the station had.
+    const tag = strongestNeed(alerts)?.tags.find((t) => !isActivityTag(t))
     if (tag) m.set(call, tag)
   }
   return m
