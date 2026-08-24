@@ -51,6 +51,8 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { EN, type MessageKey } from './index'
 import { DE } from './de'
+import { ES } from './es'
+import { FR } from './fr'
 import type { PluralForms } from './types'
 
 /** A `t()` / `<T>` call site with everything written literally enough to check. */
@@ -302,7 +304,18 @@ describe('translated catalogs agree with English', () => {
   // Every catalog the build ships, by locale. English is the source and is checked by the
   // suite above; this loop covers the rest, and is EMPTY until a translation lands — hence
   // the fixture control below, which proves the rules bite before there is anything to bite.
-  const OTHER: Array<[string, Record<string, unknown>]> = [['de', DE as Record<string, unknown>]]
+  //
+  // ⚠️ HAND-KEPT, AND THE TEST BELOW IS WHY THAT IS SURVIVABLE. Spanish and French shipped
+  // 1604 keys each while this list still read `[['de', DE]]`, so all three checks — placeholder
+  // parity, marker parity and the decimal comma — silently covered German alone. The decimal
+  // comma is the one that stings: es-ES and fr-FR BOTH render 14.074 as "14,074", so those are
+  // exactly the catalogs the rule was written for. `every shipped catalog is listed here` makes
+  // the omission a CI failure instead of a silence.
+  const OTHER: Array<[string, Record<string, unknown>]> = [
+    ['de', DE as Record<string, unknown>],
+    ['es', ES as Record<string, unknown>],
+    ['fr', FR as Record<string, unknown>],
+  ]
 
   const holesOf = (v: unknown): Set<string> => {
     const texts = typeof v === 'string' ? [v] : Object.values(v as Record<string, string>)
@@ -336,13 +349,33 @@ describe('translated catalogs agree with English', () => {
       const gotMarks = [...marksOf(value)].sort()
       if (wantMarks.join() !== gotMarks.join())
         out.push(`${locale}/${key}: markers ${gotMarks.join(',')} ≠ English ${wantMarks.join(',')}`)
+      // ⚠️ COMPARED AGAINST ENGLISH, not tested in isolation. `\d,\d` cannot tell a decimal
+      // comma from a thousands separator, and English writes both `~1,000 radios` and
+      // `38,400 or 115,200` for baud. Testing the translation alone flagged those as faults the
+      // moment es/fr were added — punishing a faithful rendering while the English said the same
+      // thing. What is actually dangerous is a comma the TRANSLATION introduced: a translator,
+      // human or machine, "correcting" 14.074 to 14,074 in their own locale's number style.
+      // So the rule is a delta, and it stays sharp on the case it was written for.
       const texts = typeof value === 'string' ? [value] : Object.values(value as Record<string, string>)
+      const enTexts = typeof en === 'string' ? [en] : Object.values(en as Record<string, string>)
+      const enHasComma = enTexts.some((t) => DECIMAL_COMMA.test(String(t)))
       for (const t of texts)
-        if (DECIMAL_COMMA.test(String(t)))
-          out.push(`${locale}/${key}: DECIMAL COMMA in "${t}" — a number an operator may read as a dial`)
+        if (DECIMAL_COMMA.test(String(t)) && !enHasComma)
+          out.push(`${locale}/${key}: DECIMAL COMMA in "${t}" — introduced by the translation; a number an operator may read as a dial`)
     }
     return out
   }
+
+  // The list above is hand-kept, so this is the guard on the guard: main.tsx is the one place a
+  // language becomes shipped, and every locale it installs must be checked here. Without this,
+  // adding a catalog and forgetting this file buys a translation nothing looks at — which is
+  // precisely what happened when Spanish and French landed.
+  it('every catalog main.tsx installs is on the list above', () => {
+    const main = readFileSync(new URL('../main.tsx', import.meta.url), 'utf8')
+    const installed = [...main.matchAll(/installCatalog\(\s*'([a-z-]+)'/g)].map((m) => m[1]).sort()
+    expect(installed.length, 'control: main.tsx really does install catalogs').toBeGreaterThan(0)
+    expect(OTHER.map(([l]) => l).sort()).toEqual(installed)
+  })
 
   it('the rules bite (positive control — the catalogs list is empty until a language ships)', () => {
     const broken = {
