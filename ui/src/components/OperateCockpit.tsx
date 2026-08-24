@@ -597,8 +597,18 @@ export function OperateCockpit({
     setDxGrid('')
     tx5Edited.current = false
     setTx5('')
-    tx6Edited.current = false
-    setTx6('')
+    // ⚠️ TX6 IS DELIBERATELY NOT CLEARED. It is the CQ message, and it has nothing to do with
+    // the DX call this clears — the stock option is "Clear DX call and grid after logging",
+    // and that is exactly what it promises. Wiping Tx6 here reset the operator's DIRECTED CQ
+    // after every single contact: type "CQ DX KR4FQG EM64", work one station, and the next CQ
+    // went out bare (reported 2026-08-23: "it will work for one call, then revert back to just
+    // CQ unless I go back to Classic and change it again").
+    //
+    // WSJT-X keeps the two apart for the same reason: editing Tx6 sets `m_CQtype`
+    // (`mainwindow.cpp on_tx6_editingFinished`), a member the DX-clear never touches, so a
+    // directed CQ persists across contacts until the operator edits it back. `cqDirFromText`
+    // re-reads this field on every Tx6 fire, so keeping the text IS keeping the direction —
+    // and clearing it back to a plain CQ stays one edit away.
     setLocalNext(null)
   }, [])
 
