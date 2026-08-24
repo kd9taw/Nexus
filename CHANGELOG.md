@@ -10,10 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Nexus speaks Spanish and French.** Both are picked up automatically from your system
-  language, or you can choose one in Settings. This first pass covers Settings, the setup
-  wizard, Getting started and the surrounding screens — 1,604 phrases each, which is where an
-  operator who does not read English actually gets stuck. Anything not yet translated shows the
-  English wording rather than a blank, so the rest fills in as it is written.
+  language, or you can choose one in Settings. The whole application is translated — all 4,681
+  phrases, every screen, the same coverage German has. Anything a future release adds shows its
+  English wording until it is translated, rather than a blank.
 
   Frequencies, callsigns, grid squares, signal reports, mode names and every other on-air term
   stay exactly as they are in all languages. That is deliberate: Spanish and French both write a
