@@ -5,6 +5,28 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A directed CQ (`CQ DX`) stays put instead of lasting one contact.** You can type your CQ
+  message in the Tx6 box on the Operate screen — `CQ DX KR4FQG EM64`, or POTA, NA, TEST, a zone
+  number — and it is parsed and sent. What went wrong is that "clear DX call and grid after
+  logging" was also wiping that box, so a directed CQ survived exactly one QSO and then went back
+  to a bare CQ, with the Classic screen the only way to set it again. That option clears the DX
+  call and grid, as its name says, and leaves your CQ message alone. Editing it back to a plain
+  CQ is still one change away.
+
+- **DXpedition is no longer counted as something you need.** A DXPED chip sat in the row of need
+  icons claiming there was something to gain from a station — including ones you had already
+  worked on that band, where it meant nothing at all. It was always a label rather than a reason,
+  and it is already shown as an activity marker, so it was being said twice. The Needed board's
+  DXped filter is unchanged, as are the POTA and SOTA markers.
+
+- **The "needs QSL" chip now reads LoTW**, which is what actually closes it for awards. A paper
+  card closes it too — the tooltip still says so — but eQSL and QRZ never did, and the old
+  wording left people wondering whether the eQSL they already had counted.
+
 ## [1.8.1] — 2026-08-23
 
 ### Fixed
