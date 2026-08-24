@@ -25925,6 +25925,53 @@ mod tests {
         );
     }
 
+    /// OPERATOR QUESTION 2026-08-23, after working RI1FJL on 20 m and still seeing its chips:
+    /// "what is the logic for removing things once I remove them from the needed board? ... any
+    /// areas in the FT area that need pills or icons removed when we work certain things?"
+    ///
+    /// The answer is that the decode feed clears RETROACTIVELY, and that is worth a test because
+    /// it is not obvious from the code: `recent_decodes` is not a stored list of rows with frozen
+    /// flags — it is REBUILT from `last_decodes` on every snapshot, so each flag is re-asked of
+    /// the worked index every time. `log_qso` refreshes that index, so a row already on screen
+    /// loses its icons the moment the contact is logged, with no new decode required.
+    ///
+    /// The neighbouring test logs FIRST and then decodes, which only ever proves the flags are
+    /// right for a NEW row. That left the case the operator actually asked about — the row is
+    /// already there, then you work them — with no coverage at all.
+    #[test]
+    fn working_a_station_clears_the_icons_on_a_decode_already_on_screen() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_dxcc_resolver(|call| call.chars().next().map(|c| c.to_string()));
+        e.set_frequency(14.074, "20m", "USB");
+
+        // The row arrives BEFORE the contact exists — nothing worked yet.
+        e.ingest_decodes_for_test(&[dec_snr("CQ W4ABC EM73", -8)], 0);
+        let before = e.snapshot().recent_decodes;
+        let r = before
+            .iter()
+            .find(|r| r.from.as_deref() == Some("W4ABC"))
+            .unwrap();
+        assert!(
+            r.new_grid && r.new_dxcc,
+            "control: an unworked station really does light up first"
+        );
+
+        // Work them. No further decodes — the same row must re-answer.
+        let rec = e.qso_record("W4ABC".into(), Some("EM73".into()), Some(-8));
+        e.log_qso(rec);
+
+        let after = e.snapshot().recent_decodes;
+        let r2 = after
+            .iter()
+            .find(|r| r.from.as_deref() == Some("W4ABC"))
+            .unwrap();
+        assert!(
+            !r2.new_grid,
+            "the GRID icon must go once that grid is worked on this band"
+        );
+        assert!(!r2.new_dxcc, "and the entity icon with it");
+    }
+
     /// The operator's ruling (2026-07-22) on whether a 20 m contact counts for a 2 m
     /// chain: "Not on 2m it's a different band." Grids and DXCC are both awarded per
     /// band, and a 2 m grid is worth far more than the same square on HF — so the
