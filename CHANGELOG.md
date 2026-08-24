@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Picking a RTTY frequency from the band plan now puts your signal where the plan says.** The
+  listed frequencies were chosen as the frequency your signal comes out on — which is what the
+  dial reads on true FSK, but not on AFSK, the default. On AFSK the tones sit about 2.3 kHz below
+  the dial, so the signal landed low: on 20 m it was inside the FT4 cluster, on 17 m and 12 m
+  inside FT8, and on 15 m inside JS8 — the exact overlaps the band plan was written to avoid.
+  Both keying backends now land in the same place, and it is the place the plan describes. Your
+  dial reading will look about 2.3 kHz higher than before on AFSK; the signal is what moved back
+  where it belongs.
+
 - **A zoomed waterfall stays where you put it.** Picking a numeric span made the display
   re-centre on your receive marker every time you clicked, so each click slid the view sideways
   by up to half a span with nothing to scroll it back. The zoom is a slice of the passband now:
@@ -95,6 +104,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.8.0] — 2026-08-23
 
 ### Fixed
+
+- **Linux: the AppImage starts on Wayland desktops again (#138).** It was bundling its own copy
+  of `libwayland-client`, which loses to a newer compositor on the host — Nexus opened to a blank
+  white window on Fedora 44 and never drew anything. That library now comes from your system,
+  where it belongs. Only that one is dropped; its siblings are still bundled, because nothing in
+  the report pointed at them and removing them on a guess is how you break somebody else's
+  desktop.
 
 - **Nexus no longer gives up on the rigctld you chose because the machine was busy for a moment.**
   Deciding whether a rigctld works meant running it once, and any failure to start it counted

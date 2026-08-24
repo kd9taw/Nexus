@@ -4730,7 +4730,36 @@ impl Engine {
     /// what the per-(band, mode) dial memory makes of it: nothing is recorded, and the
     /// operator residency it displaces is banked on the way in.
     pub fn tune_channel(&mut self, dial_mhz: f64, band: &str, mode: &str) {
-        self.machinery_tune(dial_mhz, band, mode);
+        self.machinery_tune(self.rtty_channel_dial(dial_mhz), band, mode);
+    }
+
+    /// The dial to actually tune for a band-plan pick, once the RTTY keying backend is taken
+    /// into account. Identity for everything that is not RTTY.
+    ///
+    /// ⚠️ THE PLAN STORES THE EMISSION, NOT THE DIAL — which is only the same number on true
+    /// FSK. FSK keys the rig's own RTTY mode, where the dial reads the mark RF and the signal
+    /// occupies `[dial - shift, dial]`. AFSK — the DEFAULT — rides LSB, so its audio pair lands
+    /// BELOW the dial and the signal occupies `[dial - mark - shift, dial - mark]`, about
+    /// 2.3 kHz lower. Every RTTY entry in the plan was chosen as though the dial were the
+    /// emission, so on the default backend four of them transmitted inside another mode's
+    /// cluster: 20 m on FT4, 17 m and 12 m on FT8, 15 m on JS8 — while the plan's own comments
+    /// said "above the FT4 cluster at 14.080", reasoning about the dial.
+    ///
+    /// Subtracting the two spans gives the whole correction: the AFSK dial is the FSK dial plus
+    /// the mark tone, and then both backends put the signal in the identical window. The stored
+    /// number stays the FSK dial — the frequency the comments describe and operators quote —
+    /// and this is the one place the offset is applied, so no channel table can drift out of
+    /// step with it.
+    ///
+    /// Found in a triage sweep of #114 (ve3wej), who reported only the 20 m entry.
+    fn rtty_channel_dial(&self, dial_mhz: f64) -> f64 {
+        if self.settings.operating_mode != crate::settings::OperatingMode::Rtty {
+            return dial_mhz;
+        }
+        if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
+            return dial_mhz;
+        }
+        dial_mhz + RTTY_AFSK_MARK_HZ / 1_000_000.0
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
@@ -22306,6 +22335,57 @@ mod tests {
         assert!(
             !unread.snapshot().radio.tx_power_zero,
             "no read-back is not evidence of zero"
+        );
+    }
+
+    /// A RTTY band-plan pick must land the SIGNAL where the plan says, on either keying
+    /// backend — found while validating ve3wej's 14.083 note (#114), and bigger than the one
+    /// band he asked about.
+    ///
+    /// Every RTTY dial in the plan was chosen as though the dial WERE the emission. That holds
+    /// on true FSK, where the dial reads the mark RF. It is false on AFSK — the DEFAULT — which
+    /// rides LSB and puts the audio pair BELOW the dial, so the signal came out about 2.3 kHz
+    /// low. Four entries therefore transmitted inside another mode's cluster: 20 m on FT4, 17 m
+    /// and 12 m on FT8, 15 m on JS8. The plan's own comments claim the opposite ("above the FT4
+    /// cluster at 14.080") because they reason about the dial.
+    ///
+    /// The relationship is exact, which is what makes this fixable rather than a matter of
+    /// taste: FSK emits [dial-shift, dial] and AFSK emits [dial-mark-shift, dial-mark], so for
+    /// both to occupy one window the AFSK dial is the FSK dial plus the mark tone. The plan
+    /// keeps storing the FSK dial — the frequency the comments reason about and operators quote
+    /// — and the offset is applied at the moment of tuning.
+    #[test]
+    fn a_rtty_channel_lands_the_signal_in_the_same_place_on_either_backend() {
+        let emission_top = |e: &Engine, dial: f64| -> f64 {
+            let mark = RTTY_AFSK_MARK_HZ / 1_000_000.0;
+            if e.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
+                dial
+            } else {
+                dial - mark
+            }
+        };
+
+        let mut fsk = Engine::new("W9XYZ", "EN37", 0);
+        fsk.settings.rtty_backend = "fsk".into();
+        fsk.settings.operating_mode = crate::settings::OperatingMode::Rtty;
+        fsk.tune_channel(14.083, "20m", "LSB");
+        let fsk_top = emission_top(&fsk, fsk.settings.dial_mhz);
+
+        let mut afsk = Engine::new("W9XYZ", "EN37", 0);
+        afsk.settings.rtty_backend = "afsk".into();
+        afsk.settings.operating_mode = crate::settings::OperatingMode::Rtty;
+        afsk.tune_channel(14.083, "20m", "LSB");
+        let afsk_top = emission_top(&afsk, afsk.settings.dial_mhz);
+
+        assert!(
+            (fsk_top - afsk_top).abs() < 1e-9,
+            "the two backends must put the signal in the same place — FSK top {fsk_top:.6}, \
+             AFSK top {afsk_top:.6}"
+        );
+        // …and that place is the plan's own frequency, clear of the FT4 cluster it names.
+        assert!(
+            (fsk_top - 14.083).abs() < 1e-9,
+            "the plan's dial is the emission it always described"
         );
     }
 
