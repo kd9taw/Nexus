@@ -240,7 +240,13 @@ export function OperateDecodes({
   // their filterState is dead — `filter` below takes lockedFilter — and 'rx' can never
   // overwrite the Band Activity chip the operator chose.
   const [filterState, setFilterState] = useState<DecodeFilter>(loadDecodeFilter)
-  const filter = lockedFilter ?? filterState
+  // ⚠️ A COMPACT PANE SHOWS EVERYTHING. The rule above — only a pane that renders chips may
+  // WRITE one — has to apply to READING too, and it did not: the Tempo rail's compact Band
+  // Activity hides the chip bar and still applied the shared persisted chip. So a "CQ" chip
+  // left set over in Operate silently filtered Tempo's list, with nothing on screen to say
+  // so and no control to clear it — the pane just looked like a quiet band. `lockedFilter`
+  // still wins where a pane genuinely declares one (Rx Frequency).
+  const filter = lockedFilter ?? (compact ? 'all' : filterState)
   const pickFilter = (f: DecodeFilter) => {
     saveDecodeFilter(f)
     setFilterState(f)

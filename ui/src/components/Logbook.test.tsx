@@ -294,3 +294,43 @@ describe('the log table shows the comment and flags a private note', () => {
   })
 })
 
+// #152, REPORTED AGAIN AFTER THE 1.8.0 FIX SHIPPED (rgoiko). The control existed and could not
+// be reached: it was gated on `needsConfirmOnly && !q.qslSent?.sent`.
+//
+// Both halves were wrong. The filter half meant the menu only appeared while the "needs
+// confirmation" chip happened to be on, so an operator working through a stack of cards in the
+// ordinary Logbook found nothing. The sent half is worse — a paper QSL is a ROUND TRIP, so
+// removing the menu the moment a card was marked sent deleted the control for the arrival, and
+// the very card the feature exists to record could never be recorded.
+describe('#152 — recording a QSL card does not depend on a filter, or on not having sent one', () => {
+  // ⚠️ SCOPED TO THIS RENDER'S OWN CONTAINER, not `document`. This file has no afterEach
+  // cleanup, so a document-wide query finds the FIRST Logbook still mounted from an earlier
+  // test — which is exactly how the second case below passed alone and failed in the file,
+  // reading another test's row and reporting the opposite answer.
+  const qsl = (c: HTMLElement) => c.querySelector('select.log-rowbtn') as HTMLSelectElement | null
+  const opts = (c: HTMLElement) => Array.from(qsl(c)?.options ?? []).map((o) => o.value)
+
+  it('is reachable in the ORDINARY logbook, with no filter chip set', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(1))
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+    expect(qsl(container), 'the QSL menu must be on an ordinary row').not.toBeNull()
+    expect(opts(container), 'and it offers the inbound card').toContain('R')
+  })
+
+  it('still offers the arriving card AFTER one has been marked sent — the round trip', async () => {
+    const sent = [{ ...fakeLog(1)[0], qslSent: { sent: true, via: 'B' } }]
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(sent)
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+    expect(qsl(container), 'the menu must survive marking a card sent').not.toBeNull()
+    expect(opts(container), 'the inbound card is still recordable').toContain('R')
+    // …and you still cannot send twice.
+    expect(opts(container), 'the send entries are gone once sent').not.toContain('B')
+  })
+})
+

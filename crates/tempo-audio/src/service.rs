@@ -1989,7 +1989,10 @@ struct RttyStream {
     /// The keying config this stream was built for — baud, shift, reverse, and
     /// whether it is the FSK backend. A settings change mid-over rebuilds it
     /// rather than splicing two different waveforms into one carrier.
-    key_cfg: (f64, u32, bool, bool),
+    /// (baud, shift, reverse, centre-Hz bits, fsk) — a change to ANY of these re-keys rather
+    /// than splicing a new waveform into the carrier. The centre joined it with #128, when TX
+    /// started following a waterfall net.
+    key_cfg: (f64, u32, bool, u32, bool),
     /// PTT has been asserted for this stream and the rig's dial/mode asserted with
     /// it. A latched over feeds a chunk roughly every 165 ms and PTT is held
     /// across them by `tx_until_ms`, so re-commanding it per chunk would put a
@@ -5942,7 +5945,7 @@ impl RadioLoop {
             // ([`Self::may_key`]) the queue is not polled, so the over waits instead of
             // going out on the outgoing rig.
             let ready = now >= self.rtty_busy_until && self.may_key();
-            let (abort, msg, stream_tick, baud, shift, reverse, fsk_port_line) = {
+            let (abort, msg, stream_tick, baud, shift, reverse, center_hz, fsk_port_line) = {
                 let mut eng = engine_lock(engine);
                 // Keep the cockpit's sending indicator honest each tick: an over is
                 // "sending" until its computed duration has fully played out.
@@ -6008,6 +6011,18 @@ impl RadioLoop {
                     baud,
                     eng.rtty_shift_hz(),
                     eng.rtty_reverse(),
+                    // #128 (W8GTY): TRANSMIT ON THE FREQUENCY YOU TUNED TO. The AFSK tones
+                    // were built from the fixed `MARK_HZ` while RX was freely nettable from a
+                    // waterfall click, so netting onto a station at 1500 Hz still transmitted
+                    // at 2125 — you answered on a frequency nobody was listening on.
+                    //
+                    // `rtty_center_hz` was RX-only and its own comment said so ("safe during
+                    // TX, needs no privilege gate"). Reading it here is what changes: a net
+                    // now moves the emitted audio too, which is ordinary RTTY operating and
+                    // what every other program does. It moves AUDIO OFFSET only — the dial is
+                    // untouched, exactly like the FT8 TX marker — and the centre is already
+                    // clamped to 300–3700 Hz on the way in, so it cannot leave the passband.
+                    eng.rtty_center_hz(),
                     eng.rtty_fsk_port().map(|p| (p, eng.rtty_fsk_line())),
                 )
             };
@@ -6078,7 +6093,7 @@ impl RadioLoop {
                         let code = st.enc.diddle();
                         let bits = tempo_core::rtty::code_bits(&[code]);
                         let chunk_ms = keyboard::RTTY.char_ms(baud);
-                        if !st.key_cfg.3 {
+                        if !st.key_cfg.4 {
                             let buf = st.afsk.char_chunk(&bits, true);
                             if !buf.is_empty() {
                                 backend.play(&buf);
@@ -6089,7 +6104,7 @@ impl RadioLoop {
                         // gets the same trailing character so both backends unkey on
                         // the same schedule.
                         #[cfg(feature = "serial")]
-                        if st.key_cfg.3 {
+                        if st.key_cfg.4 {
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                                 k.send(bits.clone(), baud);
                             }
@@ -6108,12 +6123,24 @@ impl RadioLoop {
                     // can hear — which is correct: they changed the shift or the baud,
                     // and splicing two different waveforms into one carrier would be
                     // worse than a clean re-key.
-                    let key_cfg = (baud, shift, reverse, fsk_port_line.is_some());
+                    // The centre joins the key config, so netting mid-stream re-keys cleanly
+                    // rather than splicing two different waveforms into one carrier — the same
+                    // rule the baud/shift change above already follows.
+                    let key_cfg = (
+                        baud,
+                        shift,
+                        reverse,
+                        center_hz.to_bits(),
+                        fsk_port_line.is_some(),
+                    );
                     if self.rtty_stream.as_ref().map(|s| s.key_cfg) != Some(key_cfg) {
+                        let (mark, space) =
+                            tempo_core::rtty::tone_pair(center_hz, shift as f32, reverse);
                         self.rtty_stream = Some(RttyStream {
                             enc: tempo_core::rtty::BaudotEncoder::new(true),
                             afsk: crate::rtty_afsk::AfskStream::new(crate::rtty_afsk::AfskConfig {
-                                space_hz: crate::rtty_afsk::MARK_HZ + shift as f32,
+                                mark_hz: mark,
+                                space_hz: space,
                                 baud,
                                 reverse,
                                 ..crate::rtty_afsk::AfskConfig::default()
@@ -6154,7 +6181,7 @@ impl RadioLoop {
                         // phase step and a 4 ms hole in the carrier every 165 ms — see
                         // `AfskStream`. Skipped entirely on the FSK backend, whose bits
                         // ride the keyline and never become audio.
-                        let buf = if key_cfg.3 {
+                        let buf = if key_cfg.4 {
                             Vec::new()
                         } else {
                             st.afsk.char_chunk(&bits, false)
@@ -6358,8 +6385,13 @@ impl RadioLoop {
                         // one route, so the operator's tx_level / drive / ALC
                         // discipline applies to RTTY exactly as to FT8. PTT around
                         // it like the soundcard CW keyer.
+                        // Same as the streaming path: the tones come from the tuned centre,
+                        // so a one-shot message answers on the frequency you netted to (#128).
+                        let (mark, space) =
+                            tempo_core::rtty::tone_pair(center_hz, shift as f32, reverse);
                         let cfg = crate::rtty_afsk::AfskConfig {
-                            space_hz: crate::rtty_afsk::MARK_HZ + shift as f32,
+                            mark_hz: mark,
+                            space_hz: space,
                             baud,
                             reverse,
                             ..crate::rtty_afsk::AfskConfig::default()
@@ -8532,6 +8564,12 @@ impl RadioLoop {
                                         contestname: contest.to_string(),
                                         freq_10hz: (dial_mhz * 1e5) as u64,
                                         sent_exchange: myexch.clone(),
+                                        // Field Day's exchange IS class+section — no RST is
+                                        // passed on the air, so both stay empty and the
+                                        // omit-when-empty rule keeps this datagram byte-identical
+                                        // to the one that has been on the air since 0.8.0.
+                                        rst_sent: String::new(),
+                                        rst_rcvd: String::new(),
                                         operator: operator.clone(),
                                         // 32-hex dedup id: time + batch index + call hash.
                                         id: tempo_net::n1mm::dedup_id(when, &q.call, i as u64),

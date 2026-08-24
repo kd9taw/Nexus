@@ -1354,6 +1354,11 @@ pub fn n1mm_contact_for(
         // A plain QSO's "exchange" is the signal report — what N1MM's own DX log
         // puts here.
         sent_exchange: rec.rst_sent.clone().unwrap_or_default(),
+        // The reports in the fields a logger actually reads as reports (#129). The N3FJP
+        // sibling gained these in 1.7.0 and this path was not swept with it, so Log4OM users
+        // received every QSO with both reports blank.
+        rst_sent: rec.rst_sent.clone().unwrap_or_default(),
+        rst_rcvd: rec.rst_rcvd.clone().unwrap_or_default(),
         // One station, one operator on this path (the rotating-operator field is
         // Field Day's, and Field Day does not come through here).
         operator: mycall.to_string(),

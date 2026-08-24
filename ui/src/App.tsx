@@ -2147,10 +2147,20 @@ export default function App() {
     snap.mycall.trim() === '' // fresh install (the default callsign is empty)
 
   // The Tempo (chat) roster represents who's on the TEMPO protocol — so it shows only
-  // stations last heard on TempoFast, not the FT8/FT4 stations that share the engine's single
-  // roster. Every other view (Operate, Field Day) shows the full roster.
+  // stations last heard on a Tempo tier, not the FT8/FT4 stations that share the engine's
+  // single roster. Every other view (Operate, Field Day) shows the full roster.
+  //
+  // ⚠️ BOTH CHAT TIERS, not just TempoFast. Tempo has two — TempoFast and TempoDeep — and the
+  // backend has said so all along (`Tier::is_chat` is `TempoFast | TempoDeep`, and its comment
+  // spells out that the whole chat cadence runs on both). This filter knew only the first, so
+  // on TempoDeep the roster was STRUCTURALLY always empty: every station heard there was
+  // filtered out of the one view that exists to list them. Found while validating an
+  // unrelated "Tempo not decoding" report (#160) — nobody had reported the roster itself,
+  // which is what an always-empty list gets you: it reads as a quiet band.
   const rosterStations =
-    effectiveView === 'chat' ? snap.stations.filter((s) => s.tier === 'TempoFast') : snap.stations
+    effectiveView === 'chat'
+      ? snap.stations.filter((s) => s.tier === 'TempoFast' || s.tier === 'TempoDeep')
+      : snap.stations
   // Two roster surfaces off one component: the Tempo chat roster keeps the long
   // presence retention (store-and-forward delivery needs it); the FT cockpit's
   // Stations panel flushes after 3 missed decode cycles (the Call Roster rule).

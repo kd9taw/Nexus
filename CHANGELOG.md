@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Recording a QSL card that arrived no longer depends on a filter — or on not having sent
+  one.** The control shipped in 1.8.0 could not be reached: it only appeared while the "needs
+  confirmation" chip was on, so it was invisible in the ordinary Logbook where you work through a
+  stack of cards. Worse, marking a card *sent* removed the menu, so the card that came back
+  months later could never be recorded — the whole point of the feature. It is on every row now,
+  and you still cannot mark one sent twice.
+
+- **Contacts sent to Log4OM (and anything else on the N1MM broadcast) carry both signal
+  reports.** Sent and received RST were missing from every QSO — the sent one only travelled in a
+  field loggers read as contest exchange data, and the received one was not sent at all. The same
+  bug in the N3FJP broadcast was fixed a while back and this one was missed with it.
+
+- **RTTY transmits on the frequency you tuned to.** Clicking the waterfall to net onto a station
+  moved the decoder but not the transmitter, which stayed on the default tone pair — so you
+  answered on a frequency nobody was listening on. Your dial does not move; only the audio
+  offset, exactly like the FT8 transmit marker.
+
+- **The Tempo roster works on Tempo Deep.** It only ever listed stations heard on Tempo Fast, so
+  on Deep it was always empty — which reads like a quiet band rather than a fault.
+
+- **The compact Band Activity in the Tempo rail shows everything again.** It hid the filter chips
+  but still applied whichever one you last chose in Operate, so a "CQ" chip set elsewhere quietly
+  filtered the list with nothing on screen to explain it.
+
 - **A directed CQ (`CQ DX`) stays put instead of lasting one contact.** You can type your CQ
   message in the Tx6 box on the Operate screen — `CQ DX KR4FQG EM64`, or POTA, NA, TEST, a zone
   number — and it is parsed and sent. What went wrong is that "clear DX call and grid after

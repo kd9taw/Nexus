@@ -1391,9 +1391,24 @@ export function Logbook({
                   >
                     {HRDLOG_LABEL}
                   </button>
-                  {/* QSL-request queue: mark a card/request sent (once) on the
-                      needs-confirmation view. Operator-declared, not a confirmation. */}
-                  {needsConfirmOnly && !q.qslSent?.sent && (
+                  {/* QSL handling for the row: mark a request SENT (once), and record the
+                      paper card that came BACK. Operator-declared, not a confirmation.
+                      
+                      ⚠️ THE GATE USED TO BE `needsConfirmOnly && !q.qslSent?.sent`, and both
+                      halves were wrong (#152, reported again after the 1.8.0 fix shipped).
+                      
+                      The filter half hid the whole menu unless the "needs confirmation" chip
+                      happened to be on, so the reporter looked in the ordinary Logbook — where
+                      anyone handling a stack of cards is — and found nothing. A fix nobody can
+                      reach is not a fix.
+                      
+                      The sent half is worse: a paper QSL is a ROUND TRIP. You send, you wait
+                      months, a card arrives. Removing the menu the moment you marked one sent
+                      deleted the control for the arrival, so the very card the feature exists
+                      to record could never be recorded. `q.qslSent?.sent` now hides only the
+                      three SEND entries — you still cannot send twice — while the inbound
+                      entries stay reachable for the life of the contact. */}
+                  {(
                     <select
                       className="log-rowbtn"
                       style={{ fontSize: '0.85em' }}
@@ -1413,9 +1428,14 @@ export function Logbook({
                     >
                       {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
                       <option value="">{QSL_MENU_LABEL}</option>
-                      <option value="B">{t('logbook.row.qslSent.bureau')}</option>
-                      <option value="D">{t('logbook.row.qslSent.direct')}</option>
-                      <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                      {/* Sending is once-only; the arrival below is not. */}
+                      {!q.qslSent?.sent && (
+                        <>
+                          <option value="B">{t('logbook.row.qslSent.bureau')}</option>
+                          <option value="D">{t('logbook.row.qslSent.direct')}</option>
+                          <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                        </>
+                      )}
                       {/* INBOUND: the paper card that arrived. Nothing on the internet can
                           report this, so the operator is the only source — and it is
                           award-eligible (card OR LoTW), which is why its absence understated
