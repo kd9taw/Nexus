@@ -225,6 +225,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64 \
+            binutils-mingw-w64-x86-64 \
             libboost-dev cmake ninja-build build-essential nsis
 
       - uses: dtolnay/rust-toolchain@master
@@ -269,6 +270,37 @@ jobs:
           mkdir -p out && cp "$exe" out/
           # The updater signature, when the signing secrets were present.
           [ -f "$exe.sig" ] && cp "$exe.sig" out/ || echo "note: unsigned build (no signing secrets)"
+
+          # ---- Crash symbols -------------------------------------------------------------
+          # A field crash report names a bare offset ("Nexus.exe+0x01ebcc35") and nothing can
+          # resolve it after the fact: the crash handler in src-tauri/src/main.rs cannot walk
+          # symbols (it runs with no allocation and about a page of stack), and the RELEASE
+          # BINARY IS NOT KEPT ANYWHERE — the artifact is the NSIS installer, whose payload is
+          # solid-compressed. The 1.8.1 report from a Flex/DAX station was unresolvable for
+          # exactly that reason, after downloading both the release asset and the workflow
+          # artifact and finding only the installer in each.
+          #
+          # ⚠️ THERE IS NO PDB TO SHIP, and asking for one is the natural mistake: PDBs are an
+          # MSVC artifact and this job cross-builds `x86_64-pc-windows-gnu` on ubuntu. What
+          # MinGW leaves behind is the SYMBOL TABLE, which survives because the release profile
+          # sets `strip = "debuginfo"` (DWARF only) rather than `strip = "symbols"`.
+          #
+          # So publish the table, not the binary: `nm` output is ~1.5 MB gzipped against 87 MB
+          # for Nexus.exe, and it answers the only question a crash report asks — which function
+          # owns this address. Resolve with the offset added to the 0x140000000 image base.
+          bin="src-tauri/target/x86_64-pc-windows-gnu/release/Nexus.exe"
+          if [ -f "$bin" ]; then
+            # Name it off the installer so the map can never drift from the build it describes.
+            sym="out/$(basename "$exe" -setup.exe).sym.gz"
+            x86_64-w64-mingw32-nm -C --defined-only -n "$bin" | gzip -9 > "$sym"
+            # A symbol map that resolved nothing would be worse than none — it would look like
+            # coverage. Require real entries, not just a non-empty file.
+            n=$(gzip -dc "$sym" | grep -c ' T ' || true)
+            [ "$n" -gt 1000 ] || { echo "symbol map has only $n text symbols — stripped too far"; exit 1; }
+            echo "symbol map: $n text symbols"
+          else
+            echo "no unpacked Nexus.exe to take symbols from — expected at $bin"; exit 1
+          fi
           ( cd out && sha256sum ./* )
 
       - uses: actions/upload-artifact@v4
