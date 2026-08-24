@@ -17259,8 +17259,32 @@ pub fn run() {
             // cannot heal without an operator visit to Settings, so skip the leg session-
             // wide and announce ONCE — save_settings/set_clublog_password clear the flag,
             // and the credential-change rescan re-queues what was skipped.
-            let creds_ready = clublog_credentials_ready(&cl_email, &cl_key);
-            if clublog_on && !creds_ready && !CLUBLOG_NO_CREDS_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
+            // ⚠️ NOTHING TO UPLOAD => DO NOT ASK WHETHER WE COULD. `clublog_credentials_ready`
+            // is not a flag read — it calls `get_password()`, and on Linux that is a D-Bus
+            // round trip opening a Secret Service session against gnome-keyring/kwallet. This
+            // worker ticks every 2 SECONDS, and the early-`continue` above only fires when NO
+            // connector is enabled at all, so any operator with ClubLog configured was paying
+            // that read forever whether or not a single QSO was queued.
+            //
+            // That is #154 again, at more than twice the rate: the 1.8.0 fix swept Settings'
+            // 5 s per-connector poll (which restarted gnome-keyring in a loop on Fedora) and
+            // missed this worker — one of a pair fixed, its twin left. Windows and macOS are
+            // local API calls and never showed it, which is exactly why it survived.
+            //
+            // The queue is drained ABOVE this point, so `recs` empty means there is nothing a
+            // credential answer could change.
+            // `None` = NOT ASKED this tick (nothing queued). Deliberately three-valued rather
+            // than a bool: collapsing "not asked" into "not ready" would fire the announcement
+            // below at an operator whose credentials are perfectly fine, simply because their
+            // upload queue was empty — a false "auto-upload paused" every session.
+            let creds_ready: Option<bool> = if recs.is_empty() {
+                None
+            } else {
+                Some(clublog_credentials_ready(&cl_email, &cl_key))
+            };
+            if clublog_on
+                && creds_ready == Some(false)
+                && !CLUBLOG_NO_CREDS_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
             {
                 conn_log(
                     "ClubLog",
@@ -17268,11 +17292,11 @@ pub fn run() {
                     "auto-upload paused — no ClubLog credentials stored (set them in Settings ▸ Confirmations)",
                 );
             }
-            if creds_ready {
+            if creds_ready == Some(true) {
                 CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
             }
             let clublog_live = clublog_on
-                && creds_ready
+                && creds_ready == Some(true)
                 && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
             let now_unix = now_unix();
             for p in recs {

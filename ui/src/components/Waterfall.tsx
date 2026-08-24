@@ -25,7 +25,7 @@ import {
   WATERFALL_ZOOMS,
   WF_FLOOR_PCT,
   coerceZoomSpan,
-  zoomRange,
+  zoomWindow,
   MIN_SPAN,
   spanDb,
   tuneTarget,
@@ -218,7 +218,17 @@ export function Waterfall({
   // — RTTY/PSK AFC is reported separately and does NOT drag the netted center), so following
   // it costs one cold re-render per retune, not one per poll.
   const [zoomSpan, setZoomSpan] = useState<number>(loadZoom)
-  const view = useMemo(() => zoomRange(rxOffsetHz, zoomSpan), [rxOffsetHz, zoomSpan])
+  // ⚠️ THE WINDOW HAS MEMORY, so this is not a pure re-derivation (#164). Re-centring on the
+  // marker every render made the display PAN: a left-click moves the RX marker, so each click
+  // slid the view by up to half a span. `zoomWindow` holds the slice still while the marker is
+  // inside it and pages only when it leaves — which keeps #115's guarantee that the window can
+  // never be stale. The ref is the previous window; nothing else reads it.
+  const prevViewRef = useRef<{ lo: number; hi: number } | null>(null)
+  const view = useMemo(() => {
+    const next = zoomWindow(prevViewRef.current, rxOffsetHz, zoomSpan)
+    prevViewRef.current = next
+    return next
+  }, [rxOffsetHz, zoomSpan])
   // refs so the animation loop always reads current props without re-subscribing
   const txRef = useRef(transmitting)
   const txBlanksRef = useRef(txBlanks)

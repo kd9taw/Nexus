@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A zoomed waterfall stays where you put it.** Picking a numeric span made the display
+  re-centre on your receive marker every time you clicked, so each click slid the view sideways
+  by up to half a span with nothing to scroll it back. The zoom is a slice of the passband now:
+  it holds still while your marker is in view, and only moves when you tune outside it — so it
+  still cannot end up showing you the wrong part of the band. The default Std view was never
+  affected.
+
+- **Linux: Nexus stops asking the system keyring whether it could upload when it has nothing to
+  upload.** The auto-upload worker checked your ClubLog credentials every two seconds whether or
+  not a single contact was waiting, and on Linux each check is a round trip to the keyring
+  daemon. That is the same thing that was restarting gnome-keyring in a loop before 1.8.0, at
+  more than twice the rate, in a different place. Windows and macOS were never affected — the
+  check there is a local call.
+
 - **Recording a QSL card that arrived no longer depends on a filter — or on not having sent
   one.** The control shipped in 1.8.0 could not be reached: it only appeared while the "needs
   confirmation" chip was on, so it was invisible in the ordinary Logbook where you work through a

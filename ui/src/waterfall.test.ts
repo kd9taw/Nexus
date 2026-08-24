@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, cwScopeWindow, CW_SCOPE_SPAN_HZ, sidebandSign, zoomRange, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
+import { SCOPE_WINDOW_DB, TRACE_HOLD_MS, traceHoldDecay, agcRange, applyGainZero, normalize, parkFloor, WF_FLOOR_PCT, bakeLut, themeColormap, resolveColormap, isSymmetricMode, resampleRow, scopeView, cwScopeWindow, CW_SCOPE_SPAN_HZ, sidebandSign, zoomRange, zoomWindow, coerceZoomSpan, WATERFALL_ZOOMS, WF_F_MIN, WF_F_MAX, WF_STD_HI, WF_DB_SPAN, spanDb, dbToSpan, WF_PARK_DB, WF_ZERO_TRIM_DB, flattenRow, WF_FLATTEN_MAX_DB, WF_FLATTEN_SEGMENTS } from './waterfall'
 import { sampleLut } from './colormaps'
 
 describe('agcRange (visual-AGC)', () => {
@@ -1421,5 +1421,59 @@ describe('rig scope vertical scale (a loud signal must draw TALL)', () => {
     const quietBand = agcRange(audioRow(-95, 0, 0), WF_FLOOR_PCT).floor
     const noisyBand = agcRange(audioRow(-75, 0, 0), WF_FLOOR_PCT).floor
     expect((noisyBand - quietBand) * WF_DB_SPAN).toBeGreaterThan(15)
+  })
+})
+
+// #164 (akhepcat): "the waterfall is a pannable viewport, not a bandwidth-defined window."
+//
+// `zoomRange` re-centres on the RX marker, and a left-click MOVES that marker — so every click
+// slid the display by up to half a span, with no scrollbar and no fixed reference. The window
+// chased the cursor instead of showing a slice of the passband.
+//
+// ⚠️ IT CANNOT SIMPLY STOP FOLLOWING. The centring is the #115 fix (same reporter): before it,
+// a persisted zoom centred on whatever `rxOffsetHz` was at FIRST RENDER — 0 before the first
+// snapshot — and stayed pinned there for the life of the mount, so an operator listening at
+// 2500 Hz read an axis labelled 200–800. Undoing it would hand #115 straight back.
+//
+// Both wants are satisfiable at once, and that is what this pins: the window must CONTAIN the
+// marker, and must not MOVE while the marker is already inside it. Tuning within the visible
+// span changes nothing; tuning outside pages the window to bring the marker back in.
+describe('zoomWindow — a slice that holds still (#164) without going stale (#115)', () => {
+  it('does not move while the marker is inside it', () => {
+    const first = zoomWindow(null, 1500, 1000) // 1000..2000
+    expect(first).toEqual({ lo: 1000, hi: 2000 })
+    // Clicks anywhere inside must leave the window exactly where it is.
+    for (const hz of [1010, 1200, 1500, 1800, 1990]) {
+      expect(zoomWindow(first, hz, 1000), `marker at ${hz}`).toEqual(first)
+    }
+  })
+
+  it('pages when the marker leaves, so it is never stale (#115)', () => {
+    const w = zoomWindow(null, 1500, 1000)
+    const moved = zoomWindow(w, 2600, 1000)
+    expect(moved).not.toEqual(w)
+    expect(2600 >= moved.lo && 2600 <= moved.hi, 'the marker is inside again').toBe(true)
+    expect(moved.hi - moved.lo, 'the span is unchanged').toBe(1000)
+  })
+
+  it('a span CHANGE always rebuilds, even with the marker inside', () => {
+    const w = zoomWindow(null, 1500, 1000)
+    const narrower = zoomWindow(w, 1500, 500)
+    expect(narrower.hi - narrower.lo).toBe(500)
+  })
+
+  it('the fixed windows are untouched — Std and Full never follow anything', () => {
+    expect(zoomWindow(null, 2500, 0)).toEqual({ lo: WF_F_MIN, hi: WF_STD_HI })
+    expect(zoomWindow({ lo: 0, hi: 100 }, 2500, -1)).toEqual({ lo: WF_F_MIN, hi: WF_F_MAX })
+  })
+
+  it('still clamps inside the passband when it does page', () => {
+    const w = zoomWindow(null, 1500, 1000)
+    const low = zoomWindow(w, 100, 1000)
+    expect(low.lo).toBe(WF_F_MIN)
+    expect(low.hi - low.lo).toBe(1000)
+    const high = zoomWindow(w, 3950, 1000)
+    expect(high.hi).toBe(WF_F_MAX)
+    expect(high.hi - high.lo).toBe(1000)
   })
 })

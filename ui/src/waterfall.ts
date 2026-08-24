@@ -894,6 +894,45 @@ export function zoomRange(centerHz: number, spanHz: number): { lo: number; hi: n
   return { lo, hi: lo + spanHz }
 }
 
+/**
+ * The zoom window to SHOW, given the one currently shown and where the RX marker is.
+ *
+ * A zoom is a SLICE OF THE PASSBAND, not a viewport that chases the cursor. It holds still
+ * while the marker is inside it, and pages only when the marker leaves.
+ *
+ * ⚠️ BOTH #115 AND #164 LIVE HERE, and they pull in opposite directions — which is why this
+ * is a function with memory rather than a pure re-derivation.
+ *
+ * #115: a window that never follows goes STALE. A persisted zoom used to centre on whatever
+ * `rxOffsetHz` was at first render — 0 before the first snapshot lands — and stayed pinned
+ * for the life of the mount, so an operator listening at 2500 Hz read an axis labelled
+ * 200–800. The window must end up containing the marker.
+ *
+ * #164: a window that follows on EVERY render pans. `zoomRange(rxOffsetHz, span)` re-centres
+ * on the marker, and a left-click MOVES the marker — so each click slid the display by up to
+ * half a span, with no scrollbar and no fixed reference. Same reporter, opposite complaint.
+ *
+ * Satisfying both: CONTAIN the marker, do not MOVE while it is already contained. Tuning
+ * inside the visible span changes nothing on screen; tuning outside pages the window back
+ * over the marker. The fixed Std/Full views never follow anything and are returned unchanged.
+ */
+export function zoomWindow(
+  prev: { lo: number; hi: number } | null,
+  centerHz: number,
+  spanHz: number,
+): { lo: number; hi: number } {
+  const next = zoomRange(centerHz, spanHz)
+  // Std (0) and Full (<0 or ≥ passband) are fixed windows — nothing to hold still.
+  const full = WF_F_MAX - WF_F_MIN
+  if (spanHz === 0 || spanHz < 0 || spanHz >= full) return next
+  if (!prev) return next
+  // A span change is a new question; rebuild rather than hold a window of the wrong width.
+  if (prev.hi - prev.lo !== next.hi - next.lo) return next
+  // The marker is still on screen — leave the operator's view exactly where it is.
+  if (centerHz >= prev.lo && centerHz <= prev.hi) return prev
+  return next
+}
+
 /** Scope feeds whose rows span ABSOLUTE RF Hz (a native panadapter retuned to the dial:
  * 'flex' = SmartSDR VITA, 'civ' = Icom CI-V scope). ''/'audio' = the soundcard FFT,
  * whose rows span demodulated audio-passband Hz. */
