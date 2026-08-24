@@ -4189,16 +4189,25 @@ export const EN = {
   // ── Settings ▸ Radio ▸ Headphone monitor ────────────────────────────────────────────
   // "System default" inside these sentences names the picker entry above, so it reads the
   // same word the operator just chose — translate them together.
-  'settings.headphoneMonitor.legend': 'Headphone monitor',
-  'settings.headphoneMonitor.enable.label': 'Enable monitor',
-  'settings.headphoneMonitor.enable.aria': 'Enable headphone monitor',
+  // ⚠️ THE WORD "MONITOR" IS NOT USED HERE, deliberately, though the settings behind it are still
+  // named `monitor_*`. In amateur practice MONITOR means listening to your own TRANSMITTED audio —
+  // it is what MONI on the rig does. This plays the RECEIVED audio out of a computer device. An
+  // experienced operator read the old label and asked whether it would put his own voice back in
+  // his ears (2026-08-22); it would not, which is precisely the problem with the old wording.
+  'settings.headphoneMonitor.legend': 'Receive audio on this computer',
+  'settings.headphoneMonitor.enable.label': 'Play receive audio here',
+  'settings.headphoneMonitor.enable.aria': 'Play receive audio on this computer',
   'settings.headphoneMonitor.enable.hint':
-    "Plays the exact audio the decoder hears — for level / RFI diagnosis and listening to the band. Off by default; UNVERIFIED on-air until the attended session. Guards against the rig's TX device by name (System default is resolved to its real device first) — if your devices go by multiple names, pick your headphones explicitly rather than System default.",
-  'settings.headphoneMonitor.device.label': 'Monitor Output Device',
+    "Plays the RECEIVED audio — exactly what the decoder hears — out of a device on this computer, for level and RFI diagnosis or simply to listen to the band. This is not a transmit monitor: it never plays your own voice back. Off by default; UNVERIFIED on-air until the attended session.",
+  // NAMES THE DESTINATION, not the direction — "Output device" collided with
+  // `settings.audio.output.label` ("Output Device (TX)") on the same tab, so the Radio page
+  // showed two pickers differing by a parenthetical and a capital letter. Under the section
+  // heading it read clearly; scanning the tab it did not (kd9taw, #157).
+  'settings.headphoneMonitor.device.label': 'Headphones or speakers',
   'settings.headphoneMonitor.device.hint':
     "Your headphones or speakers — must NOT be the rig's TX output device.",
-  'settings.headphoneMonitor.level.label': 'Monitor Level',
-  'settings.headphoneMonitor.level.aria': 'Headphone monitor level',
+  'settings.headphoneMonitor.level.label': 'Listening level',
+  'settings.headphoneMonitor.level.aria': 'Receive listening level',
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
 
