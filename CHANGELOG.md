@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The SSTV waterfall comes back.** Change band while a picture was coming in and the band
+  display stopped and stayed stopped — switching modes and back was the only way to get it
+  returned, and landing on an SSTV frequency stopped it again.
+
+  The screen shows the band until a picture starts arriving and then shows the picture in the
+  same place. A decode that began and never finished was never cleaned up, so the app went on
+  believing a picture was still coming and held the display for it — for the rest of the
+  session. Changing band is the obvious way to cause that, but so is the sending station
+  stopping mid-picture, or the band simply going long.
+
+  A picture that has run well past the time its own mode takes is now given up on and the
+  waterfall returns. Nothing is given up early: the allowance is per mode, so a Scottie DX gets
+  its four and a half minutes.
+
+
 - **Picking a RTTY frequency from the band plan now puts your signal where the plan says.** The
   listed frequencies were chosen as the frequency your signal comes out on — which is what the
   dial reads on true FSK, but not on AFSK, the default. On AFSK the tones sit about 2.3 kHz below
