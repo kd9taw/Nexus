@@ -168,10 +168,33 @@ esac
 # libusb comes with us: a USB-attached rig is the one case where its absence is not a theory,
 # and it is 100 KB. Everything else libhamlib wants (libc, libstdc++, libudev, libz, libcap) is
 # on any desktop that can run the app at all.
-for dep in libusb-1.0.so.0 libusb-1.0.0.dylib; do
-  hostlib=$(ldd "$DEST/rigctld" 2>/dev/null | awk -v d="$dep" '$1==d {print $3}')
-  [ -n "${hostlib:-}" ] && [ -f "$hostlib" ] && cp -L "$hostlib" "$DEST/$dep" && echo "  + $dep (from host)"
-done
+#
+# ⚠️ `ldd` IS LINUX-ONLY. macOS has no such command, and under `set -e` the failed command
+# substitution took the whole script down with exit 127 — after Hamlib had already built, so
+# the log looked like a successful build that stopped for no reason. macOS reads the same
+# information from `otool -L`.
+if [ "$HOST" = linux ]; then
+  dep=libusb-1.0.so.0
+  hostlib=$(ldd "$DEST/rigctld" 2>/dev/null | awk -v d="$dep" '$1==d {print $3}' || true)
+else
+  dep=libusb-1.0.0.dylib
+  hostlib=$(otool -L "$DEST/rigctld" 2>/dev/null | awk '/libusb/ {print $1; exit}' || true)
+fi
+if [ -n "${hostlib:-}" ] && [ -f "$hostlib" ]; then
+  cp -L "$hostlib" "$DEST/$dep"
+  echo "  + $dep (from host)"
+  # ⚠️ AND ON macOS, REPOINT IT. The copy is not enough: rigctld still records the absolute
+  # HOMEBREW path it was linked against (/opt/homebrew/opt/libusb/...), which does not exist on
+  # an operator's Mac. Without this rewrite the bundled libusb sits there unused and a
+  # USB-attached rig fails on exactly the machines that never had brew — i.e. the ones this
+  # whole change exists to serve.
+  if [ "$HOST" = macos ]; then
+    for f in "${BINS[@]}"; do
+      install_name_tool -change "$hostlib" "@rpath/$dep" "$DEST/$f" 2>/dev/null || true
+    done
+    install_name_tool -id "@rpath/$dep" "$DEST/$dep" 2>/dev/null || true
+  fi
+fi
 
 # Strip: an unstripped libhamlib is 29 MB against the Windows DLL's 12.
 case "$HOST" in
@@ -226,6 +249,21 @@ if [ "$HOST" = linux ]; then
       exit 1
       ;;
   esac
+else
+  # The macOS equivalent, and it catches a class `--version` never can. On the RUNNER a
+  # Homebrew path baked into the binary resolves perfectly — brew is right there. On the
+  # operator's Mac it does not exist, which is the entire population this change is for. So
+  # assert every dependency is either OURS (@rpath) or a genuine system library.
+  bad=$(otool -L "$DEST/rigctld" | tail -n +2 | awk '{print $1}' \
+        | grep -vE '^@rpath/|^/usr/lib/|^/System/' || true)
+  if [ -n "$bad" ]; then
+    {
+      echo "Staged rigctld depends on paths that will not exist on an operator's Mac:"
+      echo "$bad" | sed 's/^/  /'
+      echo "Every dependency must be @rpath/… (bundled beside it) or a system library."
+    } >&2
+    exit 1
+  fi
 fi
 if ! "$DEST/rigctld" --version >/dev/null 2>&1; then
   {
