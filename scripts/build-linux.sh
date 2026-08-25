@@ -94,9 +94,14 @@ ok "ui/node_modules"
 bold "4/4  Nexus GUI app + .deb + AppImage"
 cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo install tauri-cli --version "^2" --locked; }
 [ -f "$REPO/src-tauri/icons/128x128.png" ] || python3 "$REPO/scripts/gen-icons.py"
-# Linux uses the SYSTEM Hamlib (rigctld on PATH / the .deb's libhamlib-utils dependency), so DON'T
-# ship the Windows hamlib .dll/.exe in the Linux bundle. The Windows build re-stages the real
-# binaries via fetch-hamlib.sh, so removing them here is safe.
+# Linux BUNDLES its own Hamlib as of 2026-08-24 — see scripts/fetch-hamlib-unix.sh for why: the
+# AppImage installs nothing by definition, so "apt install libhamlib-utils" was a CAT-dead
+# default for the one package whose whole promise is that you do not have to. The .deb keeps its
+# `depends: libhamlib-utils` as belt-and-braces; the bundled copy wins regardless, because the
+# resolver checks beside-the-executable paths before PATH.
+#
+# The Windows .dll/.exe still must not ride along in a Linux bundle. The Windows build re-stages
+# them via fetch-hamlib.sh, so removing them here is safe.
 #
 # Remove ONLY the untracked Windows binaries. This used to `rm -rf` the whole directory and
 # recreate it with just a README — which DELETED four TRACKED Hamlib license files
@@ -104,6 +109,8 @@ cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo
 # one `git add -A` away from committing the removal of the license texts Hamlib's LGPL requires
 # us to ship. The tracked README.txt is byte-identical to what that heredoc wrote, so nothing
 # was gained by recreating it. Bit us for real on 2026-07-20.
+"$REPO/scripts/fetch-hamlib-unix.sh"
+
 find "$REPO/src-tauri/resources/hamlib" -type f \
   \( -name '*.dll' -o -name '*.exe' -o -name '*.lib' -o -name '*.def' \) -delete
 # Safety net for the delete above: if it ever touches a TRACKED file (the LGPL license
@@ -210,5 +217,5 @@ echo "  .deb     : src-tauri/target/release/bundle/deb/*.deb"
 echo "  AppImage : src-tauri/target/release/bundle/appimage/*.AppImage"
 echo "  binary   : src-tauri/target/release/nexus"
 echo
-warn "CAT needs Hamlib: the .deb pulls libhamlib-utils automatically; AppImage users run"
-warn "'sudo apt install libhamlib-utils'. FT8/FT4 audio decode works without it (VOX)."
+hlver="$("$REPO/src-tauri/resources/hamlib/rigctld" --version 2>/dev/null | head -1 | awk '{print $3}')"
+ok "CAT: Hamlib ${hlver:-?} bundled in both artifacts — nothing for the operator to install."

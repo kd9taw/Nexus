@@ -91,6 +91,7 @@ jobs:
             librsvg2-dev libxdo-dev libssl-dev libsoup-3.0-dev patchelf \
             build-essential cmake ninja-build gfortran \
             libfftw3-dev libboost-dev libasound2-dev libudev-dev \
+            libusb-1.0-0-dev \
             libfuse2
 
       - uses: dtolnay/rust-toolchain@master
@@ -126,6 +127,33 @@ jobs:
           m=/tmp/dc/usr/lib/Nexus/resources/deepcw/model.onnx
           [ -s "$m" ] || { echo "DeepCW model missing from the .deb"; exit 1; }
           echo "$MODEL_SHA  $m" | sha256sum -c -
+          # HAMLIB MUST BE IN BOTH ARTIFACTS, and it must RUN from where it lands.
+          #
+          # Before 1.9.0 the AppImage shipped Hamlib's five licence .txt files and no Hamlib, and
+          # nothing went red: `resources/hamlib/*` still matched the licence files, so the bundle
+          # built green and CAT was simply dead for anyone who had not separately apt-installed
+          # libhamlib-utils. Presence is checked inside the package, not on the build tree.
+          for f in rigctld rigctl rotctld rotctl libhamlib.so.4; do
+            [ -s "/tmp/dc/usr/lib/Nexus/resources/hamlib/$f" ] \
+              || { echo "$f missing from the .deb"; exit 1; }
+          done
+          # …and the same inside the AppImage, which is the package that was actually broken.
+          "$app" --appimage-extract >/dev/null
+          hl=squashfs-root/usr/lib/Nexus/resources/hamlib
+          [ -s "$hl/rigctld" ] || { echo "rigctld missing from the AppImage"; exit 1; }
+          # THE ONE THAT MATTERS: it has to find its own libhamlib, not the runner's. A CI box
+          # with Hamlib installed would let a broken rpath pass a bare --version, which is exactly
+          # how the first cut of fetch-hamlib-unix.sh looked correct while loading /lib's copy.
+          # Copy to a bare directory so there is nothing else it could possibly resolve against.
+          mkdir -p /tmp/hlcheck && cp "$hl/rigctld" "$hl/libhamlib.so.4" /tmp/hlcheck/
+          cp "$hl"/libusb-1.0.so.0 /tmp/hlcheck/ 2>/dev/null || true
+          got=$(ldd /tmp/hlcheck/rigctld | awk '/libhamlib/ {print $3}')
+          case "$got" in
+            /tmp/hlcheck/*) ;;
+            *) echo "bundled rigctld resolves libhamlib to '$got', not its own copy"; exit 1 ;;
+          esac
+          /tmp/hlcheck/rigctld --version || { echo "bundled rigctld will not run"; exit 1; }
+          rm -rf squashfs-root /tmp/hlcheck
           # GLIBC FLOOR — the check that makes the supported-distro list a decision instead of
           # a side effect of the runner image. Both shipped binaries are read: the .deb's
           # payload and the AppImage's INNER binary, because an AppImage bundles application
@@ -344,7 +372,7 @@ jobs:
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | shasum -a 256 -c -
 
       - name: Install build dependencies
-        run: brew install cmake ninja gcc fftw boost
+        run: brew install cmake ninja gcc fftw boost libusb
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -386,6 +414,13 @@ jobs:
 
       - name: Install tauri-cli
         run: cargo install tauri-cli --version "^2" --locked
+
+      # Hamlib for macOS. Explicit here because this job runs `cargo tauri build` directly —
+      # Linux and the Pi get it inside scripts/build-linux.sh, and macOS would silently ship
+      # without it, which is the exact hole this whole change closes. The script's own CAT-DEAD
+      # guard fails the build rather than producing a bundle with licence texts and no Hamlib.
+      - name: Stage Hamlib (bundled rigctld — no brew install for the user)
+        run: bash scripts/fetch-hamlib-unix.sh
 
       - name: Build, sign and notarize the DMG
         env:

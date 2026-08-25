@@ -135,8 +135,7 @@ there is no driver to install; the port appears as `/dev/cu.*` (macOS) or
 ### Test CAT fails or times out
 
 **Test CAT** saves your settings, starts (or restarts) the CAT daemon `rigctld`
-(bundled on Windows; Homebrew's on macOS — `brew install hamlib` once if the error
-names Hamlib), waits ~1.3 s, and reads the dial frequency. A real frequency back
+(bundled on every platform since 1.9.0), waits ~1.3 s, and reads the dial frequency. A real frequency back
 (e.g. `14.074 MHz`) means CAT is healthy. A failure is almost always one of:
 
 1. **Wrong model** — confirm the Hamlib model. If your rig connected through a
@@ -328,8 +327,9 @@ answer is. Nexus captures `rotctld`'s stderr and prints Hamlib's own words:
   port name is wrong, or the adapter is unplugged.
 - `… serial port COM7 is already open` — another program (a logger, another copy
   of Nexus, PstRotator) holds it. Close that first; a serial port has one owner.
-- `Hamlib's rotctld isn't installed` — macOS/Linux only, and it is not bundled
-  there. `brew install hamlib` / `sudo apt install libhamlib-utils`.
+- `Nexus could not start its own rotctld` — its bundled copy would not launch and
+  no system Hamlib was there to fall back on. Installing one fixes it:
+  `sudo apt install libhamlib-utils` / `brew install hamlib`.
 - `the rotator stopped answering during the … pass` — the daemon is fine and the
   controller went quiet mid-pass. Power, cable, or the controller left in local.
 

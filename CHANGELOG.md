@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CAT rig control now works out of the box on Linux and macOS.** Nexus carries Hamlib —
+  the `rigctld` program it drives your radio through — inside every download, on every
+  platform. Nothing to install, no Homebrew, no apt.
+
+  Windows has worked this way since the beginning. Linux and macOS did not, and the AppImage
+  was the worst of it: an AppImage is the download you choose *because* it installs nothing,
+  and it was the one that could not talk to a radio until you worked out on your own that you
+  needed a package called `libhamlib-utils` that nothing had ever mentioned. It shipped
+  Hamlib's licence files and no Hamlib. macOS had the same hole behind `brew install hamlib`.
+
+  If you already installed Hamlib yourself, nothing changes and nothing conflicts — Nexus
+  prefers its own copy, and falls back to yours if that ever fails to start.
+
 - **Nexus speaks Spanish and French.** Both are picked up automatically from your system
   language, or you can choose one in Settings. The whole application is translated — all 4,681
   phrases, every screen, the same coverage German has. Anything a future release adds shows its

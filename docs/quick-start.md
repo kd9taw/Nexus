@@ -25,9 +25,8 @@ Download the file for your platform — `Nexus_<version>_x64-setup.exe` on Windo
 from the
 [SourceForge download page](https://sourceforge.net/projects/nexus-ham-radio/files/)
 (the source lives there too).
-It is a per-user install and needs no administrator rights. On Windows, WebView2 and
-Hamlib are bundled, so there is nothing else to install; on macOS, CAT additionally
-needs Hamlib from Homebrew — `brew install hamlib` in Terminal, then restart Nexus.
+It is a per-user install and needs no administrator rights. WebView2 (Windows) and Hamlib
+(every platform) are bundled, so there is nothing else to install.
 Full detail, including SHA-256
 verification and where your data lives, is in [Install & Verify](install.md).
 
