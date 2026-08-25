@@ -437,8 +437,11 @@ jobs:
         run: |
           set -euo pipefail
           hl=src-tauri/resources/hamlib
-          mapfile -t macho < <(find "$hl" -type f -exec sh -c \
-            'file -b "$1" | grep -q "Mach-O" && echo "$1"' _ {} \; | sort)
+          # `mapfile` is bash 4+; macOS runners are bash 3.2. while-read is portable.
+          macho=()
+          while IFS= read -r f; do macho+=("$f"); done < <(
+            find "$hl" -type f -exec sh -c \
+              'file -b "$1" | grep -q "Mach-O" && echo "$1"' _ {} \; | sort)
           [ "${#macho[@]}" -gt 0 ] || { echo "no Mach-O staged under $hl — staging failed"; exit 1; }
           echo "signing ${#macho[@]} Mach-O file(s) as: $APPLE_SIGNING_IDENTITY"
           # dylibs first, then the programs that load them.

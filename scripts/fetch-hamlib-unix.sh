@@ -133,10 +133,16 @@ done
 # the loader ever asks for (`readelf -d` → `SONAME: libhamlib.so.4`). Copying the whole
 # libhamlib.so / .so.4 / .so.4.0.7 family with `cp -L` instead put THREE 29 MB copies of the same
 # file in every bundle.
-soname=$(case "$HOST" in
-  linux) readelf -d "$pfx/lib/libhamlib.$LIBEXT" 2>/dev/null | sed -n 's/.*SONAME.*\[\(.*\)\].*/\1/p' ;;
-  macos) echo "libhamlib.4.$LIBEXT" ;;
-esac)
+#
+# ⚠️ PLAIN if/else, NOT `soname=$(case … esac)`. macOS ships bash 3.2, which rejects a `case`
+# inside a command substitution — "syntax error near unexpected token `;;`". It parses fine on
+# the bash 5 this was written on, so the macOS job is the only place it could ever show up, and
+# it did: the 1.9.0 release build died here.
+if [ "$HOST" = linux ]; then
+  soname=$(readelf -d "$pfx/lib/libhamlib.$LIBEXT" 2>/dev/null | sed -n 's/.*SONAME.*\[\(.*\)\].*/\1/p')
+else
+  soname="libhamlib.4.$LIBEXT"
+fi
 [ -n "$soname" ] || { echo "could not read libhamlib's SONAME — refusing to guess" >&2; exit 1; }
 cp -L "$pfx/lib/$soname" "$DEST/$soname" && echo "  + $soname"
 
