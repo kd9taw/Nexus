@@ -14602,7 +14602,8 @@ impl Engine {
             self.station
                 .all_txt_pending
                 .push(crate::alltxt::all_txt_line(
-                    now_unix_secs(),
+                    // The beacon's own period — same rule as the QSO writer.
+                    crate::alltxt::period_start_unix(slot, self.active_slot_secs()),
                     self.settings.dial_mhz,
                     true,
                     &mode,
@@ -15007,7 +15008,11 @@ impl Engine {
                         self.station
                             .all_txt_pending
                             .push(crate::alltxt::all_txt_line(
-                                now_unix_secs(),
+                                // The period this over KEYS IN. `now_unix_secs()` was up to a
+                                // second early (the plan is made just before the boundary) and,
+                                // for a re-planned over, seconds late — the operator's log has
+                                // Tx lines at 024544 and 024852, neither on a boundary.
+                                crate::alltxt::period_start_unix(slot, self.active_slot_secs()),
                                 self.settings.dial_mhz,
                                 true,
                                 &mode,
@@ -15693,12 +15698,18 @@ impl Engine {
         if self.settings.write_all_txt {
             let dial = self.settings.dial_mhz;
             let mode = format!("{:?}", self.app.tier()).to_uppercase();
-            let now = now_unix_secs();
+            // THE PERIOD THE AUDIO CAME FROM, not the wall clock this result happened to be
+            // folded at — see `alltxt::period_start_unix` for the field report. Both passes
+            // carry `audio slot + 1` (the boundary pass decodes the just-ended slot; the early
+            // pass is dispatched as `slot + 1` to match its parity), so the audio is always the
+            // period before this index.
+            let stamp =
+                crate::alltxt::period_start_unix(slot.saturating_sub(1), self.active_slot_secs());
             for d in &decodes {
                 self.station
                     .all_txt_pending
                     .push(crate::alltxt::all_txt_line(
-                        now, dial, false, &mode, d.snr, d.dt, d.freq, &d.message,
+                        stamp, dial, false, &mode, d.snr, d.dt, d.freq, &d.message,
                     ));
             }
             // Bound memory if the shell never drains (e.g. headless): keep newest 5000.
@@ -26626,6 +26637,67 @@ mod tests {
             lines[0]
         );
         assert!(e.take_all_txt_pending().is_empty(), "drained after take");
+    }
+
+    /// THE 2026-08-25 TIMING REPORT, end to end through the engine: the line is stamped with
+    /// the period the AUDIO came from, not the wall clock the result was folded at.
+    ///
+    /// The helper is unit-tested in `alltxt`; this pins the WIRING — that `process_decodes`
+    /// passes the audio's period and not `now_unix_secs()`. Both are needed: a correct helper
+    /// called with the wrong argument is exactly the bug that shipped.
+    #[test]
+    fn all_txt_stamps_the_audio_period_not_the_wall_clock() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.write_all_txt = true;
+        // A slot far from "now", so a wall-clock stamp cannot coincidentally match.
+        const SLOT: u64 = 119_174_501;
+        let frame = native_frame_for(modes::ModeKind::Ft8, "CQ W1ABC FN42", 1500.0);
+        e.ingest(&frame, SLOT);
+        let lines = e.take_all_txt_pending();
+        assert_eq!(lines.len(), 1, "one decode → one line: {lines:?}");
+
+        let expect = crate::alltxt::period_start_unix(SLOT - 1, 15.0);
+        let (y, mo, d, h, mi, se) = tempo_core::logbook::datetime_utc(expect);
+        let stamp = format!(
+            "{:02}{:02}{:02}_{:02}{:02}{:02}",
+            (y as u32) % 100,
+            mo,
+            d,
+            h,
+            mi,
+            se
+        );
+        assert!(
+            lines[0].starts_with(&stamp),
+            "expected the audio period {stamp}, got {}",
+            lines[0]
+        );
+        // The property the operator's log did not have: it lands on a T/R boundary.
+        assert_eq!(
+            se % 15,
+            0,
+            "stamp must sit on an FT8 boundary: {}",
+            lines[0]
+        );
+        // The control — a wall-clock stamp would be today's date, not this slot's.
+        let now_stamp = {
+            let (y, mo, d, h, mi, se) = tempo_core::logbook::datetime_utc(now_unix_secs());
+            format!(
+                "{:02}{:02}{:02}_{:02}{:02}{:02}",
+                (y as u32) % 100,
+                mo,
+                d,
+                h,
+                mi,
+                se
+            )
+        };
+        assert!(
+            !lines[0].starts_with(&now_stamp),
+            "still stamping the wall clock: {}",
+            lines[0]
+        );
     }
 
     /// The WSJT-X-style early pass: a period truncated at ~11.8 s (the capture
