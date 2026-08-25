@@ -8297,11 +8297,68 @@ impl Engine {
         // advanced the QSO to RR73, so the report is gone and the contact logs with a blank
         // RST_SENT. Operator report, 2026-07-25: "the log seems to have it right in almost
         // every case" — this is the "almost".
-        let opening_report = report_in(station.outgoing());
-        self.mode = Mode::Qso {
-            station: Box::new(station),
-            running: true,
-        };
+        // ⭐ RE-CLICKING THE STATION ALREADY BEING WORKED MUST NOT REBUILD THE QSO.
+        //
+        // Everything above builds a FRESH `Station`, and this used to install it
+        // unconditionally — so "work this station" on the station already being worked threw
+        // the live contact away and started it again. Field report 2026-08-25 (RI1FJL on
+        // 10.131), proven by replaying the operator's own ALL.TXT through the state machine:
+        // he cleared his message back to his grid, clicked the station again, and Nexus sent
+        // `R-21` — the message the rebuild re-derived from the DX's last report to him. Twice,
+        // with nothing addressed to him on the air in between, which is what ruled out
+        // `Station::observe` (every arm there is gated on `same_call(to, mycall)`).
+        //
+        // The message was the visible half. The rebuild also reset `qso_start_unix` — so the
+        // contact would LOG the time of the last click instead of when it began — along with
+        // `qso_report_sent`, the per-step transmit counts and the transcript.
+        //
+        // The rule, and it is the click's own meaning: a click that POINTS AT A MESSAGE
+        // (`reply_msg`) is WSJT-X's double-click — the operator is naming the message they
+        // want answered, so re-derive from it, unchanged. A click carrying NO message is
+        // "work this station" (a roster row, a station card, a spot); when that names the
+        // station already being worked it is a re-arm, and it must not rewrite what is queued.
+        //
+        // Everything else a click does still happens: parity, RX/TX offsets, the TX-enable
+        // and the immediate-key below all run either way. Only the QSO's own state survives.
+        //
+        // ⚠️ AND IT IS A RE-ARM, NOT A NO-OP. The first cut of this guard simply skipped the
+        // install, which broke three ways that an adversarial review measured before it
+        // shipped — every one of them a click that leaves the transmitter SILENT:
+        //
+        //  (a) The rebuild was the only thing that cleared `Station::tx_count`. A directed
+        //      step that has spent `directed_max_calls` (default 8) stayed spent across the
+        //      click, so `outgoing_rv()` kept withholding and the radio never keyed —
+        //      measured 0 overs where the old code gave 8. That is this very operator's QSO
+        //      one step on: the DX never rogers, the budget runs out, he clicks to get it
+        //      going again. So the re-arm clears the step budget, exactly as the Resend
+        //      button does (`Station::resend`), while KEEPING what is queued.
+        //  (b) A QSO that reached `Done` has `pending: None` and no arm in `observe` that can
+        //      re-arm it, so "work this station" armed TX and queued nothing, for good.
+        //      `pending.is_some()` sends that case down the rebuild branch where it belongs.
+        //  (c) A cross-band QSY clears the decode context but NOT `Mode::Qso`, so a re-click
+        //      on the new band would resume the old band's mid-sequence station and open with
+        //      a roger for an exchange that never happened there. Requiring a live decode
+        //      from this DX uses the state the QSY already clears.
+        let rearming_same_qso = reply_msg.is_none()
+            && self.latest_decode_slot_from(dxcall).is_some()
+            && matches!(&self.mode, Mode::Qso { station: live, .. }
+                if live.dxcall.as_deref().is_some_and(|c| tempo_core::message::same_call(c, dxcall))
+                    && live.pending.is_some());
+        if rearming_same_qso {
+            if let Mode::Qso { station: live, .. } = &mut self.mode {
+                live.resend(); // zero the spent step budget; the queued message stands
+            }
+        }
+        if !rearming_same_qso {
+            let opening_report = report_in(station.outgoing());
+            self.mode = Mode::Qso {
+                station: Box::new(station),
+                running: true,
+            };
+            self.qso_logged = false;
+            self.qso_report_sent = opening_report;
+            self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
+        }
         // A directed call is S&P, not a CQ run: a completed QSO does NOT auto-resume
         // calling CQ.
         self.cq_running = false;
@@ -8378,9 +8435,8 @@ impl Engine {
         self.immediate_tx = true;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
-        self.qso_logged = false;
-        self.qso_report_sent = opening_report;
-        self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
+        // `qso_logged` / `qso_report_sent` / `qso_start_unix` are set with the Station above —
+        // they belong to the CONTACT, so a re-arm of the one in progress must not restamp them.
         self.harq_reset_locked(); // fresh exchange: drop stale receive-side IR-HARQ state
         Ok(())
     }
@@ -23214,6 +23270,223 @@ mod tests {
             e.settings().operating_mode,
             crate::settings::OperatingMode::Cw,
             "a whole-struct save must not revert the live section mode"
+        );
+    }
+
+    /// RE-CLICKING THE STATION YOU ARE ALREADY WORKING MUST NOT THROW THE QSO AWAY.
+    ///
+    /// Field report 2026-08-25 (RI1FJL on 10.131, proven by replaying the operator's own
+    /// ALL.TXT through the state machine): he cleared his outgoing message back to his grid,
+    /// clicked the station again, and Nexus went back to sending `R-21` — twice, with NOTHING
+    /// addressed to him on the air in between. The replay showed the sequencer holding `EN52`
+    /// both times while the app transmitted the report, so the fault was never in
+    /// `tempo_core::qso`: `call_station_ctx` built a BRAND NEW `Station` and replaced the live
+    /// one on every call, re-deriving the message from the DX's last report to us.
+    ///
+    /// It cost more than the message. The rebuild also reset `qso_start_unix` (so the contact
+    /// would log with the time of the last click rather than when it began), `qso_report_sent`,
+    /// the transmit counts, and the transcript.
+    ///
+    /// A click that POINTS AT A MESSAGE still re-derives — that is WSJT-X's double-click and
+    /// the operator is naming the message they want answered. A click that carries none (a
+    /// roster row, a station card, a spot) is "work this station", and when it is the station
+    /// already being worked it must re-arm without rewriting what is queued.
+    #[test]
+    fn reclicking_the_station_being_worked_keeps_the_operator_message() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        // The DX answers our call with a report — the sequencer arms R-<report>.
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+        let derived = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .expect("a message is queued");
+        assert!(
+            derived.contains("R-"),
+            "precondition: the sequencer arms a rogered report, got {derived}"
+        );
+
+        // The operator overrides it back to his grid (Tx1).
+        e.override_next_tx("RI1FJL", None, "RI1FJL KD9TAW EN52");
+        assert_eq!(
+            e.snapshot()
+                .qso
+                .as_ref()
+                .and_then(|q| q.tx_now.clone())
+                .as_deref(),
+            Some("RI1FJL KD9TAW EN52"),
+            "the manual pick is queued"
+        );
+        let started = e.qso_start_unix;
+
+        // …and then clicks the SAME station again, pointing at no message.
+        e.call_station_ctx("RI1FJL", None, None, None, None)
+            .expect("re-clicking the worked station is not an error");
+
+        assert_eq!(
+            e.snapshot()
+                .qso
+                .as_ref()
+                .and_then(|q| q.tx_now.clone())
+                .as_deref(),
+            Some("RI1FJL KD9TAW EN52"),
+            "THE BUG: the re-click re-derived the message and discarded the operator's pick"
+        );
+        assert_eq!(
+            e.qso_start_unix, started,
+            "the re-click also restamped the QSO clock, so it would log the wrong start time"
+        );
+    }
+
+    /// The other direction, so the fix is a rule and not a hole: a click that POINTS AT a
+    /// message re-derives from it, exactly as WSJT-X's double-click does. Without this the
+    /// guard above would freeze the sequencer at whatever was queued first.
+    #[test]
+    fn clicking_a_decode_still_rederives_even_mid_qso() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+        e.override_next_tx("RI1FJL", None, "RI1FJL KD9TAW EN52");
+        assert_eq!(
+            e.snapshot()
+                .qso
+                .as_ref()
+                .and_then(|q| q.tx_now.clone())
+                .as_deref(),
+            Some("RI1FJL KD9TAW EN52")
+        );
+
+        // Now the operator double-clicks a LINE: the DX rogering our report.
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL RR73"), Some(-20), None)
+            .expect("clicking a decode works");
+        let now = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            !now.contains("EN52"),
+            "a click that names a message must re-derive from it, got {now}"
+        );
+    }
+
+    /// (a) A CALL-CAPPED STEP MUST STILL RESUME. Caught by review, measured: the first cut of
+    /// the re-click guard skipped the rebuild, which was the only thing zeroing `tx_count`, so
+    /// a directed step that had spent `directed_max_calls` stayed spent and the click put
+    /// NOTHING on the air — 0 overs where the old code gave 8. This is the reported QSO one
+    /// step on: the DX stops rogering, the budget runs out, the operator clicks to restart it.
+    #[test]
+    fn reclicking_a_call_capped_step_re_arms_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.directed_max_calls = Some(2);
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+
+        // Spend the budget.
+        if let Mode::Qso { station, .. } = &mut e.mode {
+            station.call_cap = Some(2);
+            station.tx_count = 2;
+            assert!(station.stalled(), "precondition: the step is withheld");
+        }
+        // The operator clicks the station again to get it moving.
+        e.call_station_ctx("RI1FJL", None, None, None, None)
+            .expect("re-click is not an error");
+        if let Mode::Qso { station, .. } = &e.mode {
+            assert_eq!(
+                station.tx_count, 0,
+                "the re-click must clear the spent budget"
+            );
+            assert!(
+                !station.stalled(),
+                "THE REGRESSION: the click re-armed nothing and the radio stays silent"
+            );
+            assert!(
+                station.outgoing_rv().is_some(),
+                "and an over must actually be available to send"
+            );
+        }
+    }
+
+    /// (b) A FINISHED QSO MUST REBUILD, not re-arm. `after_tx` clears `pending` at `Done` and
+    /// no arm of `observe` can re-arm it, so keeping that station made "work this station" a
+    /// permanently dead click — TX armed, nothing ever queued.
+    #[test]
+    fn reclicking_after_the_qso_finished_starts_a_new_one() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+        if let Mode::Qso { station, .. } = &mut e.mode {
+            station.state = tempo_core::qso::State::Done;
+            station.pending = None; // what `after_tx` leaves once the 73 has gone
+        }
+        e.call_station_ctx("RI1FJL", None, None, None, None)
+            .expect("re-click is not an error");
+        if let Mode::Qso { station, .. } = &e.mode {
+            assert!(
+                station.pending.is_some(),
+                "THE REGRESSION: the click left a finished QSO in place with nothing to send"
+            );
+            assert_ne!(station.state, tempo_core::qso::State::Done);
+        }
+    }
+
+    /// (c) AFTER A BAND QSY THE OLD STATION MUST NOT BE RESUMED. A cross-band change clears the
+    /// decode context but leaves `Mode::Qso` standing, so resuming it would open the new band
+    /// with a roger for an exchange that never happened there. Requiring a live decode from
+    /// this DX is what distinguishes the two — the QSY already cleared it.
+    #[test]
+    fn a_reclick_after_a_band_change_does_not_resume_the_old_bands_sequence() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.ingest(
+            &native_frame_for(modes::ModeKind::Ft8, "KD9TAW RI1FJL -07", 1500.0),
+            3,
+        );
+        e.call_station_ctx("RI1FJL", None, Some("KD9TAW RI1FJL -07"), Some(-23), None)
+            .expect("the QSO starts");
+        let mid_sequence = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(mid_sequence.contains("R-"), "precondition: mid-sequence");
+
+        e.clear_decode_context(); // what a cross-band QSY does
+        e.call_station_ctx("RI1FJL", None, None, None, None)
+            .expect("re-click is not an error");
+        let after = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            !after.contains("R-"),
+            "THE REGRESSION: opened the new band with the old band's roger — {after}"
         );
     }
 
