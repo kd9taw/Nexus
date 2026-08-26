@@ -1026,6 +1026,10 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
             };
             match WsjtxServer::new(bind.parse().unwrap(), target) {
                 Ok(s) => {
+                    // ⚠️ `CARGO_PKG_VERSION` here is TEMPO-AUDIO's version (0.2.0), not the
+                    // app's — so this heartbeat announces a version that was never released.
+                    // Left as-is rather than fixed blind: the app version is not reachable from
+                    // this crate, and threading it is its own change.
                     let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
                     Some(s)
                 }
@@ -8215,7 +8219,17 @@ impl RadioLoop {
                     let s = eng.snapshot();
                     (s.mycall.clone(), s.mygrid.clone())
                 };
-                let _ = reporter.send_spots(&rx_call, &rx_grid, "Tempo", &station.psk_spots);
+                // ⭐ THE NAME PSKREPORTER SHOWS THE WORLD. This still said "Tempo" long after
+                // the app was renamed, so every operator running Nexus appeared on
+                // pskreporter.info as a Tempo user — the rebrand missed the one identifier that
+                // is visible to everyone but us (operator report, 2026-08-26).
+                //
+                // No version deliberately: `env!("CARGO_PKG_VERSION")` here is TEMPO-AUDIO's
+                // version (0.2.0), not the app's, so appending it would report a number that has
+                // never been released. A bare, correct name beats a decorated wrong one. (The
+                // WSJT-X heartbeat at the top of this file makes exactly that mistake — see the
+                // note there.)
+                let _ = reporter.send_spots(&rx_call, &rx_grid, "Nexus", &station.psk_spots);
                 station.psk_spots.clear();
                 station.last_psk_flush = now;
             }
