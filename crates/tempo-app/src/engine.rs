@@ -2490,6 +2490,13 @@ const RTTY_TEXT_CAP: usize = 4000;
 const PSK_TEXT_CAP: usize = 4000;
 /// AFSK RTTY mark tone (Hz) — mirrors `tempo_audio::rtty_afsk::MARK_HZ` (tempo-app can't
 /// depend on tempo-audio); used only to judge where the AFSK emission lands vs the dial.
+/// The STANDARD AFSK mark tone, and now only the basis for the DEFAULT centre.
+///
+/// ⚠️ NOT WHAT THE PRIVILEGE GATE JUDGES — that is `Engine::rtty_tx_mark_hz`, which follows the
+/// operator's netted centre. Judging this constant was correct until 1.9.0 made the transmitter
+/// follow the net; afterwards it could be wrong by ~1.9 kHz and APPROVE a transmission landing
+/// outside a privileged segment. If you find yourself reaching for it in a gate, you want
+/// `rtty_tx_mark_hz`.
 const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// Cap on the armed RTTY/SSTV audio drain buffers (~10 s at 12 kHz). The decode
 /// threads normally empty these every ~100 ms; the cap only bites if a thread
@@ -4816,7 +4823,9 @@ impl Engine {
         if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
             return dial_mhz;
         }
-        dial_mhz + RTTY_AFSK_MARK_HZ / 1_000_000.0
+        // The SAME live mark the gate judges (`rtty_tx_mark_hz`) — a channel pick must land the
+        // signal where the plan says regardless of where the operator has netted.
+        dial_mhz + self.rtty_tx_mark_hz() / 1_000_000.0
     }
 
     fn tune_dial(&mut self, dial_mhz: f64, band: &str, mode: &str, origin: DialOrigin) {
@@ -5439,9 +5448,25 @@ impl Engine {
         if self.settings.rtty_backend.eq_ignore_ascii_case("fsk") {
             allow(dial - shift) && allow(dial)
         } else {
-            let mark = RTTY_AFSK_MARK_HZ / 1_000_000.0;
+            // ⚠️ THE LIVE MARK, NOT `RTTY_AFSK_MARK_HZ`. The constant was right until 1.9.0 made
+            // the transmitter follow the netted centre; after that the emitted mark is
+            // `rtty_center_hz() - shift/2`, operator-settable from 300 to 3700 Hz, and judging
+            // 2125 could be wrong by ~1.9 kHz — enough to APPROVE a transmission that lands
+            // outside a privileged segment. Netting UP moves an AFSK emission DOWN, so the
+            // dangerous direction is the one an operator reaches for to work a station low in
+            // the passband.
+            let mark = self.rtty_tx_mark_hz() / 1_000_000.0;
             allow(dial - mark - shift) && allow(dial - mark)
         }
+    }
+
+    /// The AFSK MARK tone actually transmitted, in Hz — the netted centre less half the shift.
+    ///
+    /// One place, so the privilege gate and the band-plan tune cannot drift apart again. That
+    /// they could is the whole of the 1.9.0 regression: netting moved the emission and left the
+    /// gate judging a constant.
+    fn rtty_tx_mark_hz(&self) -> f64 {
+        self.rtty_center_hz() as f64 - self.settings.rtty_shift_hz as f64 / 2.0
     }
 
     /// Declare the provenance of the dial that was JUST written — the one place the
@@ -12113,7 +12138,7 @@ impl Engine {
     /// un-netted decoder sits on today's 2125/2295 pair at any shift. RX only.
     pub fn rtty_center_hz(&self) -> f32 {
         self.rtty_center
-            .unwrap_or(2125.0 + self.rtty_shift_hz() as f32 / 2.0)
+            .unwrap_or(RTTY_AFSK_MARK_HZ as f32 + self.rtty_shift_hz() as f32 / 2.0)
     }
 
     /// Net the RTTY decoder onto a new audio center (Hz) — a waterfall click.
@@ -22721,6 +22746,54 @@ mod tests {
     /// taste: FSK emits [dial-shift, dial] and AFSK emits [dial-mark-shift, dial-mark], so for
     /// both to occupy one window the AFSK dial is the FSK dial plus the mark tone. The plan
     /// keeps storing the FSK dial — the frequency the comments reason about and operators quote
+    /// THE RTTY PRIVILEGE GATE MUST JUDGE THE NETTED EMISSION, NOT A FIXED 2125 Hz.
+    ///
+    /// ⚠️ A REGRESSION SHIPPED IN 1.9.0, BY THE COMMIT THAT FIXED RTTY NETTING. Before it, the
+    /// transmitted mark really was fixed at `RTTY_AFSK_MARK_HZ`, so judging that constant was
+    /// right, and `rtty_center_hz`'s own doc said it was "RX-only … safe during TX and needs no
+    /// privilege gate". Making TX follow the netted centre made both false — and the gate was
+    /// not updated with it. The centre clamps to 300–3700 Hz, so the gate could be wrong by up
+    /// to ~1.9 kHz and PASS a transmission landing outside a privileged segment.
+    ///
+    /// Concretely: AFSK rides LSB, so the emission sits BELOW the dial by the mark. Netting the
+    /// centre UP moves the emission DOWN. Park the dial so the assumed emission is just inside
+    /// the bottom of the 20 m data segment, net up, and the real emission drops out of it while
+    /// the gate still says yes.
+    #[test]
+    fn the_rtty_gate_judges_the_netted_mark_not_the_old_fixed_one() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("rtty", false);
+        e.settings.rtty_backend = "afsk".into();
+        e.settings.rtty_shift_hz = 170;
+
+        // 20 m data for a General starts at 14.025 (privileges.rs). With the DEFAULT centre the
+        // mark is 2125 Hz, so a dial of 14.0275 emits at 14.0275 - 0.002125 = 14.025375 — just
+        // inside. Sanity-check the precondition rather than assume it.
+        let dial = 14.0275;
+        assert!(
+            e.rtty_emission_ok(dial),
+            "precondition: at the default centre this dial is legal"
+        );
+
+        // The operator clicks the waterfall and nets the centre up to 3700 Hz. The real mark is
+        // now 3700 - 85 = 3615 Hz, so the emission is 14.0275 - 0.003615 = 14.023885 — BELOW
+        // the 14.025 floor. The gate must now refuse.
+        e.rtty_net(3700.0);
+        assert!(
+            !e.rtty_emission_ok(dial),
+            "THE REGRESSION: the netted emission is at 14.0239, below the General 14.025 floor, \
+             and the gate approved it because it was still judging a fixed 2125 Hz mark"
+        );
+
+        // And the other direction still works: netting back down makes it legal again.
+        e.rtty_net(2210.0);
+        assert!(
+            e.rtty_emission_ok(dial),
+            "back at the default centre it is legal again"
+        );
+    }
+
     /// — and the offset is applied at the moment of tuning.
     #[test]
     fn a_rtty_channel_lands_the_signal_in_the_same_place_on_either_backend() {

@@ -6183,6 +6183,10 @@ impl RadioLoop {
                     // The centre joins the key config, so netting mid-stream re-keys cleanly
                     // rather than splicing two different waveforms into one carrier — the same
                     // rule the baud/shift change above already follows.
+                    // `reverse` STAYS in the key: it no longer reaches the modulator, but it
+                    // decides which way round `tone_pair` builds mark/space, and the pair itself
+                    // is not in this tuple. Drop it and flipping reverse would leave the centre
+                    // unchanged, the stream un-re-keyed, and the old sense still going out.
                     let key_cfg = (
                         baud,
                         shift,
@@ -6199,7 +6203,6 @@ impl RadioLoop {
                                 mark_hz: mark,
                                 space_hz: space,
                                 baud,
-                                reverse,
                                 ..crate::rtty_afsk::AfskConfig::default()
                             }),
                             key_cfg,
@@ -6450,7 +6453,6 @@ impl RadioLoop {
                             mark_hz: mark,
                             space_hz: space,
                             baud,
-                            reverse,
                             ..crate::rtty_afsk::AfskConfig::default()
                         };
                         let buf = crate::rtty_afsk::afsk_char_samples(&bits, &cfg);
