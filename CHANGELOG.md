@@ -5,6 +5,46 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] — 2026-08-26
+
+### Fixed
+
+- **RTTY: Nexus could let you transmit outside your licence privileges, and could ignore your
+  Reverse setting.** Both arrived in 1.9.0 and both are on the transmit path, so this is worth
+  taking even if neither has bitten you.
+
+  1.9.0 made RTTY transmit on the frequency you tuned to, which was the right fix — but the
+  privilege check was still working from the old fixed tone and never learned about it. Click
+  the waterfall to net onto a station and your signal moves; the check did not. It could be out
+  by as much as 1.9 kHz, and near the bottom of a band segment that is the difference between
+  legal and not. It now works from the tone you are actually sending.
+
+  Separately, **Reverse did nothing on transmit.** It was being applied twice and the two
+  cancelled out, so a rig set up for reversed tones decoded fine and answered the wrong way
+  round — the far end saw nothing. It applies once now, and receive and transmit agree.
+
+- **Working split no longer locks you out of transmitting, and no longer lets you transmit where
+  you should not.** The licence check judged your *receive* dial. Under split those are two
+  different frequencies, and it was wrong in both directions.
+
+  Receiving on a DX station in a segment you may not transmit in — the everyday way DX is
+  worked, since expeditions sit in the quiet part of the band and listen up where the pile-up
+  can answer — got you a TX lock even though your transmit frequency was perfectly legal. And
+  the reverse: a legal receive frequency with the transmit VFO parked somewhere you may not use
+  would key without complaint.
+
+  Nexus now judges the frequency your signal actually leaves on. When it cannot tell where that
+  is, it refuses rather than guessing.
+
+- **CW and Operate have a real split control.** They only ever *displayed* that split was on.
+  Phone has had a proper one for a while; now all three do, so you can set up a split from the
+  cockpit you are working in rather than reaching for the radio.
+
+- **Nexus can follow the radio's own split**, if you turn it on in Settings and your radio can
+  report it reliably. Nexus asks the radio rather than asking you to guess — on a radio that
+  cannot answer without being disturbed, the option is not offered, because finding out would
+  mean moving your VFOs behind your back. Off by default.
+
 ## [1.9.0] — 2026-08-25
 
 ### Added
