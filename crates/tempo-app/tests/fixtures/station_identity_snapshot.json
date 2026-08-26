@@ -95,6 +95,7 @@
     "txBusyReason": null,
     "txCompDb": null,
     "txCycleAuto": true,
+    "txEmissionMhz": 14.074,
     "txEnabled": false,
     "txEven": true,
     "txLevel": 0.8999999761581421,

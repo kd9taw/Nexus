@@ -331,6 +331,8 @@ export const ES: PartialCatalog = {
   "bandMap.track.title.tunable": "{{band}} — arriba lo alto, abajo lo bajo (MHz). Clic para sintonizar aquí; rueda para sintonizar.",
   "bandPicker.select.title": "Banda — tu última frecuencia en esta banda y modo en esta sesión; si no, el inicio de tu segmento autorizado",
   "bandPicker.txLock.label": "🔒 TX bloqueado",
+  'bandPicker.txLock.splitTitle':
+    'TX bloqueado — su frecuencia de transmisión en split, {{tx}} MHz, está fuera de los privilegios de su licencia. Recibir en {{rx}} MHz no supone ningún problema.',
   "bandPicker.txLock.title": "Esta frecuencia/modo queda fuera de los privilegios de tu licencia — la transmisión está bloqueada. Elige una banda arriba o cambia tu clase de licencia en Ajustes.",
   "bandStrip.age.hours": "hace {{hours}}h",
   "bandStrip.age.mins": "hace {{mins}}m",

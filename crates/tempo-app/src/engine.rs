@@ -1854,6 +1854,24 @@ pub struct Engine {
     split_tx_mhz: Option<f64>,
     /// One-shot "apply the split state now" flag for the radio loop.
     split_dirty: bool,
+    /// The TX frequency Nexus COMMANDED and the rig ACKNOWLEDGED — the ONLY transmit frequency
+    /// the privilege gate is allowed to judge.
+    ///
+    /// ⚠️ NOT `split_tx_mhz`, and the distinction is the whole safety argument. That field is
+    /// DESIRED state: it is `Some` for the entire round-trip gap before anything has reached the
+    /// radio. This one is set at exactly one site — the radio loop's success branch, where both
+    /// `set_split` and `set_split_freq` returned Ok on a rig we hold control of
+    /// (`Engine::rig_split_applied`) — and is revoked by any contradiction.
+    ///
+    /// ⚠️ AND IT IS NEVER SET FROM A READ. A rig's own report of split cannot grant permission:
+    /// 124 of Hamlib's 320 backends do not implement `get_split_vfo` and return a zero-filled
+    /// CACHE with RIG_OK, so on an IC-7200 or an IC-756 "split is off" and "I structurally
+    /// cannot answer" are the same bytes; `get_split_freq` returns 0 with success whenever that
+    /// cache says off; and on a non-targetable Icom, asking for the split frequency turns split
+    /// OFF on the radio, reads, and turns it back on — Hamlib's own source calls that "broken if
+    /// user changes split on rig". A gate that believed those reads would manufacture the very
+    /// out-of-band transmission it exists to prevent. Reads may only REVOKE.
+    tx_split_confirmed_hz: Option<u64>,
     /// RIT / XIT clarifier offsets in Hz (0 = off) and the active VFO — the CAT-panel controls.
     /// Write-only + optimistic (no read-back): the loop applies a change once and the snapshot
     /// mirrors the last commanded value, like the RF-power / filter-width path.
@@ -3720,6 +3738,7 @@ impl Engine {
             sat_inferred_keyed: false,
             sat_mode_released: false,
             split_tx_mhz: None,
+            tx_split_confirmed_hz: None,
             split_dirty: false,
             rit_hz: 0,
             xit_hz: 0,
@@ -4541,6 +4560,7 @@ impl Engine {
         // satellite path, literally consented per radio — and leaving it dirty
         // let the loop apply that TX frequency to whichever rig came next.
         // Marking dirty commands the NEW radio back to simplex instead.
+        self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -4945,6 +4965,7 @@ impl Engine {
         self.immediate_retune = true;
         // A plain QSY always returns the rig to SIMPLEX — leftover split from a
         // pile-up must never silently shift TX on the next frequency.
+        self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -5035,6 +5056,7 @@ impl Engine {
         // A knob QSY returns the rig to simplex, exactly like an app-commanded retune
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
+        self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -5963,6 +5985,8 @@ impl Engine {
         if !self.split_dirty && self.split_tx_mhz.is_some_and(|t| (t - tx_mhz).abs() < 1e-9) {
             self.split_tx_mhz = None;
         }
+        // The rig refused: whatever we thought it acknowledged is no longer true.
+        self.tx_split_confirmed_hz = None;
     }
 
     /// Set (`Some(tx_mhz)`) or clear (`None`) the DESIRED split TX dial from the operator/UI;
@@ -5971,6 +5995,10 @@ impl Engine {
     pub fn request_split(&mut self, tx_mhz: Option<f64>) {
         self.split_tx_mhz = tx_mhz;
         self.split_dirty = true;
+        // A NEW request retires the old acknowledgement immediately — the rig has not answered
+        // this one yet, so between here and the ack there is nothing confirmed to judge. TX
+        // locks for that gap, which is the correct direction.
+        self.tx_split_confirmed_hz = None;
     }
 
     /// Set (`Some("USB"|"LSB"|"FM")`) or clear (`None` = AUTO) the transient Phone mode override
@@ -10239,6 +10267,10 @@ impl Engine {
     /// The split-TX twin of [`Self::rig_dial_applied`]: the rig acknowledged
     /// the split TX dial at `tx_hz`.
     pub fn rig_split_applied(&mut self, tx_hz: u64) {
+        // THE ONE PLACE PERMISSION IS GRANTED. The caller has already proved both writes
+        // succeeded on a rig we hold control of; that acknowledgement is what the privilege
+        // gate judges from here until something contradicts it.
+        self.tx_split_confirmed_hz = Some(tx_hz);
         if let Some(b) = self.sat_binding.as_mut() {
             if b.pending_uplink_mhz
                 .is_some_and(|m| (m * 1e6).round() as u64 == tx_hz)
@@ -13689,9 +13721,24 @@ impl Engine {
     pub fn tx_allowed(&self) -> bool {
         self.emission_allowed(
             self.settings.operating_mode,
-            self.settings.dial_mhz,
+            self.tx_emission_mhz(),
             &self.settings.sideband,
         )
+    }
+
+    /// The dial the next over will actually be EMITTED on — the confirmed split TX frequency
+    /// when there is one, else the operator's dial.
+    ///
+    /// ⭐ UNDER SPLIT THE RX DIAL IS NOT A CONSERVATIVE STAND-IN, IT IS AN UNRELATED NUMBER, and
+    /// judging it was wrong in BOTH directions. It refused the field report's legal split (RX
+    /// 14.015 Extra-only, TX 14.026 legal for a General) — and it equally permitted the reverse,
+    /// a legal RX dial with the transmit VFO parked in an Extra-only segment, which shipped and
+    /// keyed. Fixing this tightens the gate as much as it unlocks it.
+    pub(crate) fn tx_emission_mhz(&self) -> f64 {
+        match self.tx_split_confirmed_hz {
+            Some(hz) => hz as f64 / 1e6,
+            None => self.settings.dial_mhz,
+        }
     }
 
     /// May the operator's class key `om`'s EMISSION with the dial at `dial` (`sideband`
@@ -14032,6 +14079,7 @@ impl Engine {
         s.radio.tx_enabled = self.tx_enabled;
         s.radio.qso_recording = self.qso_recording;
         s.radio.tx_allowed = self.tx_allowed();
+        s.radio.tx_emission_mhz = Some(self.tx_emission_mhz());
         s.radio.tuning = self.tuning;
         // The arbiter's own answer, not a flag pair for the UI to re-derive — see the field doc.
         s.radio.tx_busy_reason = self.tx_owner().map(TxOwner::busy_reason);
@@ -19703,6 +19751,78 @@ mod tests {
     /// `privileges::tx_allowed` short-circuits `LicenseClass::Open` — the DEFAULT, and the
     /// class every non-US operator and every operator who never opened Settings is on — to
     /// `true` at any frequency. So for them the dial gate does not fail closed off the
+    /// WORKING SPLIT — THE GATE MUST JUDGE WHERE THE RF LEAVES, NOT WHERE WE LISTEN.
+    ///
+    /// Field report 2026-08-25: a General worked a DX on 14.015 (Extra-only CW) with his rig in
+    /// split, transmitting 14.026 — squarely inside General privileges. Nexus locked TX. The
+    /// gate judged `settings.dial_mhz`, the RECEIVE dial, which under split is an unrelated
+    /// number. Working DX split is not exotic; it is how DX is worked, and DXpeditions sit in
+    /// the Extra-only bottom precisely so the pileup answers up where it may.
+    ///
+    /// The permission may come ONLY from a split Nexus commanded and the rig ACKNOWLEDGED
+    /// (`rig_split_applied`), never from a read — see the module note on why a rig's own report
+    /// of split cannot be trusted to grant anything.
+    #[test]
+    fn a_confirmed_split_is_judged_at_the_transmit_frequency() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "precondition: 14.015 CW is Extra-only, so simplex must lock"
+        );
+
+        // The rig acknowledged a split transmitting on 14.026 — legal for a General.
+        e.rig_split_applied(14_026_000);
+        assert!(
+            e.tx_allowed(),
+            "THE BUG: a legal split TX is refused because the gate judged the RX dial"
+        );
+    }
+
+    /// THE OTHER DIRECTION, AND IT IS THE ONE NOBODY REPORTED. Judging the RX dial is not a
+    /// conservative approximation — it is blind, and blindness fails OPEN just as readily.
+    /// A legal receive dial with the transmit VFO parked in an Extra-only segment keys today.
+    #[test]
+    fn a_confirmed_split_into_a_forbidden_segment_locks_even_with_a_legal_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        assert!(
+            e.tx_allowed(),
+            "precondition: 14.030 CW is legal for a General"
+        );
+
+        // …but the transmit VFO is in the Extra-only bottom.
+        e.rig_split_applied(14_010_000);
+        assert!(
+            !e.tx_allowed(),
+            "FAIL-OPEN: keyed an Extra-only segment because the RX dial happened to be legal"
+        );
+    }
+
+    /// A confirmation is not for ever. Anything that moves the radio out from under it — a QSY,
+    /// a refused split, a band change — must drop it, or the gate judges a transmit frequency
+    /// the rig is no longer using.
+    #[test]
+    fn a_qsy_drops_the_split_confirmation() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        e.rig_split_applied(14_026_000);
+        assert!(e.tx_allowed(), "precondition: the confirmed split unlocks");
+
+        // QSY to another Extra-only spot. The old confirmation must not carry over.
+        e.set_frequency(14.012, "20m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "a stale confirmation kept TX unlocked after the radio moved"
+        );
+    }
+
     /// bands, and this halt is the only thing that stops the sequencer keying there.
     #[test]
     fn a_knob_qsy_off_the_bands_still_cuts_transmit() {

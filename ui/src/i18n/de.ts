@@ -1882,6 +1882,8 @@ export const DE: PartialCatalog = {
   "recall.log.aria": "Frühere QSOs mit {{call}}",
   "bandPicker.select.title": "Band — die zuletzt in dieser Sitzung auf diesem Band und in dieser Betriebsart genutzte Frequenz, sonst der Anfang des zugelassenen Bereichs",
   "bandPicker.txLock.label": "🔒 TX gesperrt",
+  'bandPicker.txLock.splitTitle':
+    'TX gesperrt — Ihre Split-Sendefrequenz, {{tx}} MHz, liegt außerhalb Ihrer Lizenzrechte. Der Empfang auf {{rx}} MHz ist in Ordnung.',
   "bandPicker.txLock.title": "Diese Frequenz/Betriebsart liegt außerhalb der Lizenzrechte — Senden ist gesperrt. Oben ein Band wählen oder die Lizenzklasse in den Einstellungen ändern.",
   "freq.control.aria": "Frequenzsteuerung",
   "freq.channel.label": "Band / Kanal",

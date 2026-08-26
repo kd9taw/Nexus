@@ -287,6 +287,7 @@ impl AppState {
                 tx_level: 0.9,
                 tx_enabled: true,
                 tx_allowed: true,
+                tx_emission_mhz: None,
                 tuning: false,
                 tx_watchdog: false,
                 decode_depth: 3,

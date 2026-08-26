@@ -695,6 +695,15 @@ pub struct RadioStatus {
     /// Defaults true (Open / no-lockout) so an old snapshot never shows a phantom lock.
     #[serde(default = "default_true")]
     pub tx_allowed: bool,
+    /// The dial the next over would be EMITTED on — the confirmed split TX frequency when the
+    /// rig has acknowledged one, else the operator's dial.
+    ///
+    /// Exists so the lock can NAME the frequency it is judging. "TX locked — this frequency is
+    /// outside your license privileges" was the same sentence on every path and never said
+    /// which frequency, which under split meant it was naming one the operator was not
+    /// transmitting on (field report 2026-08-25). `None` on an old snapshot.
+    #[serde(default)]
+    pub tx_emission_mhz: Option<f64>,
     /// Whether the operator is holding a steady tune carrier (for ATU / amp
     /// tuning). While true the radio plays a continuous f0 sine instead of slots.
     #[serde(default)]

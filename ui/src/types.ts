@@ -1104,6 +1104,10 @@ export interface RadioStatus {
   /** Whether the operator's license class permits TX at the current dial+mode. False = TX
    * hard-blocked (outside privileges); the cockpit shows a lock indicator. */
   txAllowed: boolean
+  /** The dial the next over would be EMITTED on — the confirmed split TX frequency when the rig
+   *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
+   *  judging instead of saying "this frequency" about one you may not be transmitting on. */
+  txEmissionMhz?: number | null
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
   /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's
