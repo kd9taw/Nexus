@@ -113,6 +113,33 @@ pub fn parse_civ_addr(show_conf: &str) -> Option<u8> {
     value.parse::<u8>().ok().filter(|addr| *addr != 0)
 }
 
+/// Can this rig be ASKED where it transmits under split, without the asking disturbing it?
+///
+/// ⭐ THREE STATES, NOT TWO, and the middle one is the whole reason this exists. Hamlib's
+/// capability dump reports each function as `Y`es, `E`mulated or `N`o (its own words,
+/// `dumpcaps.c`: "Status is either 'Y'es, 'E'mulated, 'N'o"), and **emulated means the VFO-swap
+/// dance**: switch to the TX VFO, read, switch back — on a non-targetable Icom it even turns
+/// split OFF and on again, carrying upstream's comment "broken if user changes split on rig".
+/// A privilege gate that asked an `E` rig would move the operator's radio to find out where it
+/// transmits, and a failure mid-sequence leaves it somewhere nobody chose.
+///
+/// So the operator is never asked to guess whether their radio is honest — the radio is asked.
+/// A blind "trust my rig" toggle would be ticked in good faith on an IC-7200, whose backend
+/// returns a zero-filled CACHE with RIG_OK, so "split is off" and "I cannot answer" are
+/// identical bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SplitDetect {
+    /// Reports both split state AND the TX frequency natively, and frequency is targetable —
+    /// the read is a real answer from the radio and may be trusted to GRANT permission.
+    Native,
+    /// Hamlib would emulate the answer by moving the radio. Never poll this; never trust it.
+    Emulated,
+    /// Cannot answer at all. Includes the cache-stub backends, where a confident "split off" is
+    /// indistinguishable from silence.
+    #[default]
+    Absent,
+}
+
 /// The two facts the ladder takes from Hamlib's `--dump-caps`, and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RigCaps {
@@ -126,6 +153,10 @@ pub struct RigCaps {
     /// where it cannot receive, so a "frequency" outside every one of them did not come from
     /// this radio.
     pub rx_coverage: Vec<(u64, u64)>,
+    /// Whether the rig's split TX frequency may be READ and trusted — see [`SplitDetect`].
+    /// Requires all three of: `Can get Split VFO: Y`, `Can get Split Freq: Y`, and FREQ in
+    /// `Targetable features`. Anything less is `Emulated` (asking moves the radio) or `Absent`.
+    pub split_detect: SplitDetect,
 }
 
 impl RigCaps {
@@ -169,11 +200,22 @@ pub fn ladder_kind(rig_model: u32) -> LadderKind {
 pub fn parse_caps(dump_caps: &str) -> RigCaps {
     let mut caps = RigCaps::default();
     let mut in_rx = false;
+    // The three facts that together decide whether split may be READ (see `SplitDetect`).
+    let (mut get_vfo, mut get_freq, mut targetable_freq) = (None::<char>, None::<char>, false);
     for line in dump_caps.lines() {
         let line = line.trim_end_matches('\r');
         let indented = line.starts_with([' ', '\t']);
         if !indented {
             in_rx = line.starts_with("RX ranges #") && !line.contains(" status ");
+        }
+        if let Some(rest) = line.trim().strip_prefix("Targetable features:") {
+            targetable_freq = rest.split_whitespace().any(|t| t == "FREQ");
+        }
+        if let Some(rest) = line.trim().strip_prefix("Can get Split VFO:") {
+            get_vfo = rest.trim().chars().next();
+        }
+        if let Some(rest) = line.trim().strip_prefix("Can get Split Freq:") {
+            get_freq = rest.trim().chars().next();
         }
         if let Some(rest) = line.trim().strip_prefix("Serial speed:") {
             let mut halves = rest.trim().split("..");
@@ -193,6 +235,17 @@ pub fn parse_caps(dump_caps: &str) -> RigCaps {
             }
         }
     }
+    // ⚠️ BOTH reads must be NATIVE, and the frequency targetable. `Can get Split VFO: Y` alone
+    // is not enough — the TS-570D in the fixtures reports exactly that while its split FREQUENCY
+    // read is `E`, so Nexus would know the rig is split and have to MOVE IT to learn where.
+    caps.split_detect = match (get_vfo, get_freq) {
+        (Some('Y'), Some('Y')) if targetable_freq => SplitDetect::Native,
+        (Some('E'), _) | (_, Some('E')) => SplitDetect::Emulated,
+        // Native reads on a non-targetable rig still cost a VFO swap underneath.
+        (Some('Y'), Some('Y')) => SplitDetect::Emulated,
+        _ => SplitDetect::Absent,
+    };
+
     caps
 }
 
@@ -2371,5 +2424,39 @@ mod tests {
         );
         let m = compose_ladder_message(&r, "Icom IC-7610", 0x98, false, true, false);
         assert!(m.contains("not valid CI-V"), "{m}");
+    }
+
+    /// THE THREE-STATE VERDICT, against the two real capability dumps in the fixtures — which
+    /// happen to be a perfect natural pair.
+    ///
+    /// The TS-570D is the case that makes this necessary: it reports `Can get Split VFO: Y` but
+    /// `Can get Split Freq: E`. So Nexus could learn the rig IS split and would then have to
+    /// MOVE THE RADIO to learn where it transmits. Requiring only the VFO line — the obvious
+    /// reading — would have shipped exactly that.
+    #[test]
+    fn split_detection_is_offered_only_when_the_rig_can_answer_without_being_disturbed() {
+        let ft847 = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ft847.log"));
+        assert_eq!(
+            ft847.split_detect,
+            SplitDetect::Native,
+            "FT-847 reports both split reads natively with FREQ targetable — detection is safe"
+        );
+
+        let ts570 = parse_caps(include_str!("../tests/fixtures/rigctld/caps_ts570d.log"));
+        assert_eq!(
+            ts570.split_detect,
+            SplitDetect::Emulated,
+            "TS-570D's split FREQUENCY read is emulated (a VFO swap) — must never be polled"
+        );
+
+        // A dump we could not read at all says nothing, and silence is not permission.
+        assert_eq!(parse_caps("").split_detect, SplitDetect::Absent);
+        // The cache-stub shape: says it can report split, cannot report the frequency.
+        let stub = "Targetable features: FREQ\nCan get Split VFO:\tY\nCan get Split Freq:\tN\n";
+        assert_eq!(parse_caps(stub).split_detect, SplitDetect::Absent);
+        // Native reads but NOT targetable — the read still costs a swap underneath.
+        let untargetable =
+            "Targetable features: MODE\nCan get Split VFO:\tY\nCan get Split Freq:\tY\n";
+        assert_eq!(parse_caps(untargetable).split_detect, SplitDetect::Emulated);
     }
 }
