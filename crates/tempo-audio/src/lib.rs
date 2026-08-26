@@ -21,6 +21,7 @@
 //! backend on the station PC with `--features device` (needs ALSA/CoreAudio/WASAPI
 //! at build time and a sound card at runtime).
 
+pub mod amplifier;
 /// APRS (AFSK-1200 / AX.25) RX decode thread — same armed-decoder pattern, RX ONLY.
 #[cfg(feature = "device")]
 pub mod aprsrx;
