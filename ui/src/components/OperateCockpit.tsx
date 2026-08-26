@@ -37,6 +37,7 @@ import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecord
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { pushToast } from '../toast'
+import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { FastGraph } from './FastGraph'
 import { Waterfall } from './Waterfall'
@@ -200,8 +201,6 @@ const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
 const HOUND_LABEL = 'Hound'
 const HOUND_BADGE = 'HOUND'
 
-/** The rig's own SPLIT annunciator — the word on every radio's front panel. */
-const SPLIT_BADGE = 'SPLIT ▲'
 
 /** The two RX signal sources, named exactly as the BACKEND names them: `radio.sourceLabel`
  *  is interpolated into the group tooltip beside these buttons, so a translated button would
@@ -990,15 +989,18 @@ export function OperateCockpit({
           >
             {recording ? '■' : '●'}
           </button>
-          {snap.radio.splitTxMhz != null && (
-            <span
-              className="cockpit-cat ok"
-              title={t('operate.header.split.title', {
-                freq: snap.radio.splitTxMhz.toFixed(4),
-              })}
-            >
-              {SPLIT_BADGE}
-            </span>
+          {/* ⭐ A REAL SPLIT CONTROL. This was an annunciator only — it told you split was on
+              and gave you no way to set it. Operate is the FT8 cockpit, so it is where a
+              DXpedition pile-up is actually worked, and "UP 5" is the ordinary case: the spot
+              parser already reads the offset out of the comment and commands it, but an
+              operator who tuned to the DX by hand had no control at all. NOT a stop control —
+              see SplitControl's header. */}
+          {snap.radio.catOk === true && (
+            <SplitControl
+              snap={snap}
+              onSnap={onSnap}
+              onError={(m) => pushToast(m, 'error')}
+            />
           )}
           <div className="cockpit-layout-toggle" role="group" aria-label={t('operate.header.layout.aria')}>
             <button

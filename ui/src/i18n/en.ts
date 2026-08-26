@@ -6152,9 +6152,6 @@ export const EN = {
   'operate.header.record.startFailed': 'Could not start recording',
   'operate.header.record.stopFailed': 'Could not stop recording',
 
-  // `{{freq}}` is the split TX frequency, already formatted invariantly by the cockpit.
-  'operate.header.split.title':
-    'Rig split active — TX {{freq}} MHz (pile-up). Any QSY returns to simplex.',
 
   'operate.header.layout.aria': 'Operate layout',
   'operate.header.layout.classic.label': 'Classic',
@@ -6879,8 +6876,6 @@ export const EN = {
   // own words — all three arrive invariant.
   'cw.rotator.pointed': 'Rotator → {{call}}: {{bearing}}°',
   'cw.rotator.failed': 'Rotator: {{error}}',
-  // `{{freq}}` is the split TX frequency, already formatted invariantly.
-  'cw.split.title': 'Split — TX {{freq}} MHz',
   'cw.record.start.aria': 'Record QSO audio',
   'cw.record.stop.aria': 'Stop recording this QSO',
   'cw.record.off.title': 'Record the received audio to a WAV in the recordings folder',

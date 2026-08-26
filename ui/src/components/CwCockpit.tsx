@@ -62,6 +62,7 @@ import {
 } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
@@ -86,7 +87,6 @@ const AGC = 'AGC'
 const BW = 'BW'
 const CAT = 'CAT'
 const WINKEYER = 'WinKeyer'
-const SPLIT_PLATE = 'SPLIT ▲'
 const REC = 'REC'
 /** The BW nudge and the AI decoder's audio window, as the tooltips print them — figures, so
  *  they are supplied to the message rather than written in it. */
@@ -1381,13 +1381,23 @@ export function CwCockpit({
               )
           }
         />
-        {snap.radio.splitTxMhz != null && (
-          <span
-            className="cw-mode-badge"
-            title={t('cw.split.title', { freq: snap.radio.splitTxMhz.toFixed(4) })}
-          >
-            {SPLIT_PLATE}
-          </span>
+        {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
+            DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.
+            A General working a DX in the Extra-only CW bottom — RX 14.015, TX 14.026, which is
+            simply how DX is worked — had to reach for the radio's front panel and then found
+            Nexus refusing to key, because the privilege gate had no way to learn where he was
+            transmitting. Fixing the gate without this left the fix unreachable by the operator
+            who reported it, and he was a CW operator.
+
+            Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
+            header is width-critical at 1024 (see the density note above), so it costs nothing
+            when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
+        {catOk && (
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+          />
         )}
         {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
             picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
