@@ -2553,6 +2553,10 @@ struct RadioLoop {
     /// split): the teardown then keeps its old absolute-OFF behaviour, which is the conservative
     /// answer when we have no snapshot to put back.
     rig_split_restore: Option<(bool, String, Option<u64>)>,
+    /// Whether THIS rig's split can be read without disturbing it — probed once per connection
+    /// (`\dump_caps` is a long reply and the answer cannot change while the rig is the same
+    /// rig). `None` = not yet asked.
+    split_detect: Option<crate::baud_ladder::SplitDetect>,
     /// Last time we ran the FULL rig read-back (dial + RF power + S-meter + mode + funcs), ms.
     last_rig_poll: f64,
     /// Last time we read the TRANSMIT meters (ms). 0.0 when the bars are blanked (not keyed), so
@@ -2827,6 +2831,7 @@ impl RadioLoop {
             fake_it_restore: None,
             audio_rig_split: false,
             rig_split_restore: None,
+            split_detect: None,
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
             tx_rf: TxRfWatch::default(),
@@ -5126,16 +5131,68 @@ impl RadioLoop {
                             engine_lock(engine).settings().split_mode,
                             tempo_app::settings::SplitMode::Rig
                         );
-                        if wants_rig_split
+                        //
+                        // ⚠️ ONLY ASK A RIG THAT CAN ANSWER WITHOUT MOVING. Probed once per
+                        // connection and cached. On an `Emulated` rig Hamlib answers the split
+                        // FREQUENCY question by swapping VFOs — and on a non-targetable Icom by
+                        // turning split OFF, reading, and turning it back on, carrying upstream's
+                        // own "broken if user changes split on rig". Asking is the damage, so an
+                        // emulated rig is never asked. THIS ALSO CLOSES A LIVE HAZARD: the
+                        // frequency read below used to be issued unconditionally whenever split
+                        // reported on, with no capability test at all.
+                        // ⚠️ ONLY PROBE IF THE ANSWER COULD CHANGE ANYTHING. The capability is
+                        // needed for ONE purpose — deciding whether the rig's own split may feed
+                        // the privilege gate — so an operator who has not opted in never pays
+                        // for it. Probing unconditionally also SPENT THE HEAVY POLL'S BUDGET:
+                        // `\dump_caps` is a long multi-line reply, `have_budget()` then said no,
+                        // and the split read it was meant to qualify was skipped entirely —
+                        // which is how it regressed the teardown restore.
+                        let want_detect = engine_lock(engine).settings().split_detect_enabled;
+                        let can_ask = want_detect && {
+                            let detect = *self.split_detect.get_or_insert_with(|| {
+                                rig.read_split_capability()
+                                    // Could not ask → Absent. Silence is not permission.
+                                    .unwrap_or(crate::baud_ladder::SplitDetect::Absent)
+                            });
+                            detect == crate::baud_ladder::SplitDetect::Native
+                        };
+                        if (wants_rig_split || can_ask)
                             && !self.audio_rig_split
                             && self.rig_poll_ticks.is_multiple_of(4)
                             && have_budget()
                         {
                             if let Some((on, vfo)) = rig.read_split() {
                                 // The TX frequency only matters when split is actually on — and
-                                // reading it on a rig with split off is a round-trip for nothing.
-                                let tx_hz = if on { rig.read_split_freq() } else { None };
-                                self.rig_split_restore = Some((on, vfo, tx_hz));
+                                // only when the rig can be asked for it without being disturbed.
+                                // ⚠️ THE TWO CONSUMERS HAVE DIFFERENT NEEDS AND DIFFERENT RISK
+                                // APPETITES — do not collapse them.
+                                //
+                                // RESTORE must put the operator's own split back exactly as it
+                                // was, TX frequency included, or a Rig-split FT8 over eats it
+                                // (the 2026-08-17 Flex audit's wave-2 #22). That path is
+                                // pre-existing, opt-in via Split Operation = Rig, and already
+                                // accepts the read's cost; folding the new capability gate onto
+                                // it silently dropped the frequency and regressed the teardown.
+                                //
+                                // THE PRIVILEGE GATE is new and must never move the radio to
+                                // feed itself, so it gets the frequency only from a rig that can
+                                // answer natively.
+                                //
+                                // (Capability-gating the RESTORE read is a real question — an
+                                // emulated read moves the radio there too — but it is a separate
+                                // decision with its own regression, and it is not this change.)
+                                if wants_rig_split {
+                                    let restore_hz = if on { rig.read_split_freq() } else { None };
+                                    self.rig_split_restore = Some((on, vfo, restore_hz));
+                                    if can_ask {
+                                        engine_lock(engine).observe_rig_split(on, restore_hz);
+                                    }
+                                } else if can_ask {
+                                    let tx_hz = if on { rig.read_split_freq() } else { None };
+                                    // Asymmetric by construction: "off" revokes, "on" only
+                                    // records — see `Engine::observe_rig_split`.
+                                    engine_lock(engine).observe_rig_split(on, tx_hz);
+                                }
                             }
                         }
                         // Apply any pending DSP-func toggle from the UI promptly — the dial read

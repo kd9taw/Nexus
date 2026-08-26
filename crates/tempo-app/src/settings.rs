@@ -786,6 +786,20 @@ pub struct Settings {
     /// [`RadioProfile::icom_native_cat`]). Default off.
     #[serde(default)]
     pub icom_native_cat: bool,
+    /// Follow the radio's OWN split, rather than only a split Nexus set. Default OFF.
+    ///
+    /// Only meaningful on a rig whose capability dump says it can report both split state and
+    /// the split TX frequency NATIVELY, with frequency targetable
+    /// (`baud_ladder::SplitDetect::Native`). On anything else Nexus would have to move the radio
+    /// to answer the question, so the setting is not offered and this flag has no effect — the
+    /// gate never consults a reading it was told is emulated.
+    ///
+    /// ⚠️ NEEDS BENCH. Class-wide CAT behaviour; ships OFF so nothing changes for anyone who
+    /// does not choose it, and wants a real radio in front of someone before it is called
+    /// working — in particular the question no source answers: does a rig report a split set
+    /// from its FRONT PANEL, as opposed to one set over CAT?
+    #[serde(default)]
+    pub split_detect_enabled: bool,
     /// Which Icom DATA mode the active radio uses (flat mirror — see
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
@@ -2825,6 +2839,7 @@ impl Default for Settings {
             rig_addr: String::new(),
             omnirig_slot: 1,
             icom_native_cat: false,
+            split_detect_enabled: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig

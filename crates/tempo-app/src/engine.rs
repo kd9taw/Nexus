@@ -789,6 +789,13 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// warning that fires on a level somebody is really using is one people learn to ignore, which
 /// costs more than it saves. Only a rig that rounds to 0% on the slider trips it.
 const ZERO_RF_POWER: f32 = 0.005;
+
+/// How long a rig's own report of its split may be trusted before the gate stops granting on it.
+///
+/// The heavy poll refreshes well inside this. Expiry LOCKS — it never reverts to the dial — so
+/// an operator who cancels split at the front panel on a rig we then stop hearing from gets a
+/// refusal, not a transmission on the receive frequency.
+const OBSERVED_SPLIT_TTL_SECS: u64 = 6;
 const NOTCH_MIN_HZ: f32 = 300.0;
 const NOTCH_MAX_HZ: f32 = 3400.0;
 
@@ -969,6 +976,27 @@ impl DecodeJob {
 }
 
 /// The worker's output for one [`DecodeJob`]: the decodes plus the round-tripped
+/// Which frequency the privilege gate is judging, and why — so the lock can say something
+/// truer than "this frequency".
+///
+/// The lock used to be the same sentence on every path and never named a frequency, which under
+/// split meant it was naming one the operator was not transmitting on (field report
+/// 2026-08-25). The gate and the operator-facing reason are computed from THIS, once, so they
+/// cannot drift apart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TxFreqVerdict {
+    /// Simplex: the dial is the emission.
+    Simplex(f64),
+    /// Split, and we know where it transmits — a split Nexus commanded and the rig
+    /// acknowledged, or (opt-in, capability-verified) one the rig reported natively.
+    Split(f64),
+    /// ⚠️ THE RIG SAYS IT IS SPLIT AND WE CANNOT SAY WHERE. Refuse. Do NOT fall back to the
+    /// dial: under split the dial is not the conservative answer, it is an unrelated number,
+    /// and falling back to it is how a legal-looking receive frequency permits an illegal
+    /// transmit one.
+    SplitUnverified,
+}
+
 /// `frame` and the bookkeeping (`pass`/`slot`/`epoch`) the engine needs to fold it.
 pub struct DecodeResult {
     decodes: Vec<modes::Decode>,
@@ -1872,6 +1900,13 @@ pub struct Engine {
     /// user changes split on rig". A gate that believed those reads would manufacture the very
     /// out-of-band transmission it exists to prevent. Reads may only REVOKE.
     tx_split_confirmed_hz: Option<u64>,
+    /// What the RIG last said about its own split, and when (unix secs): `(on, tx_hz, at)`.
+    ///
+    /// Written only from a capability-verified NATIVE read (`SplitDetect::Native`) — never from
+    /// an emulated one, because asking an emulated rig moves it. Used two ways, and the
+    /// asymmetry is the safety: "split off" REVOKES a confirmation unconditionally, while
+    /// "split on at X" may only GRANT when the operator opted in and the reading is fresh.
+    observed_split: Option<(bool, Option<u64>, u64)>,
     /// RIT / XIT clarifier offsets in Hz (0 = off) and the active VFO — the CAT-panel controls.
     /// Write-only + optimistic (no read-back): the loop applies a change once and the snapshot
     /// mirrors the last commanded value, like the RF-power / filter-width path.
@@ -3739,6 +3774,7 @@ impl Engine {
             sat_mode_released: false,
             split_tx_mhz: None,
             tx_split_confirmed_hz: None,
+            observed_split: None,
             split_dirty: false,
             rit_hz: 0,
             xit_hz: 0,
@@ -4561,6 +4597,7 @@ impl Engine {
         // let the loop apply that TX frequency to whichever rig came next.
         // Marking dirty commands the NEW radio back to simplex instead.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -4966,6 +5003,7 @@ impl Engine {
         // A plain QSY always returns the rig to SIMPLEX — leftover split from a
         // pile-up must never silently shift TX on the next frequency.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -5057,6 +5095,7 @@ impl Engine {
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() {
             self.split_dirty = true;
         }
@@ -10266,6 +10305,30 @@ impl Engine {
 
     /// The split-TX twin of [`Self::rig_dial_applied`]: the rig acknowledged
     /// the split TX dial at `tx_hz`.
+    /// The radio loop's report of what the rig SAYS about its own split.
+    ///
+    /// ⚠️ ASYMMETRIC ON PURPOSE, and this asymmetry is the whole safety model:
+    ///   • "split OFF" REVOKES a confirmation unconditionally. A wrong "off" costs a refusal.
+    ///   • "split ON" grants NOTHING here. It is recorded, and `tx_freq_verdict` grants only if
+    ///     the operator opted in AND the reading is fresh AND the frequency is known. A wrong
+    ///     "on" also costs a refusal, because an unverified split refuses rather than falling
+    ///     back to the dial.
+    ///
+    /// So there is no reading — stale, cached, invented or honest — that can UNLOCK anything
+    /// that was locked. That is why none of Hamlib's documented lies about split can hurt this,
+    /// and why the caller may pass along whatever it got without pre-judging it.
+    ///
+    /// The caller must only ever call this for a rig whose capability probe said
+    /// `SplitDetect::Native`: an emulated read moves the radio to answer, so for those rigs the
+    /// question is never asked at all.
+    pub fn observe_rig_split(&mut self, on: bool, tx_hz: Option<u64>) {
+        self.observed_split = Some((on, tx_hz, now_unix_secs()));
+        if !on {
+            // The rig is not split. Anything we believed it had acknowledged is void.
+            self.tx_split_confirmed_hz = None;
+        }
+    }
+
     pub fn rig_split_applied(&mut self, tx_hz: u64) {
         // THE ONE PLACE PERMISSION IS GRANTED. The caller has already proved both writes
         // succeeded on a rig we hold control of; that acknowledgement is what the privilege
@@ -13719,6 +13782,11 @@ impl Engine {
     /// higher-class-only edge can still emit inside it. Every TX path ANDs this in; the
     /// snapshot exposes it so the cockpit can show a lockout indicator. See `privileges.rs`.
     pub fn tx_allowed(&self) -> bool {
+        // The rig says split and we cannot say where it transmits — refuse rather than judge
+        // the dial, which under split is an unrelated number.
+        if self.tx_freq_verdict() == TxFreqVerdict::SplitUnverified {
+            return false;
+        }
         self.emission_allowed(
             self.settings.operating_mode,
             self.tx_emission_mhz(),
@@ -13735,9 +13803,42 @@ impl Engine {
     /// a legal RX dial with the transmit VFO parked in an Extra-only segment, which shipped and
     /// keyed. Fixing this tightens the gate as much as it unlocks it.
     pub(crate) fn tx_emission_mhz(&self) -> f64 {
-        match self.tx_split_confirmed_hz {
-            Some(hz) => hz as f64 / 1e6,
-            None => self.settings.dial_mhz,
+        match self.tx_freq_verdict() {
+            TxFreqVerdict::Simplex(f) | TxFreqVerdict::Split(f) => f,
+            // Nothing legal to judge — the caller refuses on the verdict itself; this value is
+            // only ever a display fallback.
+            TxFreqVerdict::SplitUnverified => self.settings.dial_mhz,
+        }
+    }
+
+    /// THE ONE DECISION: which frequency the next over is emitted on, and how sure we are.
+    ///
+    /// Order matters and it is the safety argument:
+    ///   1. A split we COMMANDED and the rig ACKNOWLEDGED — permission from our own write.
+    ///   2. A split the RIG REPORTED, only when the operator opted in, the capability probe
+    ///      said the rig answers natively, and the reading is FRESH. Staleness locks; it never
+    ///      quietly reverts to the dial.
+    ///   3. The rig says split and neither of the above can say where → refuse.
+    ///   4. Otherwise simplex, and the dial is the emission.
+    pub(crate) fn tx_freq_verdict(&self) -> TxFreqVerdict {
+        if let Some(hz) = self.tx_split_confirmed_hz {
+            return TxFreqVerdict::Split(hz as f64 / 1e6);
+        }
+        match self.observed_split {
+            // The rig told us it is split. Whether that GRANTS anything depends on the opt-in,
+            // on freshness, and on our knowing the frequency at all.
+            Some((true, tx, at)) => {
+                let fresh = now_unix_secs().saturating_sub(at) <= OBSERVED_SPLIT_TTL_SECS;
+                match tx {
+                    Some(hz) if self.settings.split_detect_enabled && fresh => {
+                        TxFreqVerdict::Split(hz as f64 / 1e6)
+                    }
+                    // Split, but not something we may judge: no opt-in, gone stale, or the
+                    // frequency unknown. All three refuse.
+                    _ => TxFreqVerdict::SplitUnverified,
+                }
+            }
+            _ => TxFreqVerdict::Simplex(self.settings.dial_mhz),
         }
     }
 
@@ -19800,6 +19901,86 @@ mod tests {
         assert!(
             !e.tx_allowed(),
             "FAIL-OPEN: keyed an Extra-only segment because the RX dial happened to be legal"
+        );
+    }
+
+    /// A READ CAN REVOKE. The rig says it is not split, so whatever we believed it acknowledged
+    /// is void and the gate goes back to judging the dial.
+    #[test]
+    fn the_rig_reporting_simplex_revokes_a_confirmed_split() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.015, "20m", "USB");
+        e.rig_split_applied(14_026_000);
+        assert!(e.tx_allowed(), "precondition: the confirmed split unlocks");
+
+        e.observe_rig_split(false, None);
+        assert!(
+            !e.tx_allowed(),
+            "the rig says it is simplex — the gate must judge 14.015 again and refuse"
+        );
+    }
+
+    /// A READ CANNOT GRANT WITHOUT THE OPT-IN. The rig says it is split on a legal frequency,
+    /// but the operator never asked Nexus to follow the radio — so this refuses. It does NOT
+    /// silently fall back to judging the dial, because an unverified split is exactly the case
+    /// where the dial is an unrelated number.
+    #[test]
+    fn an_observed_split_grants_nothing_until_the_operator_opts_in() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        assert!(e.tx_allowed(), "precondition: 14.030 simplex is legal");
+
+        // The rig reports a split onto a perfectly legal TX frequency…
+        e.observe_rig_split(true, Some(14_040_000));
+        assert!(
+            !e.tx_allowed(),
+            "an unverified split must LOCK, not fall through to the dial"
+        );
+
+        // …and with the opt-in, the same reading is judged and allowed.
+        e.settings.split_detect_enabled = true;
+        assert!(
+            e.tx_allowed(),
+            "opted in, fresh, frequency known — judge it"
+        );
+    }
+
+    /// EVEN OPTED IN, A SPLIT WHOSE FREQUENCY WE DO NOT KNOW REFUSES. "Somewhere else" is not a
+    /// frequency a privilege table can rule on.
+    #[test]
+    fn an_observed_split_with_no_frequency_refuses_even_when_opted_in() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        e.settings.split_detect_enabled = true;
+        e.observe_rig_split(true, None);
+        assert!(!e.tx_allowed(), "split on, frequency unknown — refuse");
+    }
+
+    /// STALENESS LOCKS. The operator cancels split at the front panel and the rig goes quiet;
+    /// the last reading must expire into a REFUSAL, never into "well, judge the dial then".
+    #[test]
+    fn a_stale_observation_locks_rather_than_reverting_to_the_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "USB");
+        e.settings.split_detect_enabled = true;
+        e.observe_rig_split(true, Some(14_040_000));
+        assert!(e.tx_allowed(), "precondition: fresh and legal");
+
+        // Age it past the TTL by hand — the reading is the same, only older.
+        if let Some((_, _, at)) = e.observed_split.as_mut() {
+            *at -= OBSERVED_SPLIT_TTL_SECS + 5;
+        }
+        assert!(
+            !e.tx_allowed(),
+            "a stale split reading must lock; 14.030 being legal is not the question"
         );
     }
 
