@@ -989,6 +989,14 @@ export const EN = {
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
   'awards.grids.head': 'Grids by band (VUCC)',
+  // Band names and frequencies are invariant tokens — never translate '6 m' or '50 MHz'.
+  'awards.grids.filter.vucc.label': 'VUCC bands',
+  'awards.grids.filter.vucc.title': 'Show only the bands ARRL awards grids on — 50 MHz and up',
+  'awards.grids.filter.all.label': 'All bands',
+  'awards.grids.filter.all.title':
+    'Show every band you have worked a grid on, HF included — a tracker count, not award progress',
+  'awards.grids.noVucc':
+    'No grids on 6 m or up yet — VUCC starts at 50 MHz. Switch to All bands for the full tracker count.',
   'awards.modes.head': 'DXCC by mode',
   'awards.bar.title': '{{confirmed}} confirmed / {{worked}} worked',
   'awards.bar.titleGrids': '{{confirmed}} confirmed / {{worked}} worked grids',
