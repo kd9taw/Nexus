@@ -5,6 +5,30 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Icom DATA submode was quietly reset whenever you edited a radio you were not using.** If you
+  run more than one radio and set an Icom to DATA2 or DATA3, opening that radio's entry and
+  saving it put it back to DATA1 without saying so. The panel reported success, the setting was
+  gone, and the next time you keyed that rig it was in the wrong submode.
+
+  The per-radio Edit form saves through a patch that the app and the radio settings each
+  describe separately, and the submode was missing from one of the two descriptions. Anything
+  missing there is filled in with a default rather than your value. It travels with the patch
+  now, and there is a check that fails the build if the two descriptions ever disagree again —
+  the same drift has cost a keying port, a Flex address and an OmniRig slot before this.
+
+### Changed
+
+- **Grids by band lists the VUCC bands by default.** Grids count toward an award on 50 MHz and
+  up and nowhere else, so on an HF station the list was mostly grids that count toward nothing,
+  with the few bands that do count buried in it. It now starts at 6 m and up, with an **All
+  bands** button if you want the full count back.
+
+  The VUCC box above it has always been VHF-only and is unchanged. Suggested by NT9E.
+
 ## [1.9.1] — 2026-08-26
 
 ### Fixed
