@@ -1440,6 +1440,16 @@ export interface RadioProfilePatch {
   rotatorHost: string
   rotctldPort: number
   nativeScope: string
+  /** Which Icom DATA submode THIS radio uses. Rust carries a `#[serde(default = "one")]`, so
+   * omitting it here did not fail the save — it silently RESET the operator's choice to DATA1
+   * on every edit of the rig form. A default on the backend hides drift instead of catching it,
+   * which is why the guard below now reads this interface directly. */
+  icomDataMode: number
+  /** THIS radio's amplifier, per-radio because the amp is wired to a radio, not to the station.
+   * Absent here these had no serde default, so the patch did not silently drop them — it failed
+   * to deserialize at all and took the whole Save with it. */
+  ampModel: string
+  ampPort: string
   /** THIS radio's FlexRadio LAN IP (SmartSDR API, port 4992) for the native panadapter/DAX
    * workers. Per-radio since 2026-08-18: it was flat-only, so the per-radio Edit flow — which
    * saves through THIS patch — silently dropped it, and two Flexes could not both be configured

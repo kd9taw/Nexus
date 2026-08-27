@@ -4259,6 +4259,127 @@ mod tests {
         );
     }
 
+    /// ⭐ THE OTHER SIDE OF THE SAME DRIFT — and the half that was missing while the guard
+    /// above was cited as covering it.
+    ///
+    /// `every_per_radio_field_is_reachable_through_the_patch` compares `RadioProfile` against
+    /// `RadioProfilePatch` — **Rust against Rust**. It cannot see TypeScript, so it passes
+    /// happily while the UI's own `RadioProfilePatch` is missing a field the backend requires.
+    /// `SettingsPanel.tsx` nonetheless described it as the guard that "fails when a per-radio
+    /// field is added without a home in this patch", which is the dangerous kind of wrong: a
+    /// check believed to cover a gap it structurally cannot reach.
+    ///
+    /// What that cost, both found on 2026-08-27 and both live on main at the time:
+    ///
+    /// - `amp_model` / `amp_port` had **no serde default**, so a patch from the UI failed to
+    ///   deserialize outright — `missing field ampModel` — taking the entire Save with it.
+    /// - `icom_data_mode` **had** a default, so it deserialized fine and silently reset the
+    ///   operator's Icom DATA submode to DATA1 on every edit of the rig form. A serde default
+    ///   turns a loud failure into a quiet one; it does not make the drift safe.
+    ///
+    /// So this reads the TypeScript interface itself and compares it key for key. Adding a
+    /// field to either side without the other now fails here, in CI, in seconds.
+    #[test]
+    fn the_typescript_patch_carries_every_field_the_rust_patch_does() {
+        let ts_src = include_str!("../../../ui/src/api.ts");
+
+        // Pull the body of `export interface RadioProfilePatch { … }`.
+        let head = "export interface RadioProfilePatch {";
+        let start = ts_src
+            .find(head)
+            .expect("the UI declares RadioProfilePatch")
+            + head.len();
+        let body = &ts_src[start..];
+        let end = body.find("\n}").expect("the interface is closed");
+        let body = &body[..end];
+
+        // Field lines look like `  name: type` / `  name?: type`. Comments and blanks are not.
+        let mut ts_keys: Vec<String> = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+                continue;
+            }
+            let Some((name, _)) = t.split_once(':') else {
+                continue;
+            };
+            let name = name.trim().trim_end_matches('?');
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                ts_keys.push(name.to_string());
+            }
+        }
+
+        // A parser that found nothing would pass every assertion below it.
+        assert!(
+            ts_keys.len() > 20,
+            "parsed only {} fields out of the TS interface — the parser is broken, not the \
+             interface: {ts_keys:?}",
+            ts_keys.len()
+        );
+
+        // Constructed field by field ON PURPOSE, as the guard above is: there is no Default, so
+        // adding a field to the struct breaks this line and forces a look at both sides.
+        let rust = serde_json::to_value(RadioProfilePatch {
+            ptt_method: String::new(),
+            rig_model: 0,
+            rig_model_name: String::new(),
+            serial_port: String::new(),
+            ptt_serial_port: String::new(),
+            baud: 0,
+            rig_conn: String::new(),
+            rig_addr: String::new(),
+            omnirig_slot: 0,
+            rigctld_port: 0,
+            icom_native_cat: false,
+            icom_data_mode: 1,
+            data_modes_plain_ssb: false,
+            audio_in: String::new(),
+            audio_out: String::new(),
+            tx_level: 0.0,
+            rx_gain: 0.0,
+            rotator_model: 0,
+            rotator_port: String::new(),
+            rotator_baud: 0,
+            amp_model: String::new(),
+            amp_port: String::new(),
+            rotator_host: String::new(),
+            rotctld_port: 0,
+            native_scope: String::new(),
+            flex_radio_ip: String::new(),
+            flex_native_pan: false,
+            flex_native_audio: false,
+        })
+        .expect("patch serializes");
+        let rust_keys: Vec<&str> = rust
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        let missing_in_ts: Vec<&&str> = rust_keys
+            .iter()
+            .filter(|k| !ts_keys.iter().any(|t| t == *k))
+            .collect();
+        assert!(
+            missing_in_ts.is_empty(),
+            "RadioProfilePatch field(s) {missing_in_ts:?} exist in Rust but NOT in the UI's \
+             interface at ui/src/api.ts. Without a serde default the save fails to deserialize \
+             entirely; with one it silently resets the operator's value. Add them to the TS \
+             interface AND to radioPatch() in SettingsPanel.tsx."
+        );
+
+        let missing_in_rust: Vec<&String> = ts_keys
+            .iter()
+            .filter(|t| !rust_keys.contains(&t.as_str()))
+            .collect();
+        assert!(
+            missing_in_rust.is_empty(),
+            "The UI sends RadioProfilePatch field(s) {missing_in_rust:?} that Rust does not \
+             declare — serde will reject the whole payload as an unknown field, or drop it."
+        );
+    }
+
     /// THE FIELD-SPECIFIC HALF for OmniRig, written because yesterday's bug was exactly this
     /// and the generic guards above are only as good as the day they were remembered: a
     /// per-radio field the patch does not CARRY, or carries and `apply_to` does not ASSIGN,

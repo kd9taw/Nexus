@@ -635,6 +635,13 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rotatorHost: s.rotatorHost ?? '',
     rotctldPort: s.rotctldPort ?? 4533,
     nativeScope: s.nativeScope ?? 'auto',
+    // ⚠️ SAME CLASS AS THE FLEX THREE BELOW, and found the same way. `icomDataMode` was absent
+    // and Rust defaults it, so every rig-form Save quietly reset the operator's DATA submode to
+    // DATA1. `ampModel`/`ampPort` were absent and Rust does NOT default them, so Save failed
+    // outright with `missing field ampModel`.
+    icomDataMode: s.icomDataMode ?? 1,
+    ampModel: s.ampModel ?? '',
+    ampPort: s.ampPort ?? '',
     // ⚠️ THE FLEX THREE BELONG HERE, and their absence was silent data loss (2026-08-17 Flex
     // audit). Every save of the rig form while EDITING a non-active radio routes through
     // `persistRadioForm` → `updateRadioProfile(radioPatch(form))`, so a field this function does
