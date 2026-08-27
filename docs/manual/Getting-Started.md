@@ -15,7 +15,7 @@ On Windows the file is a standard `.exe` setup — per-user, no administrator ri
 - **WebView2** runtime (installs cleanly on air-gapped machines)
 - **Hamlib** (`rigctld.exe`, `libhamlib-4.dll`, and companion DLLs) — CAT rig control works with no separate Hamlib install on Windows
 
-On macOS, download the `.dmg` (Apple Silicon; signed and notarized, so no Gatekeeper hoop), drag **Nexus** to **Applications**, and for CAT run `brew install hamlib` once in Terminal — Nexus finds Homebrew's `rigctld` itself, no PATH setup. Linux users install the system Hamlib once (`sudo apt install libhamlib-utils` for the AppImage; the `.deb` pulls it in automatically).
+On macOS, download the `.dmg` (Apple Silicon; signed and notarized, so no Gatekeeper hoop) and drag **Nexus** to **Applications** — CAT needs nothing else, Hamlib is inside the app. Same on Linux, for the AppImage and both `.deb`s alike.
 
 ---
 
@@ -167,7 +167,7 @@ UI scale has four steps: **90%, 100%, 110%, 125%**. The default is **125%**, cho
 
 ## Limits / not yet
 
-- The installer bundles Hamlib for **Windows only**. Linux users install `libhamlib-utils` once; macOS users run `brew install hamlib` once (Nexus searches the Homebrew/MacPorts prefixes itself — "on PATH" is not the mechanism, since a Finder-launched app never sees your shell PATH).
+- Every installer bundles Hamlib, on every platform, since 1.9.0. If the bundled copy will not start, Nexus falls back to a system one (`libhamlib-utils` / `brew install hamlib`) — and it searches the Homebrew/MacPorts prefixes itself, because "on PATH" is not the mechanism: a Finder-launched app never sees your shell PATH.
 - Rig auto-detection requires the full `radio` Cargo feature (the headless/UI-dev build returns empty lists for ports, audio, and detected rigs).
 - The curated rig model table covers ~50 radios. For a rig not in the table, run an external `rigctld` and select **NET rigctl** (model 2) in the dropdown.
 - Generic-cable rigs (CH340, FTDI dongle reporting only "USB Serial") get a driver hint and port fill but no model match — the operator must select the model manually.

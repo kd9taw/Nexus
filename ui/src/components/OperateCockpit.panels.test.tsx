@@ -96,12 +96,13 @@ function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLay
 function renderCockpit(
   state: Partial<Record<OperatePanelId, PanelState>>,
   layoutMode: 'classic' | 'roster' = 'classic',
-  extra: { active?: boolean; onHaltTx?: () => void } = {},
+  extra: { active?: boolean; onHaltTx?: () => void; dxClearTick?: number } = {},
 ) {
   const noop = () => {}
   const panels = panelsApi(state)
-  const view = render(
+  const el = (tick: number) => (
     <OperateCockpit
+      dxClearTick={tick}
       snap={snap}
       theme="dark"
       tier="FT8"
@@ -128,9 +129,13 @@ function renderCockpit(
       onLayoutMode={noop}
       panels={panels}
       active={extra.active ?? false}
-    />,
+    />
   )
-  return { ...view, panels }
+  const view = render(el(extra.dxClearTick ?? 0))
+  /** Move ONLY `dxClearTick` on the SAME mounted instance — the whole point is what survives
+   *  a clear, which a fresh render could never show. */
+  const bumpDxClear = (tick: number) => view.rerender(el(tick))
+  return { ...view, panels, bumpDxClear }
 }
 
 afterEach(() => cleanup())
@@ -263,3 +268,42 @@ describe('OperateCockpit — TX controls are not panels', () => {
     expect(onHaltTx).toHaveBeenCalledTimes(1)
   })
 })
+
+// USER REPORT via the operator, 2026-08-23 (KR4FQG): "I'd like to send CQ DX but I can't find a
+// way to send that without going back to Classic. I can change it in Classic and it will work
+// for one call, then revert back to just 'CQ' unless I go back to Classic and change it again."
+//
+// The Tx6 field IS the way — `cqDirFromText` parses it and Tx6 fires `startCq(dir)`. What broke
+// it is that the stock "Clear DX call and grid after logging" option wiped Tx6 too, so the
+// directed CQ survived exactly one contact.
+//
+// WSJT-X keeps the two apart: editing Tx6 sets `m_CQtype` (`on_tx6_editingFinished`), which the
+// DX-clear never touches. The option's own name says what it clears, and the CQ message is not
+// the DX call.
+describe('a directed CQ survives the after-logging DX clear', () => {
+  const TX6 = 'CQ DX KD9TAW EN52'
+
+  function tx6Field(): HTMLInputElement | null {
+    // The Tx6 row's editable text input, found by its current value.
+    const inputs = Array.from(document.querySelectorAll('input')) as HTMLInputElement[]
+    return inputs.find((i) => i.value.toUpperCase().startsWith('CQ')) ?? null
+  }
+
+  it('keeps the operator edit when the DX call is cleared after a QSO', () => {
+    const { bumpDxClear } = renderCockpit({}, 'classic', { dxClearTick: 0 })
+    const f = tx6Field()
+    expect(f, 'control: the Tx6 CQ field is on screen').not.toBeNull()
+
+    fireEvent.change(f as HTMLInputElement, { target: { value: TX6 } })
+    expect(tx6Field()?.value, 'control: the edit took').toBe(TX6)
+
+    // The QSO logs and the stock option fires the DX clear, on the SAME instance.
+    bumpDxClear(1)
+    expect(tx6Field()?.value, 'the directed CQ must survive the DX clear').toBe(TX6)
+
+    // …and again, because a pileup is many contacts, not one.
+    bumpDxClear(2)
+    expect(tx6Field()?.value).toBe(TX6)
+  })
+})
+

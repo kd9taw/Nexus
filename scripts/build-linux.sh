@@ -94,9 +94,14 @@ ok "ui/node_modules"
 bold "4/4  Nexus GUI app + .deb + AppImage"
 cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo install tauri-cli --version "^2" --locked; }
 [ -f "$REPO/src-tauri/icons/128x128.png" ] || python3 "$REPO/scripts/gen-icons.py"
-# Linux uses the SYSTEM Hamlib (rigctld on PATH / the .deb's libhamlib-utils dependency), so DON'T
-# ship the Windows hamlib .dll/.exe in the Linux bundle. The Windows build re-stages the real
-# binaries via fetch-hamlib.sh, so removing them here is safe.
+# Linux BUNDLES its own Hamlib as of 2026-08-24 — see scripts/fetch-hamlib-unix.sh for why: the
+# AppImage installs nothing by definition, so "apt install libhamlib-utils" was a CAT-dead
+# default for the one package whose whole promise is that you do not have to. The .deb keeps its
+# `depends: libhamlib-utils` as belt-and-braces; the bundled copy wins regardless, because the
+# resolver checks beside-the-executable paths before PATH.
+#
+# The Windows .dll/.exe still must not ride along in a Linux bundle. The Windows build re-stages
+# them via fetch-hamlib.sh, so removing them here is safe.
 #
 # Remove ONLY the untracked Windows binaries. This used to `rm -rf` the whole directory and
 # recreate it with just a README — which DELETED four TRACKED Hamlib license files
@@ -104,6 +109,8 @@ cargo tauri --version >/dev/null 2>&1 || { warn "installing tauri-cli…"; cargo
 # one `git add -A` away from committing the removal of the license texts Hamlib's LGPL requires
 # us to ship. The tracked README.txt is byte-identical to what that heredoc wrote, so nothing
 # was gained by recreating it. Bit us for real on 2026-07-20.
+"$REPO/scripts/fetch-hamlib-unix.sh"
+
 find "$REPO/src-tauri/resources/hamlib" -type f \
   \( -name '*.dll' -o -name '*.exe' -o -name '*.lib' -o -name '*.def' \) -delete
 # Safety net for the delete above: if it ever touches a TRACKED file (the LGPL license
@@ -116,12 +123,21 @@ if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   continue. Those are the LGPL license texts Hamlib requires us to distribute; restore with
   'git checkout -- src-tauri/resources/hamlib/'."
 fi
-# ⚠️ BUILT UNSIGNED ON PURPOSE — the AppImage is repacked below, and a signature made here would
-# be a signature over bytes that no longer exist. `latest.json` is generated FROM the `.sig`, so a
-# stale one does not fail the build: it ships, and every Linux self-update then fails verification.
-# Signing moved to after the repack; see `sign_appimage` at the end of this section.
-( cd "$REPO/src-tauri" && env -u TAURI_SIGNING_PRIVATE_KEY -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
-    cargo tauri build --features radio,custom-protocol --bundles deb,appimage )
+# The signature Tauri makes HERE is over bytes the repack below replaces, so it is deleted the
+# moment the build finishes and remade at the end over the final file. `latest.json` is generated
+# FROM the `.sig`, and a stale one does NOT fail anything: it ships, and every Linux self-update
+# then fails verification. Deleting it is what makes that unrepresentable rather than merely
+# avoided — after this point no `.sig` exists until the one made over the shipped bytes.
+#
+# ⚠️ DO NOT go back to withholding the key with `env -u` (which is what this file did until
+# 1.8.0, and it broke the release build). Tauri treats "a pubkey is configured but no private key
+# is present" as a FATAL error, not a warning — it bundles both artifacts and then exits 1 with
+# "A public key has been found, but no private key". Every other platform job passes the key
+# normally; the difference here was never intended.
+( cd "$REPO/src-tauri" && cargo tauri build --features radio,custom-protocol --bundles deb,appimage )
+# Kill the premature signature immediately — before the repack, so there is no window in which a
+# stale one could be picked up by anything.
+find "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true
 ok "Nexus .deb + AppImage"
 
 # --- The Wayland client library has to come from the HOST (#138) --------------------------------
@@ -179,8 +195,16 @@ rm -rf "$work"
 # --- Sign, now that the bytes are final ---------------------------------------------------------
 # Unsigned when no key is present, which is every developer build and was already true before.
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  # It must not exist yet: the build's own signature was deleted above, so anything here would be
+  # a signature over pre-repack bytes and every Linux self-update would fail verification.
+  [ ! -e "$appimage.sig" ] \
+    || die "a .sig already exists before signing — it would cover pre-repack bytes; refusing"
   ( cd "$REPO/src-tauri" && cargo tauri signer sign "$appimage" >/dev/null )
   [ -s "$appimage.sig" ] || die "signing produced no .sig beside the AppImage"
+  # Newer than the file it signs, which is the only cheap check that catches a signature made
+  # over the wrong bytes.
+  [ "$appimage.sig" -nt "$appimage" ] \
+    || die "the .sig is older than the AppImage it signs — refusing to publish it"
   ok "AppImage signed for self-update"
 else
   warn "no TAURI_SIGNING_PRIVATE_KEY — AppImage published unsigned (developer build)"
@@ -193,5 +217,5 @@ echo "  .deb     : src-tauri/target/release/bundle/deb/*.deb"
 echo "  AppImage : src-tauri/target/release/bundle/appimage/*.AppImage"
 echo "  binary   : src-tauri/target/release/nexus"
 echo
-warn "CAT needs Hamlib: the .deb pulls libhamlib-utils automatically; AppImage users run"
-warn "'sudo apt install libhamlib-utils'. FT8/FT4 audio decode works without it (VOX)."
+hlver="$("$REPO/src-tauri/resources/hamlib/rigctld" --version 2>/dev/null | head -1 | awk '{print $3}')"
+ok "CAT: Hamlib ${hlver:-?} bundled in both artifacts — nothing for the operator to install."

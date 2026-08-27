@@ -4979,7 +4979,7 @@ dependencies = [
 
 [[package]]
 name = "tempo"
-version = "1.7.6"
+version = "1.9.1"
 dependencies = [
  "keyring",
  "propagation",

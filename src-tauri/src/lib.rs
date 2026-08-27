@@ -7507,6 +7507,50 @@ fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
     Ok(s)
 }
 
+
+/// Reset the configuration to factory defaults, keeping the logbook and stored credentials.
+///
+/// There was no reset at all, so a clean start meant deleting files by hand — and doing THAT
+/// while the app runs does not reset anything: the engine holds the old configuration in memory
+/// and writes it straight back on the next save. So this goes through the ordinary save path, the
+/// same one a backup restore uses, which is what makes every side effect (the radio loop
+/// reconfiguring, the profile mirrors re-syncing) happen exactly as it would for any other
+/// settings change.
+///
+/// SCOPE, stated because "reset" is the word operators fear for their QSOs: this replaces the
+/// settings blob only. The logbook is not reachable from here — `log.adi` lives in
+/// `shared_data_dir()`, outside the settings entirely. Credentials live in the OS keychain and are
+/// NOT cleared; `clear_*_password` are the verbs for those, so forgetting them stays a separate,
+/// deliberate act rather than a surprise buried in a reset.
+#[tauri::command(async)]
+fn reset_settings(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+) -> Result<AppSnapshot, String> {
+    // A default Settings has an empty roster, which is not a state `load` can ever produce and
+    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
+    let mut fresh = Settings::default();
+    fresh.ensure_radio_profiles();
+    fresh.ensure_distinct_radio_ports();
+    fresh.ensure_routing_targets();
+    // The ordinary save path in full — its persistence, its feed handling and the process-global
+    // state it resets — but with the ROSTER CONTRACT of a restore. Routing a reset through a form
+    // save keeps the engine's live roster, so every radio the dialog promised to erase survives it.
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        fresh,
+        true,
+    )
+}
 /// Apply + persist new settings. Returns the refreshed snapshot.
 ///
 /// Also lazily starts the live network feeds: if this change supplies a real
@@ -7522,7 +7566,43 @@ fn set_settings(
     region_paths: State<'_, SharedRegionPaths>,
     health: State<'_, SharedHealth>,
     cache: State<'_, PropCache>,
+    settings: Settings,
+) -> Result<AppSnapshot, String> {
+    // A form save: the ENGINE's roster wins, so a stale panel cannot revert a rig just added.
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        settings,
+        false,
+    )
+}
+
+/// The body of a settings save, with ONE thing parameterised: who owns the roster.
+///
+/// `authoritative_roster == false` is a form save — `apply_settings` keeps the engine's live
+/// roster, active radio, peg and tune, so a stale panel cannot revert a rig you just added.
+///
+/// `true` is for settings that REPLACE the station rather than edit it: today the factory reset.
+/// It routes through `apply_restored_settings`, the contract #85 established for backups, because
+/// a reset has a restore's shape and not a save's — the incoming settings are the whole truth.
+///
+/// Everything else is shared deliberately. A reset must also reset the PROCESS-GLOBAL state a save
+/// touches — the LoTW recency window and the unassisted-mode atomic — and must go through the same
+/// persistence and feed handling. Reimplementing that beside this function is how the two drift.
+#[allow(clippy::too_many_arguments)]
+fn apply_and_persist(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
     mut settings: Settings,
+    authoritative_roster: bool,
 ) -> Result<AppSnapshot, String> {
     // Mirror the legacy single `cluster_host` to the list head (empty when the list is
     // empty), so clearing the node list to go RBN-only actually sticks — otherwise `load`'s
@@ -7600,7 +7680,13 @@ fn set_settings(
         // copies), so saving the raw form here would write a roster that diverges from the engine and
         // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
         // light verb does.
-        eng.apply_settings(settings);
+        if authoritative_roster {
+            // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
+            // live roster here would leave a factory reset with every radio it promised to erase.
+            eng.apply_restored_settings(settings);
+        } else {
+            eng.apply_settings(settings);
+        }
         if let Err(e) = eng.settings().save(&settings_path()) {
             eprintln!("tempo: failed to persist settings: {e}");
         }
@@ -11682,6 +11768,25 @@ fn mark_qsl_sent(
         .ok_or_else(|| format!("Unknown QSL-sent method '{via}' — use B, D, or E."))?;
     let mut eng = engine_lock(&state);
     if !eng.mark_qsl_sent(index, via) {
+        return Err("That contact no longer exists — reload the log and try again.".into());
+    }
+    Ok(eng.snapshot())
+}
+
+/// Record whether a PAPER QSL card arrived for logbook entry `index` (#152).
+///
+/// The operator is the only authority for this: LoTW, eQSL and QRZ report their own
+/// confirmations and Nexus syncs those, but nothing knows a card reached a letterbox. It is
+/// award-eligible — `QslRcvd::award` is card OR LoTW — so leaving it unrecordable left the
+/// awards view understating what the operator can actually claim.
+#[tauri::command(async)]
+fn mark_qsl_card(
+    state: State<'_, SharedEngine>,
+    index: usize,
+    received: bool,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if !eng.mark_qsl_card(index, received) {
         return Err("That contact no longer exists — reload the log and try again.".into());
     }
     Ok(eng.snapshot())
@@ -17246,8 +17351,32 @@ pub fn run() {
             // cannot heal without an operator visit to Settings, so skip the leg session-
             // wide and announce ONCE — save_settings/set_clublog_password clear the flag,
             // and the credential-change rescan re-queues what was skipped.
-            let creds_ready = clublog_credentials_ready(&cl_email, &cl_key);
-            if clublog_on && !creds_ready && !CLUBLOG_NO_CREDS_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
+            // ⚠️ NOTHING TO UPLOAD => DO NOT ASK WHETHER WE COULD. `clublog_credentials_ready`
+            // is not a flag read — it calls `get_password()`, and on Linux that is a D-Bus
+            // round trip opening a Secret Service session against gnome-keyring/kwallet. This
+            // worker ticks every 2 SECONDS, and the early-`continue` above only fires when NO
+            // connector is enabled at all, so any operator with ClubLog configured was paying
+            // that read forever whether or not a single QSO was queued.
+            //
+            // That is #154 again, at more than twice the rate: the 1.8.0 fix swept Settings'
+            // 5 s per-connector poll (which restarted gnome-keyring in a loop on Fedora) and
+            // missed this worker — one of a pair fixed, its twin left. Windows and macOS are
+            // local API calls and never showed it, which is exactly why it survived.
+            //
+            // The queue is drained ABOVE this point, so `recs` empty means there is nothing a
+            // credential answer could change.
+            // `None` = NOT ASKED this tick (nothing queued). Deliberately three-valued rather
+            // than a bool: collapsing "not asked" into "not ready" would fire the announcement
+            // below at an operator whose credentials are perfectly fine, simply because their
+            // upload queue was empty — a false "auto-upload paused" every session.
+            let creds_ready: Option<bool> = if recs.is_empty() {
+                None
+            } else {
+                Some(clublog_credentials_ready(&cl_email, &cl_key))
+            };
+            if clublog_on
+                && creds_ready == Some(false)
+                && !CLUBLOG_NO_CREDS_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
             {
                 conn_log(
                     "ClubLog",
@@ -17255,11 +17384,11 @@ pub fn run() {
                     "auto-upload paused — no ClubLog credentials stored (set them in Settings ▸ Confirmations)",
                 );
             }
-            if creds_ready {
+            if creds_ready == Some(true) {
                 CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
             }
             let clublog_live = clublog_on
-                && creds_ready
+                && creds_ready == Some(true)
                 && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
             let now_unix = now_unix();
             for p in recs {
@@ -17587,6 +17716,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_mode,
             get_settings,
             set_settings,
+            reset_settings,
             export_log,
             export_general_log,
             save_text_to_downloads,
@@ -17784,6 +17914,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             resolve_entity,
             edit_qso,
             mark_qsl_sent,
+            mark_qsl_card,
             delete_qso,
             purge_log,
             get_awards,
@@ -18259,6 +18390,14 @@ mod tests {
 
     /// A scratch file path unique to this test process (std-only — no tempfile
     /// dependency), cleaned up by the caller.
+    /// A per-test scratch directory.
+    ///
+    /// ⚠️ `name` MUST BE UNIQUE PER TEST. The pid separates concurrent cargo processes, not the
+    /// tests inside one — those run on threads and share it. Two tests on one name write into
+    /// each other's folder, and one of them `remove_dir_all`s it mid-run, so the pair fails
+    /// intermittently and by test ORDER: `--test-threads=1` is green, the ordinary parallel run
+    /// is red one time in several. Exactly that cost a red gate on 2026-08-23, where it read as a
+    /// fresh break in whatever had just been edited.
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("nexus-test-{}-{name}", std::process::id()))
     }
@@ -18425,7 +18564,7 @@ mod tests {
     /// from a bare file and stay zero rather than being invented.
     #[test]
     fn an_image_the_index_never_knew_about_is_adopted() {
-        let dir = scratch("sstv-adopt");
+        let dir = scratch("sstv-adopt-orphan");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let orphan = dir.join("20260717T153000Z_pd120.bmp");

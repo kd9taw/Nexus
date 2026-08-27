@@ -37,6 +37,7 @@ import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecord
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { pushToast } from '../toast'
+import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { FastGraph } from './FastGraph'
 import { Waterfall } from './Waterfall'
@@ -200,8 +201,6 @@ const MODES: { tier: Tier; label: string; slot: string; title: string }[] = [
 const HOUND_LABEL = 'Hound'
 const HOUND_BADGE = 'HOUND'
 
-/** The rig's own SPLIT annunciator — the word on every radio's front panel. */
-const SPLIT_BADGE = 'SPLIT ▲'
 
 /** The two RX signal sources, named exactly as the BACKEND names them: `radio.sourceLabel`
  *  is interpolated into the group tooltip beside these buttons, so a translated button would
@@ -597,8 +596,18 @@ export function OperateCockpit({
     setDxGrid('')
     tx5Edited.current = false
     setTx5('')
-    tx6Edited.current = false
-    setTx6('')
+    // ⚠️ TX6 IS DELIBERATELY NOT CLEARED. It is the CQ message, and it has nothing to do with
+    // the DX call this clears — the stock option is "Clear DX call and grid after logging",
+    // and that is exactly what it promises. Wiping Tx6 here reset the operator's DIRECTED CQ
+    // after every single contact: type "CQ DX KR4FQG EM64", work one station, and the next CQ
+    // went out bare (reported 2026-08-23: "it will work for one call, then revert back to just
+    // CQ unless I go back to Classic and change it again").
+    //
+    // WSJT-X keeps the two apart for the same reason: editing Tx6 sets `m_CQtype`
+    // (`mainwindow.cpp on_tx6_editingFinished`), a member the DX-clear never touches, so a
+    // directed CQ persists across contacts until the operator edits it back. `cqDirFromText`
+    // re-reads this field on every Tx6 fire, so keeping the text IS keeping the direction —
+    // and clearing it back to a plain CQ stays one edit away.
     setLocalNext(null)
   }, [])
 
@@ -980,15 +989,18 @@ export function OperateCockpit({
           >
             {recording ? '■' : '●'}
           </button>
-          {snap.radio.splitTxMhz != null && (
-            <span
-              className="cockpit-cat ok"
-              title={t('operate.header.split.title', {
-                freq: snap.radio.splitTxMhz.toFixed(4),
-              })}
-            >
-              {SPLIT_BADGE}
-            </span>
+          {/* ⭐ A REAL SPLIT CONTROL. This was an annunciator only — it told you split was on
+              and gave you no way to set it. Operate is the FT8 cockpit, so it is where a
+              DXpedition pile-up is actually worked, and "UP 5" is the ordinary case: the spot
+              parser already reads the offset out of the comment and commands it, but an
+              operator who tuned to the DX by hand had no control at all. NOT a stop control —
+              see SplitControl's header. */}
+          {snap.radio.catOk === true && (
+            <SplitControl
+              snap={snap}
+              onSnap={onSnap}
+              onError={(m) => pushToast(m, 'error')}
+            />
           )}
           <div className="cockpit-layout-toggle" role="group" aria-label={t('operate.header.layout.aria')}>
             <button

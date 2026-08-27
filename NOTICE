@@ -275,17 +275,36 @@ affiliated with or endorsed by it.
 
 ## Bundled components (shipped in the Windows installer)
 
-### Hamlib (rigctld)
-License: **GPL-2.0 / LGPL-2.1** — see upstream project. Hamlib ships its own
-license texts with the binaries; the staging script
-(`scripts/fetch-hamlib.sh`) places them, along with `rigctld.exe`,
-`rigctl.exe`, and the required DLLs, under
-`src-tauri/resources/hamlib/`, which the Tauri bundle then includes
-(`tauri.conf.json` → `bundle.resources`). Nexus launches the bundled
-`rigctld` for offline CAT rig control. The Hamlib binaries are **not committed
-to this repository** — `scripts/fetch-hamlib.sh` reproduces them from the
-official Hamlib release. Refer to the license files shipped under
-`resources/hamlib/` (and the Hamlib project) for exact terms.
+### Hamlib (rigctld) — <https://hamlib.github.io/>
+Hamlib **4.7.1**, bundled as a runtime on **every** shipped platform: Windows,
+Linux (.deb, AppImage, and both Raspberry Pi bases) and macOS.
+
+License, checked **per file** rather than taken from the repository-level claim
+(2026-08-24): the Hamlib **library** is **LGPL-2.1-or-later** and the
+**tools** — `rigctld`, `rigctl`, `rotctld`, `rotctl`, which are what Nexus
+launches — are **GPL-2.0-or-later**. Verified two independent ways: upstream
+SPDX headers in the 4.7.1 source (5 × `GPL-2.0-or-later`, 14 ×
+`LGPL-2.1-or-later`, and **zero** `GPL-2.0-only` files), and Debian's own audit
+of the same package (`License: LGPL-2.1+ and GPL-2+`). Both are *or-later*, so
+both may be used under GPL-3, which is what Nexus is (GPL-3.0-only). Had any
+part been GPL-2-**only** it could not have shipped here at all.
+
+Nexus does not link Hamlib. It launches `rigctld` as a **separate process** and
+speaks the rigctld TCP protocol to it; `rigctl` backs the baud-ladder probe and
+the model list, and `rotctld` drives rotators.
+
+Staging is reproducible and the binaries are **not committed to this
+repository**: `scripts/fetch-hamlib.sh` unpacks the official Windows release
+(SHA-256 pinned) and `scripts/fetch-hamlib-unix.sh` builds Linux/macOS from the
+official source tarball (SHA-256 pinned). Both place the binaries and Hamlib's
+own license texts under `src-tauri/resources/hamlib/`, which the Tauri bundle
+includes (`tauri.conf.json` → `bundle.resources`). The license files travel with
+every installer; refer to them and to the Hamlib project for exact terms.
+
+Before 2026-08-24 only Windows carried the bundle. Linux relied on the .deb's
+`libhamlib-utils` dependency — which left **AppImage** users, who install
+nothing by design, with no CAT until they found out unaided that they needed a
+Hamlib package; macOS relied on `brew install hamlib` the same way.
 
 ### DXCC country file (cty.dat) — Jim Reisert, AD1C
 `crates/propagation/data/cty.dat` is the AD1C "Country Files" (the big-CTY

@@ -95,8 +95,34 @@ export function activityTypeByCall(alerts: NeedAlert[]): Map<string, 'Pota' | 'S
 }
 
 /**
+ * The APPENDED ACTIVITY tags. Not reasons to work somebody — labels for what they are doing.
+ *
+ * The backend is explicit that these are "appended post-scoring ... never the primary reason"
+ * (`needalert.rs`), and gives all three tier 0. They still travel in `tags` because that is how
+ * the activity BADGE (`activityTypeByCall`) and the board's own filter read them, so they cannot
+ * simply be dropped — but they must never be picked as a call's need, which is a different job.
+ *
+ * Operator, 2026-08-23, on a DXpedition already worked on the band in question: "why is it still
+ * showing grid, dxped ... what does that even mean when it's showing me an icon after I already
+ * have worked them?" Nothing — DXPED as a need chip claims there is something to gain, and being
+ * a DXpedition is not something you can need. It is already drawn separately as an activity
+ * badge, so it was saying it twice, once wrongly.
+ */
+const ACTIVITY_TAGS: ReadonlySet<string> = new Set(['Dxped', 'Pota', 'Sota'])
+
+/** True for a tag that only LABELS the station, rather than giving a reason to work it. */
+export function isActivityTag(tag: NeedTag | null | undefined): boolean {
+  return tag != null && ACTIVITY_TAGS.has(tag)
+}
+
+/**
  * Top need tag per UPPERCASE callsign, taken from each call's STRONGEST alert — the map the
  * roster, band strip and map colour their rows from.
+ *
+ * ⚠️ ACTIVITY TAGS ARE NOT NEEDS and are skipped here (see [`isActivityTag`]): a station whose
+ * only tag is DXped/POTA/SOTA gets NO need colour and NO need chip, because there is nothing
+ * about it to need. Its activity badge is drawn from the same tags by `activityTypeByCall` and
+ * is unaffected, as is the board's filter.
  *
  * The strongest, not an arbitrary one. A call heard on several bands carries one alert per
  * band/mode, and the map this replaces was built by writing every alert into the same slot
@@ -110,7 +136,9 @@ export function activityTypeByCall(alerts: NeedAlert[]): Map<string, 'Pota' | 'S
 export function topNeedByCall(alertsByCall: Map<string, NeedAlert[]>): Map<string, NeedTag> {
   const m = new Map<string, NeedTag>()
   for (const [call, alerts] of alertsByCall) {
-    const tag = strongestNeed(alerts)?.tags[0]
+    // The strongest alert's tags, minus the labels — its FIRST real need, if it has one. Taking
+    // `tags[0]` blindly handed back DXped whenever that was all the station had.
+    const tag = strongestNeed(alerts)?.tags.find((t) => !isActivityTag(t))
     if (tag) m.set(call, tag)
   }
   return m
@@ -236,6 +264,32 @@ export function visibleNeeds(
     out.push(retag(a, tags))
   }
   return out
+}
+
+/**
+ * The NEEDED BOARD's list: the operator's band scopes applied, the CW/Phone mode-FEATURE gate
+ * deliberately NOT applied.
+ *
+ * ⭐ The board is the one surface that wants exactly half of `visibleNeeds`. Its own filter bar
+ * owns mode visibility, so a station running digital-only must still see CW and Phone needs
+ * listed there — but "new grid on HF" is an operator INTENT that holds on every surface, the
+ * board included.
+ *
+ * Asking for it by name is the point, and the ORDER of events is why. The board was handed the
+ * raw `needAlerts` on 2026-06-29, correctly, so that turning the CW or Phone features off would
+ * stop hiding needs there. The band scopes were added to `visibleNeeds` two months LATER
+ * (2026-08-18) for the roster and the decode rows — and the board, no longer calling it, never
+ * picked them up. Nobody broke it; one call grew a second job that a caller had already opted
+ * out of wholesale, and there was no way to take one without the other.
+ *
+ * That is the failure mode this name exists to prevent: anyone changing the board's mode
+ * behaviour edits THIS function, where the scopes are visible, instead of swapping a prop and
+ * silently dropping whatever else `visibleNeeds` has grown since. (Operator, 2026-08-23: "I am
+ * seeing dx grids being shown again on the needed board, even though I have new grid in settings
+ * set to VHF +6m" — reasonable to read as a regression, and it never was one.)
+ */
+export function boardNeeds(alerts: NeedAlert[], scopes?: NeedBandScopes): NeedAlert[] {
+  return visibleNeeds(alerts, { cw: true, phone: true }, scopes)
 }
 
 /** A resolved click-to-work target: where to QSY and the cockpit to open. The CALLER

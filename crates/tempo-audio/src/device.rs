@@ -770,6 +770,12 @@ impl CpalBackend {
         // STREAM (not in RxTap) so each open owns exactly one producer — see rxtap.rs.
         let tap_ring = Arc::new(SpscRing::new((in_rate as usize).max(12_000)));
         let mon_enabled = Arc::new(AtomicBool::new(false));
+        // MUTED WHILE KEYED. The monitor plays what the capture callback hears, and while the rig
+        // is transmitting that is not the band — it is whatever the codec emits during TX, which on
+        // many radios is their own MONI. Played back through this ring it arrives DELAYED, and
+        // delayed sidetone is genuinely hard to talk over. Separate from `mon_enabled` on purpose:
+        // that one is the operator's setting and must survive a transmission unchanged.
+        let mon_tx_mute = Arc::new(AtomicBool::new(false));
         let mon_level = Arc::new(AtomicU32::new(0.5f32.to_bits()));
 
         // ---- input: fold to mono f32 (dominant lane × RX gain) → in_ring (+ peak meter) ----
@@ -778,6 +784,7 @@ impl CpalBackend {
         let mon_ring_in = mon_ring.clone();
         let tap_ring_in = tap_ring.clone();
         let mon_enabled_in = mon_enabled.clone();
+        let mon_tx_mute_in = mon_tx_mute.clone();
         let rx_gain_cb = rx_gain.clone();
         let in_stream = match in_cfg.sample_format() {
             SampleFormat::F32 => in_dev.build_input_stream(
@@ -788,7 +795,8 @@ impl CpalBackend {
                     // push each mono sample into the wait-free monitor ring — it never
                     // blocks or allocates and drops on overflow, so the decode path
                     // (this same callback) is never stalled by monitoring.
-                    let monitoring = mon_enabled_in.load(Ordering::Relaxed);
+                    let monitoring = mon_enabled_in.load(Ordering::Relaxed)
+                        && !mon_tx_mute_in.load(Ordering::Relaxed);
                     let g = f32::from_bits(rx_gain_cb.load(Ordering::Relaxed));
                     let ch = in_ch.max(1);
                     let mut sum_sq = 0.0f32;
@@ -823,7 +831,8 @@ impl CpalBackend {
                 &in_cfg.config(),
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
-                    let monitoring = mon_enabled_in.load(Ordering::Relaxed);
+                    let monitoring = mon_enabled_in.load(Ordering::Relaxed)
+                        && !mon_tx_mute_in.load(Ordering::Relaxed);
                     let g = f32::from_bits(rx_gain_cb.load(Ordering::Relaxed));
                     let ch = in_ch.max(1);
                     let mut sum_sq = 0.0f32;
@@ -855,7 +864,8 @@ impl CpalBackend {
                 &in_cfg.config(),
                 move |data: &[u8], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
-                    let monitoring = mon_enabled_in.load(Ordering::Relaxed);
+                    let monitoring = mon_enabled_in.load(Ordering::Relaxed)
+                        && !mon_tx_mute_in.load(Ordering::Relaxed);
                     let g = f32::from_bits(rx_gain_cb.load(Ordering::Relaxed));
                     let ch = in_ch.max(1);
                     let mut sum_sq = 0.0f32;
@@ -890,7 +900,8 @@ impl CpalBackend {
                 &in_cfg.config(),
                 move |data: &[i32], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
-                    let monitoring = mon_enabled_in.load(Ordering::Relaxed);
+                    let monitoring = mon_enabled_in.load(Ordering::Relaxed)
+                        && !mon_tx_mute_in.load(Ordering::Relaxed);
                     let g = f32::from_bits(rx_gain_cb.load(Ordering::Relaxed));
                     let ch = in_ch.max(1);
                     let mut sum_sq = 0.0f32;
@@ -1009,7 +1020,7 @@ impl CpalBackend {
             rx_level,
             rx_gain,
             tx_level,
-            monitor: Monitor::new(mon_ring, mon_enabled, mon_level, in_rate),
+            monitor: Monitor::new(mon_ring, mon_enabled, mon_tx_mute, mon_level, in_rate),
             spectrum_tap: tap_ring,
             in_rate,
             voice_mic: None,
@@ -1187,6 +1198,10 @@ impl AudioBackend for CpalBackend {
     /// restarts.
     fn set_monitor(&mut self, enabled: bool, device: &str, level: f32) -> Result<(), String> {
         self.monitor.apply(enabled, device, level)
+    }
+
+    fn set_monitor_tx_mute(&mut self, muted: bool) {
+        self.monitor.set_tx_mute(muted);
     }
 
     /// Open (`Some(name)`) or close (`None`) the transient voice-mic input stream. Opens

@@ -217,6 +217,11 @@ mod device_monitor {
         ring: Arc<SpscRing>,
         /// Gates the capture-callback push: cleared → the callback skips the ring.
         enabled: Arc<AtomicBool>,
+        /// Set while the rig is KEYED. The capture callback treats it as a second gate, so the
+        /// monitor goes silent for the duration of a transmission and the operator does not hear
+        /// the rig's own delayed MONI over their own voice. Deliberately NOT `enabled`: that is
+        /// the operator's setting and must come back unchanged when the over ends.
+        tx_mute: Arc<AtomicBool>,
         /// Playback level as `f32` bits, read live by the output callback.
         level_bits: Arc<AtomicU32>,
         /// The capture rate the ring is filled at (the monitor output opens here
@@ -233,12 +238,14 @@ mod device_monitor {
         pub fn new(
             ring: Arc<SpscRing>,
             enabled: Arc<AtomicBool>,
+            tx_mute: Arc<AtomicBool>,
             level_bits: Arc<AtomicU32>,
             in_rate: u32,
         ) -> Self {
             Self {
                 ring,
                 enabled,
+                tx_mute,
                 level_bits,
                 in_rate,
                 out_stream: None,
@@ -256,6 +263,19 @@ mod device_monitor {
         /// stream the backend owns inside ONE critical section
         /// (`AudioBackend::release_device`). Use [`Self::apply`] with `enabled: false`
         /// anywhere else; that one locks for you.
+        /// Mute or unmute for a transmission. Called from the radio loop on every keying change.
+        ///
+        /// On the RISING edge the ring is cleared as well as gated: whatever the capture pushed in
+        /// the moments before the key went down is band audio from before the over, and playing it
+        /// out when the over ends would be a small burst of the past. Cheap — `clear` is two atomic
+        /// stores — and it runs on the loop thread, never in an audio callback.
+        pub fn set_tx_mute(&mut self, muted: bool) {
+            let was = self.tx_mute.swap(muted, Ordering::Release);
+            if muted && !was {
+                self.ring.clear();
+            }
+        }
+
         pub fn release_locked(&mut self) {
             self.enabled.store(false, Ordering::Release);
             self.out_stream = None;
@@ -413,6 +433,70 @@ mod device_monitor {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "device")]
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    #[cfg(feature = "device")]
+    use std::sync::Arc;
+
+    /// A transmission must not be played back to the operator, and what was buffered before it
+    /// must not surface afterwards.
+    ///
+    /// Drives the REAL thing — `Monitor::set_tx_mute` and the atomics the capture callback reads.
+    /// The first version of this test did not: it built a `SpscRing`, called `clear()` and checked
+    /// the ring was empty, which `SpscRing::clear` already has its own test for and which passes
+    /// with this whole feature deleted (kd9taw caught it on #158). A test that cannot fail when the
+    /// feature is removed is not evidence of the feature.
+    ///
+    /// `Monitor` needs no audio device to construct: `new` takes the shared `Arc`s and
+    /// `out_stream` starts `None`.
+    #[cfg(feature = "device")]
+    #[test]
+    fn muting_for_a_transmission_closes_the_gate_and_discards_the_audio_that_preceded_it() {
+        let ring = Arc::new(SpscRing::new(64));
+        let enabled = Arc::new(AtomicBool::new(true));
+        let tx_mute = Arc::new(AtomicBool::new(false));
+        let level = Arc::new(AtomicU32::new(0.5f32.to_bits()));
+        let mut m = Monitor::new(
+            ring.clone(),
+            enabled.clone(),
+            tx_mute.clone(),
+            level.clone(),
+            48_000,
+        );
+
+        for _ in 0..16 {
+            assert!(
+                ring.push(0.5),
+                "fixture: band audio buffered before the over"
+            );
+        }
+
+        // THE RISING EDGE. The gate the capture callback reads closes, and the audio captured
+        // before the key went down goes with it — otherwise it plays out as a burst of the past
+        // when the over ends, which is a stranger artefact than the one this fixes.
+        m.set_tx_mute(true);
+        assert!(tx_mute.load(Ordering::Relaxed), "the gate closed");
+        assert_eq!(ring.len(), 0, "and the pre-TX audio went with it");
+
+        // EDGE-TRIGGERED, which is a claim the design makes and therefore has to be held to:
+        // muting again mid-over must not wipe anything a second time.
+        assert!(ring.push(0.25), "something arrives while still keyed");
+        m.set_tx_mute(true);
+        assert_eq!(ring.len(), 1, "muting again is not a second clear");
+
+        // AND THE OPERATOR'S OWN SETTING IS UNTOUCHED THROUGHOUT. This is the invariant the whole
+        // design rests on — the reason the mute is a second atomic rather than borrowing
+        // `enabled` — and nothing held us to it before.
+        m.set_tx_mute(false);
+        assert!(
+            !tx_mute.load(Ordering::Relaxed),
+            "the gate reopens when the over ends"
+        );
+        assert!(
+            enabled.load(Ordering::Relaxed),
+            "the operator's monitor setting survives a transmission unchanged"
+        );
+    }
     use super::*;
 
     #[test]
