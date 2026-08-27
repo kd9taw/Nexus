@@ -65,7 +65,7 @@ import { useFeatures } from './useFeatures'
 import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
-import { visibleNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
+import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
@@ -504,6 +504,23 @@ export default function App() {
     )
   }, [snap?.radio.radioConfigWarning])
 
+  // A rig at 0% power KEYS, shows TX, and produces an over that looks entirely normal from the
+  // operator's chair — it is silent only to everyone else, which is why the report it came from
+  // ("opening cat but not sending audio out") cost an evening to chase. Notify, never act: the
+  // lane says so and nothing touches the power.
+  useEffect(() => {
+    setStatus(
+      'txPowerZero',
+      snap?.radio.txPowerZero
+        ? {
+            tier: 'warning',
+            message: t('shell.lane.txPowerZero.message'),
+            detail: t('shell.lane.txPowerZero.detail'),
+          }
+        : null,
+    )
+  }, [snap?.radio.txPowerZero])
+
   // A per-QSO recording that could not be written. The contact IS logged — only the audio failed —
   // so this is a warning in the lane rather than an error on the log action, and it names the full
   // path because "it did not save" without saying where is exactly the report that prompted it.
@@ -844,6 +861,8 @@ export default function App() {
     }),
     [settings?.alertDxccBands, settings?.alertGridBands, settings?.alertRareGridBands],
   )
+  // The Needed board's feed — band scopes honoured, mode-feature gate neutral (see boardNeeds).
+  const boardAlerts = useMemo(() => boardNeeds(needAlerts, needScopes), [needAlerts, needScopes])
   const visibleAlerts = useMemo(
     () => visibleNeeds(needAlerts, { cw: cwEnabled, phone: phoneEnabled }, needScopes),
     [needAlerts, cwEnabled, phoneEnabled, needScopes],
@@ -2128,10 +2147,20 @@ export default function App() {
     snap.mycall.trim() === '' // fresh install (the default callsign is empty)
 
   // The Tempo (chat) roster represents who's on the TEMPO protocol — so it shows only
-  // stations last heard on TempoFast, not the FT8/FT4 stations that share the engine's single
-  // roster. Every other view (Operate, Field Day) shows the full roster.
+  // stations last heard on a Tempo tier, not the FT8/FT4 stations that share the engine's
+  // single roster. Every other view (Operate, Field Day) shows the full roster.
+  //
+  // ⚠️ BOTH CHAT TIERS, not just TempoFast. Tempo has two — TempoFast and TempoDeep — and the
+  // backend has said so all along (`Tier::is_chat` is `TempoFast | TempoDeep`, and its comment
+  // spells out that the whole chat cadence runs on both). This filter knew only the first, so
+  // on TempoDeep the roster was STRUCTURALLY always empty: every station heard there was
+  // filtered out of the one view that exists to list them. Found while validating an
+  // unrelated "Tempo not decoding" report (#160) — nobody had reported the roster itself,
+  // which is what an always-empty list gets you: it reads as a quiet band.
   const rosterStations =
-    effectiveView === 'chat' ? snap.stations.filter((s) => s.tier === 'TempoFast') : snap.stations
+    effectiveView === 'chat'
+      ? snap.stations.filter((s) => s.tier === 'TempoFast' || s.tier === 'TempoDeep')
+      : snap.stations
   // Two roster surfaces off one component: the Tempo chat roster keeps the long
   // presence retention (store-and-forward delivery needs it); the FT cockpit's
   // Stations panel flushes after 3 missed decode cycles (the Call Roster rule).
@@ -2305,10 +2334,11 @@ export default function App() {
     case 'needed':
       workspace = (
         <NeededPanel
-          // FULL un-gated list: the board's own per-mode toggles decide what shows, so a
-          // disabled CW/Phone *feature* no longer hides those needs here (the operator
-          // controls mode visibility in the Needed filter bar instead).
-          alerts={needAlerts}
+          // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
+          // so a disabled CW/Phone feature no longer hides those needs here — but STILL
+          // scoped by band: `boardNeeds` is that exact half, and it is a named function so
+          // the scopes cannot be dropped again by swapping this prop.
+          alerts={boardAlerts}
           bandPlan={bandPlan}
           selectedCall={activePeer}
           myGrid={snap.mygrid}

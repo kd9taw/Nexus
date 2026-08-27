@@ -54,6 +54,14 @@ pub struct N1mmContact {
     pub freq_10hz: u64,
     /// Our sent exchange, e.g. "3A WI".
     pub sent_exchange: String,
+    /// The signal report we SENT, as `<snt>` (#129). Distinct from `sent_exchange`: a
+    /// consumer reads the exchange as contest data and the report as the RST, and Log4OM
+    /// reads only the latter — which is why an ordinary QSO arrived there with no reports
+    /// at all even though the number was already in the datagram.
+    pub rst_sent: String,
+    /// The signal report we RECEIVED, as `<rcv>` (#129). This one was not in the datagram
+    /// in any form.
+    pub rst_rcvd: String,
     pub operator: String,
     /// 32-hex unique id (consumers dedup on it).
     pub id: String,
@@ -92,8 +100,21 @@ pub fn build_contactinfo(c: &N1mmContact) -> String {
             "<ID>{id}</ID>",
             "<IsClaimedQso>1</IsClaimedQso>",
             "<SentExchange>{sent}</SentExchange>",
+            "{snt}{rcv}",
             "</contactinfo>"
         ),
+        // Omitted when empty, like `gridsquare` above — this module's convention, and it keeps
+        // the Field Day datagram that has been on the air since 0.8.0 byte-identical.
+        snt = if c.rst_sent.is_empty() {
+            String::new()
+        } else {
+            format!("<snt>{}</snt>", esc(&c.rst_sent))
+        },
+        rcv = if c.rst_rcvd.is_empty() {
+            String::new()
+        } else {
+            format!("<rcv>{}</rcv>", esc(&c.rst_rcvd))
+        },
         contest = esc(&c.contestname),
         ts = esc(&c.timestamp),
         my = esc(&c.mycall),
@@ -321,8 +342,59 @@ mod tests {
             contestname: "ARRL-FIELD-DAY".into(),
             freq_10hz: 1_407_400,
             sent_exchange: "3A WI".into(),
+            rst_sent: String::new(),
+            rst_rcvd: String::new(),
             operator: "KD9TAW".into(),
             id: "0123456789abcdef0123456789abcdef".into(),
         }
+    }
+
+    /// #129 (4X4FD, seconded by bitslave): a QSO broadcast to Log4OM through the N1MM
+    /// listener arrives with BOTH signal reports blank.
+    ///
+    /// The datagram carried the sent report only as `<SentExchange>`, which a consumer reads
+    /// as CONTEST exchange data rather than as an RST, and the received report was not in it
+    /// in any form. The reports now travel in `<snt>`/`<rcv>`, the fields a logger reads as
+    /// reports.
+    ///
+    /// ⚠️ The N3FJP sibling of this bug was fixed in 1.7.0 and THIS path was not swept with
+    /// it — one emitter fixed, its twin left alone. Positive control below: the WSJT-X
+    /// emitter has carried `report_sent`/`report_recvd` all along, which is exactly why
+    /// GridTracker users never saw this and Log4OM users always did.
+    #[test]
+    fn an_ordinary_qso_carries_both_signal_reports() {
+        let mut c = fd_contact();
+        c.contestname = GENERAL_LOG.to_string();
+        c.rst_sent = "-12".into();
+        c.rst_rcvd = "-08".into();
+        let xml = build_contactinfo(&c);
+        assert!(
+            xml.contains("<snt>-12</snt>"),
+            "sent report missing in {xml}"
+        );
+        assert!(
+            xml.contains("<rcv>-08</rcv>"),
+            "received report missing in {xml}"
+        );
+    }
+
+    /// …and Field Day, whose exchange IS class+section with no RST on the air, must stay
+    /// byte-identical to the datagram that has been shipping since 0.8.0 — so empty reports
+    /// emit NO element at all, per this module's omit convention.
+    #[test]
+    fn field_day_emits_no_report_elements() {
+        let xml = build_contactinfo(&fd_contact());
+        assert!(
+            !xml.contains("<snt>"),
+            "FD must not grow an snt element: {xml}"
+        );
+        assert!(
+            !xml.contains("<rcv>"),
+            "FD must not grow an rcv element: {xml}"
+        );
+        assert!(
+            xml.contains("<SentExchange>3A WI</SentExchange>"),
+            "the FD exchange is unchanged"
+        );
     }
 }

@@ -872,6 +872,19 @@ impl StationCore {
         ok
     }
 
+    /// Record whether a PAPER QSL card arrived for entry `index` (#152). Persists by rewriting
+    /// the ADIF, and refreshes the worked index because a card is an award-eligible
+    /// confirmation — the needs/awards model reads it.
+    pub fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
+        self.recover_external_appends();
+        let ok = self.logbook.mark_qsl_card(index, received);
+        if ok {
+            self.save_log("mark_qsl_card");
+            self.refresh_worked_index();
+        }
+        ok
+    }
+
     /// Delete a logbook entry (a mis-logged contact). Persists by rewriting the
     /// ADIF. Returns false if `index` is out of range. Shifts later indices — the
     /// caller must reload the log afterward.

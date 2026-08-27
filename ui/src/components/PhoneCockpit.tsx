@@ -50,13 +50,15 @@ import { pushToast } from '../toast'
 import { RotorStrip } from './RotorStrip'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
-import { setFrequency, setSplit, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
+import { setFrequency, setRigFunc, setSidebandOverride, setFilterWidth, openPanelWindow } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
+import { SplitControl } from './SplitControl'
+import type { MessageKey } from '../i18n'
 
 /** This cockpit's INVARIANT vocabulary — the words that are technical tokens rather than
  *  prose, gathered here so the i18n guard reads them as the deliberate constants they are:
@@ -73,13 +75,24 @@ const BW = 'BW'
 const DB = 'dB'
 const DBM = 'dBm'
 const REC = 'REC'
-const SPLIT_PLATE = 'SPLIT'
 /** The mode picker's AUTO face — the word and the sideband it resolved to, both tokens. */
 const autoPlate = (sideband: string) => `AUTO·${sideband}`
 /** The nudges the two steppers take, as their tooltips print them — figures, so they are
  *  supplied to the message rather than written in it. */
 const FILTER_STEP_HZ = 100
-const SPLIT_STEP_KHZ = 1
+
+/** The AGC chips, in the order `Engine::AGC_SPEEDS` lists them: AUTO left of the three time
+ *  constants, OFF right of them — most-automatic through to no AGC at all. The `id` is the
+ *  token that goes on the wire and the label is a KEY, not a word: `t()` runs when the row
+ *  RENDERS, so a locale switch relabels the chips and the chip is still compared on its id
+ *  (the same split RF_SPANS makes, and for the same reason). */
+const AGC_CHIPS = [
+  { id: 'auto', labelKey: 'phone.rxDsp.agc.auto' },
+  { id: 'fast', labelKey: 'phone.rxDsp.agc.fast' },
+  { id: 'mid', labelKey: 'phone.rxDsp.agc.mid' },
+  { id: 'slow', labelKey: 'phone.rxDsp.agc.slow' },
+  { id: 'off', labelKey: 'phone.rxDsp.agc.off' },
+] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
 interface Props {
   /** Which panels this cockpit shows or hides (⊞ Panels). Owned by the HOST (App), never
@@ -213,7 +226,7 @@ const DSP_FUNCS = [
 ] as const
 
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
- *  is the rig's: RF offset from the dial, dial at the 1/4 mark and the sideband filling the
+ *  is the rig's: RF offset from the dial, dial at the 1/9 mark and the sideband filling the
  *  rest (PhoneScope's `carrierCentered`). The engine is asked for exactly 0..width — receiver
  *  audio is one-sided — so the preset is both what is captured and 3/4 of what is shown; the
  *  remaining quarter is scopeView's guard band, which has no data by construction.
@@ -411,7 +424,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
-  const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
+  const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -497,8 +510,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // Transient operator override ("USB"/"LSB"/"FM") or null = AUTO. The COMMANDED mode (canonical
   // for TX/logging + what the rig is set to) is the override when set, else the band-auto sideband.
   const modeOverride = snap.radio.sidebandOverride ?? null
+  // Bands where AM is worked: the HF windows below 10 MHz, and 10 m / 6 m and up. Mirrors the
+  // comment on the picker's filter below.
+  const amBandOk = snap.radio.dialMhz > 0 && (snap.radio.dialMhz < 10 || snap.radio.dialMhz >= 28)
   const commandedMode = modeOverride ?? sidebandAuto
-  const pickMode = (m: 'USB' | 'LSB' | 'FM' | null) =>
+  const pickMode = (m: 'USB' | 'LSB' | 'FM' | 'AM' | null) =>
     void setSidebandOverride(m)
       .then((s) => onSnap?.(s))
       .catch(() => pushToast(t('phone.mode.failed'), 'error'))
@@ -548,39 +564,6 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // is said. Same chip vocabulary as the mode-mismatch pill beside it — no new pane, no
   // structural size of its own (cockpit-panes.css owns those).
   const micOffForDax = snap.radio.flexDaxTx === true
-
-  // Manual split (casual DX "work up N"): the desired TX dial lives in the snapshot; a plain
-  // retune clears it (backend). Offset is kHz off the RX dial; default +5, the common pileup.
-  const [splitOffsetKhz, setSplitOffsetKhz] = useState(5)
-  const splitTxMhz = snap.radio.splitTxMhz ?? null
-  const splitOn = splitTxMhz != null
-  // When split turns on externally (e.g. a pile-up spot programs it), sync the local offset
-  // to the rig so the display + bumping start from the real value, not a stale default.
-  const wasSplitOn = useRef(false)
-  useEffect(() => {
-    if (splitOn && !wasSplitOn.current && splitTxMhz != null) {
-      setSplitOffsetKhz(Math.round((splitTxMhz - snap.radio.dialMhz) * 1000))
-    }
-    wasSplitOn.current = splitOn
-  }, [splitOn, splitTxMhz, snap.radio.dialMhz])
-  const applySplitTx = (offsetKhz: number) =>
-    setSplit(snap.radio.dialMhz + offsetKhz / 1000)
-      .then((s) => onSnap?.(s))
-      .catch(() => pushToast(t('phone.split.setFailed'), 'error'))
-  const toggleSplit = () =>
-    splitOn
-      ? setSplit(null)
-          .then((s) => onSnap?.(s))
-          .catch(() => pushToast(t('phone.split.clearFailed'), 'error'))
-      : applySplitTx(splitOffsetKhz)
-  // Accumulate on local state (functional updater) so rapid bumps that fire before the
-  // IPC/onSnap round-trip don't all read the same stale value and collapse into one step.
-  const bumpSplit = (delta: number) =>
-    setSplitOffsetKhz((prev) => {
-      const next = Math.max(-90, Math.min(90, prev + delta))
-      if (splitOn) void applySplitTx(next)
-      return next
-    })
 
   // Live snapshot ref so the spacebar PTT handler (bound on `lock` changes, not every render)
   // reads the CURRENT TX-allowed privilege state through key() — not whatever existed when bound.
@@ -1055,19 +1038,15 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
             {snap.radio.agc != null && (
               <div className="ph-agc" role="group" aria-label={t('phone.rxDsp.agc.aria')} title={t('phone.rxDsp.agc.title')}>
                 <span className="ph-dsplev-lbl">{AGC}</span>
-                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                {AGC_CHIPS.map(({ id, labelKey }) => (
                   <button
-                    key={sp}
+                    key={id}
                     type="button"
-                    className={`theme-chip${agc === sp ? ' active' : ''}`}
-                    aria-pressed={agc === sp}
-                    onClick={() => changeAgc(sp)}
+                    className={`theme-chip${agc === id ? ' active' : ''}`}
+                    aria-pressed={agc === id}
+                    onClick={() => changeAgc(id)}
                   >
-                    {sp === 'fast'
-                      ? t('phone.rxDsp.agc.fast')
-                      : sp === 'mid'
-                        ? t('phone.rxDsp.agc.mid')
-                        : t('phone.rxDsp.agc.slow')}
+                    {t(labelKey)}
                   </button>
                 ))}
               </div>
@@ -1111,7 +1090,21 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         onSnap={onSnap}
         modeIndicator={
           <div className="ph-mode-pick" role="group" aria-label={t('phone.mode.aria')}>
-            {(['AUTO', 'USB', 'LSB', 'FM'] as const).map((m) => {
+            {(['AUTO', 'USB', 'LSB', 'FM', 'AM'] as const)
+              // AM IS OFFERED ONLY WHERE AM IS ACTUALLY WORKED — below 10 MHz (the 1.885,
+              // 3.870-3.890 and 7.290 windows) and at 28 MHz and up (29.0-29.2, 50.4 and above).
+              // 20/17/15/12 m are not AM territory, and a 6 kHz emission there has no room in the
+              // band plan.
+              //
+              // NOT OFFERING it rather than refusing it, deliberately. The cockpit pick is the
+              // operator's own CURRENT action and this app honours those — `sideband_override` is
+              // already cleared by a band change, a cross-band knob QSY, working a spot and an
+              // SSTV tune, so unlike the station-wide `phone_mode` it cannot follow anybody onto a
+              // band they did not choose it for. There is no stale state to protect against here;
+              // the only thing worth doing is not putting a button in front of somebody on a band
+              // where it makes no sense.
+              .filter((m) => m !== 'AM' || amBandOk)
+              .map((m) => {
               const active = m === 'AUTO' ? modeOverride === null : modeOverride === m
               return (
                 <button
@@ -1205,36 +1198,11 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           </span>
         )}
         {catOk && (
-          <div className={`ph-split ${splitOn ? 'on' : ''}`}>
-            <button
-              className="ph-split-toggle"
-              onClick={toggleSplit}
-              title={
-                splitOn
-                  ? t('phone.split.on.title', { freq: splitTxMhz?.toFixed(3) ?? '' })
-                  : t('phone.split.off.title')
-              }
-            >
-              {SPLIT_PLATE}
-            </button>
-            <button
-              className="ph-split-step"
-              onClick={() => bumpSplit(-SPLIT_STEP_KHZ)}
-              title={t('phone.split.lower.title', { step: SPLIT_STEP_KHZ })}
-            >
-              −
-            </button>
-            <span className="ph-split-amt mono" title={t('phone.split.offset.title')}>
-              {splitOffsetKhz >= 0 ? `+${splitOffsetKhz}` : `${splitOffsetKhz}`}
-            </span>
-            <button
-              className="ph-split-step"
-              onClick={() => bumpSplit(SPLIT_STEP_KHZ)}
-              title={t('phone.split.higher.title', { step: SPLIT_STEP_KHZ })}
-            >
-              +
-            </button>
-          </div>
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+          />
         )}
         {!catOk && (
           <span

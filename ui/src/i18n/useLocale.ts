@@ -55,8 +55,16 @@ export function localeChoices(): string[] {
  * What each language calls ITSELF. A picker that offers "German" to a German operator is
  * asking them to find their language in a language they may not read; every shipping picker
  * worth copying — Windows', Firefox's, WSJT-X's — lists the native name.
+ *
+ * ⚠️ EVERY LOCALE main.tsx INSTALLS NEEDS A ROW HERE. The picker falls back to the raw tag,
+ * which is right — a missing name must not blank the option — but it is also silent, so
+ * Spanish and French shipped in 1.8.2-test2 offering an operator "es" and "fr" to choose
+ * between. Complete catalogs, and a menu that read like a config file. locale-switch.test.ts
+ * now fails when a shipped language has no row, so the omission cannot be quiet again.
  */
 export const LOCALE_NATIVE_NAME: Record<string, string> = {
   en: 'English',
   de: 'Deutsch',
+  es: 'Español',
+  fr: 'Français',
 }

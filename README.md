@@ -158,7 +158,7 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
 - **🔌 Zero-config setup, with a real transmit lockout.** Plug in the radio and click **Detect my
   radio**: Nexus reads the USB descriptors, matches the rig model, pairs the audio CODEC, and links
   the one driver you need if it's missing. Digirig and RIGblaster interfaces are recognised by name.
-  Hamlib ships inside the installer. A goal-driven first-run wizard shapes the app to you, and your
+  Hamlib ships inside every installer. A goal-driven first-run wizard shapes the app to you, and your
   declared license class becomes a real Part 97 transmit lockout, a software guard in **every** TX
   path. Launching Nexus opens the rig **read-only** and commands nothing until you act, so a radio
   parked on 40 m LSB for a net stays there.
@@ -274,9 +274,9 @@ logs, and never shown back to the UI beyond "configured."
    | File | Platform |
    |---|---|
    | `Nexus_<version>_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
-   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; CAT via Homebrew Hamlib (`brew install hamlib`); Intel Macs build from source |
-   | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place |
-   | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed, pulls `libhamlib-utils` in for CAT |
+   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; bundles Hamlib, so CAT works with nothing else installed; Intel Macs build from source |
+   | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place, bundles Hamlib so CAT works with nothing installed |
+   | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed; bundles Hamlib, and still pulls `libhamlib-utils` as a fallback |
    | `Nexus_<version>_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
    | `Nexus_<version>_pi_arm64_trixie.deb` | **Raspberry Pi OS trixie**, 64-bit (Pi 3/4/5) |
 
@@ -445,7 +445,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   their network, so it is validated against signals that actually arrived at an antenna and not only
   against another implementation of the same theory. Thanks to stations 1696, 4803, 5049 and 5062
   and their operators (see **[NOTICE](NOTICE)** for what is redistributed where).
-- **[Hamlib](https://hamlib.github.io/)** — bundled `rigctld` for CAT control (GPL/LGPL).
+- **[Hamlib](https://hamlib.github.io/)** — `rigctld` for CAT control, bundled on every platform
+  (tools GPL-2.0-or-later, library LGPL-2.1-or-later; launched as a separate process, not linked).
 - **[FFTW](https://www.fftw.org/)** (GPL), **[Tauri](https://tauri.app/)**, React,
   [cpal](https://github.com/RustAudio/cpal),
   [alsa-rs](https://github.com/diwic/alsa-rs) (Linux device names),

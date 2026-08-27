@@ -28,7 +28,7 @@ import { useEntityCentroids } from '../features/entityCentroids'
 import { useUnits } from '../units'
 import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
-import { alertsForSurface, chaseRank, strongestNeed } from '../features/needs'
+import { alertsForSurface, chaseRank, isActivityTag, strongestNeed } from '../features/needs'
 import { isIgnored } from '../txMessages'
 import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
@@ -198,14 +198,20 @@ export function OperateRoster({
       // the top-tag map; when alerts WERE supplied and the gate cleared every one, nothing
       // is needed here, so the row stays null rather than reaching for an ungated tag.
       const need: NeedTag | null =
-        strongestNeed(alerts)?.tags[0] ??
+        strongestNeed(alerts)?.tags.find((t) => !isActivityTag(t)) ??
         (raw && raw.length > 0 ? null : (needByCall.get(up) ?? null))
       // Union of ALL need forms for the row (deduped, insertion-ordered by the alerts), from
       // the GATED set so the chip cluster and the row colour can never disagree.
+      //
+      // ACTIVITY TAGS ARE EXCLUDED (`isActivityTag`): DXped/POTA/SOTA say what a station is
+      // DOING, not what you stand to gain, and a DXPED chip sat in this cluster claiming to be
+      // a need even for a station already worked on the band (operator, 2026-08-23). The
+      // activity is still shown — `activityTypeByCall` reads the same tags for the badge, and
+      // the Needed board's filter is unaffected.
       let needAll: NeedTag[] = []
       if (alerts && alerts.length > 0) {
         const seen = new Set<NeedTag>()
-        for (const a of alerts) for (const t of a.tags) seen.add(t)
+        for (const a of alerts) for (const t of a.tags) if (!isActivityTag(t)) seen.add(t)
         needAll = [...seen]
       }
       if (need && needAll.length === 0) needAll = [need]
@@ -379,7 +385,12 @@ export function OperateRoster({
             onChange={(e) => setFilter({ neededOnly: e.target.checked })}
           /> {t('operate.roster.filter.neededOnly')}
         </label>
-        <label className="or-filter">
+        {/* The tooltip is not decoration. Two operators read a surviving B4 chip as this
+            filter being broken (field reports, 2026-08-22) — it is not: `hideWorked` keeps a
+            worked station that still fills a need, which is the whole point for a band-slot
+            chaser. The neighbouring Hide blocked has always explained itself; the filter with
+            the genuinely non-obvious rule was the one saying nothing. */}
+        <label className="or-filter" title={t('operate.roster.filter.hideWorked.title')}>
           <input
             type="checkbox"
             checked={hideWorked}

@@ -341,6 +341,35 @@ pub fn unhash_call(s: &str) -> &str {
     }
 }
 
+/// Resolve an i3=4 hashed token to the plain call it stands for — but ONLY when the plain form
+/// can legally go back on the air.
+///
+/// `<W9XYZ>` → `W9XYZ`. TWO cases keep their brackets, and both matter:
+///
+/// **A COMPOUND call stays hashed.** `<KH8/W1AW>` must NOT become `KH8/W1AW`: the brackets are
+/// there precisely because a compound call does not fit an ordinary 77-bit frame, so unwrapping
+/// it would build a message the protocol cannot carry. This is the rule issue #84 recorded when
+/// it stripped brackets at the LOG boundary and deliberately not in the sequencer, for exactly
+/// this reason. The sequencer's job is to say the call the way the wire requires; the log's job
+/// is to record who it was, and those are different answers to the same token.
+///
+/// **An UNRESOLVED hash stays as it is.** `<...>` is what a decoder prints before it has heard
+/// the full call; stripping it hands the rest of the app the literal `...` as though it were a
+/// callsign.
+///
+/// What is left is the case this exists for: a station whose call fits a standard message
+/// perfectly well, sending it hashed to save bits because it is answering several callers at
+/// once. There the brackets are pure encoding and must never survive into what we transmit —
+/// see [`Msg::unhashed`].
+pub fn resolve_hashed(s: &str) -> &str {
+    let inner = unhash_call(s);
+    if !std::ptr::eq(inner, s) && is_callsign(inner) && !is_compound(inner) {
+        inner
+    } else {
+        s
+    }
+}
+
 /// The inner text of an i3=4 hashed token (`<W9XYZ>` → `W9XYZ`, `<...>` → `...`).
 fn hashed_inner(s: &str) -> &str {
     s.trim_start_matches('<').trim_end_matches('>')
@@ -379,6 +408,68 @@ pub fn looks_like_call(s: &str) -> bool {
 }
 
 impl Msg {
+    /// The same message with any i3=4 HASHED callsign resolved to the plain call it stands for.
+    ///
+    /// Applied once, where decodes are parsed, so no downstream arm has to remember. Every reply
+    /// in the sequencer is built as `to: de.clone()` from the message it answers, so a hashed
+    /// sender used to be copied straight back out and TRANSMITTED in brackets — a station
+    /// answering several callers at once sends its call hashed to save bits, and we echoed the
+    /// encoding onto the air (field report 2026-08-23: `<RI1FJL> KD9TAW EN52`, twice).
+    ///
+    /// Matching never needed this — `base_call` already ignores brackets — so this changes what
+    /// we SAY, not who we recognise. An unresolved `<...>` is deliberately left alone
+    /// ([`resolve_hashed`]).
+    #[must_use]
+    pub fn unhashed(self) -> Msg {
+        fn r(s: &str) -> String {
+            resolve_hashed(s).to_string()
+        }
+        match self {
+            Msg::Grid { to, de, grid } => Msg::Grid {
+                to: r(&to),
+                de: r(&de),
+                grid,
+            },
+            Msg::Report { to, de, snr } => Msg::Report {
+                to: r(&to),
+                de: r(&de),
+                snr,
+            },
+            Msg::RReport { to, de, snr } => Msg::RReport {
+                to: r(&to),
+                de: r(&de),
+                snr,
+            },
+            Msg::Rr73 { to, de } => Msg::Rr73 {
+                to: r(&to),
+                de: r(&de),
+            },
+            Msg::Rrr { to, de } => Msg::Rrr {
+                to: r(&to),
+                de: r(&de),
+            },
+            Msg::Bye73 { to, de } => Msg::Bye73 {
+                to: r(&to),
+                de: r(&de),
+            },
+            Msg::FieldDay {
+                to,
+                de,
+                roger,
+                class,
+                section,
+            } => Msg::FieldDay {
+                to: r(&to),
+                de: r(&de),
+                roger,
+                class,
+                section,
+            },
+            // Cq carries no `to`, and Other is raw text shown verbatim — both unchanged.
+            other => other,
+        }
+    }
+
     /// Render to the on-air text form.
     pub fn to_text(&self) -> String {
         match self {

@@ -11681,6 +11681,25 @@ fn mark_qsl_sent(
     Ok(eng.snapshot())
 }
 
+/// Record whether a PAPER QSL card arrived for logbook entry `index` (#152).
+///
+/// The operator is the only authority for this: LoTW, eQSL and QRZ report their own
+/// confirmations and Nexus syncs those, but nothing knows a card reached a letterbox. It is
+/// award-eligible — `QslRcvd::award` is card OR LoTW — so leaving it unrecordable left the
+/// awards view understating what the operator can actually claim.
+#[tauri::command(async)]
+fn mark_qsl_card(
+    state: State<'_, SharedEngine>,
+    index: usize,
+    received: bool,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if !eng.mark_qsl_card(index, received) {
+        return Err("That contact no longer exists — reload the log and try again.".into());
+    }
+    Ok(eng.snapshot())
+}
+
 /// Delete logbook entry `index` (oldest-first, as returned by `get_log`). Returns
 /// the refreshed snapshot. Indices shift after a delete — the UI reloads the log.
 #[tauri::command(async)]
@@ -17240,8 +17259,32 @@ pub fn run() {
             // cannot heal without an operator visit to Settings, so skip the leg session-
             // wide and announce ONCE — save_settings/set_clublog_password clear the flag,
             // and the credential-change rescan re-queues what was skipped.
-            let creds_ready = clublog_credentials_ready(&cl_email, &cl_key);
-            if clublog_on && !creds_ready && !CLUBLOG_NO_CREDS_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
+            // ⚠️ NOTHING TO UPLOAD => DO NOT ASK WHETHER WE COULD. `clublog_credentials_ready`
+            // is not a flag read — it calls `get_password()`, and on Linux that is a D-Bus
+            // round trip opening a Secret Service session against gnome-keyring/kwallet. This
+            // worker ticks every 2 SECONDS, and the early-`continue` above only fires when NO
+            // connector is enabled at all, so any operator with ClubLog configured was paying
+            // that read forever whether or not a single QSO was queued.
+            //
+            // That is #154 again, at more than twice the rate: the 1.8.0 fix swept Settings'
+            // 5 s per-connector poll (which restarted gnome-keyring in a loop on Fedora) and
+            // missed this worker — one of a pair fixed, its twin left. Windows and macOS are
+            // local API calls and never showed it, which is exactly why it survived.
+            //
+            // The queue is drained ABOVE this point, so `recs` empty means there is nothing a
+            // credential answer could change.
+            // `None` = NOT ASKED this tick (nothing queued). Deliberately three-valued rather
+            // than a bool: collapsing "not asked" into "not ready" would fire the announcement
+            // below at an operator whose credentials are perfectly fine, simply because their
+            // upload queue was empty — a false "auto-upload paused" every session.
+            let creds_ready: Option<bool> = if recs.is_empty() {
+                None
+            } else {
+                Some(clublog_credentials_ready(&cl_email, &cl_key))
+            };
+            if clublog_on
+                && creds_ready == Some(false)
+                && !CLUBLOG_NO_CREDS_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
             {
                 conn_log(
                     "ClubLog",
@@ -17249,11 +17292,11 @@ pub fn run() {
                     "auto-upload paused — no ClubLog credentials stored (set them in Settings ▸ Confirmations)",
                 );
             }
-            if creds_ready {
+            if creds_ready == Some(true) {
                 CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
             }
             let clublog_live = clublog_on
-                && creds_ready
+                && creds_ready == Some(true)
                 && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
             let now_unix = now_unix();
             for p in recs {
@@ -17779,6 +17822,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             resolve_entity,
             edit_qso,
             mark_qsl_sent,
+            mark_qsl_card,
             delete_qso,
             purge_log,
             get_awards,
@@ -18254,6 +18298,14 @@ mod tests {
 
     /// A scratch file path unique to this test process (std-only — no tempfile
     /// dependency), cleaned up by the caller.
+    /// A per-test scratch directory.
+    ///
+    /// ⚠️ `name` MUST BE UNIQUE PER TEST. The pid separates concurrent cargo processes, not the
+    /// tests inside one — those run on threads and share it. Two tests on one name write into
+    /// each other's folder, and one of them `remove_dir_all`s it mid-run, so the pair fails
+    /// intermittently and by test ORDER: `--test-threads=1` is green, the ordinary parallel run
+    /// is red one time in several. Exactly that cost a red gate on 2026-08-23, where it read as a
+    /// fresh break in whatever had just been edited.
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("nexus-test-{}-{name}", std::process::id()))
     }
@@ -18420,7 +18472,7 @@ mod tests {
     /// from a bare file and stay zero rather than being invented.
     #[test]
     fn an_image_the_index_never_knew_about_is_adopted() {
-        let dir = scratch("sstv-adopt");
+        let dir = scratch("sstv-adopt-orphan");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let orphan = dir.join("20260717T153000Z_pd120.bmp");
