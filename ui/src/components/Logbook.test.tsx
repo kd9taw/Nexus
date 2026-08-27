@@ -222,3 +222,115 @@ describe('POTA park on logbook edit (#60)', () => {
     expect(record.ota.theirRef).toBe('US-1234')
   })
 })
+
+// OPERATOR REPORT (2026-08-23): "Notes (shared) are not visible in the program... They should
+// also be visible in the Log viewer. I've never found anywhere that 'Private' note show up
+// either."
+//
+// Half right, and this is the half that was wrong. Both fields were WRITE-ONLY in the log
+// table: the row editor took a Comment and multi-line Notes, saved them, and the table showed
+// neither back — so the only way to read a note was to open the row you had no way of knowing
+// held one. (The callsign-recall card DOES surface them, which is the other half of the
+// report; that path has its own tests in RecallPanel.test.tsx.)
+describe('the log table shows the comment and flags a private note', () => {
+  function withNotes(over: { comment?: string | null; notes?: string | null }) {
+    return [{ ...fakeLog(1)[0], ...over }]
+  }
+
+  it('shows the shared comment inline', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+      withNotes({ comment: 'Rag chew about his 6-el yagi' }),
+    )
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-note')).not.toBeNull())
+    expect((container.querySelector('.log-note') as HTMLElement).textContent).toContain(
+      'Rag chew about his 6-el yagi',
+    )
+  })
+
+  it('flags a private note with 📝 and carries the text in the tooltip', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+      withNotes({ comment: null, notes: 'Runs a KX3 at 5W from a sailboat' }),
+    )
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-note-flag')).not.toBeNull())
+    const cell = container.querySelector('.log-note') as HTMLElement
+    // The marker is visible; the multi-line text itself lives in the tooltip, because a
+    // multi-line note in a one-line table cell is how a row height starts fighting the
+    // virtualizer's measurement.
+    expect(cell.textContent).toContain('📝')
+    expect(cell.title).toContain('Runs a KX3 at 5W from a sailboat')
+  })
+
+  it('POSITIVE CONTROL — a row with neither shows no marker and no tooltip', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(
+      withNotes({ comment: null, notes: null }),
+    )
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.log-note')).not.toBeNull())
+    const cell = container.querySelector('.log-note') as HTMLElement
+    expect(container.querySelector('.log-note-flag')).toBeNull()
+    expect(cell.title).toBe('')
+  })
+
+  it('keeps the header and the data rows on the SAME track count', async () => {
+    // The row is a CSS grid with a fixed template; a header cell added without its data cell
+    // (or the reverse) silently shears every column after it. Counting both is the cheap guard
+    // that a rendered-structure test can actually make in jsdom.
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(2))
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+    const head = container.querySelectorAll('.logbook-row.head > .log-cell').length
+    const row = container.querySelectorAll('.logbook-row:not(.head)')[0].querySelectorAll(':scope > .log-cell').length
+    expect(row).toBe(head)
+  })
+})
+
+// #152, REPORTED AGAIN AFTER THE 1.8.0 FIX SHIPPED (rgoiko). The control existed and could not
+// be reached: it was gated on `needsConfirmOnly && !q.qslSent?.sent`.
+//
+// Both halves were wrong. The filter half meant the menu only appeared while the "needs
+// confirmation" chip happened to be on, so an operator working through a stack of cards in the
+// ordinary Logbook found nothing. The sent half is worse — a paper QSL is a ROUND TRIP, so
+// removing the menu the moment a card was marked sent deleted the control for the arrival, and
+// the very card the feature exists to record could never be recorded.
+describe('#152 — recording a QSL card does not depend on a filter, or on not having sent one', () => {
+  // ⚠️ SCOPED TO THIS RENDER'S OWN CONTAINER, not `document`. This file has no afterEach
+  // cleanup, so a document-wide query finds the FIRST Logbook still mounted from an earlier
+  // test — which is exactly how the second case below passed alone and failed in the file,
+  // reading another test's row and reporting the opposite answer.
+  const qsl = (c: HTMLElement) => c.querySelector('select.log-rowbtn') as HTMLSelectElement | null
+  const opts = (c: HTMLElement) => Array.from(qsl(c)?.options ?? []).map((o) => o.value)
+
+  it('is reachable in the ORDINARY logbook, with no filter chip set', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(1))
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+    expect(qsl(container), 'the QSL menu must be on an ordinary row').not.toBeNull()
+    expect(opts(container), 'and it offers the inbound card').toContain('R')
+  })
+
+  it('still offers the arriving card AFTER one has been marked sent — the round trip', async () => {
+    const sent = [{ ...fakeLog(1)[0], qslSent: { sent: true, via: 'B' } }]
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(sent)
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+    expect(qsl(container), 'the menu must survive marking a card sent').not.toBeNull()
+    expect(opts(container), 'the inbound card is still recordable').toContain('R')
+    // …and you still cannot send twice.
+    expect(opts(container), 'the send entries are gone once sent').not.toContain('B')
+  })
+})
+

@@ -80,15 +80,20 @@ On **Windows**, no. Hamlib (for CAT and rotator control) and the WebView2 runtim
 If Windows is missing a USB bridge-chip driver for your rig's interface, the
 first-run wizard detects that and gives you the right download link.
 
-On **Linux and the Raspberry Pi**, CAT uses the system Hamlib instead of a bundled
-copy: the `.deb` pulls `libhamlib-utils` in automatically, and AppImage users run
-`sudo apt install libhamlib-utils` once.
+That is true on **every** platform now — Windows, Linux (`.deb`, AppImage and both
+Pi bases) and macOS all carry Hamlib inside the download. Nothing to install, no
+Homebrew, no apt.
 
-On **macOS**, CAT needs Hamlib's tools from Homebrew: `brew install hamlib` in
-Terminal, then restart Nexus. (Homebrew itself is at [brew.sh](https://brew.sh).)
-WSJT-X or your logger working without it proves only the Hamlib *library* is
-present — Nexus drives the radio through the `rigctld` *program*, a separate
-package those apps don't use.
+Before 1.9.0 only Windows did. Linux leaned on the `.deb`'s `libhamlib-utils`
+dependency and macOS on `brew install hamlib`, which left AppImage users — who
+install nothing by design — with no CAT until they worked out unaided that they
+needed a package nobody had mentioned.
+
+If you ever *do* see Nexus ask for Hamlib, it means its own copy would not start;
+installing the system one (`sudo apt install libhamlib-utils` /
+`brew install hamlib`) is still a valid fallback. Worth knowing either way: WSJT-X
+or your logger working proves only the Hamlib *library* is present — Nexus drives
+the radio through the `rigctld` *program*, a separate package those apps don't use.
 
 ### Will Nexus transmit on its own?
 
@@ -180,16 +185,14 @@ are all useful.
 **Linux ships**, as `Nexus_<version>_pc_amd64.deb` and `Nexus_<version>_amd64.AppImage`,
 and 64-bit **Raspberry Pi OS** on a Pi 3, 4 or 5 gets its own `.deb` per base —
 `Nexus_<version>_pi_arm64_bookworm.deb` and `Nexus_<version>_pi_arm64_trixie.deb`. All
-platforms build from the same tree and ship together every release. CAT on Linux
-uses the system Hamlib rather than a bundled copy; the `.deb` pulls `libhamlib-utils` in
-for you and AppImage users run `sudo apt install libhamlib-utils` once. On a slower Pi,
+platforms build from the same tree and ship together every release. Hamlib is bundled, so CAT
+works out of the box on all three. On a slower Pi,
 **Settings ▸ Digital ▸ Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
 
 **macOS ships too, since 1.5.0**, as `Nexus_<version>_aarch64.dmg` for Apple Silicon
 (M-series, macOS 12 or later) — signed and notarized, so Gatekeeper opens it without a
-warning, and it self-updates like the Windows build. CAT needs Hamlib from Homebrew
-(`brew install hamlib` — see "Do I need to install Hamlib…?" above). Intel Macs are
-source-build only.
+warning, and it self-updates like the Windows build. Hamlib is bundled, so CAT needs nothing
+installed. Intel Macs are source-build only.
 
 ### Will there be automatic updates?
 

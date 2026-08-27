@@ -139,6 +139,18 @@ impl ModeSpec {
     /// to be hoisted back left to align with line 0's content
     /// start). Audit #88 B4.
     #[must_use]
+    /// Roughly how long this mode takes to send one picture, in seconds.
+    ///
+    /// An UPPER BOUND is what callers want and what this is: it exists so a receiver can tell
+    /// a decode that is still coming from one that is never going to arrive, and erring long
+    /// only means waiting a little longer before giving up, while erring short would abandon a
+    /// live picture mid-transmission. `image_lines × line_seconds` overestimates the modes that
+    /// carry two picture lines per transmitted line (the PD family), which is the safe way to
+    /// be wrong.
+    pub fn airtime_seconds(&self) -> f64 {
+        f64::from(self.image_lines) * self.line_seconds
+    }
+
     pub(crate) fn skip_correction_seconds(&self) -> f64 {
         match self.sync_position {
             SyncPosition::LineStart => 0.0,
@@ -878,5 +890,49 @@ mod tests {
             );
             assert!(!spec.name.is_empty(), "{:?}: name empty", spec.mode);
         }
+    }
+
+    #[test]
+    fn airtime_is_a_usable_upper_bound_for_every_mode() {
+        // Every mode the dispatcher knows, listed here rather than iterated: there is no
+        // ALL_MODES const, and a hand list that goes stale is caught by the count assertion.
+        let modes = [
+            SstvMode::Pd90,
+            SstvMode::Pd120,
+            SstvMode::Pd160,
+            SstvMode::Pd180,
+            SstvMode::Pd240,
+            SstvMode::Pd290,
+            SstvMode::Robot24,
+            SstvMode::Robot36,
+            SstvMode::Robot72,
+            SstvMode::Scottie1,
+            SstvMode::Scottie2,
+            SstvMode::ScottieDx,
+            SstvMode::Martin1,
+            SstvMode::Martin2,
+        ];
+        assert_eq!(modes.len(), 14, "a mode was added — cover it here too");
+        for spec in modes.into_iter().map(for_mode) {
+            let t = spec.airtime_seconds();
+            assert!(
+                t > 5.0,
+                "{} airtime {t}s is implausibly short — an abandon deadline built on it \
+                 would kill live decodes",
+                spec.name
+            );
+            assert!(
+                t < 15.0 * 60.0,
+                "{} airtime {t}s is implausibly long",
+                spec.name
+            );
+        }
+        // Scottie 1 is the familiar reference point: ~110 s.
+        let s1 = for_mode(SstvMode::Scottie1);
+        assert!(
+            (100.0..125.0).contains(&s1.airtime_seconds()),
+            "Scottie 1 airtime {} s is off the known ~110 s",
+            s1.airtime_seconds()
+        );
     }
 }

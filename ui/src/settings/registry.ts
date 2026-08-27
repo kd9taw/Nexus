@@ -152,9 +152,16 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   },
   {
     id: 'headphone-monitor',
-    label: 'Headphone monitor',
+    // The ID stays `headphone-monitor` — it is a deep-link target and renaming it breaks links
+    // that already exist. The LABEL is what the operator reads, and "monitor" told them the
+    // opposite of what this does; see the note beside these strings in en.ts.
+    label: 'Receive audio on this computer',
     tab: 'radio',
-    keywords: ['headphones', 'monitor', 'listen', 'sidetone out', 'passthrough'],
+    // 'monitor' stays a KEYWORD even though it left the label: an operator who learned the old
+    // name, or who reasons from the rig's MONI control, must still land here — and landing here is
+    // how they discover it is the receive side. Searching for the wrong word is not a wrong search.
+    keywords: ['headphones', 'monitor', 'listen', 'receive audio', 'rx audio', 'speakers',
+      'sidetone out', 'passthrough'],
   },
   {
     id: 'satellite-doppler',
@@ -182,7 +189,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'radio',
     keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
       'backup', 'restore', 'export settings', 'share rig', 'rigctld address', 'other programs',
-      'foreign ptt', 'wsjt-x share', 'n1mm share'],
+      'foreign ptt', 'wsjt-x share', 'n1mm share',
+      // Reset lives beside Backup because the confirm offers a backup first. Wide on purpose:
+      // this is what an operator searches for in a panic, and none of those words are 'transmit'.
+      'reset', 'factory', 'defaults', 'start over', 'clean slate', 'wipe', 'start again'],
   },
 
   // ---- Modes -------------------------------------------------------------------

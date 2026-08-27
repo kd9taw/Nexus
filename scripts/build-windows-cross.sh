@@ -61,9 +61,28 @@ if [ -f "$FFTW_MINGW_PREFIX/lib/libfftw3f.a" ]; then
 else
   tmp="$(mktemp -d)"
   ( cd "$tmp"
-    url="http://www.fftw.org/fftw-${FFTW_VER}.tar.gz"
+    # ⚠️ HTTPS AND A PINNED HASH, because of WHERE this runs. The `make` two lines below
+    # executes whatever this tarball contains, and in release.yml it does so inside the same
+    # step that holds TAURI_SIGNING_PRIVATE_KEY and CLUBLOG_API_KEY — and four lines later that
+    # same step runs `cargo tauri build --bundles nsis`. A tampered tarball therefore does not
+    # just run on a runner: it gets statically linked into Nexus.exe and then legitimately
+    # SIGNED and published, and "Verify installer" only checks a size floor. This used to be
+    # plain `http://` with nothing to compare the bytes against, so an on-path attacker, a DNS
+    # spoof, or a compromise of one academic web host was enough.
+    #
+    # The hash was confirmed against a SECOND party rather than just recomputed from what the
+    # site served: Gentoo's sci-libs/fftw Manifest publishes size 4144100 and a SHA512 for
+    # 3.3.10, and both match these bytes. Pinning a hash you only got from the host you are
+    # trying not to trust proves nothing.
+    #
+    # Bump procedure: change FFTW_VER, download over HTTPS, verify the new bytes against an
+    # independent packager (Gentoo's Manifest, Homebrew's formula), THEN update this line.
+    url="https://www.fftw.org/fftw-${FFTW_VER}.tar.gz"
+    fftw_sha256=56c932549852cddcfafdab3820b0200c7742675be92179e59e6215b340e26467
     (command -v curl >/dev/null && curl -fsSL -o fftw.tgz "$url") || wget -qO fftw.tgz "$url" \
       || die "could not download $url"
+    echo "$fftw_sha256  fftw.tgz" | sha256sum -c - \
+      || die "FFTW checksum mismatch — refusing to build. Someone changed the bytes at $url."
     tar xf fftw.tgz && cd "fftw-${FFTW_VER}"
     ./configure --host=x86_64-w64-mingw32 --enable-float --enable-static \
       --disable-shared --prefix="$FFTW_MINGW_PREFIX" >/dev/null

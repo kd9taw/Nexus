@@ -157,9 +157,33 @@ export interface QsoContext {
   dxcall: string | null
 }
 
-/** Engaged = the sequencer is mid-CQ-run or mid-QSO (not just monitoring). */
+/**
+ * Engaged = the sequencer is MID-QSO. Calling CQ is not mid-QSO, and the difference is the
+ * whole point of this function.
+ *
+ * ⚠️ `CallingCq` COUNTED AS ENGAGED UNTIL 2026-08-22, which silenced the one alert an operator
+ * calling CQ is actually waiting for: `mycall` is gated on `!engaged`, so a station answering
+ * YOU raised no beep at all. Reported by a new operator whose other alerts all worked ("the
+ * other alerts like new DXCC work fine") — the tell that audio was fine and this single path
+ * was gated off. WSJT-X alerts here, and an operator running CQ with Auto OFF has nothing else
+ * to tell them somebody replied.
+ *
+ * The guard is still right for a QSO in progress — that was the chatty-popup fix, and `mycall`
+ * dedups per DECODE, so without it every message of an exchange would beep. Nothing is lost by
+ * exempting CallingCq: the moment somebody answers, the sequencer leaves CallingCq for
+ * AwaitReport (or the Field Day equivalent) and the rest of the exchange is suppressed exactly
+ * as before. So the alert fires on the ANSWER and then goes quiet.
+ *
+ * The engine draws the same line: `qso.rs` scores `State::Listening | State::CallingCq => 0`
+ * exchanges completed, grouping the two precisely as here.
+ */
 function engagedInQso(ctx?: QsoContext): boolean {
-  return !!ctx?.state && ctx.state !== 'Listening' && ctx.state !== 'Done'
+  return (
+    !!ctx?.state &&
+    ctx.state !== 'Listening' &&
+    ctx.state !== 'CallingCq' &&
+    ctx.state !== 'Done'
+  )
 }
 
 /** Per-alert band scope: which bands an alert type may fire on. 'vhf' = 6 m and up

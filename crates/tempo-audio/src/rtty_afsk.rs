@@ -52,16 +52,19 @@ pub const EDGE_RAMP_S: f64 = 0.002;
 /// AFSK generator settings. `Default` is the on-air standard: 2125/2295 Hz, 45.45 baud,
 /// 12 kHz mono, LSB convention.
 #[derive(Debug, Clone)]
+/// ⚠️ REVERSE IS NOT APPLIED IN THIS STRUCT, and there is deliberately no field for it.
+///
+/// `mark_hz`/`space_hz` arrive ALREADY in the operator's sense. The one place reverse is applied
+/// is `tempo_core::rtty::tone_pair`, which RX and the cockpit's waterfall cursors also call — so
+/// all three agree by construction. This config used to carry a `reverse` flag and swap AGAIN in
+/// both render paths; two swaps cancel, so through 1.9.0 reverse silently did NOTHING on
+/// transmit while RX honoured it, and a reversed rig decoded correctly then answered in the
+/// wrong sense. The field is removed rather than left unread, so it cannot be rewired.
 pub struct AfskConfig {
     pub mark_hz: f32,
     pub space_hz: f32,
     pub baud: f64,
     pub sample_rate: u32,
-    /// Swap which tone the mark/space bits key. The standard convention is LSB with
-    /// mark on 2125 Hz (lower audio → higher RF); a rig run in USB/DATA-U (e.g.
-    /// IC-9700) flips the sideband, so set `reverse` there to keep the RF mark/space
-    /// sense correct.
-    pub reverse: bool,
 }
 
 impl Default for AfskConfig {
@@ -71,7 +74,6 @@ impl Default for AfskConfig {
             space_hz: SPACE_HZ,
             baud: BAUD_45,
             sample_rate: 12_000,
-            reverse: false,
         }
     }
 }
@@ -133,11 +135,13 @@ pub fn afsk_samples(levels: &[(bool, f64)], cfg: &AfskConfig) -> Vec<f32> {
     // Pass 2: dual continuous NCOs + raised-cosine cross-fade at edges. `w_lin` walks
     // linearly toward the current bit's tone; the raised-cosine of it weights the mark
     // oscillator (space gets the complement, so the summed amplitude never exceeds 1).
-    let (f_mark, f_space) = if cfg.reverse {
-        (cfg.space_hz as f64, cfg.mark_hz as f64)
-    } else {
-        (cfg.mark_hz as f64, cfg.space_hz as f64)
-    };
+    // ⚠️ NO SWAP HERE. `cfg.mark_hz`/`cfg.space_hz` arrive ALREADY in the operator's sense —
+    // both TX sites build them with `tempo_core::rtty::tone_pair(centre, shift, reverse)`, which
+    // is the one place reverse is applied. Swapping again here applied it TWICE, and two swaps
+    // cancel: reverse silently did nothing on transmit through 1.9.0, while RX (which calls
+    // `tone_pair` once) honoured it — so a reversed rig decoded correctly and answered in the
+    // wrong sense. Bites USB-data rigs; the reverse setting's own doc names the IC-9700.
+    let (f_mark, f_space) = (cfg.mark_hz as f64, cfg.space_hz as f64);
     let dm = TAU * f_mark / fs;
     let ds = TAU * f_space / fs;
     let ramp_n = ((fs * EDGE_RAMP_S) as usize).max(1);
@@ -260,11 +264,10 @@ impl AfskStream {
 
         // Pass 2: the same dual-NCO cross-fade, reading and writing the carried
         // oscillator state instead of locals.
-        let (f_mark, f_space) = if self.cfg.reverse {
-            (self.cfg.space_hz as f64, self.cfg.mark_hz as f64)
-        } else {
-            (self.cfg.mark_hz as f64, self.cfg.space_hz as f64)
-        };
+        // No swap — see the one-shot path above. The pair arrives already in the operator's
+        // sense from `tone_pair`; this is the reader that actually keys on air, and it was
+        // double-applying reverse right alongside the other one.
+        let (f_mark, f_space) = (self.cfg.mark_hz as f64, self.cfg.space_hz as f64);
         let dm = TAU * f_mark / fs;
         let ds = TAU * f_space / fs;
         let ramp_n = ((fs * EDGE_RAMP_S) as usize).max(1);
@@ -347,16 +350,37 @@ mod tests {
         assert!((measured_hz(&space, 12000.0) - 2295.0).abs() < 5.0);
     }
 
+    /// The modulator emits the pair IT WAS GIVEN, in order — it does not reverse anything.
+    ///
+    /// This test used to set a `reverse` flag on the config and assert the modulator swapped.
+    /// That contract conflicted with `tone_pair`, which the callers (and RX, and the waterfall
+    /// cursors) already use to apply reverse — so reverse was applied twice on transmit and
+    /// cancelled. Now there is one convention: whoever builds the pair decides the sense, and
+    /// this renders it faithfully. A REVERSED pair is therefore just a pair whose mark is the
+    /// higher tone.
     #[test]
-    fn reverse_swaps_tones_for_usb_operation() {
-        let cfg = AfskConfig {
-            reverse: true,
-            ..AfskConfig::default()
-        };
+    fn the_modulator_renders_the_pair_it_was_given_without_reversing_it() {
+        // Normal sense.
+        let cfg = AfskConfig::default();
         let mark = afsk_samples(&[(true, 400.0)], &cfg);
         let space = afsk_samples(&[(false, 400.0)], &cfg);
-        assert!((measured_hz(&mark, 12000.0) - 2295.0).abs() < 5.0);
-        assert!((measured_hz(&space, 12000.0) - 2125.0).abs() < 5.0);
+        assert!((measured_hz(&mark, 12000.0) - 2125.0).abs() < 5.0);
+        assert!((measured_hz(&space, 12000.0) - 2295.0).abs() < 5.0);
+
+        // The REVERSED pair, exactly as `tone_pair(2210, 170, true)` returns it: mark is the
+        // higher tone. The modulator must key it that way round and not "helpfully" swap back.
+        let rev = AfskConfig {
+            mark_hz: 2295.0,
+            space_hz: 2125.0,
+            ..AfskConfig::default()
+        };
+        let rmark = afsk_samples(&[(true, 400.0)], &rev);
+        let rspace = afsk_samples(&[(false, 400.0)], &rev);
+        assert!(
+            (measured_hz(&rmark, 12000.0) - 2295.0).abs() < 5.0,
+            "a reversed pair must key mark HIGH — a second swap here is the 1.9.0 bug"
+        );
+        assert!((measured_hz(&rspace, 12000.0) - 2125.0).abs() < 5.0);
     }
 
     /// Render `chars` one character per call and concatenate — the naive way to

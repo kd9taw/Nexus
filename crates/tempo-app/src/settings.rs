@@ -786,6 +786,20 @@ pub struct Settings {
     /// [`RadioProfile::icom_native_cat`]). Default off.
     #[serde(default)]
     pub icom_native_cat: bool,
+    /// Follow the radio's OWN split, rather than only a split Nexus set. Default OFF.
+    ///
+    /// Only meaningful on a rig whose capability dump says it can report both split state and
+    /// the split TX frequency NATIVELY, with frequency targetable
+    /// (`baud_ladder::SplitDetect::Native`). On anything else Nexus would have to move the radio
+    /// to answer the question, so the setting is not offered and this flag has no effect — the
+    /// gate never consults a reading it was told is emulated.
+    ///
+    /// ⚠️ NEEDS BENCH. Class-wide CAT behaviour; ships OFF so nothing changes for anyone who
+    /// does not choose it, and wants a real radio in front of someone before it is called
+    /// working — in particular the question no source answers: does a rig report a split set
+    /// from its FRONT PANEL, as opposed to one set over CAT?
+    #[serde(default)]
+    pub split_detect_enabled: bool,
     /// Which Icom DATA mode the active radio uses (flat mirror — see
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
@@ -1259,6 +1273,22 @@ pub struct Settings {
     pub max_power_cw: Option<f32>,
     #[serde(default)]
     pub max_power_digital: Option<f32>,
+    /// AM's ceiling, as a fraction of the rig's max. AM rides `OperatingMode::Phone`, so without
+    /// this it took the SSB cap — and AM is not SSB.
+    ///
+    /// ⚠️ A RIG MAKING 100 W PEP ON SSB MAKES ABOUT 25 W OF CARRIER ON AM, because AM's power is
+    /// in a carrier that is always there plus two sidebands, and PEP is reached on modulation
+    /// peaks. Run the SSB drive into AM and the peaks flat-top. Most rigs' manuals say a quarter,
+    /// which is where the 0.25 default comes from — it is a starting point, not a rule, and any
+    /// operator who knows their rig can raise it.
+    ///
+    /// Applied as the LOWER of this and the phone cap (see [`Settings::rf_power_ceiling`]), never
+    /// on its own: an operator who set AM above phone must not have AM lift their power past what
+    /// the phone cap allows. That min-shape is the same one `rf_power_ceiling_high_duty` uses for
+    /// SSTV, and for the same reason — it can only ever LOWER power, which is what makes it safe
+    /// without a bench.
+    #[serde(default = "default_max_power_am")]
+    pub max_power_am: Option<f32>,
     /// Path-prediction engine: "heuristic" (physics-lite, the default) or
     /// "p533" (the native ITU-R P.533 engine). Unknown values fall back to
     /// the heuristic in the factory, so old configs can never break.
@@ -1327,16 +1357,44 @@ pub struct Settings {
     /// of the combined `RR73`. Off by default (RR73 — modern FT8 practice).
     #[serde(default)]
     pub prefer_rrr: bool,
-    /// Stop a CQ run after this many unanswered calls. `None` (default) = stock
-    /// WSJT-X behavior: CQ repeats indefinitely, the Tx watchdog is the backstop.
-    /// The earlier always-on 6-call cap is preserved as this opt-in.
-    #[serde(default)]
+    /// Stop a CQ run after this many unanswered calls, then wait [`Self::cq_pause_secs`]
+    /// and start again. `Some(8)` by default (operator ruling); `None` = stock WSJT-X,
+    /// which repeats CQ indefinitely with only the Tx watchdog as a backstop.
+    ///
+    /// ⚠️ A DELIBERATE DIVERGENCE FROM WSJT-X, and it is worth saying because an operator
+    /// running both will see the difference and read it as a fault. WSJT-X calls CQ until
+    /// something stops it; Nexus calls eight times, breathes, and calls again. The reason is
+    /// band courtesy — an unanswered run holds a frequency other people could be using — and
+    /// it costs nothing, because the pause still ANSWERS anyone who calls: only the outgoing
+    /// CQ is withheld, never the sequencer's ability to reply.
+    ///
+    /// Counting is per-STEP, so it never bites a working run: `tx_count` resets the moment a
+    /// QSO advances, which is why "if stations keep calling back, it keeps working them" is
+    /// the behaviour rather than a special case.
+    #[serde(default = "default_cq_max_calls")]
     pub cq_max_calls: Option<u32>,
-    /// Stop calling a specific station after this many unanswered overs of a directed
-    /// in-QSO step (AwaitReport/Roger/Rr73) — prevents endless recalling a station that
-    /// went silent in FT8/FT4 S&P. `Some(8)` by default (operator preference); `None`
-    /// = stock WSJT-X (repeat until answered, only the Tx watchdog stops it). Distinct
-    /// from `cq_max_calls`, which governs a CQ run.
+    /// How long to wait after a CQ run hits [`Self::cq_max_calls`] before calling again,
+    /// in seconds. 180 (three minutes) by default; `Some(0)` or `None` means do not resume —
+    /// the run simply stops, which is what happened before this setting existed.
+    ///
+    /// The pause is a TRANSMIT pause only. The sequencer stays in `CallingCq` and keeps
+    /// listening, so a station that answers during it is worked normally — a pause that made
+    /// the operator deaf would defeat the point of running CQ at all.
+    #[serde(default = "default_cq_pause_secs")]
+    pub cq_pause_secs: Option<u32>,
+    /// Stop calling a station that ANSWERED you and then went silent, after this many
+    /// unanswered overs of the exchange (AwaitRoger/AwaitRr73) — the club station that
+    /// works three people at once and drops you mid-contact. `Some(8)` by default
+    /// (operator preference); `None` = stock WSJT-X (repeat until answered, only the Tx
+    /// watchdog stops it). Distinct from `cq_max_calls`, which governs a CQ run.
+    ///
+    /// ⚠️ IT DOES NOT APPLY WHILE YOU ARE CALLING SOMEBODY WHO HAS NOT COME BACK
+    /// (operator ruling 2026-08-23: "make it not apply to a station I picked
+    /// deliberately"). It used to cover `AwaitReport` as well, which per
+    /// `Station::start` is only ever reached BEFORE the DX has addressed you — so eight
+    /// calls into a DXpedition pileup and Nexus went quiet, which is the whole of DX
+    /// chasing governed by a setting written for the opposite case. The Tx watchdog is
+    /// what bounds a call nobody answers, exactly as upstream.
     #[serde(default = "default_directed_max_calls")]
     pub directed_max_calls: Option<u32>,
     /// Tempo chat: max transmit cycles per directed message before it goes terminal
@@ -1806,6 +1864,23 @@ fn default_tune_timeout() -> u32 {
 
 fn default_directed_max_calls() -> Option<u32> {
     Some(8)
+}
+
+/// Eight unanswered CQs before a breather (operator ruling). Enough to be heard through a
+/// fade, short enough not to hold a frequency for a quarter of an hour.
+/// A quarter of the rig's maximum — what most manuals say for AM, because the carrier is always
+/// there and the peaks are what flat-top. A starting point an operator can raise.
+fn default_max_power_am() -> Option<f32> {
+    Some(0.25)
+}
+
+fn default_cq_max_calls() -> Option<u32> {
+    Some(8)
+}
+
+/// Three minutes off the air after an unanswered run, then call again.
+fn default_cq_pause_secs() -> Option<u32> {
+    Some(180)
 }
 
 /// A G-5500's own resolution is about this; below it a command is noise rather
@@ -2764,6 +2839,7 @@ impl Default for Settings {
             rig_addr: String::new(),
             omnirig_slot: 1,
             icom_native_cat: false,
+            split_detect_enabled: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
@@ -2892,6 +2968,7 @@ impl Default for Settings {
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,
+            max_power_am: default_max_power_am(),
             prop_engine: default_prop_engine(),
             save_wav: default_save_wav(),
             lotw_max_age_days: default_lotw_max_age_days(),
@@ -2908,7 +2985,12 @@ impl Default for Settings {
             prompt_to_log: false,
             save_qso_wav: false,
             prefer_rrr: false,
-            cq_max_calls: None,
+            // Both of these MUST match their serde defaults above. A struct default that
+            // disagrees with the serde one means a fresh install and a settings.json missing
+            // the field behave differently — the same operator, two answers, and no way to
+            // tell which they got.
+            cq_max_calls: default_cq_max_calls(),
+            cq_pause_secs: default_cq_pause_secs(),
             directed_max_calls: Some(8),
             chat_max_cycles: None,
             chat_implicit_ack: true,
@@ -3782,6 +3864,23 @@ impl Settings {
             .map(|c| c.clamp(0.0, 1.0))
             .unwrap_or(1.0);
         digital.min(self.rf_power_ceiling())
+    }
+
+    /// The ceiling for an AM transmission, whatever the phone cap says.
+    ///
+    /// ⚠️ AM IS NOT SSB, AND THE SSB CAP LETS IT FLAT-TOP. A rig making 100 W PEP on SSB makes
+    /// about 25 W of carrier on AM: the power is in a carrier that is always present plus two
+    /// sidebands, and PEP is reached on modulation peaks. Run the SSB drive into AM and the peaks
+    /// clip. Most manuals say a quarter, which is the [`default_max_power_am`] default.
+    ///
+    /// The LOWER of the AM cap and the selected mode's own cap, never the AM one alone — an
+    /// operator who set AM above phone must not have AM lift their power past what the phone cap
+    /// allows. Identical in shape to [`Self::rf_power_ceiling_high_duty`], and for the identical
+    /// reason: enforcement here may only ever LOWER power, which is what makes it safe to apply
+    /// without bench proof.
+    pub fn rf_power_ceiling_am(&self) -> f32 {
+        let am = self.max_power_am.map(|c| c.clamp(0.0, 1.0)).unwrap_or(1.0);
+        am.min(self.rf_power_ceiling())
     }
 
     pub fn rig_mode(&self) -> String {
@@ -6824,5 +6923,106 @@ mod tests {
             s.ai_cw_active(),
             "a fresh install keeps its shipped AI CW decoder"
         );
+    }
+}
+
+#[cfg(test)]
+mod cq_pause_wire_tests {
+    use super::*;
+
+    /// The UI reads `cqPauseSecs`; the Rust field is `cq_pause_secs`. That only lines up because
+    /// of the container's rename_all, and a mismatch here is invisible in both languages — the
+    /// setting silently reverts to its default on every save, which is exactly the shape of bug
+    /// the settings-plumbing notes warn about. So the WIRE NAME is asserted, not assumed.
+    #[test]
+    fn the_auto_cq_settings_use_the_names_the_ui_sends() {
+        let json = serde_json::to_value(Settings::default()).expect("serialises");
+        assert!(
+            json.get("cqPauseSecs").is_some(),
+            "cqPauseSecs must be on the wire"
+        );
+        assert!(
+            json.get("cqMaxCalls").is_some(),
+            "cqMaxCalls must be on the wire"
+        );
+        assert!(
+            json.get("cq_pause_secs").is_none(),
+            "snake_case on the wire would mean the UI never sees it"
+        );
+    }
+
+    /// The operator's ruling: eight CQs, then three minutes. Defaults are the whole feature for
+    /// anyone who never opens Settings, which is most people.
+    #[test]
+    fn the_defaults_are_eight_calls_and_three_minutes() {
+        let d = Settings::default();
+        assert_eq!(d.cq_max_calls, Some(8));
+        assert_eq!(d.cq_pause_secs, Some(180));
+        // And a settings.json written before these existed must load with the same values —
+        // otherwise an upgrading operator gets different behaviour from a fresh install.
+        let old: Settings = serde_json::from_str("{}").expect("an empty settings file loads");
+        assert_eq!(
+            old.cq_max_calls,
+            Some(8),
+            "serde default must match the struct default"
+        );
+        assert_eq!(old.cq_pause_secs, Some(180));
+    }
+}
+
+#[cfg(test)]
+mod am_power_tests {
+    use super::*;
+
+    /// AM'S CAP MAY ONLY EVER LOWER POWER. That property is the whole reason this can ship
+    /// without a rig on the bench, exactly as `rf_power_ceiling_high_duty` did for SSTV.
+    ///
+    /// Why it needs a cap at all: a rig making 100 W PEP on SSB makes about 25 W of carrier on
+    /// AM. The power sits in a carrier that is always present plus two sidebands, and PEP is
+    /// reached on modulation peaks — so the SSB drive clips the peaks.
+    #[test]
+    fn am_lowers_the_phone_ceiling_and_never_lifts_it() {
+        let mut s = Settings {
+            operating_mode: OperatingMode::Phone,
+            // Default: a quarter, and below an uncapped phone.
+            max_power_phone: None,
+            ..Default::default()
+        };
+        assert_eq!(s.rf_power_ceiling(), 1.0, "phone uncapped");
+        assert_eq!(s.rf_power_ceiling_am(), 0.25, "AM still capped");
+
+        // An operator who set AM ABOVE phone must not have AM lift them past the phone cap.
+        s.max_power_phone = Some(0.30);
+        s.max_power_am = Some(0.90);
+        assert_eq!(
+            s.rf_power_ceiling_am(),
+            0.30,
+            "the LOWER of the two, always"
+        );
+
+        // And the ordinary case: AM below phone.
+        s.max_power_am = Some(0.20);
+        assert_eq!(s.rf_power_ceiling_am(), 0.20);
+    }
+
+    /// An operator who deliberately clears the AM cap gets the phone cap — not 1.0, and not a
+    /// silent re-imposition of the default.
+    #[test]
+    fn clearing_the_am_cap_falls_back_to_phone_not_to_full_power() {
+        let s = Settings {
+            operating_mode: OperatingMode::Phone,
+            max_power_am: None,
+            max_power_phone: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(s.rf_power_ceiling_am(), 0.5);
+    }
+
+    /// A settings.json written before AM existed must load with the cap ON. An upgrading
+    /// operator is exactly the person who has never thought about AM drive.
+    #[test]
+    fn an_old_settings_file_gains_the_am_cap() {
+        let old: Settings = serde_json::from_str("{}").expect("empty settings loads");
+        assert_eq!(old.max_power_am, Some(0.25));
     }
 }

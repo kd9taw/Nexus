@@ -655,21 +655,29 @@ impl Station {
     /// must be withheld. Two independent budgets, each governing its own state(s):
     /// `cq_call_cap` caps a CQ run (CallingCq only; `None` = stock indefinite), and
     /// `call_cap` caps a directed in-QSO step the partner has stopped advancing
-    /// (AwaitReport/AwaitRoger/AwaitRr73/Confirming; the engine defaults it to Some(8)
-    /// so a station that goes silent stops being called). A normal QSO never trips
-    /// `call_cap` because each step advances (resetting tx_count) within a few overs;
-    /// only a stuck/unanswered step accumulates to the cap. Listening/Done never send.
+    /// (AwaitRoger/AwaitRr73; the engine defaults it to Some(8) so a station that ANSWERED
+    /// and then went silent stops being called). A normal QSO never trips `call_cap`
+    /// because each step advances (resetting tx_count) within a few overs; only a stuck
+    /// step accumulates to the cap. Listening/Done never send.
+    ///
+    /// ⚠️ `AwaitReport` IS DELIBERATELY NOT CAPPED (operator ruling 2026-08-23: "make it not
+    /// apply to a station I picked deliberately"). Per [`Station::start`]'s table that state
+    /// is only ever reached when the DX has NOT addressed us yet — any reply starts us
+    /// further along (Grid → AwaitRoger, Report → AwaitRr73, RReport → Confirming). So
+    /// capping it governed the one case the setting was never written for: the operator
+    /// calling somebody who has not come back, which is the whole of DX chasing. It stopped
+    /// a real pileup call at eight overs and went silent (RI1FJL, 2026-08-23) where stock
+    /// WSJT-X repeats until answered. The Tx watchdog still bounds it, as it does upstream.
     fn tx_capped(&self) -> bool {
         match self.state {
             State::CallingCq => self.cq_call_cap.is_some_and(|cap| self.tx_count >= cap),
-            // The establishing steps of a directed QSO — calling a station and waiting for
-            // it to advance the exchange. Confirming is excluded: by then the QSO is made
-            // and auto-logged, so it is not "calling someone" (matches the engine's own
-            // abandon-stalled state set).
-            State::AwaitReport | State::AwaitRoger | State::AwaitRr73 => {
+            // A partner that engaged and then stopped advancing. Confirming is excluded: by
+            // then the QSO is made and auto-logged, so it is not "calling someone" (matches
+            // the engine's own abandon-stalled state set).
+            State::AwaitRoger | State::AwaitRr73 => {
                 self.call_cap.is_some_and(|cap| self.tx_count >= cap)
             }
-            State::Confirming | State::Listening | State::Done => false,
+            State::AwaitReport | State::Confirming | State::Listening | State::Done => false,
         }
     }
 
@@ -684,6 +692,30 @@ impl Station {
         self.pending
             .clone()
             .map(|m| (self.hashed_form(m), self.rv_count))
+    }
+
+    /// Begin the CQ run again after a pause, by forgetting the calls already made.
+    ///
+    /// A CQ run that hits `cq_call_cap` goes quiet. Nexus waits (the engine owns that clock,
+    /// `Settings::cq_pause_secs`) and then calls this to start calling again — eight CQs, a
+    /// breather, eight more, which is band courtesy rather than holding a frequency until
+    /// something answers.
+    ///
+    /// ⚠️ ONLY IN `CallingCq`, and that restriction is the safety of it. `tx_count` is what
+    /// stops a DIRECTED step being re-sent forever at a station that has gone silent; clearing
+    /// it in `AwaitReport`/`AwaitRoger`/`AwaitRr73` would hand back a budget the operator's
+    /// `directed_max_calls` deliberately spent, and Nexus would call a dead station until the
+    /// watchdog noticed. Returns false when the state is anything else, so a caller that gets
+    /// its condition wrong is a no-op rather than a transmit bug.
+    ///
+    /// Nothing else is touched: not the state, not the pending message, not the partner. The
+    /// run resumes; it does not restart from a different place.
+    pub fn resume_cq_run(&mut self) -> bool {
+        if self.state != State::CallingCq {
+            return false;
+        }
+        self.tx_count = 0;
+        true
     }
 
     /// True when the current step has hit its transmission budget without the partner
@@ -763,7 +795,10 @@ impl Station {
     pub fn observe(&mut self, decodes: &[Decode]) {
         let state_before = self.state;
         for d in decodes {
-            let m = Msg::parse(&d.message);
+            // Resolve a HASHED sender here, once, rather than in each arm: every reply below
+            // is built as `to: de.clone()` from the message it answers, so an unresolved
+            // bracket form would be echoed straight back onto the air (see Msg::unhashed).
+            let m = Msg::parse(&d.message).unhashed();
             let rpt = d.snr.clamp(-30, 49);
             match (self.state, &m) {
                 // NOTE: there is intentionally NO (Listening, Cq) auto-answer arm.
@@ -774,6 +809,10 @@ impl Station {
                 (State::CallingCq, Msg::Grid { to, de, grid })
                     if crate::message::same_call(to, &self.mycall) =>
                 {
+                    // `de` is already unhashed: `observe` runs every parsed message through
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
+                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
+                    // be laundered into one).
                     self.dxcall = Some(de.clone());
                     if !grid.is_empty() {
                         self.dxgrid = Some(grid.clone()); // i3=4 calls carry no grid
@@ -953,6 +992,10 @@ impl Station {
                 (State::CallingCq, Msg::Report { to, de, snr })
                     if crate::message::same_call(to, &self.mycall) =>
                 {
+                    // `de` is already unhashed: `observe` runs every parsed message through
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
+                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
+                    // be laundered into one).
                     self.dxcall = Some(de.clone());
                     self.rx_report = Some(*snr);
                     self.pending = Some(Msg::RReport {
@@ -1004,6 +1047,10 @@ impl Station {
                 (State::AwaitReport, Msg::Grid { to, de, grid })
                     if crate::message::same_call(to, &self.mycall) && self.from_dx(de) =>
                 {
+                    // `de` is already unhashed: `observe` runs every parsed message through
+                    // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` and an
+                    // UNRESOLVED `<...>` arrives untouched (it is not a callsign and must not
+                    // be laundered into one).
                     self.dxcall.get_or_insert_with(|| de.clone());
                     if !grid.is_empty() {
                         self.dxgrid = Some(grid.clone());
@@ -1549,6 +1596,139 @@ mod start_context_tests {
         }
     }
 
+    /// FIELD REPORT 2026-08-23 (KD9TAW working RI1FJL, a Franz Josef Land DXpedition running
+    /// multi-answering): Nexus transmitted `<RI1FJL> KD9TAW EN52` for two overs — the DX's call
+    /// in its i3=4 HASHED form, inside our own outgoing message.
+    ///
+    /// A station answering several callers at once sends its own call hashed to make room
+    /// (WSJT-X's Fox does it explicitly: `fox_tx.f90` formats `CALL RR73; CALL <FOXCALL> rpt`,
+    /// and MSHV's multi-answering has the same pressure on message bits). Matching already
+    /// copes — `base_call` strips the brackets, so the sequencer correctly recognises the
+    /// sender — but the raw token was STORED as `dxcall` and every message built from it then
+    /// rendered the brackets onto the air.
+    ///
+    /// That is wrong on the air and not what WSJT-X sends: the hashed form is a bit-saving
+    /// encoding of a call the receiver is expected to have already, not a way to address
+    /// somebody. `unhash_call` exists for exactly this and is documented for it; the adoption
+    /// sites simply were not using it.
+    #[test]
+    fn a_hashed_sender_is_never_adopted_as_the_dx_call() {
+        // The DX answers our CQ with its call hashed.
+        let mut s = Station::calling_cq(ME, MY_GRID);
+        s.observe(&[dec("KD9TAW <W9XYZ> EN37", -5)]);
+        assert_eq!(
+            s.dxcall.as_deref(),
+            Some("W9XYZ"),
+            "the brackets are an encoding, not part of the callsign"
+        );
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("W9XYZ KD9TAW -05"),
+            "and they must never reach the air"
+        );
+
+        // Same via a REPORT rather than a grid — the other unconditional adoption site.
+        let mut r = Station::calling_cq(ME, MY_GRID);
+        r.observe(&[dec("KD9TAW <W9XYZ> -12", -8)]);
+        assert_eq!(r.dxcall.as_deref(), Some("W9XYZ"));
+        assert!(
+            !r.pending_text().unwrap_or_default().contains('<'),
+            "no hashed token in an outgoing message, got {:?}",
+            r.pending_text()
+        );
+
+        // CONTROL: a plain call is untouched — this must not be mangling ordinary calls.
+        let mut p = Station::calling_cq(ME, MY_GRID);
+        p.observe(&[dec("KD9TAW W9XYZ EN37", -5)]);
+        assert_eq!(p.dxcall.as_deref(), Some("W9XYZ"));
+    }
+
+    /// The control that keeps the unhashing honest: an UNRESOLVED hash is not a callsign.
+    ///
+    /// `<...>` is what a decoder prints when it has not yet heard the full call. Stripping its
+    /// brackets would hand the sequencer the literal `...` as a station to work and to log.
+    #[test]
+    fn an_unresolved_hash_is_not_turned_into_a_callsign() {
+        assert_eq!(crate::message::resolve_hashed("<...>"), "<...>");
+        assert_eq!(
+            crate::message::resolve_hashed("<W9XYZ>"),
+            "W9XYZ",
+            "control: a real one IS resolved"
+        );
+        // ⚠️ ISSUE #84's RULE, and the one this change nearly broke: a COMPOUND call is hashed
+        // because it does not fit an ordinary frame. Unwrapping it would build a message the
+        // protocol cannot carry, so the brackets stay all the way to the air. (The LOG strips
+        // them separately, at the record boundary — a different question about the same token.)
+        assert_eq!(crate::message::resolve_hashed("<KH8/W1AW>"), "<KH8/W1AW>");
+        assert_eq!(crate::message::resolve_hashed("<PJ4/K1ABC>"), "<PJ4/K1ABC>");
+
+        let mut s = Station::calling_cq(ME, MY_GRID);
+        s.observe(&[dec("KD9TAW <...> EN37", -5)]);
+        assert_ne!(
+            s.dxcall.as_deref(),
+            Some("..."),
+            "an unknown station must never be adopted as the literal ellipsis"
+        );
+        // It stays visibly unresolved rather than becoming a plausible-looking call — which is
+        // the pre-existing behaviour, and the right one: nothing downstream can mistake it.
+        assert_eq!(s.dxcall.as_deref(), Some("<...>"));
+    }
+
+    /// FIELD REPORT 2026-08-23: calling RI1FJL, a Franz Josef Land DXpedition working a pileup.
+    /// Nexus sent `RI1FJL KD9TAW EN52` eight times, then went silent for three and a half
+    /// minutes until the operator re-armed it by hand. Eight calls into a pileup is nothing.
+    ///
+    /// `call_cap` exists for a real problem — a station that ANSWERED you and then went quiet
+    /// should not be recalled forever — and its own documentation says so: "a directed in-QSO
+    /// step the partner has stopped advancing". The fault was that it also covered
+    /// `AwaitReport`, and per `Station::start`'s own table that state is only ever reached
+    /// when the DX has NOT addressed us yet: a reply of any kind starts us further along
+    /// (Grid -> AwaitRoger, Report -> AwaitRr73, RReport -> Confirming). So the cap was
+    /// governing exactly the case it was not written for — the operator deliberately calling
+    /// somebody who has never come back — which is the whole of DX chasing.
+    ///
+    /// Operator ruling 2026-08-23: "make it not apply to a station I picked deliberately."
+    #[test]
+    fn a_station_i_picked_is_called_for_as_long_as_i_want() {
+        let mut s = Station::answering(ME, MY_GRID, DX);
+        s.call_cap = Some(8);
+        assert_eq!(
+            s.state,
+            State::AwaitReport,
+            "control: this is the calling state"
+        );
+
+        // Well past the cap, with nothing ever heard back.
+        for over in 1..=25 {
+            assert!(
+                s.outgoing_rv().is_some(),
+                "call {over} was withheld — a pileup takes as long as it takes"
+            );
+            s.after_tx();
+        }
+    }
+
+    /// The other half, which is what `call_cap` is actually for: a station that engaged and
+    /// then went quiet mid-exchange DOES stop being called, so a CQ run can move on.
+    #[test]
+    fn a_station_that_answered_then_vanished_still_stops_being_called() {
+        let mut s = Station::answering(ME, MY_GRID, DX);
+        s.call_cap = Some(8);
+        // They come back with a report — now we are mid-exchange, not calling into a pileup.
+        s.observe(&[dec("KD9TAW W9XYZ -12", -8)]);
+        assert_eq!(s.state, State::AwaitRr73, "control: the DX engaged us");
+
+        for _ in 0..8 {
+            assert!(s.outgoing_rv().is_some());
+            s.after_tx();
+        }
+        assert!(
+            s.outgoing_rv().is_none(),
+            "a partner that stopped advancing is abandoned, exactly as before"
+        );
+        assert!(s.stalled(), "and the engine sees it as stalled");
+    }
+
     #[test]
     fn locked_qso_ignores_a_different_station() {
         // Working W9XYZ (we sent our grid, awaiting their report). A REPORT from a
@@ -1619,6 +1799,54 @@ mod start_context_tests {
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW R-10"));
     }
 
+    /// EIGHT CQs, A BREATHER, EIGHT MORE — the resume half of the operator's auto-CQ ruling.
+    /// `resume_cq_run` is the state part; the engine owns the clock.
+    #[test]
+    fn a_capped_cq_run_can_be_started_again() {
+        let mut s = Station::calling_cq("KD9TAW", "EN52");
+        s.cq_call_cap = Some(3);
+        for _ in 0..3 {
+            assert!(s.outgoing_rv().is_some());
+            s.after_tx();
+        }
+        assert!(s.outgoing_rv().is_none(), "the budget is spent");
+        assert!(s.stalled(), "and that is what stalled() means");
+
+        assert!(s.resume_cq_run(), "a CQ run may be resumed");
+        assert!(s.outgoing_rv().is_some(), "and it calls again");
+        assert_eq!(
+            s.state,
+            State::CallingCq,
+            "still a CQ run — not restarted elsewhere"
+        );
+        // The full budget is back, not one call: a pause buys another RUN.
+        for _ in 0..2 {
+            s.after_tx();
+            assert!(s.outgoing_rv().is_some());
+        }
+    }
+
+    /// ⚠️ THE RESTRICTION IS THE SAFETY. A directed step's budget exists to stop calling a
+    /// station that has gone silent; handing it back would call a dead station indefinitely,
+    /// which is exactly what `directed_max_calls` was added to prevent.
+    #[test]
+    fn a_directed_call_budget_is_never_handed_back() {
+        for state in [State::AwaitReport, State::AwaitRoger, State::AwaitRr73] {
+            let mut s = Station::calling_cq("KD9TAW", "EN52");
+            s.state = state;
+            s.call_cap = Some(2);
+            s.tx_count = 2;
+            assert!(!s.resume_cq_run(), "{state:?} must refuse");
+            assert_eq!(s.tx_count, 2, "{state:?} keeps its spent budget");
+        }
+        // Control: the one state it DOES serve still works, so the guard above is
+        // discriminating by state rather than refusing everything.
+        let mut cq = Station::calling_cq("KD9TAW", "EN52");
+        cq.tx_count = 5;
+        assert!(cq.resume_cq_run());
+        assert_eq!(cq.tx_count, 0);
+    }
+
     #[test]
     fn running_cq_stops_after_its_call_budget() {
         // The OPT-IN budget: with cq_call_cap set, a CQ stops after that many
@@ -1665,12 +1893,20 @@ mod start_context_tests {
 
     #[test]
     fn capped_directed_call_stops_after_its_budget() {
-        // With `call_cap` set (the engine defaults it to Some(8)), a directed step the
-        // partner never advances STOPS after the budget instead of calling forever — the
-        // fix for "endless recalling a station that went silent" in FT8/FT4 S&P. A normal
-        // QSO never trips it because each step advances (resetting tx_count) within a few
-        // overs; only a stuck/unanswered step accumulates to the cap.
-        let mut s = Station::answering(ME, MY_GRID, DX); // AwaitReport: sending my grid
+        // With `call_cap` set (the engine defaults it to Some(8)), a step the partner
+        // stopped advancing STOPS after the budget instead of calling forever — the fix for
+        // "endless recalling a station that went silent" in FT8/FT4 S&P. A normal QSO never
+        // trips it because each step advances (resetting tx_count) within a few overs; only
+        // a stuck step accumulates to the cap.
+        //
+        // ⚠️ THE DX ANSWERS FIRST, and that is the contract, not scaffolding. Since
+        // 2026-08-23 the cap governs only a partner that ENGAGED and then went quiet —
+        // calling somebody who has never come back is uncapped, because that is a pileup and
+        // not a stuck exchange. `a_station_i_picked_is_called_for_as_long_as_i_want` pins the
+        // other side.
+        let mut s = Station::answering(ME, MY_GRID, DX);
+        s.observe(&[dec("KD9TAW W9XYZ -12", -8)]); // they engage → AwaitRr73
+        assert_eq!(s.state, State::AwaitRr73, "control: the partner answered");
         s.call_cap = Some(4);
         for _ in 0..4 {
             assert!(s.outgoing_rv().is_some(), "calls up to the budget");
@@ -1679,9 +1915,9 @@ mod start_context_tests {
         }
         assert!(
             s.outgoing_rv().is_none(),
-            "a capped directed call stops after its budget"
+            "a partner that stopped advancing is dropped after its budget"
         );
-        assert!(s.stalled(), "a capped directed call reports stalled");
+        assert!(s.stalled(), "and reports stalled so the engine can move on");
         // Operator Resend re-arms the step (resets the count) so it tries again.
         s.resend();
         assert!(!s.stalled(), "Resend clears the directed-call stall");

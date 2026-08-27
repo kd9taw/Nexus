@@ -39,8 +39,32 @@ describe('processDecodes QSO-aware quieting', () => {
     expect(toasts.mock.calls[0][0]).toContain('calling you')
   })
 
-  it('suppresses "calling you" while mid-QSO or running CQ', () => {
-    for (const state of ['CallingCq', 'AwaitReport', 'AwaitRoger', 'Confirming']) {
+  // ⚠️ THIS PAIR WAS SPLIT ON 2026-08-22, and the reason is the whole point. It used to assert
+  // that CallingCq suppressed "calling you" alongside the mid-QSO states. That silenced the one
+  // alert an operator running CQ is waiting for — a station answering THEM. Reported by an
+  // operator whose every other alert worked. Calling CQ is not an exchange in progress; the
+  // engine itself scores Listening and CallingCq as zero exchanges done.
+  it('ANNOUNCES a station answering while we are calling CQ — the event CQ is for', () => {
+    processDecodes([decode({ from: 'K1ABC', directedToMe: true })], settings, undefined, {
+      state: 'CallingCq',
+      dxcall: null,
+    })
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('calling you')
+  })
+
+  it('announces it during a Field Day CQ run too (FD state strings)', () => {
+    processDecodes([decode({ from: 'W1AW', directedToMe: true })], settings, undefined, {
+      state: 'CallingCq',
+      dxcall: null,
+    })
+    expect(toasts).toHaveBeenCalledTimes(1)
+  })
+
+  it('and STILL suppresses it once the exchange is under way', () => {
+    // The chatty-popup fix, unchanged and still load-bearing: mycall dedups per DECODE, so
+    // without this every message of a QSO would beep. Both state vocabularies.
+    for (const state of ['AwaitReport', 'AwaitRoger', 'Confirming', 'AwaitExchange', 'AwaitConfirm']) {
       processDecodes([decode({ from: 'K1ABC', directedToMe: true })], settings, undefined, {
         state,
         dxcall: null,
@@ -49,14 +73,22 @@ describe('processDecodes QSO-aware quieting', () => {
     expect(toasts).not.toHaveBeenCalled()
   })
 
-  it('suppresses "calling you" during a Field Day exchange too (FD state strings)', () => {
-    for (const state of ['CallingCq', 'AwaitExchange', 'AwaitConfirm']) {
-      processDecodes([decode({ from: 'W1AW', directedToMe: true })], settings, undefined, {
+  it('goes quiet as soon as the answer moves the sequencer on', () => {
+    // The sequence that matters end to end, and the reason exempting CallingCq costs nothing:
+    // the answer alerts ONCE, then the sequencer leaves CallingCq and the rest of the exchange
+    // is silent. A test per state cannot show this — only the transition can.
+    processDecodes([decode({ from: 'K1ABC', directedToMe: true })], settings, undefined, {
+      state: 'CallingCq',
+      dxcall: null,
+    })
+    expect(toasts).toHaveBeenCalledTimes(1)
+    for (const state of ['AwaitReport', 'AwaitRoger', 'Confirming']) {
+      processDecodes([decode({ from: 'K1ABC', directedToMe: true, message: `KD9TAW K1ABC ${state}` })], settings, undefined, {
         state,
-        dxcall: 'W1AW',
+        dxcall: 'K1ABC',
       })
     }
-    expect(toasts).not.toHaveBeenCalled()
+    expect(toasts).toHaveBeenCalledTimes(1)
   })
 
   it('never pops anything about the station currently being worked', () => {
