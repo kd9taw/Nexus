@@ -130,7 +130,7 @@ impl SpscRing {
 /// the host can't name a default (guard then falls back to the pure rule).
 #[cfg(feature = "device")]
 pub fn resolve_output_name(name: &str) -> String {
-    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::traits::HostTrait;
     if !name.trim().is_empty() {
         return name.to_string();
     }
@@ -139,7 +139,7 @@ pub fn resolve_output_name(name: &str) -> String {
         .unwrap_or_else(|e| e.into_inner());
     cpal::default_host()
         .default_output_device()
-        .and_then(|d| d.name().ok())
+        .map(|d| d.to_string())
         .unwrap_or_default()
 }
 
@@ -203,7 +203,7 @@ mod device_monitor {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
 
-    fn err_fn(e: cpal::StreamError) {
+    fn err_fn(e: cpal::Error) {
         eprintln!("tempo-audio: monitor stream error: {e}");
     }
 
@@ -318,8 +318,8 @@ mod device_monitor {
     ) -> Option<cpal::SupportedStreamConfig> {
         let configs = dev.supported_output_configs().ok()?;
         for range in configs {
-            if range.min_sample_rate().0 <= want_rate && want_rate <= range.max_sample_rate().0 {
-                return Some(range.with_sample_rate(cpal::SampleRate(want_rate)));
+            if range.min_sample_rate() <= want_rate && want_rate <= range.max_sample_rate() {
+                return Some(range.with_sample_rate(want_rate));
             }
         }
         None
@@ -353,7 +353,7 @@ mod device_monitor {
         let supported = output_config_at_rate(&dev, in_rate)
             .or_else(|| dev.default_output_config().ok())
             .ok_or("no monitor output config")?;
-        let out_rate = supported.sample_rate().0;
+        let out_rate = supported.sample_rate();
         let out_ch = supported.channels() as usize;
         let sample_format = supported.sample_format();
         let config: cpal::StreamConfig = supported.config();
@@ -363,7 +363,7 @@ mod device_monitor {
         let mut rs = MonoResampler::new(in_rate, out_rate);
         let stream = match sample_format {
             SampleFormat::F32 => dev.build_output_stream(
-                &config,
+                config.clone(),
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     let level = f32::from_bits(level_cb.load(Ordering::Relaxed));
                     for frame in data.chunks_mut(out_ch.max(1)) {
@@ -377,7 +377,7 @@ mod device_monitor {
                 None,
             ),
             SampleFormat::I16 => dev.build_output_stream(
-                &config,
+                config.clone(),
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                     let level = f32::from_bits(level_cb.load(Ordering::Relaxed));
                     for frame in data.chunks_mut(out_ch.max(1)) {
@@ -394,7 +394,7 @@ mod device_monitor {
             // Many radio USB CODECs (the IC-9700 among them) advertise U8 or I32
             // rather than F32/I16; handle them so the monitor opens on any rig.
             SampleFormat::U8 => dev.build_output_stream(
-                &config,
+                config.clone(),
                 move |data: &mut [u8], _: &cpal::OutputCallbackInfo| {
                     let level = f32::from_bits(level_cb.load(Ordering::Relaxed));
                     for frame in data.chunks_mut(out_ch.max(1)) {
@@ -409,7 +409,7 @@ mod device_monitor {
                 None,
             ),
             SampleFormat::I32 => dev.build_output_stream(
-                &config,
+                config.clone(),
                 move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
                     let level = f32::from_bits(level_cb.load(Ordering::Relaxed));
                     for frame in data.chunks_mut(out_ch.max(1)) {

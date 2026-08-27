@@ -56,7 +56,7 @@ pub(crate) fn clamp_rx_gain(gain: f32) -> f32 {
     gain.clamp(1.0, 8.0)
 }
 
-fn err_fn(e: cpal::StreamError) {
+fn err_fn(e: cpal::Error) {
     eprintln!("tempo-audio: cpal stream error: {e}");
 }
 
@@ -85,7 +85,7 @@ pub(crate) type StreamErrSlot = std::sync::Arc<Mutex<Option<String>>>;
 fn err_recorder(
     slot: &StreamErrSlot,
     which: &'static str,
-) -> impl FnMut(cpal::StreamError) + Clone + Send + 'static {
+) -> impl FnMut(cpal::Error) + Clone + Send + 'static {
     let slot = slot.clone();
     move |e| {
         eprintln!("tempo-audio: cpal {which} stream error: {e}");
@@ -230,11 +230,11 @@ fn enumerate_devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
     let host = cpal::default_host();
     let inputs: Vec<String> = host
         .input_devices()
-        .map(|it| it.filter_map(|d| d.name().ok()).collect())
+        .map(|it| it.map(|d| d.to_string()).collect())
         .unwrap_or_default();
     let outputs: Vec<String> = host
         .output_devices()
-        .map(|it| it.filter_map(|d| d.name().ok()).collect())
+        .map(|it| it.map(|d| d.to_string()).collect())
         .unwrap_or_default();
     (
         devices_from_cpal_names(inputs),
@@ -254,7 +254,7 @@ pub(crate) trait NamedDevice {
 
 impl NamedDevice for cpal::Device {
     fn device_name(&self) -> Option<String> {
-        self.name().ok()
+        Some(self.to_string())
     }
 }
 
@@ -590,13 +590,13 @@ impl CaptureStream {
         let dev = pick_device(host.input_devices().ok(), Some(name), None)
             .ok_or_else(|| format!("voice-mic input device {name:?} not found"))?;
         let cfg = dev.default_input_config().map_err(|e| e.to_string())?;
-        let rate = cfg.sample_rate().0;
+        let rate = cfg.sample_rate();
         let ch = cfg.channels() as usize;
         let ring = Arc::new(Mutex::new(VecDeque::<f32>::new()));
         let ring_cb = ring.clone();
         let stream = match cfg.sample_format() {
             SampleFormat::F32 => dev.build_input_stream(
-                &cfg.config(),
+                cfg.config(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let mut r = ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks(ch.max(1)) {
@@ -607,7 +607,7 @@ impl CaptureStream {
                 None,
             ),
             SampleFormat::I16 => dev.build_input_stream(
-                &cfg.config(),
+                cfg.config(),
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     let mut r = ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks(ch.max(1)) {
@@ -621,7 +621,7 @@ impl CaptureStream {
             ),
             // Radio USB CODEC mics may advertise U8 or I32 — handle them too.
             SampleFormat::U8 => dev.build_input_stream(
-                &cfg.config(),
+                cfg.config(),
                 move |data: &[u8], _: &cpal::InputCallbackInfo| {
                     let mut r = ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks(ch.max(1)) {
@@ -637,7 +637,7 @@ impl CaptureStream {
                 None,
             ),
             SampleFormat::I32 => dev.build_input_stream(
-                &cfg.config(),
+                cfg.config(),
                 move |data: &[i32], _: &cpal::InputCallbackInfo| {
                     let mut r = ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks(ch.max(1)) {
@@ -726,10 +726,8 @@ impl CpalBackend {
         // carries the platform grain; the probe below is the belt-and-braces: even
         // where sharing is believed correct, a clone that cannot produce an output
         // config falls back to real resolution rather than failing the open.
-        let same_card = in_dev
-            .name()
-            .ok()
-            .is_some_and(|have| shares_one_device(HOST_GRAIN, out_name, &have));
+        let have_name = in_dev.to_string();
+        let same_card = shares_one_device(HOST_GRAIN, out_name, &have_name);
         let out_dev = match same_card.then(|| in_dev.clone()) {
             Some(d) if d.default_output_config().is_ok() => d,
             _ => resolve_configured(
@@ -740,10 +738,14 @@ impl CpalBackend {
             )?,
         };
 
-        let in_cfg = in_dev.default_input_config().map_err(|e| e.to_string())?;
-        let out_cfg = out_dev.default_output_config().map_err(|e| e.to_string())?;
-        let in_rate = in_cfg.sample_rate().0;
-        let out_rate = out_cfg.sample_rate().0;
+        let in_cfg = in_dev
+            .default_input_config()
+            .map_err(|e: cpal::Error| e.to_string())?;
+        let out_cfg = out_dev
+            .default_output_config()
+            .map_err(|e: cpal::Error| e.to_string())?;
+        let in_rate = in_cfg.sample_rate();
+        let out_rate = out_cfg.sample_rate();
         let in_ch = in_cfg.channels() as usize;
         let out_ch = out_cfg.channels() as usize;
 
@@ -788,7 +790,7 @@ impl CpalBackend {
         let rx_gain_cb = rx_gain.clone();
         let in_stream = match in_cfg.sample_format() {
             SampleFormat::F32 => in_dev.build_input_stream(
-                &in_cfg.config(),
+                in_cfg.config(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     // Read the monitor gate ONCE per callback (not per sample). When on,
@@ -828,7 +830,7 @@ impl CpalBackend {
                 None,
             ),
             SampleFormat::I16 => in_dev.build_input_stream(
-                &in_cfg.config(),
+                in_cfg.config(),
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     let monitoring = mon_enabled_in.load(Ordering::Relaxed)
@@ -861,7 +863,7 @@ impl CpalBackend {
             // Radio USB CODECs (e.g. the IC-9700) may advertise U8 or I32 capture
             // rather than F32/I16 — handle them so RX capture opens on any rig.
             SampleFormat::U8 => in_dev.build_input_stream(
-                &in_cfg.config(),
+                in_cfg.config(),
                 move |data: &[u8], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     let monitoring = mon_enabled_in.load(Ordering::Relaxed)
@@ -897,7 +899,7 @@ impl CpalBackend {
                 None,
             ),
             SampleFormat::I32 => in_dev.build_input_stream(
-                &in_cfg.config(),
+                in_cfg.config(),
                 move |data: &[i32], _: &cpal::InputCallbackInfo| {
                     let mut ring = in_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     let monitoring = mon_enabled_in.load(Ordering::Relaxed)
@@ -940,7 +942,7 @@ impl CpalBackend {
         let tx_level_cb = tx_level.clone();
         let out_stream = match out_cfg.sample_format() {
             SampleFormat::F32 => out_dev.build_output_stream(
-                &out_cfg.config(),
+                out_cfg.config(),
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     let mut ring = out_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks_mut(out_ch.max(1)) {
@@ -954,7 +956,7 @@ impl CpalBackend {
                 None,
             ),
             SampleFormat::I16 => out_dev.build_output_stream(
-                &out_cfg.config(),
+                out_cfg.config(),
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
                     let mut ring = out_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks_mut(out_ch.max(1)) {
@@ -971,7 +973,7 @@ impl CpalBackend {
             // Radio USB CODECs (e.g. the IC-9700) may advertise U8 or I32 playback
             // rather than F32/I16 — handle them so TX/output opens on any rig.
             SampleFormat::U8 => out_dev.build_output_stream(
-                &out_cfg.config(),
+                out_cfg.config(),
                 move |data: &mut [u8], _: &cpal::OutputCallbackInfo| {
                     let mut ring = out_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks_mut(out_ch.max(1)) {
@@ -986,7 +988,7 @@ impl CpalBackend {
                 None,
             ),
             SampleFormat::I32 => out_dev.build_output_stream(
-                &out_cfg.config(),
+                out_cfg.config(),
                 move |data: &mut [i32], _: &cpal::OutputCallbackInfo| {
                     let mut ring = out_ring_cb.lock().unwrap_or_else(|e| e.into_inner());
                     for frame in data.chunks_mut(out_ch.max(1)) {
@@ -1002,9 +1004,9 @@ impl CpalBackend {
             ),
             other => return Err(format!("unsupported output sample format: {other:?}")),
         }
-        .map_err(|e| e.to_string())?;
+        .map_err(|e: cpal::Error| e.to_string())?;
 
-        in_stream.play().map_err(|e| e.to_string())?;
+        in_stream.play().map_err(|e: cpal::Error| e.to_string())?;
         out_stream.play().map_err(|e| e.to_string())?;
 
         Ok(Self {

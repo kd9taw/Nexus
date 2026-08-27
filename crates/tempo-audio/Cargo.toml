@@ -37,7 +37,7 @@ hound = "3.5"
 # Received-SSTV image encoding. MIT OR Apache-2.0, already in the tree via tauri, and on
 # deny.toml's allowlist. Encode-only use: one 320x256-ish frame per ~2-minute transmission.
 png = "0.17"
-cpal = { version = "0.15", optional = true }
+cpal = { version = "0.18", optional = true }
 serialport = { version = "4", optional = true }
 deepcw = { path = "../deepcw", optional = true }
 tempo-net = { path = "../tempo-net", optional = true }
@@ -55,7 +55,7 @@ serde_json = "1"
 # code to the tree; it is a direct dependency only so we can call `HintIter` (which opens no
 # PCM stream). Apache-2.0 OR MIT — GPL-3.0-only compatible; NOTICE entry filed.
 [target.'cfg(target_os = "linux")'.dependencies]
-alsa = { version = "0.9", optional = true }
+alsa = { version = "0.11", optional = true }
 
 # Windows-only: assign the launched rigctld to a Job Object so the OS kills it
 # (freeing the serial/COM port) whenever Tempo exits — even on a crash.
