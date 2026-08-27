@@ -240,7 +240,13 @@ export function OperateDecodes({
   // their filterState is dead — `filter` below takes lockedFilter — and 'rx' can never
   // overwrite the Band Activity chip the operator chose.
   const [filterState, setFilterState] = useState<DecodeFilter>(loadDecodeFilter)
-  const filter = lockedFilter ?? filterState
+  // ⚠️ A COMPACT PANE SHOWS EVERYTHING. The rule above — only a pane that renders chips may
+  // WRITE one — has to apply to READING too, and it did not: the Tempo rail's compact Band
+  // Activity hides the chip bar and still applied the shared persisted chip. So a "CQ" chip
+  // left set over in Operate silently filtered Tempo's list, with nothing on screen to say
+  // so and no control to clear it — the pane just looked like a quiet band. `lockedFilter`
+  // still wins where a pane genuinely declares one (Rx Frequency).
+  const filter = lockedFilter ?? (compact ? 'all' : filterState)
   const pickFilter = (f: DecodeFilter) => {
     saveDecodeFilter(f)
     setFilterState(f)
@@ -595,7 +601,14 @@ export function OperateDecodes({
                   A decode ingested at boundary slot s carries AUDIO from slot s-1 —
                   the separator stamps the RX period the signals were ON AIR in
                   (WSJT-X labels the audio period, not the decode moment). */}
-              {sort === 'time' && i > 0 && d.slot !== list[i - 1].slot && (
+              {/* ⚠️ `shown[i - 1]`, NEVER `list[i - 1]` — `i` indexes `shown`, and `shown` is
+                  the newest MAX_ROWS of `list`, so once history passes 300 rows the two
+                  indices point at completely different decodes. Comparing against `list`
+                  matched each row's slot to one from the START of the buffer, minutes older,
+                  which differs nearly every time: a separator between EVERY decode instead of
+                  one per period. Reported twice (2026-08-21/22), both saying it begins "after
+                  some time" — that is the buffer reaching MAX_ROWS, not elapsed time. */}
+              {sort === 'time' && i > 0 && d.slot !== shown[i - 1].slot && (
                 <div
                   className="od-period-sep"
                   role="separator"

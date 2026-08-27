@@ -840,20 +840,37 @@ fn note_ext_read(supported: &mut Option<bool>, misses: &mut u8, ok: bool) {
     }
 }
 
-/// AGC speed <-> Hamlib enum int (FAST=2, MEDIUM=5, SLOW=3). The UI/engine speak
-/// "fast"/"mid"/"slow"; the rigctld `AGC` level carries the enum int.
+/// AGC speed <-> Hamlib enum int (`rig_agc_level_e`: OFF=0, SUPERFAST=1, FAST=2, SLOW=3,
+/// USER=4, MEDIUM=5, AUTO=6). The UI/engine speak "auto"/"fast"/"mid"/"slow"/"off".
+///
+/// AUTO AND OFF USED TO READ BACK AS "mid", AND THAT MISREPRESENTED THE RADIO. The fold was
+/// `_ => "mid"`, so a rig sitting on AUTO — an ordinary setting on an FT-710, and the one an
+/// operator is most likely to leave it on — displayed as Mid, as did AGC switched OFF. Verified
+/// on an FT-710 (2026-08-17): the rig on AUTO, the cockpit showing Mid.
+///
+/// That is worse than a cosmetic slip, because the display invites the correction that does the
+/// damage: seeing the wrong chip lit, the operator clicks the right one, and THAT reaches the
+/// radio (`Engine::agc_to_command` — one click is one command), so a reading error turns into
+/// the loss of the AGC setting they actually had.
+///
+/// SUPERFAST folds to "fast" rather than "mid" — it is a faster constant than FAST, so "mid" was
+/// never the nearest answer. USER (4) has no fixed meaning to fold honestly, so it stays "mid".
 fn agc_to_hamlib(speed: &str) -> u8 {
     match speed {
+        "off" => 0,
         "fast" => 2,
         "slow" => 3,
+        "auto" => 6,
         _ => 5, // mid
     }
 }
 fn agc_from_hamlib(v: u8) -> &'static str {
     match v {
-        2 => "fast",
+        0 => "off",
+        1 | 2 => "fast", // 1 = SUPERFAST: faster than FAST, so never "mid"
         3 => "slow",
-        _ => "mid", // 5 medium (and off/superfast fold to mid for display)
+        6 => "auto",
+        _ => "mid", // 5 MEDIUM, and USER (4) which has no honest nearest
     }
 }
 /// Max consecutive `set_mode` retries for one target mode before giving up (so a rig
@@ -2161,7 +2178,10 @@ struct RttyStream {
     /// The keying config this stream was built for — baud, shift, reverse, and
     /// whether it is the FSK backend. A settings change mid-over rebuilds it
     /// rather than splicing two different waveforms into one carrier.
-    key_cfg: (f64, u32, bool, bool),
+    /// (baud, shift, reverse, centre-Hz bits, fsk) — a change to ANY of these re-keys rather
+    /// than splicing a new waveform into the carrier. The centre joined it with #128, when TX
+    /// started following a waterfall net.
+    key_cfg: (f64, u32, bool, u32, bool),
     /// PTT has been asserted for this stream and the rig's dial/mode asserted with
     /// it. A latched over feeds a chunk roughly every 165 ms and PTT is held
     /// across them by `tx_until_ms`, so re-commanding it per chunk would put a
@@ -2599,6 +2619,9 @@ struct RadioLoop {
     /// change (used when the voice-mic notice cleared a line the monitor may
     /// still be entitled to — its guard/failure state gets re-surfaced).
     monitor_reapply: bool,
+    /// Last TX-mute state pushed to the audio backend, so the loop only speaks on a CHANGE.
+    /// `false` initially, which matches a monitor that starts unmuted.
+    monitor_tx_muted: bool,
     /// One-shot: force the RX-audio backend to rebuild on the next tick even if `audio_differs` is
     /// false. Set by a dual-radio handoff — the new radio's audio device MUST be (re)opened, and a
     /// radio whose audio is "system default" (empty) would otherwise compare equal to another empty
@@ -2757,6 +2780,10 @@ struct RadioLoop {
     /// split): the teardown then keeps its old absolute-OFF behaviour, which is the conservative
     /// answer when we have no snapshot to put back.
     rig_split_restore: Option<(bool, String, Option<u64>)>,
+    /// Whether THIS rig's split can be read without disturbing it — probed once per connection
+    /// (`\dump_caps` is a long reply and the answer cannot change while the rig is the same
+    /// rig). `None` = not yet asked.
+    split_detect: Option<crate::baud_ladder::SplitDetect>,
     /// Last time we ran the FULL rig read-back (dial + RF power + S-meter + mode + funcs), ms.
     last_rig_poll: f64,
     /// Last time we read the TRANSMIT meters (ms). 0.0 when the bars are blanked (not keyed), so
@@ -3018,6 +3045,7 @@ impl RadioLoop {
             voice_mic_open: false,
             voice_mic_failed: false,
             monitor_reapply: false,
+            monitor_tx_muted: false,
             force_audio_rebuild: false,
             audio_retry_at: None,
             audio_suspect: None,
@@ -3042,6 +3070,7 @@ impl RadioLoop {
             fake_it_restore: None,
             audio_rig_split: false,
             rig_split_restore: None,
+            split_detect: None,
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
             tx_rf: TxRfWatch::default(),
@@ -4889,6 +4918,26 @@ impl RadioLoop {
                 }
             }
 
+            // MUTE THE MONITOR WHILE THE OPERATOR IS TALKING. Independent of the block below,
+            // which reacts to SETTINGS changes — this reacts to KEYING, and the two are unrelated
+            // events. Edge-triggered so the loop speaks to the backend once per transition rather
+            // than every tick.
+            //
+            // SCOPE, stated rather than implied: `manual_ptt` is the operator holding PTT (or the
+            // CAT broker holding it for them) — a PHONE over. It is the case this exists for,
+            // because that is when the rig's own delayed MONI lands on top of the voice the
+            // operator is still speaking. An FT slot, a CW over or an RTTY stream also key the rig
+            // and are NOT covered here; nobody is talking through those, and widening this to
+            // every transmission means finding a signal that covers them all, which is a larger
+            // change than the problem needs today.
+            {
+                let keyed = engine_lock(engine).manual_ptt();
+                if keyed != self.monitor_tx_muted {
+                    self.monitor_tx_muted = keyed;
+                    backend.set_monitor_tx_mute(keyed);
+                }
+            }
+
             // Headphone monitor (DARK, off by default): reconfigure it IN PLACE on a
             // monitor-setting change — or re-apply it to a freshly rebuilt backend,
             // whose monitor starts off. This never rebuilds the capture/TX streams, so
@@ -5729,16 +5778,68 @@ impl RadioLoop {
                             engine_lock(engine).settings().split_mode,
                             tempo_app::settings::SplitMode::Rig
                         );
-                        if wants_rig_split
+                        //
+                        // ⚠️ ONLY ASK A RIG THAT CAN ANSWER WITHOUT MOVING. Probed once per
+                        // connection and cached. On an `Emulated` rig Hamlib answers the split
+                        // FREQUENCY question by swapping VFOs — and on a non-targetable Icom by
+                        // turning split OFF, reading, and turning it back on, carrying upstream's
+                        // own "broken if user changes split on rig". Asking is the damage, so an
+                        // emulated rig is never asked. THIS ALSO CLOSES A LIVE HAZARD: the
+                        // frequency read below used to be issued unconditionally whenever split
+                        // reported on, with no capability test at all.
+                        // ⚠️ ONLY PROBE IF THE ANSWER COULD CHANGE ANYTHING. The capability is
+                        // needed for ONE purpose — deciding whether the rig's own split may feed
+                        // the privilege gate — so an operator who has not opted in never pays
+                        // for it. Probing unconditionally also SPENT THE HEAVY POLL'S BUDGET:
+                        // `\dump_caps` is a long multi-line reply, `have_budget()` then said no,
+                        // and the split read it was meant to qualify was skipped entirely —
+                        // which is how it regressed the teardown restore.
+                        let want_detect = engine_lock(engine).settings().split_detect_enabled;
+                        let can_ask = want_detect && {
+                            let detect = *self.split_detect.get_or_insert_with(|| {
+                                rig.read_split_capability()
+                                    // Could not ask → Absent. Silence is not permission.
+                                    .unwrap_or(crate::baud_ladder::SplitDetect::Absent)
+                            });
+                            detect == crate::baud_ladder::SplitDetect::Native
+                        };
+                        if (wants_rig_split || can_ask)
                             && !self.audio_rig_split
                             && self.rig_poll_ticks.is_multiple_of(4)
                             && have_budget()
                         {
                             if let Some((on, vfo)) = rig.read_split() {
                                 // The TX frequency only matters when split is actually on — and
-                                // reading it on a rig with split off is a round-trip for nothing.
-                                let tx_hz = if on { rig.read_split_freq() } else { None };
-                                self.rig_split_restore = Some((on, vfo, tx_hz));
+                                // only when the rig can be asked for it without being disturbed.
+                                // ⚠️ THE TWO CONSUMERS HAVE DIFFERENT NEEDS AND DIFFERENT RISK
+                                // APPETITES — do not collapse them.
+                                //
+                                // RESTORE must put the operator's own split back exactly as it
+                                // was, TX frequency included, or a Rig-split FT8 over eats it
+                                // (the 2026-08-17 Flex audit's wave-2 #22). That path is
+                                // pre-existing, opt-in via Split Operation = Rig, and already
+                                // accepts the read's cost; folding the new capability gate onto
+                                // it silently dropped the frequency and regressed the teardown.
+                                //
+                                // THE PRIVILEGE GATE is new and must never move the radio to
+                                // feed itself, so it gets the frequency only from a rig that can
+                                // answer natively.
+                                //
+                                // (Capability-gating the RESTORE read is a real question — an
+                                // emulated read moves the radio there too — but it is a separate
+                                // decision with its own regression, and it is not this change.)
+                                if wants_rig_split {
+                                    let restore_hz = if on { rig.read_split_freq() } else { None };
+                                    self.rig_split_restore = Some((on, vfo, restore_hz));
+                                    if can_ask {
+                                        engine_lock(engine).observe_rig_split(on, restore_hz);
+                                    }
+                                } else if can_ask {
+                                    let tx_hz = if on { rig.read_split_freq() } else { None };
+                                    // Asymmetric by construction: "off" revokes, "on" only
+                                    // records — see `Engine::observe_rig_split`.
+                                    engine_lock(engine).observe_rig_split(on, tx_hz);
+                                }
                             }
                         }
                         // Apply any pending DSP-func toggle from the UI promptly — the dial read
@@ -6548,7 +6649,7 @@ impl RadioLoop {
             // ([`Self::may_key`]) the queue is not polled, so the over waits instead of
             // going out on the outgoing rig.
             let ready = now >= self.rtty_busy_until && self.may_key();
-            let (abort, msg, stream_tick, baud, shift, reverse, fsk_port_line) = {
+            let (abort, msg, stream_tick, baud, shift, reverse, center_hz, fsk_port_line) = {
                 let mut eng = engine_lock(engine);
                 // Keep the cockpit's sending indicator honest each tick: an over is
                 // "sending" until its computed duration has fully played out.
@@ -6614,6 +6715,18 @@ impl RadioLoop {
                     baud,
                     eng.rtty_shift_hz(),
                     eng.rtty_reverse(),
+                    // #128 (W8GTY): TRANSMIT ON THE FREQUENCY YOU TUNED TO. The AFSK tones
+                    // were built from the fixed `MARK_HZ` while RX was freely nettable from a
+                    // waterfall click, so netting onto a station at 1500 Hz still transmitted
+                    // at 2125 — you answered on a frequency nobody was listening on.
+                    //
+                    // `rtty_center_hz` was RX-only and its own comment said so ("safe during
+                    // TX, needs no privilege gate"). Reading it here is what changes: a net
+                    // now moves the emitted audio too, which is ordinary RTTY operating and
+                    // what every other program does. It moves AUDIO OFFSET only — the dial is
+                    // untouched, exactly like the FT8 TX marker — and the centre is already
+                    // clamped to 300–3700 Hz on the way in, so it cannot leave the passband.
+                    eng.rtty_center_hz(),
                     eng.rtty_fsk_port().map(|p| (p, eng.rtty_fsk_line())),
                 )
             };
@@ -6684,7 +6797,7 @@ impl RadioLoop {
                         let code = st.enc.diddle();
                         let bits = tempo_core::rtty::code_bits(&[code]);
                         let chunk_ms = keyboard::RTTY.char_ms(baud);
-                        if !st.key_cfg.3 {
+                        if !st.key_cfg.4 {
                             let buf = st.afsk.char_chunk(&bits, true);
                             if !buf.is_empty() {
                                 backend.play(&buf);
@@ -6695,7 +6808,7 @@ impl RadioLoop {
                         // gets the same trailing character so both backends unkey on
                         // the same schedule.
                         #[cfg(feature = "serial")]
-                        if st.key_cfg.3 {
+                        if st.key_cfg.4 {
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                                 k.send(bits.clone(), baud);
                             }
@@ -6714,14 +6827,29 @@ impl RadioLoop {
                     // can hear — which is correct: they changed the shift or the baud,
                     // and splicing two different waveforms into one carrier would be
                     // worse than a clean re-key.
-                    let key_cfg = (baud, shift, reverse, fsk_port_line.is_some());
+                    // The centre joins the key config, so netting mid-stream re-keys cleanly
+                    // rather than splicing two different waveforms into one carrier — the same
+                    // rule the baud/shift change above already follows.
+                    // `reverse` STAYS in the key: it no longer reaches the modulator, but it
+                    // decides which way round `tone_pair` builds mark/space, and the pair itself
+                    // is not in this tuple. Drop it and flipping reverse would leave the centre
+                    // unchanged, the stream un-re-keyed, and the old sense still going out.
+                    let key_cfg = (
+                        baud,
+                        shift,
+                        reverse,
+                        center_hz.to_bits(),
+                        fsk_port_line.is_some(),
+                    );
                     if self.rtty_stream.as_ref().map(|s| s.key_cfg) != Some(key_cfg) {
+                        let (mark, space) =
+                            tempo_core::rtty::tone_pair(center_hz, shift as f32, reverse);
                         self.rtty_stream = Some(RttyStream {
                             enc: tempo_core::rtty::BaudotEncoder::new(true),
                             afsk: crate::rtty_afsk::AfskStream::new(crate::rtty_afsk::AfskConfig {
-                                space_hz: crate::rtty_afsk::MARK_HZ + shift as f32,
+                                mark_hz: mark,
+                                space_hz: space,
                                 baud,
-                                reverse,
                                 ..crate::rtty_afsk::AfskConfig::default()
                             }),
                             key_cfg,
@@ -6760,7 +6888,7 @@ impl RadioLoop {
                         // phase step and a 4 ms hole in the carrier every 165 ms — see
                         // `AfskStream`. Skipped entirely on the FSK backend, whose bits
                         // ride the keyline and never become audio.
-                        let buf = if key_cfg.3 {
+                        let buf = if key_cfg.4 {
                             Vec::new()
                         } else {
                             st.afsk.char_chunk(&bits, false)
@@ -6964,10 +7092,14 @@ impl RadioLoop {
                         // one route, so the operator's tx_level / drive / ALC
                         // discipline applies to RTTY exactly as to FT8. PTT around
                         // it like the soundcard CW keyer.
+                        // Same as the streaming path: the tones come from the tuned centre,
+                        // so a one-shot message answers on the frequency you netted to (#128).
+                        let (mark, space) =
+                            tempo_core::rtty::tone_pair(center_hz, shift as f32, reverse);
                         let cfg = crate::rtty_afsk::AfskConfig {
-                            space_hz: crate::rtty_afsk::MARK_HZ + shift as f32,
+                            mark_hz: mark,
+                            space_hz: space,
                             baud,
-                            reverse,
                             ..crate::rtty_afsk::AfskConfig::default()
                         };
                         let buf = crate::rtty_afsk::afsk_char_samples(&bits, &cfg);
@@ -9138,6 +9270,12 @@ impl RadioLoop {
                                         contestname: contest.to_string(),
                                         freq_10hz: (dial_mhz * 1e5) as u64,
                                         sent_exchange: myexch.clone(),
+                                        // Field Day's exchange IS class+section — no RST is
+                                        // passed on the air, so both stay empty and the
+                                        // omit-when-empty rule keeps this datagram byte-identical
+                                        // to the one that has been on the air since 0.8.0.
+                                        rst_sent: String::new(),
+                                        rst_rcvd: String::new(),
                                         operator: operator.clone(),
                                         // 32-hex dedup id: time + batch index + call hash.
                                         id: tempo_net::n1mm::dedup_id(when, &q.call, i as u64),
@@ -9737,6 +9875,12 @@ fn mode_is_fm_family(md: &str) -> bool {
 fn passband_for(md: &str) -> i32 {
     match md.trim().to_ascii_uppercase().as_str() {
         "PKTUSB" | "PKTLSB" => 3000,
+        // AM is DOUBLE-sideband: the carrier sits in the middle with a sideband either side, so
+        // an SSB-width filter cuts half the signal off and the audio comes out thin and distorted.
+        // 6 kHz is the AM filter every HF rig that has one offers. Rigs that round to their
+        // nearest own filter are fine — the read-back check treats a nearby width as the radio
+        // doing its job, not a fault.
+        "AM" => 6000,
         _ => -1,
     }
 }
@@ -10608,6 +10752,32 @@ mod tests {
     }
     use super::*;
     use crate::backend::MockBackend;
+
+    /// AUTO and OFF must survive the round trip, and must NEVER come back as "mid".
+    ///
+    /// The old fold was `_ => "mid"`, so a radio sitting on AUTO — ordinary on an FT-710 — showed
+    /// as Mid. Confirmed against the rig on 2026-08-17. The display error is the dangerous half:
+    /// the operator clicks the chip that looks wrong to correct it, and THAT command reaches the
+    /// radio, so a misread costs them the setting they had.
+    #[test]
+    fn agc_auto_and_off_round_trip_and_are_never_shown_as_mid() {
+        for speed in tempo_app::engine::Engine::AGC_SPEEDS {
+            let back = agc_from_hamlib(agc_to_hamlib(speed));
+            assert_eq!(back, speed, "{speed} must survive the round trip");
+        }
+        // The two that used to be lost, named explicitly — a round-trip loop alone would still
+        // pass if both mapped to the same wrong number.
+        assert_eq!(agc_to_hamlib("auto"), 6, "Hamlib RIG_AGC_AUTO");
+        assert_eq!(agc_to_hamlib("off"), 0, "Hamlib RIG_AGC_OFF");
+        assert_eq!(agc_from_hamlib(6), "auto");
+        assert_eq!(agc_from_hamlib(0), "off");
+
+        // SUPERFAST is faster than FAST, so "mid" was never the nearest reading.
+        assert_eq!(agc_from_hamlib(1), "fast");
+        // USER has no honest nearest, and MEDIUM is mid — both keep the old answer.
+        assert_eq!(agc_from_hamlib(4), "mid");
+        assert_eq!(agc_from_hamlib(5), "mid");
+    }
 
     /// What `sat_tune_nominal` is told the bird needs the radio to be in —
     /// named for the same reason the engine's tests name them: the argument's

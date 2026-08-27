@@ -91,6 +91,7 @@ jobs:
             librsvg2-dev libxdo-dev libssl-dev libsoup-3.0-dev patchelf \
             build-essential cmake ninja-build gfortran \
             libfftw3-dev libboost-dev libasound2-dev libudev-dev \
+            libusb-1.0-0-dev \
             libfuse2
 
       - uses: dtolnay/rust-toolchain@master
@@ -126,6 +127,33 @@ jobs:
           m=/tmp/dc/usr/lib/Nexus/resources/deepcw/model.onnx
           [ -s "$m" ] || { echo "DeepCW model missing from the .deb"; exit 1; }
           echo "$MODEL_SHA  $m" | sha256sum -c -
+          # HAMLIB MUST BE IN BOTH ARTIFACTS, and it must RUN from where it lands.
+          #
+          # Before 1.9.0 the AppImage shipped Hamlib's five licence .txt files and no Hamlib, and
+          # nothing went red: `resources/hamlib/*` still matched the licence files, so the bundle
+          # built green and CAT was simply dead for anyone who had not separately apt-installed
+          # libhamlib-utils. Presence is checked inside the package, not on the build tree.
+          for f in rigctld rigctl rotctld rotctl libhamlib.so.4; do
+            [ -s "/tmp/dc/usr/lib/Nexus/resources/hamlib/$f" ] \
+              || { echo "$f missing from the .deb"; exit 1; }
+          done
+          # …and the same inside the AppImage, which is the package that was actually broken.
+          "$app" --appimage-extract >/dev/null
+          hl=squashfs-root/usr/lib/Nexus/resources/hamlib
+          [ -s "$hl/rigctld" ] || { echo "rigctld missing from the AppImage"; exit 1; }
+          # THE ONE THAT MATTERS: it has to find its own libhamlib, not the runner's. A CI box
+          # with Hamlib installed would let a broken rpath pass a bare --version, which is exactly
+          # how the first cut of fetch-hamlib-unix.sh looked correct while loading /lib's copy.
+          # Copy to a bare directory so there is nothing else it could possibly resolve against.
+          mkdir -p /tmp/hlcheck && cp "$hl/rigctld" "$hl/libhamlib.so.4" /tmp/hlcheck/
+          cp "$hl"/libusb-1.0.so.0 /tmp/hlcheck/ 2>/dev/null || true
+          got=$(ldd /tmp/hlcheck/rigctld | awk '/libhamlib/ {print $3}')
+          case "$got" in
+            /tmp/hlcheck/*) ;;
+            *) echo "bundled rigctld resolves libhamlib to '$got', not its own copy"; exit 1 ;;
+          esac
+          /tmp/hlcheck/rigctld --version || { echo "bundled rigctld will not run"; exit 1; }
+          rm -rf squashfs-root /tmp/hlcheck
           # GLIBC FLOOR — the check that makes the supported-distro list a decision instead of
           # a side effect of the runner image. Both shipped binaries are read: the .deb's
           # payload and the AppImage's INNER binary, because an AppImage bundles application
@@ -225,6 +253,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 gfortran-mingw-w64-x86-64 \
+            binutils-mingw-w64-x86-64 \
             libboost-dev cmake ninja-build build-essential nsis
 
       - uses: dtolnay/rust-toolchain@master
@@ -269,6 +298,37 @@ jobs:
           mkdir -p out && cp "$exe" out/
           # The updater signature, when the signing secrets were present.
           [ -f "$exe.sig" ] && cp "$exe.sig" out/ || echo "note: unsigned build (no signing secrets)"
+
+          # ---- Crash symbols -------------------------------------------------------------
+          # A field crash report names a bare offset ("Nexus.exe+0x01ebcc35") and nothing can
+          # resolve it after the fact: the crash handler in src-tauri/src/main.rs cannot walk
+          # symbols (it runs with no allocation and about a page of stack), and the RELEASE
+          # BINARY IS NOT KEPT ANYWHERE — the artifact is the NSIS installer, whose payload is
+          # solid-compressed. The 1.8.1 report from a Flex/DAX station was unresolvable for
+          # exactly that reason, after downloading both the release asset and the workflow
+          # artifact and finding only the installer in each.
+          #
+          # ⚠️ THERE IS NO PDB TO SHIP, and asking for one is the natural mistake: PDBs are an
+          # MSVC artifact and this job cross-builds `x86_64-pc-windows-gnu` on ubuntu. What
+          # MinGW leaves behind is the SYMBOL TABLE, which survives because the release profile
+          # sets `strip = "debuginfo"` (DWARF only) rather than `strip = "symbols"`.
+          #
+          # So publish the table, not the binary: `nm` output is ~1.5 MB gzipped against 87 MB
+          # for Nexus.exe, and it answers the only question a crash report asks — which function
+          # owns this address. Resolve with the offset added to the 0x140000000 image base.
+          bin="src-tauri/target/x86_64-pc-windows-gnu/release/Nexus.exe"
+          if [ -f "$bin" ]; then
+            # Name it off the installer so the map can never drift from the build it describes.
+            sym="out/$(basename "$exe" -setup.exe).sym.gz"
+            x86_64-w64-mingw32-nm -C --defined-only -n "$bin" | gzip -9 > "$sym"
+            # A symbol map that resolved nothing would be worse than none — it would look like
+            # coverage. Require real entries, not just a non-empty file.
+            n=$(gzip -dc "$sym" | grep -c ' T ' || true)
+            [ "$n" -gt 1000 ] || { echo "symbol map has only $n text symbols — stripped too far"; exit 1; }
+            echo "symbol map: $n text symbols"
+          else
+            echo "no unpacked Nexus.exe to take symbols from — expected at $bin"; exit 1
+          fi
           ( cd out && sha256sum ./* )
 
       - uses: actions/upload-artifact@v4
@@ -312,7 +372,7 @@ jobs:
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | shasum -a 256 -c -
 
       - name: Install build dependencies
-        run: brew install cmake ninja gcc fftw boost
+        run: brew install cmake ninja gcc fftw boost libusb
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -354,6 +414,50 @@ jobs:
 
       - name: Install tauri-cli
         run: cargo install tauri-cli --version "^2" --locked
+
+      # Hamlib for macOS. Explicit here because this job runs `cargo tauri build` directly —
+      # Linux and the Pi get it inside scripts/build-linux.sh, and macOS would silently ship
+      # without it, which is the exact hole this whole change closes. The script's own CAT-DEAD
+      # guard fails the build rather than producing a bundle with licence texts and no Hamlib.
+      - name: Stage Hamlib (bundled rigctld — no brew install for the user)
+        run: bash scripts/fetch-hamlib-unix.sh
+
+      # ⭐ AND SIGN IT, or notarization rejects the whole app. Apple requires EVERY Mach-O
+      # inside the bundle to carry a Developer ID signature, the hardened runtime and a secure
+      # timestamp — Tauri signs the app binary and its own libraries, not resources we stage.
+      # The 1.9.0 attempt failed here with exactly three messages, once per Hamlib executable:
+      # "not signed with a valid Developer ID certificate", "does not have the hardened runtime
+      # enabled", "signature does not include a secure timestamp". Windows does not notarize
+      # and Linux does not sign, so this can only ever surface on the macOS job.
+      #
+      # Discovered by FILE TYPE rather than a hard-coded list: a future Hamlib tool added to
+      # `fetch-hamlib-unix.sh` would otherwise be staged unsigned and fail notarization again,
+      # a whole release later. Libraries are signed before the executables that load them.
+      - name: Sign the bundled Hamlib binaries
+        run: |
+          set -euo pipefail
+          hl=src-tauri/resources/hamlib
+          # `mapfile` is bash 4+; macOS runners are bash 3.2. while-read is portable.
+          macho=()
+          while IFS= read -r f; do macho+=("$f"); done < <(
+            find "$hl" -type f -exec sh -c \
+              'file -b "$1" | grep -q "Mach-O" && echo "$1"' _ {} \; | sort)
+          [ "${#macho[@]}" -gt 0 ] || { echo "no Mach-O staged under $hl — staging failed"; exit 1; }
+          echo "signing ${#macho[@]} Mach-O file(s) as: $APPLE_SIGNING_IDENTITY"
+          # dylibs first, then the programs that load them.
+          for f in "${macho[@]}"; do case "$f" in *.dylib) : ;; *) continue ;; esac
+            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$f"
+          done
+          for f in "${macho[@]}"; do case "$f" in *.dylib) continue ;; esac
+            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$f"
+          done
+          # Verify here rather than discovering it 10 minutes later in notarization.
+          for f in "${macho[@]}"; do
+            codesign --verify --strict --verbose=2 "$f"
+            codesign -dvv "$f" 2>&1 | grep -q "flags=.*runtime" \
+              || { echo "$f: hardened runtime missing after signing"; exit 1; }
+          done
+          echo "all staged Hamlib binaries signed, hardened and timestamped"
 
       - name: Build, sign and notarize the DMG
         env:

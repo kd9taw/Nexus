@@ -1113,19 +1113,85 @@ fn path_has(path_var: &std::ffi::OsStr, bin_name: &str) -> bool {
 /// hang Nexus, so it is killed and treated as unusable rather than waited on.
 #[cfg(unix)]
 fn runs_ok(bin: &std::ffi::OsStr) -> bool {
+    runs_ok_within(bin, std::time::Duration::from_millis(2_000))
+}
+
+/// [`runs_ok`] with the wait budget supplied.
+///
+/// ⚠️ SPLIT OUT FOR THE TEST, AND THE PRODUCTION BUDGET IS UNCHANGED. The 2 s bound is right on
+/// the CAT-connect path — a candidate that hangs must not hang Nexus — but it is a WALL CLOCK,
+/// and a wall clock in a test is a race against the machine. Under a full `cargo test
+/// --workspace`, with every core busy on other crates, spawning `/bin/sh` and collecting its exit
+/// can take longer than two seconds; the child is then killed and a perfectly good binary reports
+/// as unrunnable. That is what made
+/// `runs_ok_accepts_a_nonzero_exit_and_rejects_only_a_signal` fail only in the full run and pass
+/// alone, serially or in parallel — measured, after it went red on two consecutive workspace runs
+/// while its own module passed every way it could be run on its own.
+///
+/// The test passes a generous budget so it measures the VERDICT LOGIC — ran vs died by signal vs
+/// could not exec — which is the thing it exists to pin. Nothing about what ships changes.
+#[cfg(unix)]
+fn runs_ok_within(bin: &std::ffi::OsStr, budget: std::time::Duration) -> bool {
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
-    let mut child = match Command::new(bin)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+    // ⚠️ "COULD NOT EXEC RIGHT NOW" IS NOT "THIS BINARY IS UNUSABLE", and collapsing the two is
+    // the same mistake EINTR was on the CAT read path. This function's verdict decides whether
+    // Nexus ABANDONS an operator's deliberately chosen rigctld and substitutes its own guess, so
+    // every transient must be retried rather than answered.
+    //
+    // Three are transient, and the third is the one that was actually biting:
+    //   WouldBlock   EAGAIN from `fork` — the system is briefly out of process/thread slots.
+    //   Interrupted  EINTR — a signal landed mid-call.
+    //   ExecutableFileBusy  ETXTBSY — someone holds the file OPEN FOR WRITING. On Linux `execve`
+    //                refuses that, and the writer does not have to be us: a fork in ANOTHER
+    //                thread between a `File::create` and its close hands the child an inherited
+    //                write descriptor, and the exec fails until that child's fd goes away. So it
+    //                is a property of the moment, not of the binary — and it is exactly what a
+    //                fresh install hits, where Nexus has just unpacked rigctld and is probing it.
+    //
+    // ETXTBSY was found by a flaky test rather than reasoned out: the assertion prints the raw
+    // spawn error, and after 12 runs it said `kind=ExecutableFileBusy err=Text file busy`. An
+    // earlier pass had guessed a fork/timeout cause and its own control DISPROVED it. Retrying
+    // the wrong errno would have left this exactly as broken while looking fixed.
+    //
+    // ENOENT / EACCES / bad arch are real answers about the binary and still return immediately.
+    let spawn = |_: ()| {
+        Command::new(bin)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    };
+    let mut child = match spawn(()) {
         Ok(c) => c,
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock
+                    | std::io::ErrorKind::Interrupted
+                    | std::io::ErrorKind::ExecutableFileBusy
+            ) =>
+        {
+            // A few short retries, not one: ETXTBSY lasts as long as some other process holds
+            // the write descriptor, which is a fork's worth of time and can outlast a single
+            // 50 ms nap. Bounded so a genuinely busy file still answers quickly.
+            let mut got = None;
+            for _ in 0..5 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if let Ok(c) = spawn(()) {
+                    got = Some(c);
+                    break;
+                }
+            }
+            match got {
+                Some(c) => c,
+                None => return false,
+            }
+        }
         Err(_) => return false, // not executable at all (ENOENT / EACCES / bad arch)
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
+    let deadline = std::time::Instant::now() + budget;
     loop {
         match child.try_wait() {
             // Exited on its own terms — ANY code, see above. Only signal death disqualifies.
@@ -1207,6 +1273,64 @@ fn resolve_hamlib_bin_in(
     bin_name.into()
 }
 
+/// Every place a **bundled** Hamlib tool can sit, relative to the directory holding the Nexus
+/// executable, most-specific first. `exe_name` is the executable's own file name, which is also
+/// the directory Tauri names on Linux (`usr/lib/<productName>/`).
+///
+/// ⚠️ **THE LINUX AND macOS ENTRIES ARE NOT DECORATION — until 2026-08-24 they were missing and
+/// the AppImage shipped Hamlib's five licence texts and no Hamlib.** The Windows installer has
+/// always carried rigctld, and the entries above covered it because Tauri puts the Windows
+/// resources beside the .exe. Every other platform puts them somewhere else, so the bundled copy
+/// was unreachable even once the build staged it:
+///
+/// | bundle          | executable                  | resources                              |
+/// |-----------------|-----------------------------|----------------------------------------|
+/// | Windows NSIS    | `<root>/Nexus.exe`          | `<root>/resources/`                    |
+/// | Linux deb + App | `usr/bin/Nexus`             | `usr/lib/Nexus/resources/`             |
+/// | macOS .app      | `Contents/MacOS/Nexus`      | `Contents/Resources/`                  |
+///
+/// Kept as ONE list because the three resolvers (`rigctld`, `rotctld`, `rigctl`) held three
+/// verbatim copies of it, which is how the two new entries would have gone into two of them.
+fn bundled_candidates(exe_name: &str, tool: &str) -> Vec<String> {
+    vec![
+        format!("hamlib/{tool}.exe"),
+        format!("resources/hamlib/{tool}.exe"),
+        format!("{tool}.exe"),
+        format!("hamlib/{tool}"),
+        format!("resources/hamlib/{tool}"),
+        // Linux .deb and AppImage: usr/bin/<exe> → usr/lib/<exe>/resources/
+        format!("../lib/{exe_name}/resources/hamlib/{tool}"),
+        // macOS .app: Contents/MacOS/<exe> → Contents/Resources/
+        format!("../Resources/hamlib/{tool}"),
+    ]
+}
+
+/// The first bundled candidate for `tool` that exists under `dir`, or `None`.
+///
+/// Split from [`resolve_rigctld`] and its two siblings so the layouts above can be driven by a
+/// fixture directory in tests — `current_exe()` cannot be pointed at one.
+fn find_bundled_in(
+    dir: &std::path::Path,
+    exe_name: &str,
+    tool: &str,
+) -> Option<std::ffi::OsString> {
+    for cand in bundled_candidates(exe_name, tool) {
+        let p = dir.join(&cand);
+        if p.is_file() {
+            return Some(p.into_os_string());
+        }
+    }
+    None
+}
+
+/// [`find_bundled_in`] against the running executable's own directory.
+fn find_bundled(tool: &str) -> Option<std::ffi::OsString> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let name = exe.file_stem()?.to_str()?.to_string();
+    find_bundled_in(dir, &name, tool)
+}
+
 /// Locate the `rigctld` binary. Prefers one **bundled next to the app** — the
 /// Windows installer ships Hamlib under the install dir (with its DLLs), so CAT
 /// works with no separate Hamlib install — then whatever `rigctld` the process's own `PATH`
@@ -1215,20 +1339,8 @@ fn resolve_hamlib_bin_in(
 /// `Command` the bare name. Launching the bundled exe by full path lets Windows resolve its
 /// co-located DLLs (libhamlib-4.dll etc.) from the exe's own directory.
 fn resolve_rigctld() -> std::ffi::OsString {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for cand in [
-                "hamlib/rigctld.exe",
-                "resources/hamlib/rigctld.exe",
-                "rigctld.exe",
-                "hamlib/rigctld",
-            ] {
-                let p = dir.join(cand);
-                if p.is_file() {
-                    return p.into_os_string();
-                }
-            }
-        }
+    if let Some(p) = find_bundled("rigctld") {
+        return p;
     }
     #[cfg(unix)]
     {
@@ -1258,18 +1370,27 @@ fn resolve_rigctld() -> std::ffi::OsString {
 /// file that was never shipped.
 pub fn hamlib_missing_for(mac: bool, tool: &str, e: &std::io::Error) -> String {
     if e.kind() == std::io::ErrorKind::NotFound {
+        // Nexus SHIPS Hamlib on every platform since 2026-08-24, so reaching this at all means
+        // the bundled copy could not be launched either — a different fault from "you never
+        // installed it", and the sentence has to say so or it sends the operator to install
+        // something they already have. The system-install cure stays as the fallback: it is
+        // still the answer for a source build, a distro package, or a bundle whose Hamlib the
+        // machine refuses (wrong architecture, noexec mount, security policy).
         if mac {
             return format!(
-                "Hamlib's {tool} isn't installed. In Terminal: brew install hamlib, then \
-                 restart Nexus (Homebrew itself is at brew.sh). WSJT-X or a logger working \
-                 proves only the Hamlib LIBRARY is there — Nexus needs the {tool} program. ({e})"
+                "Nexus could not start its own {tool}, and there is no Hamlib {tool} installed \
+                 to fall back on. If you built Nexus yourself, the bundled Hamlib may be \
+                 missing; otherwise install one with: brew install hamlib, then restart Nexus \
+                 (Homebrew is at brew.sh). WSJT-X or a logger working proves only the Hamlib \
+                 LIBRARY is there — Nexus needs the {tool} program. ({e})"
             );
         }
         return format!(
-            "Hamlib's {tool} isn't installed. On Debian/Ubuntu: sudo apt install \
-             libhamlib-utils (the Nexus .deb pulls it in; the AppImage can't, so it has to be \
-             installed once by hand). WSJT-X working proves only the Hamlib LIBRARY is there — \
-             Nexus needs the {tool} program. ({e})"
+            "Nexus could not start its own {tool}, and there is no Hamlib {tool} installed to \
+             fall back on. If you built Nexus yourself, the bundled Hamlib may be missing; \
+             otherwise on Debian/Ubuntu: sudo apt install libhamlib-utils, then restart Nexus. \
+             WSJT-X working proves only the Hamlib LIBRARY is there — Nexus needs the {tool} \
+             program. ({e})"
         );
     }
     format!("Could not launch {tool} (Hamlib): {e}")
@@ -1310,20 +1431,8 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
 /// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), then the same
 /// [`HAMLIB_SEARCH_DIRS`] fallback, then PATH — same resolution as [`resolve_rigctld`].
 fn resolve_rotctld() -> std::ffi::OsString {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for cand in [
-                "hamlib/rotctld.exe",
-                "resources/hamlib/rotctld.exe",
-                "rotctld.exe",
-                "hamlib/rotctld",
-            ] {
-                let p = dir.join(cand);
-                if p.is_file() {
-                    return p.into_os_string();
-                }
-            }
-        }
+    if let Some(p) = find_bundled("rotctld") {
+        return p;
     }
     #[cfg(unix)]
     {
@@ -1533,20 +1642,8 @@ pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
 /// headless `cargo clippy --workspace --all-targets -- -D warnings` CI job fails it as dead code.
 #[cfg(feature = "serial")]
 pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for cand in [
-                "hamlib/rigctl.exe",
-                "resources/hamlib/rigctl.exe",
-                "rigctl.exe",
-                "hamlib/rigctl",
-            ] {
-                let p = dir.join(cand);
-                if p.is_file() {
-                    return p.into_os_string();
-                }
-            }
-        }
+    if let Some(p) = find_bundled("rigctl") {
+        return p;
     }
     #[cfg(unix)]
     {
@@ -1757,22 +1854,46 @@ mod tests {
     fn runs_ok_accepts_a_nonzero_exit_and_rejects_only_a_signal() {
         // Exits 9 for an unknown flag — the shape of the service.rs fixture and of real wrappers.
         let picky = stub_script("picky", "#!/bin/sh\n[ \"$1\" = \"-vvv\" ] || exit 9\n");
+        // A generous budget on purpose — see `runs_ok_within`. This test is about the verdict,
+        // not about how fast a loaded machine can fork a shell.
+        let budget = std::time::Duration::from_secs(30);
+        // ⚠️ IF THIS FAILS, READ THE DIAGNOSIS BEFORE ASSUMING THE VERDICT LOGIC BROKE. This
+        // assertion went red on two consecutive full-workspace runs (2026-08-23) while passing
+        // every way the module could be run on its own — serially, in parallel, and under a
+        // saturated CPU. Neither a wall-clock timeout nor CPU contention reproduced it, so the
+        // cause is still unproven and the next occurrence should not cost another investigation.
+        // Spawning the script directly here separates "the system would not fork" from "the
+        // verdict logic is wrong", which are the two candidates.
+        let diag = match std::process::Command::new(picky.as_os_str())
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut c) => format!("spawn ok, wait={:?}", c.wait()),
+            Err(e) => format!("SPAWN FAILED: kind={:?} err={e}", e.kind()),
+        };
         assert!(
-            runs_ok(picky.as_os_str()),
+            runs_ok_within(picky.as_os_str(), budget),
             "a stand-in that exits non-zero for --version still RUNS; rejecting it lets Nexus \
-             override an operator's or a test's deliberate choice of binary"
+             override an operator's or a test's deliberate choice of binary. \
+             Direct spawn of the same script says: {diag}"
         );
 
         // Killed by SIGABRT — how a binary whose dylibs cannot be loaded dies.
         let aborts = stub_script("aborts", "#!/bin/sh\nkill -ABRT $$\n");
         assert!(
-            !runs_ok(aborts.as_os_str()),
+            !runs_ok_within(aborts.as_os_str(), budget),
             "signal death is the unloadable-library signature and must be rejected"
         );
 
         // Not executable at all.
         assert!(
-            !runs_ok(std::ffi::OsStr::new("/nonexistent-nexus-test-dir/rigctld")),
+            !runs_ok_within(
+                std::ffi::OsStr::new("/nonexistent-nexus-test-dir/rigctld"),
+                budget
+            ),
             "a path that cannot be spawned is not usable"
         );
 
@@ -3103,6 +3224,81 @@ mod tests {
             );
         }
         eprintln!("swept every model; keyed by a serial line: {keyed_by_a_line:?}");
+    }
+
+    /// THE APPIMAGE SHIPPED HAMLIB'S LICENCE TEXTS AND NO HAMLIB, and this is the test that
+    /// makes that unrepresentable.
+    ///
+    /// The bundled-tool search only ever knew the WINDOWS layout (resources beside the .exe).
+    /// Linux and macOS put them elsewhere, so a bundled rigctld was unreachable no matter what
+    /// the build staged — the resolver fell straight through to PATH, and an AppImage user with
+    /// no `libhamlib-utils` installed had no CAT at all. Both layouts are pinned here against
+    /// fixture trees shaped like the real bundles.
+    #[test]
+    fn finds_a_bundled_tool_in_every_shipped_bundle_layout() {
+        let root = std::env::temp_dir().join(format!(
+            "nexus-bundle-layout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        // Each entry: the dir holding the executable, and where that bundle puts resources.
+        let layouts: [(&str, &str); 3] = [
+            // Windows NSIS: resources sit beside the .exe.
+            ("win", "win/resources/hamlib"),
+            // Linux .deb + AppImage: usr/bin/Nexus, usr/lib/Nexus/resources/.
+            ("linux/usr/bin", "linux/usr/lib/Nexus/resources/hamlib"),
+            // macOS .app: Contents/MacOS/Nexus, Contents/Resources/.
+            ("mac/Contents/MacOS", "mac/Contents/Resources/hamlib"),
+        ];
+
+        for (exe_dir, res_dir) in layouts {
+            let exe_dir = root.join(exe_dir);
+            let res_dir = root.join(res_dir);
+            std::fs::create_dir_all(&exe_dir).unwrap();
+            std::fs::create_dir_all(&res_dir).unwrap();
+
+            // The control: nothing staged yet, so nothing is found.
+            assert_eq!(
+                find_bundled_in(&exe_dir, "Nexus", "rigctld"),
+                None,
+                "{exe_dir:?} matched before anything was staged"
+            );
+
+            std::fs::write(res_dir.join("rigctld"), b"#!/bin/sh\n").unwrap();
+            let found = find_bundled_in(&exe_dir, "Nexus", "rigctld")
+                .unwrap_or_else(|| panic!("bundled rigctld unreachable from {exe_dir:?}"));
+            assert_eq!(
+                std::fs::canonicalize(std::path::Path::new(&found)).unwrap(),
+                std::fs::canonicalize(res_dir.join("rigctld")).unwrap(),
+            );
+
+            // A tool that was NOT staged stays a miss — the layout is not a blanket yes.
+            assert_eq!(find_bundled_in(&exe_dir, "Nexus", "rotctld"), None);
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The Linux directory is named after the executable, not the string "Nexus" — so the
+    /// candidate has to be built from the running binary's own name.
+    #[test]
+    fn the_linux_resource_dir_follows_the_executable_name() {
+        let cands = bundled_candidates("Nexus", "rigctld");
+        assert!(cands
+            .iter()
+            .any(|c| c == "../lib/Nexus/resources/hamlib/rigctld"));
+        let renamed = bundled_candidates("Tempo", "rigctld");
+        assert!(renamed
+            .iter()
+            .any(|c| c == "../lib/Tempo/resources/hamlib/rigctld"));
+        assert!(
+            !renamed.iter().any(|c| c.contains("/Nexus/")),
+            "the product name was hard-coded"
+        );
     }
 }
 

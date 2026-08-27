@@ -1050,7 +1050,8 @@ export interface RadioStatus {
   /** MANUAL notch (Hamlib MN), distinct from `notch` which is the AUTOMATIC notch (ANF).
    *  A radio may report either, both or neither; each toggle renders only when non-null. */
   manualNotch?: boolean | null
-  /** AGC time constant: "fast" | "mid" | "slow"; absent when the rig doesn't report it. */
+  /** AGC time constant, one of `Engine::AGC_SPEEDS` ("auto" | "fast" | "mid" | "slow" |
+   * "off"); absent when the rig doesn't report it. */
   agc?: string | null
   /** CAT S-meter in dB relative to S9 (S9 = 0, S1 ≈ -48, S9+20 = +20). Absent when
    * the rig doesn't report STRENGTH over CAT (RX-only; not updated during TX). */
@@ -1103,6 +1104,10 @@ export interface RadioStatus {
   /** Whether the operator's license class permits TX at the current dial+mode. False = TX
    * hard-blocked (outside privileges); the cockpit shows a lock indicator. */
   txAllowed: boolean
+  /** The dial the next over would be EMITTED on — the confirmed split TX frequency when the rig
+   *  has acknowledged one, else the operator's dial. Lets the lock NAME the frequency it is
+   *  judging instead of saying "this frequency" about one you may not be transmitting on. */
+  txEmissionMhz?: number | null
   /** Whether a tune carrier is currently keyed. */
   tuning: boolean
   /** ⭐ WHO HOLDS THE TRANSMITTER, or null/undefined when nobody does — the engine's
@@ -1132,7 +1137,7 @@ export interface RadioStatus {
   rxRangesMhz?: [number, number][]
   /** The dial (MHz) the radio most recently REFUSED, so the UI can name it. */
   refusedDialMhz?: number | null
-  /** The AGC speed ('fast'|'mid'|'slow') the radio most recently REFUSED. Hamlib's AGC is an
+  /** The AGC speed (`Engine::AGC_SPEEDS`) the radio most recently REFUSED. Hamlib's AGC is an
    * enum and not every backend implements every step (MEDIUM least of all), so a pick can be
    * rejected outright. The cockpits' segmented AGC chip is optimistic — the rig read-back lags
    * a poll — and this is what stops it claiming a speed the radio never took. */
@@ -1164,6 +1169,9 @@ export interface RadioStatus {
   scopeFixStartMhz?: number | null
   /** Set when two radios are on the same serial COM port (explains a red pill). */
   radioConfigWarning?: string | null
+  /** The radio reports essentially no RF power while transmit is armed — it will key and put
+   *  nothing on the air. A flag, not a message: the wording lives in the UI so it translates. */
+  txPowerZero?: boolean
   /** The last per-QSO recording failed, with the path it failed at. Surfaced in the status lane;
    * cleared by the next recording that succeeds. */
   recordingWarning?: string | null
@@ -2648,6 +2656,7 @@ export interface Settings {
   /** Stop a CQ run after N unanswered calls; null/undefined = stock WSJT-X
    * (CQ repeats until you stop it — the Tx watchdog is the backstop). */
   cqMaxCalls?: number | null
+  cqPauseSecs?: number | null
   /** Tempo chat: max transmit cycles per message before terminal no-ack (null = default 3). */
   chatMaxCycles?: number | null
   /** Tempo chat: a peer's completed reply implicitly confirms in-flight messages (default on). */

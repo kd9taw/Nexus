@@ -894,6 +894,45 @@ export function zoomRange(centerHz: number, spanHz: number): { lo: number; hi: n
   return { lo, hi: lo + spanHz }
 }
 
+/**
+ * The zoom window to SHOW, given the one currently shown and where the RX marker is.
+ *
+ * A zoom is a SLICE OF THE PASSBAND, not a viewport that chases the cursor. It holds still
+ * while the marker is inside it, and pages only when the marker leaves.
+ *
+ * ⚠️ BOTH #115 AND #164 LIVE HERE, and they pull in opposite directions — which is why this
+ * is a function with memory rather than a pure re-derivation.
+ *
+ * #115: a window that never follows goes STALE. A persisted zoom used to centre on whatever
+ * `rxOffsetHz` was at first render — 0 before the first snapshot lands — and stayed pinned
+ * for the life of the mount, so an operator listening at 2500 Hz read an axis labelled
+ * 200–800. The window must end up containing the marker.
+ *
+ * #164: a window that follows on EVERY render pans. `zoomRange(rxOffsetHz, span)` re-centres
+ * on the marker, and a left-click MOVES the marker — so each click slid the display by up to
+ * half a span, with no scrollbar and no fixed reference. Same reporter, opposite complaint.
+ *
+ * Satisfying both: CONTAIN the marker, do not MOVE while it is already contained. Tuning
+ * inside the visible span changes nothing on screen; tuning outside pages the window back
+ * over the marker. The fixed Std/Full views never follow anything and are returned unchanged.
+ */
+export function zoomWindow(
+  prev: { lo: number; hi: number } | null,
+  centerHz: number,
+  spanHz: number,
+): { lo: number; hi: number } {
+  const next = zoomRange(centerHz, spanHz)
+  // Std (0) and Full (<0 or ≥ passband) are fixed windows — nothing to hold still.
+  const full = WF_F_MAX - WF_F_MIN
+  if (spanHz === 0 || spanHz < 0 || spanHz >= full) return next
+  if (!prev) return next
+  // A span change is a new question; rebuild rather than hold a window of the wrong width.
+  if (prev.hi - prev.lo !== next.hi - next.lo) return next
+  // The marker is still on screen — leave the operator's view exactly where it is.
+  if (centerHz >= prev.lo && centerHz <= prev.hi) return prev
+  return next
+}
+
 /** Scope feeds whose rows span ABSOLUTE RF Hz (a native panadapter retuned to the dial:
  * 'flex' = SmartSDR VITA, 'civ' = Icom CI-V scope, 'yaesu' = the FT-710's FT4222 USB→SPI
  * bridge). ''/'audio' = the soundcard FFT, whose rows span demodulated audio-passband Hz.
@@ -951,15 +990,24 @@ export function sidebandSign(sideband: string): 1 | -1 {
  * so an LSB signal paints LEFT of the dial. CW keeps the one-sided window (see cwScopeWindow),
  * so this stays an explicit opt-in.
  *
- * The axis is ASYMMETRIC — [−W/3, +W] on USB, mirrored on LSB — and that is the fix for the
+ * The axis is ASYMMETRIC — [−W/8, +W] on USB, mirrored on LSB — and that is the fix for the
  * second half of the same report (screenshot, 2026-08-16: "the voice is compressed into one
  * section"). It shipped as ±W, which reads well on a rig streaming real RF but not here: this
  * feed is DEMODULATED RECEIVER AUDIO, one-sided by construction, so half the panel was a side
- * that can never carry a signal and the voice got ~30% of the width. Giving the occupied
- * sideband 3/4 of the axis triples the detail; the W/3 guard band is what keeps the dial a
- * reference LINE rather than the edge it was before carrier-centering, and it is display-only —
- * the row is still requested (and read) as 0..W, so the guard has no data and paints as the
- * out-of-row floor (see PhoneScope's column loop).
+ * that can never carry a signal and the voice got ~30% of the width.
+ *
+ * The guard band is what keeps the dial a reference LINE rather than the edge it was before
+ * carrier-centering. It was W/3 until 2026-08-23, when the operator read the result as a fault
+ * in the opposite direction: "the dial looks off to the left... it looks mismatched from the
+ * signal I am tuned into." Nothing was wrong — on USB the dial IS the suppressed carrier, so the
+ * voice sits entirely above it and the dial is always at the LOW edge of the energy, never
+ * centred in it — but a third of the panel standing empty beside the marker reads as the marker
+ * being in the wrong place. W/8 keeps a clearly visible gap (the dial lands at the 1/9 mark, and
+ * on a 1900 px panel that is still ~210 px of space) while giving the voice 8/9 of the width
+ * instead of 3/4.
+ *
+ * It is display-only either way — the row is still requested (and read) as 0..W, so the guard has
+ * no data and paints as the out-of-row floor (see PhoneScope's column loop).
  *
  * Native-panadapter rows span ABSOLUTE RF Hz, but the row center only APPROXIMATES the
  * dial: the Flex pan recenters only after >500 Hz dial moves (RETUNE_EPS), and an Icom
@@ -986,12 +1034,14 @@ export function scopeView(
 ): { loHz: number; hiHz: number; markerAtHz: number | null; mirrored: boolean } {
   if (!isRfScopeSource(source)) {
     if (carrierCentered) {
-      // W of occupied sideband + W/3 of guard on the empty side, hung on the sideband's hand
-      // (see the header). The dial is axis 0, so it falls at the 1/4 mark on USB and the 3/4
+      // W of occupied sideband + W/8 of guard on the empty side, hung on the sideband's hand
+      // (see the header). The dial is axis 0, so it falls at the 1/9 mark on USB and the 8/9
       // mark on LSB WITHOUT anyone stating that — every consumer derives its pixel from these
       // two bounds, and there is no second constant that could drift out of step with them.
+      // That is why the DIAL line, the frequency ticks and a click all agree by construction:
+      // there is exactly one definition of where the dial is.
       const width = Math.max(50, Math.abs(viewHiHz - viewLoHz))
-      const guard = width / 3
+      const guard = width / 8
       return {
         loHz: sign < 0 ? -width : -guard,
         hiHz: sign < 0 ? guard : width,
@@ -1015,6 +1065,53 @@ export function scopeView(
     markerAtHz: markerHz == null ? null : rf(markerHz),
     mirrored: false,
   }
+}
+
+/**
+ * The ABSOLUTE frequency (Hz) at a point on a drawn scope axis — what the operator is pointing at.
+ *
+ * Added because the Phone waterfall had no numbers on it at all: an operator could see a signal
+ * and had no way to know where clicking would put them (operator, 2026-08-22).
+ *
+ * ⚠️ THE AXIS MEANS TWO DIFFERENT THINGS AND THAT IS THE WHOLE OF THIS FUNCTION. For an AUDIO row
+ * on the carrier-centred axis, [`scopeView`] returns RF OFFSETS from the dial — the dial is axis
+ * zero, which is what puts it at the 1/9 mark on USB and the 8/9 mark on LSB. For a NATIVE RF
+ * panadapter row it already returns absolute RF, because that branch built its bounds from
+ * `center + sign*(f - anchor)` with the dial as centre. Adding the dial in the second case would
+ * label a 14 MHz scope at 28 MHz.
+ *
+ * Returns null when there is nothing honest to say: an audio axis with no known dial has no
+ * absolute frequency, and a guessed one on a scale an operator tunes by is worse than a blank.
+ */
+export function axisAbsoluteHz(
+  axisHz: number,
+  source: string,
+  dialHz: number | null,
+): number | null {
+  if (isRfScopeSource(source)) return axisHz
+  if (dialHz == null || !Number.isFinite(dialHz) || dialHz <= 0) return null
+  return dialHz + axisHz
+}
+
+/**
+ * Tick positions for a frequency scale across `[loHz, hiHz]`, in the same axis units.
+ *
+ * Chooses a round step — 100 Hz to 100 kHz — so labels land on numbers an operator recognises
+ * rather than wherever an even division happened to fall. `maxTicks` is a budget, not a target:
+ * a narrow scope gets fewer ticks rather than a crowded axis, because an unreadable scale is the
+ * same as no scale.
+ */
+export function axisTicks(loHz: number, hiHz: number, maxTicks = 6): number[] {
+  const span = hiHz - loHz
+  if (!(span > 0) || !Number.isFinite(span)) return []
+  const STEPS = [100, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000]
+  const step = STEPS.find((s) => span / s <= maxTicks) ?? STEPS[STEPS.length - 1]
+  const out: number[] = []
+  // `+ 0` normalises NEGATIVE ZERO. `Math.ceil(-0.8) * 1000` is -0, which formats as "-0" and
+  // would put a minus sign on the dial's own tick — the one label an operator is most likely to
+  // be looking at.
+  for (let t = Math.ceil(loHz / step) * step; t <= hiHz; t += step) out.push(t + 0 === 0 ? 0 : t)
+  return out
 }
 
 /** Width of the CW cockpit's audio scope window (Hz) — 800 over 512 bins = 1.5625 Hz/bin. */

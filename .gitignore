@@ -80,3 +80,14 @@ secrets.json
 .wrangler/
 credentials.json
 service-account*.json
+
+# Hamlib runtime staged by scripts/fetch-hamlib.sh (Windows) and fetch-hamlib-unix.sh
+# (Linux/macOS). Never committed — the scripts reproduce them from a SHA-pinned upstream.
+# `*.dll`/`*.exe` above cover Windows; Unix binaries carry no extension, so they are named
+# here. The tracked LGPL licence .txt files in the same directory MUST stay tracked.
+src-tauri/resources/hamlib/rigctld
+src-tauri/resources/hamlib/rigctl
+src-tauri/resources/hamlib/rotctld
+src-tauri/resources/hamlib/rotctl
+src-tauri/resources/hamlib/lib*.so*
+src-tauri/resources/hamlib/lib*.dylib*

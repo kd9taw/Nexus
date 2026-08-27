@@ -110,9 +110,42 @@ pub fn spawn_sstv_rx(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
         .expect("spawn sstv-rx");
 }
 
+/// How long past a mode's own airtime an in-flight decode may run before it is abandoned.
+///
+/// The decoder buffers the whole picture before it can place any line (`find_sync`), so a real
+/// decode finishes at roughly the airtime plus its own processing. Half a minute past that is
+/// comfortably clear of a live picture and still quick enough that the operator does not sit
+/// looking at a dead screen.
+const ABANDON_MARGIN_SECS: f64 = 30.0;
+
+/// Has a decode that started at `started_unix` outlived the airtime its mode needs?
+///
+/// ⭐ THE MISSING ABANDON PATH. Until 2026-08-25 `sstv_progress` was cleared in exactly two
+/// places, BOTH on the completion path — after the PNG is written, and if that write fails.
+/// There was no timeout, no retune hook and no elapsed-time tracking anywhere in this loop. So
+/// a VIS that was detected and then lost its signal left the progress set FOREVER, and because
+/// the SSTV view shows `inFlight ? <picture> : <waterfall>` — one region, the picture replacing
+/// the band while an image comes in — the band waterfall never came back for the rest of the
+/// session.
+///
+/// The operator hit it by changing band mid-decode ("on SSTV when the band is changed the
+/// waterfall stops... change to a SSTV freq and the waterfall stops"), but a band change is
+/// only the most obvious trigger. The same latch fires whenever a picture stops arriving: the
+/// sending station quits mid-frame, the band goes long, a tuning nudge loses the signal. That
+/// is why this is a deadline on the decode rather than a hook on the dial.
+fn decode_is_abandoned(started_unix: i64, now_unix: i64, airtime_secs: f64) -> bool {
+    // Saturating, so a clock that steps BACKWARD (NTP correcting a drifted PC mid-decode)
+    // reads as zero elapsed and waits, rather than going negative and abandoning a live
+    // picture on the spot.
+    (now_unix.saturating_sub(started_unix)).max(0) as f64 > airtime_secs + ABANDON_MARGIN_SECS
+}
+
 fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
     let mut decoder: Option<SstvDecoder> = None;
     let mut inflight: Option<InFlight> = None;
+    // When the in-flight picture's VIS landed, and how long that mode needs — the two facts
+    // `decode_is_abandoned` needs to tell a slow picture from one that will never arrive.
+    let mut inflight_started: Option<(i64, f64)> = None;
     // Path of the most recently saved image — the target for a trailing
     // `FskId` event, which arrives just after that image's `ImageComplete`.
     let mut last_finished_path: Option<String> = None;
@@ -127,6 +160,7 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
             // cleared its progress in `set_sstv_armed`); re-arm starts clean.
             decoder = None;
             inflight = None;
+            inflight_started = None;
             continue;
         }
         if decoder.is_none() {
@@ -137,6 +171,17 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                     std::thread::sleep(CONSTRUCT_RETRY);
                     continue;
                 }
+            }
+        }
+        // ⚠️ BEFORE the empty-events `continue` below. A decode that has lost its signal
+        // produces NO events at all, so a check placed after that early-out is a check that
+        // can never run for the case it exists to catch.
+        if let Some((started, airtime)) = inflight_started {
+            if decode_is_abandoned(started, now_unix(), airtime) {
+                inflight = None;
+                inflight_started = None;
+                // Hand the band back to the waterfall.
+                engine_lock(&engine).set_sstv_progress(None);
             }
         }
         let events = rx_step(&engine, decoder.as_mut().unwrap(), now_unix());
@@ -160,6 +205,7 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                         lines_done: 0,
                         hedr_shift_hz,
                     });
+                    inflight_started = Some((now_unix(), spec.airtime_seconds()));
                     progress_dirty = true;
                 }
                 SstvEvent::UnknownVis { code, .. } => {
@@ -182,6 +228,7 @@ fn run(engine: Arc<Mutex<Engine>>, gallery_dir: PathBuf) {
                 }
                 SstvEvent::ImageComplete { image, .. } => {
                     if let Some(img) = inflight.take() {
+                        inflight_started = None;
                         last_finished_path = finish_image(&engine, &gallery_dir, &img, &image);
                         progress_dirty = false; // finish_image cleared progress
                     }
@@ -520,6 +567,67 @@ mod tests {
             (h.audio_peak - 0.5).abs() < 1e-6,
             "level survives, got {}",
             h.audio_peak
+        );
+    }
+
+    /// THE WATERFALL THAT NEVER CAME BACK (field report 2026-08-25).
+    ///
+    /// A Scottie 1 picture takes ~110 s, so at 60 s in the decode is simply slow and must be
+    /// left alone; well past its airtime it is never arriving and the band has to be handed
+    /// back. Both directions, because a deadline that only ever fires — or only ever holds —
+    /// is not a deadline.
+    #[test]
+    fn a_decode_is_abandoned_only_once_it_outlives_its_own_airtime() {
+        let s1 = tempo_sstv::for_mode(tempo_sstv::SstvMode::Scottie1).airtime_seconds();
+        assert!(
+            (100.0..125.0).contains(&s1),
+            "precondition: Scottie 1 is ~110 s, got {s1}"
+        );
+
+        // Mid-picture: slow is not dead.
+        assert!(
+            !decode_is_abandoned(1_000, 1_000, s1),
+            "the instant it starts"
+        );
+        assert!(
+            !decode_is_abandoned(1_000, 1_060, s1),
+            "60 s in, still coming"
+        );
+        assert!(
+            !decode_is_abandoned(1_000, 1_000 + s1 as i64, s1),
+            "exactly at the airtime — the decoder still has to finish"
+        );
+        assert!(
+            !decode_is_abandoned(1_000, 1_000 + s1 as i64 + 29, s1),
+            "inside the margin"
+        );
+        // Past airtime + margin: gone.
+        assert!(
+            decode_is_abandoned(1_000, 1_000 + s1 as i64 + 31, s1),
+            "past the margin it must be abandoned or the waterfall never returns"
+        );
+        assert!(
+            decode_is_abandoned(1_000, 1_000 + 600, s1),
+            "ten minutes later"
+        );
+
+        // The longest mode gets proportionally longer, not a fixed grace: Scottie DX is minutes.
+        let dx = tempo_sstv::for_mode(tempo_sstv::SstvMode::ScottieDx).airtime_seconds();
+        assert!(dx > s1, "precondition: Scottie DX is the long one");
+        assert!(
+            !decode_is_abandoned(1_000, 1_000 + s1 as i64 + 31, dx),
+            "a Scottie DX must NOT be killed at Scottie 1's deadline"
+        );
+    }
+
+    /// A PC whose clock is corrected backwards mid-decode must not lose the picture it is
+    /// receiving. `saturating_sub` on signed values still goes negative, hence the `.max(0)`.
+    #[test]
+    fn a_backward_clock_step_does_not_abandon_a_live_decode() {
+        let s1 = tempo_sstv::for_mode(tempo_sstv::SstvMode::Scottie1).airtime_seconds();
+        assert!(
+            !decode_is_abandoned(1_000, 940, s1),
+            "NTP stepped the clock back 60 s — that is not an expired decode"
         );
     }
 }

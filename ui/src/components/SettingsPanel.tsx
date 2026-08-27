@@ -5,6 +5,7 @@ import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeC
 import {
   confirmSatUplink,
   exportSettingsBundle,
+  resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
   setBlockedCalls as apiSetBlockedCalls,
@@ -90,6 +91,7 @@ import {
   getAssistanceJournal,
   getConnectionLog,
   getCredentialsStatus,
+  CREDENTIALS_CHANGED,
   setUnassistedMode,
 } from '../api'
 import { AssistanceNote } from './AssistanceNote'
@@ -829,6 +831,40 @@ export function SettingsPanel({
       pushToast(t('settings.backup.restore.done'), 'success')
     }, t('settings.backup.restore.failed'))
   }
+
+  // Reset everything to factory defaults. Destructive, immediate, and the one control in this
+  // block an operator can reach by accident, so it confirms through the same danger dialog the
+  // restore uses — and the wording points AT the backup beside it, because the machinery that
+  // makes this reversible is one button away and there is no excuse not to name it.
+  //
+  // Reloads the form from the backend rather than trusting the returned snapshot: `reset_settings`
+  // runs `ensure_radio_profiles` and friends, so what LANDED is not the bare `Settings::default()`
+  // this asked for, and a form seeded from anything else would show a roster the engine is not
+  // driving.
+  const handleResetConfig = async () => {
+    if (
+      !(await confirmDialog({
+        title: t('settings.backup.reset.confirm.title'),
+        body: t('settings.backup.reset.confirm.body'),
+        confirmLabel: t('settings.backup.reset.confirm.action'),
+        danger: true,
+      }))
+    ) {
+      return
+    }
+    const snap = await withErrorToast(
+      () => resetSettings(),
+      t('settings.backup.reset.failed'),
+    )
+    if (snap) {
+      const fresh = await getSettings()
+      setForm(fresh)
+      setEditingRadioId(fresh.activeRadio)
+      dirtyRef.current = false
+      onSaved?.()
+      pushToast(t('settings.backup.reset.done'), 'success')
+    }
+  }
   const [form, setForm] = useState<Settings | null>(null)
   // The blocklist editor's text — its OWN write path (apiSetBlockedCalls, the narrow
   // verb), never the form save: the engine deliberately ignores blockedCalls in a
@@ -1020,10 +1056,10 @@ export function SettingsPanel({
   // The assistance journal is the operator's EVIDENCE of what was running during an event, so
   // it is shown next to the switch rather than hidden in a file. Same poll as the conn log.
   const [assistLog, setAssistLog] = useState<AssistanceEvent[]>([])
+  // The two LOGS are live and belong on a timer: they grow while the operator watches.
   useEffect(() => {
     let live = true
     const load = () => {
-      getCredentialsStatus().then((c) => live && setCreds(c)).catch(() => {})
       getConnectionLog().then((l) => live && setConnLog(l)).catch(() => {})
       getAssistanceJournal().then((l) => live && setAssistLog(l ?? [])).catch(() => {})
     }
@@ -1032,6 +1068,24 @@ export function SettingsPanel({
     return () => {
       live = false
       window.clearInterval(id)
+    }
+  }, [])
+  // ⚠️ CREDENTIAL STATUS IS NOT ON THAT TIMER, and must not go back on it (#154). Answering
+  // "is a password stored?" opens an OS-keychain session PER CONNECTOR; doing it every 5 s
+  // crashed gnome-keyring-daemon on Fedora 44 in a restart loop that lasted as long as the app
+  // was open — the operator's journal caught it aborting in `service_method_open_session`.
+  // The answer changes only when a secret is saved or cleared, and `api.ts` raises
+  // CREDENTIALS_CHANGED when that happens, so this reads once and then only on real news.
+  useEffect(() => {
+    let live = true
+    const pull = () => {
+      getCredentialsStatus().then((c) => live && setCreds(c)).catch(() => {})
+    }
+    pull()
+    window.addEventListener(CREDENTIALS_CHANGED, pull)
+    return () => {
+      live = false
+      window.removeEventListener(CREDENTIALS_CHANGED, pull)
     }
   }, [])
   // LoTW/eQSL passwords are write-only (kept in the OS keychain, never read back),
@@ -5026,6 +5080,25 @@ export function SettingsPanel({
               </span>
             </div>
 
+            {/* Start over. Deliberately the LAST thing in this block: an operator who arrives
+                here wanting a clean slate reads the backup affordance on the way past. */}
+            <div className="settings-field">
+              <span className="settings-label">{t('settings.transmit.reset.label')}</span>
+              <div className="rig-share-row">
+                <button
+                  type="button"
+                  className="settings-linkbtn danger"
+                  onClick={handleResetConfig}
+                  title={t('settings.transmit.reset.title')}
+                >
+                  {t('settings.transmit.reset.action')}
+                </button>
+              </div>
+              <span className="settings-hint">
+                <T k="settings.transmit.reset.hint" tags={{ b: <strong /> }} />
+              </span>
+            </div>
+
             {/* THE share affordance (#53) — one block, and it advertises the CAT BROKER, not the
                 Hamlib daemon's port. The daemon is torn down by Test CAT and every CAT-config
                 save (eleven trigger fields), and rogerloxton's VarAC log shows what a shared
@@ -5243,10 +5316,33 @@ export function SettingsPanel({
                     />
                   </label>
                   <span className="settings-hint">
-                    Blank = WSJT-X behavior: CQ repeats until you stop it (the TX watchdog is the
-                    backstop). Set a number to auto-stop an unanswered CQ run after that many calls.
-                    The Tempo chat CQ run always stops (default 10 unanswered) — this number
-                    overrides that budget too.
+                    How many unanswered CQs before Nexus pauses. Default 8, then it waits and calls
+                    again — a run that nobody answers stops holding the frequency. Blank = WSJT-X
+                    behaviour: CQ repeats until you stop it, with the TX watchdog as the only
+                    backstop. The Tempo chat CQ run always stops (default 10 unanswered) — this
+                    number overrides that budget too.
+                  </span>
+                </div>
+
+                <div className="settings-field">
+                  <label>
+                    <span className="settings-label">Wait before calling CQ again</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={0}
+                      max={3600}
+                      value={form.cqPauseSecs ?? ''}
+                      placeholder="180"
+                      onChange={(e) => updateNullableNum('cqPauseSecs', e.target.value, 0)}
+                    />
+                  </label>
+                  <span className="settings-hint">
+                    Seconds off the air after an unanswered run, before the next one starts.
+                    Default 180 (three minutes). 0 = do not resume: the run just stops, which is
+                    what happened before this setting existed. You are still LISTENING through the
+                    pause — a station that calls you is worked as normal, and answering anyone
+                    resets the count, so a busy run never pauses at all.
                   </span>
                 </div>
 

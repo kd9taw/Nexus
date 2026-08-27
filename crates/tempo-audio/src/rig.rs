@@ -725,6 +725,22 @@ impl Rig {
         parse_dump_state_rx_ranges(&reply)
     }
 
+    /// Ask the rig ONCE whether its split can be read without disturbing it.
+    ///
+    /// Uses `\dump_caps` — the PROSE capability dump, which is the only one carrying the split
+    /// flags (`\dump_state`, the machine-readable one, does not). Verified against Hamlib
+    /// 4.7.1 `tests/rigctl_parse.c`, where `dump_caps` is a real protocol command
+    /// (`{ '1', "dump_caps", … }`).
+    ///
+    /// Cache the answer per connection: it is a long reply and it cannot change while the rig
+    /// is the same rig. `None` = we could not ask, which the caller must treat as
+    /// [`SplitDetect::Absent`] — silence is not permission.
+    pub fn read_split_capability(&mut self) -> Option<crate::baud_ladder::SplitDetect> {
+        self.control.as_ref()?;
+        let reply = self.command_multiline("\\dump_caps\n").ok()?;
+        Some(crate::baud_ladder::parse_caps(&reply).split_detect)
+    }
+
     /// Set the operating mode (e.g. "USB") + passband. A BLANK mode is a no-op —
     /// the caller is choosing to OBEY the radio's current mode (max compatibility),
     /// so Nexus sends no `M` command. Also a no-op unless a CAT control channel is

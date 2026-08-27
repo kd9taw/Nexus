@@ -10,6 +10,9 @@ import {
   topNeedByCall,
   alertsByCall,
   visibleNeeds,
+  boardNeeds,
+  isActivityTag,
+  activityTypeByCall,
   workTarget,
 } from './needs'
 import type { BandChannel, NeedAlert, NeedTag } from '../types'
@@ -636,3 +639,98 @@ describe('the mode label the Needed board shows never changes where a click land
     expect(workTarget(alert('RTTY'), [])?.view).toBe('rtty')
   })
 })
+
+// OPERATOR REPORT (2026-08-23, running 1.7.7-test2): "I am seeing dx grids being shown again
+// on the needed board, even though I have new grid in settings set to VHF +6m. This seems
+// like this has broke from a fixed state before."
+//
+// It had not, quite — and the real order is the interesting part. The board was handed the raw,
+// un-gated list on 2026-06-29 so a disabled CW/Phone feature would stop hiding rows there, which
+// was right: the board's own filter bar owns mode visibility. The band scopes were added to
+// `visibleNeeds` two months LATER, for the roster and the decode rows, and the board — no longer
+// calling it — never picked them up. So it read as a regression to an operator who had watched
+// the icons get fixed elsewhere, and no commit ever broke it: one call grew a second job that
+// this caller had already opted out of wholesale.
+//
+// `boardNeeds` is that half, named: scopes intact, mode gate neutral. The board asks for it
+// by name now, so the next person fixing mode visibility cannot take the scopes along by
+// accident.
+describe('boardNeeds — the Needed board keeps its band scopes without the mode gate', () => {
+  /** The shipped defaults the operator is running: grids VHF+ only, DXCC everywhere. */
+  const DEFAULTS = { dxcc: 'all', grid: 'vhf', rareGrid: 'vhf' }
+  const mk = (tags: NeedTag[], mode: string, band: string): NeedAlert => ({
+    ...alert('K1GRID', mode, band),
+    tags,
+    priority: NEED_TIER[tags[0]],
+  })
+
+  it('drops an HF new-grid need — the report', () => {
+    expect(boardNeeds([mk(['NewGrid'], 'Digital', '20m')], DEFAULTS)).toEqual([])
+  })
+
+  it('POSITIVE CONTROL — the same need on 6 m survives', () => {
+    expect(boardNeeds([mk(['NewGrid'], 'Digital', '6m')], DEFAULTS)).toHaveLength(1)
+  })
+
+  it('keeps a CW need the mode gate would have dropped — what the un-gating was for', () => {
+    expect(boardNeeds([mk(['NewEntity'], 'CW', '20m')], DEFAULTS)).toHaveLength(1)
+  })
+
+  it('keeps a Phone need too', () => {
+    expect(boardNeeds([mk(['NewEntity'], 'Phone', '20m')], DEFAULTS)).toHaveLength(1)
+  })
+
+  it('no scopes yet (settings still loading) → permissive, as everywhere else', () => {
+    expect(boardNeeds([mk(['NewGrid'], 'Digital', '20m')], undefined)).toHaveLength(1)
+  })
+})
+
+// OPERATOR REPORT (2026-08-23), having just worked RI1FJL on 20 m and still seeing its chips:
+// "why is it still showing grid, dxped ... what does that even mean when its showing me an icon
+// after I already have worked them on 20m? ... I would just remove dxpedition or not rank it
+// within the needed tiering."
+//
+// DXped/POTA/SOTA are LABELS, not reasons to work somebody. The backend already says so — they
+// are "appended post-scoring ... never the primary reason" and all carry tier 0 — but they ride
+// in `tags`, and every consumer that reached for `tags[0]` therefore picked one up whenever it
+// was all a station had. A DXPED chip in a row of needs claims there is something to gain from a
+// station, and being a DXpedition is not something anyone can need.
+//
+// They stay in `tags` on purpose: the activity BADGE and the Needed board's own DXped filter
+// both read them from there. What changes is that they can never be chosen AS a need.
+describe('activity tags label a station, they are not needs', () => {
+  const mk = (tags: NeedTag[], call = 'RI1FJL'): NeedAlert => ({
+    ...alert(call, 'Digital', '20m'),
+    tags,
+    priority: NEED_TIER[tags[0]],
+  })
+
+  it('a station whose only tag is DXped gets no need at all', () => {
+    const m = topNeedByCall(new Map([['RI1FJL', [mk(['Dxped'])]]]))
+    expect(m.get('RI1FJL')).toBeUndefined()
+  })
+
+  it('POTA and SOTA are the same kind of label', () => {
+    expect(topNeedByCall(new Map([['K1PARK', [mk(['Pota'], 'K1PARK')]]])).get('K1PARK')).toBeUndefined()
+    expect(topNeedByCall(new Map([['K1PEAK', [mk(['Sota'], 'K1PEAK')]]])).get('K1PEAK')).toBeUndefined()
+  })
+
+  it('POSITIVE CONTROL — a real need alongside DXped still wins the row', () => {
+    // The case that must NOT regress: a DXpedition that is also an all-time-new entity is very
+    // much a need, and it should read NEW ONE rather than DXPED.
+    const m = topNeedByCall(new Map([['RI1FJL', [mk(['NewEntity', 'Dxped'])]]]))
+    expect(m.get('RI1FJL')).toBe('NewEntity')
+  })
+
+  it('and the label is still readable for the badge and the filter', () => {
+    // `activityTypeByCall` reads the same tags — the badge and the board filter are untouched.
+    expect(activityTypeByCall([mk(['Dxped'])]).get('RI1FJL')).toBe('Dxped')
+  })
+
+  it('isActivityTag names exactly the three, and nothing else', () => {
+    for (const t of ['Dxped', 'Pota', 'Sota'] as NeedTag[]) expect(isActivityTag(t)).toBe(true)
+    for (const t of ['NewEntity', 'NewGrid', 'NewBand', 'Confirm', 'Wanted'] as NeedTag[])
+      expect(isActivityTag(t)).toBe(false)
+  })
+})
+

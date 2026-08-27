@@ -63,6 +63,7 @@ import {
 } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
+import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
 import { useWheelTune } from '../useWheelTune'
 import { useScopeTune } from '../useScopeTune'
@@ -87,7 +88,6 @@ const AGC = 'AGC'
 const BW = 'BW'
 const CAT = 'CAT'
 const WINKEYER = 'WinKeyer'
-const SPLIT_PLATE = 'SPLIT ▲'
 const REC = 'REC'
 /** The BW nudge and the AI decoder's audio window, as the tooltips print them — figures, so
  *  they are supplied to the message rather than written in it. */
@@ -99,6 +99,19 @@ const REC = 'REC'
 const HZ = 'Hz'
 const FILTER_STEP_HZ = 50
 const AI_WINDOW_HZ = '400–1200'
+
+/** The AGC chips, in the order `Engine::AGC_SPEEDS` lists them: AUTO left of the three time
+ *  constants, OFF right of them — most-automatic through to no AGC at all. The `id` is the
+ *  token that goes on the wire and the label is a KEY, not a word: `t()` runs when the row
+ *  RENDERS, so a locale switch relabels the chips and the chip is still compared on its id
+ *  (the same split RF_SPANS makes, and for the same reason). */
+const AGC_CHIPS = [
+  { id: 'auto', labelKey: 'cw.rxDsp.agc.auto' },
+  { id: 'fast', labelKey: 'cw.rxDsp.agc.fast' },
+  { id: 'mid', labelKey: 'cw.rxDsp.agc.mid' },
+  { id: 'slow', labelKey: 'cw.rxDsp.agc.slow' },
+  { id: 'off', labelKey: 'cw.rxDsp.agc.off' },
+] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
 /** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit).
  *  The ± labels are measurements and stay written here; `Full` is a word. Both it and every
@@ -442,7 +455,7 @@ export function CwCockpit({
   const [agcPick, setAgcPick] = useState<string | null>(null)
   const agc =
     agcPick != null && agcPick !== snap.radio.refusedAgc ? agcPick : (snap.radio.agc ?? null)
-  const changeAgc = (sp: 'fast' | 'mid' | 'slow') => {
+  const changeAgc = (sp: 'auto' | 'fast' | 'mid' | 'slow' | 'off') => {
     setAgcPick(sp)
     void setAgc(sp)
       .then((s) => onSnap?.(s))
@@ -1134,19 +1147,15 @@ export function CwCockpit({
                 title={t('cw.rxDsp.agc.title')}
               >
                 <span className="ph-dsplev-lbl">{AGC}</span>
-                {(['fast', 'mid', 'slow'] as const).map((sp) => (
+                {AGC_CHIPS.map(({ id, labelKey }) => (
                   <button
-                    key={sp}
+                    key={id}
                     type="button"
-                    className={`theme-chip${agc === sp ? ' active' : ''}`}
-                    aria-pressed={agc === sp}
-                    onClick={() => changeAgc(sp)}
+                    className={`theme-chip${agc === id ? ' active' : ''}`}
+                    aria-pressed={agc === id}
+                    onClick={() => changeAgc(id)}
                   >
-                    {sp === 'fast'
-                      ? t('cw.rxDsp.agc.fast')
-                      : sp === 'mid'
-                        ? t('cw.rxDsp.agc.mid')
-                        : t('cw.rxDsp.agc.slow')}
+                    {t(labelKey)}
                   </button>
                 ))}
               </div>
@@ -1434,13 +1443,23 @@ export function CwCockpit({
               )
           }
         />
-        {snap.radio.splitTxMhz != null && (
-          <span
-            className="cw-mode-badge"
-            title={t('cw.split.title', { freq: snap.radio.splitTxMhz.toFixed(4) })}
-          >
-            {SPLIT_PLATE}
-          </span>
+        {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
+            DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.
+            A General working a DX in the Extra-only CW bottom — RX 14.015, TX 14.026, which is
+            simply how DX is worked — had to reach for the radio's front panel and then found
+            Nexus refusing to key, because the privilege gate had no way to learn where he was
+            transmitting. Fixing the gate without this left the fix unreachable by the operator
+            who reported it, and he was a CW operator.
+
+            Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
+            header is width-critical at 1024 (see the density note above), so it costs nothing
+            when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
+        {catOk && (
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+          />
         )}
         {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
             picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,

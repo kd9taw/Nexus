@@ -94,9 +94,35 @@ export function isTauri(): boolean {
   }
 }
 
+/**
+ * Fired after any command that could change WHICH credentials are stored.
+ *
+ * ⚠️ THIS EXISTS SO SETTINGS DOES NOT POLL THE OS KEYCHAIN (#154). Reading whether a password
+ * is saved means opening a Secret Service session per connector, and Settings was doing that
+ * every 5 seconds — which on Fedora 44 crashed `gnome-keyring-daemon` in a loop
+ * (`service_method_open_session` → SIGABRT, restart, repeat) for as long as the app was open.
+ * The answer only changes when the operator saves or clears one, so it is an EVENT, not a poll.
+ *
+ * Raised centrally rather than at each of the ten call sites: a missed one would leave the
+ * badge stale, and the whole point is that nothing re-reads the keychain on a timer to correct
+ * it.
+ */
+export const CREDENTIALS_CHANGED = 'nexus-credentials-changed'
+
+/** Commands that add or remove a stored secret. Matched by SHAPE, so a new connector's
+ *  `set_x_password` / `clear_x` is covered the day it is added and not the day someone
+ *  remembers to extend a list. */
+function mutatesCredentials(cmd: string): boolean {
+  return /^set_[a-z0-9_]+_(password|key|token|code)$/.test(cmd) || /^clear_[a-z0-9_]+$/.test(cmd)
+}
+
 /** Invoke a backend command. Throws if the IPC bridge is unavailable. */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  return bridge()(cmd, args) as Promise<T>
+  const out = (await bridge()(cmd, args)) as T
+  if (mutatesCredentials(cmd) && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(CREDENTIALS_CHANGED))
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +620,13 @@ export async function editQso(index: number, record: LoggedQso): Promise<AppSnap
  *  a confirmation — this never flips `confirmed`/`awardConfirmed`. */
 export async function markQslSent(index: number, via: 'B' | 'D' | 'E'): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('mark_qsl_sent', { index, via })
+}
+
+/** Record whether a PAPER QSL card arrived for entry `index` (#152). The operator is the only
+ *  authority — LoTW/eQSL/QRZ report their own confirmations, but nothing knows a card landed.
+ *  Award-eligible, so this moves the awards view. Clearable, for a mis-tick. */
+export async function markQslCard(index: number, received: boolean): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('mark_qsl_card', { index, received })
 }
 
 /** Delete logbook entry `index` (the position in the `getLog()` array). */
@@ -1095,7 +1128,7 @@ export async function setSplit(txMhz: number | null): Promise<AppSnapshot> {
 
 /** Set ('USB'|'LSB'|'FM') or clear (null = AUTO) the transient Phone mode override. The radio
  * loop applies it next cycle; a band change reverts to the band-auto sideband. */
-export async function setSidebandOverride(mode: 'USB' | 'LSB' | 'FM' | null): Promise<AppSnapshot> {
+export async function setSidebandOverride(mode: 'USB' | 'LSB' | 'FM' | 'AM' | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_sideband_override', { mode })
 }
 
@@ -1218,7 +1251,6 @@ export async function setMicGain(gain: number): Promise<AppSnapshot> {
 export async function setNrLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_nr_level', { level })
 }
-
 /** Set the speech-processor depth as a 0.0–1.0 fraction (#95). */
 export async function setCompLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_comp_level', { level })
@@ -1228,8 +1260,9 @@ export async function setCompLevel(level: number): Promise<AppSnapshot> {
 export async function setNotchFreq(hz: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_notch_freq', { hz })
 }
-/** Set the AGC speed ("fast" | "mid" | "slow"). */
-export async function setAgc(speed: 'fast' | 'mid' | 'slow'): Promise<AppSnapshot> {
+
+/** Set the AGC speed — `Engine::AGC_SPEEDS`, in the order the cockpits show them. */
+export async function setAgc(speed: 'auto' | 'fast' | 'mid' | 'slow' | 'off'): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_agc', { speed })
 }
 
@@ -2382,6 +2415,17 @@ export async function exportLogForOperator(operator: string): Promise<string> {
  *  ClubLog key is redacted because ClubLog auto-revokes one that becomes public. */
 export async function exportSettingsBundle(): Promise<string> {
   return invoke<string>('export_settings_bundle')
+}
+
+/**
+ * Reset the configuration to factory defaults.
+ *
+ * Keeps the logbook (it lives outside the settings) and keeps stored credentials (they live in
+ * the OS keychain — `clear*` verbs forget those, deliberately separately). Applies through the
+ * same path a restore uses, so a running app reconfigures rather than writing the old config back.
+ */
+export async function resetSettings(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('reset_settings')
 }
 
 /** Restore a bundle written by `exportSettingsBundle`. Refuses anything that is not one, by

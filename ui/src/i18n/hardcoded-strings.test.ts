@@ -551,6 +551,10 @@ const PARTIAL = [
   'components/PskCockpit.tsx',
   'components/SstvView.tsx',
   'components/PhoneCockpit.tsx',
+  // SplitControl.tsx (2026-08-26) — extracted FROM PhoneCockpit when CW and Operate gained a
+  // real split control, so it arrives already fully catalogued. Without it here every
+  // `phone.split.*` entry reads as an orphan, because the strings moved and the scanner did not.
+  'components/SplitControl.tsx',
   'components/VoiceKeyer.tsx',
 ]
 

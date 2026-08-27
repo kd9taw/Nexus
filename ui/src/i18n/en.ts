@@ -666,6 +666,10 @@ export const EN = {
   'logbook.field.qth.label': 'QTH',
   // Also prose — QTH is free text, so the example is a place a reader recognises.
   'logbook.field.qth.placeholder': 'Dayton, OH',
+  'logbook.column.notes': 'Notes',
+  'logbook.row.notes.title': 'Comment (shared on the QSL)',
+  'logbook.row.notes.private': 'Private note',
+  'logbook.row.notes.aria': 'has a private note',
   'logbook.field.comment.label': 'Comment',
   'logbook.field.comment.placeholder': 'Shared on the QSL',
   'logbook.field.notes.label': 'Notes',
@@ -727,6 +731,10 @@ export const EN = {
   'logbook.row.qslSent.title':
     "Mark a QSL request sent to {{call}} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.",
   'logbook.row.qslSent.aria': 'Mark QSL sent to {{call}}',
+  'logbook.qsl.cardMarked': 'QSL card recorded for {{call}}',
+  'logbook.qsl.cardCleared': 'QSL card cleared for {{call}}',
+  'logbook.row.qslRcvd.card': 'Card received',
+  'logbook.row.qslRcvd.clear': 'Card NOT received',
   'logbook.row.qslSent.bureau': 'Bureau',
   'logbook.row.qslSent.direct': 'Direct',
   'logbook.row.qslSent.electronic': 'Electronic',
@@ -1160,6 +1168,9 @@ export const EN = {
   'needed.column.call': 'Call',
   'needed.column.entity': 'Entity',
   'needed.column.band': 'Band',
+  'needed.column.freq': 'Freq',
+  'needed.row.freq.title': 'Spotted on {{freq}} MHz',
+  'needed.row.freq.none': 'No exact frequency — this need is band-level only',
   'needed.column.mode': 'Mode',
   'needed.column.zone': 'Zone',
   'needed.column.why': 'Why',
@@ -1204,7 +1215,7 @@ export const EN = {
     'New US state on this band (5BWAS) — a hint from the grid; confirm from the log',
   'need.badge.dxped.label': 'DXPED',
   'need.badge.dxped.title': 'Active DXpedition — limited-time window',
-  'need.badge.confirm.label': 'NEEDS QSL',
+  'need.badge.confirm.label': 'LoTW',
   'need.badge.confirm.title':
     'This entity/zone/grid is worked on this band but not yet confirmed — a LoTW match or a paper card would close it (eQSL and QRZ do not count toward awards, so they do not clear this). Not a claim about this callsign: B4 is the worked-this-call chip.',
   'need.badge.pota.title': 'Live POTA activator',
@@ -1232,8 +1243,8 @@ export const EN = {
   'need.chip.newState.label': 'STATE',
   'need.chip.newState.short': 'ST',
   'need.chip.newState.title': 'New US state on this band — best-guess from the grid',
-  'need.chip.confirm.label': 'NEEDS QSL',
-  'need.chip.confirm.short': 'QSL',
+  'need.chip.confirm.label': 'LoTW',
+  'need.chip.confirm.short': 'LoTW',
   'need.chip.confirm.title':
     'Worked on this band but not yet confirmed — a LoTW match or a paper card closes it; eQSL and QRZ do not count toward awards',
   'need.chip.dxped.label': 'DXPED',
@@ -3551,6 +3562,8 @@ export const EN = {
   'bandPicker.select.title':
     'Band — your last frequency on this band in this mode this session, else the start of your licensed segment',
   'bandPicker.txLock.label': '🔒 TX locked',
+  'bandPicker.txLock.splitTitle':
+    'TX locked — your split transmit frequency, {{tx}} MHz, is outside your license privileges. Receiving on {{rx}} MHz is fine.',
   'bandPicker.txLock.title':
     'This frequency/mode is outside your license privileges — transmit is blocked. Pick a band above, or change your license class in Settings.',
 
@@ -3693,6 +3706,15 @@ export const EN = {
   'settings.backup.restore.confirm.action': 'Restore',
   'settings.backup.restore.done': 'Settings restored — check your radio and Test CAT',
   'settings.backup.restore.failed': 'Restore failed',
+  // Reset's dialog says what SURVIVES as well as what goes: "reset" reads as total, and the two
+  // things operators fear for — the log and their stored passwords — are exactly the two this
+  // does not touch. Saying so in the dialog is what makes the confirm answerable.
+  'settings.backup.reset.confirm.title': 'Reset all settings to factory defaults?',
+  'settings.backup.reset.confirm.body':
+    'Your radios, audio devices, callsign and preferences will be erased. Your contact log is not affected, and stored passwords stay in your keychain. This cannot be undone — back up first if you have not.',
+  'settings.backup.reset.confirm.action': 'Reset',
+  'settings.backup.reset.done': 'Settings reset to defaults',
+  'settings.backup.reset.failed': 'Could not reset the configuration',
 
   'settings.audio.rxGain.failed': 'Could not apply RX gain',
   'settings.audio.txPower.failed': 'Could not set TX power',
@@ -4178,16 +4200,25 @@ export const EN = {
   // ── Settings ▸ Radio ▸ Headphone monitor ────────────────────────────────────────────
   // "System default" inside these sentences names the picker entry above, so it reads the
   // same word the operator just chose — translate them together.
-  'settings.headphoneMonitor.legend': 'Headphone monitor',
-  'settings.headphoneMonitor.enable.label': 'Enable monitor',
-  'settings.headphoneMonitor.enable.aria': 'Enable headphone monitor',
+  // ⚠️ THE WORD "MONITOR" IS NOT USED HERE, deliberately, though the settings behind it are still
+  // named `monitor_*`. In amateur practice MONITOR means listening to your own TRANSMITTED audio —
+  // it is what MONI on the rig does. This plays the RECEIVED audio out of a computer device. An
+  // experienced operator read the old label and asked whether it would put his own voice back in
+  // his ears (2026-08-22); it would not, which is precisely the problem with the old wording.
+  'settings.headphoneMonitor.legend': 'Receive audio on this computer',
+  'settings.headphoneMonitor.enable.label': 'Play receive audio here',
+  'settings.headphoneMonitor.enable.aria': 'Play receive audio on this computer',
   'settings.headphoneMonitor.enable.hint':
-    "Plays the exact audio the decoder hears — for level / RFI diagnosis and listening to the band. Off by default; UNVERIFIED on-air until the attended session. Guards against the rig's TX device by name (System default is resolved to its real device first) — if your devices go by multiple names, pick your headphones explicitly rather than System default.",
-  'settings.headphoneMonitor.device.label': 'Monitor Output Device',
+    "Plays the RECEIVED audio — exactly what the decoder hears — out of a device on this computer, for level and RFI diagnosis or simply to listen to the band. This is not a transmit monitor: it never plays your own voice back. Off by default; UNVERIFIED on-air until the attended session.",
+  // NAMES THE DESTINATION, not the direction — "Output device" collided with
+  // `settings.audio.output.label` ("Output Device (TX)") on the same tab, so the Radio page
+  // showed two pickers differing by a parenthetical and a capital letter. Under the section
+  // heading it read clearly; scanning the tab it did not (kd9taw, #157).
+  'settings.headphoneMonitor.device.label': 'Headphones or speakers',
   'settings.headphoneMonitor.device.hint':
     "Your headphones or speakers — must NOT be the rig's TX output device.",
-  'settings.headphoneMonitor.level.label': 'Monitor Level',
-  'settings.headphoneMonitor.level.aria': 'Headphone monitor level',
+  'settings.headphoneMonitor.level.label': 'Listening level',
+  'settings.headphoneMonitor.level.aria': 'Receive listening level',
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
 
@@ -4552,6 +4583,14 @@ export const EN = {
   'settings.transmit.backup.failed': 'Backup failed',
   'settings.transmit.restore.action': 'Restore…',
   'settings.transmit.restore.title': 'Replace your current setup with a saved backup',
+
+  // Reset sits beside Backup because its confirm points AT the backup: the machinery that makes
+  // this reversible is one control away, so the wording names it rather than just warning.
+  'settings.transmit.reset.label': 'Start over',
+  'settings.transmit.reset.action': 'Reset all settings…',
+  'settings.transmit.reset.title': 'Erase all settings and return to factory defaults',
+  'settings.transmit.reset.hint':
+    'Erases your radios, audio devices, callsign and preferences. Your <b>logbook is not touched</b>, and stored passwords stay in your keychain (clear those individually under Logging & Connectors). Back up first — this cannot be undone.',
 
   'settings.transmit.share.label': 'Share this radio with other programs',
   'settings.transmit.share.copy.action': 'Copy',
@@ -6086,7 +6125,7 @@ export const EN = {
   'operate.dxped.off.label': 'Off',
   'operate.dxped.off.title': 'No DXpedition special mode',
   'operate.dxped.hound.title':
-    "DXpedition hound: calls go out above 1000 Hz; your R+report auto-moves to the Fox's frequency",
+    "DXpedition hound: calls go out above 1000 Hz, your R+report auto-moves to the Fox's frequency, and the QSO ends on the Fox's RR73 with NO parting 73 — a 73 there is QRM in the Fox's own segment. Off again at every launch: turn it on for the DXpedition, not for the day.",
 
   // The signal source. `{{active}}` is the backend's own `sourceLabel` and `{{addr}}` the
   // configured companion UDP address — both data. Two whole sentences, because the
@@ -6122,9 +6161,6 @@ export const EN = {
   'operate.header.record.startFailed': 'Could not start recording',
   'operate.header.record.stopFailed': 'Could not stop recording',
 
-  // `{{freq}}` is the split TX frequency, already formatted invariantly by the cockpit.
-  'operate.header.split.title':
-    'Rig split active — TX {{freq}} MHz (pile-up). Any QSY returns to simplex.',
 
   'operate.header.layout.aria': 'Operate layout',
   'operate.header.layout.classic.label': 'Classic',
@@ -6319,6 +6355,8 @@ export const EN = {
   'operate.roster.title': 'Call Roster',
   'operate.roster.filter.neededOnly': 'Needed only',
   'operate.roster.filter.hideWorked': 'Hide worked',
+  'operate.roster.filter.hideWorked.title':
+    'Hide stations you have already worked — EXCEPT the ones that still fill a need, which stay on the list. That is why a B4 chip can survive this filter: you worked that call on another band or mode, and it is still a new slot here. Turn on Needed only to see just those.',
   'operate.roster.filter.hideBlocked': 'Hide blocked',
   'operate.roster.filter.hideBlocked.title':
     'Drop blocked callsigns from the roster entirely (unchecked: they render dimmed). Alt-double-click a row to block or unblock; the auto-responder never answers blocked calls either way.',
@@ -6847,8 +6885,6 @@ export const EN = {
   // own words — all three arrive invariant.
   'cw.rotator.pointed': 'Rotator → {{call}}: {{bearing}}°',
   'cw.rotator.failed': 'Rotator: {{error}}',
-  // `{{freq}}` is the split TX frequency, already formatted invariantly.
-  'cw.split.title': 'Split — TX {{freq}} MHz',
   'cw.record.start.aria': 'Record QSO audio',
   'cw.record.stop.aria': 'Stop recording this QSO',
   'cw.record.off.title': 'Record the received audio to a WAV in the recordings folder',
@@ -6908,10 +6944,13 @@ export const EN = {
   'cw.rxDsp.nr.aria': 'Noise-reduction level',
   'cw.rxDsp.agc.aria': 'AGC speed',
   'cw.rxDsp.agc.title': 'AGC time constant — Fast for CW/pileups, Slow for steady copy',
-  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  // The five chips are words over stored tokens ('auto' / 'fast' / 'mid' / 'slow' /
+  // 'off' — `Engine::AGC_SPEEDS`, and the order they render in).
+  'cw.rxDsp.agc.auto': 'Auto',
   'cw.rxDsp.agc.fast': 'Fast',
   'cw.rxDsp.agc.mid': 'Mid',
   'cw.rxDsp.agc.slow': 'Slow',
+  'cw.rxDsp.agc.off': 'Off',
 
   // ── CW ▸ the decode pane and the sent echo ──────────────────────────────────────────
   // `{{window}}` is the AI decoder's audio window in Hz, supplied by the call site.
@@ -7124,10 +7163,13 @@ export const EN = {
   'phone.rxDsp.notchFreq.aria': 'Manual notch frequency in hertz',
   'phone.rxDsp.agc.aria': 'AGC speed',
   'phone.rxDsp.agc.title': 'AGC time constant',
-  // The three chips are words over stored tokens ('fast' / 'mid' / 'slow').
+  // The five chips are words over stored tokens ('auto' / 'fast' / 'mid' / 'slow' /
+  // 'off' — `Engine::AGC_SPEEDS`, and the order they render in).
+  'phone.rxDsp.agc.auto': 'Auto',
   'phone.rxDsp.agc.fast': 'Fast',
   'phone.rxDsp.agc.mid': 'Mid',
   'phone.rxDsp.agc.slow': 'Slow',
+  'phone.rxDsp.agc.off': 'Off',
 
   // ── Phone ▸ the voice keyer pane ─────────────────────────────────────────────────────
   // F1–F6 are key names and `{{slot}}` is the number one of them carries; `{{label}}` is the
@@ -7211,6 +7253,9 @@ export const EN = {
   // data, never translated.
   'shell.lane.audio.message': 'RADIO STOPPED',
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
+  'shell.lane.txPowerZero.message': 'NO RF POWER',
+  'shell.lane.txPowerZero.detail':
+    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the Pwr slider, and the rig\u2019s own power for THIS mode: Yaesu rigs keep a separate level for SSB, DATA, CW and AM.',
   'shell.lane.recording.message': 'RECORDING',
   'shell.lane.prop.offline.message': 'Prop: no live data',
   'shell.lane.prop.offline.detail':

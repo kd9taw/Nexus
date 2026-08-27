@@ -31,6 +31,8 @@ import {
   // which shadows a bare import everywhere inside the component — including the one call site
   // below, where it resolved to a number and failed to compile.
   spanDb as rowSpanDb,
+  axisAbsoluteHz,
+  axisTicks,
 } from '../waterfall'
 import { boxEdges, boxWidthFor, clampBoxCenterHz, clickTuneTarget, dialFromBoxCenter } from '../tuneSnap'
 import type { ScopeTuneRequest } from '../useScopeTune'
@@ -103,11 +105,11 @@ interface Props {
    * (cwScopeWindow) so individual carriers are readable for tone placement. On a native
    * RF panadapter row the same window is mapped onto RF around the dial (scopeView), so
    * the width still applies. With `carrierCentered` the width is the OCCUPIED SIDEBAND's,
-   * and the axis adds a W/3 guard band on the empty side. */
+   * and the axis adds a W/8 guard band on the empty side. */
   viewLoHz?: number
   viewHiHz?: number
   /** PHONE only: draw the audio row on a rig-style axis — RF offset from the dial, with the
-   * dial (audio 0 Hz, the suppressed carrier) at the 1/4 mark on USB, the 3/4 mark on LSB,
+   * dial (audio 0 Hz, the suppressed carrier) at the 1/9 mark on USB, the 8/9 mark on LSB,
    * and the occupied sideband taking the other 3/4 of the panel. Off = the plain audio
    * window, which is what CW uses (its axis is centered on the PITCH instead — see
    * cwScopeWindow). Never applies to a native RF row; those are already dial-centered. */
@@ -789,15 +791,17 @@ export function PhoneScope({
       ctx.lineWidth = Math.max(1, scaleY)
       ctx.stroke()
 
-      // ---- Carrier line (Phone): the DIAL, at the 1/4 mark (USB) or the 3/4 mark (LSB) ----
+      // ---- Carrier line (Phone): the DIAL, at the 1/9 mark (USB) or the 8/9 mark (LSB) ----
       //
       // WHY THE GUARD BAND IS ALWAYS QUIET, and it is not a bug to be fixed later. This scope
       // is fed by DEMODULATED RECEIVER AUDIO, which is one-sided: an SSB detector folds the
       // wanted sideband down to 0–3 kHz and throws the image away, so there is no signal on
       // the other side of the carrier to draw. That is why the axis is not centered — a
       // centered dial spent half the panel on that side and squeezed the voice into ~30% of
-      // the width (operator screenshot, 2026-08-16). W/3 of empty is the whole cost of having
-      // the dial read as a line rather than an edge. A radio that streams its OWN panadapter
+      // the width (operator screenshot, 2026-08-16). The guard band is the whole cost of having
+      // the dial read as a line rather than an edge, and it was cut from W/3 to W/8 on 2026-08-23:
+      // a third of the panel standing empty beside the marker read as the marker being misplaced,
+      // when in fact a USB dial belongs at the LOW edge of its own voice. A radio that streams its OWN panadapter
       // (Flex, Icom CI-V) sends real RF and genuinely fills both sides; that feed takes the RF
       // branch in scopeView and never reaches this code.
       //
@@ -864,6 +868,48 @@ export function PhoneScope({
           ctx.textAlign = 'left'
           ctx.textBaseline = 'top'
           ctx.fillText(DIAL_PLATE, dx + 3 * scaleY, 2 * scaleY)
+        }
+      }
+
+      // ---- Frequency scale: where a click will actually put you --------------------
+      //
+      // Operator, 2026-08-22: "can freq numbers be added to the phone waterfall? It's a bit
+      // difficult to see where a mouse click will take you." The Operate waterfall has had an
+      // axis all along; this one had the DIAL plate and nothing else, so a signal two thirds of
+      // the way across was a guess.
+      //
+      // ABSOLUTE frequency, not offset from the dial. The question being answered is "where will
+      // I land", and an operator reading "-3.2k" still has arithmetic to do mid-QSO.
+      //
+      // `axisAbsoluteHz` owns the one thing that is easy to get wrong here: on the carrier-centred
+      // AUDIO axis these bounds are offsets FROM the dial, while a native RF panadapter's are
+      // already absolute. It returns null when there is no honest answer (audio row, unknown
+      // dial), and then nothing is drawn — a wrong number on a scale someone tunes by is worse
+      // than a blank one.
+      {
+        const dialNow = dialRef.current
+        for (const t of axisTicks(lo, hi, 6)) {
+          const abs = axisAbsoluteHz(t, src, dialNow)
+          if (abs == null) break
+          const tx = Math.round(((t - lo) / (hi - lo)) * Wd)
+          // Skip a tick sitting on the dial line — its plate is already there and the two
+          // would overprint.
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)'
+          ctx.lineWidth = Math.max(1, scaleY)
+          ctx.beginPath()
+          ctx.moveTo(tx, devH - 10 * scaleY)
+          ctx.lineTo(tx, devH)
+          ctx.stroke()
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
+          ctx.font = `${Math.max(8, Math.round(9 * scaleY))}px system-ui, sans-serif`
+          ctx.textBaseline = 'bottom'
+          // Three decimals of MHz is the kHz an operator dials. Nudged inward at the edges so a
+          // label is never half-clipped — a truncated frequency is a misleading one.
+          const label = (abs / 1e6).toFixed(3)
+          const w = ctx.measureText(label).width
+          ctx.textAlign = 'left'
+          const lx = Math.min(Wd - w - 2 * scaleY, Math.max(2 * scaleY, tx + 3 * scaleY))
+          ctx.fillText(label, lx, devH - 2 * scaleY)
         }
       }
 

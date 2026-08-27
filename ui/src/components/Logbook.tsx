@@ -29,6 +29,7 @@ import {
   logQso,
   markLotwUploaded,
   markQslSent,
+  markQslCard,
   purgeLog,
   qrzLookup,
   saveTextToDownloads,
@@ -543,6 +544,25 @@ export function Logbook({
     const snap = await withErrorToast(() => markQslSent(i, via), t('logbook.qsl.markFailed'))
     if (snap) {
       pushToast(t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via }), 'success')
+      load()
+    }
+  }
+
+  const onMarkQslCard = async (q: LoggedQso, i: number, received: boolean) => {
+    const snap = await withErrorToast(
+      () => markQslCard(i, received),
+      t('logbook.qsl.markFailed'),
+    )
+    if (snap) {
+      // Two literal keys, not one interpolated one: the i18n orphan guard scans for literal
+      // `t('key')` references and a ternary inside the call is invisible to it — it flagged
+      // both of these as unused catalog entries, which is exactly its job.
+      pushToast(
+        received
+          ? t('logbook.qsl.cardMarked', { call: q.call })
+          : t('logbook.qsl.cardCleared', { call: q.call }),
+        'success',
+      )
       load()
     }
   }
@@ -1183,6 +1203,9 @@ export function Logbook({
           {th(t('logbook.column.park'), 'park')}
           {/* The QSL column's header is the Q-code itself, not a word for it. */}
           {th('QSL', 'qsl')}
+          {/* Not sortable: free text, and sorting a log by remark answers no question an
+              operator asks. Plain header cell, same shape as the actions column's. */}
+          <span className="log-cell" role="columnheader">{t('logbook.column.notes')}</span>
           <span className="log-cell" role="columnheader" aria-label={t('logbook.column.actions')}></span>
         </div>
           </div>
@@ -1308,6 +1331,29 @@ export function Logbook({
                     </span>
                   )}
                 </span>
+                {/* Comment + private note. Both were WRITE-ONLY here until 2026-08-23: the edit
+                    form took them and the table never showed them back, so the only way to see
+                    a note was to open the row you already had to guess held one (operator:
+                    "how else do you remember the things you talked about in the last QSOs?").
+                    The comment is short by design and shows inline; the private note is
+                    multi-line and gets a 📝 marker with the text in the tooltip, the same
+                    idiom the callsign-recall card already uses. */}
+                <span
+                  className="log-cell log-note"
+                  title={[
+                    (q.comment ?? '').trim() && `${t('logbook.row.notes.title')}: ${(q.comment ?? '').trim()}`,
+                    (q.notes ?? '').trim() && `${t('logbook.row.notes.private')}: ${(q.notes ?? '').trim()}`,
+                  ]
+                    .filter(Boolean)
+                    .join('\n\n')}
+                >
+                  {(q.notes ?? '').trim() && (
+                    <span className="log-note-flag" aria-label={t('logbook.row.notes.aria')}>
+                      📝
+                    </span>
+                  )}
+                  {(q.comment ?? '').trim() || ((q.notes ?? '').trim() ? '' : '—')}
+                </span>
                 <span className="log-cell log-rowactions">
                   <button
                     type="button"
@@ -1345,25 +1391,59 @@ export function Logbook({
                   >
                     {HRDLOG_LABEL}
                   </button>
-                  {/* QSL-request queue: mark a card/request sent (once) on the
-                      needs-confirmation view. Operator-declared, not a confirmation. */}
-                  {needsConfirmOnly && !q.qslSent?.sent && (
+                  {/* QSL handling for the row: mark a request SENT (once), and record the
+                      paper card that came BACK. Operator-declared, not a confirmation.
+                      
+                      ⚠️ THE GATE USED TO BE `needsConfirmOnly && !q.qslSent?.sent`, and both
+                      halves were wrong (#152, reported again after the 1.8.0 fix shipped).
+                      
+                      The filter half hid the whole menu unless the "needs confirmation" chip
+                      happened to be on, so the reporter looked in the ordinary Logbook — where
+                      anyone handling a stack of cards is — and found nothing. A fix nobody can
+                      reach is not a fix.
+                      
+                      The sent half is worse: a paper QSL is a ROUND TRIP. You send, you wait
+                      months, a card arrives. Removing the menu the moment you marked one sent
+                      deleted the control for the arrival, so the very card the feature exists
+                      to record could never be recorded. `q.qslSent?.sent` now hides only the
+                      three SEND entries — you still cannot send twice — while the inbound
+                      entries stay reachable for the life of the contact. */}
+                  {(
                     <select
                       className="log-rowbtn"
                       style={{ fontSize: '0.85em' }}
                       value=""
                       onChange={(e) => {
-                        const v = e.target.value as 'B' | 'D' | 'E' | ''
-                        if (v) void onMarkQslSent(q, i, v)
+                        const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | ''
+                        // R/r are NOT ADIF letters — they are this menu's own two entries for
+                        // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
+                        // is not a send at all. Kept in the same menu because an operator
+                        // handling a card thinks about one row, not two controls.
+                        if (v === 'R') void onMarkQslCard(q, i, true)
+                        else if (v === 'r') void onMarkQslCard(q, i, false)
+                        else if (v) void onMarkQslSent(q, i, v as 'B' | 'D' | 'E')
                       }}
                       title={t('logbook.row.qslSent.title', { call: q.call })}
                       aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
                     >
                       {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
                       <option value="">{QSL_MENU_LABEL}</option>
-                      <option value="B">{t('logbook.row.qslSent.bureau')}</option>
-                      <option value="D">{t('logbook.row.qslSent.direct')}</option>
-                      <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                      {/* Sending is once-only; the arrival below is not. */}
+                      {!q.qslSent?.sent && (
+                        <>
+                          <option value="B">{t('logbook.row.qslSent.bureau')}</option>
+                          <option value="D">{t('logbook.row.qslSent.direct')}</option>
+                          <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                        </>
+                      )}
+                      {/* INBOUND: the paper card that arrived. Nothing on the internet can
+                          report this, so the operator is the only source — and it is
+                          award-eligible (card OR LoTW), which is why its absence understated
+                          the awards view. The clear entry exists for a mis-tick. */}
+                      <option value="R">{t('logbook.row.qslRcvd.card')}</option>
+                      {q.qslRcvd?.card && (
+                        <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
+                      )}
                     </select>
                   )}
                   <button
