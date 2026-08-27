@@ -432,6 +432,73 @@ pub fn kpa_payload<'a>(reply: &'a str, verb: &str) -> Option<&'a str> {
     Some(rest)
 }
 
+/// The four data rates a KPA can be set to (`^BRP`), fastest first.
+///
+/// The amplifier remembers its rate, so Nexus cannot assume one — it sweeps them with
+/// [`kpa_ping`], which is the only probe that asks for nothing and changes nothing.
+pub const KPA_BAUDS: [u32; 4] = [38_400, 19_200, 9_600, 4_800];
+
+/// Decode a `^VI` payload — `"480 325"` is 48.0 V and 32.5 A.
+///
+/// Elecraft puts an **implied decimal point after the second digit** of both values, so the
+/// three digits are hundredths-of-a-hundred, not an integer. Reading `480` as 480 volts would
+/// put a plausible, wildly wrong number in front of the operator, which is why this is a parser
+/// with a test and not an inline `parse()`.
+pub fn kpa_parse_vi(payload: &str) -> Option<(f32, f32)> {
+    let (v, i) = payload.split_once(' ')?;
+    Some((implied_tenth(v)?, implied_tenth(i.trim_start())?))
+}
+
+/// Decode a `^WS` payload — `"250 015"` is 250 W at 1.5:1.
+///
+/// The SWR carries the same implied decimal. Elecraft documents its range as 1.0–99.0 and says
+/// it **reads `000` when not transmitting**, so a zero is "no reading", not a 0:1 match — it
+/// comes back as `None` rather than as a number no antenna can produce.
+pub fn kpa_parse_ws(payload: &str) -> Option<(u16, Option<f32>)> {
+    let (w, s) = payload.split_once(' ')?;
+    let watts = w.trim().parse().ok()?;
+    let swr = implied_tenth(s.trim_start())?;
+    Some((watts, (swr > 0.0).then_some(swr)))
+}
+
+/// Three digits with an implied decimal before the last: `"480"` → `48.0`.
+fn implied_tenth(digits: &str) -> Option<f32> {
+    let d = digits.trim();
+    if d.len() != 3 || !d.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(d.parse::<u16>().ok()? as f32 / 10.0)
+}
+
+/// One decoded KPA reading. Every field comes from a verb present on **both** the KPA500 and the
+/// KPA1500, so this struct is the same for either amplifier.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KpaStatus {
+    /// `^OS` — `true` = operate, `false` = standby.
+    pub operate: bool,
+    /// `^BN` — 0 = 160 m … 10 = 6 m. Elecraft publishes this ladder in full and notes it matches
+    /// the K3S/K3, so unlike the SPE index this one needs no bench confirmation.
+    pub band_index: u8,
+    /// `^TM` — PA temperature. Documented as degrees **Celsius**, 0–150.
+    pub temp_c: u16,
+    /// `^VI` — PA supply voltage and current.
+    pub volts: f32,
+    pub amps: f32,
+    /// `^WS` — output power in watts.
+    pub output_watts: u16,
+    /// `^WS` — SWR, or `None` when the amplifier is not transmitting.
+    pub swr: Option<f32>,
+    /// `^FL` — current fault identifier; `0` means no fault is active.
+    pub fault: u8,
+}
+
+impl KpaStatus {
+    /// `true` when the amplifier is reporting a fault.
+    pub fn has_fault(self: &KpaStatus) -> bool {
+        self.fault != 0
+    }
+}
+
 // ─────────────────────── SPE transport (serial) ───────────────────────
 
 /// The link itself, gated exactly as the WinKeyer's is: the codec above compiles everywhere and
@@ -439,12 +506,13 @@ pub fn kpa_payload<'a>(reply: &'a str, verb: &str) -> Option<&'a str> {
 #[cfg(feature = "serial")]
 mod imp {
     use super::{
+        kpa_parse_vi, kpa_parse_ws, kpa_payload, kpa_ping, kpa_ping_ok, kpa_query,
         parse_spe_status, spe_looks_like_1k_fa, spe_status_reply_len, spe_status_request,
-        SpeStatus, SPE_HEADER_LEN,
+        KpaStatus, SpeStatus, KPA_BAUDS, SPE_HEADER_LEN,
     };
     use serialport::SerialPort;
     use std::io::{Read, Write};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     /// 115200 8N1, per §1 — and the amplifier adapts downward by itself, so this is the only
     /// speed Nexus ever needs to offer and there is no baud setting to get wrong.
@@ -532,10 +600,241 @@ mod imp {
             let _ = self.port.clear(serialport::ClearBuffer::Input);
         }
     }
+
+    /// Per-verb reply budget. The KPA answers immediately; this bounds a link that went quiet.
+    const KPA_TIMEOUT: Duration = Duration::from_millis(400);
+    /// A shorter budget while sweeping rates, so four wrong guesses do not cost two seconds.
+    const KPA_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+    /// How many replies to skip while looking for the one matching the verb we asked. The KPA
+    /// sends unsolicited status, so the next line is not necessarily our answer.
+    const KPA_MAX_SKIPPED: usize = 8;
+    /// A reply is `^XXdddd;` — a few dozen bytes. This bounds a port emitting noise.
+    const KPA_MAX_REPLY: usize = 64;
+
+    /// An open Elecraft KPA500 or KPA1500. One type for both: the KPA500's verbs are a strict
+    /// subset of the KPA1500's, so every command this issues works on either amplifier.
+    pub struct KpaLink {
+        port: Box<dyn SerialPort>,
+    }
+
+    impl KpaLink {
+        /// Open `port`, discovering its data rate.
+        ///
+        /// The KPA's speed is operator-selectable and remembered in the amplifier, so unlike the
+        /// SPE there is nothing to assume — but there is also nothing to ask the operator. Each
+        /// rate gets a bare `;`, which Elecraft documents the amplifier as echoing back, and the
+        /// one that answers is the one it is set to. The probe reads nothing and changes nothing,
+        /// which is what makes sweeping with it safe.
+        ///
+        /// Returns the link and the rate that answered.
+        pub fn open(port: &str) -> std::io::Result<(Self, u32)> {
+            let mut last: Option<std::io::Error> = None;
+            for baud in KPA_BAUDS {
+                let mut sp = match serialport::new(port, baud)
+                    .data_bits(serialport::DataBits::Eight)
+                    .stop_bits(serialport::StopBits::One)
+                    .parity(serialport::Parity::None)
+                    .flow_control(serialport::FlowControl::None)
+                    .timeout(KPA_PROBE_TIMEOUT)
+                    .open()
+                {
+                    Ok(sp) => sp,
+                    Err(e) => {
+                        last = Some(std::io::Error::other(e.to_string()));
+                        continue;
+                    }
+                };
+                let _ = sp.clear(serialport::ClearBuffer::All);
+                if sp.write_all(kpa_ping().as_bytes()).is_err() || sp.flush().is_err() {
+                    continue;
+                }
+                if matches!(read_framed(&mut *sp, KPA_PROBE_TIMEOUT), Ok(r) if kpa_ping_ok(&r)) {
+                    let _ = sp.set_timeout(KPA_TIMEOUT);
+                    return Ok((Self { port: sp }, baud));
+                }
+            }
+            Err(last.unwrap_or_else(|| {
+                std::io::Error::other(
+                    "no KPA answered on any of its four data rates — check the port, and that \
+                     the amplifier is powered on",
+                )
+            }))
+        }
+
+        /// Read one full status set.
+        ///
+        /// Six queries rather than one: Elecraft has no combined status command, so a reading is
+        /// assembled. Every one of these verbs exists on both amplifiers.
+        pub fn poll(&mut self) -> std::io::Result<KpaStatus> {
+            let operate = self.ask("OS")? == "1";
+            let band_index = self.ask("BN")?.parse().map_err(bad("^BN band"))?;
+            let temp_c = self.ask("TM")?.parse().map_err(bad("^TM temperature"))?;
+            let (volts, amps) =
+                kpa_parse_vi(&self.ask("VI")?).ok_or_else(|| malformed("^VI volts/current"))?;
+            let (output_watts, swr) =
+                kpa_parse_ws(&self.ask("WS")?).ok_or_else(|| malformed("^WS power/SWR"))?;
+            let fault = self.ask("FL")?.parse().map_err(bad("^FL fault"))?;
+
+            Ok(KpaStatus {
+                operate,
+                band_index,
+                temp_c,
+                volts,
+                amps,
+                output_watts,
+                swr,
+                fault,
+            })
+        }
+
+        /// Send one query and return the payload of the reply **to that verb**.
+        ///
+        /// ⭐ The KPA sends unsolicited status, so the next line to arrive is not necessarily the
+        /// answer to what was just asked. Replies for other verbs are skipped rather than
+        /// returned — without this a temperature of `042` lands in the pane as 42 watts. The skip
+        /// is bounded, so a chattering amplifier ends as an error rather than a stall.
+        fn ask(&mut self, verb: &str) -> std::io::Result<String> {
+            let q = kpa_query(verb).ok_or_else(|| malformed("an unknown verb"))?;
+            self.port.write_all(q.as_bytes())?;
+            self.port.flush()?;
+
+            read_matching(&mut *self.port, verb, KPA_TIMEOUT)
+        }
+    }
+
+    /// Read replies until one is the answer to `verb`, skipping the rest.
+    ///
+    /// ⭐ Split out of `ask` so it can be tested against an in-memory reader — this is the logic
+    /// that stops a `^TM042;` temperature being returned as the answer to `^WS` and landing in
+    /// the pane as 42 watts, and it was previously reachable only with an amplifier on the desk.
+    ///
+    /// The skip is bounded: a chattering amplifier ends as an error, never a stall.
+    fn read_matching<R: Read + ?Sized>(
+        r: &mut R,
+        verb: &str,
+        budget: Duration,
+    ) -> std::io::Result<String> {
+        for _ in 0..KPA_MAX_SKIPPED {
+            let reply = read_framed(r, budget)?;
+            if let Some(payload) = kpa_payload(&reply, verb) {
+                return Ok(payload.to_string());
+            }
+        }
+        Err(std::io::Error::other(format!(
+            "the amplifier never answered ^{verb} — {KPA_MAX_SKIPPED} other replies arrived first"
+        )))
+    }
+
+    /// Read one `;`-terminated reply against an overall deadline.
+    ///
+    /// The deadline bounds the whole reply, not each read: a reply arriving in two pieces is a
+    /// split reply, not a foreign one — the same rule `rig.rs` states for CAT, and the reason a
+    /// partial answer is never treated as a complete one.
+    fn read_framed<R: Read + ?Sized>(port: &mut R, budget: Duration) -> std::io::Result<String> {
+        let deadline = Instant::now() + budget;
+        let mut out = Vec::new();
+        let mut b = [0u8; 1];
+        while Instant::now() < deadline {
+            match port.read(&mut b) {
+                Ok(0) => continue,
+                Ok(_) => {
+                    out.push(b[0]);
+                    if b[0] == b';' {
+                        return String::from_utf8(out).map_err(|_| malformed("a non-ASCII reply"));
+                    }
+                    if out.len() >= KPA_MAX_REPLY {
+                        return Err(malformed("a reply with no terminator"));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the amplifier stopped answering",
+        ))
+    }
+
+    fn malformed(what: &str) -> std::io::Error {
+        std::io::Error::other(format!("the amplifier sent {what} this cannot read"))
+    }
+
+    fn bad<E>(what: &'static str) -> impl Fn(E) -> std::io::Error {
+        move |_| malformed(what)
+    }
+
+    #[cfg(test)]
+    mod transport_tests {
+        use super::*;
+        use std::io::Cursor;
+
+        /// A short budget: these readers hit EOF, and the timeout paths should not cost 400 ms.
+        const T: Duration = Duration::from_millis(50);
+
+        #[test]
+        fn a_reply_is_read_up_to_its_semicolon() {
+            let mut r = Cursor::new(b"^OS1;".to_vec());
+            assert_eq!(read_framed(&mut r, T).unwrap(), "^OS1;");
+
+            // A second reply is left in the stream, not swallowed with the first.
+            let mut r = Cursor::new(b"^OS1;^TM042;".to_vec());
+            assert_eq!(read_framed(&mut r, T).unwrap(), "^OS1;");
+            assert_eq!(read_framed(&mut r, T).unwrap(), "^TM042;");
+        }
+
+        #[test]
+        fn an_unterminated_reply_is_an_error_not_a_partial_reading() {
+            // No semicolon ever arrives — this must time out, never return what it managed to get.
+            let mut r = Cursor::new(b"^OS1".to_vec());
+            assert!(
+                read_framed(&mut r, T).is_err(),
+                "a partial answer is not an answer"
+            );
+
+            // POSITIVE CONTROL: the same reader WITH its terminator succeeds.
+            let mut r = Cursor::new(b"^OS1;".to_vec());
+            assert!(read_framed(&mut r, T).is_ok());
+        }
+
+        /// ⭐ THE ONE THAT MATTERS. Elecraft documents unsolicited status, so the next reply to
+        /// arrive is not necessarily the answer to what was just asked.
+        #[test]
+        fn unsolicited_status_is_skipped_rather_than_returned_as_the_answer() {
+            // Three unsolicited lines arrive before the ^WS we asked for.
+            let mut r = Cursor::new(b"^OS1;^TM042;^BN05;^WS250 015;".to_vec());
+            assert_eq!(read_matching(&mut r, "WS", T).unwrap(), "250 015");
+
+            // Without the skip, the FIRST line would have been the answer — and a temperature of
+            // 042 would have been read as 42 watts. Pin that it is not.
+            let mut r = Cursor::new(b"^TM042;^WS250 015;".to_vec());
+            let got = read_matching(&mut r, "WS", T).unwrap();
+            assert_eq!(got, "250 015");
+            assert_ne!(got, "042", "a temperature must never answer a power query");
+        }
+
+        #[test]
+        fn a_chattering_amplifier_ends_as_an_error_not_a_stall() {
+            // More non-matching replies than the bound allows.
+            let noise = "^OS1;".repeat(KPA_MAX_SKIPPED + 2);
+            let mut r = Cursor::new(noise.into_bytes());
+            assert!(
+                read_matching(&mut r, "WS", T).is_err(),
+                "bounded, not infinite"
+            );
+
+            // POSITIVE CONTROL: just inside the bound still succeeds, so the limit is not
+            // rejecting ordinary traffic.
+            let mut ok = "^OS1;".repeat(KPA_MAX_SKIPPED - 1);
+            ok.push_str("^WS250 015;");
+            let mut r = Cursor::new(ok.into_bytes());
+            assert_eq!(read_matching(&mut r, "WS", T).unwrap(), "250 015");
+        }
+    }
 }
 
 #[cfg(feature = "serial")]
-pub use imp::SpeLink;
+pub use imp::{KpaLink, SpeLink};
 
 #[cfg(test)]
 mod tests {
@@ -810,6 +1109,82 @@ mod tests {
 
     /// The null command is Elecraft's own documented "is anyone there" — and the only probe that
     /// asks for nothing and changes nothing, which is what makes it safe to sweep baud rates with.
+    /// ⭐ THE IMPLIED DECIMAL POINT. Elecraft packs `48.0 V` as `480`, so a plain integer parse
+    /// puts a plausible and wildly wrong number in front of the operator — 480 volts on a supply
+    /// that runs at 48, or 250 W shown as a 15:1 SWR.
+    #[test]
+    fn kpa_readings_honour_elecrafts_implied_decimal_point() {
+        // ^VI480 325; — 48.0 volts, 32.5 amps.
+        let (v, i) = kpa_parse_vi("480 325").expect("parses");
+        assert_eq!(v, 48.0);
+        assert_eq!(i, 32.5);
+        assert_ne!(v, 480.0, "reading it as an integer is the bug this pins");
+
+        // ^WS250 015; — 250 watts at 1.5:1.
+        let (w, swr) = kpa_parse_ws("250 015").expect("parses");
+        assert_eq!(w, 250);
+        assert_eq!(swr, Some(1.5));
+
+        // Documented top of the SWR range.
+        assert_eq!(kpa_parse_ws("999 990").unwrap().1, Some(99.0));
+    }
+
+    /// Elecraft documents SWR reading `000` when not transmitting. Zero is "no reading", not a
+    /// 0:1 match — no antenna produces that, and showing it would be a lie with a number on it.
+    #[test]
+    fn kpa_swr_is_absent_rather_than_zero_on_receive() {
+        let (w, swr) = kpa_parse_ws("000 000").expect("parses");
+        assert_eq!(w, 0);
+        assert_eq!(
+            swr, None,
+            "not transmitting is no reading, not a perfect match"
+        );
+
+        // POSITIVE CONTROL: a real transmitting reading DOES come back as a number, or the
+        // check above would be hiding every SWR the amplifier ever reports.
+        assert_eq!(kpa_parse_ws("100 012").unwrap().1, Some(1.2));
+    }
+
+    #[test]
+    fn kpa_readings_refuse_malformed_payloads() {
+        // Both parsers need exactly three digits per field — anything else is not a reading.
+        assert_eq!(kpa_parse_vi("48 325"), None, "two digits is not the format");
+        assert_eq!(kpa_parse_vi("4800 325"), None, "four is not either");
+        assert_eq!(kpa_parse_vi("480"), None, "^VI carries two values");
+        assert_eq!(kpa_parse_vi("abc def"), None);
+        assert_eq!(kpa_parse_vi(""), None);
+        assert_eq!(kpa_parse_ws("250"), None, "^WS carries two values");
+        assert_eq!(kpa_parse_ws("25O 015"), None, "letter O is not a zero");
+
+        // POSITIVE CONTROL: the well-formed case still parses, or these prove nothing.
+        assert!(kpa_parse_vi("480 325").is_some());
+        assert!(kpa_parse_ws("250 015").is_some());
+    }
+
+    #[test]
+    fn kpa_fault_zero_is_the_only_quiet_value() {
+        let ok = KpaStatus {
+            operate: true,
+            band_index: 5,
+            temp_c: 42,
+            volts: 48.0,
+            amps: 32.5,
+            output_watts: 250,
+            swr: Some(1.5),
+            fault: 0,
+        };
+        assert!(!ok.has_fault());
+        assert!(KpaStatus {
+            fault: 7,
+            ..ok.clone()
+        }
+        .has_fault());
+        assert!(
+            KpaStatus { fault: 1, ..ok }.has_fault(),
+            "any non-zero is a fault"
+        );
+    }
+
     #[test]
     fn kpa_ping_is_a_bare_semicolon_echoed_back() {
         assert_eq!(kpa_ping(), ";");
