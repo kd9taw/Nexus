@@ -29509,6 +29509,8 @@ mod tests {
             rotator_model: p.rotator_model,
             rotator_port: p.rotator_port.clone(),
             rotator_baud: p.rotator_baud,
+            amp_model: p.amp_model.clone(),
+            amp_port: p.amp_port.clone(),
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),

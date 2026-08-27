@@ -912,6 +912,18 @@ pub struct Settings {
     pub rotator_port: String,
     #[serde(default = "default_rotator_baud")]
     pub rotator_baud: u32,
+    /// The amplifier family on this radio's amp port: "" = none (the default, and the state of
+    /// most stations), "spe" = SPE Expert 1.3K-FA/1.5K-FA/2K-FA, "kpa" = Elecraft KPA500/KPA1500.
+    ///
+    /// PER RADIO, like the rotator: an SO2R station has an amplifier per radio, and a field that
+    /// lived only on the flat `Settings` would let one radio's amp config overwrite the other's.
+    #[serde(default)]
+    pub amp_model: String,
+    /// Serial port the amplifier is on. Empty = not configured, which is what makes every
+    /// amplifier surface render NOTHING rather than an empty frame (the rotator's honesty rule:
+    /// unconfigured shows nothing, configured-and-silent shows "—").
+    #[serde(default)]
+    pub amp_port: String,
     /// ADVANCED override: an external `rotctld` daemon address `host:port`
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
@@ -2337,6 +2349,8 @@ pub struct RadioProfile {
     pub rotator_model: u32,
     pub rotator_port: String,
     pub rotator_baud: u32,
+    pub amp_model: String,
+    pub amp_port: String,
     pub rotator_host: String,
     /// UNIQUE across enabled profiles (validated) — each radio's own rotctld TCP port.
     pub rotctld_port: u16,
@@ -2411,6 +2425,8 @@ pub struct RadioProfilePatch {
     pub rotator_model: u32,
     pub rotator_port: String,
     pub rotator_baud: u32,
+    pub amp_model: String,
+    pub amp_port: String,
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
@@ -2454,6 +2470,8 @@ impl RadioProfilePatch {
         p.rx_gain = self.rx_gain;
         p.rotator_model = self.rotator_model;
         p.rotator_port = self.rotator_port;
+        p.amp_model = self.amp_model;
+        p.amp_port = self.amp_port;
         p.rotator_baud = self.rotator_baud;
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
@@ -2543,6 +2561,8 @@ impl Default for RadioProfile {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: default_rotator_baud(),
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: String::new(),
             rotctld_port: 4533,
             bands: Vec::new(),
@@ -2866,6 +2886,8 @@ impl Default for Settings {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: default_rotator_baud(),
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: String::new(),
             // Satellite Doppler is OFF and unmapped by default: a station
             // with no satellite interest must never have its dial moved.
@@ -3144,6 +3166,11 @@ impl Settings {
             rotator_port: self.rotator_port.clone(),
             rotator_baud: self.rotator_baud,
             rotator_host: self.rotator_host.clone(),
+            // MIRRORS the flat value, not a blank: this is the migration seed for a
+            // single-radio station's profile 0, and blanking here would lose an amplifier the
+            // operator had already configured before profiles existed.
+            amp_model: self.amp_model.clone(),
+            amp_port: self.amp_port.clone(),
             rotctld_port: 4533,
             bands: Vec::new(),
             last_dial_mhz: self.dial_mhz,
@@ -3477,6 +3504,8 @@ impl Settings {
         self.rx_gain = p.rx_gain;
         self.rotator_model = p.rotator_model;
         self.rotator_port = p.rotator_port;
+        self.amp_model = p.amp_model;
+        self.amp_port = p.amp_port;
         self.rotator_baud = p.rotator_baud;
         self.rotator_host = p.rotator_host;
         // The Flex three ride the SAME mirror as every other rig field, so every existing consumer
@@ -3515,6 +3544,8 @@ impl Settings {
             rotator_port,
             rotator_baud,
             rotator_host,
+            amp_model,
+            amp_port,
             flex_radio_ip,
             flex_native_pan,
             flex_native_audio,
@@ -3539,6 +3570,8 @@ impl Settings {
             self.rotator_port.clone(),
             self.rotator_baud,
             self.rotator_host.clone(),
+            self.amp_model.clone(),
+            self.amp_port.clone(),
             self.flex_radio_ip.clone(),
             self.flex_native_pan,
             self.flex_native_audio,
@@ -3564,6 +3597,8 @@ impl Settings {
             p.rotator_port = rotator_port;
             p.rotator_baud = rotator_baud;
             p.rotator_host = rotator_host;
+            p.amp_model = amp_model;
+            p.amp_port = amp_port;
             p.flex_radio_ip = flex_radio_ip;
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
@@ -4064,6 +4099,8 @@ mod tests {
             rotator_model: 202,
             rotator_port: "COM11".into(),
             rotator_baud: 19_200,
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
@@ -4107,6 +4144,57 @@ mod tests {
     /// `last_*` tune memory the radio loop owns — and adding a field to `RadioProfile` that is
     /// neither excluded nor in the patch fails here rather than in the field.
     #[test]
+    fn editing_one_radios_amplifier_leaves_the_others_alone() {
+        // The SO2R case, and the reason the amplifier is a PER-RADIO field rather than a station
+        // one: two radios, an amplifier on each. The 2026-07-25 COM-port incident and the Flex
+        // audit both found the same shape — a patch that omits a field silently blanks it on the
+        // profile it touches, and the operator is told "saved".
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    amp_model: "spe".into(),
+                    amp_port: "/dev/ttyUSB0".into(),
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    amp_model: "kpa".into(),
+                    amp_port: "/dev/ttyUSB1".into(),
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+
+        // Edit radio 0's amplifier through the patch path the Settings form uses.
+        let mut p0 = s.radios[0].clone();
+        RadioProfilePatch {
+            amp_model: "kpa".into(),
+            amp_port: "/dev/ttyUSB9".into(),
+            ..patch_of(&s.radios[0])
+        }
+        .apply_to(&mut p0);
+        s.radios[0] = p0;
+
+        assert_eq!(
+            s.radios[0].amp_model, "kpa",
+            "the edited radio took the change"
+        );
+        assert_eq!(s.radios[0].amp_port, "/dev/ttyUSB9");
+        // …and the OTHER radio is untouched. This is the assertion that matters.
+        assert_eq!(
+            s.radios[1].amp_model, "kpa",
+            "radio 1's amplifier model was disturbed by editing radio 0"
+        );
+        assert_eq!(
+            s.radios[1].amp_port, "/dev/ttyUSB1",
+            "radio 1's amplifier PORT was disturbed by editing radio 0"
+        );
+    }
+
+    #[test]
     fn every_per_radio_field_is_reachable_through_the_patch() {
         const NOT_EDITABLE: [&str; 7] = [
             "id",
@@ -4139,6 +4227,8 @@ mod tests {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: 0,
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -4310,6 +4400,8 @@ mod tests {
             rotator_model: p.rotator_model,
             rotator_port: p.rotator_port.clone(),
             rotator_baud: p.rotator_baud,
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
