@@ -736,7 +736,12 @@ mod imp {
         let mut b = [0u8; 1];
         while Instant::now() < deadline {
             match port.read(&mut b) {
-                Ok(0) => continue,
+                // End of stream — an unplugged USB serial adapter returns this, and returns it
+                // forever. Yield before looking again: without the pause this arm spins flat out
+                // until the deadline (measured at ~2M iterations in 50 ms), which costs nothing
+                // on a one-shot call and a whole core on a polling thread. The deadline still
+                // bounds the reply, so no timing contract moves.
+                Ok(0) => std::thread::sleep(Duration::from_millis(1)),
                 Ok(_) => {
                     out.push(b[0]);
                     if b[0] == b';' {
@@ -811,6 +816,32 @@ mod imp {
             let got = read_matching(&mut r, "WS", T).unwrap();
             assert_eq!(got, "250 015");
             assert_ne!(got, "042", "a temperature must never answer a power query");
+        }
+
+        /// ⭐ A DEAD PORT MUST NOT BURN A CORE. `read()` returning `Ok(0)` is end-of-stream —
+        /// an unplugged USB serial adapter does exactly this, and does it forever. With no
+        /// pause in that arm the loop spins flat out until the deadline, which is harmless for
+        /// a one-shot call and is a pegged core once this runs on a polling thread.
+        ///
+        /// `Err(TimedOut) => continue` is NOT the same thing and must stay as it is: the OS has
+        /// already blocked for the budget by the time it returns.
+        #[test]
+        fn an_end_of_stream_port_does_not_spin_the_cpu() {
+            struct Dead(std::cell::Cell<usize>);
+            impl Read for Dead {
+                fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                    self.0.set(self.0.get() + 1);
+                    Ok(0)
+                }
+            }
+            let d = Dead(std::cell::Cell::new(0));
+            let mut d = d;
+            assert!(read_framed(&mut d, T).is_err(), "a dead port is an error");
+            let calls = d.0.get();
+            assert!(
+                calls < 500,
+                "spun {calls} times in {T:?} — a dead port is burning a core"
+            );
         }
 
         #[test]
