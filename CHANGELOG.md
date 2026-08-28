@@ -47,6 +47,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Test CAT told you to close other software when the real problem was permissions.** On Linux,
+  a serial port your user is not permitted to open reports "permission denied" — and Nexus
+  answered with the advice for a *busy* port, telling you to close WSJT-X and flrig. No amount of
+  closing programs grants a group membership, so you would close everything, test again, fail
+  again, and reasonably conclude Nexus does not do CAT on Linux. It now recognises a permission
+  refusal and gives the actual cure: add yourself to the `dialout` group, then log out and back in
+  — the second half matters, because a group does not apply to a session already running. A port
+  another program really is holding still gets the advice it always did. Reported from Ubuntu
+  24.04 with an FT-991A that worked on Windows on the same machine.
+
 - **Audio broke up badly on Windows, and worse on battery.** The sound-card callback and the code
   feeding it were fighting over the same lock, and the feeding side held it while copying a whole
   transmission — so when Windows slowed the cores down on battery, the callback missed its deadline
