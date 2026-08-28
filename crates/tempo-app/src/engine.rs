@@ -9246,6 +9246,22 @@ impl Engine {
             self.tx_watchdog = false;
             self.tx_watchdog_start = None;
         } else {
+            // DROP A HELD MANUAL PTT. `manual_ptt()` masks on read, so disarming already stops
+            // it REPORTING as keyed and the loop unkeys the rig — but the stored flag survived,
+            // and re-arming made it report true again with no operator action, keying the
+            // transmitter on the next tick. Found on the bench (2026-08-28) checking that the
+            // TX latch cuts a live mic: it does, and then TX back on brought the rig up on its
+            // own. `halt_tx` already clears this; the toggle did not, and the two must agree.
+            //
+            // The cost is exactly right: after arming again the operator presses PTT, which is
+            // what "arming keys NOTHING by itself" has always claimed in this file.
+            //
+            // `broker_ptt` goes with it and for the same reason — it is the other half of the
+            // same `manual_ptt()` OR, so leaving it latched would preserve the defect through
+            // the other input. A broker that still wants the key re-asserts it on its next
+            // message; a broker that has gone away must not leave one behind.
+            self.manual_ptt = false;
+            self.broker_ptt = false;
             // A SLOT over already in flight is NOT cut here. Operator (2026-07-31):
             // "TX Off should disable TX for the next cycle, but allow any ongoing
             // TX to complete." — WSJT-X's Enable-Tx contract (de-latch finishes the
@@ -19520,6 +19536,41 @@ mod tests {
         e.set_operating_mode("cw", false);
         e.set_frequency(7.030, "40m", "USB");
         assert!(e.tx_allowed(), "Technician CW on 40 m is allowed");
+    }
+
+    #[test]
+    fn tx_off_then_on_does_not_re_key_a_ptt_the_operator_never_released() {
+        // FOUND ON THE BENCH, 2026-08-28, while checking that dropping the TX latch mid-over
+        // cuts a live mic. It does. But `set_tx_enabled(false)` does NOT clear the STORED
+        // `manual_ptt` — it only stops `manual_ptt()` from reporting it, because that masks on
+        // read. So the flag survives, and re-arming TX makes it report true again with no
+        // operator action at all: the rig keys itself on the next loop tick.
+        //
+        // Only `halt_tx` clears the flag. Stop TX therefore does not have this shape; the TX
+        // toggle does.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+
+        e.set_tx_enabled(true);
+        e.set_ptt(true);
+        assert!(
+            e.manual_ptt(),
+            "fixture is not keying — the rest proves nothing"
+        );
+
+        // The operator drops the TX latch WITHOUT releasing PTT.
+        e.set_tx_enabled(false);
+        assert!(!e.manual_ptt(), "TX is off: nothing may report as keyed");
+
+        // ...and arms TX again later. Nothing has touched PTT in between.
+        e.set_tx_enabled(true);
+        assert!(
+            !e.manual_ptt(),
+            "re-arming TX re-keyed a PTT the operator never released — the transmitter comes \
+             up on its own, which is the one thing arming must never do by itself"
+        );
     }
 
     #[test]

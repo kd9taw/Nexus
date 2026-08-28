@@ -429,6 +429,31 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     void setScopeRef(tenths)
   }
   const [keyed, setKeyed] = useState(false)
+
+  // THE BUTTON MUST NOT SAY "ON AIR" OVER AN UNKEYED RIG.
+  //
+  // `keyed` is local state set on the click, and the engine's gate is re-read EVERY tick:
+  // `set_ptt` is `on && tx_enabled && tx_allowed()`. So TX being switched off, the dial moving
+  // into a locked segment, the TX watchdog, Stop TX or a UDP HaltTx all unkey the transmitter
+  // WITHOUT this cockpit being told, and the button kept reading ON AIR over a rig that was not
+  // transmitting. That is the #81 shape from the other direction — #81 was the press being
+  // silently refused, this is a key silently ending — and it was reported from the bench
+  // (2026-08-28) after dropping the TX latch mid-over: "the radio unkeys, but the PTT button
+  // still says it is transmitting".
+  //
+  // Reconciled from `txEnabled`/`txAllowed`, NOT from `radio.transmitting`: that flag is the FT
+  // slot indicator alone and is false throughout a perfectly good manual phone over, so keying
+  // off it would clear the button mid-transmission.
+  //
+  // `lock` is deliberately left alone. The operator chose hands-free; silently switching them
+  // back to hold-to-talk is a second surprise on top of the first, and with `keyed` false the
+  // next click keys again exactly as it should.
+  useEffect(() => {
+    if (!keyed) return
+    if (snap.radio.txEnabled && snap.radio.txAllowed) return
+    setKeyed(false)
+  }, [keyed, snap.radio.txEnabled, snap.radio.txAllowed])
+
   // Bandscope span (audio-window zoom within the captured passband — this is
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
