@@ -228,13 +228,25 @@ fn alsa_hints() -> Result<Vec<crate::audiodev::PcmHint>, String> {
 fn enumerate_devices() -> (Vec<AudioDevice>, Vec<AudioDevice>) {
     use crate::audiodev::devices_from_cpal_names;
     let host = cpal::default_host();
+    // A device whose name can't be read (a description() error, e.g. a device
+    // that dropped off the bus mid-enumeration) is skipped, not fatal — cpal's
+    // Display impl for Device panics on that same failure via to_string(), so
+    // this deliberately goes through the fallible description() instead (#132
+    // is the precedent: a panicking USB serial driver took down port
+    // enumeration the same way).
     let inputs: Vec<String> = host
         .input_devices()
-        .map(|it| it.map(|d| d.to_string()).collect())
+        .map(|it| {
+            it.filter_map(|d| d.description().ok().map(|desc| desc.name().to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     let outputs: Vec<String> = host
         .output_devices()
-        .map(|it| it.map(|d| d.to_string()).collect())
+        .map(|it| {
+            it.filter_map(|d| d.description().ok().map(|desc| desc.name().to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     (
         devices_from_cpal_names(inputs),
@@ -254,7 +266,8 @@ pub(crate) trait NamedDevice {
 
 impl NamedDevice for cpal::Device {
     fn device_name(&self) -> Option<String> {
-        Some(self.to_string())
+        // Fallible on purpose — see the comment on enumerate_devices() above.
+        self.description().ok().map(|d| d.name().to_string())
     }
 }
 
@@ -726,8 +739,13 @@ impl CpalBackend {
         // carries the platform grain; the probe below is the belt-and-braces: even
         // where sharing is believed correct, a clone that cannot produce an output
         // config falls back to real resolution rather than failing the open.
-        let have_name = in_dev.to_string();
-        let same_card = shares_one_device(HOST_GRAIN, out_name, &have_name);
+        // Fallible on purpose — see the comment on enumerate_devices() above.
+        // A name that can't be read is never "the same card": fall through to
+        // ordinary resolution rather than treating an unreadable input as a
+        // false-positive card match.
+        let same_card = in_dev
+            .device_name()
+            .is_some_and(|have| shares_one_device(HOST_GRAIN, out_name, &have));
         let out_dev = match same_card.then(|| in_dev.clone()) {
             Some(d) if d.default_output_config().is_ok() => d,
             _ => resolve_configured(

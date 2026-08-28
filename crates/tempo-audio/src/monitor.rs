@@ -130,16 +130,20 @@ impl SpscRing {
 /// the host can't name a default (guard then falls back to the pure rule).
 #[cfg(feature = "device")]
 pub fn resolve_output_name(name: &str) -> String {
-    use cpal::traits::HostTrait;
+    use cpal::traits::{DeviceTrait, HostTrait};
     if !name.trim().is_empty() {
         return name.to_string();
     }
     let _guard = crate::device::AUDIO_HOST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    // Fallible on purpose -- cpal's Display impl for Device panics via
+    // to_string() when description() errors (see device.rs's
+    // enumerate_devices() for the full rationale and the #132 precedent).
     cpal::default_host()
         .default_output_device()
-        .map(|d| d.to_string())
+        .and_then(|d| d.description().ok())
+        .map(|desc| desc.name().to_string())
         .unwrap_or_default()
 }
 
