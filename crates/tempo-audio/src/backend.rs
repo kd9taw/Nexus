@@ -308,7 +308,10 @@ mod second_mic_tests {
     // `fn want_live_mic(..) -> bool { true }`. Each half is shown to refuse on its own.
     #[test]
     fn a_live_mic_needs_both_the_safety_gate_and_a_chosen_device() {
-        assert!(want_live_mic(true, "USB Mic"), "both satisfied — must stream");
+        assert!(
+            want_live_mic(true, "USB Mic"),
+            "both satisfied — must stream"
+        );
         assert!(
             !want_live_mic(false, "USB Mic"),
             "the engine gate said no (PTT up / TX off / out of privilege / over the ceiling); \
