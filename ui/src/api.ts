@@ -1474,6 +1474,13 @@ export interface RadioProfilePatch {
   flexNativePan: boolean
   /** See RadioProfile.yaesuRfScope — the FT-710's USB-SPI spectrum, per radio. */
   yaesuRfScope: boolean
+  /** See RadioProfile.yaesuFixStarts — the operator's own FIX-window start per band, kept
+   *  because the derived band-edge start CAN be wrong and the radio reports neither the
+   *  change nor the new start. OPTIONAL and currently never sent: nothing writes it yet, and
+   *  omitting it means "leave alone" (the Rust side is an `Option`). It is declared here
+   *  because the Rust patch carries it, and the guard that compares the two sides is right to
+   *  demand they agree — a field on one side only is how a save silently resets a value. */
+  yaesuFixStarts?: Record<string, number>
   /** This radio's native-DAX-audio opt-in (per-radio, as above). */
   flexNativeAudio: boolean
 }

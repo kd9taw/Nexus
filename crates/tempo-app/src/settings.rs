@@ -4512,6 +4512,11 @@ mod tests {
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
+            // Added by this branch. `yaesu_rf_scope` has a UI counterpart (`yaesuRfScope?`);
+            // `yaesu_fix_starts` deliberately does NOT — its own doc says nothing writes it yet
+            // and calls wiring a writer a follow-up. This guard exists to force exactly that look.
+            yaesu_rf_scope: None,
+            yaesu_fix_starts: Default::default(),
         })
         .expect("patch serializes");
         let rust_keys: Vec<&str> = rust
@@ -4542,6 +4547,7 @@ mod tests {
             "The UI sends RadioProfilePatch field(s) {missing_in_rust:?} that Rust does not \
              declare — serde will reject the whole payload as an unknown field, or drop it."
         );
+    }
 
     /// A patch that does not MENTION the RF scope must leave it alone.
     ///
@@ -4570,7 +4576,8 @@ mod tests {
             "txLevel": 0.9, "rxGain": 1.0,
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
-            "flexNativePan": false, "flexNativeAudio": false
+            "flexNativePan": false, "flexNativeAudio": false,
+            "ampModel": "", "ampPort": ""
         }"#;
         let patch: RadioProfilePatch =
             serde_json::from_str(json).expect("the form's payload parses");
