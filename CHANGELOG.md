@@ -153,6 +153,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Backup and Restore moved to their own Config tab.** They existed, but sat under **Radio ▸
+  Transmit limits & sharing**, which is why operators did not find them: backing up a whole
+  station has nothing to do with transmit limits. Same controls, same behaviour — a findable
+  home, and search keywords wide enough to survive a panic ("backup", "restore", "factory",
+  "defaults", "start over").
+
 - **Sharing your radio now refuses a mode it cannot set, where it used to accept it silently.**
   This is the honest half of the fix above, and it is the one you might feel: a program configured
   for a data mode while Nexus sits in Phone now gets a real error instead of a quiet success. Put
@@ -544,8 +550,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attempt is ignored too it tells you the actual width instead of implying success. Rigs
   that round to the nearest filter they own are left alone: asking for 3 kHz and getting
   2.7 is the radio doing its job, not a fault.
-
-### Added
 
 - **A manual notch you can actually place, and a depth for the speech processor.** The Notch
   button was driving the radio's *automatic* notch — the one that hunts a carrier down by

@@ -3698,7 +3698,23 @@ export const EN = {
   'settings.tabs.logging': 'Logging & Connectors',
   'settings.tabs.contesting': 'Contesting',
   'settings.tabs.appearance': 'Appearance',
+  'settings.tabs.configurations': 'Config',
 
+  // The Config tab. `<em>` marks the OLD location in the note — an operator who knew where these
+  // used to be needs to be told they moved, once, rather than left to hunt.
+  'settings.configurations.legend': 'Backup & reset',
+  'settings.configurations.note':
+    'Your whole setup in one file — for a new computer, before a rebuild, or to get back to a known-good state. These used to live under <em>Radio → Transmit limits & sharing</em>, where nobody found them.',
+
+  // Reset sits beside Backup in the Config tab because its confirm points AT the backup: the
+  // machinery that makes this reversible is one control away, so the wording names it rather
+  // than just warning. Keyed under `configurations`, not `transmit` — a translator reads the key
+  // for context, and this is not a transmit setting.
+  'settings.configurations.reset.label': 'Start over',
+  'settings.configurations.reset.action': 'Reset all settings…',
+  'settings.configurations.reset.title': 'Erase all settings and return to factory defaults',
+  'settings.configurations.reset.hint':
+    'Erases your radios, audio devices, callsign and preferences. Your <b>logbook is not touched</b>, and stored passwords stay in your keychain (clear those individually under Logging & Connectors). Back up first — this cannot be undone.',
   // What Save says when the form is refused. The rig checks' own wording lives above, in
   // `settings.radio.check.*` — this is only the panel's fallback when one carries no message.
   'settings.save.callsignFirst': 'Enter your callsign on the Station tab before saving.',
@@ -4604,13 +4620,6 @@ export const EN = {
   'settings.transmit.restore.action': 'Restore…',
   'settings.transmit.restore.title': 'Replace your current setup with a saved backup',
 
-  // Reset sits beside Backup because its confirm points AT the backup: the machinery that makes
-  // this reversible is one control away, so the wording names it rather than just warning.
-  'settings.transmit.reset.label': 'Start over',
-  'settings.transmit.reset.action': 'Reset all settings…',
-  'settings.transmit.reset.title': 'Erase all settings and return to factory defaults',
-  'settings.transmit.reset.hint':
-    'Erases your radios, audio devices, callsign and preferences. Your <b>logbook is not touched</b>, and stored passwords stay in your keychain (clear those individually under Logging & Connectors). Back up first — this cannot be undone.',
 
   'settings.transmit.share.label': 'Share this radio with other programs',
   'settings.transmit.share.copy.action': 'Copy',

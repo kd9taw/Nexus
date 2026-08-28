@@ -563,6 +563,7 @@ type SettingsTab =
   | 'logging'
   | 'contesting'
   | 'appearance'
+  | 'configurations'
 
 //
 // `label` is the ENGLISH source string and stays literal for the two parsers above. What the
@@ -581,6 +582,7 @@ const SETTINGS_TABS: { id: SettingsTab; label: string; labelKey?: MessageKey }[]
   { id: 'logging', label: 'Logging & Connectors', labelKey: 'settings.tabs.logging' },
   { id: 'contesting', label: 'Contesting', labelKey: 'settings.tabs.contesting' },
   { id: 'appearance', label: 'Appearance', labelKey: 'settings.tabs.appearance' },
+  { id: 'configurations', label: 'Config', labelKey: 'settings.tabs.configurations' },
 ]
 
 /** How the OmniRig connection option is offered, as a function of the platform.
@@ -2098,6 +2100,7 @@ export function SettingsPanel({
     onSaved?.()
     pushToast(t('settings.profiles.loaded', { name: p.name }), 'success')
   }
+
   const handleDeleteProfile = () => {
     if (!selectedProfile) return
     setProfiles(deleteProfile(selectedProfile))
@@ -2651,6 +2654,79 @@ export function SettingsPanel({
         </div>
         <div className="settings-scroll">
           {/* ---- Workspace (UI-only prefs, applied live like the theme) ---- */}
+          {tab === 'configurations' && (
+            <fieldset className="settings-section" id="settings-configurations">
+              <legend>{t('settings.configurations.legend')}</legend>
+              <p className="settings-note">
+                <T k="settings.configurations.note" tags={{ em: <em /> }} />
+              </p>
+              {/* Back up / restore the whole station (#28 item 4). MOVED here from Radio →
+                  Transmit limits & sharing, unchanged: same handlers, same catalog keys, same
+                  markup. Backing up a whole station has nothing to do with transmit limits, and
+                  that mismatch is why operators did not find it — the registry's own comment on
+                  that section already said so. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.transmit.backup.label')}</span>
+                <div className="rig-share-row">
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() =>
+                      withErrorToast(async () => {
+                        const text = await exportSettingsBundle()
+                        const stamp = new Date().toISOString().slice(0, 10)
+                        // The FILE NAME is invariant (batch 8): a translated word in it would
+                        // reduce a non-Latin locale's backup to `nexus-settings-.json`.
+                        const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
+                        pushToast(t('settings.transmit.backup.done', { path }), 'success')
+                      }, t('settings.transmit.backup.failed'))
+                    }
+                    title={t('settings.transmit.backup.title')}
+                  >
+                    {t('settings.transmit.backup.action')}
+                  </button>
+                  <input
+                    ref={backupFileRef}
+                    type="file"
+                    accept=".json,application/json"
+                    style={{ display: 'none' }}
+                    onChange={onRestoreBackup}
+                  />
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() => backupFileRef.current?.click()}
+                    title={t('settings.transmit.restore.title')}
+                  >
+                    {t('settings.transmit.restore.action')}
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  <T k="settings.transmit.backup.hint" tags={{ b: <strong /> }} />
+                </span>
+              </div>
+
+                {/* Start over. Deliberately the LAST thing in this tab: an operator who arrives
+                    here wanting a clean slate reads the backup affordance on the way past. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.configurations.reset.label')}</span>
+                <div className="rig-share-row">
+                  <button
+                    type="button"
+                    className="settings-linkbtn danger"
+                    onClick={handleResetConfig}
+                    title={t('settings.configurations.reset.title')}
+                  >
+                    {t('settings.configurations.reset.action')}
+                  </button>
+                </div>
+                <span className="settings-hint">
+                  <T k="settings.configurations.reset.hint" tags={{ b: <strong /> }} />
+                </span>
+              </div>
+            </fieldset>
+          )}
+
           {tab === 'appearance' && (
           <fieldset className="settings-section" id="settings-workspace">
             <legend>{t('settings.workspace.legend')}</legend>
@@ -5094,69 +5170,6 @@ export function SettingsPanel({
 
                 The address existed all along — `rigctld_port` is per-radio and validated
                 unique — and was simply never shown to anyone. That is the whole defect. */}
-            {/* Back up / restore the whole station (#28 item 4). Until now there was no way
-                to keep a copy of any of this: settings.json sits in a config folder most
-                operators never open, and the honest answer to "how do I move to a new laptop"
-                was to go and find it. */}
-            <div className="settings-field">
-              <span className="settings-label">{t('settings.transmit.backup.label')}</span>
-              <div className="rig-share-row">
-                <button
-                  type="button"
-                  className="settings-linkbtn"
-                  onClick={() =>
-                    withErrorToast(async () => {
-                      const text = await exportSettingsBundle()
-                      const stamp = new Date().toISOString().slice(0, 10)
-                      // The FILE NAME is invariant (batch 8): a translated word in it would
-                      // reduce a non-Latin locale's backup to `nexus-settings-.json`.
-                      const path = await saveTextToDownloads(`nexus-settings-${stamp}.json`, text)
-                      pushToast(t('settings.transmit.backup.done', { path }), 'success')
-                    }, t('settings.transmit.backup.failed'))
-                  }
-                  title={t('settings.transmit.backup.title')}
-                >
-                  {t('settings.transmit.backup.action')}
-                </button>
-                <input
-                  ref={backupFileRef}
-                  type="file"
-                  accept=".json,application/json"
-                  style={{ display: 'none' }}
-                  onChange={onRestoreBackup}
-                />
-                <button
-                  type="button"
-                  className="settings-linkbtn"
-                  onClick={() => backupFileRef.current?.click()}
-                  title={t('settings.transmit.restore.title')}
-                >
-                  {t('settings.transmit.restore.action')}
-                </button>
-              </div>
-              <span className="settings-hint">
-                <T k="settings.transmit.backup.hint" tags={{ b: <strong /> }} />
-              </span>
-            </div>
-
-            {/* Start over. Deliberately the LAST thing in this block: an operator who arrives
-                here wanting a clean slate reads the backup affordance on the way past. */}
-            <div className="settings-field">
-              <span className="settings-label">{t('settings.transmit.reset.label')}</span>
-              <div className="rig-share-row">
-                <button
-                  type="button"
-                  className="settings-linkbtn danger"
-                  onClick={handleResetConfig}
-                  title={t('settings.transmit.reset.title')}
-                >
-                  {t('settings.transmit.reset.action')}
-                </button>
-              </div>
-              <span className="settings-hint">
-                <T k="settings.transmit.reset.hint" tags={{ b: <strong /> }} />
-              </span>
-            </div>
 
             {/* THE share affordance (#53) — one block, and it advertises the CAT BROKER, not the
                 Hamlib daemon's port. The daemon is torn down by Test CAT and every CAT-config
@@ -5237,8 +5250,7 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.transmit.foreignPtt.hint')}</span>
                 </div>
               )}
-            </div>
-          </fieldset>
+            </div>          </fieldset>
           </>
           )}
 
