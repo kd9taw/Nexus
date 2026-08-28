@@ -598,6 +598,24 @@ describe('Satellites — logging the contact you just made', () => {
     // the two tiers it covers and sends the rest to the Logbook's free-text
     // Mode field. This test is what keeps those sentences honest: widen
     // `LOG_MODES` and it goes red, which is the cue to widen the prose too.
+    //
+    // ⚠️ WIDENED ONCE, DELIBERATELY (#159, 2026-08-28): PSK31 and QPSK31 joined the list
+    // when the PSK cockpit got a log strip and needed to name its own mode.
+    //
+    // THE QUESTION THAT HAD TO BE ANSWERED FIRST, because widening a list to make a test
+    // pass is how a constraint dies: does PSK belong in the picker ON THIS SURFACE, or did
+    // a keyboard-mode change leak into the satellite view? It BELONGS, and not by
+    // indulgence — PSK31 through a linear transponder is real, documented satellite
+    // operating, and two birds carried transponders built for exactly it (the US Naval
+    // Academy's PSAT/NO-84 and PSAT2). An operator who worked one of those on a rig Nexus
+    // does not control has to be able to name the mode, and before this the picker could
+    // not. Scoping `LOG_MODES` per exchange to keep this list frozen would have REMOVED a
+    // legitimate satellite mode to protect a sentence about something else.
+    //
+    // What the sentence actually claims is untouched: it is about the WSJT-X TIERS reachable
+    // from this section, and the loop below — the half that carries the claim — still finds
+    // none of them. The released 0.28.x note spelling the old list out is history, and stays
+    // as written.
     render(<SatellitesView focusSat="RS-44" snap={snap()} />)
     const strip = await screen.findByPlaceholderText('Call')
     await act(async () => {
@@ -608,7 +626,7 @@ describe('Satellites — logging the contact you just made', () => {
       .querySelector('.le-ov-mode') as HTMLSelectElement | null
     expect(picker, 'the override has no mode picker at all').not.toBeNull()
     const offered = Array.from(picker!.options).map((o) => o.value)
-    expect(offered).toEqual(['SSB', 'FM', 'AM', 'CW', 'RTTY', 'FT8', 'FT4'])
+    expect(offered).toEqual(['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4'])
     for (const tier of [
       'FT2',
       'Q65',

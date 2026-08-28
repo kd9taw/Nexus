@@ -9,6 +9,186 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tune can key at its own power.** Set a tune power under **Settings ▸ Digital ▸ Transmit &
+  Sequencing** and a tune-up keys at that level instead of whatever you are running. It can only
+  ever turn the rig *down* — it keys at whichever is lower, your setting or your current power —
+  so it can never lift you past a per-mode limit. Left empty it does nothing at all, which is the
+  default. Asked for by an operator running an MFJ-1786 loop, where a hundred watts into an
+  untuned loop is not what you want while the tuner hunts.
+
+- **Split contacts log both frequencies.** A contact worked split now records the frequency you
+  transmitted on and the frequency you received on, as separate ADIF fields, so a logger you export
+  to sees the same pair you actually used. Both values were already on screen and were being thrown
+  away at the log boundary. Not split? Nothing changes and no second frequency is written — an
+  invented one would be a false claim of split that every logger downstream believes. Satellite
+  passes are deliberately unchanged for now; doing them properly means moving the band field too,
+  which reaches every award and needed-list in Nexus. Asked for by swann.
+
+- **PSK has a log strip.** The PSK cockpit now carries the same log strip as CW and Phone, PSK31
+  and QPSK31 are in the mode list, and the manual log form stops pre-filling FT8 for a PSK
+  contact. It logs the sub-mode you actually worked, so a QPSK31 QSO records QPSK31. Reported by
+  KR4FQG.
+
+- **A callsign card in the FT8 cockpit.** Clicking a call in the roster now shows what you already
+  know about that station — previous contacts with band, mode and date, what is unconfirmed, the
+  new-one flags, distance and bearing, and your private note — the same card CW and Phone have
+  had. It follows the station you are working as well as one you click, so it is populated through
+  a normal run rather than only when you go looking. Reported by KR4FQG.
+
+- **RTTY starts receiving when you open it.** Every other decode mode auto-arms; RTTY was the one
+  that waited for you to press Arm RX, which is a likely reason behind "RTTY is not decoding".
+  Same Settings opt-out as PSK, APRS and SSTV.
+
+- **Tell Nexus what your serial cable actually does.** Two new declarations under **Settings ▸
+  Radio ▸ Rig & CAT ▸ Advanced** — serial handshake, and the keying line's state at startup. Both
+  default to **Auto**, which is exactly today's behaviour, so nothing about your station changes
+  by upgrading. They exist for one fault: a rig that keys the transmitter the moment Nexus opens.
+  If that is not happening to you, leave them alone.
+
+### Fixed
+
+- **Nexus no longer adopts a rigctld that is driving a different radio.** When a rigctld was already
+  listening on a radio's CAT port, Nexus connected through it — which is the right thing, and is how
+  it shares a rig with WSJT-X — but it never checked WHICH radio that daemon was attached to. On a
+  two-radio station a stray daemon left over from the other rig would be adopted, and from then on
+  every frequency read, every band change and **every keying command went to the wrong radio**, with
+  the app showing the other rig's dial as though it were yours. Nexus now asks first: it reads the
+  daemon's own arguments (which carry the model AND the serial device) and falls back to asking the
+  daemon over the protocol when there is no local process to read. On a mismatch it refuses, says
+  which radio that daemon is actually driving, and tells you how to fix it — stop the daemon, or
+  give this radio its own rigctld port. Sharing a daemon that IS this radio's is unchanged, and so
+  is coexisting with an external NET-rigctl station.
+
+- **Tune could drop out repeatedly, defeating an automatic antenna tuner.** On a station with an
+  auto-tuning antenna — a magnetic loop especially — the tune carrier was interrupted over and
+  over. A tuner reads those gaps as a match, beeps, and stops before it has found one. Reported by
+  an operator running an MFJ-1786 with an IC-7300.
+
+  Two causes, both ours. Nexus queued only about 40 ms of tune audio ahead of the sound card while
+  asking the radio for meter readings on the same thread — and a radio that is slow to answer
+  stalls that thread for longer than the audio it has queued, so the carrier stops while the rig
+  stays keyed. Separately, if you had a per-mode power limit set, Nexus re-sent that limit to the
+  radio *every twenty milliseconds* for the whole tune. The meters now stand down during a
+  tune-up, the power limit is not re-sent under a live carrier, and the carrier runs a quarter of
+  a second ahead instead of forty milliseconds.
+
+- **A rig could key the transmitter the moment Nexus started.** With PTT set to serial RTS and no
+  separate PTT port, Nexus told the rig-control daemon nothing about the RTS line at all, so its
+  idle state fell to whatever the driver happened to do — on some cables, keyed. Two earlier
+  attempts guessed at this from other settings. Rather than guess a third time, the handshake and
+  the keying line's startup state are now things you can state outright (see Added). Reported by
+  VK6MO.
+
+- **Sharing your radio could report success for a mode it never set.** If another program —
+  VarAC, FreeDV, WSJT-X, a logger — asked Nexus for a data mode while Nexus was in a voice
+  section, Nexus answered "done" and left the rig in plain SSB. Your data signal went out on a
+  voice emission with nothing on screen to say so. It now answers honestly, and the connection log
+  names the mode that was asked for and the mode your radio is actually in. Reading the mode back
+  is honest too, on an FM calling channel, an APRS park or during an SSTV picture. Reported by
+  rogerloxton. **This is a behaviour change you may notice — see Changed.**
+
+- **A refused PTT from another program said nothing at all.** Nexus starts with transmit disarmed,
+  so the first time an external program tried to key, it was refused silently — which is why
+  pressing PTT in Phone appeared to "wake it up". The refusal now says why, in the connection log.
+
+- **Sharing could fill your connection log at one line a second, forever.** If something else
+  already owned the sharing port — your own rigctld, a second copy of Nexus — Nexus retried the
+  bind every second and logged every failure, without ever telling you plainly. It now says so
+  once, names the port and the likely cause, and backs off.
+
+- **Callsigns could be given the wrong country and a nonsense state.** WL7E showed as Alaska with
+  a state of "CA". The country comes from the callsign prefix and the state came from the FCC
+  index, which is a mailing address — and nothing compared the two. An Alaskan or Hawaiian call
+  now gets AK or HI, and a station outside the US gets no state at all. This also fed the Worked
+  All States "new one" cue, so it was quietly wrong there too. Reported by KR4FQG.
+
+- **Settings you changed while editing another radio were thrown away.** If you clicked Edit on a
+  radio you were not currently using and then changed anything station-wide — QRZ auto-upload, for
+  instance — the panel said it saved and nothing was written. This seam has now cost a keying
+  port, three Flex fields, an OmniRig slot and an Icom submode; the save itself is fixed rather
+  than another field name being added to it. Reported by barnburner6503.
+
+- **Your own transmissions vanished from the Rx Frequency pane.** Stopping transmit, changing band
+  or switching radio wiped the record of overs you had already sent — including when Nexus did it
+  for you, with nobody touching anything. Reported by Luk73.
+
+- **"Calling you" alerts only fired after the contact had ended.** An alert for the station you
+  were working was suppressed — and the station answering your CQ becomes that station in the same
+  instant the decode arrives, so the alert you actually wanted was the one that got suppressed.
+  Your own callsign now always raises the alert, as it does in WSJT-X. Reported by KR4FQG.
+
+- **LoTW confirmations were recorded as paper QSL cards.** A LoTW report carries an ordinary
+  confirmation field, and Nexus read it as a card — so the log claimed a card you never received,
+  and an ADIF export carried that claim on to any other logger. A hand-imported third-party ADIF
+  still counts as a card, correctly. Award credit is unaffected either way. Reported by rgoiko.
+
+- **A QSL-sent mark could not be undone.** Mis-click the QSL menu and it was permanent. There is a
+  clear entry now, and the clear sticks even if you later re-import a log that still says the card
+  went out. Reported by rgoiko.
+
+- **WSPR could beacon where nobody was listening.** The transmit marker could be dragged anywhere
+  from 200 Hz to 4 kHz, while every WSPR decoder searches 1400-1600 Hz. You could beacon all night
+  and be heard by nobody. It is held inside the sub-band now, matching WSJT-X. FT8, FT4 and FST4W
+  are unchanged. Reported by akhepcat.
+
+- **A repeated report went unanswered, and a station returning late got silence.** When a contact
+  closed, Nexus dropped the station immediately — so a partner who repeated their report got
+  nothing back, and a station the run had given up on that came back with RR73 never got a closing
+  73. WSJT-X keeps the station and answers both. Nexus now does too, bounded to a single over
+  within three minutes, without re-entering the contact. Reported by KR4FQG and bitslave.
+
+- **The update notice did nothing on Linux, and silenced itself.** Clicking Download dismissed the
+  pop-up and opened nothing — and it recorded the version as dismissed anyway, so the notice never
+  came back. Anyone who clicked it once stopped being told about updates entirely. It now opens
+  the page or tells you it could not and gives you the link to copy.
+
+- **A radio's audio could be refused by the monitor while working everywhere else.** On Linux the
+  headphone monitor picked the first audio format the card advertised rather than the one it could
+  actually use, and reported "unsupported format" for a card the rest of Nexus was using happily.
+  Reported by MW0CQU.
+
+- **Satellite elements stopped updating.** The upstream catalogue renamed the status that marks a
+  satellite as being in orbit, and the mirror correctly refused to publish rather than ship an
+  empty list — which meant satellite data quietly went stale instead. Fixed, and the check now
+  refuses an unknown status by name rather than only noticing when everything moves at once.
+
+- **Icom DATA submode was quietly reset whenever you edited a radio you were not using.** If you
+  run more than one radio and set an Icom to DATA2 or DATA3, opening that radio's entry and
+  saving it put it back to DATA1 without saying so. The panel reported success, the setting was
+  gone, and the next time you keyed that rig it was in the wrong submode.
+
+  The per-radio Edit form saves through a patch that the app and the radio settings each
+  describe separately, and the submode was missing from one of the two descriptions. Anything
+  missing there is filled in with a default rather than your value. It travels with the patch
+  now, and there is a check that fails the build if the two descriptions ever disagree again —
+  the same drift has cost a keying port, a Flex address and an OmniRig slot before this.
+
+### Changed
+
+- **Backup and Restore moved to their own Config tab.** They existed, but sat under **Radio ▸
+  Transmit limits & sharing**, which is why operators did not find them: backing up a whole
+  station has nothing to do with transmit limits. Same controls, same behaviour — a findable
+  home, and search keywords wide enough to survive a panic ("backup", "restore", "factory",
+  "defaults", "start over").
+
+- **Sharing your radio now refuses a mode it cannot set, where it used to accept it silently.**
+  This is the honest half of the fix above, and it is the one you might feel: a program configured
+  for a data mode while Nexus sits in Phone now gets a real error instead of a quiet success. Put
+  Nexus in the section that matches what the other program is doing — Digital for FT8 and
+  VarAC-style data, Phone for voice, CW for CW — and it goes through exactly as before. If you do
+  see a refusal, the connection log names both modes so you can see which end to change.
+
+- **The spots filter says what it does.** "Heard near me" is now "Heard on my continent", which is
+  what the filter has always actually done. Asked about by barnburner6503, who went looking for a
+  Europe-only filter that was already there and switched on.
+
+- **Grids by band lists the VUCC bands by default.** Grids count toward an award on 50 MHz and
+  up and nowhere else, so on an HF station the list was mostly grids that count toward nothing,
+  with the few bands that do count buried in it. It now starts at 6 m and up, with an **All
+  bands** button if you want the full count back.
+
+  The VUCC box above it has always been VHF-only and is unchanged. Suggested by NT9E.
+
 - **macOS: the Settings pickers can now tell two identical radios apart.** On a station with
   two rigs that use the same bridge and codec chips, every serial port carried the same product
   label ("CP2105 Dual USB to UART Bridge Controller", eight times) and both sound cards
@@ -398,8 +578,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attempt is ignored too it tells you the actual width instead of implying success. Rigs
   that round to the nearest filter they own are left alone: asking for 3 kHz and getting
   2.7 is the radio doing its job, not a fault.
-
-### Added
 
 - **A manual notch you can actually place, and a depth for the speech processor.** The Notch
   button was driving the radio's *automatic* notch — the one that hunts a carrier down by

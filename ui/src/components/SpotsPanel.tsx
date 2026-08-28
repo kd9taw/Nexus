@@ -86,10 +86,14 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
   // `licensed` flag is computed backend-side from the SAME tables as the TX lockout;
   // an Open-class (non-US) operator has every spot licensed, so the toggle is a no-op.
   const [licensedOnly, setLicensedOnly] = useSessionState('nexus.spots.licensedOnly', false)
-  // "Heard near me" — keep only spots at least one voice on the operator's OWN CONTINENT
-  // reported. The same question the Needed board asks; the panel had no locality test at all,
-  // so a US operator saw JA stations only Europe and Asia had heard, which says nothing about a
-  // path from here (operator, 2026-08-19).
+  // "Heard on my continent" — keep only spots at least one voice on the operator's OWN
+  // CONTINENT reported. The same question the Needed board asks; the panel had no locality test
+  // at all, so a US operator saw JA stations only Europe and Asia had heard, which says nothing
+  // about a path from here (operator, 2026-08-19).
+  //
+  // ⚠️ IT WAS LABELLED "Heard near me", and a reporter asked us to BUILD a "spotted from Europe
+  // only" filter while standing in front of it, default on. The label named a feeling; the
+  // predicate is a continent. The words on the chip now say what the tooltip always did.
   //
   // DEFAULT ON, and the count of what it hides is printed beside it — a filter that removes
   // rows silently is how "my spots disappeared" becomes an unanswerable report.

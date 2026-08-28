@@ -215,6 +215,27 @@ fn spawn_cat_daemon(
     .map(|p| (CatDaemon::Spawned(p), native_fallback))
 }
 
+/// Overlay the #145 control-line DECLARATIONS onto the startup transport seed.
+///
+/// ⚠️ THE FIRST LAUNCH IS THE ONE THAT KEYS, which is the whole of #145 — a rig that comes up
+/// transmitting the moment Nexus opens the port. [`Transport::from_cfg`] deliberately seeds the
+/// SAFE control-line state rather than the operator's, and the live per-tick
+/// [`Transport::from_settings`] rebuild supplies the real one a tick later. For a wish about a
+/// line we may freely hold, a tick later is fine. For these two it is not: they are the operator
+/// stating how their keying line and their handshake actually behave, and by the first tick the
+/// daemon has already opened the port. `cat_rts_keys_ptt` is seeded for exactly this reason
+/// (#44); these are its siblings.
+///
+/// Only the two declarations are overlaid. `rts`/`dtr` stay at the seed's hold-low safety
+/// default on purpose — that is a separate, deliberate choice about the FIRST launch, and
+/// widening it here would quietly change it.
+fn seed_line_declarations(t: &mut Transport, s: &tempo_app::settings::Settings) {
+    t.control_lines.handshake =
+        crate::rigctld_proc::Handshake::from_setting(&s.cat_serial_handshake);
+    t.control_lines.keying_line =
+        crate::rigctld_proc::LineState::from_keying_setting(&s.cat_ptt_line_state);
+}
+
 /// Which CAT backend is actually serving, for probe/status attribution — the operator
 /// must never have to guess whether "isn't answering" came from the native CI-V daemon
 /// or from Hamlib. `native_wanted` = the transport opted into native CI-V (and keying
@@ -464,6 +485,110 @@ fn cat_port_conflict(t: &Transport) -> Option<String> {
 /// names a program. (b) names one and quotes the greeting as its evidence, because the
 /// program is the only thing a banner establishes — the rest of a Thetis banner is a
 /// compile-time build label, so no hardware is read out of it.
+/// Is the rigctld already on `addr` driving a DIFFERENT radio than this profile describes? If
+/// so, the operator-facing reason to refuse it; `None` to go ahead and share it.
+///
+/// COEXISTING IS A FEATURE, and this must not break it: an external rigctld on the port is the
+/// manual's own NET-rigctl station, and it is how WSJT-X and Nexus share one rig. What was
+/// missing is the question "is it MY rig?", which the monitor path answers by never coexisting at
+/// all and the active path did not answer at all.
+///
+/// TWO SOURCES OF IDENTITY, strongest first:
+///  1. The daemon's own ARGUMENTS (`-m` model, `-r` device). Local processes only, and it is the
+///     only evidence that separates two IDENTICAL rigs — both answer the same model, but they
+///     cannot be on the same serial device.
+///  2. `\dump_state`'s served model. Works for a daemon on another machine, where no process
+///     list can reach, but cannot tell two same-model rigs apart.
+///
+/// REFUSING NEEDS EVIDENCE. Every "cannot tell" answers `None`: no reply, an unparseable reply,
+/// a remote daemon with no readable process, an unsupported platform. A guard that refused on
+/// silence would take CAT away from exactly the shared setups it is meant to protect.
+///
+/// EXEMPT: a profile whose model is Hamlib's own NET/dummy/software class (`<= 4`, or a
+/// software-CAT profile). "NET rigctl" means "whatever serves this address" — that IS the
+/// Is the daemon `d` driving a DIFFERENT radio than this profile describes?
+///
+/// The whole decision of the argv branch, as a pure function, so the thing that can key the wrong
+/// radio is testable without a `ps`, a daemon or a rig. `foreign_daemon_refusal` around it does the
+/// reading and the wording; this does the judging.
+///
+/// TWO INDEPENDENT WITNESSES, and either one is enough. The MODEL differing is the obvious case. The
+/// DEVICE differing catches the case the model cannot: two identical rigs — the same model on two
+/// serial ports — where a stray daemon for radio B looks exactly like radio A's until you compare
+/// what it is attached to.
+///
+/// WHAT IS DELIBERATELY NOT EVIDENCE. An unknown field is never a difference:
+/// * `d.model == None` — argv did not carry a model, so it says nothing either way.
+/// * `d.device == None` — likewise.
+/// * an empty `want_port` — this profile has no port configured, so there is nothing to disagree
+///   with; a network rig's "port" is an address the daemon's `-r` will not match either, hence
+///   `is_network`.
+///
+/// The bias is deliberate and it is the opposite of the usual one: this guard REFUSES a working
+/// setup when it fires, so it must only fire on evidence. Silence means share.
+fn daemon_is_foreign(
+    want_model: u32,
+    want_port: &str,
+    is_network: bool,
+    d: &crate::rigctld_proc::ServedRig,
+) -> bool {
+    let model_differs = d.model.is_some_and(|m| m != want_model);
+    let device_differs = match (&d.device, want_port) {
+        (Some(dev), want) if !want.is_empty() && !is_network => dev != want,
+        _ => false,
+    };
+    model_differs || device_differs
+}
+
+/// operator's instruction, and comparing it against the real rig behind the daemon would refuse
+/// the manual's documented setup.
+fn foreign_daemon_refusal(t: &Transport, addr: &str) -> Option<String> {
+    if t.rig_model <= 4 || crate::rigmodels::is_software_cat_profile(t.rig_model) {
+        return None;
+    }
+    // 1. Process arguments — model AND device.
+    if let Some(d) = crate::rigctld_proc::daemon_serving_port(t.rigctld_port) {
+        if daemon_is_foreign(t.rig_model, &t.serial_port, t.is_network(), &d) {
+            return Some(format!(
+                "The rigctld on :{} is driving a different radio — {} — not this one ({} on {}). \
+                 Nexus did not connect to it, because it would have been reading and commanding \
+                 the wrong rig. Stop that daemon, or give this radio its own rigctld port in \
+                 Settings ▸ Radio.",
+                t.rigctld_port,
+                d.describe(),
+                t.rig_model,
+                if t.serial_port.is_empty() {
+                    "no serial port"
+                } else {
+                    &t.serial_port
+                },
+            ));
+        }
+        // Arguments matched: it IS this rig's daemon (ours, or a restart of it). Share it.
+        return None;
+    }
+    // 2. No local process to read (remote daemon, or a platform without the lookup) — fall back
+    //    to the protocol. Model only, which is weaker but reaches further.
+    let served = crate::rigctld_server::served_rig_model(addr, Duration::from_millis(400))?;
+    // A daemon that answers with Hamlib's own NET/dummy/software class is a RELAY, not a radio:
+    // `rigctld -m 2 -r otherhost:4532` chains to a rig whose real model it never reports, and a
+    // test harness or a broker answers the same way. Its model is therefore not evidence about
+    // the rig at the far end, and "cannot tell" is the only honest reading. The LOCAL case that
+    // motivated all of this is not lost by this: a stray daemon on this machine is identified by
+    // its arguments above, which carry the model AND the device.
+    if served <= 4 || crate::rigmodels::is_software_cat_profile(served) {
+        return None;
+    }
+    (served != t.rig_model).then(|| {
+        format!(
+            "The rigctld on :{} is serving Hamlib model {served}, but this radio is model {}. \
+             Nexus did not connect to it — it would have been commanding a different rig. Stop \
+             that daemon, or give this radio its own rigctld port in Settings ▸ Radio.",
+            t.rigctld_port, t.rig_model,
+        )
+    })
+}
+
 ///
 /// Detection INFORMS. Nothing here switches an operator's rig model.
 fn foreign_cat_port_message(addr: &str, reply: &str, rig_model: u32) -> String {
@@ -530,9 +655,25 @@ const N3FJP_BAND_REPORT_MS: f64 = 60_000.0;
 
 /// Tune-carrier audio tone (Hz), the same f0 the FT1 modem centers on.
 const TUNE_FREQ_HZ: f32 = 1500.0;
-/// How many ms of tune carrier to queue per loop iteration (keeps the output
-/// ring fed across the loop's sleep without building a large backlog).
-const TUNE_CHUNK_MS: f32 = 40.0;
+/// How much tune carrier to keep QUEUED AHEAD of the sound card, in ms — the carrier's LEAD.
+///
+/// ⚠️ THE LEAD USED TO BE ONE TICK, AND THAT IS THE GAP (operator report: an auto-tuning
+/// magnetic loop stops tuning early, mid-tune). The loop queued exactly the wall-clock it had
+/// just spent, so the output ring never held more than ~40 ms of carrier. Anything that made one
+/// tick run long — and this loop still makes blocking CAT round-trips with a 700 ms deadline
+/// (2500 ms on a slow transport) — drained the ring, and an empty ring is not a pause:
+/// `next_tx_sample` (device.rs) pops `unwrap_or(0.0)`, so the card emits SILENCE while PTT stays
+/// asserted. A keyed rig with no modulation makes no forward power, the power collapses and comes
+/// back, and an ATU reads that as a match and stops tuning.
+///
+/// 250 ms outlasts the blocking reads a tick can still make. It is a TARGET DEPTH, not a chunk
+/// size: the loop tops the ring up TOWARD it and can therefore never exceed it — which is what
+/// keeps the 1.0.x unbounded-growth bug fixed at the same site (a fixed chunk per tick queued
+/// audio twice as fast as it could play, for as long as Tune was held).
+///
+/// ⚠️ NEEDS-BENCH: there is no rig on this box and CI cannot reproduce wire timing. The bound is
+/// unit-tested; that 250 ms is ENOUGH lead on a real slow-serial station is not.
+const TUNE_LEAD_MS: f32 = 250.0;
 /// HARD CEILING on the tune auto-release: never hold PTT + a steady carrier
 /// longer than this, whatever `settings.tune_timeout_secs` says — the setting
 /// is a bare numeric field AND settings.json is hand-editable, so one mistyped
@@ -1026,6 +1167,10 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
             };
             match WsjtxServer::new(bind.parse().unwrap(), target) {
                 Ok(s) => {
+                    // ⚠️ `CARGO_PKG_VERSION` here is TEMPO-AUDIO's version (0.2.0), not the
+                    // app's — so this heartbeat announces a version that was never released.
+                    // Left as-is rather than fixed blind: the app version is not reachable from
+                    // this crate, and threading it is its own change.
                     let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
                     Some(s)
                 }
@@ -1141,7 +1286,10 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // connection status so the UI shows green/red right away. The transport is
     // rebuilt **live** below when the operator changes rig/PTT/audio settings, so
     // CAT connects on Save without an app restart.
-    let applied = Transport::from_cfg(&cfg);
+    let mut applied = Transport::from_cfg(&cfg);
+    // ⚠️ #145'S TWO DECLARATIONS HAVE TO REACH THE **FIRST** LAUNCH, so they are overlaid onto
+    // the startup seed here — see [`seed_line_declarations`].
+    seed_line_declarations(&mut applied, engine_lock(&engine).settings());
     // Initial open: allow coexisting onto a pre-existing EXTERNAL rigctld (e.g. WSJT-X already sharing
     // the rig). Mid-session rig SWITCHES pass `allow_coexist=false` when they reuse their own port.
     let (mut rig, rigctld_proc, init_probe) = open_rig(&applied, true);
@@ -1494,6 +1642,12 @@ fn monitor_loop(
             let lines = crate::rigctld_proc::ControlLines {
                 rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
                 dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
+                // The two #145 declarations. Both default to "auto"/"untouched", i.e. the
+                // inference and the silence every release up to now shipped.
+                handshake: crate::rigctld_proc::Handshake::from_setting(&s.cat_serial_handshake),
+                keying_line: crate::rigctld_proc::LineState::from_keying_setting(
+                    &s.cat_ptt_line_state,
+                ),
                 // Not an operator wish and never read from settings: `resolve_lines` sets it,
                 // and only where dropping the handshake is what makes `rts` above achievable.
                 handshake_none: false,
@@ -2274,6 +2428,11 @@ struct RadioLoop {
     /// zero drainage). `None` between tune holds and for the first chunk of a new hold, which
     /// still seeds off `TUNE_CHUNK_MS` before there's an elapsed-time baseline.
     tune_last_chunk_ms: Option<f64>,
+    /// How much tune carrier we believe is still QUEUED and unplayed (ms) — the loop's own model
+    /// of the output ring's depth, since the backend seam does not report it. Grows by what we
+    /// queue, shrinks by the wall-clock that has passed, floored at zero (past zero the card
+    /// underran and the shortfall went out as silence). Kept at [`TUNE_LEAD_MS`]; see it.
+    tune_queued_ms: f32,
     applied: Transport,
     /// Set when a handoff bailed on the pool lock: step() skips ONE rig_differs rebuild
     /// tick so the handoff (not a fresh spawn racing the monitor's port) wins.
@@ -2762,6 +2921,7 @@ impl RadioLoop {
             tune_phase: 0.0,
             tune_started_ms: None,
             tune_last_chunk_ms: None,
+            tune_queued_ms: 0.0,
             applied,
             rigctld_proc,
             cat_hold_active: false,
@@ -7015,7 +7175,22 @@ impl RadioLoop {
                 // moving the slider always tries again — and the cap's `force` leg is NOT
                 // weakened: a refusal means CAT cannot enforce the ceiling on this radio at all,
                 // which is a fact to state, not one to keep burning the loop over.
-                if (force || Some(p) != self.last_rf_power) && self.rf_power_giveup != Some(p) {
+                // ⚠️ AND NOT WHILE A TUNE CARRIER IS UP — a STARVATION fix, not tidiness.
+                // `force` is set whenever the last-OBSERVED rig power exceeds the mode ceiling
+                // (`Engine::rf_power_to_command`), and the observation that would clear it comes
+                // from the 750 ms heavy poll, which IS suppressed while tuning. So a tune that
+                // started with the rig observed above its cap re-issued this BLOCKING write on
+                // every 20 ms tick for the whole tune-up — against a carrier with one tick of
+                // lead. Every other blocking poll in this loop already stands down for a tune
+                // (`!self.tuning_keyed`, four sites); this was the one that did not. It is also
+                // what would fight the tune power set in the keying branch below.
+                //
+                // Nothing is lost by standing down: the ceiling was already applied before the
+                // tune keyed, and only the heavy poll — also suppressed — could learn otherwise.
+                if !self.tuning_keyed
+                    && (force || Some(p) != self.last_rf_power)
+                    && self.rf_power_giveup != Some(p)
+                {
                     match rig.set_power(p) {
                         Ok(()) => {
                             self.last_rf_power = Some(p);
@@ -7200,6 +7375,18 @@ impl RadioLoop {
         {
             let keyed_now =
                 self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
+            // ⚠️ …BUT THE METERS STAND DOWN FOR A TUNE-UP, and that is a starvation fix rather
+            // than a display choice. The note above says one blocking read per throttled cycle is
+            // safe because four back-to-back reads are what would stall a chunked carrier. That
+            // was measured against an over; against a TUNE it is wrong, because a tune carrier is
+            // generated one chunk per tick and ONE slow read is enough — 150 ms of meter poll on
+            // a rig that answers slowly outlasts the lead, the ring runs dry, and the card emits
+            // zeros with PTT still asserted (see [`TUNE_LEAD_MS`]). The lead is now 250 ms, which
+            // absorbs a healthy read; standing the poll down as well is what makes the carrier
+            // gapless on a slow link too, and it costs nothing — these are bars nobody watches
+            // during a tune-up, and the tune-up is excluded from the Po watch by contract anyway.
+            // Real overs and live mic PTT keep the poll.
+            let meters_now = keyed_now && !self.tuning_keyed;
             // ⚠️ PROOF OF TRANSMISSION (2026-08-17 Flex audit, completeness-critic gap #14 —
             // "'keyed but no RF' is never detected"). The Po meter read below is already the
             // evidence; nothing ever asked it whether any RF actually came out. Arm the watch
@@ -7267,7 +7454,7 @@ impl RadioLoop {
                 self.rig_keyed = false;
                 engine_lock(engine).observe_rig_ptt(false);
             }
-            if (keyed_now || self.rig_keyed) && self.cat_ok != Some(false) {
+            if (meters_now || self.rig_keyed) && self.cat_ok != Some(false) {
                 if now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
                     // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
                     // normalized 0..1, only the _WATTS variant is true watts — and the native
@@ -7505,6 +7692,28 @@ impl RadioLoop {
         }
         if is_tuning {
             let keying = !self.tuning_keyed;
+            // TUNE POWER (`Settings::tune_power_pct`) — the level a tune-up keys at, read while
+            // the lock is still held. Applied in the LOOP and not in a cockpit, so every path
+            // that starts a tune gets it.
+            //
+            // SAFE-DIRECTION ONLY: the lower of the operator's tune level and the level already
+            // commanded, so a tune can turn the rig DOWN and never up — and it inherits the
+            // per-mode duty-cycle ceiling that commanded level is already clamped to
+            // (`Engine::set_rf_power`), without this loop having to re-derive it.
+            //
+            // `None` on EITHER side means do nothing, which is today's behaviour: no setting, or
+            // no level Nexus has ever commanded on this rig, and there is then nothing to put
+            // back afterwards. Leaving a rig at 10 W for the rest of the session would be a worse
+            // bug than the one this fixes, so the feature declines rather than guess.
+            let tune_power = keying
+                .then(|| {
+                    eng.settings()
+                        .tune_power_pct
+                        .map(|pct| f32::from(pct.min(100)) / 100.0)
+                        .zip(eng.rf_power())
+                        .map(|(want, commanded)| want.min(commanded))
+                })
+                .flatten();
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).
             drop(eng);
@@ -7523,28 +7732,59 @@ impl RadioLoop {
                     d.set_scope_enabled(false);
                     d.set_data_mode(true);
                 }
+                if let Some(p) = tune_power {
+                    // BEFORE the key, like the DATA flip above — the carrier must never come up
+                    // at the operating level and then step down.
+                    //
+                    // ⚠️ NEEDS-BENCH. There is no rig on this box: what is tested is that the
+                    // command is issued before PTT and that the operator's level is re-commanded
+                    // after, never that a radio read back the watts.
+                    let _ = rig.set_power(p);
+                    // THE RESTORE, and it is STRUCTURAL rather than a saved value. Forgetting
+                    // what we last commanded means the RF-power block above re-commands the
+                    // operator's own level — through its normal retry / give-up / status
+                    // machinery — on the first tick after `tuning_keyed` goes false. That covers
+                    // EVERY exit path, including the four that clear `tuning_keyed` without ever
+                    // reaching the release branch below: a CAT-transport rebuild, an audio
+                    // rebuild, a dual-radio handoff, and the Test-CAT port hold. The release
+                    // branch and the MAX_TUNE_MS auto-stop are simply two more of them.
+                    self.last_rf_power = None;
+                    // …and a give-up recorded against the TUNE level must not be mistaken for a
+                    // refusal of the operator's, which is a different value.
+                    self.rf_power_giveup = None;
+                }
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                 let _ = rig.ptt(true);
                 self.tuning_keyed = true;
                 self.tune_started_ms = Some(now);
+                // A fresh hold starts with an empty ring and no elapsed baseline.
+                self.tune_last_chunk_ms = None;
+                self.tune_queued_ms = 0.0;
                 self.tx_until_ms = None; // a tune supersedes any pending slot TX tail
                 self.slot_tx_until_ms = 0.0; // …so there is no slot over left to protect
             }
-            // Size this chunk off real elapsed wall-clock time since the last one, not the
-            // fixed TUNE_CHUNK_MS constant. The driving loop's actual tick period doesn't
-            // match TUNE_CHUNK_MS, and queuing a fixed-duration chunk every tick regardless of
-            // how much real time passed is what let out_ring grow without bound for as long as
-            // Tune was held. Clamped so a stalled tick (e.g. a slow CAT read) can't queue one
-            // huge catch-up burst. TUNE_CHUNK_MS still seeds the FIRST chunk of a hold, before
-            // there's an elapsed-time baseline.
-            let elapsed_ms = self
+            // TOP THE CARRIER'S LEAD UP TOWARD [`TUNE_LEAD_MS`] — never add to it.
+            //
+            // What is still unplayed is what we queued minus the wall-clock since we queued it,
+            // floored at zero: below zero the card already ran dry and the shortfall went out as
+            // silence, which is exactly the gap the lead exists to close. Queue the difference.
+            //
+            // ⚠️ THIS IS THE SITE OF THE 1.0.x OUT_RING-GROWTH BUG, and the bound is what keeps
+            // it fixed: a chunk sized off the fixed 40 ms constant every ~20 ms tick queued audio
+            // twice as fast as it could ever play, so out_ring grew without bound for as long as
+            // Tune was held (confirmed live: past 190,000 queued samples, zero drainage). Sizing
+            // off elapsed time fixed the growth but left the ring one tick deep, which is the
+            // starvation this now fixes. Topping up TOWARD a target does both: the depth can
+            // never exceed the target, and it can never fall to a single tick either.
+            let drained_ms = self
                 .tune_last_chunk_ms
-                .map(|last| (now - last) as f32)
-                .unwrap_or(TUNE_CHUNK_MS)
-                .clamp(0.0, TUNE_CHUNK_MS * 4.0);
+                .map_or(0.0, |last| (now - last) as f32);
+            self.tune_queued_ms = (self.tune_queued_ms - drained_ms).max(0.0);
             self.tune_last_chunk_ms = Some(now);
-            let n = (tempo_fast::SAMPLE_RATE * (elapsed_ms / 1000.0)) as usize;
+            let top_up_ms = (TUNE_LEAD_MS - self.tune_queued_ms).max(0.0);
+            self.tune_queued_ms += top_up_ms;
+            let n = (tempo_fast::SAMPLE_RATE * (top_up_ms / 1000.0)) as usize;
             let chunk = tune_carrier(
                 TUNE_FREQ_HZ,
                 n,
@@ -7559,6 +7799,13 @@ impl RadioLoop {
             // flag only clears on a SUCCESSFUL unkey (fail-safe Rig::ptt), so a miss
             // here is retried by the idle self-heal below.
             crate::civ::diag::note("tune released: unkey (tune ended or Tune toggled off)");
+            // FLUSH THE LEAD FIRST, then unkey — the same order every other end-of-over site in
+            // this loop uses, and with the lead now a quarter of a second it is load-bearing
+            // rather than tidiness: on a VOX-keyed station the AUDIO is the key, so `ptt(false)`
+            // does nothing and a queued tail would hold the transmitter up for as long as it
+            // took to play out. Nothing but tune carrier can be queued here — the tune branch
+            // supersedes any pending slot over and returns early on every tick it runs.
+            backend.flush_output();
             let _ = rig.ptt(false);
             if let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::native) {
                 // Restore the PRE-TUNE data state — NOT a hardcoded OFF. An FT8/DATA-U operator
@@ -7568,6 +7815,7 @@ impl RadioLoop {
             self.tuning_keyed = false;
             self.tune_started_ms = None;
             self.tune_last_chunk_ms = None;
+            self.tune_queued_ms = 0.0;
             self.last_slot = None;
             self.prev_slot_was_tx = false;
         }
@@ -8215,7 +8463,17 @@ impl RadioLoop {
                     let s = eng.snapshot();
                     (s.mycall.clone(), s.mygrid.clone())
                 };
-                let _ = reporter.send_spots(&rx_call, &rx_grid, "Tempo", &station.psk_spots);
+                // ⭐ THE NAME PSKREPORTER SHOWS THE WORLD. This still said "Tempo" long after
+                // the app was renamed, so every operator running Nexus appeared on
+                // pskreporter.info as a Tempo user — the rebrand missed the one identifier that
+                // is visible to everyone but us (operator report, 2026-08-26).
+                //
+                // No version deliberately: `env!("CARGO_PKG_VERSION")` here is TEMPO-AUDIO's
+                // version (0.2.0), not the app's, so appending it would report a number that has
+                // never been released. A bare, correct name beats a decorated wrong one. (The
+                // WSJT-X heartbeat at the top of this file makes exactly that mistake — see the
+                // note there.)
+                let _ = reporter.send_spots(&rx_call, &rx_grid, "Nexus", &station.psk_spots);
                 station.psk_spots.clear();
                 station.last_psk_flush = now;
             }
@@ -9059,6 +9317,12 @@ impl Transport {
             control_lines: crate::rigctld_proc::ControlLines {
                 rts: crate::rigctld_proc::LineState::from_setting(&s.cat_rts_state),
                 dtr: crate::rigctld_proc::LineState::from_setting(&s.cat_dtr_state),
+                // The two #145 declarations. Both default to "auto"/"untouched", i.e. the
+                // inference and the silence every release up to now shipped.
+                handshake: crate::rigctld_proc::Handshake::from_setting(&s.cat_serial_handshake),
+                keying_line: crate::rigctld_proc::LineState::from_keying_setting(
+                    &s.cat_ptt_line_state,
+                ),
                 // Not an operator wish and never read from settings: `resolve_lines` sets it,
                 // and only where dropping the handshake is what makes `rts` above achievable.
                 handshake_none: false,
@@ -9759,6 +10023,11 @@ fn open_cat(
     };
     match listening {
         crate::rigctld_server::PortReply::Rigctld => {
+            // A rigctld is there — but WHICH RADIO is it driving? Adopting it without asking is
+            // how CAT and keying end up on the wrong rig; see `foreign_daemon_refusal`.
+            if let Some(detail) = foreign_daemon_refusal(t, &addr) {
+                return (Rig::vox(), None, CatProbe::status(Some(false), detail));
+            }
             // Auto-coexist: connect THROUGH it instead of fighting for the serial port.
             let mut rig = Rig::with_control(Some(addr.clone()), ptt_mode);
             rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
@@ -11775,6 +12044,84 @@ mod tests {
             tx_level: 0.8,
             ..Settings::default()
         }
+    }
+
+    /// THE DECISION THAT CAN KEY THE WRONG RADIO, and it is a warning as well as a guard: when this
+    /// says true, Nexus REFUSES a rigctld it could otherwise have shared. So the cases that must
+    /// come back false matter as much as the ones that must come back true.
+    #[test]
+    fn a_daemon_is_foreign_only_on_evidence() {
+        use crate::rigctld_proc::ServedRig;
+        let d = |model: Option<u32>, device: Option<&str>| ServedRig {
+            model,
+            device: device.map(str::to_string),
+        };
+
+        // ── FIRES: either witness alone is enough ────────────────────────────────────────────
+        assert!(
+            daemon_is_foreign(
+                1049,
+                "/dev/cu.usbserial-A",
+                false,
+                &d(Some(1051), Some("/dev/cu.usbserial-A"))
+            ),
+            "a different MODEL on the same device is a different radio"
+        );
+        assert!(
+            daemon_is_foreign(
+                1049,
+                "/dev/cu.usbserial-A",
+                false,
+                &d(Some(1049), Some("/dev/cu.usbserial-B"))
+            ),
+            "the device witness is what catches TWO IDENTICAL RIGS — same model, other port, and \
+             the model alone cannot tell them apart"
+        );
+
+        // ── SILENT: it IS this radio's daemon ────────────────────────────────────────────────
+        assert!(
+            !daemon_is_foreign(
+                1049,
+                "/dev/cu.usbserial-A",
+                false,
+                &d(Some(1049), Some("/dev/cu.usbserial-A"))
+            ),
+            "both witnesses agree — ours, or a restart of ours. Share it"
+        );
+
+        // ── SILENT: an unknown field is NOT a difference ─────────────────────────────────────
+        // Each of these would refuse a working setup if absence were read as disagreement.
+        assert!(
+            !daemon_is_foreign(
+                1049,
+                "/dev/cu.usbserial-A",
+                false,
+                &d(None, Some("/dev/cu.usbserial-A"))
+            ),
+            "argv carried no model — that is silence, not a mismatch"
+        );
+        assert!(
+            !daemon_is_foreign(1049, "/dev/cu.usbserial-A", false, &d(Some(1049), None)),
+            "argv carried no device — likewise"
+        );
+        assert!(
+            !daemon_is_foreign(1049, "", false, &d(Some(1049), Some("/dev/cu.usbserial-B"))),
+            "this profile has NO port configured, so there is nothing for a device to disagree with"
+        );
+        assert!(
+            !daemon_is_foreign(
+                1049,
+                "192.168.1.50:4992",
+                true,
+                &d(Some(1049), Some("/dev/cu.usbserial-B"))
+            ),
+            "a network rig's 'port' is an address; a daemon's -r will never match it, and reading \
+             that as foreign would refuse every network rig sharing a daemon"
+        );
+        assert!(
+            !daemon_is_foreign(1049, "/dev/cu.usbserial-A", false, &d(None, None)),
+            "nothing known at all — the honest answer is share, and let the CAT probe judge"
+        );
     }
 
     #[test]
@@ -17129,15 +17476,27 @@ mod tests {
         );
     }
 
+    /// ⭐ THE TUNE CARRIER'S LEAD, BOUNDED AT BOTH ENDS — one test standing where two bugs met.
+    ///
+    /// This test was written for the FIRST of them (1.0.x): a chunk sized off the fixed 40 ms
+    /// `TUNE_CHUNK_MS` constant on every ~20 ms tick queued audio twice as fast as it could ever
+    /// play, so `out_ring` grew without bound for as long as Tune was held — confirmed live past
+    /// 190,000 queued samples with zero drainage. Sizing the chunk off real elapsed time fixed
+    /// the growth and created the SECOND: the ring then never held more than one tick of carrier,
+    /// so any tick that ran long (this loop still makes blocking CAT reads) drained it, the card
+    /// emitted zeros with PTT still asserted, forward power collapsed and came back, and an
+    /// operator's auto-tuning magnetic loop read that as a match and stopped tuning early.
+    ///
+    /// So the pinned property is no longer "each chunk equals the elapsed time" — that shape IS
+    /// the starvation. It is a **two-sided bound on everything queued so far**:
+    ///
+    ///  * never more than `elapsed + TUNE_LEAD_MS` — the unbounded-growth guard, and it still
+    ///    fails against the original bug, which queues `2 × elapsed`; and
+    ///  * never less than `elapsed` — the loop must not fall behind real time; plus a
+    ///  * steady-state equality: with ticks arriving on time the surplus over `elapsed` is
+    ///    exactly the lead, which is what fails if anyone goes back to queuing exactly-elapsed.
     #[test]
-    fn tune_chunk_pacing_follows_elapsed_time_not_a_fixed_constant() {
-        // Regression test for the out_ring-growth bug: a chunk sized off the fixed
-        // TUNE_CHUNK_MS constant (40ms) every ~20ms driving-loop tick queued audio twice as
-        // fast as it could ever play, so out_ring grew without bound for as long as Tune was
-        // held (confirmed live: past 190,000 queued samples, zero drainage). The SECOND chunk
-        // of a hold must be sized off real elapsed time since the first, not TUNE_CHUNK_MS
-        // again — only the very first chunk of a hold still seeds off the constant, before
-        // there's an elapsed-time baseline.
+    fn tune_carrier_keeps_a_bounded_lead_and_never_grows_without_bound() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         engine.lock().unwrap().set_tune(true);
         let mut backend = MockBackend::new();
@@ -17145,45 +17504,400 @@ mod tests {
         let mut state = loop_state();
         let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        // Samples of carrier for a span of wall clock, at the modem rate the tune tone is
+        // generated at. Rounded, not truncated: an exact 1060 ms lands on 12719.999 in f32 and a
+        // one-sample truncation error would make the bound below fail on arithmetic, not on
+        // behaviour. The lead itself uses the loop's own expression so the two cannot drift.
+        let samples =
+            |ms: f64| (f64::from(tempo_fast::SAMPLE_RATE) * (ms / 1000.0)).round() as usize;
+        let lead = (tempo_fast::SAMPLE_RATE * (TUNE_LEAD_MS / 1000.0)) as usize;
+        let tick_ms = 20.0; // the real driving loop's cadence
 
-        state
-            .step(
-                &engine,
-                &mut backend,
-                &mut rig,
-                &sinks,
-                0.0,
-                &mut ra,
-                &mut rr,
-                &mut station,
-            )
-            .unwrap();
-        let first_chunk_len = backend.played.len();
+        run(&mut state, &mut backend, 0.0);
         assert_eq!(
-            first_chunk_len, 480,
-            "first chunk of a hold still seeds off TUNE_CHUNK_MS (40ms @ 12kHz)"
+            backend.played.len(),
+            lead,
+            "the FIRST chunk of a hold is the whole lead — a tune that starts one tick deep is \
+             already within one slow CAT read of a gap"
         );
 
-        // The real driving loop ticks every 20ms — simulate that cadence, not TUNE_CHUNK_MS's
-        // 40ms, to reproduce the mismatch that overflowed out_ring.
-        state
-            .step(
-                &engine,
-                &mut backend,
-                &mut rig,
-                &sinks,
-                20.0,
-                &mut ra,
-                &mut rr,
-                &mut station,
-            )
-            .unwrap();
-        let second_chunk_len = backend.played.len() - first_chunk_len;
+        // A hundred ticks of a held Tune: the shape the growth bug needed to show itself.
+        for i in 1..=100 {
+            let t = f64::from(i) * tick_ms;
+            run(&mut state, &mut backend, t);
+            let elapsed = samples(t);
+            assert!(
+                backend.played.len() <= elapsed + lead,
+                "tick {i}: queued {} samples in {elapsed} samples of wall clock — the ring may \
+                 never hold more than the lead, which is what the 1.0.x growth bug broke",
+                backend.played.len()
+            );
+            assert!(
+                backend.played.len() >= elapsed,
+                "tick {i}: queued {} for {elapsed} elapsed — falling behind real time IS the gap",
+                backend.played.len()
+            );
+        }
         assert_eq!(
-            second_chunk_len, 240,
-            "second chunk must be sized off the real 20ms elapsed (240 samples @ 12kHz), not \
-             the fixed 40ms TUNE_CHUNK_MS (480 samples) — the bug queued a 480-sample chunk \
-             every 20ms tick, doubling out_ring's backlog every tick with zero drainage"
+            backend.played.len() - samples(100.0 * tick_ms),
+            lead,
+            "and in steady state the surplus is exactly the lead — queueing exactly-elapsed (the \
+             shape that starved the carrier) leaves a surplus of zero here"
+        );
+
+        // A STALLED TICK — half a second of blocking CAT, the thing that empties the ring. The
+        // carrier recovers to its full lead and does NOT queue a catch-up burst on top of it.
+        let before = backend.played.len();
+        let stalled_at = 100.0 * tick_ms + 500.0;
+        run(&mut state, &mut backend, stalled_at);
+        assert_eq!(
+            backend.played.len() - before,
+            lead,
+            "a stalled tick tops the lead back up — never the 500 ms it lost as well"
+        );
+        assert!(
+            backend.played.len() <= samples(stalled_at) + lead,
+            "and the bound still holds across the stall"
+        );
+    }
+
+    /// ⭐ THE OPERATOR'S REPORT — an auto-tuning magnetic loop stops tuning early, because
+    /// forward power collapses and returns mid-tune.
+    ///
+    /// The TX meter poll is the starvation source: it is the one blocking CAT reader in this
+    /// loop that is enabled *because* we are keyed, and every other one already stands down for
+    /// a tune. Measured as the rigctld command log, because what was wrong is WHAT THE RADIO WAS
+    /// ASKED while the carrier needed the thread back.
+    #[test]
+    fn a_tune_carrier_stands_the_transmit_meters_down() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (addr, log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        let meter_reads = |log: &Arc<Mutex<Vec<String>>>, from: usize| -> Vec<String> {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| {
+                    ["l SWR", "l ALC", "l RFPOWER_METER_WATTS", "l COMP_METER"]
+                        .contains(&l.as_str())
+                })
+                .cloned()
+                .collect()
+        };
+
+        // ⚠️ POSITIVE CONTROL FIRST: a live mic over MUST read the meters, or "no meter reads
+        // during a tune" is a claim about a loop that never polls meters at all.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            e.set_ptt(true);
+        }
+        let mark = log.lock().unwrap().len();
+        for i in 0..8 {
+            run(&mut state, &mut rig, f64::from(i) * 200.0);
+        }
+        assert!(
+            !meter_reads(&log, mark).is_empty(),
+            "control: a manual-PTT over reads the transmit meters — {:?}",
+            log.lock().unwrap()
+        );
+
+        // THE TUNE. Same loop, same rig, same cadence.
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_ptt(false);
+            e.set_tune(true);
+        }
+        run(&mut state, &mut rig, 2_000.0); // consume the unkey, then mark
+        let mark = log.lock().unwrap().len();
+        for i in 0..8 {
+            run(&mut state, &mut rig, 2_200.0 + f64::from(i) * 200.0);
+        }
+        assert!(
+            state.tuning_keyed,
+            "control: the tune must actually be keyed, or nothing below is tested"
+        );
+        assert_eq!(
+            meter_reads(&log, mark),
+            Vec::<String>::new(),
+            "a blocking meter read against a chunked tune carrier is what empties the output \
+             ring — and these bars are not on screen during a tune-up anyway"
+        );
+    }
+
+    /// The SECOND starvation source at the same site, and it is not a meter: the RF-power
+    /// re-assert.
+    ///
+    /// `Engine::rf_power_to_command` sets `force` whenever the last-OBSERVED rig power is above
+    /// the mode ceiling, and the observation that clears it comes from the 750 ms heavy poll —
+    /// which is itself suppressed while tuning. So the flag cannot clear, and the loop re-issued
+    /// a blocking `L RFPOWER` on EVERY 20 ms tick for the whole tune-up.
+    #[test]
+    fn a_tune_carrier_stops_re_asserting_the_power_ceiling_every_tick() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.max_power_digital = Some(0.5); // an FT8 duty-cycle cap…
+            e.apply_settings(s);
+            e.set_rf_power(0.5); // …the operator is sitting exactly on
+            e.observe_rig_power(0.9); // …and a rig observed above it: `force` latches on
+        }
+        let (addr, log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        let powers = |log: &Arc<Mutex<Vec<String>>>, from: usize| -> usize {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| l.starts_with("L RFPOWER "))
+                .count()
+        };
+
+        // ⚠️ POSITIVE CONTROL: idle, the re-assert really does fire on every single tick. Without
+        // this the assertion below passes against a scene where `force` was never set.
+        let mark = log.lock().unwrap().len();
+        for i in 0..5 {
+            run(&mut state, &mut rig, f64::from(i) * 20.0);
+        }
+        assert_eq!(
+            powers(&log, mark),
+            5,
+            "control: the un-clearable `force` re-asserts the cap on every tick — {:?}",
+            log.lock().unwrap()
+        );
+
+        // THE TUNE — the same latched `force`, now with a carrier to feed. The mark goes AFTER
+        // the tick that keys: on that one tick `tuning_keyed` is still false when the RF-power
+        // block runs, so the cap is asserted once more before the carrier starts, which is right
+        // (it is the last chance to bring a rig down before it keys). What must stop is the
+        // per-tick repeat FOR THE WHOLE TUNE.
+        engine.lock().unwrap().set_tune(true);
+        run(&mut state, &mut rig, 200.0);
+        assert!(state.tuning_keyed, "control: the tune keyed");
+        let mark = log.lock().unwrap().len();
+        for i in 1..5 {
+            run(&mut state, &mut rig, 200.0 + f64::from(i) * 20.0);
+        }
+        assert_eq!(
+            powers(&log, mark),
+            0,
+            "a blocking L RFPOWER per tick, for the whole tune-up, against a chunked carrier — \
+             and the ceiling was already applied before the tune keyed: {:?}",
+            log.lock().unwrap()
+        );
+    }
+
+    /// ⭐ TUNE POWER: a tune-up keys at its own level, and the operator's level comes back on
+    /// EVERY exit path — including the ones that never reach the tune-release branch.
+    ///
+    /// A tune that permanently left the rig at 10 W would be a worse bug than the gap this
+    /// batch fixes, so the restore is structural rather than a saved value: applying the tune
+    /// level FORGETS what was last commanded, which is what makes the loop's own RF-power block
+    /// re-command the operator's level on the first tick after the tune ends, whichever way it
+    /// ended.
+    #[test]
+    fn a_tune_keys_at_its_own_power_and_hands_the_operators_level_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.tune_power_pct = Some(10);
+            e.apply_settings(s);
+            e.set_rf_power(0.8); // the operator is running 80%
+        }
+        let (addr, log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        run(&mut state, &mut rig, 0.0); // the operating level reaches the rig
+        assert_eq!(state.last_rf_power, Some(0.8), "control: 80% was commanded");
+
+        // THE TUNE. The level must be on the wire BEFORE the key, not after — a carrier that
+        // comes up at 80 W and steps down has already put 80 W into a mismatched antenna.
+        engine.lock().unwrap().set_tune(true);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 20.0);
+        let lines = log.lock().unwrap()[mark..].to_vec();
+        let keyed = lines
+            .iter()
+            .position(|l| l == "T 1")
+            .unwrap_or_else(|| panic!("control: the tune must key — {lines:?}"));
+        let set = lines
+            .iter()
+            .position(|l| l == "L RFPOWER 0.100")
+            .unwrap_or_else(|| panic!("the tune keys at ITS level, not the operator's: {lines:?}"));
+        assert!(set < keyed, "power before PTT, not after: {lines:?}");
+
+        // …and it holds for the whole tune: no tick puts 80% back while the carrier is up.
+        let mark = log.lock().unwrap().len();
+        for i in 1..8 {
+            run(&mut state, &mut rig, 20.0 + f64::from(i) * 20.0);
+        }
+        assert!(
+            !log.lock().unwrap()[mark..]
+                .iter()
+                .any(|l| l == "L RFPOWER 0.800"),
+            "the operating level must not be re-asserted underneath the tune: {:?}",
+            log.lock().unwrap()
+        );
+
+        // EXIT PATH 1 — the operator lets go of Tune.
+        engine.lock().unwrap().set_tune(false);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 200.0);
+        assert!(!state.tuning_keyed, "the tune released");
+        run(&mut state, &mut rig, 220.0);
+        assert!(
+            log.lock().unwrap()[mark..]
+                .iter()
+                .any(|l| l == "L RFPOWER 0.800"),
+            "the operator's own level comes back: {:?}",
+            log.lock().unwrap()
+        );
+        assert_eq!(state.last_rf_power, Some(0.8));
+
+        // EXIT PATH 2 — the MAX_TUNE_MS / `tune_timeout_secs` auto-release, which is the tune
+        // ending WITHOUT the operator touching anything. Same restore, same one tick.
+        engine.lock().unwrap().set_tune(true);
+        run(&mut state, &mut rig, 400.0);
+        assert!(state.tuning_keyed && state.last_rf_power.is_none());
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 400.0 + MAX_TUNE_MS + 1.0); // past every ceiling
+        assert!(!state.tuning_keyed, "the safety auto-release fired");
+        run(&mut state, &mut rig, 400.0 + MAX_TUNE_MS + 21.0);
+        assert!(
+            log.lock().unwrap()[mark..]
+                .iter()
+                .any(|l| l == "L RFPOWER 0.800"),
+            "an ABORTED tune must hand the level back too: {:?}",
+            log.lock().unwrap()
+        );
+    }
+
+    /// The other direction of the tune-power gate, and the reason it is safe to ship without a
+    /// bench: with no setting there is no extra command at all (today's behaviour to the byte),
+    /// and the level can only ever go DOWN — an operator running below their tune level keeps
+    /// the lower one.
+    #[test]
+    fn tune_power_is_opt_in_and_can_only_lower_the_rig() {
+        let scene = |tune_pct: Option<u8>, operating: f32| -> Vec<String> {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.tune_power_pct = tune_pct;
+                e.apply_settings(s);
+                e.set_rf_power(operating);
+            }
+            let (addr, log) = mock_rigctld_on(14_074_000, false);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            };
+            run(&mut state, &mut rig, 0.0);
+            engine.lock().unwrap().set_tune(true);
+            let mark = log.lock().unwrap().len();
+            run(&mut state, &mut rig, 20.0);
+            assert!(state.tuning_keyed, "control: the tune keyed");
+            let seen = log.lock().unwrap()[mark..].to_vec();
+            seen.into_iter()
+                .filter(|l| l.starts_with("L RFPOWER "))
+                .collect()
+        };
+        assert_eq!(
+            scene(None, 0.8),
+            Vec::<String>::new(),
+            "no setting = never touch the operator's power, which is today's behaviour"
+        );
+        assert_eq!(
+            scene(Some(10), 0.8),
+            vec!["L RFPOWER 0.100".to_string()],
+            "a tune level below the operating level is what turns the rig down"
+        );
+        assert_eq!(
+            scene(Some(50), 0.2),
+            vec!["L RFPOWER 0.200".to_string()],
+            "and one ABOVE it is clamped to the operator's own level — safe-direction only, so a \
+             tune can never raise power past the per-mode duty ceiling that level is clamped to"
         );
     }
 
@@ -17213,6 +17927,53 @@ mod tests {
             monitor_device: String::new(),
             monitor_level: 0.5,
         }
+    }
+
+    /// ⭐ #145 AT THE **FIRST** LAUNCH, which is the launch that keys.
+    ///
+    /// The startup seed is not the live settings rebuild — it deliberately carries the safe
+    /// control-line state — so a declaration that only reached `from_settings` would arrive one
+    /// tick after rigctld had already opened the port and, on the reported station, keyed the
+    /// transmitter. This is the same reason `cat_rts_keys_ptt` is seeded (#44).
+    #[test]
+    fn the_first_rigctld_of_the_session_carries_the_operators_line_declarations() {
+        let cfg = RadioConfig::default();
+        // Control: the seed alone says neither thing, which is every release up to now.
+        let seed = Transport::from_cfg(&cfg);
+        assert_eq!(
+            seed.control_lines.handshake,
+            crate::rigctld_proc::Handshake::Auto
+        );
+        assert_eq!(
+            seed.control_lines.keying_line,
+            crate::rigctld_proc::LineState::Untouched
+        );
+
+        let s = tempo_app::settings::Settings {
+            cat_serial_handshake: "none".to_string(),
+            cat_ptt_line_state: "low".to_string(),
+            ..tempo_app::settings::Settings::default()
+        };
+        let mut t = Transport::from_cfg(&cfg);
+        seed_line_declarations(&mut t, &s);
+        assert_eq!(
+            t.control_lines.handshake,
+            crate::rigctld_proc::Handshake::None,
+            "the declared handshake reaches the very first daemon"
+        );
+        assert_eq!(
+            t.control_lines.keying_line,
+            crate::rigctld_proc::LineState::Low,
+            "and so does the keying line's idle state — a tick later is after the port opened"
+        );
+        // …and the seed's own hold-low safety default is NOT widened by this overlay.
+        assert_eq!(t.control_lines.rts, crate::rigctld_proc::LineState::Low);
+        assert_eq!(t.control_lines.dtr, crate::rigctld_proc::LineState::Low);
+
+        // The default settings change nothing, so no working station moves under an upgrade.
+        let mut t = Transport::from_cfg(&cfg);
+        seed_line_declarations(&mut t, &tempo_app::settings::Settings::default());
+        assert_eq!(t.control_lines, seed.control_lines);
     }
 
     #[test]

@@ -859,11 +859,17 @@ impl StationCore {
         ok
     }
 
-    /// Mark logbook entry `index` as QSL-sent (operator-declared: I sent a
-    /// card/request `via` bureau/direct/electronic, dated now). Only ADDS a request
-    /// — never touches confirmation state. Persists by rewriting the ADIF. Returns
-    /// false if `index` is out of range.
-    pub fn mark_qsl_sent(&mut self, index: usize, via: tempo_core::logbook::QslVia) -> bool {
+    /// Record — or WITHDRAW — the operator's QSL-sent declaration for logbook entry `index`.
+    /// `Some(via)` marks it sent (bureau/direct/electronic, dated now); `None` clears the mark,
+    /// which until now had no path at all while the received side has taken a bool since #152.
+    /// Never touches confirmation state in either direction. Persists by rewriting the ADIF —
+    /// a clear MUST be written, since it carries the operator decision that keeps a later
+    /// import from restoring the mark. Returns false if `index` is out of range.
+    pub fn mark_qsl_sent(
+        &mut self,
+        index: usize,
+        via: Option<tempo_core::logbook::QslVia>,
+    ) -> bool {
         self.recover_external_appends();
         let ok = self.logbook.mark_qsl_sent(index, via, now_unix_secs());
         if ok {
@@ -1301,6 +1307,7 @@ mod grid_tests {
             state: None,
             band: band.into(),
             freq_mhz: 14.074,
+            freq_rx_mhz: None,
             mode: "FT8".into(),
             rst_sent: None,
             rst_rcvd: None,

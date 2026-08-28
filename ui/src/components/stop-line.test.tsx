@@ -231,6 +231,9 @@ vi.mock('../api', () => ({
   getRttyState: vi.fn(async () => rttyState),
   getLicensedBandPlan: vi.fn(async () => []),
   rttyArm: vi.fn(async () => rttyState),
+  // `rtty_auto_arm` fires on the rising edge of `active`; a hand-kept mock must carry it or
+  // the cockpit throws on mount.
+  rttyAutoArm: vi.fn(async () => rttyState),
   rttySend: vi.fn(async () => rttyState),
   rttyStop: vi.fn(async () => rttyState),
   rttyClear: vi.fn(async () => rttyState),

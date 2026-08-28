@@ -4,7 +4,7 @@
 // tile claiming an ARRL semantic the number didn't have. These render the tiles
 // with N9UM-shaped data and pin the corrected claims.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { AwardsView } from './AwardsView'
 import type { AwardSummary } from '../types'
 
@@ -41,7 +41,16 @@ const N9UM: Partial<AwardSummary> = {
   vucc: {
     worked: 1602,
     confirmed: 1489,
-    bands: [],
+    // N9UM's real shape, and the whole of NT9E's point: 1489 confirmed grids, of which
+    // 132 are on 6 m and 7 on 2 m. Everything else is HF FT8 grid exchange and counts
+    // toward no ARRL award.
+    bands: [
+      { band: '20m', worked: 903, confirmed: 851 },
+      { band: '17m', worked: 312, confirmed: 289 },
+      { band: '40m', worked: 235, confirmed: 210 },
+      { band: '6m', worked: 139, confirmed: 132 },
+      { band: '2m', worked: 13, confirmed: 7 },
+    ],
     satWorked: 63,
     satConfirmed: 3,
     awards: [
@@ -81,6 +90,35 @@ describe('award-tile semantics (N9UM audit)', () => {
     expect(screen.getByText(/1489 grids confirmed on all bands \(tracker\)/)).toBeTruthy()
     // The old claim — the all-band total presented AS VUCC — must be gone.
     expect(screen.queryByText(/1489 grids to go|worked \(terrestrial, all bands\)/)).toBeNull()
+  })
+
+  /// ⭐ NT9E, 2026-08-27: "Is there a way to display only VHF grids. HF grids offers no
+  /// awards." He is right, and the fixture above is why — 1489 confirmed grids of which
+  /// 139 are on a band ARRL awards grids on. The VUCC headline was already VHF-only
+  /// (the test above pins it); the grids-by-band list was not, so the four bands that
+  /// count were buried under the ones that do not.
+  it('lists grids for the VUCC bands only, until asked for all of them', async () => {
+    await renderAwards()
+
+    // Default: the bands ARRL awards grids on, and nothing else.
+    expect(screen.getByText('6m')).toBeTruthy()
+    expect(screen.getByText('2m')).toBeTruthy()
+    expect(screen.queryByText('20m'), '20m grids are not an award').toBeNull()
+    expect(screen.queryByText('17m')).toBeNull()
+    expect(screen.queryByText('40m')).toBeNull()
+
+    // The tracker view is one click away, not deleted.
+    fireEvent.click(screen.getByRole('button', { name: 'All bands' }))
+    expect(screen.getByText('20m')).toBeTruthy()
+    expect(screen.getByText('17m')).toBeTruthy()
+    // POSITIVE CONTROL: the VUCC bands are still there too — the filter widened the
+    // list, it did not swap one subset for another.
+    expect(screen.getByText('6m')).toBeTruthy()
+    expect(screen.getByText('2m')).toBeTruthy()
+
+    // And back.
+    fireEvent.click(screen.getByRole('button', { name: 'VUCC bands' }))
+    expect(screen.queryByText('20m')).toBeNull()
   })
 
   it('Honor Roll names the shortfall and the entry threshold, unambiguously', async () => {

@@ -23,6 +23,7 @@ import {
   rttyAfcReset,
   rttyArm,
   rttyAutoAbort,
+  rttyAutoArm,
   rttyAutoAnswer,
   rttyAutoCq,
   rttyClear,
@@ -178,6 +179,34 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       alive = false
       window.clearInterval(id)
     }
+  }, [active])
+
+  // Arm the decoder on ENTERING the view. RTTY was the ONLY decode mode without this — PSK,
+  // APRS and SSTV all auto-arm — and its decoder could be started in exactly one place, the
+  // Arm RX button inside the `stream` pane, which is also the one pane an operator can hide.
+  // That is very likely what the "RTTY is not decoding" reports were. Rising edge of `active`,
+  // not mount: this cockpit is kept alive across navigation, so mount fires once a session.
+  //
+  // ⚠️ RX-ONLY, and the ENGINE is what guarantees it: `rtty_auto_arm` only upgrades from off,
+  // refuses once the operator has explicitly stopped the decoder this session (the decline
+  // memory), and honours the Settings opt-out (`rttyRxAutoArm`, default on). None of that
+  // policy is duplicated here — PSK, APRS and SSTV answer the same question in the engine, and
+  // a second client-side answer is a second thing to keep true. Arming a decoder cannot key:
+  // TX starts only from an explicit send behind the engine's gate.
+  //
+  // ⚠️ THE BACKEND VERB IS WAVE 2. Until `rtty_auto_arm` lands in engine.rs/lib.rs this call
+  // rejects and the `.catch` below swallows it, leaving RTTY armed by hand exactly as today.
+  const autoArmed = useRef(false)
+  useEffect(() => {
+    if (!active) {
+      autoArmed.current = false
+      return
+    }
+    if (autoArmed.current) return
+    autoArmed.current = true
+    void rttyAutoArm()
+      .then((s) => setRtty(s))
+      .catch(() => {})
   }, [active])
 
   const armed = rtty?.armed === true

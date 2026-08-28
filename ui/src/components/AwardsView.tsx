@@ -283,6 +283,11 @@ export function AwardsView({
   // get_log) can hand its QsoRecord to the per-QSO QRZ/ClubLog/eQSL push.
   const [log, setLog] = useState<LoggedQso[] | null>(null)
   const [err, setErr] = useState(false)
+  // Grid list: VUCC bands only by default — see the grids panel for why. Declared up here
+  // with the other hooks rather than beside its own derivations, because AwardsView early-
+  // returns for the loading, error and empty-log states and a hook below those is not
+  // called on every render path.
+  const [gridsVuccOnly, setGridsVuccOnly] = useState(true)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
   // Guards post-await setState in upload() — TQSL signing can take seconds, during
@@ -428,7 +433,16 @@ export function AwardsView({
   const challengePct = Math.min(100, Math.round((aw.slotsConfirmed / CHALLENGE_AWARD) * 100))
   const bandMax = Math.max(1, ...aw.bands.map((b) => b.worked))
   const modeMax = Math.max(1, ...aw.modes.map((m) => m.worked))
-  const gridBandMax = Math.max(1, ...aw.vucc.bands.map((b) => b.worked))
+  /** The bands ARRL actually awards grids on, taken from the standings Rust already
+   *  filtered against VUCC_THRESHOLDS. Never a second band list maintained here. */
+  const vuccBandSet = new Set((aw.vucc.awards ?? []).map((a) => a.band))
+  const gridRows = gridsVuccOnly
+    ? aw.vucc.bands.filter((b) => vuccBandSet.has(b.band))
+    : aw.vucc.bands
+  // ⚠️ Deliberately NOT a max over every band. A scale taken from an HF FT8 grid pile
+  // would render every VHF bar as a sliver — technically correct and visually useless,
+  // the opposite of what filtering to VHF is for. So it tracks what is SHOWN.
+  const gridBandMax = Math.max(1, ...gridRows.map((b) => b.worked))
 
   return (
     <section className="awards">
@@ -733,8 +747,38 @@ export function AwardsView({
           {aw.vucc.bands.length > 0 && (
             <div className="aw-panel">
               <h3>{t('awards.grids.head')}</h3>
+              {/* VUCC bands only, by default. Grids are an award on 50 MHz and up and
+                  nowhere else, so an HF grid count is a tracker statistic, not progress
+                  toward anything — and on an FT8 station it is most of the list, which
+                  buries the bands that do count. Reported by NT9E, 2026-08-27.
+
+                  The VHF set is DERIVED from `vucc.awards`, never a second band list kept
+                  here: Rust already filters that against VUCC_THRESHOLDS, so the two cannot
+                  drift. `awards` only carries bands with grids worked, which is exactly what
+                  this list wants anyway. The full tracker view stays one click away. */}
+              <div className="aw-needctl">
+                <button
+                  type="button"
+                  className={`aw-needsort${gridsVuccOnly ? ' active' : ''}`}
+                  onClick={() => setGridsVuccOnly(true)}
+                  title={t('awards.grids.filter.vucc.title')}
+                >
+                  {t('awards.grids.filter.vucc.label')}
+                </button>
+                <button
+                  type="button"
+                  className={`aw-needsort${gridsVuccOnly ? '' : ' active'}`}
+                  onClick={() => setGridsVuccOnly(false)}
+                  title={t('awards.grids.filter.all.title')}
+                >
+                  {t('awards.grids.filter.all.label')}
+                </button>
+              </div>
+              {gridRows.length === 0 ? (
+                <p className="aw-empty">{t('awards.grids.noVucc')}</p>
+              ) : (
               <div className="aw-bands">
-                {aw.vucc.bands.map((b) => (
+                {gridRows.map((b) => (
                   <div className="aw-bandrow" key={b.band}>
                     <span className="aw-band">{b.band}</span>
                     <div
@@ -758,6 +802,7 @@ export function AwardsView({
                   </div>
                 ))}
               </div>
+              )}
             </div>
           )}
 

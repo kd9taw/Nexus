@@ -48,6 +48,9 @@ vi.mock('../api', () => ({
   getRttyState: vi.fn(async () => state.current),
   getLicensedBandPlan: vi.fn(async () => []),
   rttyArm: vi.fn(async () => state.current),
+  // `rtty_auto_arm` fires on the rising edge of `active`; a hand-kept mock must carry it or
+  // the cockpit throws on mount. Wave-2 backend contract — the UI half is what is exercised here.
+  rttyAutoArm: vi.fn(async () => state.current),
   rttySend: vi.fn(async () => state.current),
   rttyStop: vi.fn(async () => state.current),
   rttyClear: vi.fn(async () => state.current),

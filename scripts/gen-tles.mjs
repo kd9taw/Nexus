@@ -28,8 +28,12 @@
 //
 // TWO TIERS, AND WHY. A bird is LISTED (a catalog row) on a far wider rule
 // than it is DRAWN (published elements):
-//   * ACTIVE  = status `alive` AND at least one LIVE amateur transmitter.
-//     Exactly this set gets elements — it is what "which bird can I work" means.
+//   * ACTIVE  = the bird is IN ORBIT AND has at least one LIVE amateur
+//     transmitter. Exactly this set gets elements — it is what "which bird can
+//     I work" means. SatNOGS spelled "in orbit" as `alive` until 2026-08, when
+//     it renamed the value and retired `dead`; both spellings are accepted and
+//     the whole story is on IN_ORBIT_STATUSES, including what the retirement
+//     of `dead` cost this predicate.
 //   * LISTED  = every bird SatNOGS has ever given an amateur transmitter,
 //     minus re-entries older than RECENT_DECAY_DAYS. So a bird that dies, goes
 //     silent, or re-enters KEEPS ITS ROW, carrying the status that says why.
@@ -289,6 +293,70 @@ export function classifyTransmitter(t) {
 /// the whole window rather than vanishing the same day.
 const RECENT_DECAY_DAYS = 180
 
+/// SatNOGS' word for "this bird is up there right now" — the field the ACTIVE
+/// tier and the share gate's denominator both hang on.
+///
+/// THE 2026-08 RENAME. SatNOGS renamed this value from `alive` to `in orbit`
+/// and dropped `dead` altogether. Measured against the live API 2026-08-28:
+/// `/api/satellites/?status=alive` answers HTTP 400 — "Select a valid choice.
+/// alive is not one of the available choices" — while `?status=in orbit`
+/// returns 1704, and all 2771 records carry exactly `in orbit` (1704),
+/// `re-entered` (1018) or `future` (49). GREENCUBE / IO-117, the bird this
+/// file used to cite as `status: "dead"` with a live transmitter record, now
+/// reads `in orbit`. That rename is what broke the mirror: the two
+/// `status === 'alive'` tests below matched nothing, so the active set AND the
+/// alive denominator both went to zero and gate 2 refused the run at 0.0%.
+///
+/// BOTH spellings stay in the set, deliberately. `alive` is not dead weight —
+/// the committed fixture speaks the pre-rename vocabulary, and a mirror that
+/// only understands the words of the day it was written is a mirror that
+/// breaks on the next rename. `dead` is KNOWN but deliberately NOT in orbit:
+/// upstream no longer emits it, and admitting it here would silently change
+/// what the fixture's dead-bird case means.
+///
+/// WHAT THE RENAME COST. `dead` was the editorial half of the liveness test —
+/// "the orbit is fine, the bird is not" — and it is simply gone; SatNOGS' new
+/// `reception_status` / `reception_evidence` fields look like its intended
+/// replacement but read `Unknown` / empty on all 2771 records, so there is
+/// nothing left to join on. Liveness now rests entirely on the second clause,
+/// `transmitter.alive`, which still discriminates (AO-85 has three legs, all
+/// dead, and stays listed-but-inactive).
+///
+/// The cost is EXACTLY THREE BIRDS, measured by diffing the last pre-rename
+/// manifest (published 2026-08-27T10:06Z, 6 birds at `status: "dead"`) against
+/// the first post-rename run: HAMSAT / VO-52 (28650), GREENCUBE / IO-117
+/// (53106) and OMOTENASHI (55904) each carry transmitter records still
+/// claiming `alive: true`, so with nothing left to contradict them they enter
+/// the ACTIVE tier and get elements they did not have the day before. All
+/// three are defunct in fact. Of the other three, CELESTA (53111) is still
+/// caught by the transmitter clause — every leg dead — and two 98xxx/99xxx
+/// placeholders have left the catalog entirely.
+///
+/// Shipping those three is the deliberate choice, and it is upstream's
+/// judgement to mirror, not this script's to overrule. The alternative is a
+/// hardcoded deny-list of birds we personally believe are dead — exactly the
+/// guess the rest of this file refuses to make, with no principle for adding
+/// the fourth and no way to notice when one of them is repaired. If SatNOGS
+/// ever populates `reception_status` (today it reads `Unknown` on all 2771
+/// records) that is the principled signal to restore this clause from.
+const IN_ORBIT_STATUSES = new Set(['in orbit', 'alive'])
+
+/// Every satellite status this script has an opinion about. SatNOGS' status is
+/// a SMALL CURATED enumeration — the API 400s on anything outside it, and three
+/// values cover all 2771 live records — not an open vocabulary like
+/// transmitter `mode`. So an unseen value here is a vocabulary move, never a
+/// stray record, and it is GATED rather than logged (the treatment
+/// `classifyTransmitter`'s unseen types get). The reason is the PARTIAL move: a
+/// wholesale rename crashes the share to 0% and gate 2 catches it, as it just
+/// did, but a SPLIT — say `in orbit` divided into `in orbit` and `operational`
+/// — would move a third of the catalog into a status this file has never seen,
+/// quietly shrink the active tier, and leave the share sitting inside its band
+/// with nothing tripped. A three-value enum growing a fourth value is worth a
+/// human's attention before the payload ships to a thousand operators.
+const KNOWN_SAT_STATUSES = new Set([...IN_ORBIT_STATUSES, 'dead', 're-entered', 'future'])
+
+const isInOrbit = (status) => IN_ORBIT_STATUSES.has(status)
+
 /// The birds an amateur-satellite list exists to serve. Gate 6 requires ISS
 /// unconditionally and at least `WORKED_CANARY_MIN` of these — see the header.
 const WORKED_CANARIES = [
@@ -482,14 +550,19 @@ function listable(status, decayed, updated, now) {
 /// LISTS when it carries at least one amateur transmitter record — declared
 /// `service: "Amateur"` or transmitting in an ITU amateur-satellite
 /// allocation — and [`listable`] still counts it as news. It is ACTIVE (the
-/// element-bearing tier; see the TWO TIERS note in the header) only when
-/// `status == "alive"` AND one of those transmitters is itself `alive`.
+/// element-bearing tier; see the TWO TIERS note in the header) only when the
+/// bird is IN ORBIT (see [`IN_ORBIT_STATUSES`], and read its rename note — the
+/// upstream word for this was `alive` until 2026-08) AND one of those
+/// transmitters is itself `alive`.
 ///
-/// `satellite.status` is authoritative over `transmitter.alive`: a dead bird
-/// is inactive however lively its transmitter records look (IO-117 is the live
-/// example — `status: "dead"` while its transmitter still says `alive: true`),
+/// `satellite.status` is authoritative over `transmitter.alive`: a bird that
+/// is not in orbit is inactive however lively its transmitter records look,
 /// and a bird whose every transmitter is silent is inactive however healthy
-/// the orbit is (AO-85). Neither loses its row — that is the whole point:
+/// the orbit is (AO-85 — three legs, all dead, listed and not active). Since
+/// the `dead` status was retired upstream the first clause only excludes
+/// re-entries and pre-launch birds; IO-117, which used to be this comment's
+/// example of the first clause, is now caught by neither and is active.
+/// Neither loses its row — that is the whole point:
 /// "this bird stopped working" is a fact the operator is owed, and a bird that
 /// disappears from the catalog cannot report anything.
 ///
@@ -540,11 +613,19 @@ export function deriveAmateurCatalog(satellites, transmitters, now) {
   }
   const birds = []
   let alive = 0
+  /// Status values [`KNOWN_SAT_STATUSES`] has never seen, counted by value so
+  /// the run can NAME them. Gated by [`assemble`] — see that constant for why
+  /// this one refuses where the transmitter-type census only reports.
+  const unknownStatus = new Map()
   for (const s of satellites) {
     const cat = Number.isInteger(s?.norad_cat_id) ? s.norad_cat_id : null
     if (cat === null) continue // one live record has a null NORAD — not a bird
     const status = String(s.status ?? '')
-    if (status === 'alive') alive++
+    if (!KNOWN_SAT_STATUSES.has(status)) {
+      const kind = status === '' ? '(no status)' : status
+      unknownStatus.set(kind, (unknownStatus.get(kind) ?? 0) + 1)
+    }
+    if (isInOrbit(status)) alive++
     const claims =
       (typeof s.sat_id === 'string' && bySatId.get(s.sat_id)) || byNorad.get(cat) || null
     if (!claims) continue // never an amateur bird — not ours to list
@@ -564,7 +645,7 @@ export function deriveAmateurCatalog(satellites, transmitters, now) {
       /// Something is still transmitting on an amateur allocation.
       amateur: live.length > 0,
       /// …and the orbit is alive: the element-bearing tier.
-      active: status === 'alive' && live.length > 0,
+      active: isInOrbit(status) && live.length > 0,
       /// The classes the bird's LIVE amateur transmitters add up to, in
       /// [`SAT_CLASSES`] order — the same "live claims only" rule `amateur`
       /// and `active` use, for the same reason: a dead transmitter is not a
@@ -600,6 +681,9 @@ export function deriveAmateurCatalog(satellites, transmitters, now) {
       /// `[upstream type, live amateur records dropped from the
       /// classification]`, commonest first. Empty on a healthy run.
       unclassified: [...unclassified.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+      /// `[upstream satellite status, birds carrying it]` for values outside
+      /// [`KNOWN_SAT_STATUSES`], commonest first. Empty on a healthy run.
+      unknownStatus: [...unknownStatus.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
     },
   }
 }
@@ -665,6 +749,22 @@ export function assemble({
         `(${stats.unclassified.map(([k, c]) => `${k} ×${c}`).join(', ')}) — those legs add no ` +
         `class, so their birds publish a class set that omits them. Nothing is guessed and no ` +
         `row is dropped; teach classifyTransmitter the new type.`,
+    )
+  }
+  // The vocabulary gate goes FIRST: every number below is computed off
+  // `satellite.status`, so if that field has moved under us the population and
+  // share failures are symptoms and this is the diagnosis. Naming the value is
+  // the whole point — the 2026-08 `alive` → `in orbit` rename cost a hunt
+  // through five healthy-looking fetches to find.
+  if (stats.unknownStatus.length) {
+    fail(
+      `satellite status vocabulary moved: ${stats.unknownStatus
+        .map(([k, c]) => `"${k}" ×${c}`)
+        .join(', ')} — value(s) KNOWN_SAT_STATUSES has never seen. The in-orbit tier is decided ` +
+        `by this field, so an unrecognised value silently drops those birds out of the active set ` +
+        `and out of the share denominator. Classify each value — into IN_ORBIT_STATUSES if it ` +
+        `means the bird is up there, into KNOWN_SAT_STATUSES alone if it does not — before this ` +
+        `publishes.`,
     )
   }
   if (stats.listed < limits.minCatalog || stats.listed > limits.maxCatalog) {

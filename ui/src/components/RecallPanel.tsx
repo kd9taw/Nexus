@@ -33,6 +33,21 @@ interface Props {
   newEntity?: boolean
   newBandSlot?: boolean
   newModeSlot?: boolean
+  /** Is this card in a BOUNDED rail that it shares with something else? Adds the
+   *  `.cockpit-recall` placement class (cockpit-panes.css), which caps the card at a share
+   *  of its column and lets it scroll inside itself. Only the Operate cockpit passes it:
+   *  there the card shares `.cockpit-side` with the Stations roster and, unbounded, took
+   *  the roster down to ~2 rows at 1024x768. The CW/Phone log panes pass nothing and are
+   *  unchanged — their pane body is already the card's scroller and the operator asked for
+   *  the full card there (2026-07-31). Default false. */
+  bounded?: boolean
+  /** Does the HOST offer a callbook Lookup button? The empty-QTH line is an instruction
+   *  ("Tab or press Lookup for name / QTH") and it names a control that exists in the log
+   *  strip and nowhere else. The FT cockpit resolves a call by itself and has no such
+   *  button, so it passes false and the line is simply absent — a card that points at a
+   *  control which is not on screen reads as a broken card. Default true: every host that
+   *  says nothing is a log strip, unchanged. */
+  hasLookup?: boolean
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -77,7 +92,7 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot }: Props) {
+export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false }: Props) {
   const units = useUnits()
   const c = call.trim()
   if (c.length < 3) return null
@@ -154,7 +169,7 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
   )
 
   return (
-    <div className="recall-card">
+    <div className={`recall-card${bounded ? ' cockpit-recall' : ''}`}>
       <div className="recall-head">
         {/* Same open_qrz_page path as the roster/logbook ↗ buttons: the Rust command derives
             and sanitizes https://www.qrz.com/db/<base call>, so nothing URL-shaped is built
@@ -188,7 +203,8 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
           <div className="recall-where">
             {/* Names the button the operator actually sees: the log strip's callbook button is
                 "Lookup" (it answers from QRZ or HamQTH), not "QRZ". */}
-            {where || <span className="recall-where-empty">{t('recall.where.empty')}</span>}
+            {where ||
+              (hasLookup ? <span className="recall-where-empty">{t('recall.where.empty')}</span> : null)}
           </div>
           {geo && (
             <div className="recall-geo mono" title={geoTitle}>
