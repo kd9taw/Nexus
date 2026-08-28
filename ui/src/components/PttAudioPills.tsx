@@ -1,4 +1,4 @@
-// THE TWO PILLS LEFT OF PTT — where the operator's audio actually goes and comes from.
+// THE TWO PILLS BESIDE PTT — where the operator's audio actually goes and comes from.
 //
 // Operator design (2026-08-22). Two small controls in the PTT row, each answering one question
 // permanently rather than in a tooltip:
@@ -10,6 +10,10 @@
 // target inside PTT can swallow a key, and PTT is the control an operator reaches for by muscle
 // memory — and in Phone it is part of the stop line. Beside it, the button keeps its whole surface
 // and every handler it had.
+//
+// WHICH SIDE: to the RIGHT of PTT, between it and the Lock toggle (operator, 2026-08-28 — they
+// were on the left as first built). Nothing here depends on the side; the row is a flex container
+// with no order-dependent selectors, so this is JSX order and nothing else.
 //
 // A WORD ABOUT THE WORD "MONITOR". The settings this pill drives are called `monitor_enabled` /
 // `monitor_device` / `monitor_level`, and NONE of the operator-facing strings here use that word.

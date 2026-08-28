@@ -1535,65 +1535,13 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           i18n PARTIAL list. PTT is Phone's stop-line census (features/panelState.ts) and
           components/stop-line.test.tsx finds it by ACCESSIBLE NAME, matching all four of the
           labels below; its tooltip IS that control's description, naming the switch that is
-          down and the mic the operator talks on. The Lock toggle beside it decides whether
+          down and the mic the operator talks on (the audio pills sit to its RIGHT, before Lock).
+          The Lock toggle decides whether
           the window's Space keyup is a PTT release at all — the census's fourth holder — and
           the Field Day chip shares the row. All of it moves in the transmit-path batch, with
           the stop-line sweeps re-run. The TOASTS this row's handler raises did move (see
           `key` above): a toast is not a control, and no sweep can see one. */}
       <div className="ph-ptt-row">
-        <PttAudioPills
-          settings={audioSettings}
-          devices={audioDevices}
-          micGain={snap.radio.micGain ?? null}
-          onMicGain={(g) => {
-            void setMicGain(g)
-              .then((sn) => onSnap?.(sn))
-              .catch((e) => pushToast(String(e), 'error'))
-          }}
-          onMicSource={(device) => {
-            // Narrow setter (#54): the pill persists ONE per-radio field. It must never push a
-            // whole Settings — a control in the PTT row that round-trips the form can revert
-            // anything changed elsewhere since that form was read.
-            void setLiveMic(device)
-              .then((sn) => {
-                onSnap?.(sn)
-                // Mirror it locally so the tag updates on the click rather than on the next
-                // snapshot: `audioSettings` is what `micSourceOf` reads.
-                setAudioSettings((prev) =>
-                  prev
-                    ? {
-                        ...prev,
-                        radios: (prev.radios ?? []).map((r) =>
-                          r.id === prev.activeRadio ? { ...r, liveMicDevice: device } : r,
-                        ),
-                      }
-                    : prev,
-                )
-              })
-              .catch((e) => pushToast(String(e), 'error'))
-          }}
-          onOutput={(enabled, device) => {
-            void setMonitor(enabled, device, audioSettings?.monitorLevel ?? 0.5)
-              .then((sn) => {
-                onSnap?.(sn)
-                setAudioSettings((p) =>
-                  p ? { ...p, monitorEnabled: enabled, monitorDevice: device } : p,
-                )
-              })
-              .catch((e) => pushToast(String(e), 'error'))
-          }}
-          onVolume={(level) => {
-            // Optimistic locally so the slider tracks the drag; the engine remains the record.
-            setAudioSettings((p) => (p ? { ...p, monitorLevel: level } : p))
-            void setMonitor(
-              audioSettings?.monitorEnabled ?? false,
-              audioSettings?.monitorDevice ?? '',
-              level,
-            )
-              .then((sn) => onSnap?.(sn))
-              .catch((e) => pushToast(String(e), 'error'))
-          }}
-        />
         {fdExchange && (
           <span
             className="ph-fd-give"
@@ -1652,6 +1600,59 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
                 ? 'ON AIR — release to stop'
                 : 'PUSH TO TALK'}
         </button>
+        <PttAudioPills
+          settings={audioSettings}
+          devices={audioDevices}
+          micGain={snap.radio.micGain ?? null}
+          onMicGain={(g) => {
+            void setMicGain(g)
+              .then((sn) => onSnap?.(sn))
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onMicSource={(device) => {
+            // Narrow setter (#54): the pill persists ONE per-radio field. It must never push a
+            // whole Settings — a control in the PTT row that round-trips the form can revert
+            // anything changed elsewhere since that form was read.
+            void setLiveMic(device)
+              .then((sn) => {
+                onSnap?.(sn)
+                // Mirror it locally so the tag updates on the click rather than on the next
+                // snapshot: `audioSettings` is what `micSourceOf` reads.
+                setAudioSettings((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        radios: (prev.radios ?? []).map((r) =>
+                          r.id === prev.activeRadio ? { ...r, liveMicDevice: device } : r,
+                        ),
+                      }
+                    : prev,
+                )
+              })
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onOutput={(enabled, device) => {
+            void setMonitor(enabled, device, audioSettings?.monitorLevel ?? 0.5)
+              .then((sn) => {
+                onSnap?.(sn)
+                setAudioSettings((p) =>
+                  p ? { ...p, monitorEnabled: enabled, monitorDevice: device } : p,
+                )
+              })
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onVolume={(level) => {
+            // Optimistic locally so the slider tracks the drag; the engine remains the record.
+            setAudioSettings((p) => (p ? { ...p, monitorLevel: level } : p))
+            void setMonitor(
+              audioSettings?.monitorEnabled ?? false,
+              audioSettings?.monitorDevice ?? '',
+              level,
+            )
+              .then((sn) => onSnap?.(sn))
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+        />
         <label className="ph-lock" title="Hands-free: click PTT once to key, again to unkey">
           <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
