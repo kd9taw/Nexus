@@ -430,29 +430,26 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   }
   const [keyed, setKeyed] = useState(false)
 
-  // THE BUTTON MUST NOT SAY "ON AIR" OVER AN UNKEYED RIG.
+  // ⚠️ THE STALE "ON AIR" BUTTON IS A KNOWN, UNFIXED BUG — and the obvious fix is WRONG.
   //
-  // `keyed` is local state set on the click, and the engine's gate is re-read EVERY tick:
-  // `set_ptt` is `on && tx_enabled && tx_allowed()`. So TX being switched off, the dial moving
-  // into a locked segment, the TX watchdog, Stop TX or a UDP HaltTx all unkey the transmitter
-  // WITHOUT this cockpit being told, and the button kept reading ON AIR over a rig that was not
-  // transmitting. That is the #81 shape from the other direction — #81 was the press being
-  // silently refused, this is a key silently ending — and it was reported from the bench
-  // (2026-08-28) after dropping the TX latch mid-over: "the radio unkeys, but the PTT button
-  // still says it is transmitting".
+  // `keyed` is local state set on the click; the engine re-reads `on && tx_enabled &&
+  // tx_allowed()` every tick, so TX off, the dial leaving privilege, the watchdog, Stop TX and a
+  // UDP HaltTx all unkey the rig without telling this cockpit, and the button goes on being
+  // styled as transmitting. Reported from the bench 2026-08-28.
   //
-  // Reconciled from `txEnabled`/`txAllowed`, NOT from `radio.transmitting`: that flag is the FT
-  // slot indicator alone and is false throughout a perfectly good manual phone over, so keying
-  // off it would clear the button mid-transmission.
+  // Reconciling it from `snap.radio.txEnabled && snap.radio.txAllowed` was tried and REVERTED the
+  // same day: `tx_allowed()` is recomputed from the dial, the dial comes from CAT polling, and a
+  // momentary bad read makes it briefly false. The effect took that transient as authoritative
+  // and cleared `keyed` mid-over, so hands-free Lock appeared to drop the key after a few
+  // seconds. Trading a cosmetic lie for a transmit control that looks like it failed is the
+  // wrong trade.
   //
-  // `lock` is deliberately left alone. The operator chose hands-free; silently switching them
-  // back to hold-to-talk is a second surprise on top of the first, and with `keyed` false the
-  // next click keys again exactly as it should.
-  useEffect(() => {
-    if (!keyed) return
-    if (snap.radio.txEnabled && snap.radio.txAllowed) return
-    setKeyed(false)
-  }, [keyed, snap.radio.txEnabled, snap.radio.txAllowed])
+  // What it actually needs is the engine's OWN manual-PTT state, which the snapshot does not
+  // carry — deliberately (see `dto.rs`, "manual PTT is DELIBERATELY not" surfaced). So the fix is
+  // a snapshot-surface decision, not a cockpit patch, and it is left undone rather than done
+  // badly. The engine-side half of the same bench finding IS fixed: disarming TX now drops a
+  // held PTT instead of letting a re-arm re-key it.
+
 
   // Bandscope span (audio-window zoom within the captured passband — this is
   // soundcard audio, not RF IQ, so "span" means which slice of the passband

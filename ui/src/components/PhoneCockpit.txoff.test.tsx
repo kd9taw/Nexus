@@ -173,64 +173,13 @@ describe('the Phone PTT button tells the operator WHICH gate stopped him (#81)',
     })
   })
 
-  // THE SAME LIE, FROM THE OTHER DIRECTION. #81 was a press silently REFUSED. This is a key
-  // silently ENDING: the engine re-reads `on && tx_enabled && tx_allowed()` every tick, so TX
-  // going off, the dial leaving privilege, the TX watchdog, Stop TX and a UDP HaltTx all unkey
-  // the rig without telling this cockpit. `keyed` is local state set on the click, so it stayed
-  // true and the button went on reading ON AIR over a transmitter that was not transmitting.
-  // Reported from the bench, 2026-08-28.
-  it('a key that ENDS without the operator releasing stops being styled as keyed', async () => {
-    const { rerender } = renderPhone()
-    await act(async () => {
-      fireEvent.pointerDown(ptt())
-    })
-    // Assert on the CLASS, not the label. With TX off the label already reads "TX is OFF"
-    // from the #81 fix whether or not `keyed` is stale, so a text assertion here passes with
-    // the bug present — it did, until the control caught it. `keyed` drives the red styling
-    // and `aria-pressed`, and that is what stayed lit over an unkeyed rig.
-    expect(
-      ptt().className,
-      'the fixture is not keyed — the rest proves nothing',
-    ).toMatch(/\bkeyed\b/)
-
-    // The TX latch drops while the key is still down. Nothing releases PTT.
-    await act(async () => {
-      rerender(
-        <PhoneCockpit
-          snap={makeSnap({ txEnabled: false })}
-          theme="dark"
-          onWorkSpot={() => {}}
-          spots={[]}
-        />,
-      )
-    })
-    expect(
-      ptt().className,
-      'the rig is unkeyed but the button is still styled as transmitting',
-    ).not.toMatch(/\bkeyed\b/)
-  })
-
-  it('the dial leaving privilege mid-over also clears the keyed styling', async () => {
-    // The second half of the engine's gate, and it must be reconciled from the same place —
-    // otherwise turning the knob into a locked segment leaves the same false ON AIR.
-    const { rerender } = renderPhone()
-    await act(async () => {
-      fireEvent.pointerDown(ptt())
-    })
-    expect(ptt().className).toMatch(/\bkeyed\b/)
-
-    await act(async () => {
-      rerender(
-        <PhoneCockpit
-          snap={makeSnap({ txAllowed: false })}
-          theme="dark"
-          onWorkSpot={() => {}}
-          spots={[]}
-        />,
-      )
-    })
-    expect(ptt().className).not.toMatch(/\bkeyed\b/)
-  })
+  // NOT TESTED HERE, DELIBERATELY: the button going on being styled as keyed after the rig has
+  // unkeyed itself (TX off mid-over, the dial leaving privilege, the watchdog, Stop TX, HaltTx).
+  // Two tests for it existed on 2026-08-28 and went with the fix they pinned: reconciling from
+  // `txEnabled`/`txAllowed` clears `keyed` on a transient bad CAT read, which made hands-free
+  // Lock look like it dropped the key after a few seconds. The cockpit comment records why the
+  // real fix needs the engine's manual-PTT state on the snapshot, which is a surface decision
+  // rather than something to patch here. A test pinning the wrong fix is worse than no test.
 
   it('state 3 — not permitted: the licence lock is unchanged and stays distinct', () => {
     renderPhone({ txAllowed: false })
