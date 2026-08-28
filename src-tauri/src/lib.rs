@@ -9727,6 +9727,20 @@ fn set_tx_level(state: State<'_, SharedEngine>, level: f32) -> Result<AppSnapsho
 /// because each is a separate settings save otherwise. A NARROW setter (#54): a cockpit control
 /// must not push a whole `Settings` back, which would write the panel's stale copy of everything
 /// else over the engine's.
+/// Choose the live microphone for the ACTIVE radio ("" = the rig's own mic, the default).
+///
+/// Narrow (#54) and persisted immediately, like `set_monitor` beside it: the pill is in the PTT
+/// row, and a control there must not carry a whole settings form.
+#[tauri::command(async)]
+fn set_live_mic(state: State<'_, SharedEngine>, device: String) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.set_live_mic_device(device);
+    if let Err(e) = eng.settings().save(&settings_path()) {
+        eprintln!("tempo: failed to persist the live-mic setting: {e}");
+    }
+    Ok(eng.snapshot())
+}
+
 #[tauri::command(async)]
 fn set_monitor(
     state: State<'_, SharedEngine>,
@@ -17665,6 +17679,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_msk144_period,
             set_rx_gain,
             set_monitor,
+            set_live_mic,
             set_active_radio,
             set_peg_lock,
             confirm_sat_uplink,

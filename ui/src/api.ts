@@ -1328,6 +1328,11 @@ export async function setTxLevel(level: number): Promise<AppSnapshot> {
  * One call for the trio because the PTT row's output pill changes them together, and because a
  * cockpit control must not push a whole Settings back over the engine's copy.
  */
+/** Choose the live microphone for the ACTIVE radio. `""` = the rig's own mic (the default). */
+export async function setLiveMic(device: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_live_mic', { device })
+}
+
 export async function setMonitor(
   enabled: boolean,
   device: string,

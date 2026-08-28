@@ -6523,6 +6523,23 @@ impl Engine {
         }
     }
 
+    /// Choose the LIVE MICROPHONE for the active radio, or `""` for the rig's own mic.
+    ///
+    /// A NARROW setter (#54): a cockpit control must never push a whole `Settings`, because a
+    /// pill in the PTT row that round-trips the entire form can revert anything the operator
+    /// changed elsewhere since the form was read.
+    ///
+    /// PER RADIO, like `audio_in`/`audio_out` and for the same reason — a boom mic on one rig
+    /// and a headset on another are different answers, and one global setting forces one of them
+    /// to be wrong. Writing it for a radio that is not in the roster is a no-op rather than an
+    /// error: the roster can change under a cockpit that is mid-render.
+    pub fn set_live_mic_device(&mut self, device: String) {
+        let id = self.settings.active_radio;
+        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == id) {
+            p.live_mic_device = device;
+        }
+    }
+
     /// The hard ceiling on ONE continuous live-mic over, in milliseconds.
     ///
     /// The same value as [`Self::RTTY_MAX_LATCH_MS`] and for the same reason: these are the only

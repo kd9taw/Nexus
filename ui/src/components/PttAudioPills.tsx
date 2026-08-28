@@ -19,14 +19,25 @@
 // experienced operator read the field name and reasonably assumed the opposite (2026-08-22), which
 // is the whole argument for the UI saying "receive" wherever the code says "monitor".
 //
-// WHAT IS LIVE AND WHAT IS NOT. The OUTPUT pill is complete: it drives that trio — "Rig" is the
+// WHAT IS LIVE. Both pills are wired. The OUTPUT pill drives the monitor trio — "Rig" is the
 // pass-through OFF (you hear the radio itself, today's default and how it ships), a computer
-// device is it ON. The MIC
-// pill's GAIN is live too (`setMicGain`). Its SOURCE selector is deliberately not wired to a live
-// microphone yet: streaming a computer mic into the transmitter is a transmit-path change and
-// needs the maintainer's sign-off (kd9taw/Nexus#149). Until then the computer entries are shown
-// and disabled with the reason, rather than hidden — an operator who wants this should be able to
-// see that it is coming and why it is not here.
+// device is it ON. The MIC pill's GAIN is `setMicGain`, and its SOURCE now writes the per-radio
+// `liveMicDevice` through `setLiveMic`.
+//
+// THE SOURCE SELECTOR WAS GATED AND NO LONGER IS. It needed maintainer sign-off because streaming
+// a computer mic into the transmitter is a transmit-path change (kd9taw/Nexus#149). That arrived,
+// conditioned on #158 landing first — without it the monitor had no notion of keying, so a
+// computer mic plus computer speakers plus a keying-blind monitor is an acoustic feedback loop.
+// #158 is merged: the monitor goes quiet while the operator talks, and this is buildable rather
+// than a howl. The condition attached to the sign-off is that this gets a BENCH PASS rather than
+// a code review, because it is the transmit path.
+//
+// WHAT IS NOT OFFERED, AND IT IS A RULING NOT AN OVERSIGHT. The rig's own RX codec is NOT LISTED
+// as a microphone at all (operator, 2026-08-22) — not listed-and-disabled, absent. Choosing it
+// would transmit the received band back out. It is the mirror of `forbiddenOutput`, decided the
+// other way: an output the monitor must not use is shown disabled with the reason, because the
+// operator may be looking for it and deserves to know why not; a microphone that can only ever be
+// wrong is not a choice worth rendering.
 import { useEffect, useRef, useState } from 'react'
 import { Mic, Volume2 } from 'lucide-react'
 import type { AudioDevices, Settings } from '../types'
@@ -42,6 +53,8 @@ interface Props {
   onMicGain: (gain: number) => void
   /** Persisted monitor trio — the OUTPUT pill's whole state. */
   onOutput: (enabled: boolean, device: string) => void
+  /** Persist the live mic for the active radio. `''` = the rig's own mic. */
+  onMicSource: (device: string) => void
   onVolume: (level: number) => void
 }
 
@@ -49,6 +62,26 @@ interface Props {
 export function outputSinkOf(s: Settings | null): OutputSink {
   if (!s?.monitorEnabled) return 'rig'
   return { device: s.monitorDevice ?? '' }
+}
+
+/** Which microphone is in force, read from the ACTIVE radio's profile. `'rig'` is the default
+ *  and what ships. A missing profile reads as `'rig'` rather than throwing: the roster can change
+ *  under a cockpit that is mid-render, and the safe reading of "I do not know" is the rig's mic,
+ *  which streams nothing from this computer. */
+export function micSourceOf(s: Settings | null): MicSource {
+  const id = s?.activeRadio
+  const prof = s?.radios?.find((r) => r.id === id)
+  const dev = (prof?.liveMicDevice ?? '').trim()
+  return dev === '' ? 'rig' : { device: dev }
+}
+
+/** The rig's own RX codec, which must never be offered as a microphone: choosing it would put the
+ *  received band back on the air. Operator ruling (2026-08-22) — NOT LISTED, not listed-and-
+ *  disabled. Compare `forbiddenOutput`, which shows its rejection because the operator may be
+ *  hunting for that device; here the entry could only ever be wrong, so it is not a choice. */
+export function forbiddenMic(s: Settings | null, name: string): boolean {
+  const rx = (s?.audioIn ?? '').trim()
+  return rx !== '' && name.trim() === rx
 }
 
 /** A device the monitor must never be pointed at: the rig's own TX device would put the received
@@ -64,6 +97,7 @@ export function PttAudioPills({
   micGain,
   onMicGain,
   onOutput,
+  onMicSource,
   onVolume,
 }: Props) {
   const [open, setOpen] = useState<null | 'micGain' | 'micSource' | 'vol' | 'out'>(null)
@@ -90,6 +124,11 @@ export function PttAudioPills({
   const sink = outputSinkOf(settings)
   const onComputer = sink !== 'rig'
   const vol = settings?.monitorLevel ?? 0.5
+  const micSrc = micSourceOf(settings)
+  const onRigMic = micSrc === 'rig'
+  const micDev = onRigMic ? '' : (micSrc as { device: string }).device
+  // The rig's own RX codec is filtered OUT, not shown disabled — see the header ruling.
+  const micChoices = (devices?.input ?? []).filter((d) => !forbiddenMic(settings, d.name))
 
   return (
     <div className="ph-audio-pills" ref={wrapRef}>
@@ -97,13 +136,15 @@ export function PttAudioPills({
       <div className="ph-pill-wrap">
         <button
           type="button"
-          // `rig` today, always: the computer-mic path is not wired (see the header).
-          className="ph-audio-pill mic on-rig"
+          className={`ph-audio-pill mic ${onRigMic ? 'on-rig' : 'on-computer'}`}
           aria-label="Microphone — click for gain, right-click to choose the source"
           title={
-            micGain == null
-              ? "Talking on the RIG's own mic. Right-click to see the source options."
-              : "Talking on the RIG's own mic. Click for mic gain, right-click for the source."
+            !onRigMic
+              ? `Talking on ${micDev} — this computer's microphone, streamed to the radio while`
+                + ' you hold PTT. Right-click to change it.'
+              : micGain == null
+                ? "Talking on the RIG's own mic. Right-click to choose a different source."
+                : "Talking on the RIG's own mic. Click for mic gain, right-click for the source."
           }
           onClick={() => setOpen(open === 'micGain' ? null : 'micGain')}
           onContextMenu={(e) => {
@@ -112,7 +153,7 @@ export function PttAudioPills({
           }}
         >
           <Mic size={13} aria-hidden="true" />
-          <span className="ph-audio-pill-tag">RIG</span>
+          <span className="ph-audio-pill-tag">{onRigMic ? 'RIG' : micDev}</span>
         </button>
 
         {open === 'micGain' && (
@@ -141,31 +182,42 @@ export function PttAudioPills({
         )}
 
         {open === 'micSource' && (
-          <div className="ph-audio-pop" role="menu" aria-label="Microphone source">
-            <button type="button" role="menuitemradio" aria-checked className="ph-audio-item sel">
-              Rig&apos;s own mic
-            </button>
-            {(devices?.input ?? []).map((d) => (
+            <div className="ph-audio-pop" role="menu" aria-label="Microphone source">
               <button
-                key={d.name}
                 type="button"
                 role="menuitemradio"
-                aria-checked={false}
-                className="ph-audio-item"
-                disabled
-                title="Not yet available — streaming a computer mic into the transmitter is a transmit-path change awaiting maintainer sign-off (#149)."
+                aria-checked={onRigMic}
+                className={`ph-audio-item${onRigMic ? ' sel' : ''}`}
+                onClick={() => {
+                  onMicSource('')
+                  setOpen(null)
+                }}
               >
-                {d.name}
+                Rig&apos;s own mic
               </button>
-            ))}
-            <span className="ph-audio-note">
-              Computer microphones are listed but not yet selectable — see #149.
-            </span>
-          </div>
-        )}
-      </div>
+              {micChoices.map((d) => (
+                <button
+                  key={d.name}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={!onRigMic && d.name === micDev}
+                  className={`ph-audio-item${!onRigMic && d.name === micDev ? ' sel' : ''}`}
+                  onClick={() => {
+                    onMicSource(d.name)
+                    setOpen(null)
+                  }}
+                >
+                  {d.name}
+                </button>
+              ))}
+              <span className="ph-audio-note">
+                A computer mic is streamed to the radio only while you hold PTT.
+              </span>
+            </div>
+          )}
+        </div>
 
-      {/* ---- OUTPUT ------------------------------------------------------------------- */}
+        {/* ---- OUTPUT ------------------------------------------------------------------- */}
       <div className="ph-pill-wrap">
         <button
           type="button"

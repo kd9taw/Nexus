@@ -31,6 +31,7 @@ import { LogEntry } from './LogEntry'
 import {
   setPtt,
   setRfPower,
+  setLiveMic,
   setMicGain,
   setMonitor,
   getSettings,
@@ -1547,6 +1548,28 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           onMicGain={(g) => {
             void setMicGain(g)
               .then((sn) => onSnap?.(sn))
+              .catch((e) => pushToast(String(e), 'error'))
+          }}
+          onMicSource={(device) => {
+            // Narrow setter (#54): the pill persists ONE per-radio field. It must never push a
+            // whole Settings — a control in the PTT row that round-trips the form can revert
+            // anything changed elsewhere since that form was read.
+            void setLiveMic(device)
+              .then((sn) => {
+                onSnap?.(sn)
+                // Mirror it locally so the tag updates on the click rather than on the next
+                // snapshot: `audioSettings` is what `micSourceOf` reads.
+                setAudioSettings((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        radios: (prev.radios ?? []).map((r) =>
+                          r.id === prev.activeRadio ? { ...r, liveMicDevice: device } : r,
+                        ),
+                      }
+                    : prev,
+                )
+              })
               .catch((e) => pushToast(String(e), 'error'))
           }}
           onOutput={(enabled, device) => {
