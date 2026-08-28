@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Nexus no longer adopts a rigctld that is driving a different radio.** When a rigctld was already
+  listening on a radio's CAT port, Nexus connected through it — which is the right thing, and is how
+  it shares a rig with WSJT-X — but it never checked WHICH radio that daemon was attached to. On a
+  two-radio station a stray daemon left over from the other rig would be adopted, and from then on
+  every frequency read, every band change and **every keying command went to the wrong radio**, with
+  the app showing the other rig's dial as though it were yours. Nexus now asks first: it reads the
+  daemon's own arguments (which carry the model AND the serial device) and falls back to asking the
+  daemon over the protocol when there is no local process to read. On a mismatch it refuses, says
+  which radio that daemon is actually driving, and tells you how to fix it — stop the daemon, or
+  give this radio its own rigctld port. Sharing a daemon that IS this radio's is unchanged, and so
+  is coexisting with an external NET-rigctl station.
+
 - **Tune could drop out repeatedly, defeating an automatic antenna tuner.** On a station with an
   auto-tuning antenna — a magnetic loop especially — the tune carrier was interrupted over and
   over. A tuner reads those gaps as a match, beeps, and stops before it has found one. Reported by

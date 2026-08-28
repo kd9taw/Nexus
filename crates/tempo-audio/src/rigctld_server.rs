@@ -637,6 +637,73 @@ pub fn classify_probe_reply(bytes: &[u8]) -> PortReply {
 ///
 /// The read budget is `timeout` in total, not per read, so the worst case is unchanged from
 /// the single-read version this replaces (connect + one timeout).
+/// Ask `addr` whether it is a rigctld we can share, and REPORT WHAT ANSWERED.
+///
+/// Sends `\chk_vfo` and reads one line back inside `timeout`. Two servers are being told
+/// apart here, and both talk on connect-or-command: a rigctld says nothing until asked and
+/// then answers one line; an SDR console's CAT server (Thetis, and PowerSDR forks) greets
+/// immediately and then ignores anything without a `;`. Writing the question first and
+/// reading once serves both — the greeting is already in the socket by then.
+///
+/// The read budget is `timeout` in total, not per read, so the worst case is unchanged from
+/// the single-read version this replaces (connect + one timeout).
+/// Ask the rigctld on `addr` WHICH RIG MODEL it is serving, via `\dump_state`.
+///
+/// WHY THIS EXISTS. [`probe_cat_port`] establishes that *a rigctld* is listening, and the
+/// coexist branch then connects through it. What it could never establish is which RADIO that
+/// daemon drives — the monitor path's comment says exactly this, and refuses to coexist at all
+/// for that reason, calling it "the dual-radio crossed-CAT bug". The active radio coexists
+/// anyway, so it inherited the bug.
+///
+/// Demonstrated on a two-radio macOS station, 2026-08-17: a stray rigctld left by a previous run
+/// held the FTX-1's port, Nexus adopted it, took its dial (145.000, a Hamlib dummy) as the rig's,
+/// and left the real radio's serial port untouched. The pill looked fine.
+///
+/// The premise was simply out of date: `\dump_state`'s SECOND line is the served model. A Hamlib
+/// dummy answers `1`, an FT-710 answers `1049`. That is enough to refuse a daemon that is driving
+/// something other than the rig this profile describes.
+///
+/// `None` means "could not establish" — not "mismatch". A daemon that does not answer, answers
+/// The model line of a `\dump_state` reply: line 1 is the protocol version, line 2 the model.
+///
+/// Split out so the parse is testable without a socket — and because the shape is the sort of
+/// thing that changes between Hamlib versions, so it must fail to `None` rather than guess.
+pub fn parse_dump_state_model(bytes: &[u8]) -> Option<u32> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+    let _protocol = lines.next()?;
+    lines.next()?.trim().parse::<u32>().ok()
+}
+
+/// something unparseable, or speaks a protocol variant we do not recognise must NOT be treated as
+/// foreign: refusing on absent evidence would break the sharing setups this branch exists for.
+pub fn served_rig_model(addr: &str, timeout: std::time::Duration) -> Option<u32> {
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+    let sa = addr.to_socket_addrs().ok()?.next()?;
+    let mut stream = TcpStream::connect_timeout(&sa, timeout).ok()?;
+    stream.set_write_timeout(Some(timeout)).ok()?;
+    stream.write_all(b"\\dump_state\n").ok()?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 512];
+    // Two lines is all we need (protocol version, then the model), but they can arrive in one
+    // packet or several; stop as soon as a second newline is in hand.
+    while buf.len() < 2048 && buf.iter().filter(|b| **b == b'\n').count() < 2 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left < std::time::Duration::from_millis(1)
+            || stream.set_read_timeout(Some(left)).is_err()
+        {
+            break;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    }
+    parse_dump_state_model(&buf)
+}
+
 pub fn probe_cat_port(addr: &str, timeout: std::time::Duration) -> PortReply {
     use std::io::Read;
     use std::net::ToSocketAddrs;
@@ -1396,6 +1463,32 @@ pub(crate) mod tests {
             REPLY_SNIPPET_MAX + 1,
             "capped, with an ellipsis"
         );
+    }
+    /// `\dump_state`'s second line is the served rig's model — the fact that lets the coexist
+    /// branch ask "is this MY radio?" instead of assuming. Both replies below are real: the
+    /// Hamlib dummy and an FT-710, captured from the station on 2026-08-17.
+    #[test]
+    fn dump_state_names_the_rig_the_daemon_is_serving() {
+        let dummy = b"1\n1\n0\n150000.000000 1500000000.000000 0x1ff -1 -1 0x17e00007 0x1f\n";
+        let ft710 = b"1\n1049\n0\n30000.000000 60000000.000000 0x420201dbf -1 -1 0x10000003\n";
+        assert_eq!(parse_dump_state_model(dummy), Some(1));
+        assert_eq!(parse_dump_state_model(ft710), Some(1049));
+    }
+
+    /// EVERY "cannot tell" must be None, never a wrong number: refusing on a misread reply would
+    /// take CAT away from the sharing setups the coexist branch exists to support.
+    #[test]
+    fn an_unreadable_dump_state_is_undecided_rather_than_wrong() {
+        assert_eq!(parse_dump_state_model(b""), None);
+        assert_eq!(parse_dump_state_model(b"1\n"), None, "no model line yet");
+        assert_eq!(
+            parse_dump_state_model(b"1\nRPRT -1\n"),
+            None,
+            "an error reply"
+        );
+        assert_eq!(parse_dump_state_model(b"garbage\nalso garbage\n"), None);
+        // Blank lines must not shift the line the model is read from.
+        assert_eq!(parse_dump_state_model(b"1\n\n1049\n"), Some(1049));
     }
 }
 
