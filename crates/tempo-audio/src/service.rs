@@ -2063,6 +2063,10 @@ enum ErrOwner {
     Device,
     Monitor,
     VoiceMic,
+    /// The live mic could not be opened while the operator was keying. Distinct from
+    /// `VoiceMic`: that one degrades to recording from the shared tap, this one means the
+    /// operator is transmitting and their voice is NOT going out.
+    LiveMic,
     /// The rig rejected a TX key command (PTT NAK/timeout) — otherwise we'd play modem
     /// audio into a receiving rig with no warning ("silent dead air").
     Ptt,
@@ -2406,6 +2410,20 @@ struct RadioLoop {
     /// Retry suppression for a failed mic open — cleared when the recording
     /// ends so the NEXT recording tries the device again (not per-loop spam).
     voice_mic_failed: bool,
+    /// A transient input stream is live and feeding the AIR — the operator's own
+    /// microphone during a manual-PTT over. Same slot as `voice_mic_open`; who gets it
+    /// is decided by `backend::second_mic_owner`, never by loop order.
+    live_mic_open: bool,
+    /// Retry suppression for a failed live-mic open, cleared when the over ends. Without
+    /// it a bad device would be re-opened every 20 ms for the length of a transmission.
+    live_mic_failed: bool,
+    /// Loop-ms at which the CURRENT live-mic over started, or `None` between overs.
+    ///
+    /// This is the clock `Engine::live_mic_may_stream` measures its hard ceiling against,
+    /// and it lives here rather than in the engine because it is the LOOP's notion of when
+    /// audio actually started flowing. Cleared on every falling edge, so a ceiling can
+    /// never be inherited by the next over.
+    live_mic_started_ms: Option<f64>,
     /// Nudge: re-evaluate the monitor block next loop even without a settings
     /// change (used when the voice-mic notice cleared a line the monitor may
     /// still be entitled to — its guard/failure state gets re-surfaced).
@@ -2778,6 +2796,9 @@ impl RadioLoop {
             qso_started_ms: None,
             voice_mic_open: false,
             voice_mic_failed: false,
+            live_mic_open: false,
+            live_mic_failed: false,
+            live_mic_started_ms: None,
             monitor_reapply: false,
             force_audio_rebuild: false,
             audio_retry_at: None,
@@ -6592,8 +6613,29 @@ impl RadioLoop {
                 let eng = engine_lock(engine);
                 eng.is_recording()
             };
-            let want_mic =
-                crate::backend::want_voice_mic(recording_active, &self.applied.voice_mic_device);
+            // LIVE MIC — asked FIRST, because it decides who gets the one transient stream.
+            //
+            // Both questions come out of a single engine lock: may this over put audio on the
+            // air right now, and which device would it use. `live_mic_may_stream` is the whole
+            // safety gate (PTT actually held, TX enabled, still in privilege, under the hard
+            // ceiling) and it is recomputed EVERY tick — a live mic is, like RTTY's continuous
+            // TX, an over with no precomputed end, so there is no moment at which the answer
+            // may be cached.
+            let (live_may, live_dev) = {
+                let eng = engine_lock(engine);
+                (
+                    eng.live_mic_may_stream(now, self.live_mic_started_ms),
+                    eng.live_mic_device().unwrap_or_default().to_string(),
+                )
+            };
+            let owner = crate::backend::second_mic_owner(
+                recording_active,
+                &self.applied.voice_mic_device,
+                live_may,
+                &live_dev,
+            );
+            let want_mic = owner == crate::backend::SecondMic::Recording;
+            let want_live = owner == crate::backend::SecondMic::Live;
             if want_mic && !self.voice_mic_open && !self.voice_mic_failed {
                 // Rising edge: open the mic once. A failed open surfaces why and falls back
                 // to the shared tap; `voice_mic_failed` blocks a per-loop retry until the
@@ -6636,6 +6678,72 @@ impl RadioLoop {
                     self.monitor_reapply = true;
                 }
             }
+            // LIVE MIC ROUTING — the operator's own microphone onto the air.
+            //
+            // `voice_capture()` is 12 kHz mono, already resampled from the mic's native rate,
+            // and `play()` takes 12 kHz and resamples up to the output rate. So the whole
+            // route is `play(voice_capture())`; there is no rate maths to get wrong here.
+            //
+            // THE ORDER BELOW IS THE SAFETY PROPERTY. The gate is asked first and the audio
+            // is moved second, every tick — never audio started beside the key and left to a
+            // stop path to end. If `want_live` goes false for ANY reason (PTT released, TX
+            // disabled, knob turned into a locked segment, the hard ceiling reached, the
+            // device un-chosen), this tick moves no samples and the falling edge below runs.
+            // That is why a stuck PTT cannot hold the mic open: the gate stops answering yes
+            // and nothing further is queued, rather than something being asked to stop.
+            if want_live && !self.live_mic_open && !self.live_mic_failed {
+                // Rising edge. Stamp the clock BEFORE the open, so a slow device open counts
+                // against the ceiling rather than extending it.
+                self.live_mic_started_ms.get_or_insert(now);
+                match backend.set_voice_mic(Some(&live_dev)) {
+                    Ok(()) => self.live_mic_open = true,
+                    Err(e) => {
+                        self.live_mic_failed = true;
+                        // This one is louder than the voice-mic equivalent on purpose. That
+                        // degrades to recording from the shared tap and the operator still
+                        // gets a message. This means they are KEYING and their voice is not
+                        // going out — silence the far end hears and they do not.
+                        if matches!(self.err_owner, ErrOwner::None | ErrOwner::LiveMic) {
+                            {
+                                let mut eng = engine_lock(engine);
+                                eng.set_audio_error(Some(format!(
+                                    "Live mic could not open: {e} — you are transmitting and \
+                                     your microphone is NOT going out. Release PTT and check \
+                                     the mic pill beside the PTT button."
+                                )));
+                            }
+                            self.err_owner = ErrOwner::LiveMic;
+                        }
+                    }
+                }
+            } else if !want_live && (self.live_mic_open || self.live_mic_failed) {
+                // Falling edge. Close the stream AND flush the output ring: samples already
+                // queued would otherwise keep playing after the unkey, putting a tail of room
+                // audio on the air past the moment the operator let go. Closing the input
+                // alone does not empty what the input already produced.
+                if self.live_mic_open {
+                    backend.set_voice_mic(None).ok();
+                    backend.flush_output();
+                    self.live_mic_open = false;
+                }
+                self.live_mic_failed = false;
+                self.live_mic_started_ms = None;
+                if self.err_owner == ErrOwner::LiveMic {
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.set_audio_error(None);
+                    }
+                    self.err_owner = ErrOwner::None;
+                    self.monitor_reapply = true;
+                }
+            }
+            if self.live_mic_open {
+                let mic = backend.voice_capture();
+                if !mic.is_empty() {
+                    backend.play(&mic);
+                }
+            }
+
             // The audio the recorder ingests this iteration: the mic when its stream is
             // live, else the shared capture tap (today's behavior / the failed-open
             // fallback). Only the recorder switches source — the decoder always reads the
@@ -18866,6 +18974,207 @@ mod tests {
                 "engine mutex still held after the step ({name})"
             );
         }
+    }
+
+    // ---- LIVE MIC on the air (the pure ownership predicate is tested in backend.rs) ----
+
+    /// An engine that is genuinely keying, with a live mic chosen for the active radio.
+    ///
+    /// Every one of these matters: `set_ptt` REFUSES unless TX is enabled and the dial is in
+    /// privilege, so an engine built without them looks keyed in the test and is not.
+    fn keying_engine(live_mic_device: &str) -> Arc<Mutex<Engine>> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut eng = engine.lock().unwrap();
+            // `Settings::default()` carries NO radio profiles, and `live_mic_device()` resolves
+            // through the active radio's profile — so a fixture without one silently has no live
+            // mic at all, and every assertion below would be testing the empty case.
+            let st = Settings {
+                radios: vec![tempo_app::settings::RadioProfile {
+                    id: 0,
+                    live_mic_device: live_mic_device.to_string(),
+                    ..Default::default()
+                }],
+                active_radio: 0,
+                ..Settings::default()
+            };
+            // NOT `apply_settings`: that deliberately keeps the engine's OWN roster so a stale
+            // form cannot revert a rig you just added (#85), and it therefore DISCARDS the
+            // profile above — leaving no live mic configured and every assertion below testing
+            // the empty case. Here the fixture is the authority for the roster, which is
+            // `apply_restored_settings`'s contract.
+            eng.apply_restored_settings(st);
+            // `set_ptt` refuses unless TX is enabled AND the emitted RF is in privilege, so a
+            // licence class and a mid-segment dial are part of "is keying", not decoration.
+            eng.set_license_class("general");
+            eng.set_operating_mode("phone", false);
+            eng.set_frequency(14.250, "20m", "USB");
+            eng.set_tx_enabled(true);
+            eng.set_ptt(true);
+            assert!(
+                eng.manual_ptt(),
+                "fixture is not actually keying — every assertion below would pass vacuously"
+            );
+            assert_eq!(
+                eng.live_mic_device(),
+                (!live_mic_device.is_empty()).then_some(live_mic_device),
+                "fixture did not resolve the live mic through the active radio profile"
+            );
+            assert_eq!(
+                eng.live_mic_may_stream(0.0, None),
+                !live_mic_device.is_empty(),
+                "the engine gate disagrees with the fixture's intent"
+            );
+        }
+        engine
+    }
+
+    fn step_once(engine: &Arc<Mutex<Engine>>, backend: &mut MockBackend, state: &mut RadioLoop) {
+        let mut rig = Rig::vox();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        state
+            .step(
+                engine,
+                backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_held_ptt_with_a_live_mic_puts_the_microphone_on_the_air() {
+        let engine = keying_engine("Headset");
+        let mut backend = MockBackend::new();
+        backend.queue_capture(vec![0.9, 0.9]); // the band — must never reach the air
+        backend.queue_voice_capture(vec![0.1, 0.2, 0.3]); // the operator
+        let mut state = loop_state();
+
+        step_once(&engine, &mut backend, &mut state);
+
+        assert_eq!(
+            backend.voice_mic_calls,
+            vec![Some("Headset".to_string())],
+            "opened the chosen live mic exactly once"
+        );
+        assert!(state.live_mic_open);
+        assert_eq!(
+            backend.played,
+            vec![0.1, 0.2, 0.3],
+            "the operator's microphone reached the air — and the band audio did not"
+        );
+    }
+
+    #[test]
+    fn no_live_mic_chosen_streams_nothing_even_while_keying() {
+        // The default, and what happens today: the rig's own mic. This computer must put
+        // NOTHING on the air. Also the control for the test above — if routing ignored the
+        // device setting, that test would pass on a station that never configured one.
+        let engine = keying_engine("");
+        let mut backend = MockBackend::new();
+        backend.queue_voice_capture(vec![0.1, 0.2, 0.3]);
+        let mut state = loop_state();
+
+        step_once(&engine, &mut backend, &mut state);
+
+        assert!(
+            backend.voice_mic_calls.is_empty(),
+            "no stream should have been opened"
+        );
+        assert!(!state.live_mic_open);
+        assert!(
+            backend.played.is_empty(),
+            "nothing may go out when the operator chose the rig's own mic"
+        );
+    }
+
+    #[test]
+    fn releasing_ptt_closes_the_mic_and_flushes_what_was_already_queued() {
+        // THE ONE THAT MATTERS, and it needs care to test HONESTLY. Closing the input does not
+        // empty what the input already produced: without a flush, audio captured just before the
+        // release keeps playing after the unkey.
+        //
+        // A bare `flush_calls` grew? assertion is WORTHLESS here — nine other paths in this loop
+        // flush, and the ordinary manual-PTT unkey is one of them, so the count rises on release
+        // whether or not the live-mic path flushed at all. (Verified: deleting the flush left
+        // that assertion green.) So the flush is ATTRIBUTED by differencing against the identical
+        // scenario with no live mic, where the live-mic path cannot contribute.
+        fn flushes_across_release(live_mic: &str) -> usize {
+            let engine = keying_engine(live_mic);
+            let mut backend = MockBackend::new();
+            backend.queue_voice_capture(vec![0.1, 0.2]);
+            let mut state = loop_state();
+            step_once(&engine, &mut backend, &mut state);
+            let before = backend.flush_calls;
+            engine.lock().unwrap().set_ptt(false); // the operator lets go
+            step_once(&engine, &mut backend, &mut state);
+            assert!(
+                !state.live_mic_open,
+                "the stream must be closed on the falling edge ({live_mic:?})"
+            );
+            assert!(
+                state.live_mic_started_ms.is_none(),
+                "the over's clock must not be inherited by the next over ({live_mic:?})"
+            );
+            backend.flush_calls - before
+        }
+
+        let with_mic = flushes_across_release("Headset");
+        let without_mic = flushes_across_release("");
+        assert!(
+            with_mic > without_mic,
+            "the live-mic path contributed no flush of its own ({with_mic} vs {without_mic} \
+             across the release) — audio queued before the release would keep playing after \
+             the unkey"
+        );
+    }
+
+    #[test]
+    fn releasing_ptt_closes_the_stream_it_opened() {
+        let engine = keying_engine("Headset");
+        let mut backend = MockBackend::new();
+        backend.queue_voice_capture(vec![0.1, 0.2]);
+        let mut state = loop_state();
+        step_once(&engine, &mut backend, &mut state);
+        assert!(state.live_mic_open, "keyed: the mic is live");
+
+        engine.lock().unwrap().set_ptt(false);
+        step_once(&engine, &mut backend, &mut state);
+
+        assert_eq!(
+            backend.voice_mic_calls,
+            vec![Some("Headset".to_string()), None],
+            "opened once on the key, closed once on the release — and nothing in between"
+        );
+    }
+
+    #[test]
+    fn tx_disabled_mid_over_stops_the_microphone_on_the_very_next_tick() {
+        // The gate is asked every tick precisely so that something which was legal when the
+        // key went down and is not legal now stops without anyone calling a stop path.
+        let engine = keying_engine("Headset");
+        let mut backend = MockBackend::new();
+        backend.queue_voice_capture(vec![0.1]);
+        let mut state = loop_state();
+        step_once(&engine, &mut backend, &mut state);
+        assert!(state.live_mic_open);
+
+        engine.lock().unwrap().set_tx_enabled(false); // the TX-enable latch drops
+        backend.queue_voice_capture(vec![0.7, 0.7, 0.7]); // more of the room
+        let played_before = backend.played.len();
+        step_once(&engine, &mut backend, &mut state);
+
+        assert!(!state.live_mic_open, "TX is off: the mic must be closed");
+        assert_eq!(
+            backend.played.len(),
+            played_before,
+            "not one further sample may go out once TX is disabled"
+        );
     }
 
     // ---- voice-mic recording source (the pure predicate is tested in backend.rs) ----
