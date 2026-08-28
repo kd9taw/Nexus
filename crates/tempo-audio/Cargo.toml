@@ -37,7 +37,7 @@ hound = "3.5"
 # Received-SSTV image encoding. MIT OR Apache-2.0, already in the tree via tauri, and on
 # deny.toml's allowlist. Encode-only use: one 320x256-ish frame per ~2-minute transmission.
 png = "0.17"
-cpal = { version = "0.15", optional = true }
+cpal = { version = "0.18", optional = true }
 serialport = { version = "4", optional = true }
 deepcw = { path = "../deepcw", optional = true }
 tempo-net = { path = "../tempo-net", optional = true }
@@ -51,11 +51,15 @@ serde_json = "1"
 # DESCRIPTION ("USB AUDIO CODEC") the operator's system, `aplay -l`, KDE, pavucontrol and
 # WSJT-X all show — cpal keeps only the raw PCM name ("plughw:CARD=CODEC,DEV=0") and, worse,
 # probe-opens every hint and silently drops what it cannot open. `alsa` is cpal's OWN
-# dependency at the same "0.9" requirement, so this is already in Cargo.lock and adds no new
+# dependency at the same "0.11" requirement, so this is already in Cargo.lock and adds no new
 # code to the tree; it is a direct dependency only so we can call `HintIter` (which opens no
 # PCM stream). Apache-2.0 OR MIT — GPL-3.0-only compatible; NOTICE entry filed.
+# Moved 0.9 → 0.11 WITH cpal 0.18, to keep that "cpal's own dependency, same requirement"
+# argument true — two alsa versions in one tree would mean two `snd_config` global states.
+# `HintIter`/`Hint` are unchanged between the two (name/desc/direction, `new_str`), so this
+# is a version match, not a migration.
 [target.'cfg(target_os = "linux")'.dependencies]
-alsa = { version = "0.9", optional = true }
+alsa = { version = "0.11", optional = true }
 
 # Windows-only: assign the launched rigctld to a Job Object so the OS kills it
 # (freeing the serial/COM port) whenever Tempo exits — even on a crash.
@@ -72,11 +76,39 @@ windows-sys = { version = "0.59", features = [
 # raw-FFI crate and carries no COM interface types (no `IDispatch`, no `VARIANT` with a
 # Drop), so hand-rolling the vtables is the only alternative and it is the wrong trade for
 # a transmit-adjacent path. Microsoft, Apache-2.0 OR MIT — GPL-3.0-only compatible
-# (verified from the crate's own metadata + its bundled licence files). Version pinned to
-# the one ALREADY in Cargo.lock: cpal depends on `windows` 0.54, so this adds no new crate
-# to the tree — exactly the argument the `alsa` entry above makes. Minimum feature set:
+# (verified from the crate's own metadata + its bundled licence files). Minimum feature set:
 # Com for the COM API and IDispatch, Ole for DISPID_PROPERTYPUT, Variant for the VT tags,
 # Foundation for the two HRESULTs that mean "OmniRig is not installed".
+#
+# ⚠️ THE 0.54 PIN IS A DECISION, NOT AN OVERSIGHT — AND THE TREE CARRIES TWO `windows`
+# VERSIONS ON PURPOSE. Do not "consolidate" this in passing.
+#
+# This entry used to justify 0.54 by saying it was already in the lock as cpal's own
+# dependency, so it added no new crate to the tree — the same argument the `alsa` entry above
+# still makes. That argument DIED at the cpal 0.18 upgrade: 0.18's WASAPI backend raised its
+# `windows` floor to 0.61+, and the lock now resolves cpal's half to 0.62. So the tree holds
+# `windows` 0.54 here for the OmniRig COM path and `windows` 0.62 under cpal for WASAPI.
+#
+# Why that is ACCEPTED rather than fixed:
+#   * Both are Windows-only targets, so neither costs a Linux or macOS build anything, and the
+#     two never meet — we call COM through IDispatch, cpal calls WASAPI.
+#   * `cargo deny check bans` passes on the duplicate, and
+#     `cargo check --target x86_64-pc-windows-gnu` compiles with both present.
+#   * Consolidating means migrating our COM code from 0.54 to 0.62. That is ONE file —
+#     `src/omnirig/com.rs`, the only place in the tree that uses this crate (`Interface`,
+#     `BSTR`, `VARIANT`, `HRESULT`, the `Win32::System::Com`/`Ole`/`Variant` types). Do not
+#     be misled by the `std::os::windows::*` imports in `rigctld_proc.rs`, `ports.rs`,
+#     `baud_ladder.rs` and `src-tauri/src/lib.rs` — those are the STANDARD LIBRARY, and
+#     `rigctld_proc.rs`'s `windows_sys::` is the separate `windows-sys` 0.59 entry above.
+#     Neither is affected by this pin.
+#   * So the work is small, and that is NOT why it is deferred. It is deferred because
+#     `com.rs` is the OmniRig CAT backend: it keys the rig, it is Windows-only, and nothing
+#     about it can be verified from a Linux box beyond a cross-compile. A COM-interop
+#     rewrite on a transmit path earns a bench pass on a real Windows station with OmniRig
+#     installed, and that is a different change from an audio-format batch.
+#
+# Bumping this to match cpal is a perfectly good thing to do ON PURPOSE, with that bench pass
+# behind it. It is not a cleanup, and a duplicate-dependency warning is not a reason on its own.
 windows = { version = "0.54", features = [
     "Win32_Foundation",
     "Win32_System_Com",

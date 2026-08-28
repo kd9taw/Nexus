@@ -47,6 +47,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Audio broke up badly on Windows, and worse on battery.** The sound-card callback and the code
+  feeding it were fighting over the same lock, and the feeding side held it while copying a whole
+  transmission — so when Windows slowed the cores down on battery, the callback missed its deadline
+  and put silence on the air. That is why raising Nexus's priority helped, and why WSJT-X on the
+  same laptop was clean. The two no longer share a lock. There are underrun counters behind it now,
+  so the next report comes with a number instead of an impression. Reported by KR8MER.
+
+- **No decodes, and a log that grew to 294 MB.** Nexus opened the playback side of your sound card
+  at startup whether or not you ever transmitted. On a codec that cannot record and play at the same
+  time, that open wedges, and the error retried forever — millions of identical lines — while
+  capture kept working, so the waterfall looked healthy and nothing ever decoded. Nexus now opens
+  the playback side when you first transmit, so a station that is only listening opens it at all.
+  Repeated errors are also capped: 22 lines with a count on each, instead of filling your disk.
+  Reported by M0LHJ, who did the diagnostic work that found it.
+
+- **Your radio's audio card could be missing from the transmit list on macOS.** A card that only
+  plays and does not record was dropped from the list entirely, so the rig keyed with no audio and
+  nothing on screen explained why. Two operators hit it on different interfaces. Reported by
+  pvanderp and crabtreejw; the cause was found by M7HNF-Ian, whose diagnosis this fix follows.
+
+- **Some sound cards were refused outright, with no audio at all.** Nexus understood four of the ten
+  audio formats a card can report. A card whose natural format was any of the other six got an
+  "unsupported format" message and silence — not a setting you could change, and nothing you did
+  wrong. All formats are carried now. If you have an interface that never worked with Nexus and you
+  could never find out why, it is worth another try.
+
 - **Nexus no longer adopts a rigctld that is driving a different radio.** When a rigctld was already
   listening on a radio's CAT port, Nexus connected through it — which is the right thing, and is how
   it shares a rig with WSJT-X — but it never checked WHICH radio that daemon was attached to. On a
@@ -164,6 +190,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same drift has cost a keying port, a Flex address and an OmniRig slot before this.
 
 ### Changed
+
+- **A station that is only receiving no longer opens your sound card's playback side at all.** You
+  will see this if you look — the playback stream simply is not there until the first time you
+  transmit. That is the fix for the wedged-open problem above, and it also means one fewer thing
+  holding your card if you share it with another program.
+
+- **Your sound card may open at a different rate or format after this update.** The audio library
+  Nexus uses now picks the card's default differently — 48 kHz where it might previously have chosen
+  44.1 kHz, and a different sample format on some cards. Nexus adapts either way and you should not
+  hear a difference, but if you keep notes on your station's audio settings, this is the release
+  where a number may move on its own.
 
 - **Backup and Restore moved to their own Config tab.** They existed, but sat under **Radio ▸
   Transmit limits & sharing**, which is why operators did not find them: backing up a whole
