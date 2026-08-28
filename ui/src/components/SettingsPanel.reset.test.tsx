@@ -142,12 +142,12 @@ beforeEach(() => {
 afterEach(cleanup)
 
 
-/** Open the Radio tab and hand back the Reset field. Reset lives beside Backup, which is the
+/** Open the Config tab and hand back the Reset field. Reset lives beside Backup, which is the
  *  point: the confirm tells the operator to back up first, and the means to do it is right
  *  there rather than somewhere they have to go and find. */
 async function resetButton() {
   renderPanel()
-  fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+  fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
   return await screen.findByRole('button', { name: 'Reset all settings…' })
 }
 
@@ -172,7 +172,7 @@ describe('Reset to factory defaults asks first, and the answer decides', () => {
     // the five literal characters. `en.ts` documents this at the onboarding nudge; the hint here
     // names "Logging & Connectors" and would have shipped it as "Logging &amp; Connectors".
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
     const btn = await screen.findByRole('button', { name: 'Reset all settings…' })
     const hint = btn.closest('.settings-field')!.querySelector('.settings-hint')!.textContent ?? ''
     expect(hint).toContain('Logging & Connectors')

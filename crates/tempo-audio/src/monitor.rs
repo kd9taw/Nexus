@@ -310,15 +310,37 @@ mod device_monitor {
         }
     }
 
-    /// Pick an output config at `want_rate` if the device supports it (so the ring's
+    /// Can [`build_output`] actually build a stream in this sample format?
+    ///
+    /// The list IS `build_output`'s match arms and has to stay in step with them: a format
+    /// missing here is never picked, and a format picked but missing THERE falls into the
+    /// `other` arm and the monitor refuses to open.
+    fn buildable_format(f: SampleFormat) -> bool {
+        matches!(
+            f,
+            SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U8 | SampleFormat::I32
+        )
+    }
+
+    /// Pick an output config at `want_rate` from what the device offers (so the ring's
     /// samples play straight through with no resampling), else `None`.
+    ///
+    /// ⚠️ THE FORMAT FILTER IS THE WHOLE POINT (#8). This took the FIRST range whose rate span
+    /// covered `want_rate` with no regard for its sample format, and on ALSA the first format a
+    /// rig codec offers is `I8` — which [`build_output`] cannot build, so the monitor died with
+    /// "unsupported monitor output format: I8" on a card whose audio the DECODE path was opening
+    /// happily the whole time. The decode path never hit this because it takes
+    /// `default_output_config()`, the card's own PREFERRED format, and never enumerates. Picking
+    /// nothing is safe: `build_output` then falls back to that same default config.
     fn output_config_at_rate(
-        dev: &cpal::Device,
+        configs: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
         want_rate: u32,
     ) -> Option<cpal::SupportedStreamConfig> {
-        let configs = dev.supported_output_configs().ok()?;
         for range in configs {
-            if range.min_sample_rate().0 <= want_rate && want_rate <= range.max_sample_rate().0 {
+            if buildable_format(range.sample_format())
+                && range.min_sample_rate().0 <= want_rate
+                && want_rate <= range.max_sample_rate().0
+            {
                 return Some(range.with_sample_rate(cpal::SampleRate(want_rate)));
             }
         }
@@ -350,7 +372,10 @@ mod device_monitor {
             host.default_output_device(),
             "monitor output",
         )?;
-        let supported = output_config_at_rate(&dev, in_rate)
+        let supported = dev
+            .supported_output_configs()
+            .ok()
+            .and_then(|c| output_config_at_rate(c, in_rate))
             .or_else(|| dev.default_output_config().ok())
             .ok_or("no monitor output config")?;
         let out_rate = supported.sample_rate().0;
@@ -428,6 +453,80 @@ mod device_monitor {
         .map_err(|e| e.to_string())?;
         stream.play().map_err(|e| e.to_string())?;
         Ok(stream)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use cpal::{SampleRate, SupportedBufferSize, SupportedStreamConfigRange};
+
+        fn range(fmt: SampleFormat, lo: u32, hi: u32) -> SupportedStreamConfigRange {
+            SupportedStreamConfigRange::new(
+                2,
+                SampleRate(lo),
+                SampleRate(hi),
+                SupportedBufferSize::Unknown,
+                fmt,
+            )
+        }
+
+        /// ⭐ #8 ON THE WIRE: *"unsupported format: I8"* on the very card whose audio the decoder
+        /// was already reading. ALSA offers `I8` FIRST, the picker took the first range whose
+        /// rate span fitted, and [`build_output`] then had no arm for it — so the monitor
+        /// refused to open a device the decode path opens every session.
+        #[test]
+        fn the_picker_skips_a_format_the_monitor_cannot_build() {
+            let offered = [
+                range(SampleFormat::I8, 8_000, 48_000), // what ALSA offers first
+                range(SampleFormat::I16, 8_000, 48_000),
+            ];
+            let picked = output_config_at_rate(offered.into_iter(), 12_000)
+                .expect("a buildable format was on offer");
+            assert_eq!(
+                picked.sample_format(),
+                SampleFormat::I16,
+                "the picker must skip past I8 to a format build_output has an arm for"
+            );
+            assert_eq!(picked.sample_rate().0, 12_000, "still at the ring's rate");
+        }
+
+        /// The other direction, and the one that says the filter is a FILTER rather than a
+        /// blanket refusal: every format `build_output` handles is still pickable, and the
+        /// rate span is still what decides between them.
+        #[test]
+        fn every_buildable_format_is_still_picked_and_the_rate_span_still_decides() {
+            for fmt in [
+                SampleFormat::F32,
+                SampleFormat::I16,
+                SampleFormat::U8,
+                SampleFormat::I32,
+            ] {
+                let picked = output_config_at_rate([range(fmt, 8_000, 48_000)].into_iter(), 12_000)
+                    .unwrap_or_else(|| panic!("{fmt:?} is buildable and must be pickable"));
+                assert_eq!(picked.sample_format(), fmt);
+            }
+            // A buildable format whose span does NOT cover the rate is still passed over.
+            assert!(
+                output_config_at_rate(
+                    [range(SampleFormat::I16, 44_100, 48_000)].into_iter(),
+                    12_000
+                )
+                .is_none(),
+                "a range that cannot reach the ring's rate is not a candidate"
+            );
+        }
+
+        /// Nothing buildable on offer is `None`, NOT a config that would fail to build —
+        /// `build_output` then falls back to the card's own default config, which is exactly
+        /// the route the decode path takes and the reason rig audio opens at all.
+        #[test]
+        fn no_buildable_format_yields_none_so_the_default_config_is_used() {
+            assert!(output_config_at_rate(
+                [range(SampleFormat::I8, 8_000, 48_000)].into_iter(),
+                12_000
+            )
+            .is_none());
+        }
     }
 }
 

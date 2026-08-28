@@ -533,4 +533,32 @@ mod tests {
         *off += len;
         s
     }
+
+    /// THE NAME EVERY OTHER OPERATOR SEES. PSKReporter publishes the reporting software on
+    /// pskreporter.info, so this string is the app's most public identifier — and it is the one
+    /// the rename missed. Nexus users showed up as "Tempo" to the whole network until an
+    /// operator noticed (2026-08-26).
+    ///
+    /// The datagram is checked here rather than the call site because this is where the bytes
+    /// are built: a caller passing the wrong name is the bug that happened, and a caller passing
+    /// the RIGHT name into a builder that mangled it would look identical from outside.
+    #[test]
+    fn the_reporting_software_name_reaches_the_wire_intact() {
+        let r = PskReporter::new();
+        let dgram = r
+            .build_datagram("KD9TAW", "EN52", "Nexus", &sample_spots(), 100)
+            .expect("a datagram is built");
+        // The name must appear in the RX data set, byte for byte.
+        let needle = b"Nexus";
+        assert!(
+            dgram.windows(needle.len()).any(|w| w == needle),
+            "the software name is not in the datagram at all"
+        );
+        // …and the old one must not survive anywhere in it.
+        let stale = b"Tempo";
+        assert!(
+            !dgram.windows(stale.len()).any(|w| w == stale),
+            "the pre-rename name is still on the wire"
+        );
+    }
 }

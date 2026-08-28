@@ -767,6 +767,41 @@ pub struct Settings {
     /// to a rig that did not ask for it.
     #[serde(default)]
     pub cat_rts_keys_ptt: bool,
+    /// The rig's serial HANDSHAKE, stated rather than inferred: `"auto"` (default) | `"none"` |
+    /// `"hardware"` | `"xonxoff"`.
+    ///
+    /// ⚠️ #145 IS THE THIRD TIME AN INFERENCE HERE WAS WRONG, so this one is asked. `"auto"` is
+    /// today's behaviour to the byte — Nexus reads the backend's declaration out of the
+    /// operator's own Hamlib and drops the handshake only when [`Settings::cat_rts_keys_ptt`] or
+    /// a recognised keying cable says RTS is deliberate. That inference cannot reach the
+    /// reported case at all: with PTT = serial RTS on the CAT port, Hamlib reports RTS
+    /// unsettable BECAUSE it is the keying line, which makes the handshake override's own
+    /// precondition false — so rigctld launches saying nothing whatever about RTS and the
+    /// line's idle state falls to Hamlib's default and the USB-serial driver.
+    ///
+    /// Anything other than `"auto"` is emitted verbatim as `-C serial_handshake=…` and REPLACES
+    /// the inference. It is the operator's declaration about their own cable, which is the only
+    /// place that fact has ever lived — see [`Settings::cat_rts_keys_ptt`] for why no VID/PID
+    /// rule can supply it.
+    #[serde(default = "default_cat_auto")]
+    pub cat_serial_handshake: String,
+    /// What the KEYING line (serial RTS/DTR PTT) is held at while idle: `"auto"` (default) |
+    /// `"untouched"` | `"low"` | `"high"`.
+    ///
+    /// ⚠️ THIS IS THE LINE THAT KEYS THE TRANSMITTER (#145). [`Settings::cat_rts_state`] /
+    /// [`Settings::cat_dtr_state`] are deliberately never emitted for the line Hamlib is keying
+    /// with, so today the keying line's idle level is whatever `rig_open` and the serial driver
+    /// leave it at — which on a CP210x can be ASSERTED, i.e. the rig keyed from launch. `"auto"`
+    /// keeps exactly that (say nothing), so no working station changes under an upgrade.
+    ///
+    /// ⚠️ NEEDS-BENCH, and it is not a formality: Hamlib's `rig_open` REFUSES `rts_state` on the
+    /// line it keys with (`rig.c:1253-1272`), and that refusal is the SILENT kind — `-RIG_ECONF`,
+    /// rigctld does not exit, and it goes on serving a rig it never opened. So a non-`"auto"`
+    /// value can cost this operator CAT entirely on some backends and fix a keyed-at-launch rig
+    /// on others, and which one it does cannot be established from this machine — there is no
+    /// serial rig here. It exists so the operator who can watch the pin has a knob to turn.
+    #[serde(default = "default_cat_auto")]
+    pub cat_ptt_line_state: String,
     /// Serial baud rate for CAT.
     pub baud: u32,
     /// Rig connection type: "serial" (default; rigctld talks to `serial_port`/`baud`) or
@@ -922,6 +957,18 @@ pub struct Settings {
     pub rotator_port: String,
     #[serde(default = "default_rotator_baud")]
     pub rotator_baud: u32,
+    /// The amplifier family on this radio's amp port: "" = none (the default, and the state of
+    /// most stations), "spe" = SPE Expert 1.3K-FA/1.5K-FA/2K-FA, "kpa" = Elecraft KPA500/KPA1500.
+    ///
+    /// PER RADIO, like the rotator: an SO2R station has an amplifier per radio, and a field that
+    /// lived only on the flat `Settings` would let one radio's amp config overwrite the other's.
+    #[serde(default)]
+    pub amp_model: String,
+    /// Serial port the amplifier is on. Empty = not configured, which is what makes every
+    /// amplifier surface render NOTHING rather than an empty frame (the rotator's honesty rule:
+    /// unconfigured shows nothing, configured-and-silent shows "—").
+    #[serde(default)]
+    pub amp_port: String,
     /// ADVANCED override: an external `rotctld` daemon address `host:port`
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
@@ -1453,6 +1500,21 @@ pub struct Settings {
     /// after t s". Default matches the loop's long-standing 12 s safety cap.
     #[serde(default = "default_tune_timeout")]
     pub tune_timeout_secs: u32,
+    /// RF power for the TUNE carrier, percent — the level a tune-up keys at, whatever the
+    /// operating slider says.
+    ///
+    /// `None` = LEAVE THE RIG'S POWER ALONE, which is today's behaviour to the byte: a tune
+    /// keys at whatever the cockpit slider is on. Percent (u8) with a watts hint from
+    /// [`Settings::station_power_w`], following [`Settings::sstv_tx_power_pct`] exactly — the
+    /// control it seeds is a percent slider.
+    ///
+    /// ⚠️ SAFE-DIRECTION ONLY: the loop applies it as the LOWER of this and the level it has
+    /// already commanded, so a tune power can turn the rig DOWN for the tune-up and can never
+    /// turn it up past the operator's own setting or past the per-mode duty-cycle ceiling those
+    /// levels are already clamped to ([`Settings::rf_power_ceiling`]). A tune carrier is 100%
+    /// duty into a load or a mismatched antenna, so the only direction worth allowing is down.
+    #[serde(default)]
+    pub tune_power_pct: Option<u8>,
     /// WSJT-X Split Operation (Settings ▸ Radio): keep the TRANSMITTED audio in
     /// 1500–2000 Hz (harmonics land outside the TX filter) by shifting the TX
     /// dial in 500 Hz steps. `None` = stock default (transmit at the raw audio
@@ -1586,6 +1648,11 @@ pub struct Settings {
     /// for the session (the decline memory), exactly as SSTV/APRS do.
     #[serde(default = "default_true")]
     pub psk_rx_auto_arm: bool,
+    /// Whether opening the RTTY view starts the receiver — [`Settings::psk_rx_auto_arm`]'s
+    /// twin, same doctrine, same default, and the same interior-acronym trap on the wire key
+    /// (`rttyRXAutoArm` compiles clean on both sides and never matches).
+    #[serde(default = "default_true")]
+    pub rtty_rx_auto_arm: bool,
 
     // --- alerts / comforts ---
     /// Alert (sound + visual) when your callsign is decoded (someone calling you).
@@ -1870,6 +1937,11 @@ fn default_on() -> bool {
 
 fn default_tune_timeout() -> u32 {
     12
+}
+
+/// The shared default for the two #145 CAT declarations: "work it out as before".
+fn default_cat_auto() -> String {
+    "auto".to_string()
 }
 
 fn default_directed_max_calls() -> Option<u32> {
@@ -2347,6 +2419,8 @@ pub struct RadioProfile {
     pub rotator_model: u32,
     pub rotator_port: String,
     pub rotator_baud: u32,
+    pub amp_model: String,
+    pub amp_port: String,
     pub rotator_host: String,
     /// UNIQUE across enabled profiles (validated) — each radio's own rotctld TCP port.
     pub rotctld_port: u16,
@@ -2452,6 +2526,8 @@ pub struct RadioProfilePatch {
     pub rotator_model: u32,
     pub rotator_port: String,
     pub rotator_baud: u32,
+    pub amp_model: String,
+    pub amp_port: String,
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
@@ -2521,6 +2597,8 @@ impl RadioProfilePatch {
         p.rx_gain = self.rx_gain;
         p.rotator_model = self.rotator_model;
         p.rotator_port = self.rotator_port;
+        p.amp_model = self.amp_model;
+        p.amp_port = self.amp_port;
         p.rotator_baud = self.rotator_baud;
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
@@ -2616,6 +2694,8 @@ impl Default for RadioProfile {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: default_rotator_baud(),
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: String::new(),
             rotctld_port: 4533,
             bands: Vec::new(),
@@ -2909,6 +2989,11 @@ impl Default for Settings {
             // what must never happen to a rig that did not ask for it (the FTDX10/FT-991 bench
             // regression). An operator who ticks nothing gets today's behaviour unchanged.
             cat_rts_keys_ptt: false,
+            // "auto" on both = today's behaviour exactly: infer the handshake as before, and
+            // say nothing at all about the keying line. #145's knobs are opt-in, because each
+            // of them can cost a working station its CAT (see the field docs).
+            cat_serial_handshake: default_cat_auto(),
+            cat_ptt_line_state: default_cat_auto(),
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
@@ -2942,6 +3027,8 @@ impl Default for Settings {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: default_rotator_baud(),
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: String::new(),
             // Satellite Doppler is OFF and unmapped by default: a station
             // with no satellite interest must never have its dial moved.
@@ -3077,6 +3164,7 @@ impl Default for Settings {
             clear_dx_after_log: false,
             double_click_sets_tx: true,
             tune_timeout_secs: 12,
+            tune_power_pct: None, // None = never touch the operator's power
             split_mode: SplitMode::None,
             special_op: SpecialOp::None,
             decode_depth: 3,
@@ -3094,6 +3182,7 @@ impl Default for Settings {
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
             psk_rx_auto_arm: true,
+            rtty_rx_auto_arm: true,
             alert_my_call: true,
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
@@ -3220,6 +3309,11 @@ impl Settings {
             rotator_port: self.rotator_port.clone(),
             rotator_baud: self.rotator_baud,
             rotator_host: self.rotator_host.clone(),
+            // MIRRORS the flat value, not a blank: this is the migration seed for a
+            // single-radio station's profile 0, and blanking here would lose an amplifier the
+            // operator had already configured before profiles existed.
+            amp_model: self.amp_model.clone(),
+            amp_port: self.amp_port.clone(),
             rotctld_port: 4533,
             bands: Vec::new(),
             last_dial_mhz: self.dial_mhz,
@@ -3559,6 +3653,8 @@ impl Settings {
         self.rx_gain = p.rx_gain;
         self.rotator_model = p.rotator_model;
         self.rotator_port = p.rotator_port;
+        self.amp_model = p.amp_model;
+        self.amp_port = p.amp_port;
         self.rotator_baud = p.rotator_baud;
         self.rotator_host = p.rotator_host;
         // The Flex three ride the SAME mirror as every other rig field, so every existing consumer
@@ -3598,6 +3694,8 @@ impl Settings {
             rotator_port,
             rotator_baud,
             rotator_host,
+            amp_model,
+            amp_port,
             flex_radio_ip,
             flex_native_pan,
             flex_native_audio,
@@ -3623,6 +3721,8 @@ impl Settings {
             self.rotator_port.clone(),
             self.rotator_baud,
             self.rotator_host.clone(),
+            self.amp_model.clone(),
+            self.amp_port.clone(),
             self.flex_radio_ip.clone(),
             self.flex_native_pan,
             self.flex_native_audio,
@@ -3649,6 +3749,8 @@ impl Settings {
             p.rotator_port = rotator_port;
             p.rotator_baud = rotator_baud;
             p.rotator_host = rotator_host;
+            p.amp_model = amp_model;
+            p.amp_port = amp_port;
             p.flex_radio_ip = flex_radio_ip;
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
@@ -4149,6 +4251,8 @@ mod tests {
             rotator_model: 202,
             rotator_port: "COM11".into(),
             rotator_baud: 19_200,
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
@@ -4202,6 +4306,57 @@ mod tests {
     /// `last_*` tune memory the radio loop owns — and adding a field to `RadioProfile` that is
     /// neither excluded nor in the patch fails here rather than in the field.
     #[test]
+    fn editing_one_radios_amplifier_leaves_the_others_alone() {
+        // The SO2R case, and the reason the amplifier is a PER-RADIO field rather than a station
+        // one: two radios, an amplifier on each. The 2026-07-25 COM-port incident and the Flex
+        // audit both found the same shape — a patch that omits a field silently blanks it on the
+        // profile it touches, and the operator is told "saved".
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    amp_model: "spe".into(),
+                    amp_port: "/dev/ttyUSB0".into(),
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    amp_model: "kpa".into(),
+                    amp_port: "/dev/ttyUSB1".into(),
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+
+        // Edit radio 0's amplifier through the patch path the Settings form uses.
+        let mut p0 = s.radios[0].clone();
+        RadioProfilePatch {
+            amp_model: "kpa".into(),
+            amp_port: "/dev/ttyUSB9".into(),
+            ..patch_of(&s.radios[0])
+        }
+        .apply_to(&mut p0);
+        s.radios[0] = p0;
+
+        assert_eq!(
+            s.radios[0].amp_model, "kpa",
+            "the edited radio took the change"
+        );
+        assert_eq!(s.radios[0].amp_port, "/dev/ttyUSB9");
+        // …and the OTHER radio is untouched. This is the assertion that matters.
+        assert_eq!(
+            s.radios[1].amp_model, "kpa",
+            "radio 1's amplifier model was disturbed by editing radio 0"
+        );
+        assert_eq!(
+            s.radios[1].amp_port, "/dev/ttyUSB1",
+            "radio 1's amplifier PORT was disturbed by editing radio 0"
+        );
+    }
+
+    #[test]
     fn every_per_radio_field_is_reachable_through_the_patch() {
         const NOT_EDITABLE: [&str; 7] = [
             "id",
@@ -4234,6 +4389,8 @@ mod tests {
             rotator_model: 0,
             rotator_port: String::new(),
             rotator_baud: 0,
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -4265,6 +4422,126 @@ mod tests {
              NOT_EDITABLE with a reason."
         );
     }
+
+    /// ⭐ THE OTHER SIDE OF THE SAME DRIFT — and the half that was missing while the guard
+    /// above was cited as covering it.
+    ///
+    /// `every_per_radio_field_is_reachable_through_the_patch` compares `RadioProfile` against
+    /// `RadioProfilePatch` — **Rust against Rust**. It cannot see TypeScript, so it passes
+    /// happily while the UI's own `RadioProfilePatch` is missing a field the backend requires.
+    /// `SettingsPanel.tsx` nonetheless described it as the guard that "fails when a per-radio
+    /// field is added without a home in this patch", which is the dangerous kind of wrong: a
+    /// check believed to cover a gap it structurally cannot reach.
+    ///
+    /// What that cost, both found on 2026-08-27 and both live on main at the time:
+    ///
+    /// - `amp_model` / `amp_port` had **no serde default**, so a patch from the UI failed to
+    ///   deserialize outright — `missing field ampModel` — taking the entire Save with it.
+    /// - `icom_data_mode` **had** a default, so it deserialized fine and silently reset the
+    ///   operator's Icom DATA submode to DATA1 on every edit of the rig form. A serde default
+    ///   turns a loud failure into a quiet one; it does not make the drift safe.
+    ///
+    /// So this reads the TypeScript interface itself and compares it key for key. Adding a
+    /// field to either side without the other now fails here, in CI, in seconds.
+    #[test]
+    fn the_typescript_patch_carries_every_field_the_rust_patch_does() {
+        let ts_src = include_str!("../../../ui/src/api.ts");
+
+        // Pull the body of `export interface RadioProfilePatch { … }`.
+        let head = "export interface RadioProfilePatch {";
+        let start = ts_src
+            .find(head)
+            .expect("the UI declares RadioProfilePatch")
+            + head.len();
+        let body = &ts_src[start..];
+        let end = body.find("\n}").expect("the interface is closed");
+        let body = &body[..end];
+
+        // Field lines look like `  name: type` / `  name?: type`. Comments and blanks are not.
+        let mut ts_keys: Vec<String> = Vec::new();
+        for line in body.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+                continue;
+            }
+            let Some((name, _)) = t.split_once(':') else {
+                continue;
+            };
+            let name = name.trim().trim_end_matches('?');
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                ts_keys.push(name.to_string());
+            }
+        }
+
+        // A parser that found nothing would pass every assertion below it.
+        assert!(
+            ts_keys.len() > 20,
+            "parsed only {} fields out of the TS interface — the parser is broken, not the \
+             interface: {ts_keys:?}",
+            ts_keys.len()
+        );
+
+        // Constructed field by field ON PURPOSE, as the guard above is: there is no Default, so
+        // adding a field to the struct breaks this line and forces a look at both sides.
+        let rust = serde_json::to_value(RadioProfilePatch {
+            ptt_method: String::new(),
+            rig_model: 0,
+            rig_model_name: String::new(),
+            serial_port: String::new(),
+            ptt_serial_port: String::new(),
+            baud: 0,
+            rig_conn: String::new(),
+            rig_addr: String::new(),
+            omnirig_slot: 0,
+            rigctld_port: 0,
+            icom_native_cat: false,
+            icom_data_mode: 1,
+            data_modes_plain_ssb: false,
+            audio_in: String::new(),
+            audio_out: String::new(),
+            tx_level: 0.0,
+            rx_gain: 0.0,
+            rotator_model: 0,
+            rotator_port: String::new(),
+            rotator_baud: 0,
+            amp_model: String::new(),
+            amp_port: String::new(),
+            rotator_host: String::new(),
+            rotctld_port: 0,
+            native_scope: String::new(),
+            flex_radio_ip: String::new(),
+            flex_native_pan: false,
+            flex_native_audio: false,
+        })
+        .expect("patch serializes");
+        let rust_keys: Vec<&str> = rust
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        let missing_in_ts: Vec<&&str> = rust_keys
+            .iter()
+            .filter(|k| !ts_keys.iter().any(|t| t == *k))
+            .collect();
+        assert!(
+            missing_in_ts.is_empty(),
+            "RadioProfilePatch field(s) {missing_in_ts:?} exist in Rust but NOT in the UI's \
+             interface at ui/src/api.ts. Without a serde default the save fails to deserialize \
+             entirely; with one it silently resets the operator's value. Add them to the TS \
+             interface AND to radioPatch() in SettingsPanel.tsx."
+        );
+
+        let missing_in_rust: Vec<&String> = ts_keys
+            .iter()
+            .filter(|t| !rust_keys.contains(&t.as_str()))
+            .collect();
+        assert!(
+            missing_in_rust.is_empty(),
+            "The UI sends RadioProfilePatch field(s) {missing_in_rust:?} that Rust does not \
+             declare — serde will reject the whole payload as an unknown field, or drop it."
+        );
 
     /// A patch that does not MENTION the RF scope must leave it alone.
     ///
@@ -4466,6 +4743,8 @@ mod tests {
             rotator_model: p.rotator_model,
             rotator_port: p.rotator_port.clone(),
             rotator_baud: p.rotator_baud,
+            amp_model: String::new(),
+            amp_port: String::new(),
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
@@ -5714,6 +5993,84 @@ mod tests {
         assert!(old.psk_rx_auto_arm);
         let off: Settings = serde_json::from_str(r#"{"pskRxAutoArm":false}"#).unwrap();
         assert!(!off.psk_rx_auto_arm);
+    }
+
+    /// RTTY's auto-arm field, added as the exact twin of the PSK one above — same default,
+    /// same `#[serde(default_true)]` shape, same interior-acronym trap on the wire key.
+    #[test]
+    fn rtty_settings_default_and_wire_key() {
+        let s = Settings::default();
+        assert!(
+            s.rtty_rx_auto_arm,
+            "opening the RTTY view arms the receiver — the PSK/SSTV doctrine"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"rttyRxAutoArm\":true"),
+            "missing wire key rttyRxAutoArm in {json}"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(old.rtty_rx_auto_arm, "an upgrader's file predates the key");
+        let off: Settings = serde_json::from_str(r#"{"rttyRxAutoArm":false}"#).unwrap();
+        assert!(!off.rtty_rx_auto_arm, "and an explicit opt-out survives");
+    }
+
+    /// The tune carrier's own power level, on the exact wire key the UI hand-writes.
+    ///
+    /// `None` is the whole safety story: an operator who upgrades and never opens the setting
+    /// must find their tune-up keying at exactly the level it always did.
+    #[test]
+    fn tune_power_default_and_wire_key() {
+        let s = Settings::default();
+        assert_eq!(
+            s.tune_power_pct, None,
+            "None = never touch the operator's power, which is today's behaviour"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"tunePowerPct\":null"),
+            "missing wire key tunePowerPct in {json}"
+        );
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            old.tune_power_pct, None,
+            "an upgrader's file predates the key"
+        );
+        let set: Settings = serde_json::from_str(r#"{"tunePowerPct":10}"#).unwrap();
+        assert_eq!(set.tune_power_pct, Some(10), "and a set level survives");
+    }
+
+    /// ⭐ #145's two declarations: BOTH default to "auto", which is today's behaviour to the
+    /// byte — the inference for the handshake, and silence for the keying line. Nobody's
+    /// working station may change under them, which is the entire reason they are opt-in
+    /// rather than a fourth guess (see the field docs for the first three).
+    #[test]
+    fn the_cat_line_declarations_default_to_todays_behaviour() {
+        let s = Settings::default();
+        assert_eq!(s.cat_serial_handshake, "auto");
+        assert_eq!(s.cat_ptt_line_state, "auto");
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"catSerialHandshake\":\"auto\"",
+            "\"catPttLineState\":\"auto\"",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+
+        // An upgrader's file predates both keys.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.cat_serial_handshake, "auto");
+        assert_eq!(old.cat_ptt_line_state, "auto");
+        // …and an explicit declaration survives the round trip — the other direction of the
+        // same gate, which a default that ignored the file would pass on its own.
+        let set: Settings =
+            serde_json::from_str(r#"{"catSerialHandshake":"none","catPttLineState":"low"}"#)
+                .unwrap();
+        assert_eq!(set.cat_serial_handshake, "none");
+        assert_eq!(set.cat_ptt_line_state, "low");
     }
 
     #[test]

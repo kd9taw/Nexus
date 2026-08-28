@@ -7,7 +7,7 @@
 // model and audio devices onto radio 1's profile, persisted. Operator report, 2026-07-25: with
 // two radios configured, both ended up on one set of comm ports.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -15,20 +15,32 @@ import defaultSettings from './__fixtures__/defaultSettings.json'
 const api = vi.hoisted(() => {
   // SettingsPanel pulls ~50 verbs from ../api. They all resolve null, which is enough for a
   // mount — the assertions here are about WHICH save verb gets called, not what it returns.
+  const VERBS = [
+    'clearCloudlogKey', 'clearClublogPassword', 'clearEqslPassword', 'clearHamqthPassword',
+    'clearHrdlogCode', 'clearLotwPassword', 'clearQrzLogbookKey', 'clearQrzPassword', 'detectRigs',
+    'downloadEqslReport', 'downloadLotwReport', 'getAllRigModels', 'getAudioDevices', 'resetSettings', 'audioDevicesForPort', 'getBandPlan',
+    'getRigModels', 'getSerialPortsDetailed', 'getSettings', 'setCloudlogKey', 'setClublogPassword',
+    'setEqslPassword', 'setHamqthPassword', 'setHrdlogCode', 'setLotwPassword', 'setQrzLogbookKey',
+    'setQrzPassword', 'setRepeaterbookToken', 'setRxGain', 'setSettings', 'setTxLevel', 'addRadio',
+    'removeRadio', 'renameRadio', 'setActiveRadio', 'setRadioBands', 'updateRadioProfile', 'testCat',
+    'probeCatPorts', 'qrzTestConnection', 'syncQrz', 'n3fjpTestConnection', 'getConnectionLog',
+    'getCredentialsStatus', 'fetchLotwUsers', 'getLotwUsersStatus', 'fetchFccStates',
+    'getFccStatesStatus', 'getTleStatus', 'fetchTlesNow', 'importTles', 'discoverFlex', 'civDiagnosticLog', 'civDiagnosticStatus',
+    'allTxtLocation', 'revealAllTxt', 'recordingsLocation', 'revealRecordings', 'appVersion', 'getSpectrumRow', 'setFrequency',
+    'getWatchlist', 'setWatchlist', 'openPanelWindow', 'getAssistanceJournal',
+    'setUnassistedMode',
+  ]
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
   const get = (name: string) => {
     if (!spies[name]) spies[name] = vi.fn(() => Promise.resolve(null))
     return spies[name]
   }
-  return { spies, get }
+  return { spies, get, VERBS }
 })
 
-// Mock EVERY export of `../api`, derived from the real module rather than a hand-kept list.
-//
-// The list was the problem: a verb missing from it made the panel THROW ON MOUNT ("No export is
-// defined on the mock"), which presents as a behaviour regression in whichever test happened to
-// run -- not as the out-of-date mock it actually is. Reading the real module's export names makes
-// that failure impossible by construction.
+// Derive the mock from the REAL module rather than a hand-kept verb list (upstream #79): a list
+// goes stale the moment the panel calls a verb nobody added to it, and the failure is a crash
+// inside an effect, not a missing-mock message. `getPortlessRigModels` was exactly that.
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   const mod: Record<string, unknown> = {}
@@ -41,13 +53,6 @@ vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 }))
-
-/** Newest call to a mocked api verb. (`Array.prototype.at` is outside this project's lib
- *  target, so index explicitly.) */
-function lastCall(name: string): unknown[] | undefined {
-  const calls = api.get(name).mock.calls
-  return calls.length ? (calls[calls.length - 1] as unknown[]) : undefined
-}
 
 const FTDX10 = {
   id: 0,
@@ -163,76 +168,38 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-/** Click "Edit" on the non-active radio (the IC-9700) so the flat rig form describes it. */
-async function editTheNonActiveRadio() {
-  fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
-  // Only the NON-active radio's card offers Edit — the active one is already loaded in the form.
-  fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
-}
 
-describe('rig form writes go to the radio they describe', () => {
-  it('Test CAT while editing a non-active radio patches THAT radio, never the active one', async () => {
+describe('Config tab: a findable home for backup and restore', () => {
+  const openTab = async () => fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
+
+  // The RESET cases that used to live here are now SettingsPanel.reset.test.tsx, which drives
+  // the real confirm dialog. They were written against `window.confirm` — inert in this webview
+  // — so they passed while the button they described would have done nothing on macOS.
+  it('exists as its own tab — Backup and Restore were unfindable under Radio > Transmit limits', async () => {
     renderPanel()
-    await editTheNonActiveRadio()
-
-    fireEvent.click(await screen.findByRole('button', { name: /test cat/i }))
-
-    await waitFor(() => expect(api.get('updateRadioProfile')).toHaveBeenCalled())
-    const [id, patch] = api.get('updateRadioProfile').mock.calls[0] as [number, { serialPort: string }]
-    expect(id).toBe(1)
-    expect(patch.serialPort).toBe('COM7')
-    // ⛔ DO NOT RESTORE `expect(setSettings).not.toHaveBeenCalled()` HERE. That assertion was
-    // #173 written down as a guarantee, and it is why this seam survived six data-loss
-    // bugs: routing the WHOLE save through the per-radio verb discarded every
-    // station-wide setting while the panel reported success, and any correct fix turned
-    // four assertions like this one red and read as a regression.
-    // WHAT IT GUARANTEES NOW: a whole-settings save built from the EDITED form is what
-    // clobbered radio 0 — the payload's identity, not the save's existence, is the invariant.
-    // Assert it describes the FTDX10.
-    const saved = lastCall('setSettings')?.[0] as
-      | { activeRadio: number; serialPort: string }
-      | undefined
-    if (saved) {
-      expect(saved.activeRadio).toBe(0)
-      expect(saved.serialPort).toBe('COM3') // the active FTDX10's, never the IC-9700's COM7
-    }
+    await openTab()
+    expect(await screen.findByRole('button', { name: 'Back up' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: 'Restore…' })).toBeTruthy()
+    expect(await screen.findByRole('button', { name: /reset all settings/i })).toBeTruthy()
   })
 
-  it('Test CAT does not report a green tick earned by the OTHER radio', async () => {
+  it('takes them OUT of Radio — a move that leaves a copy behind is not a move', async () => {
+    // The duplicate is the failure mode a merge produces on its own: both parents render the
+    // block, both look right in isolation, and the operator gets two of everything.
     renderPanel()
-    await editTheNonActiveRadio()
-    fireEvent.click(await screen.findByRole('button', { name: /test cat/i }))
-
-    await waitFor(() => expect(api.get('updateRadioProfile')).toHaveBeenCalled())
-    // test_cat has no radio argument — it reports the ACTIVE radio. Running it here would hand
-    // back a pass earned by the FTDX10 for an IC-9700 config that was never tested.
-    expect(api.get('testCat')).not.toHaveBeenCalled()
-    expect(await screen.findByText(/make .* active to test it/i)).toBeTruthy()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+    await screen.findByText('Transmit limits & sharing')
+    expect(screen.queryByRole('button', { name: 'Back up' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Restore…' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /reset all settings/i })).toBeNull()
   })
 
-  it('Auto-test probes on behalf of the radio being configured, and saves to it', async () => {
+  it('says where they moved from, once — an operator who knew the old place is not left hunting', async () => {
     renderPanel()
-    await editTheNonActiveRadio()
-
-    fireEvent.click(await screen.findByRole('button', { name: /auto-test/i }))
-
-    // Radio-blind probing seeded every port with the ACTIVE radio's Hamlib model, and an Icom
-    // answers only at its own CI-V address — so radio 2's port could never answer.
-    await waitFor(() => expect(api.get('probeCatPorts')).toHaveBeenCalledWith(1))
-    await waitFor(() => expect(api.get('updateRadioProfile')).toHaveBeenCalled())
-    // ⛔ DO NOT RESTORE `expect(setSettings).not.toHaveBeenCalled()` HERE. That assertion was
-    // #173 written down as a guarantee, and it is why this seam survived six data-loss
-    // bugs: routing the WHOLE save through the per-radio verb discarded every
-    // station-wide setting while the panel reported success, and any correct fix turned
-    // four assertions like this one red and read as a regression.
-    // WHAT IT GUARANTEES NOW: as above — the station-wide write is allowed and must carry the
-    // ACTIVE radio's config.
-    const saved = lastCall('setSettings')?.[0] as
-      | { activeRadio: number; serialPort: string }
-      | undefined
-    if (saved) {
-      expect(saved.activeRadio).toBe(0)
-      expect(saved.serialPort).toBe('COM3')
-    }
+    await openTab()
+    const note = document.querySelector('#settings-configurations .settings-note')?.textContent ?? ''
+    expect(note).toMatch(/Transmit limits & sharing/)
+    // Rendered through <T>, so an entity in the catalog would surface as literal characters.
+    expect(note).not.toContain('&amp;')
   })
 })

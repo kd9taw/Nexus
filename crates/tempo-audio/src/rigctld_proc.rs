@@ -88,6 +88,75 @@ impl LineState {
             _ => LineState::Low,
         }
     }
+
+    /// Parse `Settings::cat_ptt_line_state` — the KEYING line's idle state (#145), whose safe
+    /// default is the OPPOSITE of [`from_setting`](LineState::from_setting)'s.
+    ///
+    /// The two differ on purpose. For a line Nexus may freely hold, [`Low`](LineState::Low) is
+    /// the safe answer and the 1.0.2 fix. For the line Hamlib is KEYING with, we have never
+    /// emitted anything at all and Hamlib refuses it on most backends anyway, so the safe answer
+    /// is that same silence — [`Untouched`](LineState::Untouched). An unrecognised or empty
+    /// value therefore changes nothing, exactly as it does there.
+    pub fn from_keying_setting(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "low" => LineState::Low,
+            "high" => LineState::High,
+            _ => LineState::Untouched,
+        }
+    }
+}
+
+/// The rig's serial HANDSHAKE as the operator DECLARED it (`Settings::cat_serial_handshake`) —
+/// as distinct from the handshake Nexus INFERS, which is what [`ControlLines::handshake_none`]
+/// carries.
+///
+/// ⚠️ #145 IS WHY A DECLARATION EXISTS AT ALL. The inference has been wrong three times, and its
+/// third failure is structural rather than a mistuned threshold: with serial-RTS PTT on the CAT
+/// port, [`settable_lines_for`] reports RTS unsettable *because it is the keying line*, which
+/// makes `rts_taken_by_handshake` false — so [`resolve_lines`]'s override cannot fire, no
+/// `serial_handshake` is emitted, no `rts_state` is emitted either, and rigctld launches saying
+/// nothing whatever about RTS. A fourth inference would be a fourth guess about a cable only the
+/// operator can see (the [`ControlLines::handshake_none`] ⚠️ has the full history).
+///
+/// [`Auto`](Handshake::Auto) is the default and is today's behaviour to the byte.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Handshake {
+    /// Say nothing of our own; let [`resolve_lines`] infer it exactly as before.
+    #[default]
+    Auto,
+    /// `-C serial_handshake=None` — no flow control, so RTS is ours to hold.
+    None,
+    /// `-C serial_handshake=Hardware` — RTS/CTS flow control, RTS is the rig's.
+    Hardware,
+    /// `-C serial_handshake=XONXOFF` — software flow control; RTS is free.
+    XonXoff,
+}
+
+impl Handshake {
+    /// The exact Hamlib `serial_handshake` token, or `None` for "say nothing". The spellings are
+    /// [`HANDSHAKE_RTS_FREE`]/[`HANDSHAKE_RTS_TAKEN`] — Hamlib's own combo vocabulary, which
+    /// `conf.c` matches with `strcmp`, so a wrong case is `Invalid parameter` and rigctld exits 2
+    /// (see [`LineState::value`], which is the same discipline for the same reason).
+    fn value(self) -> Option<&'static str> {
+        match self {
+            Handshake::Auto => Option::None,
+            Handshake::None => Some("None"),
+            Handshake::Hardware => Some("Hardware"),
+            Handshake::XonXoff => Some("XONXOFF"),
+        }
+    }
+
+    /// Parse the operator's stored setting (`Settings::cat_serial_handshake`). Anything
+    /// unrecognised — including the empty string an older settings file or a half-wired UI can
+    /// produce — means [`Auto`](Handshake::Auto), i.e. change nothing.
+    pub fn from_setting(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Handshake::None,
+            "hardware" => Handshake::Hardware,
+            "xonxoff" => Handshake::XonXoff,
+            _ => Handshake::Auto,
+        }
+    }
 }
 
 /// What the operator wants each of the two control lines held at.
@@ -95,6 +164,28 @@ impl LineState {
 pub struct ControlLines {
     pub rts: LineState,
     pub dtr: LineState,
+    /// The operator's own declaration about this port's flow control — it REPLACES the
+    /// inference below when it is anything but [`Handshake::Auto`]. See [`Handshake`].
+    pub handshake: Handshake,
+    /// What the KEYING line (serial RTS/DTR PTT) is held at while idle
+    /// (`Settings::cat_ptt_line_state`).
+    ///
+    /// ⚠️ THIS IS THE LINE THAT KEYS THE TRANSMITTER (#145), and it is deliberately NOT `rts` /
+    /// `dtr` above: those two are never emitted for the keying line, because Hamlib's `rig_open`
+    /// refuses `<line>_state` on the line it is keying with (refusal #1 in [`SettableLines`]) —
+    /// so today the keying line's idle level is whatever `rig_open` and the USB-serial driver
+    /// leave it at, which on a CP210x can be ASSERTED, i.e. the rig keyed from launch.
+    ///
+    /// [`Untouched`](LineState::Untouched) is the default and means "say nothing", which is
+    /// today's behaviour. Anything else is emitted for the keying line, and that is the
+    /// operator overriding a Hamlib refusal on purpose.
+    ///
+    /// ⚠️ NEEDS-BENCH. Refusal #1 is the SILENT kind — `rig_open` returns `-RIG_ECONF` and
+    /// rigctld does not exit, so it serves a rig it never opened: CAT that connects and does
+    /// nothing. There is no serial rig on this machine and CI cannot reproduce a pin, so which
+    /// backends take it and which lose CAT to it is unknown here. Default-safe is the whole
+    /// design: an operator who never opens the setting cannot reach any of it.
+    pub keying_line: LineState,
     /// Emit `-C serial_handshake=None`, so RTS stops being flow control and CAN be held.
     ///
     /// Set only by [`resolve_lines`], and only when the hardware-handshake declaration is the
@@ -129,11 +220,13 @@ pub struct ControlLines {
 }
 
 impl ControlLines {
-    /// The safety default: both lines held low.
+    /// The safety default: both lines held low, and neither #145 declaration made.
     pub fn hold_low() -> Self {
         Self {
             rts: LineState::Low,
             dtr: LineState::Low,
+            handshake: Handshake::Auto,
+            keying_line: LineState::Untouched,
             handshake_none: false,
         }
     }
@@ -243,10 +336,21 @@ fn resolve_lines(
     // DELIBERATE thing (`rts_deliberate`): the blanket hold-low safety default must never be
     // the reason a rig loses its declared handshake. See [`ControlLines::handshake_none`] —
     // the KD9TAW bench regression (2026-08-09) is why this gate exists.
-    let free_rts = !settable.rts
-        && settable.rts_taken_by_handshake
-        && want.rts != LineState::Untouched
-        && rts_deliberate;
+    //
+    // …unless the operator DECLARED the handshake (#145), in which case their declaration
+    // replaces the whole inference — a declared `None`/`XONXOFF` frees RTS, a declared
+    // `Hardware` says it is the rig's and no override applies. See [`Handshake`] for why a
+    // fourth inference was not the answer.
+    let free_rts = match want.handshake {
+        Handshake::Auto => {
+            !settable.rts
+                && settable.rts_taken_by_handshake
+                && want.rts != LineState::Untouched
+                && rts_deliberate
+        }
+        Handshake::None | Handshake::XonXoff => true,
+        Handshake::Hardware => false,
+    };
     ControlLines {
         rts: if settable.rts || free_rts {
             want.rts
@@ -258,7 +362,12 @@ fn resolve_lines(
         } else {
             LineState::Untouched
         },
-        handshake_none: free_rts,
+        // Both declarations pass through untouched: narrowing them against what the daemon
+        // says it accepts is exactly what silenced the keying line in the first place, and a
+        // declaration the operator made about their own cable is not ours to narrow.
+        handshake: want.handshake,
+        keying_line: want.keying_line,
+        handshake_none: free_rts && want.handshake == Handshake::Auto,
     }
 }
 
@@ -348,9 +457,16 @@ pub fn rigctld_args(
         // applies every -C before rig_open, and rig_open is where both are read — but it reads
         // as the precondition it is, and the daemon's own log line then shows why RTS was
         // settable on a backend that declares otherwise.
-        if lines.handshake_none {
+        // ONE `serial_handshake` argument, whichever decided it: the operator's declaration
+        // first (#145), else the inference's `None` override. They are mutually exclusive by
+        // construction — `resolve_lines` only sets `handshake_none` on the `Auto` arm.
+        if let Some(h) = lines.handshake.value().or(if lines.handshake_none {
+            Some("None")
+        } else {
+            None
+        }) {
             args.push("-C".to_string());
-            args.push("serial_handshake=None".to_string());
+            args.push(format!("serial_handshake={h}"));
         }
         if ptt_line != Some(crate::rig::SerialLine::Rts) {
             if let Some(v) = lines.rts.value() {
@@ -362,6 +478,16 @@ pub fn rigctld_args(
             if let Some(v) = lines.dtr.value() {
                 args.push("-C".to_string());
                 args.push(format!("dtr_state={v}"));
+            }
+        }
+        // …and the KEYING line, which the two guards above deliberately skip (#145). Emitted
+        // ONLY on an explicit declaration — `Untouched` is the default and says nothing, which
+        // is what every release up to now did. See [`ControlLines::keying_line`] for the
+        // NEEDS-BENCH warning: Hamlib refuses this on the line it keys with, silently.
+        if let Some(line) = ptt_line {
+            if let Some(v) = lines.keying_line.value() {
+                args.push("-C".to_string());
+                args.push(format!("{}_state={v}", line_state_param(line)));
             }
         }
     }
@@ -384,6 +510,16 @@ pub fn ptt_type_token(line: crate::rig::SerialLine) -> &'static str {
     match line {
         crate::rig::SerialLine::Rts => "RTS",
         crate::rig::SerialLine::Dtr => "DTR",
+    }
+}
+
+/// The Hamlib conf-parameter NAME for a line's held state — `rts_state` / `dtr_state`. Kept as a
+/// function for the same reason [`ptt_type_token`] is: the spelling is what
+/// [`parse_settable_lines`] looks for in the dump, so it must exist in exactly one place.
+fn line_state_param(line: crate::rig::SerialLine) -> &'static str {
+    match line {
+        crate::rig::SerialLine::Rts => "rts",
+        crate::rig::SerialLine::Dtr => "dtr",
     }
 }
 
@@ -1744,6 +1880,119 @@ fn parse_settable_lines(show_conf: &str) -> SettableLines {
 ///
 /// `want` is the operator's per-line control-line choice ([`ControlLines`]); it is narrowed
 /// to what this rig's Hamlib will actually accept before anything is emitted.
+/// What a rigctld found on the process list says it is serving.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ServedRig {
+    /// Hamlib model from `-m`. `None` if the daemon was launched without one.
+    pub model: Option<u32>,
+    /// Serial device (or network address) from `-r` — the fact that separates two IDENTICAL rigs.
+    pub device: Option<String>,
+}
+
+impl ServedRig {
+    /// A phrase for an operator-facing sentence: what this daemon is actually driving.
+    pub fn describe(&self) -> String {
+        match (self.model, &self.device) {
+            (Some(m), Some(d)) => format!("Hamlib model {m} on {d}"),
+            (Some(m), None) => format!("Hamlib model {m}"),
+            (None, Some(d)) => format!("a rig on {d}"),
+            (None, None) => "an unidentified rig".to_string(),
+        }
+    }
+}
+
+/// Run `cmd` and capture its stdout, giving up after `timeout`.
+///
+/// ⚠️ READS AND WAITS TOGETHER, and that is the whole point of it existing. The obvious shape —
+/// spawn, poll `try_wait` to a deadline, then read stdout — DEADLOCKS on any command whose output
+/// exceeds the ~64 KB pipe buffer: the child blocks writing, never exits, and the deadline kills
+/// it. The caller then gets `None` and reads it as "nothing to find".
+///
+/// That is not hypothetical. `daemon_serving_port` shipped with exactly that shape and answered
+/// `None` for EVERY port on a live station — `ps -axo command=` runs well past 64 KB there — so
+/// the crossed-CAT guard silently never fired while all of its unit tests passed, because they
+/// exercise the parser and this is what feeds it.
+///
+/// `output()` drains the pipes while it waits; the bound lives on the receive, so a wedged child
+/// still cannot hold up a rig open (the thread is left to finish on its own).
+fn capture_bounded(cmd: &mut Command, timeout: std::time::Duration) -> Option<String> {
+    let mut owned = Command::new(cmd.get_program());
+    owned.args(cmd.get_args());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(
+            owned
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .ok(),
+        );
+    });
+    let out = rx.recv_timeout(timeout).ok().flatten()?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Which rig is the local rigctld on `tcp_port` serving, read from ITS OWN LAUNCH ARGUMENTS?
+///
+/// A daemon's argv states both facts that identify a radio: `-m <model>` is the rig type and
+/// `-r <device>` is the physical port. That is strictly more than the protocol can tell us —
+/// `\dump_state` gives the model alone, so it cannot separate two IDENTICAL rigs, and two FT-710s
+/// on one station is an ordinary configuration. They cannot share a serial device.
+///
+/// `None` = no local daemon on that port could be identified, which is NOT the same as "foreign":
+/// a daemon on another machine has no process here to read, and the caller must treat the absence
+/// as "cannot tell" rather than as grounds to refuse.
+///
+/// Unix only for now. Windows would need a process-list call of its own
+/// (`CreateToolhelp32Snapshot`), and until it has one the protocol check in
+/// `service::foreign_daemon_refusal` is what covers it — weaker, but universal.
+#[cfg(unix)]
+pub fn daemon_serving_port(tcp_port: u16) -> Option<ServedRig> {
+    // `ps` rather than a crate: this reads the process list once per CAT open, and it is the one
+    // thing every Unix exposes the same way.
+    let out = capture_bounded(
+        Command::new("ps").args(["-axo", "pid=,command="]),
+        std::time::Duration::from_millis(1_500),
+    )?;
+    parse_ps_for_port(&out, tcp_port)
+}
+
+#[cfg(not(unix))]
+pub fn daemon_serving_port(_tcp_port: u16) -> Option<ServedRig> {
+    None
+}
+
+/// Find the `rigctld` line serving `-t <tcp_port>` in `ps` output and read its `-m` / `-r`.
+///
+/// Split out from the `ps` call so it is testable against fixed text — the parsing, not the
+/// process list, is what a change to the argument order would break.
+pub fn parse_ps_for_port(ps_output: &str, tcp_port: u16) -> Option<ServedRig> {
+    for line in ps_output.lines() {
+        if !line.contains("rigctld") {
+            continue;
+        }
+        let args: Vec<&str> = line.split_whitespace().collect();
+        // `-t <port>` is what makes this the daemon on the port in question. Matched as a
+        // whole token so :4534 never matches :45340.
+        let serves_port = args
+            .windows(2)
+            .any(|w| w[0] == "-t" && w[1].parse::<u16>() == Ok(tcp_port));
+        if !serves_port {
+            continue;
+        }
+        let val = |flag: &str| -> Option<String> {
+            args.windows(2)
+                .find(|w| w[0] == flag)
+                .map(|w| w[1].to_string())
+        };
+        return Some(ServedRig {
+            model: val("-m").and_then(|m| m.parse::<u32>().ok()),
+            device: val("-r"),
+        });
+    }
+    None
+}
+
 pub fn spawn_rigctld(
     model: u32,
     addr: &str,
@@ -2646,6 +2895,186 @@ mod tests {
         assert!(holds(&args, "dtr", "OFF"), "{args:?}");
     }
 
+    /// ⭐ #145 ON THE COMMAND LINE — the scene the reporter runs, before the fix: PTT method =
+    /// serial RTS with the PTT port left blank, so keying rides the CAT port. rigctld is
+    /// launched saying **nothing whatever about RTS**, and the line's idle level falls to
+    /// Hamlib's default and the CP210x driver — which can key the transmitter at launch.
+    ///
+    /// Both suppressions are structural, which is why a fourth inference was not the answer:
+    /// `settable_lines_for` reports RTS unsettable BECAUSE it is the keying line, so
+    /// `rts_taken_by_handshake` is false and `resolve_lines`' handshake override cannot fire;
+    /// and `rigctld_args` skips `rts_state=` for the line it passes `-P RTS` for.
+    #[test]
+    fn keying_on_the_cat_port_leaves_rts_unmentioned_until_the_operator_says_otherwise() {
+        let ptt = Some(crate::rig::SerialLine::Rts);
+        let settable = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
+        // TODAY, and it must not change under an upgrade: the shipped hold-low default with
+        // neither declaration made says nothing at all.
+        let lines = resolve_lines(settable, ControlLines::hold_low(), true);
+        let args = rigctld_args(1035, "COM5", 38400, 4532, false, ptt, lines);
+        assert!(
+            says_nothing_about(&args, "rts"),
+            "the reported bug, pinned: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.starts_with("serial_handshake")),
+            "and the handshake override cannot fire either: {args:?}"
+        );
+
+        // THE FIX — the operator declares what only they can see, and both reach the daemon.
+        let declared = ControlLines {
+            handshake: Handshake::None,
+            keying_line: LineState::Low,
+            ..ControlLines::hold_low()
+        };
+        let lines = resolve_lines(settable, declared, true);
+        let args = rigctld_args(1035, "COM5", 38400, 4532, false, ptt, lines);
+        assert!(
+            holds(&args, "rts", "OFF"),
+            "the keying line's idle state is now stated, not left to the driver: {args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=None"),
+            "and the declared handshake goes with it: {args:?}"
+        );
+        assert_eq!(
+            args.iter()
+                .filter(|a| a.starts_with("serial_handshake="))
+                .count(),
+            1,
+            "exactly ONE serial_handshake argument, whichever decided it: {args:?}"
+        );
+    }
+
+    /// The declaration is a DECLARATION, not another guess: each of the four handshake values
+    /// reaches Hamlib verbatim, `auto` still infers, and `Hardware` refuses to free RTS even
+    /// where the inference would have.
+    #[test]
+    fn a_declared_handshake_replaces_the_inference_in_both_directions() {
+        // The vk6mo case the inference DOES reach: a Digirig-class cable on a hardware-handshake
+        // rig, RTS not the keying line. `auto` still frees RTS, exactly as before.
+        let settable = parse_settable_lines(&show_conf("RIG", Some("Hardware")));
+        let inferred = resolve_lines(settable, ControlLines::hold_low(), true);
+        assert!(
+            inferred.handshake_none,
+            "control: the inference still fires"
+        );
+        assert!(holds(
+            &rigctld_args(1042, "COM5", 38400, 4532, false, None, inferred),
+            "rts",
+            "OFF"
+        ));
+
+        // …and an operator who declares Hardware keeps their flow control, override or not.
+        let hw = resolve_lines(
+            settable,
+            ControlLines {
+                handshake: Handshake::Hardware,
+                ..ControlLines::hold_low()
+            },
+            true,
+        );
+        assert!(
+            !hw.handshake_none,
+            "a declared Hardware handshake is never overridden by the inference"
+        );
+        let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, hw);
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=Hardware"),
+            "{args:?}"
+        );
+        assert!(
+            says_nothing_about(&args, "rts"),
+            "RTS stays theirs: {args:?}"
+        );
+
+        // Every token is Hamlib's own spelling — `conf.c` matches with `strcmp`, and a wrong
+        // case is `Invalid parameter`, which exits rigctld with status 2 before it listens.
+        for (setting, token) in [
+            ("none", "None"),
+            ("hardware", "Hardware"),
+            ("xonxoff", "XONXOFF"),
+        ] {
+            let lines = ControlLines {
+                handshake: Handshake::from_setting(setting),
+                ..ControlLines::hold_low()
+            };
+            let args = rigctld_args(1042, "COM5", 38400, 4532, false, None, lines);
+            assert!(
+                args.windows(2)
+                    .any(|w| w[0] == "-C" && w[1] == format!("serial_handshake={token}")),
+                "{setting} must reach Hamlib as {token}: {args:?}"
+            );
+        }
+        // Anything unreadable — an empty string, a half-wired UI, a hand-edited file — is
+        // `Auto`, i.e. change nothing.
+        for junk in ["", "  ", "AUTO", "yes please"] {
+            assert_eq!(Handshake::from_setting(junk), Handshake::Auto, "{junk:?}");
+        }
+    }
+
+    /// The keying line's idle state: emitted only for the line we are actually keying with,
+    /// only on an explicit declaration, and never over a transport that has no control lines.
+    #[test]
+    fn the_keying_lines_idle_state_is_emitted_only_where_it_means_something() {
+        let declared = ControlLines {
+            keying_line: LineState::High,
+            ..ControlLines::hold_low()
+        };
+        // DTR keying → `dtr_state`, and RTS keeps the ordinary hold-low.
+        let args = rigctld_args(
+            1035,
+            "COM5",
+            38400,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Dtr),
+            declared,
+        );
+        assert!(
+            holds(&args, "dtr", "ON"),
+            "the keying line is DTR: {args:?}"
+        );
+        assert!(
+            holds(&args, "rts", "OFF"),
+            "and the non-keying line still takes the operator's own hold: {args:?}"
+        );
+        // No keying line at all: nothing to say about one.
+        let args = rigctld_args(1035, "COM5", 38400, 4532, false, None, declared);
+        assert!(holds(&args, "rts", "OFF") && holds(&args, "dtr", "OFF"));
+        assert_eq!(
+            args.iter().filter(|a| a.contains("_state=")).count(),
+            2,
+            "no third line appears from nowhere: {args:?}"
+        );
+        // A network rig has no control lines — the same gate the other two flags sit behind.
+        let args = rigctld_args(
+            2,
+            "192.168.1.50:4992",
+            38400,
+            4532,
+            true,
+            Some(crate::rig::SerialLine::Rts),
+            declared,
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("_state=")),
+            "a TCP rig has no RTS pin: {args:?}"
+        );
+        // And the default says nothing, which is every release up to now.
+        for junk in ["", "auto", "untouched", "nonsense"] {
+            assert_eq!(
+                LineState::from_keying_setting(junk),
+                LineState::Untouched,
+                "{junk:?}"
+            );
+        }
+        assert_eq!(LineState::from_keying_setting("low"), LineState::Low);
+        assert_eq!(LineState::from_keying_setting("HIGH"), LineState::High);
+    }
+
     /// The `rts_deliberate` answer itself: a Digirig enumerates as a keying interface, a
     /// rig's own USB port does not, and an unknown port claims nothing.
     #[test]
@@ -2739,7 +3168,7 @@ mod tests {
             ControlLines {
                 rts: LineState::Untouched,
                 dtr: LineState::Low,
-                handshake_none: false,
+                ..ControlLines::default()
             },
             true,
         );
@@ -3348,5 +3777,41 @@ mod rts_declaration_tests {
             !rts_is_deliberate(None, false, "COM3"),
             "an operator who ticks nothing must get exactly the behaviour they have today"
         );
+    }
+
+    /// A daemon states which radio it serves in its own launch arguments — the model AND the
+    /// device. Real `ps` output from the station this was written on (2026-08-17).
+    const PS: &str = "\
+  501 /Users/x/.local/bin/rigctld -m 1 -T 127.0.0.1 -t 4534
+  502 rigctld -vvv -m 1049 -r /dev/cu.usbserial-01AF7FED0 -s 38400 -T 127.0.0.1 -t 4533
+  503 rigctld -vvv -m 1051 -r /dev/cu.usbserial-01A98F800 -s 38400 -T 127.0.0.1 -t 45340
+  504 /Applications/Nexus.app/Contents/MacOS/Nexus";
+    #[test]
+    fn a_daemons_arguments_say_which_radio_it_is_driving() {
+        let ft710 = parse_ps_for_port(PS, 4533).expect("the daemon on 4533");
+        assert_eq!(ft710.model, Some(1049));
+        assert_eq!(
+            ft710.device.as_deref(),
+            Some("/dev/cu.usbserial-01AF7FED0"),
+            "the DEVICE is what separates two identical rigs"
+        );
+
+        // The stray that caused this: a dummy, launched with no -r at all.
+        let stray = parse_ps_for_port(PS, 4534).expect("the daemon on 4534");
+        assert_eq!(stray.model, Some(1));
+        assert_eq!(stray.device, None);
+        assert_eq!(stray.describe(), "Hamlib model 1");
+
+        // `-t 4534` must not match `-t 45340` — a substring match would have called the FTX-1's
+        // daemon the stray's and refused a perfectly good rig.
+        assert_eq!(
+            parse_ps_for_port(PS, 45340).and_then(|d| d.model),
+            Some(1051)
+        );
+
+        // A port nothing serves is "cannot tell", NOT "foreign".
+        assert!(parse_ps_for_port(PS, 4599).is_none());
+        // And a process list with no rigctld in it at all is the same answer.
+        assert!(parse_ps_for_port("  1 /sbin/launchd\n  2 /usr/bin/ssh-agent", 4533).is_none());
     }
 }

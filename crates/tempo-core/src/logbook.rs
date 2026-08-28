@@ -67,7 +67,20 @@ pub struct QsoRecord {
     /// `None` for non-US contacts or when the report didn't carry it.
     pub state: Option<String>,
     pub band: String,
+    /// ADIF `FREQ` — the frequency we TRANSMITTED on (MHz). Equal to the dial plus the TX
+    /// audio offset on an ordinary simplex contact; the SPLIT TX dial plus that offset when
+    /// the pair below is written.
     pub freq_mhz: f64,
+    /// ADIF `FREQ_RX` — the frequency we RECEIVED on (MHz), recorded ONLY when it differs
+    /// from [`freq_mhz`](Self::freq_mhz).
+    ///
+    /// `None` is the normal case and the correct one: an operator working simplex has one
+    /// frequency, and writing a second field equal to the first is not extra information, it
+    /// is a false claim of split operation that every logger the export reaches will believe.
+    ///
+    /// ⚠️ Populated for TERRESTRIAL split only — see `Engine::log_frequencies`, which owns the
+    /// rule and the reason satellites are excluded.
+    pub freq_rx_mhz: Option<f64>,
     /// Mode / tier label ("TempoFast" | "TempoDeep" | "FT8" | "CW" | "SSB" | "USB" | "LSB" | "FM" …).
     pub mode: String,
     /// Signal report SENT / RECEIVED, as a string (ADIF `RST_SENT`/`RST_RCVD` are
@@ -241,14 +254,48 @@ pub struct QslSent {
     /// Date sent, Unix seconds at UTC midnight (ADIF `QSLSDATE`, `YYYYMMDD`) — the
     /// field carries no time-of-day, so only the date round-trips.
     pub date_unix: Option<u64>,
+    /// WHEN THE OPERATOR DELIBERATELY CLEARED THE SENT MARK (Unix seconds), if they did.
+    ///
+    /// The difference between "never sent" and "the operator un-sent this", which
+    /// `sent == false` alone cannot express — and without the distinction there is no way to
+    /// offer a clear at all: [`Self::merge`] is monotonic and ADIF carries `QSL_SENT`, so
+    /// re-importing a log exported before the clear would silently restore the mark.
+    ///
+    /// An operator DECISION, deliberately not an absence. Only ever `Some` while
+    /// `sent == false`: a genuine re-send retires it (see [`Logbook::mark_qsl_sent`]), which
+    /// is what lets an operator clear a mistake and then mark a real card later.
+    ///
+    /// Rides ADIF as `APP_TEMPO_QSL_SENT_CLEARED` — an APP_ field, the same shape as the
+    /// `APP_TEMPO_UL_*` upload stamps. It has to round-trip through OUR OWN log or the clear
+    /// would survive only until the next restart; other loggers ignore APP_ fields, and a log
+    /// written before this existed simply parses it as `None`, which is not a clear decision.
+    pub cleared_unix: Option<u64>,
 }
 
 impl QslSent {
     /// Adopt another instance's outbound QSL-sent mark when we don't already hold one. The
     /// operator declared "I sent a card" on the other instance; sharing one log, that truth
-    /// must survive this instance's full-file rewrite. Monotonic — never un-sends.
+    /// must survive this instance's full-file rewrite.
+    ///
+    /// STILL MONOTONIC — it never un-sends, and the guard below is unchanged. What it now
+    /// also refuses is to RE-send what the operator deliberately un-sent
+    /// ([`Self::cleared_unix`]), because ADIF carries `QSL_SENT` and a log exported before a
+    /// clear would otherwise walk the mark straight back in on the next import. Note the
+    /// asymmetry, which is the whole design: a stale import still cannot downgrade a genuine
+    /// sent mark (that case never reaches this branch), and a record that never held a mark
+    /// still adopts one.
+    ///
+    /// The clear is beaten only by an incoming mark that is genuinely NEWER than it — a card
+    /// really posted after the correction. An incoming mark with no `QSLSDATE` at all cannot
+    /// prove that, so it loses: the operator ruling is that their deliberate act outranks an
+    /// import, and an undated one is exactly the stale re-import this exists to stop.
     pub fn merge(&mut self, other: &QslSent) {
         if !self.sent && other.sent {
+            if let Some(cleared) = self.cleared_unix {
+                if other.date_unix.is_none_or(|sent| sent <= cleared) {
+                    return;
+                }
+            }
             *self = *other;
         }
     }
@@ -478,6 +525,13 @@ impl Logbook {
                 if rec.time_off_unix.is_none() {
                     rec.time_off_unix = old.time_off_unix;
                 }
+                // Nor does it carry the SPLIT receive leg (#163): the form edits one
+                // frequency, so a name/RST fix would silently turn a split contact into a
+                // simplex one and drop `FREQ_RX` from the record and every future export.
+                // Same rule as TIME_OFF and the park refs above.
+                if rec.freq_rx_mhz.is_none() {
+                    rec.freq_rx_mhz = old.freq_rx_mhz;
+                }
                 // Preserve the stored POTA/SOTA park refs when the edit leaves them empty (a
                 // busted-call/RST fix must not silently drop the park from the record + ADIF).
                 let incoming_ota_empty = rec.ota.my_program.is_none()
@@ -528,18 +582,39 @@ impl Logbook {
         }
     }
 
-    /// Mark the record at `index` as QSL-sent — operator-declared truth that you
-    /// sent a card/request `via` (bureau/direct/electronic) on `date_unix`. Only
-    /// ever ADDS a request; it never touches `confirmed`/`qsl_rcvd` (a request is
-    /// not a confirmation). Returns false if `index` is out of range. Pure — call
-    /// [`save`](Self::save) to persist.
-    pub fn mark_qsl_sent(&mut self, index: usize, via: QslVia, date_unix: u64) -> bool {
+    /// Record — or WITHDRAW — the operator's declaration that they sent a QSL for `index`.
+    ///
+    /// `Some(via)` marks it sent (bureau/direct/electronic) on `date_unix`. `None` CLEARS the
+    /// mark: there was previously no way to undo one at all, while the received side has taken
+    /// a bool since #152, so an operator who ticked the wrong row was stuck with it.
+    ///
+    /// Never touches `confirmed`/`qsl_rcvd` in either direction — a request is not a
+    /// confirmation, and withdrawing one is not un-confirming anything.
+    ///
+    /// ⚠️ A CLEAR IS RECORDED AS A DECISION, not as an absence: `date_unix` doubles as the
+    /// moment of the clear in [`QslSent::cleared_unix`], which is what stops a later import of
+    /// a pre-clear export from quietly restoring the mark (see [`QslSent::merge`]). And a
+    /// genuine re-send RETIRES that decision — the operator who clears a mistake and then
+    /// really posts a card gets an ordinary monotonic sent mark back, not one permanently
+    /// shadowed by their own correction.
+    ///
+    /// Returns false if `index` is out of range. Pure — call [`save`](Self::save) to persist.
+    pub fn mark_qsl_sent(&mut self, index: usize, via: Option<QslVia>, date_unix: u64) -> bool {
         match self.records.get_mut(index) {
             Some(rec) => {
-                rec.qsl_sent = QslSent {
-                    sent: true,
-                    via: Some(via),
-                    date_unix: Some(date_unix),
+                rec.qsl_sent = match via {
+                    Some(via) => QslSent {
+                        sent: true,
+                        via: Some(via),
+                        date_unix: Some(date_unix),
+                        cleared_unix: None,
+                    },
+                    None => QslSent {
+                        sent: false,
+                        via: None,
+                        date_unix: None,
+                        cleared_unix: Some(date_unix),
+                    },
                 };
                 true
             }
@@ -1089,7 +1164,8 @@ impl Logbook {
     /// report drops new confirmations on already-logged QSOs". Pure merge — call
     /// [`save`](Self::save) to persist.
     pub fn merge_report(&mut self, text: &str) -> crate::reconcile::ReconcileSummary {
-        let incoming = parse_adif(text);
+        let mut incoming = parse_adif(text);
+        lotw_channel_fixup(text, &mut incoming);
         crate::reconcile::reconcile(&mut self.records, &incoming)
     }
 
@@ -1405,6 +1481,13 @@ pub fn adif_record(r: &QsoRecord) -> String {
     if r.freq_mhz.is_finite() && r.freq_mhz > 0.0 {
         out.push_str(&field("FREQ", &format!("{:.6}", r.freq_mhz)));
     }
+    // FREQ_RX — the RECEIVE leg of a split contact, and only when there is one. Same
+    // absent-not-guessed rule as FREQ and BAND above: a simplex contact emits nothing here,
+    // because `<FREQ_RX>` equal to `<FREQ>` is not a harmless duplicate — it is a claim that
+    // the QSO was worked split, carried into every logger the export lands in.
+    if let Some(rx) = r.freq_rx_mhz.filter(|v| v.is_finite() && *v > 0.0) {
+        out.push_str(&field("FREQ_RX", &format!("{rx:.6}")));
+    }
     // A mode whose own spelling is not in the ADIF Mode enumeration rides as its REGISTERED
     // PARENT + a SUBMODE. The enumeration is CLOSED (47 values; "DATA" is not among them —
     // that exists only inside LoTW), so a bare <MODE:9>TempoFast is rejected outright by
@@ -1514,6 +1597,21 @@ pub fn adif_record(r: &QsoRecord) -> String {
         if let Some(ts) = r.qsl_sent.date_unix {
             let (sy, smo, sd, ..) = datetime_utc(ts);
             out.push_str(&field("QSLSDATE", &format!("{sy:04}{smo:02}{sd:02}")));
+        }
+    }
+    // The operator's WITHDRAWAL of a sent mark, when they made one. Standard ADIF has no way
+    // to say "deliberately not sent" — absence is the only spelling, and absence is also what
+    // "never sent" looks like — so the decision rides an APP_ field beside the `APP_TEMPO_UL_*`
+    // upload stamps. Without it the clear would live only until the next restart, and the next
+    // import of a pre-clear export would put the mark back (see `QslSent::merge`).
+    //
+    // Full seconds, not a QSLSDATE-style date: it is compared against `QSLSDATE` midnights to
+    // decide which came later, and a same-day clear must still beat that day's sent mark.
+    // Emitted only while the record is actually cleared — a re-send retires the decision, so
+    // there is never a stale one in the file.
+    if !r.qsl_sent.sent {
+        if let Some(ts) = r.qsl_sent.cleared_unix {
+            out.push_str(&field("APP_TEMPO_QSL_SENT_CLEARED", &ts.to_string()));
         }
     }
     // Credit state round-trips so a reconciled log re-exports its granted/applied
@@ -1830,6 +1928,46 @@ fn body_after_eoh(bytes: &[u8]) -> &[u8] {
 
 /// Minimal ADIF parser: reads `<NAME:len>value` tags, splitting records on
 /// `<EOR>`. Tolerant of the header (everything up to `<EOH>` is skipped).
+/// Re-key a LoTW report's bare `QSL_RCVD` onto the LoTW channel (#180).
+///
+/// A LoTW status report carries a plain `<QSL_RCVD:1>Y` — not `LOTW_QSL_RCVD`; the project's
+/// own LoTW fixture is the proof. Parsed by FIELD NAME alone that landed in
+/// [`QslRcvd::card`], so every LoTW confirmation an operator fetched was recorded — and
+/// re-exported — as a paper card they never received.
+///
+/// ⚠️ THE FIELD NAME IS NOT THE DISCRIMINATOR, AND THAT IS THE WHOLE POINT. `QSL_RCVD` in a
+/// hand-imported third-party ADIF genuinely IS a paper card, so this can never be a global
+/// remap of the field: it keys off the FETCH SOURCE — the documented status banner a LoTW
+/// report begins with, the same marker [`crate::lotw::is_lotw_adif`] validates the download
+/// with. An eQSL report (its own `EQSL_QSL_RCVD`), a QRZ fetch and every hand import miss the
+/// banner and are untouched, which is why this sits at the REPORT boundary and not in
+/// `parse_adif` or [`Logbook::import_adif`].
+///
+/// Award credit is identical either way — [`QslRcvd::award`] accepts card and LoTW alike — so
+/// nothing here moves an award count. What it fixes is the truth of the claim: the badge the
+/// operator reads, and the confirmation channel an export asserts to every other logger.
+///
+/// Deliberately a MOVE, not a copy: a LoTW report is not evidence of a card, and leaving
+/// `card` set would export the same false claim it was written to stop. A card already held
+/// on the LOGGED record is untouched — this only rewrites the incoming report rows, and
+/// [`QslRcvd::merge`] is monotonic.
+fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
+    if !crate::lotw::is_lotw_adif(text) {
+        return;
+    }
+    for r in incoming.iter_mut() {
+        if r.qsl_rcvd.card {
+            r.qsl_rcvd.card = false;
+            r.qsl_rcvd.lotw = true;
+            // The derived booleans are unchanged by construction (both channels are
+            // award-grade), but recompute rather than assume — they are what the awards
+            // path reads.
+            r.confirmed = r.qsl_rcvd.any();
+            r.award_confirmed = r.qsl_rcvd.award();
+        }
+    }
+}
+
 fn parse_adif(text: &str) -> Vec<QsoRecord> {
     let body = match text.to_ascii_uppercase().find("<EOH>") {
         Some(i) => &text[i + 5..],
@@ -2020,6 +2158,14 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             );
             unix_from_ymdhms(sy, smo, sd, 0, 0, 0)
         }),
+        // The operator's withdrawal of a sent mark, if this file carries one. ABSENT IS NOT A
+        // CLEAR: a log written before this field existed, and every log from every other
+        // program, parse to `None` and behave exactly as they did. Only meaningful while the
+        // record is not sent — a file that somehow claims both is read as sent, because the
+        // writer only ever emits the decision on a cleared record.
+        cleared_unix: f
+            .remove("APP_TEMPO_QSL_SENT_CLEARED")
+            .and_then(|v| v.trim().parse().ok()),
     };
     let credit_granted = f
         .remove("CREDIT_GRANTED")
@@ -2126,6 +2272,13 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             .filter(|s| !s.is_empty()),
         band: f.remove("BAND").unwrap_or_default(),
         freq_mhz: f.remove("FREQ").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        // Absent (every log written before this existed, and every simplex contact) ⇒ `None`,
+        // never a zero: a 0.0 here would read as "worked split on 0 MHz". A zero or negative
+        // value from a malformed import is discarded for the same reason.
+        freq_rx_mhz: f
+            .remove("FREQ_RX")
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0),
         mode,
         // RST is a string (CW "599" / phone "59" / digital "-12") per ADIF.
         rst_sent: f
@@ -2344,6 +2497,7 @@ mod tests {
             state: None,
             band: band.into(),
             freq_mhz: 14.0905,
+            freq_rx_mhz: None,
             mode: "TempoFast".into(),
             rst_sent: Some("-10".into()),
             rst_rcvd: Some("-12".into()),
@@ -3139,6 +3293,7 @@ mod tests {
             sent: true,
             via: Some(QslVia::Bureau),
             date_unix: Some(unix_from_ymdhms(2024, 3, 9, 0, 0, 0)),
+            cleared_unix: None,
         };
         let adif = adif_header() + &adif_record(&r);
         assert!(adif.contains("<QSL_SENT:1>Y"));
@@ -3158,6 +3313,7 @@ mod tests {
             sent: true,
             via: Some(QslVia::Direct),
             date_unix: None,
+            cleared_unix: None,
         };
         let dback = &parse_adif(&(adif_header() + &adif_record(&d)))[0];
         assert_eq!(dback.qsl_sent.via, Some(QslVia::Direct));
@@ -3180,14 +3336,207 @@ mod tests {
     fn mark_qsl_sent_declares_request_without_confirming() {
         let mut lb = Logbook::new();
         lb.add(rec("W1AW", "20m", 1_700_000_000));
-        assert!(lb.mark_qsl_sent(0, QslVia::Electronic, 1_700_000_000));
+        assert!(lb.mark_qsl_sent(0, Some(QslVia::Electronic), 1_700_000_000));
         let r = &lb.records()[0];
         assert!(r.qsl_sent.sent);
         assert_eq!(r.qsl_sent.via, Some(QslVia::Electronic));
         // Marking a request must NEVER fabricate a confirmation.
         assert!(!r.confirmed && !r.award_confirmed && !r.qsl_rcvd.any());
         // Out-of-range is a no-op false.
-        assert!(!lb.mark_qsl_sent(9, QslVia::Bureau, 1_700_000_000));
+        assert!(!lb.mark_qsl_sent(9, Some(QslVia::Bureau), 1_700_000_000));
+    }
+
+    /// #163 — `FREQ_RX` round-trips through ADIF, and is ABSENT when there is nothing to say.
+    ///
+    /// The standard field name, so every other logger reads it: ADIF pairs `FREQ` (the logging
+    /// station's transmit frequency) with `FREQ_RX` (its receive frequency).
+    #[test]
+    fn freq_rx_round_trips_through_adif_and_is_omitted_when_absent() {
+        // A split contact: two different legs, both written.
+        let mut split = rec("W1AW", "20m", 1_700_000_000);
+        split.freq_mhz = 14.027_5;
+        split.freq_rx_mhz = Some(14.025_0);
+        let mut lb = Logbook::new();
+        lb.add(split);
+        let out = lb.adif();
+        assert!(out.contains("<FREQ:9>14.027500"), "the TX leg: {out}");
+        assert!(out.contains("<FREQ_RX:9>14.025000"), "the RX leg: {out}");
+        let back = parse_adif(&out);
+        assert_eq!(back[0].freq_rx_mhz, Some(14.025_0), "and it parses back");
+        assert!((back[0].freq_mhz - 14.027_5).abs() < 1e-9);
+
+        // A simplex contact writes NO FREQ_RX. An empty field is correct; a duplicate of FREQ
+        // is a lie that propagates into every logger the export reaches.
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let out = lb.adif();
+        assert!(!out.contains("FREQ_RX"), "no fabricated RX leg: {out}");
+        assert_eq!(parse_adif(&out)[0].freq_rx_mhz, None);
+
+        // An existing log, written before the field existed, parses to None — absence is
+        // absence, not a zero.
+        let legacy = "<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:9>TempoFast\
+             <QSO_DATE:8>20231114<FREQ:9>14.074000<EOR>\n";
+        let old = parse_adif(legacy);
+        assert_eq!(old[0].freq_rx_mhz, None);
+        assert!((old[0].freq_mhz - 14.074).abs() < 1e-9, "FREQ still reads");
+    }
+
+    /// An ordinary field edit must not silently turn a SPLIT contact into a simplex one.
+    ///
+    /// The edit form carries one frequency and has no control for the receive leg, so a
+    /// record coming back from it leaves `freq_rx_mhz` empty. Taken at face value that drops
+    /// `FREQ_RX` from the record and from every future export — a fix to the operator's NAME
+    /// quietly rewriting what their radio did. Same rule `update_record` already applies to
+    /// TIME_OFF and the park refs.
+    #[test]
+    fn an_edit_keeps_the_split_receive_leg_the_form_does_not_carry() {
+        let mut lb = Logbook::new();
+        let mut split = rec("W1AW", "20m", 1_700_000_000);
+        split.freq_mhz = 14.027_5;
+        split.freq_rx_mhz = Some(14.025_0);
+        lb.add(split);
+
+        // The edit form sends the record back with a corrected name and no receive leg.
+        let mut edited = lb.records()[0].clone();
+        edited.name = Some("Hiram".into());
+        edited.freq_rx_mhz = None;
+        assert!(lb.update_record(0, edited));
+
+        let r = &lb.records()[0];
+        assert_eq!(r.name.as_deref(), Some("Hiram"), "the edit landed");
+        assert_eq!(
+            r.freq_rx_mhz,
+            Some(14.025_0),
+            "and the split receive leg survived it"
+        );
+        // …and is still in the export, which is where the loss would have been noticed.
+        assert!(lb.adif().contains("<FREQ_RX:9>14.025000"));
+    }
+
+    /// AN OPERATOR'S DELIBERATE CLEAR OF A QSL-SENT MARK OUTRANKS AN IMPORT.
+    ///
+    /// There was no way to undo a QSL-sent mark at all: the received side takes a bool and
+    /// `false` clears, the sent side had no clear path anywhere. Adding one is two lines; the
+    /// hard part is that [`QslSent::merge`] is deliberately monotonic ("never un-sends") and
+    /// ADIF carries `QSL_SENT`, so re-importing a log exported BEFORE the clear would silently
+    /// restore the mark and hand the reporter his bug back.
+    ///
+    /// THE OPERATOR RULING: the clear wins. It is recorded as a DECISION with a timestamp
+    /// (`cleared_unix`), not as an absence, so merge can tell "never sent" from "the operator
+    /// un-sent this" — and merge is NOT made non-monotonic, which the operator explicitly
+    /// rejected. It still never un-sends; it now also refuses to RE-send what was un-sent,
+    /// unless the incoming mark is genuinely newer than the clear.
+    ///
+    /// All four required properties are asserted here, (b) with its own control.
+    #[test]
+    fn an_operator_clear_of_a_qsl_sent_mark_outranks_a_later_import() {
+        const SENT: u64 = 1_700_100_000;
+        const CLEARED: u64 = 1_700_200_000;
+        const RESENT: u64 = 1_700_300_000;
+
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        assert!(lb.mark_qsl_sent(0, Some(QslVia::Direct), SENT));
+        assert!(lb.records()[0].qsl_sent.sent, "fixture: the mark is on");
+
+        // An export taken WHILE it was marked sent — the file that causes the regression.
+        let exported_while_sent = lb.adif();
+        assert!(
+            exported_while_sent.contains("<QSL_SENT:1>Y"),
+            "fixture: the export really claims sent"
+        );
+
+        // THE NEW VERB: clearing it.
+        assert!(lb.mark_qsl_sent(0, None, CLEARED));
+        let r = &lb.records()[0];
+        assert!(!r.qsl_sent.sent, "the mark is cleared");
+        assert_eq!(r.qsl_sent.via, None, "and so is the method");
+        assert_eq!(r.qsl_sent.date_unix, None, "and the date");
+        assert_eq!(
+            r.qsl_sent.cleared_unix,
+            Some(CLEARED),
+            "recorded as a DECISION, not as an absence"
+        );
+
+        // (a) THE REGRESSION: re-importing the pre-clear export must NOT restore the mark.
+        lb.import_adif(&exported_while_sent);
+        assert_eq!(lb.records().len(), 1, "fixture: it deduped, not appended");
+        assert!(
+            !lb.records()[0].qsl_sent.sent,
+            "an operator's clear outranks an import that still says sent"
+        );
+
+        // (c) ROUND-TRIP: the decision survives our own save/reload, or (a) comes back after
+        // the next restart. It rides an APP_ field, so other loggers ignore it.
+        let out = lb.adif();
+        assert!(
+            !out.contains("<QSL_SENT:1>Y"),
+            "a cleared record exports no QSL_SENT: {out}"
+        );
+        let reloaded = parse_adif(&out);
+        assert_eq!(
+            reloaded[0].qsl_sent.cleared_unix,
+            Some(CLEARED),
+            "the clear decision round-trips through ADIF"
+        );
+        assert!(!reloaded[0].qsl_sent.sent);
+
+        // …and it still holds AFTER a reload, which is the case that matters.
+        let mut fresh = Logbook::new();
+        fresh.add(reloaded[0].clone());
+        fresh.import_adif(&exported_while_sent);
+        assert!(
+            !fresh.records()[0].qsl_sent.sent,
+            "the clear still outranks the import after a restart"
+        );
+
+        // (c) OLD FILES: a log written before this field existed must load unchanged — not
+        // reset, not defaulted into a clear decision.
+        let legacy = "<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:9>TempoFast\
+             <QSO_DATE:8>20231114<QSL_SENT:1>Y<QSL_SENT_VIA:1>B<QSLSDATE:8>20231114<EOR>\n";
+        let old = parse_adif(legacy);
+        assert!(old[0].qsl_sent.sent, "an existing log still reads as sent");
+        assert_eq!(old[0].qsl_sent.via, Some(QslVia::Bureau));
+        assert_eq!(
+            old[0].qsl_sent.cleared_unix, None,
+            "absence of the field is NOT a clear decision"
+        );
+
+        // (b) THE MONOTONIC PROTECTION SURVIVES — the control, and the half a careless fix
+        // would break. Nothing here makes merge able to un-send.
+        //   b1: a record that never held a mark still ADOPTS an incoming one.
+        let mut never = QslSent::default();
+        never.merge(&QslSent {
+            sent: true,
+            via: Some(QslVia::Bureau),
+            date_unix: Some(SENT),
+            cleared_unix: None,
+        });
+        assert!(never.sent, "an unmarked record still adopts a sent mark");
+        //   b2: a GENUINE sent mark is never downgraded by a stale/partial import.
+        let mut genuine = QslSent {
+            sent: true,
+            via: Some(QslVia::Direct),
+            date_unix: Some(SENT),
+            cleared_unix: None,
+        };
+        genuine.merge(&QslSent::default());
+        assert!(genuine.sent, "merge still never un-sends");
+        assert_eq!(genuine.via, Some(QslVia::Direct), "and does not blank it");
+
+        // (d) CLEAR THEN GENUINELY RE-SEND: the operator posts a real card afterwards.
+        assert!(lb.mark_qsl_sent(0, Some(QslVia::Bureau), RESENT));
+        let r = &lb.records()[0];
+        assert!(r.qsl_sent.sent, "a genuine re-send marks it sent again");
+        assert_eq!(r.qsl_sent.via, Some(QslVia::Bureau));
+        assert_eq!(
+            r.qsl_sent.cleared_unix, None,
+            "and RETIRES the clear — the decision it recorded is superseded"
+        );
+        // …so ordinary monotonic merging is fully back in force for this record.
+        lb.import_adif(&exported_while_sent);
+        assert!(lb.records()[0].qsl_sent.sent);
     }
 
     #[test]
@@ -3242,6 +3591,7 @@ mod tests {
             sent: true,
             via: Some(QslVia::Direct),
             date_unix: Some(1_700_000_000),
+            cleared_unix: None,
         };
         original.upload.lotw = Some(UploadStatus {
             outcome: UploadOutcome::Accepted,
@@ -3413,6 +3763,7 @@ mod tests {
             sent: true,
             via: Some(QslVia::Direct),
             date_unix: Some(1_700_000_000),
+            cleared_unix: None,
         };
         original.upload.lotw = Some(UploadStatus {
             outcome: UploadOutcome::Accepted,
@@ -4382,6 +4733,78 @@ mod tests {
         assert!(s.orphans[0].reason.contains("K9ZZZ"));
     }
 
+    /// #180 — A LoTW CONFIRMATION MUST NOT BE RECORDED AS A PAPER CARD.
+    ///
+    /// A real LoTW status report carries a plain `<QSL_RCVD:1>Y`, not `LOTW_QSL_RCVD` — the
+    /// project's own fixture says so (`crate::lotw` REPORT_HEADER). Parsed by field name
+    /// alone that lands in [`QslRcvd::card`], so the badge showed a paper card the operator
+    /// never received and an ADIF export carried that false claim into every other logger.
+    ///
+    /// ⚠️ THE WHOLE DIFFICULTY IS THAT THE FIELD NAME IS NOT THE ANSWER. `QSL_RCVD` in a
+    /// hand-imported THIRD-PARTY ADIF genuinely IS a paper card, so this must never become a
+    /// global remap. The channel is keyed off the FETCH SOURCE — the LoTW status banner the
+    /// report itself begins with — and both halves are pinned here, because a fix that only
+    /// showed the LoTW half would silently relabel every card an operator ever imported.
+    ///
+    /// Award credit is unaffected either way (card and LoTW are both award-grade); the only
+    /// thing at stake is telling the operator the truth about how a QSO was confirmed.
+    #[test]
+    fn a_lotw_report_confirms_via_lotw_and_a_third_party_adif_still_means_a_card() {
+        let (y, mo, d, ..) = datetime_utc(1_700_000_000);
+        let date = format!("{y:04}{mo:02}{d:02}");
+        let row = format!(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:9>TempoFast<QSO_DATE:8>{date}<QSL_RCVD:1>Y<EOR>\n"
+        );
+
+        // A LoTW STATUS REPORT — the banner is what names the channel, exactly as
+        // `lotw::is_lotw_adif` (and Cloudlog) identify one.
+        let report = format!(
+            "ARRL Logbook of the World Status Report\n\
+             <PROGRAMID:4>LoTW\n\
+             <APP_LoTW_LASTQSL:19>2026-03-01 12:34:56\n\
+             <APP_LoTW_NUMREC:1>1\n\
+             <eoh>\n{row}"
+        );
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = lb.merge_report(&report);
+        assert_eq!(s.newly_confirmed, 1, "the QSO is confirmed either way");
+        let r = &lb.records()[0];
+        assert!(r.qsl_rcvd.lotw, "a LoTW report confirms via LoTW");
+        assert!(
+            !r.qsl_rcvd.card,
+            "and NOT as a paper card the operator never received"
+        );
+        assert!(r.award_confirmed, "LoTW is award-grade, as a card is");
+        // …and the export must not carry the false claim onward.
+        let out = lb.adif();
+        assert!(
+            out.contains("<LOTW_QSL_RCVD:1>Y"),
+            "exported as LoTW: {out}"
+        );
+        assert!(
+            !out.contains("<QSL_RCVD:1>Y"),
+            "no fabricated paper card in the export: {out}"
+        );
+
+        // THE CONTROL, and it is the half that must not break: the SAME field in a
+        // hand-imported third-party ADIF (no LoTW banner) is a genuine card.
+        let third_party = format!("<EOH>\n{row}");
+        let mut lb2 = Logbook::new();
+        lb2.add(rec("W1AW", "20m", 1_700_000_000));
+        let s2 = lb2.merge_report(&third_party);
+        assert_eq!(s2.newly_confirmed, 1);
+        let r2 = &lb2.records()[0];
+        assert!(r2.qsl_rcvd.card, "a plain ADIF's QSL_RCVD is still a card");
+        assert!(!r2.qsl_rcvd.lotw, "and is NOT relabelled as LoTW");
+
+        // Same control on the IMPORT path (a hand-imported log, not a fetch).
+        let mut lb3 = Logbook::new();
+        lb3.import_adif(&third_party);
+        assert!(lb3.records()[0].qsl_rcvd.card);
+        assert!(!lb3.records()[0].qsl_rcvd.lotw);
+    }
+
     #[test]
     fn csv_has_header_and_quotes() {
         let mut lb = Logbook::new();
@@ -4760,6 +5183,7 @@ mod operator_split_tests {
             state: None,
             band: "20m".into(),
             freq_mhz: 14.074,
+            freq_rx_mhz: None,
             mode: "FT8".into(),
             rst_sent: None,
             rst_rcvd: None,
@@ -4878,6 +5302,7 @@ mod qsl_card_tests {
             state: None,
             band: "20m".into(),
             freq_mhz: 14.074,
+            freq_rx_mhz: None,
             mode: "FT8".into(),
             rst_sent: Some("-10".into()),
             rst_rcvd: Some("-12".into()),

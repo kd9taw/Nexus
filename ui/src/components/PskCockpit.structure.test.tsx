@@ -66,6 +66,11 @@ vi.mock('./Waterfall', () => ({
   // at the live-instrument 50 ms cadence (the RTTY value), not the FT default.
   Waterfall: (p: { rowMs?: number }) => <div className="waterfall-wrap" data-rowms={p.rowMs} />,
 }))
+// The log strip is stubbed for the same reason Phone's and CW's are in their own structure
+// suites: this file is a SHELL census, and the real LogEntry reaches the logbook, the park
+// directory and the callbook on mount. That the strip is actually WIRED — the right ADIF
+// mode, the right default report, reachable from this cockpit at all — is PskCockpit.log.test.tsx.
+vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 
 const pskAutoArm = api.pskAutoArm as ReturnType<typeof vi.fn>
 const pskArm = api.pskArm as ReturnType<typeof vi.fn>
@@ -124,9 +129,16 @@ afterEach(cleanup)
 describe('PskCockpit pane shell', () => {
   it('the shell holds no child kinds beyond the census', async () => {
     // PSK's sanctioned kinds since Phase 2: header chrome, the waterfall, the
-    // keyer-error banner, the ONE content frame, and the TX dock — RTTY's
+    // keyer-error banner, the content frames, and the TX dock — RTTY's
     // census exactly. A new shell-level sibling updates this deliberately or
     // does not ship.
+    //
+    // ⚠️ TWO CONTENT FRAMES SINCE #159 ("PSK has no LOG button"), and this is that
+    // deliberate update. The second is the LOG strip — the CW/Phone `LogEntry`, framed like
+    // theirs — and it is the SSTV shape rather than a new one: that shell has carried two
+    // bare CockpitPaneFrames as direct children since its `-lower` region was deleted. It
+    // stays out of the ⊞ vocabulary (PSK's is {scope, stream}, so the frame gets no ✕) and
+    // it hosts no stop control; the dock assertions below are what hold that half.
     state.current = { ...state.current, keyerError: 'the rig didn’t accept PTT' }
     await renderCockpit()
     const shell = document.querySelector('main.layout.single.psk-cockpit')!
@@ -139,7 +151,9 @@ describe('PskCockpit pane shell', () => {
       ).toBe(true)
     }
     expect(document.querySelector('.cw-keyer-warn'), 'warn banner did not render — census untested').not.toBeNull()
-    expect(shell.querySelectorAll(':scope > .pane-frame').length).toBe(1)
+    // Named, not just counted: a count alone goes green on the stream frame rendering twice.
+    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame'))
+    expect(frames.map((f) => f.getAttribute('data-pane'))).toEqual(['stream', 'log'])
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
   })
 

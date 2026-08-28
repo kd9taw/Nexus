@@ -1346,6 +1346,13 @@ impl From<QslSentDto> for tempo_core::logbook::QslSent {
                 .via
                 .and_then(|c| tempo_core::logbook::QslVia::from_code(&c.to_string())),
             date_unix: s.date_unix,
+            // The operator's CLEAR decision is deliberately not on this wire, and does not
+            // need to be. Every path that turns a `LoggedQso` back into a stored record either
+            // creates a NEW contact (never cleared) or goes through `Logbook::update_record`,
+            // which copies the whole `QslSent` off the existing record so an edit form cannot
+            // wipe an operator-declared mark. Carrying it here would only add a breaking wire
+            // field the UI has no use for.
+            cleared_unix: None,
         }
     }
 }
@@ -1359,6 +1366,11 @@ impl From<LoggedQso> for tempo_core::logbook::QsoRecord {
             state: q.state,
             band: q.band,
             freq_mhz: q.freq_mhz,
+            // The SPLIT receive leg is not on this wire and does not need to be: the edit
+            // form has no control for it, and `Logbook::update_record` restores the stored
+            // value when an incoming record leaves it empty (the same rule it applies to
+            // TIME_OFF and the park refs). A manually logged contact has no split leg.
+            freq_rx_mhz: None,
             mode: q.mode,
             rst_sent: q.rst_sent,
             rst_rcvd: q.rst_rcvd,
