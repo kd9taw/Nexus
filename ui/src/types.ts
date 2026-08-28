@@ -2541,6 +2541,22 @@ export interface Settings {
   catBroker: boolean
   /** TCP port the CAT broker listens on (Hamlib NET rigctl default 4532). */
   catBrokerPort: number
+  /** The rig's serial HANDSHAKE as the operator DECLARES it (`cat_serial_handshake`):
+   *  `auto` | `none` | `hardware` | `xonxoff`. `auto` (the default) is today's behaviour to the
+   *  byte — Nexus infers it exactly as before. Anything else REPLACES that inference.
+   *
+   *  ⚠️ Part of the #145 fix, and opt-in for a reason: see `catPttLineState`. */
+  catSerialHandshake?: string
+  /** What the KEYING line (serial RTS/DTR PTT) is held at while idle (`cat_ptt_line_state`):
+   *  `auto` | `untouched` | `low` | `high`. `auto` is the default and touches nothing.
+   *
+   *  ⚠️ #145 — A RIG THAT KEYS THE TRANSMITTER AT APP LAUNCH. Hamlib's `rig_open` refuses
+   *  `<line>_state` on the line it is keying with, and THE REFUSAL IS SILENT: it returns
+   *  `-RIG_ECONF`, rigctld does not exit, and it serves a rig it never opened — CAT that
+   *  connects and does nothing. So a non-`auto` value can fix a keyed-at-launch rig on one
+   *  backend and cost CAT entirely on another, and which it does cannot be determined from
+   *  here (NEEDS-BENCH: no serial rig on the dev box, and CI cannot watch a pin). */
+  catPttLineState?: string
   /** A FlexRadio's IP for the SmartSDR API (port 4992), for the native panadapter. Empty = off. */
   flexRadioIp: string
   /** Opt-in to the Flex native SmartSDR panadapter (unverified on hardware; off by default). */
@@ -2579,6 +2595,14 @@ export interface Settings {
   /** Per-mode RF-power CEILING (0.0–1.0 fraction of the rig's max) — a SAFETY cap for
    * duty-cycle-heavy modes. `null`/absent = uncapped. Enforced backend-side at the set_rf_power
    * chokepoint and re-applied on mode change. */
+  /** The fixed low power a TUNE-UP keys at, as a percent (`tune_power_pct`, `Option<u8>`).
+   *  `null`/absent = never touch the operator's power, which is today's behaviour.
+   *
+   *  ⚠️ SAFE DIRECTION ONLY. The radio loop commands `min(this, the level already commanded)`,
+   *  so it can turn the rig DOWN for a tune and never up — setting 50 % while running 25 %
+   *  tunes at 25 %. It also declines entirely when Nexus has never commanded a level on this
+   *  rig, because there would be nothing to put back afterwards. */
+  tunePowerPct?: number | null
   maxPowerPhone?: number | null
   maxPowerCw?: number | null
   maxPowerDigital?: number | null
@@ -2729,6 +2753,10 @@ export interface Settings {
    * key must read as on — `!== false`, never `!!`. The gate is in the engine
    * (`Engine::psk_auto_arm`), beside the session decline memory. */
   pskRxAutoArm?: boolean
+  /** Arm the RTTY decoder on entering the RTTY view. Default TRUE — RTTY was the only
+   *  decode mode with no auto-arm, which is very likely what "RTTY is not decoding" was.
+   *  Absent = on (`rtty_rx_auto_arm`, settings.rs). */
+  rttyRxAutoArm?: boolean
   /** Alert (beep + flash) when a decode is directed at my callsign. */
   alertMyCall: boolean
   /** Alert when any station is calling CQ. */

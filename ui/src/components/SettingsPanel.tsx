@@ -1948,11 +1948,31 @@ export function SettingsPanel({
   // model and audio devices onto the ACTIVE radio's profile — persisted, silent, and
   // unrecoverable. Operator report, 2026-07-25: both radios ended up on one set of comm ports.
   //
+  // ⚠️ TWO WRITES, NOT ONE (#173). Routing the ENTIRE save through the per-radio verb was the
+  // other half of the same mistake: `radioPatch()` carries per-radio CAT/audio/PTT/rotator
+  // fields only, so while the panel was editing a non-active radio EVERY station-wide edit was
+  // discarded — and the panel said "Saved". The reporter's was QRZ auto-upload, made on Logging
+  // & Connectors, where nothing on screen even hints a radio is being edited. That is a SEAM,
+  // not a field: `pttSerialPort`, the Flex three, `omnirigSlot`, `icomDataMode` and
+  // `ampModel`/`ampPort` were each fixed by adding one more name to the patch, and no name
+  // added there could ever have reached a station-wide setting. So send both.
+  //
+  // ORDER MATTERS: station-wide FIRST. A settings payload carries the whole `radios` array, and
+  // the form's copy predates the per-radio patch — sent second it would write the edited radio
+  // back to what it was, trading one silent loss for another.
+  //
   // Takes the form explicitly: setForm is async, so a caller that just built a new form must
   // hand it over rather than let this read a stale closure.
   const persistRadioForm = async (next: NonNullable<typeof form>) => {
     if (editingRadioId != null && editingRadioId !== next.activeRadio) {
       const edited = next.radios?.find((r) => r.id === editingRadioId)
+      // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
+      // the backend's flat→active fold is a no-op and the edited radio's ports/model/audio
+      // cannot be stamped onto the one being operated (the 2026-07-25 report).
+      await setSettings({
+        ...withActiveRadioConfig(next),
+        mycall: next.mycall.trim().toUpperCase(),
+      })
       await updateRadioProfile(
         editingRadioId,
         radioPatch({
@@ -4143,6 +4163,62 @@ export function SettingsPanel({
                   </span>
                 </label>
               )}
+
+              {/* ⚠️ THE TWO #145 DECLARATIONS — a rig that KEYS THE TRANSMITTER AT APP LAUNCH.
+                  These are not preferences, they are the operator DECLARING something about a
+                  cable only they can see, replacing an inference that has now been wrong three
+                  times. They sit behind this collapsed disclosure on purpose, and both hints
+                  WARN rather than describe, because the failure mode is silent and asymmetric:
+                  Hamlib's `rig_open` refuses `<line>_state` on the line it is keying with,
+                  returns -RIG_ECONF, and rigctld DOES NOT EXIT — it goes on serving a rig it
+                  never opened, so the operator sees CAT connected and a radio that ignores it.
+                  Which backends accept these and which lose CAT to them cannot be determined
+                  here: there is no serial rig on the dev box and CI cannot watch a pin
+                  (NEEDS-BENCH, and rigctld_proc.rs says the same from its end). Both default to
+                  `auto`, which is today's behaviour to the byte, so upgrading changes nothing. */}
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.rigControl.serialHandshake.label')}
+                </span>
+                <select
+                  className="settings-input"
+                  value={form.catSerialHandshake ?? 'auto'}
+                  onChange={(e) => update('catSerialHandshake', e.target.value)}
+                >
+                  <option value="auto">{t('settings.rigControl.serialHandshake.auto')}</option>
+                  <option value="none">{t('settings.rigControl.serialHandshake.none')}</option>
+                  <option value="hardware">
+                    {t('settings.rigControl.serialHandshake.hardware')}
+                  </option>
+                  <option value="xonxoff">
+                    {t('settings.rigControl.serialHandshake.xonxoff')}
+                  </option>
+                </select>
+                <span className="settings-hint">
+                  {t('settings.rigControl.serialHandshake.hint')}
+                </span>
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.rigControl.pttLineState.label')}
+                </span>
+                <select
+                  className="settings-input"
+                  value={form.catPttLineState ?? 'auto'}
+                  onChange={(e) => update('catPttLineState', e.target.value)}
+                >
+                  <option value="auto">{t('settings.rigControl.pttLineState.auto')}</option>
+                  <option value="untouched">
+                    {t('settings.rigControl.pttLineState.untouched')}
+                  </option>
+                  <option value="low">{t('settings.rigControl.pttLineState.low')}</option>
+                  <option value="high">{t('settings.rigControl.pttLineState.high')}</option>
+                </select>
+                <span className="settings-hint">
+                  {t('settings.rigControl.pttLineState.hint')}
+                </span>
+              </label>
             </SettingsGroup>
             <div className="settings-cat-test">
               <button
@@ -5279,6 +5355,39 @@ export function SettingsPanel({
                     unattended.
                   </span>
                 </div>
+
+                {/* TUNE POWER (#, the MFJ-loop report). The one control in these two sub-groups
+                    whose strings come from the CATALOG, and deliberately: the English-only rule
+                    above exists because MOVING the FT-mode TX/timing wording risks WSJT-X parity
+                    that CI cannot check. Nothing is being moved here — this control is new, WSJT-X
+                    has no equivalent, and it is on no cockpit's stop-line census. Its hint carries
+                    a correctness warning (it can only turn the rig DOWN) that a German, Spanish or
+                    French operator needs exactly as much as an English one.
+
+                    ⚠️ `Option<u8>`: EMPTY MEANS null, not 0. `None` is load-bearing — the radio
+                    loop declines to touch the power at all rather than guess, because leaving a
+                    rig at 10 W for the rest of a session is a worse bug than the one this fixes.
+                    A 0 here would read as "tune at zero power". */}
+                <div className="settings-field">
+                  <label>
+                    <span className="settings-label">{t('settings.digital.tunePower.label')}</span>
+                    <input
+                      className="settings-input"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={form.tunePowerPct ?? ''}
+                      onChange={(e) => {
+                        markDirty()
+                        const raw = e.target.value
+                        const pct =
+                          raw === '' ? null : Math.min(100, Math.max(1, Number(raw) || 1))
+                        setForm((prev) => (prev ? { ...prev, tunePowerPct: pct } : prev))
+                      }}
+                    />
+                  </label>
+                  <span className="settings-hint">{t('settings.digital.tunePower.hint')}</span>
+                </div>
               </div>
             </div>
 
@@ -6385,6 +6494,26 @@ export function SettingsPanel({
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-rtty">
             <legend>{t('settings.rtty.legend')}</legend>
+            {/* RTTY was the ONLY decode mode without an auto-arm — PSK, APRS and SSTV all arm on
+                entering their view, and RTTY's decoder only ever started from the Arm RX button
+                inside a hideable pane. That is very likely what the "RTTY is not decoding"
+                reports were. Same opt-out shape as PSK's, default ON. */}
+            <div className="settings-field">
+              <label className="settings-toggle">
+                <span className="settings-label">{t('settings.rtty.rxAutoArm.label')}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  // ⚠️ `!== false`, not `!!` — the default is ON, so an absent key reads as on.
+                  aria-checked={form.rttyRxAutoArm !== false}
+                  className={`toggle${form.rttyRxAutoArm !== false ? ' on' : ''}`}
+                  onClick={() => updateBool('rttyRxAutoArm', form.rttyRxAutoArm === false)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              <span className="settings-hint">{t('settings.rtty.rxAutoArm.hint')}</span>
+            </div>
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">

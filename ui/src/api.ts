@@ -617,8 +617,15 @@ export async function editQso(index: number, record: LoggedQso): Promise<AppSnap
 
 /** Mark logbook entry `index` as QSL-sent (operator-declared): a card/request was
  *  sent `via` "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT
- *  a confirmation — this never flips `confirmed`/`awardConfirmed`. */
-export async function markQslSent(index: number, via: 'B' | 'D' | 'E'): Promise<AppSnapshot> {
+ *  a confirmation — this never flips `confirmed`/`awardConfirmed`.
+ *
+ *  `via: null` CLEARS the mark instead (#180): the operator mis-clicked and nothing was
+ *  ever sent. Sending is once-only, so without a clear the three send entries vanish with
+ *  nothing to put the row back. Mirrors `markQslCard(index, false)` on the inbound side. */
+export async function markQslSent(
+  index: number,
+  via: 'B' | 'D' | 'E' | null,
+): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('mark_qsl_sent', { index, via })
 }
 
@@ -1800,6 +1807,20 @@ export async function repeaterTune(
 /** Arm/disarm the RTTY RX decoder (session-only; RX decode, never TX). */
 export async function rttyArm(on: boolean): Promise<RttyState> {
   return invoke<RttyState>('rtty_arm', { on })
+}
+
+/** Arm the decoder because the operator ENTERED the RTTY view (the PSK/APRS/SSTV auto-arm
+ *  doctrine). Receive-only by construction; the ENGINE owns the policy — it only upgrades
+ *  from off, honours the session decline memory and honours the Settings opt-out
+ *  (`rttyRxAutoArm`). Deliberately not reimplemented in the UI: four cockpits ask this same
+ *  question and there must be one answer.
+ *
+ *  ⚠️ THE BACKEND HALF IS NOT LANDED YET. `rtty_auto_arm` is a wave-2 engine.rs + lib.rs
+ *  contract; until it exists this rejects at runtime and the caller's `.catch` swallows it,
+ *  leaving RTTY exactly as it is today (armed by hand). A green typecheck is NOT evidence
+ *  this works. */
+export async function rttyAutoArm(): Promise<RttyState> {
+  return invoke<RttyState>('rtty_auto_arm')
 }
 
 /** Live RTTY state (poll while the RTTY cockpit is visible). */

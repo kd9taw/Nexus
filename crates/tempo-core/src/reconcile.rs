@@ -499,6 +499,7 @@ mod tests {
             state: None,
             band: band.into(),
             freq_mhz: 14.074,
+            freq_rx_mhz: None,
             mode: mode.into(),
             rst_sent: None,
             rst_rcvd: None,

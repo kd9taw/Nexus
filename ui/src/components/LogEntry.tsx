@@ -57,9 +57,18 @@ function bandForMhz(mhz: number): string {
  * enumeration, so TQSL accepts the record. USB/LSB are deliberately ABSENT: they are ADIF
  * SUBMODEs, not Modes, and writing `<MODE>USB` gets the whole QSO rejected on LoTW upload —
  * the same closed-enumeration trap that rejected a bare `<MODE>TempoFast` (see
- * logbook.rs adif_submode). SSB is the generic phone Mode; FM/AM cover the rest of phone. The
- * cockpits only ever pass SSB/FM/CW as the default, all present here. */
-const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'FT8', 'FT4'] as const
+ * logbook.rs adif_submode). SSB is the generic phone Mode; FM/AM cover the rest of phone.
+ *
+ * PSK31 and QPSK31 are the keyboard-mode pair (#159 — the PSK cockpit had no log path at
+ * all, and this list was the second of that report's three defects: even the manual
+ * override could not name the mode the operator was running). Both are MODE values, not
+ * SUBMODEs — `adif_submode` deliberately maps neither, and the logbook's own round-trip
+ * writes `<MODE:5>PSK31` bare — so they stand beside RTTY here rather than needing the
+ * TempoFast-style parent cascade. BPSK31 is not listed: it is the same waveform under a
+ * logger's spelling, and both the importer and `modeKey` fold it to PSK31, so offering it
+ * would let one mode be logged under two names.
+ * The cockpits only ever pass SSB/FM/CW/PSK31/QPSK31 as the default, all present here. */
+const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4'] as const
 
 /**
  * The invariant example values this strip shows in empty fields, gathered so the guard can prove

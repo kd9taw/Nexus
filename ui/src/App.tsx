@@ -2316,6 +2316,13 @@ export default function App() {
             // Seed manual entries from the mode the operator was ACTUALLY running —
             // a hand-logged SSB/CW QSO must not default to the digital codec tier
             // (that silently wrote "FT8" on phone contacts and corrupted awards).
+            //
+            // 'keyboard' is the PSK cockpit's rig mode (rigModeForView.ts) and it was
+            // missing here, so it fell through the same hole phone once did: a PSK31
+            // contact hand-logged after the cockpit visit came up pre-filled FT8 (#159,
+            // the third of that report's three defects). PSK31 is the sub-mode the cockpit
+            // opens on; a QPSK31 contact is one pick away in the Mode field, which is the
+            // same accuracy the phone branch offers between SSB and FM.
             defaultMode={
               lastOpModeRef.current === 'phone'
                 ? settings?.phoneMode?.toLowerCase() === 'fm'
@@ -2325,7 +2332,9 @@ export default function App() {
                   ? 'CW'
                   : lastOpModeRef.current === 'rtty'
                     ? 'RTTY'
-                    : snap.link.tier
+                    : lastOpModeRef.current === 'keyboard'
+                      ? 'PSK31'
+                      : snap.link.tier
             }
           />
         </main>
@@ -2560,12 +2569,33 @@ export default function App() {
                   ? settings?.phoneMode === 'fm'
                     ? 'FM'
                     : snap.radio.sideband || 'USB'
-                  : // The tier's own name, not a guess. This was
-                    // `tier === 'FT4' ? 'FT4' : 'FT8'`, which labelled a memory
-                    // saved on Q65/WSPR/JT65 as FT8.
-                    OPERATE_TIERS.includes(tier)
-                    ? tier
-                    : 'FT8'
+                  : lastOpModeRef.current === 'rtty'
+                    ? // Found while fixing its identical sibling below and fixed with it: this
+                      // ladder never had an 'rtty' branch either, so a memory saved from the
+                      // RTTY cockpit was stamped FT8 too. Same consumption path, re-checked
+                      // rather than assumed by analogy: RTTY is already in `DIGITAL_MODES`, so
+                      // `planRecall` routes it digital, and `plan.mode` commands nothing.
+                      'RTTY'
+                    : lastOpModeRef.current === 'keyboard'
+                    ? // The same hole as the Logbook seed above, in the surface that
+                      // WRITES A RECORD THE OPERATOR KEEPS: 'keyboard' is the PSK
+                      // cockpit's rig mode and it was not on this ladder, so a memory
+                      // saved from the PSK watering hole was stamped FT8 — a wrong mode
+                      // on a stored frequency, re-read every time it is recalled.
+                      //
+                      // Safe as a MEMORY mode, checked rather than assumed: `planRecall`
+                      // already knows PSK31 (it is in DIGITAL_MODES), and `plan.mode`
+                      // never reaches CAT — the rig mode on recall comes from the
+                      // 'digital' operating policy, and `plan.mode` is used only for the
+                      // toast and the phone USB/LSB override branch. So this labels the
+                      // memory honestly and commands nothing new.
+                      'PSK31'
+                    : // The tier's own name, not a guess. This was
+                      // `tier === 'FT4' ? 'FT4' : 'FT8'`, which labelled a memory
+                      // saved on Q65/WSPR/JT65 as FT8.
+                      OPERATE_TIERS.includes(tier)
+                      ? tier
+                      : 'FT8'
             }
             onRecall={recallMemory}
           />

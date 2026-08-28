@@ -277,15 +277,31 @@ export function processDecodes(
   for (const d of decodes) {
     const call = d.from
 
-    // Already working this station → nothing about them is news (skipped WITHOUT
-    // consuming the dedup key, so a later fresh event can still alert).
-    if (partner && call?.toUpperCase() === partner) continue
+    // ⭐ THE MYCALL KIND IS DECIDED BEFORE THE PARTNER SKIP, and it has to be (#167). The
+    // sequencer sets `qso.dxcall` in the SAME ingest that produces the decode, so the very
+    // decode that ANSWERS your CQ arrives on a snapshot where that station is already the
+    // partner. Skipping it here dropped the one alert a CQ run exists for, and the operator
+    // heard nothing until their post-RR73 "73" — by then the QSO was over and dxcall had moved
+    // on. WSJT-X applies its MyCall highlight to every decode carrying your callsign with no
+    // exclusion for the station being worked (widgets/displaytext.cpp:490); dxCall drives a
+    // separate highlight. The anti-chatter job the skip was doing is the `engaged` gate's and
+    // the per-decode dedup's, not this line's: mid-exchange states never reach `callingMe`.
+    const callingMe = !!(settings.alertMyCall && d.directedToMe && !engaged)
+
+    // Already working this station → nothing else about them is news (skipped WITHOUT
+    // consuming the dedup key, so a later fresh event can still alert). A partner row that
+    // IS someone calling us falls through to the kind ladder below, where `mycall` wins
+    // first — so a partner can still only ever produce that one alert.
+    const isPartner = !!partner && call?.toUpperCase() === partner
+    if (isPartner && !callingMe) continue
 
     // User watch list FIRST: an explicitly-watched call/prefix/entity/grid is the loudest tier
     // and pre-empts the generic new/CQ logic (deduped once per filter+call so it doesn't spam).
     // Deliberately ABOVE the band-scope gates: a grid the operator typed in must fire on HF
     // even though unworked-grid chatter is HF-quiet by default.
-    if (watchlist && watchlist.length) {
+    // …but NOT for the station being worked: the watch tier is louder than "calling you" and
+    // pre-empts it, and a partner reaching this line is here on the mycall exemption alone.
+    if (!isPartner && watchlist && watchlist.length) {
       const hit = matchWatchlist(d, watchlist)
       if (hit) {
         const wkey = `watch:${hit.id}:${call ?? '?'}`
@@ -319,7 +335,7 @@ export function processDecodes(
     // the plain scope demotes a gem to a quiet toast when only IT is open).
     const isRareGrid = d.gridRarity === 'rare' || d.gridRarity === 'ultraRare'
     let kind: AlertKind | null = null
-    if (settings.alertMyCall && d.directedToMe && !engaged) kind = 'mycall'
+    if (callingMe) kind = 'mycall'
     else if (settings.alertNew && d.newDxcc && dxccOk) kind = 'newdxcc'
     else if (settings.alertNew && d.newGrid && (isRareGrid ? rareOk || gridOk : gridOk))
       kind = 'newgrid'

@@ -238,7 +238,7 @@ describe('every selector is flat (uniform specificity ⇒ no cascade war is poss
 describe('the fence: styles.css never names a structural class', () => {
   // The 19k-line sheet is where every previous override crept in. If it cannot name these
   // classes it cannot fight them — the isolation is the guarantee, not a convention.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-pane-acts']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-pane-acts', 'cockpit-recall']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)

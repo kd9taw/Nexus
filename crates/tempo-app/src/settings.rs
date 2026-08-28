@@ -767,6 +767,41 @@ pub struct Settings {
     /// to a rig that did not ask for it.
     #[serde(default)]
     pub cat_rts_keys_ptt: bool,
+    /// The rig's serial HANDSHAKE, stated rather than inferred: `"auto"` (default) | `"none"` |
+    /// `"hardware"` | `"xonxoff"`.
+    ///
+    /// ⚠️ #145 IS THE THIRD TIME AN INFERENCE HERE WAS WRONG, so this one is asked. `"auto"` is
+    /// today's behaviour to the byte — Nexus reads the backend's declaration out of the
+    /// operator's own Hamlib and drops the handshake only when [`Settings::cat_rts_keys_ptt`] or
+    /// a recognised keying cable says RTS is deliberate. That inference cannot reach the
+    /// reported case at all: with PTT = serial RTS on the CAT port, Hamlib reports RTS
+    /// unsettable BECAUSE it is the keying line, which makes the handshake override's own
+    /// precondition false — so rigctld launches saying nothing whatever about RTS and the
+    /// line's idle state falls to Hamlib's default and the USB-serial driver.
+    ///
+    /// Anything other than `"auto"` is emitted verbatim as `-C serial_handshake=…` and REPLACES
+    /// the inference. It is the operator's declaration about their own cable, which is the only
+    /// place that fact has ever lived — see [`Settings::cat_rts_keys_ptt`] for why no VID/PID
+    /// rule can supply it.
+    #[serde(default = "default_cat_auto")]
+    pub cat_serial_handshake: String,
+    /// What the KEYING line (serial RTS/DTR PTT) is held at while idle: `"auto"` (default) |
+    /// `"untouched"` | `"low"` | `"high"`.
+    ///
+    /// ⚠️ THIS IS THE LINE THAT KEYS THE TRANSMITTER (#145). [`Settings::cat_rts_state`] /
+    /// [`Settings::cat_dtr_state`] are deliberately never emitted for the line Hamlib is keying
+    /// with, so today the keying line's idle level is whatever `rig_open` and the serial driver
+    /// leave it at — which on a CP210x can be ASSERTED, i.e. the rig keyed from launch. `"auto"`
+    /// keeps exactly that (say nothing), so no working station changes under an upgrade.
+    ///
+    /// ⚠️ NEEDS-BENCH, and it is not a formality: Hamlib's `rig_open` REFUSES `rts_state` on the
+    /// line it keys with (`rig.c:1253-1272`), and that refusal is the SILENT kind — `-RIG_ECONF`,
+    /// rigctld does not exit, and it goes on serving a rig it never opened. So a non-`"auto"`
+    /// value can cost this operator CAT entirely on some backends and fix a keyed-at-launch rig
+    /// on others, and which one it does cannot be established from this machine — there is no
+    /// serial rig here. It exists so the operator who can watch the pin has a knob to turn.
+    #[serde(default = "default_cat_auto")]
+    pub cat_ptt_line_state: String,
     /// Serial baud rate for CAT.
     pub baud: u32,
     /// Rig connection type: "serial" (default; rigctld talks to `serial_port`/`baud`) or
@@ -1455,6 +1490,21 @@ pub struct Settings {
     /// after t s". Default matches the loop's long-standing 12 s safety cap.
     #[serde(default = "default_tune_timeout")]
     pub tune_timeout_secs: u32,
+    /// RF power for the TUNE carrier, percent — the level a tune-up keys at, whatever the
+    /// operating slider says.
+    ///
+    /// `None` = LEAVE THE RIG'S POWER ALONE, which is today's behaviour to the byte: a tune
+    /// keys at whatever the cockpit slider is on. Percent (u8) with a watts hint from
+    /// [`Settings::station_power_w`], following [`Settings::sstv_tx_power_pct`] exactly — the
+    /// control it seeds is a percent slider.
+    ///
+    /// ⚠️ SAFE-DIRECTION ONLY: the loop applies it as the LOWER of this and the level it has
+    /// already commanded, so a tune power can turn the rig DOWN for the tune-up and can never
+    /// turn it up past the operator's own setting or past the per-mode duty-cycle ceiling those
+    /// levels are already clamped to ([`Settings::rf_power_ceiling`]). A tune carrier is 100%
+    /// duty into a load or a mismatched antenna, so the only direction worth allowing is down.
+    #[serde(default)]
+    pub tune_power_pct: Option<u8>,
     /// WSJT-X Split Operation (Settings ▸ Radio): keep the TRANSMITTED audio in
     /// 1500–2000 Hz (harmonics land outside the TX filter) by shifting the TX
     /// dial in 500 Hz steps. `None` = stock default (transmit at the raw audio
@@ -1588,6 +1638,11 @@ pub struct Settings {
     /// for the session (the decline memory), exactly as SSTV/APRS do.
     #[serde(default = "default_true")]
     pub psk_rx_auto_arm: bool,
+    /// Whether opening the RTTY view starts the receiver — [`Settings::psk_rx_auto_arm`]'s
+    /// twin, same doctrine, same default, and the same interior-acronym trap on the wire key
+    /// (`rttyRXAutoArm` compiles clean on both sides and never matches).
+    #[serde(default = "default_true")]
+    pub rtty_rx_auto_arm: bool,
 
     // --- alerts / comforts ---
     /// Alert (sound + visual) when your callsign is decoded (someone calling you).
@@ -1872,6 +1927,11 @@ fn default_on() -> bool {
 
 fn default_tune_timeout() -> u32 {
     12
+}
+
+/// The shared default for the two #145 CAT declarations: "work it out as before".
+fn default_cat_auto() -> String {
+    "auto".to_string()
 }
 
 fn default_directed_max_calls() -> Option<u32> {
@@ -2854,6 +2914,11 @@ impl Default for Settings {
             // what must never happen to a rig that did not ask for it (the FTDX10/FT-991 bench
             // regression). An operator who ticks nothing gets today's behaviour unchanged.
             cat_rts_keys_ptt: false,
+            // "auto" on both = today's behaviour exactly: infer the handshake as before, and
+            // say nothing at all about the keying line. #145's knobs are opt-in, because each
+            // of them can cost a working station its CAT (see the field docs).
+            cat_serial_handshake: default_cat_auto(),
+            cat_ptt_line_state: default_cat_auto(),
             baud: 38400,
             rig_conn: "serial".to_string(),
             rig_addr: String::new(),
@@ -3023,6 +3088,7 @@ impl Default for Settings {
             clear_dx_after_log: false,
             double_click_sets_tx: true,
             tune_timeout_secs: 12,
+            tune_power_pct: None, // None = never touch the operator's power
             split_mode: SplitMode::None,
             special_op: SpecialOp::None,
             decode_depth: 3,
@@ -3040,6 +3106,7 @@ impl Default for Settings {
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
             psk_rx_auto_arm: true,
+            rtty_rx_auto_arm: true,
             alert_my_call: true,
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
@@ -5769,6 +5836,84 @@ mod tests {
         assert!(old.psk_rx_auto_arm);
         let off: Settings = serde_json::from_str(r#"{"pskRxAutoArm":false}"#).unwrap();
         assert!(!off.psk_rx_auto_arm);
+    }
+
+    /// RTTY's auto-arm field, added as the exact twin of the PSK one above — same default,
+    /// same `#[serde(default_true)]` shape, same interior-acronym trap on the wire key.
+    #[test]
+    fn rtty_settings_default_and_wire_key() {
+        let s = Settings::default();
+        assert!(
+            s.rtty_rx_auto_arm,
+            "opening the RTTY view arms the receiver — the PSK/SSTV doctrine"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"rttyRxAutoArm\":true"),
+            "missing wire key rttyRxAutoArm in {json}"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(old.rtty_rx_auto_arm, "an upgrader's file predates the key");
+        let off: Settings = serde_json::from_str(r#"{"rttyRxAutoArm":false}"#).unwrap();
+        assert!(!off.rtty_rx_auto_arm, "and an explicit opt-out survives");
+    }
+
+    /// The tune carrier's own power level, on the exact wire key the UI hand-writes.
+    ///
+    /// `None` is the whole safety story: an operator who upgrades and never opens the setting
+    /// must find their tune-up keying at exactly the level it always did.
+    #[test]
+    fn tune_power_default_and_wire_key() {
+        let s = Settings::default();
+        assert_eq!(
+            s.tune_power_pct, None,
+            "None = never touch the operator's power, which is today's behaviour"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"tunePowerPct\":null"),
+            "missing wire key tunePowerPct in {json}"
+        );
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            old.tune_power_pct, None,
+            "an upgrader's file predates the key"
+        );
+        let set: Settings = serde_json::from_str(r#"{"tunePowerPct":10}"#).unwrap();
+        assert_eq!(set.tune_power_pct, Some(10), "and a set level survives");
+    }
+
+    /// ⭐ #145's two declarations: BOTH default to "auto", which is today's behaviour to the
+    /// byte — the inference for the handshake, and silence for the keying line. Nobody's
+    /// working station may change under them, which is the entire reason they are opt-in
+    /// rather than a fourth guess (see the field docs for the first three).
+    #[test]
+    fn the_cat_line_declarations_default_to_todays_behaviour() {
+        let s = Settings::default();
+        assert_eq!(s.cat_serial_handshake, "auto");
+        assert_eq!(s.cat_ptt_line_state, "auto");
+        let json = serde_json::to_string(&s).unwrap();
+        for key in [
+            "\"catSerialHandshake\":\"auto\"",
+            "\"catPttLineState\":\"auto\"",
+        ] {
+            assert!(json.contains(key), "missing wire key {key} in {json}");
+        }
+        assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), s);
+
+        // An upgrader's file predates both keys.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.cat_serial_handshake, "auto");
+        assert_eq!(old.cat_ptt_line_state, "auto");
+        // …and an explicit declaration survives the round trip — the other direction of the
+        // same gate, which a default that ignored the file would pass on its own.
+        let set: Settings =
+            serde_json::from_str(r#"{"catSerialHandshake":"none","catPttLineState":"low"}"#)
+                .unwrap();
+        assert_eq!(set.cat_serial_handshake, "none");
+        assert_eq!(set.cat_ptt_line_state, "low");
     }
 
     #[test]

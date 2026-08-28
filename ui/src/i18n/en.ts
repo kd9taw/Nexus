@@ -427,7 +427,9 @@ export const EN = {
   'update.notNow.title': 'Not now — the update stays downloaded',
   'update.available': "Nexus {{latest}} is available — you're on {{current}}",
   'update.download': 'Download',
-  'update.downloadFailed': 'Could not open the download page',
+  'update.downloadFailed':
+    "Couldn't open your browser — download Nexus yourself from {{url}}",
+  'update.copyLink': 'Copy link',
   'update.checkFailed': 'Could not reach the update server to check for updates',
   'update.upToDate': "You're on the latest Nexus ({{current}})",
   'update.unreadable': "Couldn't read the latest release info",
@@ -735,6 +737,7 @@ export const EN = {
   'logbook.qsl.cardCleared': 'QSL card cleared for {{call}}',
   'logbook.row.qslRcvd.card': 'Card received',
   'logbook.row.qslRcvd.clear': 'Card NOT received',
+  'logbook.row.qslSent.clear': 'QSL NOT sent',
   'logbook.row.qslSent.bureau': 'Bureau',
   'logbook.row.qslSent.direct': 'Direct',
   'logbook.row.qslSent.electronic': 'Electronic',
@@ -752,6 +755,7 @@ export const EN = {
   'logbook.qsl.sentVia': 'QSL sent via {{via}}',
   'logbook.qsl.sentOnVia': 'QSL sent {{date}} via {{via}}',
   'logbook.qsl.marked': 'Marked QSL sent to {{call}} ({{via}})',
+  'logbook.qsl.sentCleared': 'QSL sent mark cleared for {{call}}',
   'logbook.qsl.markFailed': 'Could not mark QSL sent',
 
   // Manual per-QSO pushes. `{{reason}}` and `{{detail}}` are the service's own words.
@@ -1995,8 +1999,8 @@ export const EN = {
   'spots.filter.mode.hide.title': 'Hide {{mode}} spots',
   'spots.filter.state.title':
     "Show only {{state}} spots (state resolved from stations you've heard before)",
-  'spots.filter.local.label': 'Heard near me',
-  'spots.filter.local.hidden': 'Heard near me · {{count}} hidden',
+  'spots.filter.local.label': 'Heard on my continent',
+  'spots.filter.local.hidden': 'Heard on my continent · {{count}} hidden',
   'spots.filter.local.title':
     'Show only spots someone on your continent actually heard. A station reported solely from another continent says nothing about a path from your station — the same test the Needed board uses. Turn it off for the worldwide cluster feed.',
   'spots.filter.privileges.label': 'My privileges',
@@ -4119,6 +4123,23 @@ export const EN = {
 
   // ── Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ─────────────────────────────────────────
   'settings.rigControl.advanced.title': 'Advanced',
+  'settings.rigControl.serialHandshake.label': 'Serial handshake',
+  'settings.rigControl.serialHandshake.auto': 'Auto (recommended)',
+  'settings.rigControl.serialHandshake.none': 'None — no flow control',
+  'settings.rigControl.serialHandshake.hardware': 'Hardware (RTS/CTS)',
+  'settings.rigControl.serialHandshake.xonxoff': 'XON/XOFF (software)',
+  'settings.rigControl.serialHandshake.hint':
+    "Tells Nexus what your cable actually does, instead of letting it guess. Leave it on Auto unless you have a rig that keys at launch — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto: on some rigs Hamlib quietly refuses the setting and then answers without ever having opened the radio, so you get a CAT light and a rig that ignores you.",
+  'settings.rigControl.pttLineState.label': 'Keying line at startup',
+  'settings.rigControl.pttLineState.auto': 'Auto (recommended)',
+  'settings.rigControl.pttLineState.untouched': 'Never touch it',
+  'settings.rigControl.pttLineState.low': 'Hold it low',
+  'settings.rigControl.pttLineState.high': 'Hold it high',
+  'settings.rigControl.pttLineState.hint':
+    "For the one fault this exists to fix: a rig that keys at launch, before you have touched anything. Leave it on Auto unless that is happening to you — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto. Only you can see whether the rig unkeys; nobody can test this from our end, so treat it as something to try on a rig you are watching.",
+  'settings.digital.tunePower.label': 'Tune power (%)',
+  'settings.digital.tunePower.hint':
+    "The power a tune-up keys at — leave it empty and Nexus never touches your power, which is what it does today. It can only turn the rig DOWN, never up: it keys at whichever is lower, this or the power you are already running, so 50 % here while you run 25 % still tunes at 25 %. On a 100 W rig, 10 % is about 10 W — enough for an antenna tuner, kind to a loop.",
   'settings.rigControl.rigctldPort.label': 'rigctld TCP Port',
   'settings.rigControl.rigctldPort.hint': 'Port Nexus launches rigctld on.',
   'settings.rigControl.plainSsb.label': 'Data modes use plain SSB',
@@ -4936,6 +4957,9 @@ export const EN = {
   // The 425 and 850 Hz shifts are rows with nothing in them but a number, so they stay in
   // the panel; only the 170 Hz row and the two baud rows carry prose beside the figure.
   'settings.rtty.legend': 'RTTY',
+  'settings.rtty.rxAutoArm.label': 'Start receiving when RTTY opens',
+  'settings.rtty.rxAutoArm.hint':
+    'The RTTY screen starts the decoder as soon as you open it — tune a signal and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). This arms the RECEIVER only — transmitting is never armed for you.',
   'settings.rtty.keying.title': 'Keying',
   'settings.rtty.backend.label': 'Keying backend',
   'settings.rtty.backend.afsk': 'AFSK — soundcard tones through the rig in LSB (default)',
@@ -4967,7 +4991,7 @@ export const EN = {
   'settings.psk.legend': 'PSK',
   'settings.psk.rxAutoArm.label': 'Start receiving when PSK opens',
   'settings.psk.rxAutoArm.hint':
-    'The PSK screen starts the decoder as soon as you open it — click a trace on the waterfall and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). Stopping the receiver yourself is already remembered for the rest of the session. PSK31 is receive-only for now; transmit is on the keyboard-modes roadmap.',
+    'The PSK screen starts the decoder as soon as you open it — click a trace on the waterfall and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). Stopping the receiver yourself is already remembered for the rest of the session. This arms the RECEIVER only — transmitting is never armed for you.',
 
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its
@@ -6563,6 +6587,7 @@ export const EN = {
   'psk.waterfall.hint': 'click nets the decoder',
 
   // ── PSK ▸ the decoded-text pane ─────────────────────────────────────────────────────
+  'psk.pane.log.title': 'Log',
   'psk.pane.stream.title': 'Decoded text',
   'psk.stream.title':
     "Decoded PSK31 text — faint characters are low-confidence copy (the demodulator's phase-margin metric)",

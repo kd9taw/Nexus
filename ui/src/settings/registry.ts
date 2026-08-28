@@ -139,7 +139,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     advanced: true,
     keywords: ['rigctld port', 'cat broker', 'sharing port', 'native ci-v', 'flex ip',
       'panadapter', 'dax', 'diagnostic log', 'plain ssb', 'data modes', 'no rf', 'red light',
-      'rigblaster', 'mic jack', 'pktusb', 'data-u', 'usb-d'],
+      'rigblaster', 'mic jack', 'pktusb', 'data-u', 'usb-d',
+      // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
+      // operator whose rig keys the moment Nexus opens does not search for "handshake".
+      'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',
+      'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit'],
   },
   {
     id: 'audio',
@@ -201,9 +205,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Digital (FT8/FT4)',
     tab: 'digital',
     neededInHourOne: true,
+    // `tune`/`tune timeout` are here because the Tune timeout — the auto-release on a key-down
+    // carrier — sits in this section's "Transmit & Sequencing" group and had NO searchable word
+    // anywhere in the registry, so search returned nothing and no deep link could name it.
     keywords: ['ft8', 'ft4', 'auto sequence', 'sequencing', 'tx enable', 'watchdog', 'decode',
       'depth', 'deep', 'auto cq', 'cq', 'hound', 'fox', 'dxpedition', 'auto log', 'blocked',
-      'ap decode', 'f low', 'f high'],
+      'ap decode', 'f low', 'f high', 'tune', 'tune timeout', 'tune carrier', 'key down',
+      'tx period', 't/r period', 'disable tx after 73', 'tune power', 'low power tune',
+      'atu power', 'loop antenna'],
   },
   {
     id: 'jt65',
@@ -263,7 +272,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'RTTY',
     tab: 'digital',
     keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space'],
+      'mark', 'space', 'auto arm', 'start receiving', 'not decoding'],
   },
   {
     id: 'psk',

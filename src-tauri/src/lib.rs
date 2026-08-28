@@ -3692,6 +3692,32 @@ fn fcc_state_for_call(call: &str) -> Option<&'static str> {
 /// false New-State as often as a real one. Deferred until a 6-char grid→state resolver exists.
 /// Actual WAS credit still comes from the confirmed QSO's logged ADIF STATE; this only hints.)
 fn us_state_hint(call: &str, grid: Option<&str>) -> Option<String> {
+    // ⚠️ THE ENTITY OUTRANKS BOTH RESOLVERS BELOW, AND NEITHER OF THEM KNOWS THE COUNTRY (#171).
+    //
+    // The two answers were computed independently and never compared. Country comes from
+    // cty.dat prefix arithmetic — which is where the station IS. State comes from the FCC ULS
+    // index, which is the licensee's MAILING ADDRESS, or (failing that) from `state_for_grid`,
+    // whose table is US state polygons and which therefore answers with a US state for any grid
+    // cell that touches one. WL7E was reported as country "Alaska", state "CA": an Alaskan
+    // licensee with a California address, and nothing in the app was in a position to notice.
+    //
+    // NOT a display-only wrong. This hint feeds the WAS "New State" cue, so a mailing address
+    // credits a state that was never worked.
+    //
+    // Two rules, and the entity settles both. Alaska and Hawaii are single-state entities, so
+    // they name their own subdivision outright. Outside the United States/Alaska/Hawaii group
+    // there is no US state to report AT ALL, so the hint is dropped rather than guessed — the
+    // grouping is `propagation::dxcc::is_us_state_entity`, the same three names
+    // `tempo_core::diagnostics` groups a logged QSO by. An UNRESOLVABLE call falls through to
+    // the old behaviour: the entity has said nothing, so it overrules nothing.
+    if let Some(entity) = propagation::dxcc::resolve(call).map(|d| d.entity) {
+        if let Some(st) = propagation::dxcc::state_for_entity(entity) {
+            return Some(st.to_string());
+        }
+        if !propagation::dxcc::is_us_state_entity(entity) {
+            return None;
+        }
+    }
     if let Some(st) = fcc_state_for_call(call) {
         return Some(st.to_string());
     }
@@ -9029,6 +9055,21 @@ fn rtty_arm(state: State<'_, SharedEngine>, on: bool) -> Result<RttyStateDto, St
     Ok(rtty_state_dto(&eng))
 }
 
+/// Arm the decoder because the operator ENTERED the RTTY view. Receive-only by construction
+/// (arming the decoder keys nothing): only upgrades from off, refuses once the operator has
+/// explicitly stopped it this session, and refuses for good when the Settings opt-out
+/// (`rtty_rx_auto_arm`) is off. See `Engine::rtty_auto_arm` for the policy — it lives there so
+/// a cockpit remount cannot lose it, exactly as for PSK, APRS and SSTV.
+///
+/// RTTY was the last decode mode without this, and a receive screen with a dead receiver is
+/// the field bug behind the standing "RTTY is not decoding" reports.
+#[tauri::command(async)]
+fn rtty_auto_arm(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
+    let mut eng = engine_lock(&state);
+    eng.rtty_auto_arm();
+    Ok(rtty_state_dto(&eng))
+}
+
 /// The live RTTY state (poll while the RTTY cockpit is visible).
 #[tauri::command(async)]
 fn get_rtty_state(state: State<'_, SharedEngine>) -> Result<RttyStateDto, String> {
@@ -11661,19 +11702,57 @@ fn edit_qso(
     Ok(eng.snapshot())
 }
 
+/// What a `via` argument MEANS on [`mark_qsl_sent`] — the one decision the command layer owns
+/// in the #180 sandwich (UI `'B'|'D'|'E'|null` → here → `Engine::mark_qsl_sent(.., Option<QslVia>)`).
+///
+/// EXACTLY ONE VALUE WITHDRAWS THE MARK: `null`, which the UI sends from its own explicit
+/// "clear" menu entry. Everything else must name a real method or be refused — including the
+/// EMPTY string, and that arm is the safety of the whole thing rather than a nicety. Empty is
+/// the select's PLACEHOLDER, the state the control sits in when the operator has chosen
+/// nothing; it is a non-choice, not a decision, and honouring it as a withdrawal would erase
+/// a mark nobody asked to erase. Same loss as reading a typo as a withdrawal, and likelier:
+/// a placeholder is a value the UI can emit by accident, and a typo is not.
+///
+/// So: `None` clears; an unknown or empty non-null value is an error the caller must fix.
+fn qsl_via_arg(via: Option<&str>) -> Result<Option<tempo_core::logbook::QslVia>, String> {
+    let Some(raw) = via else {
+        return Ok(None); // the explicit withdrawal, and the only one
+    };
+    let code = raw.trim();
+    if code.is_empty() {
+        return Err(
+            "No QSL-sent method given — use B, D, or E, or the menu's Clear entry to \
+             withdraw the mark."
+                .into(),
+        );
+    }
+    tempo_core::logbook::QslVia::from_code(code)
+        .map(Some)
+        .ok_or_else(|| format!("Unknown QSL-sent method '{code}' — use B, D, or E."))
+}
+
 /// Mark logbook entry `index` (oldest-first, as returned by `get_log`) as
 /// QSL-sent — operator-declared truth that a card/request was sent `via`
 /// "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT a
 /// confirmation: this never flips `confirmed`/`awardConfirmed`. Returns the
 /// refreshed snapshot.
+///
+/// `via: null` — and ONLY null — WITHDRAWS the mark instead (#180). Sending is once-only, so
+/// before this a mis-click made the three send entries vanish with nothing to put the row back,
+/// while the inbound side had `mark_qsl_card(index, false)` all along. See [`qsl_via_arg`] for
+/// why an unknown code, and an EMPTY one, are both errors rather than withdrawals.
+///
+/// ⚠️ The withdrawal is an OPERATOR DECISION and outranks a later ADIF import that still says
+/// sent — the core records the cleared state as such so merge can tell "never sent" from
+/// "operator un-sent it". Nothing in this layer re-derives the mark or offers an import a way
+/// around that: the command forwards the operator's word and nothing else.
 #[tauri::command(async)]
 fn mark_qsl_sent(
     state: State<'_, SharedEngine>,
     index: usize,
-    via: String,
+    via: Option<String>,
 ) -> Result<AppSnapshot, String> {
-    let via = tempo_core::logbook::QslVia::from_code(&via)
-        .ok_or_else(|| format!("Unknown QSL-sent method '{via}' — use B, D, or E."))?;
+    let via = qsl_via_arg(via.as_deref())?;
     let mut eng = engine_lock(&state);
     if !eng.mark_qsl_sent(index, via) {
         return Err("That contact no longer exists — reload the log and try again.".into());
@@ -15693,42 +15772,242 @@ fn qsy_stop(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     Ok(eng.snapshot())
 }
 
+/// A CAT-broker listener bind that FAILED, remembered so the manager thread can wait instead
+/// of hammering (#165). Without it `running` stayed `None`, the manager's `want != have` test
+/// stayed true, and the bind + its error log re-ran on every 1 Hz tick forever.
+struct BrokerBindFailure {
+    port: u16,
+    attempts: u32,
+    retry_at: std::time::Instant,
+}
+
+/// How long to wait before re-attempting a bind that failed: 2 s, 4 s, 8 s … capped at a
+/// minute. A port conflict is usually permanent for the session (the operator's own rigctld
+/// owns 4532), so the retry exists to catch the case where the other program exits — it does
+/// not need to be quick, and it must never be a busy loop.
+fn broker_bind_backoff(attempts: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(2u64.saturating_pow(attempts.clamp(1, 6)).min(60))
+}
+
+/// May the manager attempt to bind `port` right now? A record for a DIFFERENT port never
+/// holds one back — moving the broker to a free port is the operator's fix for this, and it
+/// must take effect on the next tick.
+fn broker_may_attempt(
+    failure: Option<&BrokerBindFailure>,
+    port: u16,
+    now: std::time::Instant,
+) -> bool {
+    match failure {
+        Some(f) if f.port == port => now >= f.retry_at,
+        _ => true,
+    }
+}
+
+/// Record a failed bind and schedule the retry. Returns true only for the FIRST failure on a
+/// port — the one that earns a connection-log line. Everything after it is the same failure
+/// still failing, and saying so once a second is the defect, not the report.
+fn broker_record_failure(
+    failure: &mut Option<BrokerBindFailure>,
+    port: u16,
+    now: std::time::Instant,
+) -> bool {
+    match failure {
+        Some(f) if f.port == port => {
+            f.attempts = f.attempts.saturating_add(1);
+            f.retry_at = now + broker_bind_backoff(f.attempts);
+            false
+        }
+        _ => {
+            *failure = Some(BrokerBindFailure {
+                port,
+                attempts: 1,
+                retry_at: now + broker_bind_backoff(1),
+            });
+            true
+        }
+    }
+}
+
+/// A CAT mode word reduced to what distinguishes one EMISSION from another (#140).
+///
+/// The broker has to answer "did you set what I asked?" honestly, and that is not string
+/// equality. `PKTUSB`, `DATA-U` and `USB-D` are one mode under three vendors' names, while
+/// `USB` and `PKTUSB` are two modes that differ in where the rig takes its transmit audio —
+/// on the air, the difference between a voice signal and a data signal.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct CatMode {
+    family: CatFamily,
+    /// `Some(true)` = LSB side, `Some(false)` = USB side, `None` = the word names no side.
+    ///
+    /// `None` for CW and RTTY on purpose: `CW`/`CWR` and `RTTY`/`RTTYR` differ in which side
+    /// of the carrier the rig's BFO sits, which changes the pitch a listener hears and not the
+    /// emission — a client that asked for CW and got CW-L got CW. `None` also for a bare
+    /// `DATA`, which names a family and leaves the side to us.
+    lsb: Option<bool>,
+}
+
+/// The mode CLASS — what the rig is doing, as opposed to which side of the carrier it does it
+/// on. This is the axis a foreign client may NOT move: it belongs to the operator's section.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CatFamily {
+    /// Plain SSB — transmit audio from the mic.
+    Ssb,
+    /// An SSB-side DATA submode (Yaesu DATA-U/L, Icom USB-D, Kenwood DATA) — transmit audio
+    /// from the USB codec, which is what makes a soundcard mode radiate at all.
+    Data,
+    /// The FM data submode (`PKTFM`) — packet/SSTV on an FM channel.
+    DataFm,
+    Cw,
+    Rtty,
+    Am,
+    Fm,
+}
+
+impl CatMode {
+    /// Does the mode Nexus is COMMANDING deliver what this request asked for?
+    fn satisfied_by(self, commanded: CatMode) -> bool {
+        self.family == commanded.family && (self.lsb.is_none() || self.lsb == commanded.lsb)
+    }
+
+    /// The `settings.sideband` word that would move this request's side — `None` when the
+    /// request names no side, or when the family does not ride the sideband at all (CW, RTTY,
+    /// AM and FM are commanded by the section, not by which sideband is selected).
+    fn sideband_word(self) -> Option<&'static str> {
+        match (self.family, self.lsb) {
+            (CatFamily::Ssb | CatFamily::Data, Some(true)) => Some("LSB"),
+            (CatFamily::Ssb | CatFamily::Data, Some(false)) => Some("USB"),
+            _ => None,
+        }
+    }
+}
+
+/// Parse a CAT mode word — Hamlib's vocabulary plus the vendor spellings clients actually
+/// send. `None` for anything unrecognised, which the broker reports as a refusal: a word we
+/// cannot place is a word we cannot promise to have set.
+fn parse_cat_mode(word: &str) -> Option<CatMode> {
+    // Fold the punctuation vendors disagree about: DATA-U / DATA_U / "DATA U" are one word.
+    let up: String = word
+        .trim()
+        .to_ascii_uppercase()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    let m = |family, lsb| Some(CatMode { family, lsb });
+    match up.as_str() {
+        "USB" => m(CatFamily::Ssb, Some(false)),
+        "LSB" => m(CatFamily::Ssb, Some(true)),
+        "PKTUSB" | "PKTU" | "DATAU" | "DATAUSB" | "USBD" | "DIGU" => {
+            m(CatFamily::Data, Some(false))
+        }
+        "PKTLSB" | "PKTL" | "DATAL" | "DATALSB" | "LSBD" | "DIGL" => m(CatFamily::Data, Some(true)),
+        // A family with no side named — honoured by whichever side we are already on.
+        "PKT" | "DATA" | "DIG" => m(CatFamily::Data, None),
+        "PKTFM" | "DATAFM" | "FMD" => m(CatFamily::DataFm, None),
+        "CW" | "CWU" | "CWR" | "CWL" => m(CatFamily::Cw, None),
+        "RTTY" | "RTTYR" | "RTTYL" | "FSK" | "FSKR" => m(CatFamily::Rtty, None),
+        "AM" => m(CatFamily::Am, None),
+        "FM" | "FMN" | "NFM" => m(CatFamily::Fm, None),
+        _ => None,
+    }
+}
+
+/// True the first time this exact refusal is seen, recording it — the de-dup behind the
+/// broker's connection-log lines. A client that retries on a timer says the same thing over
+/// and over, and the operator needs to read it once.
+fn refusal_is_new(slot: &Mutex<Option<String>>, line: &str) -> bool {
+    let mut last = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if last.as_deref() == Some(line) {
+        return false;
+    }
+    *last = Some(line.to_string());
+    true
+}
+
+/// Forget the last refusal, so the NEXT one is reported even if it repeats an old line.
+fn clear_refusal(slot: &Mutex<Option<String>>) {
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// Bridges the CAT broker (rigctld server) to Nexus's live engine: other apps read
 /// the dial/mode/PTT and can retune Nexus. CAT-sharing (freq/mode) is always on;
 /// foreign PTT is ARBITRATED (Engine::broker_ptt): allowed only behind the
 /// cat_broker_ptt opt-in, with TX enabled/legal and Nexus idle — Nexus's own key
 /// always wins, and un-key is always honored.
 #[cfg(feature = "radio")]
-struct EngineRig(SharedEngine);
+struct EngineRig {
+    engine: SharedEngine,
+    /// The last mode refusal and the last PTT refusal we WROTE to the connection log.
+    /// A client that re-sends `M` or `T 1` on a timer would otherwise fill the log at its own
+    /// poll rate — the same 1 Hz spam the bind retry used to produce (#165). Only a refusal
+    /// that says something NEW gets a line; a grant clears the slot, so the next one is
+    /// reported again.
+    last_mode_refusal: Mutex<Option<String>>,
+    last_ptt_refusal: Mutex<Option<String>>,
+}
+
+#[cfg(feature = "radio")]
+impl EngineRig {
+    fn new(engine: SharedEngine) -> Self {
+        Self {
+            engine,
+            last_mode_refusal: Mutex::new(None),
+            last_ptt_refusal: Mutex::new(None),
+        }
+    }
+
+    /// Say — once per distinct refusal — that a client asked for a mode this radio is not in.
+    /// The client already has its `RPRT -1`; this is the operator's half, because "my logger
+    /// cannot put Nexus in DATA" left no trace anywhere in the app before it.
+    fn refuse_mode(&self, asked: &str, commanded: &str) {
+        let line = format!(
+            "refused mode {asked}: this radio is in {commanded}. \
+             The mode follows the section you are operating in — change it in Nexus, not over CAT."
+        );
+        if refusal_is_new(&self.last_mode_refusal, &line) {
+            conn_log("CAT broker", "error", line);
+        }
+    }
+}
 
 #[cfg(feature = "radio")]
 impl tempo_audio::rigctld_server::RigBackend for EngineRig {
     fn freq_hz(&self) -> u64 {
-        (engine_lock(&self.0).settings().dial_mhz * 1_000_000.0).round() as u64
+        (engine_lock(&self.engine).settings().dial_mhz * 1_000_000.0).round() as u64
     }
     fn mode(&self) -> (String, u32) {
-        // Report the CAT mode to a foreign app sharing the radio. When Nexus sets
-        // the mode, report that; when it's obeying the radio (rig_mode empty),
-        // best-effort report the sideband.
+        // Report the mode the radio was actually COMMANDED — `rig_mode_effective`, the same
+        // write-side canon `set_mode` judges a request against, so the answer to `m` and the
+        // answer to `M` can never describe different radios.
+        //
+        // ⚠️ IT USED TO ANSWER `settings.rig_mode()`, WHICH IS THE SECTION POLICY, NOT THE
+        // RADIO (#140, readback lane). The two agree in the ordinary case and part company
+        // exactly where it matters: an APRS or FM-channel park, and an SSTV image in flight,
+        // all command something the band/section policy would not have chosen (FM or the FM
+        // data submode). A client was then told a mode the rig was not in — the same broken
+        // promise as answering RPRT 0 for a mode we never set, pointed the other way.
+        //
+        // The sideband fallback is kept for the case the canon has nothing to say.
         let m = {
-            let e = engine_lock(&self.0);
-            let s = e.settings();
-            let rm = s.rig_mode();
-            if !rm.is_empty() {
-                rm
-            } else if s.sideband.trim().is_empty() {
-                "USB".into()
+            let e = engine_lock(&self.engine);
+            let commanded = e.rig_mode_effective();
+            if !commanded.trim().is_empty() {
+                commanded
             } else {
-                s.sideband.clone()
+                let s = e.settings();
+                if s.sideband.trim().is_empty() {
+                    "USB".into()
+                } else {
+                    s.sideband.clone()
+                }
             }
         };
         (m, 2700)
     }
     fn ptt(&self) -> bool {
-        engine_lock(&self.0).snapshot().radio.transmitting
+        engine_lock(&self.engine).snapshot().radio.transmitting
     }
     fn set_freq(&self, hz: u64) -> bool {
-        let mut e = engine_lock(&self.0);
+        let mut e = engine_lock(&self.engine);
         let mhz = hz as f64 / 1_000_000.0;
         // Derive the band label from the freq; keep the current band if off-plan.
         let band = propagation::model::Band::from_mhz(mhz)
@@ -15745,23 +16024,65 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         e.set_frequency(mhz, &band, &mode);
         true
     }
+    /// Set the mode a foreign client asked for — or say honestly that we did not (#140).
+    ///
+    /// ⚠️ THE OLD BEHAVIOUR WAS A FALSE SUCCESS, and a false success on a mode is how a data
+    /// signal ends up in a voice emission. Every word that was not LSB or FM was collapsed to
+    /// plain USB and answered `RPRT 0`, so VarAC or FreeDV asking for `PKTUSB`/`DATA-U` was
+    /// told "done" while the rig sat in SSB. The reporter's frequency control worked and the
+    /// mode-to-DATA silently did not.
+    ///
+    /// What the broker may change, and it is deliberately narrow: **the sideband SIDE, inside
+    /// the mode family the operator's own section already put the rig in.** The section (Phone
+    /// / Digital / CW / RTTY) is the operator's choice and drives the whole TX chain — routing,
+    /// power caps, the audio path — so a foreign `M` is not allowed to move it. Anything else
+    /// is `RPRT -1` plus one connection-log line naming what was asked and what this radio is
+    /// actually in, because "my logger cannot set DATA" needs a trace somewhere in the app.
+    ///
+    /// The comparison is against [`Engine::rig_mode_effective`] — the write-side canon for the
+    /// rig's own `M` verb, i.e. the mode the radio is really in — read back AFTER any change,
+    /// so a side the section refuses (Phone's below-10-MHz LSB convention, say) is reported as
+    /// the refusal it is rather than assumed to have landed.
+    ///
+    /// ⚠️ NEEDS-BENCH. Unit-tested only; there is no rig on this box. Bench list: WSJT-X and
+    /// VarAC asking `PKTUSB` with Nexus in Digital (must set and answer `RPRT 0`) and with
+    /// Nexus in Phone (must answer `RPRT -1` and log one line); a client's `M LSB` on 40 m
+    /// Phone; and that a refused `M` leaves the rig where it was. Same pass covers the
+    /// READBACK half ([`RigBackend::mode`]): a client's `m` on a 2 m FM channel, during an
+    /// APRS park and with an SSTV image in flight must each name the mode the rig is really
+    /// in — those three are exactly where the old answer diverged.
     fn set_mode(&self, mode: &str, _passband_hz: u32) -> bool {
-        let mut e = engine_lock(&self.0);
-        let (mhz, band) = {
-            let s = e.settings();
-            (s.dial_mhz, s.band.clone())
-        };
-        // Collapse data submodes (PKTUSB/DATA-U/FT8/…) to the underlying sideband.
-        let up = mode.to_ascii_uppercase();
-        let sb = if up.contains("LSB") {
-            "LSB"
-        } else if up == "FM" {
-            "FM"
-        } else {
-            "USB"
-        };
-        e.set_frequency(mhz, &band, sb);
-        true
+        let mut e = engine_lock(&self.engine);
+        let commanded = e.rig_mode_effective();
+        if let (Some(req), Some(cur)) = (parse_cat_mode(mode), parse_cat_mode(&commanded)) {
+            if req.satisfied_by(cur) {
+                drop(e);
+                clear_refusal(&self.last_mode_refusal);
+                return true;
+            }
+            // A side flip WITHIN the family the section is already in — the one thing that is
+            // the broker's to change.
+            if req.family == cur.family {
+                if let Some(sb) = req.sideband_word() {
+                    let (mhz, band) = {
+                        let s = e.settings();
+                        (s.dial_mhz, s.band.clone())
+                    };
+                    e.set_frequency(mhz, &band, sb);
+                    let now = e.rig_mode_effective();
+                    drop(e);
+                    if parse_cat_mode(&now).is_some_and(|n| req.satisfied_by(n)) {
+                        clear_refusal(&self.last_mode_refusal);
+                        return true;
+                    }
+                    self.refuse_mode(mode, &now);
+                    return false;
+                }
+            }
+        }
+        drop(e);
+        self.refuse_mode(mode, &commanded);
+        false
     }
     fn set_ptt(&self, on: bool) -> bool {
         // v2 arbitration: a foreign app may key ONLY when the operator opted in
@@ -15770,7 +16091,50 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
         // and it must land on a POISONED engine too: this call is the broker's
         // client-disconnect fail-safe, and a raw .lock() here left the rig keyed
         // in exactly the panic case the recovering accessor exists for.
-        engine_lock(&self.0).broker_ptt(on)
+        //
+        // ⚠️ THE REFUSAL IS LOG-ONLY (#140). Everything the arbiter checks is a transmit-safety
+        // invariant and stays exactly as it is — above all `tx_enabled`, the TX-enable latch,
+        // which defaults OFF at launch and is the app's universal transmit gate. What was
+        // missing is that a refused client got `RPRT -1` and the operator got NOTHING: no line
+        // anywhere, which is why pressing PTT in Phone looked like it "woke the broker up" (it
+        // armed Nexus, not the radio). The reasons are read BEFORE the arbiter runs so the line
+        // describes the state it actually judged.
+        let mut e = engine_lock(&self.engine);
+        let opted_in = e.settings().cat_broker_ptt;
+        let tx_enabled = e.tx_enabled();
+        let tx_allowed = e.tx_allowed();
+        let owner = e.tx_owner();
+        let granted = e.broker_ptt(on);
+        drop(e);
+        if !on {
+            return granted; // un-key always lands; nothing to explain
+        }
+        if granted {
+            clear_refusal(&self.last_ptt_refusal);
+            return true;
+        }
+        // First matching gate, in the order the arbiter applies them. The fallthrough is the
+        // context hold — the band or radio moved under a client that had permission — which
+        // has no accessor of its own and is the only remaining way to get here.
+        let why = if !opted_in {
+            "\"Other programs may key transmit\" is off in Settings ▸ Radio".to_string()
+        } else if !tx_enabled {
+            "Enable TX is off in Nexus — arm transmit before an external program can key"
+                .to_string()
+        } else if !tx_allowed {
+            "transmit is not allowed here (license privileges or band edge on this dial)"
+                .to_string()
+        } else if let Some(o) = owner {
+            o.busy_reason()
+        } else {
+            "the band or radio changed since this client last keyed — re-arm transmit in Nexus"
+                .to_string()
+        };
+        let line = format!("refused PTT from a client: {why}");
+        if refusal_is_new(&self.last_ptt_refusal, &line) {
+            conn_log("CAT broker", "error", line);
+        }
+        false
     }
     fn client_event(&self, peer: &str, connected: bool) {
         // #53: the broker is the advertised share endpoint, so "is VarAC actually
@@ -15962,14 +16326,112 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
     })
 }
 
-/// Open the download page (GitHub Releases) in the operator's default browser. Opened from Rust via
-/// the opener plugin, so no JS package or ACL capability entry is required.
-#[tauri::command]
+/// How long to watch a freshly-spawned launcher before deciding it took the URL. Long enough
+/// for `xdg-open` to look up the handler and give up (it exits in tens of milliseconds when it
+/// is going to), short enough that the operator never notices the wait.
+#[cfg(target_os = "linux")]
+const LAUNCHER_PROBE: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Hand a URL to one desktop launcher and report whether the launcher ACCEPTED it.
+///
+/// ⚠️ THIS EXISTS BECAUSE A DETACHED SPAWN CANNOT FAIL. The opener plugin's Linux arm is
+/// `open::that_detached`, which returns `Ok` the moment `xdg-open` is spawned and never reads
+/// its exit status — so "no handler registered" (exit 3) and "the handler failed" (exit 4)
+/// both reported success, and upstream the UI recorded the version as dismissed forever on the
+/// strength of it. Windows (`ShellExecuteExW`) and macOS (`/usr/bin/open`) return real errors,
+/// which is why this arm is Linux-only.
+///
+/// The rule, and it is the whole subtlety: a launcher that has EXITED tells us its verdict, and
+/// one still alive at the deadline has taken the URL — it is waiting on the browser, or it IS
+/// the browser. Waiting for that to exit would block for the browser's whole lifetime, which is
+/// what the detached spawn was avoiding in the first place.
+#[cfg(target_os = "linux")]
+fn spawn_launcher(program: &str, args: &[&str], url: &str) -> Result<(), String> {
+    use std::process::Stdio;
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("{program}: {e}"))?;
+    let deadline = std::time::Instant::now() + LAUNCHER_PROBE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("{program} exited with {status}")),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(format!("{program}: {e}")),
+        }
+    }
+}
+
+/// Open a URL in the operator's browser, reporting a failure as a failure (Linux).
+///
+/// The candidate list mirrors the `open` crate's: the freedesktop launcher first, then GIO
+/// (present where `xdg-open` may not be), then the WSL bridge and the Debian browser
+/// alternative. The first launcher that ACCEPTS the URL wins; if every one of them refuses,
+/// so does this, carrying what each said.
+#[cfg(target_os = "linux")]
+fn open_url_checked(url: &str) -> Result<(), String> {
+    const LAUNCHERS: [(&str, &[&str]); 5] = [
+        ("xdg-open", &[]),
+        ("gio", &["open"]),
+        ("kde-open", &[]),
+        ("wslview", &[]),
+        ("x-www-browser", &[]),
+    ];
+    let mut refusals = Vec::new();
+    for (program, args) in LAUNCHERS {
+        match spawn_launcher(program, args, url) {
+            Ok(()) => return Ok(()),
+            Err(e) => refusals.push(e),
+        }
+    }
+    Err(format!("no launcher opened it ({})", refusals.join("; ")))
+}
+
+/// Open the download page (GitHub Releases) in the operator's default browser.
+///
+/// ⚠️ THE RESULT IS LOAD-BEARING: the frontend dismisses the update prompt and remembers the
+/// version on the strength of it, so one click on an open that never happened silences update
+/// notices for good. On Linux that promise cannot come from the opener plugin — see
+/// [`spawn_launcher`] — so the launcher is driven directly and its verdict is read. Windows and
+/// macOS keep the plugin, whose errors there are real.
+///
+/// `async` so the launcher probe runs off the UI thread, and logged either way: `check_for_update`
+/// writes a line per check, and a reporter's log used to show "update available" and then silence.
+#[tauri::command(async)]
 fn open_download_page(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_url(DOWNLOAD_PAGE_URL, None::<&str>)
-        .map_err(|e| e.to_string())
+    #[cfg(target_os = "linux")]
+    let result = {
+        let _ = &app;
+        open_url_checked(DOWNLOAD_PAGE_URL)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let result = {
+        use tauri_plugin_opener::OpenerExt;
+        app.opener()
+            .open_url(DOWNLOAD_PAGE_URL, None::<&str>)
+            .map_err(|e| e.to_string())
+    };
+    match &result {
+        Ok(()) => tempo_core::applog::info(
+            "updater",
+            &format!("opened the download page ({DOWNLOAD_PAGE_URL})"),
+        ),
+        Err(e) => tempo_core::applog::error(
+            "updater",
+            &format!("could NOT open the download page ({DOWNLOAD_PAGE_URL}): {e}"),
+        ),
+    }
+    result
 }
 
 /// Stamp POTA/SOTA park refs from a pota.app hunter/activator ADIF export onto
@@ -17440,6 +17902,10 @@ pub fn run() {
         std::thread::spawn(move || {
             // The running broker as (port, shutdown flag); None = not serving.
             let mut running: Option<(u16, std::sync::Arc<AtomicBool>)> = None;
+            // …and the bind that FAILED, which is the other half of "not serving" (#165).
+            // Without it a failed bind left `running` as None, `want != have` stayed true,
+            // and both the bind and its error line re-ran every second, forever.
+            let mut failure: Option<BrokerBindFailure> = None;
             loop {
                 let want = {
                     let e = engine_lock(&mgr_engine);
@@ -17453,30 +17919,47 @@ pub fn run() {
                     if let Some((_, shutdown)) = running.take() {
                         shutdown.store(true, Ordering::Relaxed);
                     }
-                    // Start on the wanted port.
-                    if let Some(port) = want {
+                    // Start on the wanted port, unless a recent failure on THIS port says to
+                    // wait. A different port is always tried at once — changing it is the
+                    // operator's fix for a conflict and must take effect on the next tick.
+                    let now = std::time::Instant::now();
+                    if let Some(port) =
+                        want.filter(|p| broker_may_attempt(failure.as_ref(), *p, now))
+                    {
                         match std::net::TcpListener::bind(("127.0.0.1", port)) {
                             Ok(l) => {
                                 let shutdown = std::sync::Arc::new(AtomicBool::new(false));
                                 let backend: std::sync::Arc<
                                     dyn tempo_audio::rigctld_server::RigBackend,
-                                > = std::sync::Arc::new(EngineRig(mgr_engine.clone()));
+                                > = std::sync::Arc::new(EngineRig::new(mgr_engine.clone()));
                                 let sd = shutdown.clone();
                                 std::thread::spawn(move || {
                                     tempo_audio::rigctld_server::serve_until(l, backend, sd)
                                 });
                                 running = Some((port, shutdown));
+                                failure = None;
                                 conn_log(
                                     "CAT broker",
                                     "info",
                                     format!("sharing this radio on 127.0.0.1:{port}"),
                                 );
                             }
-                            Err(e) => conn_log(
-                                "CAT broker",
-                                "error",
-                                format!("couldn't bind 127.0.0.1:{port}: {e}"),
-                            ),
+                            Err(e) => {
+                                if broker_record_failure(&mut failure, port, now) {
+                                    // ONE line, naming the port and the cause an operator can
+                                    // act on. The retry carries on quietly behind the backoff.
+                                    let msg = format!(
+                                        "couldn't bind 127.0.0.1:{port}: {e} — another program \
+                                         is already listening there (your own rigctld, a second \
+                                         copy of Nexus, or this radio's own daemon on 4534). \
+                                         Sharing is OFF until it frees up; change the Sharing \
+                                         port in Settings ▸ Radio, or stop the other program. \
+                                         Retrying quietly."
+                                    );
+                                    tempo_core::applog::error("cat", &msg);
+                                    conn_log("CAT broker", "error", msg);
+                                }
+                            }
                         }
                     }
                 }
@@ -17675,6 +18158,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             preview_cw,
             cw_skim,
             rtty_arm,
+            rtty_auto_arm,
             get_rtty_state,
             aprs_arm,
             aprs_auto_arm,
@@ -18085,6 +18569,341 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
 
 #[cfg(test)]
 mod tests {
+    /// #171: the country resolver and the state resolver never spoke to each other. Country
+    /// comes from cty.dat prefix arithmetic; state comes from the FCC ULS index, which holds
+    /// the licensee's MAILING address. WL7E was reported as country "Alaska", state "CA" —
+    /// and it is not a display-only wrong: the same hint feeds the WAS "New State" cue, so it
+    /// credits a state that was never worked.
+    ///
+    /// No FCC index is loaded in a unit test, so the wrong answers here arrive by the OTHER
+    /// road into the same defect — `state_for_grid`, whose table is US state polygons and
+    /// which will happily place an Alaskan or a Mexican station in California. Both roads end
+    /// at the same missing cross-check, and the entity closes both.
+    #[test]
+    fn the_entity_outranks_a_state_resolver_that_does_not_know_the_country() {
+        // An Alaskan station heard from a California grid: the entity is Alaska, so the
+        // subdivision is AK. Nothing else may answer.
+        assert_eq!(
+            super::subdivision_hint("WL7E", Some("CM87")).as_deref(),
+            Some("AK"),
+            "an Alaska entity settles its own state"
+        );
+        assert_eq!(
+            super::subdivision_hint("KH6ABC", Some("CM87")).as_deref(),
+            Some("HI"),
+            "…and so does Hawaii"
+        );
+        // Outside the United States/Alaska/Hawaii group there is no US state to report, so
+        // the subdivision is DROPPED rather than guessed from a border grid cell.
+        assert_eq!(
+            super::subdivision_hint("XE2ABC", Some("DM12")),
+            None,
+            "a Mexican station never carries a US state, whatever cell it was heard in"
+        );
+        assert_eq!(
+            super::subdivision_hint("KP4ABC", Some("EL96")),
+            None,
+            "Puerto Rico is its own DXCC entity and has no WAS state"
+        );
+        // The lower 48 is untouched — this is the case the FCC index and the grid exist for.
+        assert_eq!(
+            super::subdivision_hint("W9XYZ", Some("EN52")).as_deref(),
+            Some("WI")
+        );
+        // …and so is the Canadian province path, which answers before any of this.
+        assert_eq!(
+            super::subdivision_hint("VE3ABC", Some("EN82")).as_deref(),
+            Some("ON")
+        );
+    }
+
+    /// #180: a QSL-sent mark could not be undone. Sending is once-only, so a mis-click made
+    /// the three send entries vanish with nothing to put the row back — the inbound side has
+    /// had `markQslCard(index, false)` all along. The command layer is the middle of that
+    /// sandwich, and this is the decision it owns: what a `via` argument MEANS.
+    ///
+    /// Two rules, and the second is what keeps the first safe. Absent — `null` from the UI,
+    /// and equally an empty field, which is what an empty form control delivers — is the
+    /// operator WITHDRAWING the mark. An unknown NON-EMPTY code is a mistake and must still
+    /// be refused: accepting it as a clear would turn a typo into an erased mark, which is
+    /// the very loss this exists to undo.
+    #[test]
+    fn a_qsl_sent_mark_can_be_withdrawn_and_a_typo_still_cannot() {
+        use tempo_core::logbook::QslVia;
+        assert_eq!(
+            super::qsl_via_arg(None),
+            Ok(None),
+            "no method named = the operator withdrawing the mark"
+        );
+        // ⚠️ EMPTY IS NOT A WITHDRAWAL — it is a NON-CHOICE, and that distinction is the
+        // whole safety of this. The UI's clear is an explicit menu entry that sends `null`;
+        // the empty string is the select's PLACEHOLDER, the state the control sits in when
+        // the operator has chosen nothing (and today's `else if (v)` guard means it never
+        // even reaches this command). So an empty `via` arriving here is something upstream
+        // sending a non-choice, and honouring it would erase a mark nobody asked to erase —
+        // the same loss as reading a typo as a withdrawal, except a placeholder is a value
+        // the UI can plausibly emit by accident and a typo is not.
+        assert!(
+            super::qsl_via_arg(Some("")).is_err(),
+            "a placeholder is not a decision"
+        );
+        assert!(super::qsl_via_arg(Some("   ")).is_err());
+        // The refusal is something an operator may actually read in a toast, and it is
+        // written across two source lines with a continuation escape — which silently eats
+        // the newline AND the next line's indent, or does not, depending on getting it right.
+        let msg = super::qsl_via_arg(Some("")).unwrap_err();
+        assert!(msg.contains("use B, D, or E"), "{msg}");
+        assert!(!msg.contains("  "), "the continuation escape left a gap: {msg}");
+        assert_eq!(super::qsl_via_arg(Some("B")), Ok(Some(QslVia::Bureau)));
+        assert_eq!(super::qsl_via_arg(Some("d")), Ok(Some(QslVia::Direct)));
+        assert_eq!(
+            super::qsl_via_arg(Some(" E ")),
+            Ok(Some(QslVia::Electronic))
+        );
+        assert!(
+            super::qsl_via_arg(Some("X")).is_err(),
+            "an unknown code is a mistake, never a silent clear"
+        );
+        assert!(super::qsl_via_arg(Some("BUREAU")).is_err());
+    }
+
+    /// The RTTY view-entry auto-arm reaches the frontend only if the command is DEFINED and
+    /// REGISTERED — `ui/src/api.ts` already calls `invoke('rtty_auto_arm')`, and a name that
+    /// is not in `generate_handler!` fails at runtime with nothing at compile time to catch
+    /// it. RTTY was the last decode mode with no auto-arm, which is the likeliest cause of
+    /// the standing "RTTY is not decoding" reports, so a silently unregistered command would
+    /// leave the field bug exactly where it was.
+    ///
+    /// Source-scanned, like `no_engine_locking_command_runs_on_the_ui_thread`, because
+    /// registration is the property under test and no type sees it.
+    #[test]
+    fn the_rtty_auto_arm_command_the_ui_already_calls_is_defined_and_registered() {
+        let src = include_str!("lib.rs");
+        // ⚠️ COLUMN-ZERO MATCH, not `contains`: `include_str!` pulls in THIS TEST too, so a
+        // `contains("fn rtty_auto_arm(…)")` is satisfied by the string literal inside the
+        // assertion itself and passes with no command defined anywhere. A top-level `fn` is
+        // unindented; every mention inside a test body is not.
+        assert!(
+            src.lines().any(|l| l.starts_with("fn rtty_auto_arm(")),
+            "the command the UI invokes must exist"
+        );
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1;
+        let list = list
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for name in ["rtty_auto_arm", "rtty_arm", "get_rtty_state"] {
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{name},")),
+                "{name} is not registered — invoking it from the UI would fail at runtime"
+            );
+        }
+    }
+
+    /// …and the state the command hands back reflects the arm, through the DTO the cockpit
+    /// actually reads. The POLICY is the engine's (`Engine::rtty_auto_arm`, tested there);
+    /// this pins the layer I own — that the command returns the FRESH state rather than the
+    /// one from before the arm, which is what the cockpit renders.
+    #[test]
+    fn rtty_auto_arm_hands_back_the_state_it_just_changed() {
+        use tempo_app::settings::Settings;
+        let mut eng = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        assert!(!super::rtty_state_dto(&eng).armed, "never launches armed");
+        eng.rtty_auto_arm();
+        assert!(
+            super::rtty_state_dto(&eng).armed,
+            "view entry armed the decoder and the DTO says so"
+        );
+
+        // The persisted opt-out refuses it, and the DTO reports the refusal honestly rather
+        // than an arm that did not happen.
+        let mut off = tempo_app::engine::Engine::with_settings(Settings {
+            rtty_rx_auto_arm: false,
+            ..Settings::default()
+        });
+        off.rtty_auto_arm();
+        assert!(!super::rtty_state_dto(&off).armed);
+    }
+
+    /// #140, the same promise in the READBACK direction: the broker answered `m` with
+    /// `settings.rig_mode()` — the band/section policy — while the radio had been commanded
+    /// something else entirely. An FM calling channel is the plainest case: the rig is in FM
+    /// and the policy still says USB, so a client asking "what mode are you in?" was told a
+    /// mode the radio was not in. A false answer here is the same defect as a false success on
+    /// `M`, one lane over.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_broker_reports_the_mode_the_radio_was_actually_commanded() {
+        use tempo_audio::rigctld_server::RigBackend;
+        let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        // A 2 m SSTV/FM calling channel: Phone section, FM commanded by the channel.
+        engine_lock(&shared).sstv_tune(145.500, "2m", "FM");
+        {
+            // The fixture is only interesting because the two answers DISAGREE here.
+            let e = engine_lock(&shared);
+            assert_eq!(e.rig_mode_effective(), "FM", "the rig is commanded FM");
+            assert_eq!(
+                e.settings().rig_mode(),
+                "USB",
+                "…while the section policy alone still says USB — the stale answer"
+            );
+        }
+        let rig = super::EngineRig::new(shared);
+        assert_eq!(
+            rig.mode().0,
+            "FM",
+            "the broker must report the mode the radio is in, not the one the policy would pick"
+        );
+
+        // The ordinary path is unchanged: with nothing overriding it, the commanded mode IS
+        // the section policy, and a data client still reads the DATA submode.
+        let digital: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::with_settings(tempo_app::settings::Settings {
+                operating_mode: tempo_app::settings::OperatingMode::Digital,
+                band: "20m".into(),
+                dial_mhz: 14.074,
+                sideband: "USB".into(),
+                ..tempo_app::settings::Settings::default()
+            }),
+        ));
+        assert_eq!(super::EngineRig::new(digital).mode().0, "PKTUSB");
+    }
+
+    /// #140, the reported half: the CAT broker answered `RPRT 0` to EVERY mode word. It
+    /// collapsed anything that was not LSB or FM to plain USB and returned true, so VarAC or
+    /// FreeDV asking for `PKTUSB`/`DATA-U` was told "done" while the rig sat in voice USB.
+    /// A false success on a mode is how a data signal ends up in the wrong emission.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_broker_never_reports_success_for_a_mode_it_did_not_set() {
+        use tempo_app::settings::{OperatingMode, Settings};
+        use tempo_audio::rigctld_server::RigBackend;
+        let rig_in = |mode: OperatingMode, dial_mhz: f64, sideband: &str| {
+            let s = Settings {
+                operating_mode: mode,
+                band: "20m".into(),
+                dial_mhz,
+                sideband: sideband.into(),
+                ..Settings::default()
+            };
+            let shared: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+                tempo_app::engine::Engine::with_settings(s),
+            ));
+            super::EngineRig::new(shared)
+        };
+
+        // Nexus is in the Phone section, so it commands plain USB. A data client asking for
+        // the DATA submode must be REFUSED — not told yes and left on voice.
+        let phone = rig_in(OperatingMode::Phone, 14.200, "USB");
+        assert_eq!(phone.mode().0, "USB", "fixture: Phone commands plain USB");
+        assert!(
+            !phone.set_mode("PKTUSB", 3000),
+            "PKTUSB is not USB — answering RPRT 0 here puts a data signal in a voice emission"
+        );
+        assert!(
+            !phone.set_mode("DATA-U", 3000),
+            "same mode, vendor spelling"
+        );
+        assert!(
+            !phone.set_mode("FM", 3000),
+            "the sideband field is not the FM switch — the rig stays in SSB"
+        );
+        assert!(
+            !phone.set_mode("CW", 3000),
+            "the section owns the mode class"
+        );
+        assert!(
+            !phone.set_mode("BOGUS", 3000),
+            "an unknown word is not a yes"
+        );
+        // What Phone CAN honour: the plain SSB it is already in.
+        assert!(
+            phone.set_mode("USB", 2700),
+            "USB is exactly what it commands"
+        );
+        assert_eq!(phone.mode().0, "USB", "and it is still in it");
+
+        // The Digital section commands the DATA submode, so the same request succeeds — and a
+        // side flip inside the family is the broker's to make.
+        let digital = rig_in(OperatingMode::Digital, 14.074, "USB");
+        assert_eq!(digital.mode().0, "PKTUSB", "fixture: Digital commands DATA");
+        assert!(digital.set_mode("PKTUSB", 3000));
+        assert!(
+            digital.set_mode("DATA-U", 3000),
+            "vendor spelling of the same"
+        );
+        assert!(digital.set_mode("PKTLSB", 3000), "a side flip within DATA");
+        assert_eq!(digital.mode().0, "PKTLSB", "and it actually moved");
+        assert!(
+            !digital.set_mode("USB", 2700),
+            "plain USB is a different emission from PKTUSB — refuse it"
+        );
+    }
+
+    /// #165: on a bind failure the manager thread recorded NOTHING, so `running` stayed `None`,
+    /// the `want != have` branch re-ran `TcpListener::bind` on the very next tick, and the
+    /// connection log filled with the identical error at 1 Hz forever. Five minutes of a port
+    /// that is never going to be free is the shape of the reporter's log.
+    #[test]
+    fn a_broker_bind_that_keeps_failing_backs_off_and_is_reported_once() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let mut failure: Option<super::BrokerBindFailure> = None;
+        let (mut attempts, mut logged) = (0u32, 0u32);
+        for tick in 0..300u64 {
+            // The manager's 1 Hz loop, against a port a foreign rigctld owns: every attempt
+            // fails.
+            let now = start + Duration::from_secs(tick);
+            if super::broker_may_attempt(failure.as_ref(), 4532, now) {
+                attempts += 1;
+                if super::broker_record_failure(&mut failure, 4532, now) {
+                    logged += 1;
+                }
+            }
+        }
+        assert_eq!(logged, 1, "one line per failure, not one per second");
+        assert!(
+            attempts <= 10,
+            "five minutes of a busy port must not be 300 bind attempts (was {attempts})"
+        );
+        // A port CHANGE is a fresh situation — the operator moving the broker off the busy
+        // port must be tried at once, not held behind the old port's backoff.
+        assert!(super::broker_may_attempt(
+            failure.as_ref(),
+            4534,
+            start + Duration::from_secs(300)
+        ));
+    }
+
+    /// R3: on Linux the opener plugin's `that_detached` returns `Ok` the moment the launcher is
+    /// SPAWNED and never reads its exit status, so "no handler" (xdg-open exit 3) and "the
+    /// handler failed" (exit 4) both reported success. Upstream, the UI took that success and
+    /// recorded the version as dismissed forever — one click silencing update notices for good.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_launcher_that_refuses_the_url_is_reported_as_a_failure() {
+        let url = "https://example.invalid/nexus";
+        assert!(
+            super::spawn_launcher("sh", &["-c", "exit 3"], url).is_err(),
+            "a launcher that exits non-zero opened nothing"
+        );
+        assert!(super::spawn_launcher("sh", &["-c", "exit 4"], url).is_err());
+        assert!(super::spawn_launcher("sh", &["-c", "exit 0"], url).is_ok());
+        // Still alive at the deadline = it took the URL (it IS the browser, or it is waiting
+        // on one). Waiting for THAT to exit is what the detached spawn exists to avoid, so
+        // "still running" has to read as success.
+        assert!(super::spawn_launcher("sh", &["-c", "sleep 2"], url).is_ok());
+        assert!(
+            super::spawn_launcher("nexus-no-such-launcher-exists", &[], url).is_err(),
+            "a launcher that is not installed is not a success either"
+        );
+    }
+
     /// The roster's State-or-Province column and the log record's ADIF `STATE` both come from
     /// `subdivision_hint`. Two things have to hold, and only the first one did.
     ///
@@ -19230,7 +20049,7 @@ mod tests {
             tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
         ));
         engine_lock(&shared).set_frequency(14.105, "20m", "USB");
-        let rig = super::EngineRig(shared);
+        let rig = super::EngineRig::new(shared);
         assert_eq!(rig.freq_hz(), 14_105_000);
     }
 
@@ -19266,6 +20085,9 @@ mod tests {
             state: None,
             band: band.into(),
             freq_mhz,
+            // #163: a satellite QSO keeps its downlink-derived FREQ and writes no FREQ_RX —
+            // the operator ruled the split pair TERRESTRIAL-only, and this fixture is a pass.
+            freq_rx_mhz: None,
             mode: "FM".into(),
             rst_sent: None,
             rst_rcvd: None,

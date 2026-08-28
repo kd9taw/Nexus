@@ -13,6 +13,7 @@ import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { PSK_PANEL_IDS, type PskPanelId, type PanelLayoutApi } from '../features/panelState'
 import { FrequencyControl } from './FrequencyControl'
+import { LogEntry } from './LogEntry'
 import { Waterfall } from './Waterfall'
 import {
   atuTune,
@@ -277,6 +278,30 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     void haltTx()
   }
 
+  // THE DOCK'S "their call" → THE LOG STRIP'S CALLSIGN BOX (#159 follow-on). The operator
+  // types the station once, into the field the macros already expand {CALL} from, and the
+  // log strip fills itself instead of asking for the same callsign a second time.
+  //
+  // ⚠️ NO FOCUS STEAL. That is the binding constraint here, not a nicety. The strip's other
+  // machine-fill path — `pendingWork`, the Needed-board click — focuses AND SELECTS the RST
+  // box on arrival, which is right for a click meaning "work this one now" and wrong for
+  // this: this fires while the operator is still typing, in the dock field itself or in the
+  // compose bar with an over on the air, and a caret yanked out of the compose bar mid-
+  // transmission is a worse bug than the convenience is a feature. `cwLive` is the path that
+  // fills and moves nothing, so it is the one used. (Its NAME is CW's — it is the shared
+  // strip's live machine-fill channel and its contract is mode-agnostic: fill blanks, never
+  // clobber a typed value, never move the caret. Renaming it would reach into CwCockpit.)
+  //
+  // DEBOUNCED, because `cwLive` treats a confirmed call as FINAL and the strip then spends a
+  // callbook lookup on it. Fed every keystroke it would look up K, K9, K9A, K9AB… — the
+  // exact quota burn LogEntry's own `settledCallRef` comment describes for the CW decoder.
+  // One fill, one lookup, 500 ms after typing stops.
+  const [settledHisCall, setSettledHisCall] = useState('')
+  useEffect(() => {
+    const id = setTimeout(() => setSettledHisCall(hisCall.trim().toUpperCase()), 500)
+    return () => clearTimeout(id)
+  }, [hisCall])
+
   const sending = psk?.sending === true
 
   // --- CONTINUOUS TX (the MMTTY-style latch, RTTY's semantics verbatim) -----
@@ -493,9 +518,11 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         </div>
       )}
 
-      {/* THE ONE CONTENT PANE — RTTY's region-less shape: a single CockpitPaneFrame as
-          the shell's grower, transcript scrolling inside. Every control in the head is a
-          DECODER control (arm / re-acquire / clear) — none touches PTT. */}
+      {/* THE DECODED STREAM — RTTY's region-less shape: a bare CockpitPaneFrame as a shell
+          child, transcript scrolling inside. Every control in the head is a DECODER control
+          (arm / re-acquire / clear) — none touches PTT.
+          NO `weight`, deliberately: since #159 there is a second fill frame below it (the log
+          strip), and the share that matters is declared THERE, measured. See that frame. */}
       {shown('stream') && (
         <CockpitPaneFrame title={t('psk.pane.stream.title')} paneId="stream">
           <div className="cw-decode psk-stream" title={t('psk.stream.title')}>
@@ -562,6 +589,70 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               )}
             </div>
           </div>
+        </CockpitPaneFrame>
+      )}
+
+      {/* THE LOG STRIP (#159 — "PSK has no LOG button"). The CW and Phone cockpits have
+          carried this exact component since the pane-grid overhaul; PSK shipped without any
+          in-cockpit log path at all, so a PSK31 ragchew had to be written down and re-typed
+          in the Logbook afterwards. Modelled on CW/Phone, which is the only place this shape
+          exists — RTTY looks similar and is NOT the model: it logs through its auto-sequencer
+          and has no strip.
+
+          NOT ⊞-REMOVABLE, and it renders as the shell's second bare pane frame. `paneId` is a
+          test/pop-out handle, not a vocabulary id: PSK's vocabulary is {scope, stream}, so
+          this pane has no menu entry and no ✕ (CockpitPaneFrame: "a pane with no id in the
+          view's vocabulary stays put"). It hosts no stop control either — every one of those
+          is in the header or the dock below, exactly where the stop-line sweep looks for them.
+
+          `titled={false}`: the frame head already says it, and the strip's own <h2> would say
+          it twice — the same reasoning as the CW/Phone log panes. The head is `psk.pane.log.title`
+          rather than the strip's own `logEntry.title`, so this pane is named with the ONE word
+          CW and Phone use for the same pane instead of a second, longer name for it.
+
+          FILL, NOT `fit="content"`, and `weight={1.5}` — BOTH MEASURED in a real layout engine
+          (headless Chrome against this sheet; jsdom lays nothing out and cannot answer either
+          question). The numbers, at the sweep sizes:
+            · The strip needs 296 px of pane height for its commit row — the Log button — to be
+              on screen without scrolling the pane. That figure is what picks the share: at an
+              even 1:1 the pane is 292 px at 1920×1080 and the button misses the fold by FOUR
+              pixels, which on the one ticket that is about a missing Log button is the whole
+              defect again. 1.5 gives it 350 px there (visible, ~50 px of margin), 518 px at
+              1440p where the pane stops scrolling altogether, and the stream still keeps 234 px
+              of transcript under a 238 px waterfall.
+            · `fit="content"` was measured and REFUSED: the strip is 488 px with a recall card
+              open, which leaves the stream under its 10em `--cockpit-fill-min` floor and pushes
+              the SHELL onto its deficit valve in the ordinary case — a valve that is meant for
+              genuine deficit, not for every window. Fill keeps the deficit inside the panes.
+            · At the 1024×768 supported floor neither can win: 340 px for two panes that want
+              296 + 140. Both scroll internally, the shell does NOT, the TX dock stays sticky
+              and on screen, and nothing is trapped. Same at 175 % pinned zoom, except there the
+              shell valve does engage — by design — and the dock still parks in the scrollport,
+              so the stop line holds at magnification. */}
+      {snap && (
+        <CockpitPaneFrame title={t('psk.pane.log.title')} paneId="log" weight={1.5}>
+          <LogEntry
+            snap={snap}
+            // The sub-mode table's names ARE the ADIF Mode tokens (PSK31 / QPSK31), so the
+            // record says which waveform was actually on the air rather than folding QPSK
+            // into its BPSK sibling — and a sub-mode added to `pskModes.ts` logs itself.
+            mode={mode.name}
+            defaultRst="599"
+            // A PSK operator hunts parks like any other HF operator — the park/summit row is
+            // part of this exchange (the satellite exchange is the only one it is not).
+            exchange="terrestrial"
+            titled={false}
+            // The dock's "their call", settled — see `settledHisCall` above for why this
+            // rides the live machine-fill channel and not `pendingWork`. `confirmed: true`
+            // because the operator TYPED this call; it is a statement, not a decoder guess,
+            // so it is worth one callbook lookup. rst/name stay null: PSK has no decoder
+            // reading an exchange off the air the way the CW copilot does.
+            cwLive={
+              settledHisCall
+                ? { call: settledHisCall, rst: null, name: null, confirmed: true }
+                : null
+            }
+          />
         </CockpitPaneFrame>
       )}
 

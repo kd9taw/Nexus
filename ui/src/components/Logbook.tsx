@@ -540,10 +540,21 @@ export function Logbook({
   // Record an operator-declared QSL request on a contact (a card/request WAS sent,
   // via bureau/direct/electronic). This is NOT a confirmation — it stays in the
   // needs-confirmation filter until the partner actually confirms.
-  const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E') => {
+  //
+  // `via === null` CLEARS the mark instead (#180). Sending is once-only, so a mis-click
+  // on Bureau/Direct/Electronic used to be permanent from the operator's chair: the three
+  // send entries vanish and nothing put them back. Same reversal the inbound card has had
+  // since #152 — a declaration the operator made by hand, they can unmake by hand.
+  const onMarkQslSent = async (q: LoggedQso, i: number, via: 'B' | 'D' | 'E' | null) => {
     const snap = await withErrorToast(() => markQslSent(i, via), t('logbook.qsl.markFailed'))
     if (snap) {
-      pushToast(t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via }), 'success')
+      // Two literal keys, not one interpolated one — same reason as onMarkQslCard below.
+      pushToast(
+        via
+          ? t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via })
+          : t('logbook.qsl.sentCleared', { call: q.call }),
+        'success',
+      )
       load()
     }
   }
@@ -1414,13 +1425,15 @@ export function Logbook({
                       style={{ fontSize: '0.85em' }}
                       value=""
                       onChange={(e) => {
-                        const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | ''
-                        // R/r are NOT ADIF letters — they are this menu's own two entries for
+                        const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | ''
+                        // R/r/s are NOT ADIF letters — they are this menu's own entries for
                         // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
-                        // is not a send at all. Kept in the same menu because an operator
-                        // handling a card thinks about one row, not two controls.
+                        // is not a send at all, and for CLEARING the send (#180). Kept in the
+                        // same menu because an operator handling a card thinks about one row,
+                        // not two controls.
                         if (v === 'R') void onMarkQslCard(q, i, true)
                         else if (v === 'r') void onMarkQslCard(q, i, false)
+                        else if (v === 's') void onMarkQslSent(q, i, null)
                         else if (v) void onMarkQslSent(q, i, v as 'B' | 'D' | 'E')
                       }}
                       title={t('logbook.row.qslSent.title', { call: q.call })}
@@ -1435,6 +1448,12 @@ export function Logbook({
                           <option value="D">{t('logbook.row.qslSent.direct')}</option>
                           <option value="E">{t('logbook.row.qslSent.electronic')}</option>
                         </>
+                      )}
+                      {/* ...and the way back out of it (#180). It has to be shown on exactly
+                          the condition that HIDES the three above: a clear that disappears
+                          once sent would be the same trap with an extra step in it. */}
+                      {q.qslSent?.sent && (
+                        <option value="s">{t('logbook.row.qslSent.clear')}</option>
                       )}
                       {/* INBOUND: the paper card that arrived. Nothing on the internet can
                           report this, so the operator is the only source — and it is

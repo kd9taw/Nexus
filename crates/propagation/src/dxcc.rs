@@ -264,6 +264,35 @@ fn info(r: &'static Resolver, i: u32, zone_override: Option<u8>) -> DxccInfo {
     }
 }
 
+/// Is `entity` one of the DXCC entities whose stations carry a **US state** as their ADIF
+/// primary administrative subdivision — the WAS family, United States + Alaska + Hawaii?
+///
+/// The group is ENUMERATED rather than derived from "does it fly the US flag", because the
+/// other US-flagged entities (Guam, Puerto Rico, the Virgin Islands, the Marianas…) are DXCC
+/// entities in their own right and have no state. Same three names
+/// `tempo_core::diagnostics` groups a logged QSO by, deliberately.
+pub fn is_us_state_entity(entity: &str) -> bool {
+    matches!(entity, "United States" | "Alaska" | "Hawaii")
+}
+
+/// The subdivision an ENTITY settles on its own, because the entity IS one state (#171).
+///
+/// Alaska and Hawaii are single-state DXCC entities: a call the prefix places there is in AK
+/// or HI, whatever any other resolver says — and one other resolver says otherwise. The FCC
+/// ULS index answers with the licensee's **mailing address**, so WL7E came out country
+/// "Alaska", state "CA". The prefix knows where the station is; a mailing address does not,
+/// and nothing was comparing the two.
+///
+/// `None` for every other entity, including the United States — a state there is a real
+/// per-licensee fact this cannot supply.
+pub fn state_for_entity(entity: &str) -> Option<&'static str> {
+    match entity {
+        "Alaska" => Some("AK"),
+        "Hawaii" => Some("HI"),
+        _ => None,
+    }
+}
+
 /// The number of **current ARRL DXCC entities** — the count of non-WAE entities
 /// in cty.dat. This is the DXCC Honor Roll denominator. cty.dat carries only
 /// current entities (the 62 deleted ones are absent), so this is the live
@@ -409,6 +438,32 @@ mod tests {
         // longest-prefix: Hawaii/American Samoa beat the bare "K"/"N"/"W".
         assert_eq!(resolve("KH6ABC").unwrap().entity, "Hawaii");
         assert_eq!(resolve("KL7XX").unwrap().entity, "Alaska");
+    }
+
+    /// #171: the entity is the only resolver that knows where a station IS. WL7E was reported
+    /// showing country "Alaska" and state "CA" — the state came from the FCC index, which holds
+    /// the licensee's mailing address. Alaska and Hawaii settle their own subdivision, and
+    /// everything outside the WAS family has none to settle.
+    #[test]
+    fn single_state_entities_settle_their_own_subdivision() {
+        let ent = |c: &str| resolve(c).unwrap().entity;
+        assert_eq!(state_for_entity(ent("WL7E")), Some("AK"));
+        assert_eq!(state_for_entity(ent("KL7XX")), Some("AK"));
+        assert_eq!(state_for_entity(ent("KH6ABC")), Some("HI"));
+        // The lower 48 has 50 answers this cannot give — that is the FCC index's job.
+        assert_eq!(state_for_entity(ent("KD9TAW")), None);
+
+        assert!(is_us_state_entity(ent("KD9TAW")));
+        assert!(is_us_state_entity(ent("WL7E")));
+        assert!(is_us_state_entity(ent("KH6ABC")));
+        // US-flagged, but DXCC entities of their own with no state.
+        assert!(!is_us_state_entity(ent("KP4ABC")));
+        // Guam by prefix. (`KH2AB` would NOT do here: cty.dat carries it as an exact-call
+        // exception filed under the United States, which is the whole reason the entity — not
+        // the prefix — is what this asks.)
+        assert!(!is_us_state_entity(ent("KH2XYZ")));
+        assert!(!is_us_state_entity(ent("VE3ABC")));
+        assert!(!is_us_state_entity(ent("XE1ABC")));
     }
 
     #[test]
