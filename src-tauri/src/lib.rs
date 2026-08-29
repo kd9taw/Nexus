@@ -13989,8 +13989,19 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::eqsl::is_eqsl_adif(&body) {
+        // ⚠️ DO NOT BLAME THE CREDENTIALS HERE. This point is only reached AFTER the fetch
+        // succeeded, so the login worked: a wrong password fails earlier, in `fetch_inbox`,
+        // with its own message. Saying "check your username/password" sent an operator to
+        // re-enter a password that was correct — reported 2026-08-28 by an operator whose
+        // uploads were landing in his eQSL Outbox (proving the credentials) while every sync
+        // returned this string. The real cause that day was eQSL changing the wording its
+        // download opens with, which `is_eqsl_adif` was matching on (#176).
         return Err(
-            "eQSL returned an unexpected response — check your username/password.".to_string(),
+            "eQSL answered, but the download was not the log file it should have been. Your \
+             username and password are fine — this is not a login problem. eQSL may be \
+             returning an error page, or may have changed the format again. Try once more in \
+             a few minutes, and if it keeps happening please report it."
+                .to_string(),
         );
     }
 
@@ -18816,11 +18827,24 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                     }
                 }
             }
-            // RTTY + PSK + SSTV RX decode threads — RX ONLY (arming is per-session
-            // runtime state; nothing here can key PTT or emit TX audio).
+            // RTTY + PSK + SSTV RX decode threads, and the amplifier status poll — RX ONLY
+            // (arming is per-session runtime state; nothing here can key PTT or emit TX audio).
+            //
+            // The amplifier belongs in THIS family and nowhere else, and that is the whole
+            // isolation argument spent in one place. It must never be folded into the radio
+            // loop's heavy CAT block: that loop ticks every 20 ms and caps its entire read-back
+            // at HEAVY_POLL_BUDGET_MS = 250, asking have_budget() before every single read,
+            // while ONE amplifier poll is 0.5-2.4 s of blocking serial (SPE: two read_exact at
+            // a 500 ms budget; KPA: six sequential verbs at 400 ms each) — 25 to 120 ticks. A
+            // reader that long inside the budget does not fail loudly; it silently STARVES the
+            // readers after it, which is exactly what \dump_caps did to the split read it was
+            // meant to qualify. Nor may it live in RadioLoop, and nor may it become a
+            // spawn_blocking per UI poll: that model reopens its transport on every call, which
+            // for a serial amplifier means opening and closing a COM port every second.
             #[cfg(feature = "radio")]
             {
                 tempo_audio::rttyrx::spawn_rtty_rx(app.state::<SharedEngine>().inner().clone());
+                tempo_audio::amppoll::spawn_amp_poll(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::pskrx::spawn_psk_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::aprsrx::spawn_aprs_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::sstvrx::spawn_sstv_rx(

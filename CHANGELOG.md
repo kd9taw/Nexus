@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **eQSL sync blamed your password when the password was fine.** If the download came back as
+  anything other than the log file, Nexus told you to check your username and password — at a
+  point where the login had already succeeded. Uploads kept working, because they never go
+  through that check, so the app was simultaneously proving your credentials were right and
+  telling you they were wrong. It now says what actually happened and states plainly that it is
+  not a login problem.
+
 - **The SWR and ALC meters had no warning band.** The bar that should turn amber as SWR climbs
   was painting the same red as the "too hot" band, so there was nothing between "fine" and
   "trouble" — you saw a problem arriving rather than coming. Same on the ALC and the S-meter.
