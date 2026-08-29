@@ -9,16 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Amplifier controls in every cockpit.** With an SPE amplifier configured, each operating
-  screen's header carries a compact strip: Standby/Operate, band down and up, and power out —
-  so you can put the amp in line or move it a band without leaving the screen you are working
-  on. It appears only when an amplifier is set up, and nothing at all is added for the stations
-  that have none. Operate reads from the amplifier itself rather than from your click, so the
-  button always shows where the amplifier actually is. Both controls are refused while you are
-  transmitting: changing band on a keyed amplifier can damage it, and dropping to standby
-  mid-over does not stop anything — the exciter keeps keying and the drive passes straight
-  through. Nexus will never switch your amplifier off; that command does not exist in the code.
-  Asked for by KD9TAW.
+- **Amplifier controls in every cockpit.** With an amplifier configured — SPE Expert or Elecraft
+  KPA500/KPA1500 — each operating screen's header carries a compact strip: Standby/Operate, band
+  down and up, and power out, so you can put the amp in line or move it a band without leaving
+  the screen you are working on. It appears only when an amplifier is set up, and nothing at all
+  is added for the stations that have none. Operate reads from the amplifier itself rather than
+  from your click, so the button always shows where the amplifier actually is, even if you press
+  the front-panel key instead. Both controls are refused while you are transmitting: changing
+  band on a keyed amplifier can damage it, and dropping to standby mid-over does not stop
+  anything — the exciter keeps keying and the drive passes straight through. Nexus will never
+  switch your amplifier off; that command does not exist in the code. Asked for by KD9TAW.
+
+  ⚠️ The Elecraft side has never been run on hardware — it is written from Elecraft's own
+  programmer's references and is waiting on someone with a KPA to try it. The SPE side has been
+  tested against a 1.5K-FA.
 
 - **Nexus can read your amplifier.** Put an SPE Expert (1.3K-FA, 1.5K-FA, 2K-FA) or an Elecraft
   KPA500/KPA1500 on its own serial port, set it under **Settings ▸ Radio ▸ Amplifier**, and place
@@ -39,8 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   400 Hz out. How close counts as on pitch follows your rig's CW filter (25 Hz behind the usual
   500 Hz one, tighter behind a narrow filter). When several signals are in the passband it
   follows the one nearest your marker rather than the loudest, so it does not jump to a strong
-  station 300 Hz away while you are closing in. On a dead band it reads "no signal" rather than
-  a confident zero, and it is a display only — it never touches your dial. Asked for by KD9TAW.
+  station 300 Hz away while you are closing in. On a dead band it goes quiet and stays quiet: a
+  reading only appears once a tone has held the same frequency long enough to be a signal you
+  are tuning rather than the loudest thing the receiver happened to hear, so the needle does not
+  twitch at band noise between overs. It waits about a fifth of a second before showing a new
+  signal, which is the price of that stillness, and it keeps tracking live once it has one — the
+  wait is paid when a station starts sending, never between their letters. It is a display only;
+  it never touches your dial. Asked for by KD9TAW.
 
 - **Tune can key at its own power.** Set a tune power under **Settings ▸ Digital ▸ Transmit &
   Sequencing** and a tune-up keys at that level instead of whatever you are running. It can only
