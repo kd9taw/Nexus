@@ -973,6 +973,17 @@ pub struct Settings {
     /// of its ladder is derived from two published endpoints plus one measured point rather than
     /// published — so following there is several commands walking a table that has never been
     /// confirmed end to end on hardware. Both honour this switch; only one of them is proven.
+    ///
+    /// ⚠️ AND ON MOST SPE STATIONS THIS SHOULD STAY OFF FOR A REASON THAT IS NOT ABOUT RISK.
+    /// An SPE is normally wired to follow the radio through its own band-data cable, in
+    /// hardware. Where that cable is fitted, this setting is a SECOND thing steering one band —
+    /// redundant at best, and at worst two controllers disagreeing about where the amplifier
+    /// should be. Reported by the operator on 2026-08-29, whose own 1.5K-FA is wired exactly
+    /// that way; it is also why the SPE ladder's middle is still unmeasured here, since testing
+    /// the step would have meant unplugging a cable that is doing the job correctly.
+    ///
+    /// The setting's own hint says this, in all four catalogs. It is the difference between a
+    /// switch an operator can judge and one they have to guess at.
     #[serde(default)]
     pub amp_follow_band: bool,
     /// ADVANCED override: an external `rotctld` daemon address `host:port`

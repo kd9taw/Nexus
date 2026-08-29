@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own, and you should choose it rather than discover it. It never moves the amplifier while you
   are transmitting, and it steps one band at a time, checking where the amplifier actually is
   after each step rather than assuming it arrived. If your radio is on a band the amplifier does
-  not have, it does nothing at all instead of picking the nearest.
+  not have, it does nothing at all instead of picking the nearest. ⚠️ If your amplifier already
+  follows the radio through its own band-data cable — which is how most SPE installations are
+  wired — leave this off. The hardware is doing the same job, and two things steering one band
+  is worse than either alone.
 
 ### Changed
 

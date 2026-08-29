@@ -662,7 +662,7 @@ export const DE: PartialCatalog = {
   "settings.amplifier.model.none": "Keine",
   "settings.amplifier.model.hint": "Setze das Endstufen-Panel in Connect ein, um die Messwerte zu sehen. Nichts hiervon ändert, wie das Funkgerät sendet.",
   "settings.amplifier.follow.label": "Dem Band des Ger\u00e4ts folgen",
-  "settings.amplifier.follow.hint": "Schaltet die Endstufe auf das Band, auf dem du bist, ohne zu fragen. Standardm\u00e4\u00dfig aus \u2014 dies ist die einzige Endstufen-Bedienung, die von selbst handelt. Sie bewegt die Endstufe nie w\u00e4hrend der Aussendung und schaltet jeweils ein Band weiter, wobei sie nach jedem Schritt pr\u00fcft, wo die Endstufe wirklich steht.",
+  "settings.amplifier.follow.hint": "Schaltet die Endstufe auf das Band, auf dem du bist, ohne zu fragen. Standardm\u00e4\u00dfig aus \u2014 dies ist die einzige Endstufen-Bedienung, die von selbst handelt. Sie bewegt die Endstufe nie w\u00e4hrend der Aussendung und schaltet jeweils ein Band weiter, wobei sie nach jedem Schritt pr\u00fcft, wo die Endstufe wirklich steht. \u26a0\ufe0f Wenn deine Endstufe dem Ger\u00e4t bereits \u00fcber ihr eigenes Banddaten-Kabel folgt, wie bei den meisten SPE-Installationen, lass dies aus: die Hardware macht dasselbe, und zwei Dinge, die ein Band steuern, sind schlechter als eines.",
   "settings.amplifier.port.label": "Endstufen-Port",
   "settings.amplifier.port.hint": "Ein eigener Port, nicht der von CAT — ein serieller Port lässt sich nur einmal öffnen; gemeinsam genutzt verbindet sich das Funkgerät nicht mehr. Die Geschwindigkeit wird automatisch ermittelt.",
   "settings.rotator.legend": "Rotor",
