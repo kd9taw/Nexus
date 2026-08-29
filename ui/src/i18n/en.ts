@@ -5384,6 +5384,25 @@ export const EN = {
   'settings.callsignState.hint':
     'A callsign→state index (from the FCC license file) so a New State lights up on cluster / CW / SSB spots that carry no grid. Refreshed weekly from hamradiotools.io; a live decode grid refines it for rovers.',
 
+  // ── Settings ▸ Logging & Connectors ▸ Country file (DXCC) ─────────────────────────
+  // ⚠️ `AD1C` (the file's maintainer), `cty.dat` and `DXCC` are invariant tokens in every
+  // catalog. `{{ver}}` is an AD1C release date the panel formats as YYYY-MM-DD; the resolver
+  // is set once at launch, so every "applies at next launch" is literal, not caution.
+  'settings.countryFile.legend': 'Country file (DXCC)',
+  'settings.countryFile.update.action': 'Update country file',
+  'settings.countryFile.update.busy': 'Updating…',
+  'settings.countryFile.update.done':
+    'Country file downloaded — AD1C {{ver}} applies at next launch.',
+  'settings.countryFile.update.current': 'Country file is already current — AD1C {{ver}}.',
+  'settings.countryFile.update.failed': 'Country file update failed: {{detail}}',
+  'settings.countryFile.status': '{{count}} entities · AD1C {{ver}} · fetched {{date}}',
+  'settings.countryFile.statusBuiltIn': '{{count}} entities · AD1C {{ver}} (built-in)',
+  'settings.countryFile.empty': 'Built-in country file active.',
+  'settings.countryFile.pending':
+    'Update downloaded (AD1C {{ver}}) — applies at next launch.',
+  'settings.countryFile.hint':
+    'The AD1C cty.dat country file maps callsigns to DXCC entities — the country on decode rows, the Needed board and the log. Checked weekly; a downloaded update applies at the next launch.',
+
   // ── Settings ▸ Logging & Connectors ▸ Confirmations ────────────────────────────────
   // The QSL services, one featgroup each. Everything below is a LABEL or a HINT: no key,
   // password, token or upload code is read, written or interpolated by any entry here, and the

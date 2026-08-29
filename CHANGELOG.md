@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Your country file can finally be updated — and Nexus tells you how old it is.** The DXCC
+  country data that drives the Needed board, award credit and entity labels was frozen into
+  each release; every install has been running a file from January 2025. **Settings ▸ Logging ▸
+  Country file (DXCC)** now shows the file's actual date and fetches the current one — the full
+  big-CTY edition, same as the big loggers use — checked weekly for freshness the way the
+  callsign database already is. A downloaded file is validated before it is ever trusted and
+  takes effect at the next launch; the built-in copy remains the floor, so a bad download can
+  never make things worse. Works the N3FJP way: update at home before Field Day, operate all
+  weekend offline.
+
 - **Nexus speaks Japanese.** 日本語に対応しました。 The whole application — all 4,765 phrases,
   every screen, the same coverage the other languages have — picked up automatically from your
   system language or chosen in Settings. Written to Japanese amateur-radio convention (ゼロイン

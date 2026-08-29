@@ -315,6 +315,32 @@ export async function fetchFccStates(): Promise<FccStatesStatus> {
   return invoke<FccStatesStatus>('fetch_fcc_states')
 }
 
+/** AD1C cty.dat country-file currency — Settings "Country file (DXCC)" fieldset.
+ * The resolver is set once at launch, so a downloaded file applies at the NEXT
+ * launch: `activeVer` is what is resolving now, `installedVer` what is staged
+ * on disk (both AD1C `yyyymmdd` release dates; `installedVer` empty until a
+ * download happens). */
+export interface CtyStatus {
+  /** Entity count of the ACTIVE file. */
+  count: number
+  fetchedAt: number
+  generated: string
+  activeVer: string
+  installedVer: string
+}
+
+export async function getCtyStatus(): Promise<CtyStatus> {
+  return invoke<CtyStatus>('get_cty_status')
+}
+
+/** Download/refresh the country file if AD1C published a newer release
+ * (compared on the content-derived `=VER` date, so an unchanged week is one
+ * small manifest fetch). The downloaded file applies at the next launch —
+ * never mid-session. */
+export async function fetchCty(): Promise<CtyStatus> {
+  return invoke<CtyStatus>('fetch_cty')
+}
+
 /** Orbital-element (TLE) currency status — Settings "Orbital elements" fieldset
  * + the Now-Bar `sat` lane. */
 export interface TleStatus {

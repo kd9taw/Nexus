@@ -402,6 +402,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['fcc', 'state', 'was', 'callsign database', 'us states'],
   },
   {
+    id: 'country-file',
+    label: 'Country file (DXCC)',
+    tab: 'logging',
+    keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
+      'country'],
+  },
+  {
     id: 'confirmations',
     label: 'Confirmations',
     tab: 'logging',

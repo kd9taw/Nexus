@@ -3950,6 +3950,204 @@ async fn fetch_fcc_states() -> Result<FccStatesStatus, String> {
     Ok(fcc_status())
 }
 
+// --- AD1C cty.dat country file (downloaded to the SHARED data dir; DXCC entity resolution
+// for decode rows, the Needed board and the log). Mirrors the FCC block above with ONE
+// deliberate delta: the "is newer" compare keys on the manifest's content-derived `ver` (the
+// AD1C `=VERyyyymmdd` marker), not `generated` — the weekly cron re-publishes unchanged
+// content with a fresh `generated`, and that must not force every install to re-download the
+// file for nothing.
+//
+// ⚠️ STARTUP-ONLY SWAP, unlike FCC's live RwLock: the DXCC resolver is a set-once OnceLock
+// serving `&'static` borrows, so a downloaded file activates at the NEXT launch —
+// `cty_load_from_disk` runs in `run()` right after Settings::load, BEFORE any thread that
+// could resolve a call, and `cty_download_if_newer` only stages bytes on disk (it never
+// touches the resolver). See propagation::dxcc::init_from for the seed-floor rule. ---
+
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+struct CtyMeta {
+    /// The manifest's `generated` ISO timestamp (kept for display; NOT the freshness key).
+    generated: String,
+    /// The installed file's `=VERyyyymmdd` date — the freshness key the download compares.
+    ver: String,
+    entities: usize,
+    fetched_at: i64,
+}
+
+fn cty_path() -> PathBuf {
+    shared_data_dir().join("cty.dat")
+}
+fn cty_meta_path() -> PathBuf {
+    shared_data_dir().join("cty.meta.json")
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CtyStatus {
+    /// Entity count of the ACTIVE file (the one resolving this session).
+    count: usize,
+    fetched_at: i64,
+    generated: String,
+    /// `=VER` date of the ACTIVE file.
+    active_ver: String,
+    /// `=VER` date of the INSTALLED (downloaded) file, `""` if none — when it is newer than
+    /// `active_ver`, the UI shows "applies at next launch".
+    installed_ver: String,
+}
+
+fn cty_meta() -> CtyMeta {
+    std::fs::read_to_string(cty_meta_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn cty_status() -> CtyStatus {
+    let m = cty_meta();
+    let active = propagation::dxcc::active_stats();
+    CtyStatus {
+        count: active.entities,
+        fetched_at: m.fetched_at,
+        generated: m.generated,
+        active_ver: active.ver.unwrap_or_default(),
+        installed_ver: m.ver,
+    }
+}
+
+/// Activate the downloaded cty.dat, if there is one and it beats the seed floor. MUST run
+/// before anything can resolve a callsign (see the `run()` call site). Milestone-logs which
+/// file won either way; an `AlreadyInitialized` is logged as an ERROR because it means a
+/// resolve beat us here — a code-ordering regression to fix, not a state to accept.
+fn cty_load_from_disk() {
+    let embedded = propagation::dxcc::embedded_ver().unwrap_or_default();
+    let text = match std::fs::read_to_string(cty_path()) {
+        Ok(t) => t,
+        Err(_) => {
+            // Nothing downloaded (or unreadable): the embedded seed activates lazily on
+            // first resolve, exactly as before the refresh pipeline existed.
+            tempo_core::applog::info(
+                "startup",
+                &format!("cty.dat: no downloaded file — embedded AD1C {embedded} active"),
+            );
+            return;
+        }
+    };
+    match propagation::dxcc::init_from(&text) {
+        Ok(stats) => tempo_core::applog::info(
+            "startup",
+            &format!(
+                "cty.dat: downloaded AD1C {} active ({} entities)",
+                stats.ver.unwrap_or_default(),
+                stats.entities
+            ),
+        ),
+        Err(propagation::dxcc::CtyInitError::AlreadyInitialized) => tempo_core::applog::error(
+            "startup",
+            "cty.dat: resolver was already initialized before the startup install — \
+             something resolved a callsign too early (code-ordering regression); the \
+             embedded file is locked in for this session",
+        ),
+        Err(e) => tempo_core::applog::info(
+            "startup",
+            &format!("cty.dat: downloaded file rejected ({e}) — embedded AD1C {embedded} active"),
+        ),
+    }
+}
+
+/// BLOCKING: download cty.dat if the hosted manifest's `ver` differs from what we hold (or we
+/// hold nothing), VALIDATE it with a scratch parse (never the global resolver — a corrupt
+/// download must never replace a good local copy, and the live resolver is set-once), persist
+/// it atomically to the shared data dir, and stamp the meta. NO resolver swap — the file
+/// activates at the next launch. Returns Ok(true) when it installed a new file. Shared by the
+/// Settings button + the startup auto-refresh.
+fn cty_download_if_newer() -> Result<bool, String> {
+    let local = cty_meta();
+    let have = cty_path().exists();
+    let c = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = c
+        .get(format!("{FCC_STATES_BASE}/cty.json"))
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .map_err(|e| e.to_string())?;
+    let ver = manifest
+        .get("ver")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let generated = manifest
+        .get("generated")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if !ver.is_empty() && ver == local.ver && have {
+        // Same content (the weekly cron re-publishes with a fresh `generated`) — just
+        // refresh the fetched_at stamp so the 7-day staleness gate doesn't re-hit the
+        // manifest on every launch.
+        let _ = std::fs::write(
+            cty_meta_path(),
+            serde_json::to_string(&CtyMeta {
+                generated,
+                ver,
+                entities: local.entities,
+                fetched_at: now_unix(),
+            })
+            .unwrap_or_default(),
+        );
+        return Ok(false);
+    }
+    let text = c
+        .get(format!("{FCC_STATES_BASE}/cty.dat"))
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .text()
+        .map_err(|e| e.to_string())?;
+    let stats = propagation::dxcc::validate(&text)
+        .map_err(|e| format!("downloaded cty.dat failed validation: {e}"))?;
+    if let Some(dir) = cty_path().parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Atomic install: per-process temp then rename, so two radio instances sharing this dir
+    // can never read a half-written file (same shape as the FCC index above).
+    let final_path = cty_path();
+    let tmp = final_path.with_extension(format!("dat.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, &text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &final_path).map_err(|e| e.to_string())?;
+    let _ = std::fs::write(
+        cty_meta_path(),
+        serde_json::to_string(&CtyMeta {
+            generated,
+            // Stamp the VALIDATED file's own marker, not the manifest's claim.
+            ver: stats.ver.clone().unwrap_or(ver),
+            entities: stats.entities,
+            fetched_at: now_unix(),
+        })
+        .unwrap_or_default(),
+    );
+    Ok(true)
+}
+
+#[tauri::command]
+fn get_cty_status() -> CtyStatus {
+    cty_status()
+}
+
+/// The Settings "Update country file" button. The downloaded file applies at the NEXT
+/// launch; the returned status carries both vers so the UI can say so.
+#[tauri::command]
+async fn fetch_cty() -> Result<CtyStatus, String> {
+    tauri::async_runtime::spawn_blocking(cty_download_if_newer)
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(cty_status())
+}
+
 /// The LEGACY per-profile TLE cache (a bare `Vec<Tle>` array, pre-snapshot
 /// builds) — read once at startup for migration onto the shared path, never
 /// written again.
@@ -17353,6 +17551,15 @@ pub fn run() {
         ),
     );
 
+    // DXCC country file: activate the downloaded cty.dat (if any, and only if it beats the
+    // embedded seed) BEFORE anything can resolve a callsign. The resolver is a set-once
+    // OnceLock and whoever touches it first locks a file in for the whole session — the
+    // POTA/cluster feed threads spawned below resolve on their very first spot — so this
+    // must stay ahead of EVERY thread spawn and of engine construction. Parse cost is
+    // single-digit ms. A file downloaded mid-session activates at the NEXT launch (no live
+    // swap; the Settings status line says so).
+    cty_load_from_disk();
+
     let bound_radio = bound_radio_id();
 
     // Union in any radio the BASE config has that this window's config doesn't, and adopt base's
@@ -17713,6 +17920,23 @@ pub fn run() {
                 std::thread::spawn(|| {
                     if let Err(e) = fcc_download_if_newer() {
                         eprintln!("tempo: FCC callsign→state auto-refresh failed: {e}");
+                    }
+                });
+            }
+        }
+        // cty.dat country file: background refresh when missing or > 7 days old (AD1C
+        // releases every few weeks; the manifest compare keys on `ver`, so an unchanged
+        // release costs one small JSON fetch). This only STAGES the file — it activates at
+        // the next launch (cty_load_from_disk above, before any resolve).
+        {
+            let stale = {
+                let m = cty_meta();
+                m.fetched_at == 0 || now_unix() - m.fetched_at > 7 * 86_400
+            };
+            if stale {
+                std::thread::spawn(|| {
+                    if let Err(e) = cty_download_if_newer() {
+                        eprintln!("tempo: cty.dat auto-refresh failed: {e}");
                     }
                 });
             }
@@ -18743,6 +18967,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             fetch_lotw_users,
             get_fcc_states_status,
             fetch_fcc_states,
+            get_cty_status,
+            fetch_cty,
             get_tle_status,
             fetch_tles_now,
             import_tles,

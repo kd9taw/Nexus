@@ -99,6 +99,7 @@ import {
 import { AssistanceNote } from './AssistanceNote'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
+import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
@@ -1063,6 +1064,18 @@ export function SettingsPanel({
       .then(setFccStates)
       .catch(() => {})
   }, [])
+  // AD1C cty.dat country file (DXCC entity resolution) — the resolver is set once at
+  // launch, so a downloaded update applies at the NEXT launch and the row says so.
+  const [ctyStatus, setCtyStatus] = useState<CtyStatus | null>(null)
+  const [ctyFetching, setCtyFetching] = useState(false)
+  useEffect(() => {
+    getCtyStatus()
+      .then(setCtyStatus)
+      .catch(() => {})
+  }, [])
+  // AD1C's `=VER` dates are `yyyymmdd`; show them as ISO dates.
+  const ctyVerDate = (v: string) =>
+    v.length === 8 ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6)}` : v
   // Orbital elements (TLE snapshot) — the satellite currency pipeline's
   // operator surface: status + manual refresh + the file-import escape hatch.
   const [tleStatus, setTleStatus] = useState<TleStatus | null>(null)
@@ -8484,6 +8497,76 @@ export function SettingsPanel({
                 </span>
               </div>
               <span className="settings-hint">{t('settings.callsignState.hint')}</span>
+            </div>
+          </fieldset>
+
+          <fieldset className="settings-section" id="settings-country-file">
+            <legend>{t('settings.countryFile.legend')}</legend>
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={ctyFetching}
+                  onClick={() => {
+                    setCtyFetching(true)
+                    fetchCty()
+                      .then((st) => {
+                        setCtyStatus(st)
+                        const pending =
+                          st.installedVer !== '' && st.installedVer > st.activeVer
+                        pushToast(
+                          pending
+                            ? t('settings.countryFile.update.done', {
+                                ver: ctyVerDate(st.installedVer),
+                              })
+                            : t('settings.countryFile.update.current', {
+                                ver: ctyVerDate(st.activeVer),
+                              }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          t('settings.countryFile.update.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setCtyFetching(false))
+                  }}
+                >
+                  {ctyFetching
+                    ? t('settings.countryFile.update.busy')
+                    : t('settings.countryFile.update.action')}
+                </button>
+                <span className="settings-hint">
+                  {ctyStatus === null
+                    ? t('settings.countryFile.empty')
+                    : ctyStatus.fetchedAt > 0
+                      ? t('settings.countryFile.status', {
+                          count: ctyStatus.count.toLocaleString(),
+                          ver: ctyVerDate(ctyStatus.activeVer),
+                          date: new Date(ctyStatus.fetchedAt * 1000).toISOString().slice(0, 10),
+                        })
+                      : t('settings.countryFile.statusBuiltIn', {
+                          count: ctyStatus.count.toLocaleString(),
+                          ver: ctyVerDate(ctyStatus.activeVer),
+                        })}
+                </span>
+              </div>
+              {ctyStatus !== null &&
+                ctyStatus.installedVer !== '' &&
+                ctyStatus.installedVer > ctyStatus.activeVer && (
+                  <span className="settings-hint">
+                    {t('settings.countryFile.pending', {
+                      ver: ctyVerDate(ctyStatus.installedVer),
+                    })}
+                  </span>
+                )}
+              <span className="settings-hint">{t('settings.countryFile.hint')}</span>
             </div>
           </fieldset>
           <fieldset className="settings-section" id="settings-confirmations">

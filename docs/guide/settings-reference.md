@@ -986,6 +986,16 @@ master computer and point Nexus at its IP and port.
   first launch, then auto-refreshes weekly from hamradiotools.io; a live decode
   grid refines it for rovers.
 
+### Country file (DXCC)
+
+- **Update country file** — "The AD1C cty.dat country file maps callsigns to
+  DXCC entities — the country on decode rows, the Needed board and the log."
+  A copy ships built in, so entity resolution always works offline; Nexus
+  checks weekly for a newer AD1C release and downloads it automatically. The
+  resolver is fixed for a running session, so a downloaded update **applies at
+  the next launch** — the status line shows the active release date and notes
+  when a newer download is waiting.
+
 ### Confirmations
 
 **LoTW**

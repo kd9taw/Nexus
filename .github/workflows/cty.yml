@@ -1,0 +1,92 @@
+# Weekly refresh of AD1C's cty.dat country file that Nexus downloads for DXCC entity
+# resolution (see scripts/gen-cty.mjs + crates/propagation/src/dxcc.rs — the embedded copy is
+# the seed; a downloaded one activates at the next launch).
+#
+# AD1C publishes new releases every few weeks; this runs weekly and publishes the ~100 KB
+# file + manifest as a rolling GitHub Release asset (`cty`), which needs NO secrets — the
+# built-in GITHUB_TOKEN is enough. The manifest's `ver` is the content-derived AD1C release
+# date, and the in-app client keys its "is newer" compare on it — so a week with no new AD1C
+# release re-publishes identical content harmlessly (installs skip the download). Serving it
+# under hamradiotools.io is the same one-time `_redirects` site edit as fcc-states; the
+# optional Cloudflare R2 step below hosts it directly under the domain when the secret exists.
+name: AD1C country file (cty.dat)
+
+on:
+  schedule:
+    # Tuesdays 09:43 UTC — an off-the-hour minute, plus the jitter sleep below, so this does
+    # not land on country-files.com at the same instant as every other cron in the world.
+    - cron: '43 9 * * 2'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # publish the rolling Release asset
+
+concurrency:
+  group: cty
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Jitter (be a polite weekly visitor to country-files.com)
+        run: sleep $((RANDOM % 240))
+
+      - name: Fetch + validate + emit (refuses a short/garbage file, exit 1)
+        run: |
+          mkdir -p out
+          node scripts/gen-cty.mjs --download out
+
+      - name: Sanity-check the output before publishing (independent re-parse)
+        run: |
+          node -e '
+            const fs = require("fs");
+            const text = fs.readFileSync("out/cty.dat", "latin1");
+            if (/^\s*</.test(text)) throw new Error("HTML, not cty.dat");
+            let entities = 0;
+            for (const line of text.split("\n")) {
+              if (!line.trim()) continue;
+              if (line[0] !== " " && line[0] !== "\t" && line.split(":").length >= 8) entities++;
+            }
+            const ver = /=VER(\d{8})/.exec(text);
+            if (!ver) throw new Error("no =VERyyyymmdd marker");
+            // ~346 entities in current files; far fewer means an upstream/parse break.
+            if (entities < 330) throw new Error(`only ${entities} entities — refusing to publish a short file`);
+            const manifest = JSON.parse(fs.readFileSync("out/cty.json", "utf8"));
+            if (manifest.ver !== ver[1]) throw new Error(`manifest ver ${manifest.ver} != file =VER${ver[1]}`);
+            console.log(`ok: ${entities} entities, =VER${ver[1]}, ${text.length} bytes`);
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cty
+          path: out/*
+          retention-days: 14
+
+      - name: Publish to the rolling `cty` Release (automatic source, no secrets)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view cty >/dev/null 2>&1 \
+            || gh release create cty \
+                 --title "AD1C country file (cty.dat)" \
+                 --notes "Auto-generated weekly from country-files.com. Nexus downloads this for DXCC entity resolution; it activates at the next launch." \
+                 --latest=false
+          gh release upload cty out/cty.dat out/cty.json --clobber
+
+      - name: (optional) Publish under hamradiotools.io via Cloudflare R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "No CLOUDFLARE_API_TOKEN secret — skipping R2 publish (the Release above is the source)."
+            exit 0
+          fi
+          npx --yes wrangler r2 object put nexus-data/cty.dat  --file out/cty.dat  --content-type text/plain
+          npx --yes wrangler r2 object put nexus-data/cty.json --file out/cty.json --content-type application/json
