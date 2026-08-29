@@ -3173,6 +3173,8 @@ export const ES: PartialCatalog = {
   "settings.amplifier.model.none": "Ninguno",
   "settings.amplifier.note": "Estado de solo lectura de un lineal en su propio puerto serie — potencia de salida, SWR, temperatura y alarmas. Nexus nunca manda al amplificador: solo lo lee.",
   "settings.amplifier.port.hint": "Su propio puerto, no el de CAT — un puerto serie solo puede abrirse una vez, así que compartirlo impide que la radio conecte. La velocidad se detecta sola.",
+  "settings.amplifier.follow.label": "Seguir la banda del equipo",
+  "settings.amplifier.follow.hint": "Cambia el amplificador a la banda en la que est\u00e1s, sin preguntar. Desactivado por defecto: es el \u00fanico control del amplificador que act\u00faa por su cuenta. Nunca mueve el amplificador mientras transmites, y avanza de banda en banda comprobando d\u00f3nde est\u00e1 realmente despu\u00e9s de cada paso.",
   "settings.amplifier.port.label": "Puerto del amplificador",
   "settings.antennaGain.hint": "Solo la usa el balance de enlace de P.533. 0 = un hilo o vertical simple (isotrópico); una yagi de 3 elementos ≈ 6–8. Honesto v1: un simple desplazamiento en dB — sin modelar diagrama ni ángulo de salida, y el heurístico rápido la ignora.",
   "settings.antennaGain.label": "Ganancia de antena (dBi) — TX / RX",

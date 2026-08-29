@@ -207,6 +207,16 @@ pub fn spe_command(cmd: SpeCommand) -> Vec<u8> {
 ///
 /// Returns `None` for an index outside the ladder rather than guessing — a band an amplifier
 /// reports and we cannot name is a newer model, not a bad frame.
+/// The ladder in reverse — a band NAME to the index both families use.
+///
+/// Used only by band-follow, and only ever to compute a target the amplifier is then asked to
+/// reach. Returns `None` for a band no amplifier in either family has (2m and up, and anything
+/// this ladder does not name), which is what stops a follow attempt on a band where the right
+/// answer is to do nothing rather than to pick the nearest.
+pub fn band_index_for_label(label: &str) -> Option<u8> {
+    (0u8..=11).find(|i| spe_band_label(*i) == Some(label))
+}
+
 pub fn spe_band_label(index: u8) -> Option<&'static str> {
     Some(match index {
         0 => "160m",
@@ -1351,6 +1361,28 @@ mod tests {
         assert_eq!(kpa_band_label(10), Some("6m"));
         assert_eq!(kpa_band_label(11), None, "no 4m on a KPA");
         assert_eq!(spe_band_label(11), Some("4m"), "the SPE has one");
+    }
+
+    /// The reverse lookup must agree with the forward one for every band, and refuse the rest.
+    #[test]
+    fn a_band_name_maps_back_to_the_index_it_came_from() {
+        for i in 0..=11u8 {
+            let name = spe_band_label(i).expect("every index 0..=11 names a band");
+            assert_eq!(
+                band_index_for_label(name),
+                Some(i),
+                "{name} did not map back to {i}"
+            );
+        }
+        // Bands no amplifier in either family has. `None` is what stops band-follow from
+        // picking a nearest match and moving a kilowatt onto a band nobody asked for.
+        for absent in ["2m", "70cm", "23cm", "630m", "2200m", "", "20"] {
+            assert_eq!(
+                band_index_for_label(absent),
+                None,
+                "{absent} is not on the ladder"
+            );
+        }
     }
 
     /// The band ladder, checked against every anchor that exists rather than against itself.

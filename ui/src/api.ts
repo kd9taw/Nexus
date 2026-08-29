@@ -1470,6 +1470,7 @@ export interface RadioProfilePatch {
    * to deserialize at all and took the whole Save with it. */
   ampModel: string
   ampPort: string
+  ampFollowBand: boolean
   /** THIS radio's FlexRadio LAN IP (SmartSDR API, port 4992) for the native panadapter/DAX
    * workers. Per-radio since 2026-08-18: it was flat-only, so the per-radio Edit flow — which
    * saves through THIS patch — silently dropped it, and two Flexes could not both be configured

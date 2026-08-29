@@ -959,6 +959,22 @@ pub struct Settings {
     /// unconfigured shows nothing, configured-and-silent shows "—").
     #[serde(default)]
     pub amp_port: String,
+    /// Step the amplifier to the band the radio is on, without being asked. **Off by default.**
+    ///
+    /// ⚠️ OFF IS DELIBERATE, AND NOT JUST CAUTION. The standing rule in this app is that Nexus
+    /// notifies and never moves the station unattended; an amplifier is a slaved accessory
+    /// rather than the thing making the QSO, which is why this is offered at all. But it is
+    /// still Nexus putting a command on a kilowatt's wire with nobody's hand on it, so the
+    /// operator turns it on rather than discovering it.
+    ///
+    /// ⭐ AND THE TWO FAMILIES DO NOT CARRY THE SAME RISK. Elecraft sets a band ABSOLUTELY
+    /// (`^BNbb;`) against a table Elecraft publishes in full, so following is one command whose
+    /// result is read back on the next poll. SPE can only STEP (`BAND-`/`BAND+`), and the middle
+    /// of its ladder is derived from two published endpoints plus one measured point rather than
+    /// published — so following there is several commands walking a table that has never been
+    /// confirmed end to end on hardware. Both honour this switch; only one of them is proven.
+    #[serde(default)]
+    pub amp_follow_band: bool,
     /// ADVANCED override: an external `rotctld` daemon address `host:port`
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
@@ -2411,6 +2427,7 @@ pub struct RadioProfile {
     pub rotator_baud: u32,
     pub amp_model: String,
     pub amp_port: String,
+    pub amp_follow_band: bool,
     pub rotator_host: String,
     /// UNIQUE across enabled profiles (validated) — each radio's own rotctld TCP port.
     pub rotctld_port: u16,
@@ -2487,6 +2504,7 @@ pub struct RadioProfilePatch {
     pub rotator_baud: u32,
     pub amp_model: String,
     pub amp_port: String,
+    pub amp_follow_band: bool,
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
@@ -2532,6 +2550,7 @@ impl RadioProfilePatch {
         p.rotator_port = self.rotator_port;
         p.amp_model = self.amp_model;
         p.amp_port = self.amp_port;
+        p.amp_follow_band = self.amp_follow_band;
         p.rotator_baud = self.rotator_baud;
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
@@ -2623,6 +2642,7 @@ impl Default for RadioProfile {
             rotator_baud: default_rotator_baud(),
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             rotctld_port: 4533,
             bands: Vec::new(),
@@ -3034,6 +3054,7 @@ impl Default for Settings {
             rotator_baud: default_rotator_baud(),
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             // Satellite Doppler is OFF and unmapped by default: a station
             // with no satellite interest must never have its dial moved.
@@ -3319,6 +3340,7 @@ impl Settings {
             // operator had already configured before profiles existed.
             amp_model: self.amp_model.clone(),
             amp_port: self.amp_port.clone(),
+            amp_follow_band: self.amp_follow_band,
             rotctld_port: 4533,
             bands: Vec::new(),
             last_dial_mhz: self.dial_mhz,
@@ -4266,6 +4288,7 @@ mod tests {
             rotator_baud: 19_200,
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
@@ -4394,6 +4417,7 @@ mod tests {
             rotator_baud: 0,
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -4507,6 +4531,7 @@ mod tests {
             rotator_baud: 0,
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -4688,6 +4713,7 @@ mod tests {
             rotator_baud: p.rotator_baud,
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),

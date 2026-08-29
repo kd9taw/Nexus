@@ -646,6 +646,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     icomDataMode: s.icomDataMode ?? 1,
     ampModel: s.ampModel ?? '',
     ampPort: s.ampPort ?? '',
+    ampFollowBand: s.ampFollowBand ?? false,
     // ⚠️ THE FLEX THREE BELONG HERE, and their absence was silent data loss (2026-08-17 Flex
     // audit). Every save of the rig form while EDITING a non-active radio routes through
     // `persistRadioForm` → `updateRadioProfile(radioPatch(form))`, so a field this function does
@@ -5187,6 +5188,23 @@ export function SettingsPanel({
                     aria-label={t('settings.amplifier.port.label')}
                   />
                   <span className="settings-hint">{t('settings.amplifier.port.hint')}</span>
+                </div>
+              )}
+              {/* Band-follow. Shown only once a port is set, because until then there is no
+                  amplifier to follow anything and the switch would be a promise about nothing.
+                  OFF by default and deliberately so: this is the one amplifier control that
+                  acts without the operator's hand on it. */}
+              {(form.ampModel ?? '') !== '' && (form.ampPort ?? '') !== '' && (
+                <div className="settings-field">
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={form.ampFollowBand ?? false}
+                      onChange={(e) => updateBool('ampFollowBand', e.target.checked)}
+                    />
+                    <span>{t('settings.amplifier.follow.label')}</span>
+                  </label>
+                  <span className="settings-hint">{t('settings.amplifier.follow.hint')}</span>
                 </div>
               )}
             </div>

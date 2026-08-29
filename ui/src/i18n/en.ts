@@ -4340,6 +4340,9 @@ export const EN = {
   'settings.amplifier.model.none': 'None',
   'settings.amplifier.model.hint':
     'Place the Amplifier pane in Connect to see the readings. Nothing here changes how the radio transmits.',
+  'settings.amplifier.follow.label': 'Follow the radio\u2019s band',
+  'settings.amplifier.follow.hint':
+    'Step the amplifier to the band you are on, without being asked. Off by default \u2014 this is the one amplifier control that acts on its own. It never moves the amplifier while you are transmitting, and it steps one band at a time, checking where the amplifier actually is after each one rather than assuming it got there.',
   'settings.amplifier.port.label': 'Amplifier port',
   'settings.amplifier.port.hint':
     'Its own port, not the one CAT uses — a serial port can only be open once, so sharing it stops the radio connecting. The speed is worked out for you.',

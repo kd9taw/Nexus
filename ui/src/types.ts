@@ -2568,6 +2568,7 @@ export interface Settings {
    * 'kpa' = Elecraft KPA500/KPA1500. The flat mirror of the ACTIVE radio's profile. */
   ampModel?: string
   ampPort?: string
+  ampFollowBand?: boolean
   /** ADVANCED: external rotctld host:port override (wins over the integrated
    * spawn). Empty + model 0 = no rotator. */
   rotatorHost: string
@@ -3058,6 +3059,7 @@ export interface RadioProfile {
    * an SO2R station has an amplifier per radio. */
   ampModel: string
   ampPort: string
+  ampFollowBand: boolean
   rotatorHost: string
   rotctldPort: number
   /** Bands this radio covers (empty = all) — for auto band-routing (P4). */
