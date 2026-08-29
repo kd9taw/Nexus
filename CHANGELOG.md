@@ -417,6 +417,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every port you could pick before, you can still pick.
 ## [1.9.1] — 2026-08-26
 
+### Added
+
+- **CW and Operate have a real split control.** They only ever *displayed* that split was on.
+  Phone has had a proper one for a while; now all three do, so you can set up a split from the
+  cockpit you are working in rather than reaching for the radio.
+
+- **Nexus can follow the radio's own split**, if you turn it on in Settings and your radio can
+  report it reliably. Nexus asks the radio rather than asking you to guess — on a radio that
+  cannot answer without being disturbed, the option is not offered, because finding out would
+  mean moving your VFOs behind your back. Off by default.
+
 ### Fixed
 
 - **RTTY: Nexus could let you transmit outside your licence privileges, and could ignore your
@@ -445,15 +456,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Nexus now judges the frequency your signal actually leaves on. When it cannot tell where that
   is, it refuses rather than guessing.
-
-- **CW and Operate have a real split control.** They only ever *displayed* that split was on.
-  Phone has had a proper one for a while; now all three do, so you can set up a split from the
-  cockpit you are working in rather than reaching for the radio.
-
-- **Nexus can follow the radio's own split**, if you turn it on in Settings and your radio can
-  report it reliably. Nexus asks the radio rather than asking you to guess — on a radio that
-  cannot answer without being disturbed, the option is not offered, because finding out would
-  mean moving your VFOs behind your back. Off by default.
 
 ## [1.9.0] — 2026-08-25
 
