@@ -315,13 +315,12 @@ meaning depends on a state Nexus learns a poll late, so every write is a guess �
 and putting an amplifier in standby is not a way to stop a transmission anyway,
 because the exciter keeps keying and the drive passes straight through.
 
-- **Amplifier** — the family: SPE Expert 1.3K-FA / 2K-FA, or Elecraft
+- **Amplifier** — the family: SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, or Elecraft
   KPA500 / KPA1500. None is the default and the state of most stations; with None
   picked nothing is opened, nothing is polled and no amplifier surface appears
-  anywhere. The 1.5K-FA is selectable under the SPE entry and is expected to speak
-  the same protocol, but no one has yet linked one — SPE's own programming guide for
-  this protocol covers the 1.3K-FA and 2K-FA only. If you have one, the model id
-  shown beside the link state is what settles it.
+  anywhere. All three SPE models share one protocol; the 1.5K-FA reports itself as
+  `15K` and is confirmed working, even though SPE's programming guide for this
+  protocol names only the other two.
 - **Amplifier port** — the serial port the amplifier is on, and it must be **its
   own**. A serial port can only be open once, so an amplifier pointed at the CAT
   port takes the port away from the radio and the *radio* is what stops working —

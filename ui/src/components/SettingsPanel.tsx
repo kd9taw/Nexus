@@ -728,7 +728,7 @@ const ROTATOR_EXAMPLES = {
  * The one word that IS prose, "no amplifier", goes through the catalog.
  */
 const AMP_FAMILIES = [
-  { value: 'spe', label: 'SPE Expert 1.3K-FA / 2K-FA (1.5K-FA untested)' },
+  { value: 'spe', label: 'SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA' },
   { value: 'kpa', label: 'Elecraft KPA500 / KPA1500' },
 ] as const
 

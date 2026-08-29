@@ -948,8 +948,7 @@ pub struct Settings {
     #[serde(default = "default_rotator_baud")]
     pub rotator_baud: u32,
     /// The amplifier family on this radio's amp port: "" = none (the default, and the state of
-    /// most stations), "spe" = SPE Expert 1.3K-FA/2K-FA (a 1.5K-FA is expected to speak the same
-    /// protocol and is selectable, but none has been linked), "kpa" = Elecraft KPA500/KPA1500.
+    /// most stations), "spe" = SPE Expert 1.3K-FA/1.5K-FA/2K-FA, "kpa" = Elecraft KPA500/KPA1500.
     ///
     /// PER RADIO, like the rotator: an SO2R station has an amplifier per radio, and a field that
     /// lived only on the flat `Settings` would let one radio's amp config overwrite the other's.

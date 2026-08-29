@@ -65,12 +65,14 @@
 /// Which amplifier family a link speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmpModel {
-    /// SPE Expert 1.3K-FA / 2K-FA — one binary protocol, two amplifiers. The 1.5K-FA is
-    /// believed to speak the same protocol and is selectable, but NOBODY HAS SEEN ONE LINK:
-    /// SPE's own 1.3K-2K programming guide never names it ("1.5" appears zero times in it,
-    /// against 19 hits for "1.3"), so its support is a hypothesis until a real one answers.
-    /// Everything downstream is written to survive that being wrong — the model id is kept
-    /// raw rather than matched against a list, so an unrecognised amplifier reports itself.
+    /// SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA — one binary protocol, three amplifiers.
+    ///
+    /// The 1.5K-FA is CONFIRMED ON HARDWARE (2026-08-29): it identifies itself as `15K` and
+    /// answers the documented status request in this protocol. SPE's own programming guide
+    /// never names it — "1.5" appears zero times in it — so its support was a hypothesis until
+    /// an operator's amplifier answered. The model id is still kept raw rather than matched
+    /// against a list, so an amplifier nobody here has seen reports itself rather than being
+    /// rejected.
     SpeExpert,
     /// Elecraft KPA500 / KPA1500 — line-oriented ASCII, from Elecraft's own published
     /// programmer's references (KPA500 Rev. A2; KPA1500 Rev. 2.03).
@@ -640,7 +642,7 @@ mod imp {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "this is an EXPERT 1K-FA, which speaks a different protocol Nexus does not \
-                     support yet — the 1.3K-FA and 2K-FA are the models Nexus speaks to",
+                     support yet — the 1.3K-FA, 1.5K-FA and 2K-FA are the models Nexus speaks to",
                 ));
             }
 
