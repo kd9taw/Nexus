@@ -1160,6 +1160,20 @@ pub struct FieldDayStatus {
     /// powered_points + bonus_points — the claimed total.
     #[serde(default)]
     pub total_score: u32,
+    /// The active-or-next occurrence of this event's window (Unix UTC),
+    /// computed in Rust from the ruleset data — the single source the
+    /// banner/countdown reads. (The TS date math this replaces hardcoded a
+    /// 24 h duration, which dropped SFD's final 3 and WFD's final 6 hours.)
+    #[serde(default)]
+    pub event_start_unix: u64,
+    #[serde(default)]
+    pub event_end_unix: u64,
+    /// The active ruleset's rules year + the rules data's `generated` stamp —
+    /// which parameters are scoring this log (the banner shows both).
+    #[serde(default)]
+    pub rules_year: u16,
+    #[serde(default)]
+    pub rules_generated: String,
     pub log: Vec<FieldDayQso>,
 }
 

@@ -430,7 +430,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Field Day Setup',
     tab: 'contesting',
     keywords: ['field day', 'arrl', 'class', 'section', 'exchange', 'power multiplier',
-      'winter field day'],
+      'winter field day', 'rules', 'rules year', 'rules update', 'wfd'],
   },
 
   // ---- Appearance --------------------------------------------------------------

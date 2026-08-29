@@ -5047,6 +5047,8 @@ version = "0.2.0"
 dependencies = [
  "microfft",
  "modes",
+ "serde",
+ "serde_json",
  "tempo-fast",
  "wspr",
 ]

@@ -14776,6 +14776,9 @@ impl Engine {
                 let (qso_pts, powered) =
                     rs.scoring.qso_and_powered(log, self.settings.fd_power_mult);
                 let bonus = rs.bonus_points(&self.settings.fd_bonuses);
+                // The running-or-next event window, from the rules data (the
+                // banner/countdown's single source — no TS date math).
+                let event_window = rs.next_or_running(now_unix_secs());
                 s.field_day = Some(FieldDayStatus {
                     my_class: log.myexch.class.clone(),
                     my_section: log.myexch.section.clone(),
@@ -14794,6 +14797,10 @@ impl Engine {
                     powered_points: powered,
                     bonus_points: bonus,
                     total_score: powered + bonus,
+                    event_start_unix: event_window.start_unix,
+                    event_end_unix: event_window.end_unix,
+                    rules_year: rs.rules_year,
+                    rules_generated: tempo_core::fd_rules::active_generated().to_string(),
                     log: log
                         .qsos()
                         .iter()
@@ -27090,6 +27097,14 @@ mod tests {
         assert_eq!(fd.powered_points, 30);
         assert_eq!(fd.bonus_points, 150);
         assert_eq!(fd.total_score, 180);
+        // The rules-data plumbing rides the same snapshot: a real 27 h SFD
+        // window (the TS 24 h date math is dead) + the parameter identity the
+        // banner shows. Duration is clock-independent; the dates aren't, so
+        // only the invariants are pinned here (fd_rules pins the dates).
+        assert_eq!(fd.event_end_unix - fd.event_start_unix, 27 * 3600);
+        assert!(fd.event_start_unix > 0);
+        assert_eq!(fd.rules_year, 2026);
+        assert!(!fd.rules_generated.is_empty());
     }
 
     /// THE SUBMODE FUNNEL, end to end: the engine stamps the ACTIVE tier's

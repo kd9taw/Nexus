@@ -2351,6 +2351,14 @@ export interface FieldDayStatus {
   bonusPoints?: number
   /** poweredPoints + bonusPoints. */
   totalScore?: number
+  /** The active-or-next occurrence of this event's window (Unix UTC), computed in Rust
+   *  from the ruleset data — the single source the banner/countdown reads (the old TS
+   *  date math hardcoded 24 h and dropped WFD's final six hours). */
+  eventStartUnix?: number
+  eventEndUnix?: number
+  /** The active ruleset's rules year + the rules data's `generated` stamp. */
+  rulesYear?: number
+  rulesGenerated?: string
 }
 
 /** Result of the release-feed update check (Phase 1: notify + open the download page). */

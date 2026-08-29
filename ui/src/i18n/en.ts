@@ -2504,6 +2504,9 @@ export const EN = {
   'fieldDay.countdown.tomorrow': 'starts tomorrow',
   'fieldDay.countdown.hours': 'starts in {{count}}h',
   'fieldDay.countdown.soon': 'starting soon',
+  // Which rules data is scoring — the banner's identity line. {{year}} is the ruleset's
+  // rules_year, {{date}} the rules file's `generated` stamp shown as YYYY-MM-DD.
+  'fieldDay.rules.line': 'Rules {{year}} · data {{date}}',
 
   // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
   // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time
@@ -2583,6 +2586,23 @@ export const EN = {
   'settings.fieldDay.power.high.hint': 'Over 100W — commercial/generator power',
   'settings.fieldDay.power.hint':
     'Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.',
+
+  // Rules-data currency (fd-rules.json — the scoring parameters, event windows, bonus menu
+  // and section list behind both events). {{date}} is the rules file's `generated` stamp
+  // shown as YYYY-MM-DD; every "applies at next launch" is literal (the table is set once
+  // at launch), like the country file's. No cron: this pre-event button is the refresh path.
+  'settings.fdRules.update.action': 'Check for rules updates',
+  'settings.fdRules.update.busy': 'Checking…',
+  'settings.fdRules.update.done':
+    'Rules data downloaded — applies at next launch (data {{date}}).',
+  'settings.fdRules.update.current': 'Rules data is already current (data {{date}}).',
+  'settings.fdRules.update.failed': 'Rules update failed: {{detail}}',
+  'settings.fdRules.status': '{{year}} rules · data {{date}}',
+  'settings.fdRules.pending': 'Update downloaded (data {{date}}) — applies at next launch.',
+  'settings.fdRules.stale': 'Rules data is from {{year}} — check for updates before the event.',
+  'settings.fdRules.empty': 'Built-in rules data active.',
+  'settings.fdRules.hint':
+    'Scoring parameters, event windows, bonuses and sections for both Field Day events. Checked on demand; a downloaded update applies at the next launch.',
 
   // ── Satellites ──────────────────────────────────────────────────────────────────────
   // The Satellites section, the Connect Passes pane, and the nine composers behind them.

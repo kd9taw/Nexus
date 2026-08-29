@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
 import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads } from '../api'
 import { pushToast } from '../toast'
-import { fdNextEvent, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
+import { fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { t } from '../i18n'
@@ -660,11 +660,17 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
     }
   }
 
-  // Event header: compute from current date for the configured event kind.
+  // Event header: the window arrives Rust-computed on the DTO (fd_rules data —
+  // real 27 h SFD / 30 h WFD durations; the old TS date math hardcoded 24 h and
+  // called WFD over with six hours left). Snapshots refresh it, so the year
+  // rollover and the active→next transition need no client-side clock walk.
   const eventKind: FdKind = (fieldDay?.event === 'wfd' ? 'wfd' : 'arrlfd')
   const isWfd = eventKind === 'wfd'
-  const fdEvent = useMemo(() => fdNextEvent(new Date(), eventKind), [eventKind])
-  const subtitle = useMemo(() => fdHeaderSubtitle(new Date(), fdEvent), [fdEvent])
+  const fdEvent = useMemo(
+    () => fdEventFromWindow(eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix),
+    [eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix],
+  )
+  const subtitle = useMemo(() => (fdEvent ? fdHeaderSubtitle(new Date(), fdEvent) : ''), [fdEvent])
 
   // Score components (shared with the scoreboard tiles) — needed here for the
   // Summary export + the bonuses count.
@@ -725,6 +731,14 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
       <div className="fd-event-banner">
         <span className="fd-event-name">{isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd}</span>
         <span className="fd-event-subtitle">{subtitle}</span>
+        {fieldDay?.rulesYear ? (
+          <span className="fd-event-rules">
+            {t('fieldDay.rules.line', {
+              year: fieldDay.rulesYear,
+              date: (fieldDay.rulesGenerated ?? '').slice(0, 10),
+            })}
+          </span>
+        ) : null}
       </div>
 
       <div className="panel-header fd-header">

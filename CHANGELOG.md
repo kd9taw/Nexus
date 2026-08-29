@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Field Day rules can now be refreshed as data — and the countdown finally knows how long
+  the events really run.** The numbers behind Field Day — points per mode, power tiers, the
+  bonus menu, the section list, event weekends, Winter Field Day's banned-mode list — now ship
+  as a rules file the app can update, instead of being frozen into each release. A
+  **Check for rules updates** button in **Settings ▸ Contesting ▸ Field Day Setup** fetches the
+  current file before the event (validated before it is trusted, applied at the next launch,
+  with the built-in copy as the floor — the country-file discipline). The Field Day banner
+  shows which rules year is scoring your log and the Cabrillo export records it
+  (`X-NEXUS-RULES-YEAR:`), so a submission is traceable to the parameters that scored it.
+  In the same change the banner and countdown stop pretending both events are 24 hours: ARRL
+  Field Day is 27 (1800Z Saturday → 2100Z Sunday) and Winter Field Day 30 (1600Z Saturday →
+  21:59Z Sunday) — previously the app declared WFD over with six hours still on the clock and
+  started counting down to next year.
+
 - **Your country file can finally be updated — and Nexus tells you how old it is.** The DXCC
   country data that drives the Needed board, award credit and entity labels was frozen into
   each release; every install has been running a file from January 2025. **Settings ▸ Logging ▸

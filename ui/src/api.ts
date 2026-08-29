@@ -341,6 +341,31 @@ export async function fetchCty(): Promise<CtyStatus> {
   return invoke<CtyStatus>('fetch_cty')
 }
 
+/** Field Day rules-data currency — the "check for rules updates" row in
+ * Settings ▸ Contesting ▸ Field Day Setup. Same set-once discipline as the
+ * country file: `activeGenerated` is the data scoring THIS session (the
+ * bundled seed, or a previously downloaded file), `installedGenerated` what is
+ * staged on disk (empty until a download happens; newer than active ⇒
+ * "applies at next launch"). */
+export interface FdRulesStatus {
+  /** Newest rules year in the ACTIVE table. */
+  rulesYear: number
+  activeGenerated: string
+  installedGenerated: string
+  fetchedAt: number
+}
+
+export async function getFdRulesStatus(): Promise<FdRulesStatus> {
+  return invoke<FdRulesStatus>('get_fd_rules_status')
+}
+
+/** Download the hosted fd-rules.json if its `generated` stamp differs from
+ * what we hold (validated with the app loader's own checks before it ever
+ * touches disk). Applies at the next launch — never mid-session. */
+export async function fetchFdRules(): Promise<FdRulesStatus> {
+  return invoke<FdRulesStatus>('fetch_fd_rules')
+}
+
 /** Orbital-element (TLE) currency status — Settings "Orbital elements" fieldset
  * + the Now-Bar `sat` lane. */
 export interface TleStatus {

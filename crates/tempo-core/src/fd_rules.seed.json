@@ -1,0 +1,662 @@
+{
+  "schema": 1,
+  "generated": "2026-08-29T00:00:00Z",
+  "_provenance": {
+    "assistance": {
+      "arrlfd": "arrl.org/field-day-rules read 2026-08-29 (2026 rules, rev. 2026-03-01): no restriction language on spotting networks / DX cluster / assistance found in any of the 9 sections — spotting_allowed/cluster_allowed stay true (dormant advisory).",
+      "wfd": "winterfieldday.org rules text (sop.php) unreachable on 2026-08-29 (page serves navigation only to a fetcher) — NOT verified; shipped dormant (allowed) until the real rules text is read. Do not flip these flags without a verbatim quote + URL recorded here."
+    },
+    "banned_modes": "WFD 2026 WSJT-suite ban carried over verbatim from the fd_rules.rs consts landed in c76f5242 (RTTY and SSTV explicitly legal as Digital).",
+    "objectives": "WFD reuses the ARRL bonus menu today (the pre-data modelling); a real WFD objectives table flows through this field later."
+  },
+  "rulesets": [
+    {
+      "event": "arrlfd",
+      "rules_year": 2026,
+      "contest_id": "ARRL-FIELD-DAY",
+      "window": {
+        "month": 6,
+        "weekend": "nth_full",
+        "n": 4,
+        "start_hour_utc": 18,
+        "duration_hours": 27,
+        "overrides": {}
+      },
+      "scoring": "powered_multiplier",
+      "points_by_mode_class": {
+        "PH": 1,
+        "CW": 2,
+        "DIG": 2
+      },
+      "power_tiers": [
+        1,
+        2,
+        5
+      ],
+      "bonuses": [
+        {
+          "id": "emergency-power",
+          "label": "100% emergency power",
+          "points": 100
+        },
+        {
+          "id": "media-publicity",
+          "label": "Media publicity",
+          "points": 100
+        },
+        {
+          "id": "public-location",
+          "label": "Public location",
+          "points": 100
+        },
+        {
+          "id": "public-info-table",
+          "label": "Public information table",
+          "points": 100
+        },
+        {
+          "id": "nts-message",
+          "label": "Message to ARRL SM/SEC",
+          "points": 100
+        },
+        {
+          "id": "w1aw-bulletin",
+          "label": "W1AW bulletin copied",
+          "points": 100
+        },
+        {
+          "id": "natural-power",
+          "label": "Natural power QSOs",
+          "points": 100
+        },
+        {
+          "id": "site-visit-official",
+          "label": "Site visit: elected official",
+          "points": 100
+        },
+        {
+          "id": "site-visit-agency",
+          "label": "Site visit: agency representative",
+          "points": 100
+        },
+        {
+          "id": "gota",
+          "label": "GOTA station max",
+          "points": 100
+        },
+        {
+          "id": "youth",
+          "label": "Youth participation",
+          "points": 100
+        },
+        {
+          "id": "web-submission",
+          "label": "Web submission",
+          "points": 50
+        },
+        {
+          "id": "safety-officer",
+          "label": "Safety officer",
+          "points": 100
+        },
+        {
+          "id": "social-media",
+          "label": "Social media",
+          "points": 100
+        },
+        {
+          "id": "educational",
+          "label": "Educational activity",
+          "points": 100
+        }
+      ],
+      "banned_modes": [],
+      "tempo_fd": false,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": []
+    },
+    {
+      "event": "wfd",
+      "rules_year": 2026,
+      "contest_id": "WFD",
+      "window": {
+        "month": 1,
+        "weekend": "last_full",
+        "start_hour_utc": 16,
+        "duration_hours": 30,
+        "overrides": {}
+      },
+      "scoring": "objectives",
+      "points_by_mode_class": {
+        "PH": 1,
+        "CW": 2,
+        "DIG": 2
+      },
+      "power_tiers": [
+        1,
+        2,
+        5
+      ],
+      "bonuses": [
+        {
+          "id": "emergency-power",
+          "label": "100% emergency power",
+          "points": 100
+        },
+        {
+          "id": "media-publicity",
+          "label": "Media publicity",
+          "points": 100
+        },
+        {
+          "id": "public-location",
+          "label": "Public location",
+          "points": 100
+        },
+        {
+          "id": "public-info-table",
+          "label": "Public information table",
+          "points": 100
+        },
+        {
+          "id": "nts-message",
+          "label": "Message to ARRL SM/SEC",
+          "points": 100
+        },
+        {
+          "id": "w1aw-bulletin",
+          "label": "W1AW bulletin copied",
+          "points": 100
+        },
+        {
+          "id": "natural-power",
+          "label": "Natural power QSOs",
+          "points": 100
+        },
+        {
+          "id": "site-visit-official",
+          "label": "Site visit: elected official",
+          "points": 100
+        },
+        {
+          "id": "site-visit-agency",
+          "label": "Site visit: agency representative",
+          "points": 100
+        },
+        {
+          "id": "gota",
+          "label": "GOTA station max",
+          "points": 100
+        },
+        {
+          "id": "youth",
+          "label": "Youth participation",
+          "points": 100
+        },
+        {
+          "id": "web-submission",
+          "label": "Web submission",
+          "points": 50
+        },
+        {
+          "id": "safety-officer",
+          "label": "Safety officer",
+          "points": 100
+        },
+        {
+          "id": "social-media",
+          "label": "Social media",
+          "points": 100
+        },
+        {
+          "id": "educational",
+          "label": "Educational activity",
+          "points": 100
+        }
+      ],
+      "banned_modes": [
+        "FST4",
+        "FT4",
+        "FT8",
+        "JT4",
+        "JT9",
+        "JT65",
+        "Q65",
+        "MSK144",
+        "WSPR",
+        "FST4W",
+        "ECHO"
+      ],
+      "tempo_fd": true,
+      "assistance": {
+        "spotting_allowed": true,
+        "cluster_allowed": true,
+        "assistance_note_key": ""
+      },
+      "enforcement": "warn",
+      "objectives": []
+    }
+  ],
+  "sections": [
+    {
+      "code": "DE",
+      "name": "Delaware",
+      "division": "Atlantic"
+    },
+    {
+      "code": "EPA",
+      "name": "Eastern Pennsylvania",
+      "division": "Atlantic"
+    },
+    {
+      "code": "MDC",
+      "name": "Maryland-DC",
+      "division": "Atlantic"
+    },
+    {
+      "code": "NNY",
+      "name": "Northern New York",
+      "division": "Atlantic"
+    },
+    {
+      "code": "SNJ",
+      "name": "Southern New Jersey",
+      "division": "Atlantic"
+    },
+    {
+      "code": "WNY",
+      "name": "Western New York",
+      "division": "Atlantic"
+    },
+    {
+      "code": "WPA",
+      "name": "Western Pennsylvania",
+      "division": "Atlantic"
+    },
+    {
+      "code": "IL",
+      "name": "Illinois",
+      "division": "Central"
+    },
+    {
+      "code": "IN",
+      "name": "Indiana",
+      "division": "Central"
+    },
+    {
+      "code": "WI",
+      "name": "Wisconsin",
+      "division": "Central"
+    },
+    {
+      "code": "MN",
+      "name": "Minnesota",
+      "division": "Dakota"
+    },
+    {
+      "code": "ND",
+      "name": "North Dakota",
+      "division": "Dakota"
+    },
+    {
+      "code": "SD",
+      "name": "South Dakota",
+      "division": "Dakota"
+    },
+    {
+      "code": "AR",
+      "name": "Arkansas",
+      "division": "Delta"
+    },
+    {
+      "code": "LA",
+      "name": "Louisiana",
+      "division": "Delta"
+    },
+    {
+      "code": "MS",
+      "name": "Mississippi",
+      "division": "Delta"
+    },
+    {
+      "code": "TN",
+      "name": "Tennessee",
+      "division": "Delta"
+    },
+    {
+      "code": "KY",
+      "name": "Kentucky",
+      "division": "Great Lakes"
+    },
+    {
+      "code": "MI",
+      "name": "Michigan",
+      "division": "Great Lakes"
+    },
+    {
+      "code": "OH",
+      "name": "Ohio",
+      "division": "Great Lakes"
+    },
+    {
+      "code": "ENY",
+      "name": "Eastern New York",
+      "division": "Hudson"
+    },
+    {
+      "code": "NLI",
+      "name": "New York City-Long Island",
+      "division": "Hudson"
+    },
+    {
+      "code": "NNJ",
+      "name": "Northern New Jersey",
+      "division": "Hudson"
+    },
+    {
+      "code": "IA",
+      "name": "Iowa",
+      "division": "Midwest"
+    },
+    {
+      "code": "KS",
+      "name": "Kansas",
+      "division": "Midwest"
+    },
+    {
+      "code": "MO",
+      "name": "Missouri",
+      "division": "Midwest"
+    },
+    {
+      "code": "NE",
+      "name": "Nebraska",
+      "division": "Midwest"
+    },
+    {
+      "code": "CT",
+      "name": "Connecticut",
+      "division": "New England"
+    },
+    {
+      "code": "EMA",
+      "name": "Eastern Massachusetts",
+      "division": "New England"
+    },
+    {
+      "code": "ME",
+      "name": "Maine",
+      "division": "New England"
+    },
+    {
+      "code": "NH",
+      "name": "New Hampshire",
+      "division": "New England"
+    },
+    {
+      "code": "RI",
+      "name": "Rhode Island",
+      "division": "New England"
+    },
+    {
+      "code": "VT",
+      "name": "Vermont",
+      "division": "New England"
+    },
+    {
+      "code": "WMA",
+      "name": "Western Massachusetts",
+      "division": "New England"
+    },
+    {
+      "code": "AK",
+      "name": "Alaska",
+      "division": "Northwestern"
+    },
+    {
+      "code": "EWA",
+      "name": "Eastern Washington",
+      "division": "Northwestern"
+    },
+    {
+      "code": "ID",
+      "name": "Idaho",
+      "division": "Northwestern"
+    },
+    {
+      "code": "MT",
+      "name": "Montana",
+      "division": "Northwestern"
+    },
+    {
+      "code": "OR",
+      "name": "Oregon",
+      "division": "Northwestern"
+    },
+    {
+      "code": "WWA",
+      "name": "Western Washington",
+      "division": "Northwestern"
+    },
+    {
+      "code": "EB",
+      "name": "East Bay",
+      "division": "Pacific"
+    },
+    {
+      "code": "NV",
+      "name": "Nevada",
+      "division": "Pacific"
+    },
+    {
+      "code": "PAC",
+      "name": "Pacific",
+      "division": "Pacific"
+    },
+    {
+      "code": "SCV",
+      "name": "Santa Clara Valley",
+      "division": "Pacific"
+    },
+    {
+      "code": "SF",
+      "name": "San Francisco",
+      "division": "Pacific"
+    },
+    {
+      "code": "SJV",
+      "name": "San Joaquin Valley",
+      "division": "Pacific"
+    },
+    {
+      "code": "SV",
+      "name": "Sacramento Valley",
+      "division": "Pacific"
+    },
+    {
+      "code": "NC",
+      "name": "North Carolina",
+      "division": "Roanoke"
+    },
+    {
+      "code": "SC",
+      "name": "South Carolina",
+      "division": "Roanoke"
+    },
+    {
+      "code": "VA",
+      "name": "Virginia",
+      "division": "Roanoke"
+    },
+    {
+      "code": "WV",
+      "name": "West Virginia",
+      "division": "Roanoke"
+    },
+    {
+      "code": "CO",
+      "name": "Colorado",
+      "division": "Rocky Mountain"
+    },
+    {
+      "code": "NM",
+      "name": "New Mexico",
+      "division": "Rocky Mountain"
+    },
+    {
+      "code": "UT",
+      "name": "Utah",
+      "division": "Rocky Mountain"
+    },
+    {
+      "code": "WY",
+      "name": "Wyoming",
+      "division": "Rocky Mountain"
+    },
+    {
+      "code": "AL",
+      "name": "Alabama",
+      "division": "Southeastern"
+    },
+    {
+      "code": "GA",
+      "name": "Georgia",
+      "division": "Southeastern"
+    },
+    {
+      "code": "NFL",
+      "name": "Northern Florida",
+      "division": "Southeastern"
+    },
+    {
+      "code": "PR",
+      "name": "Puerto Rico",
+      "division": "Southeastern"
+    },
+    {
+      "code": "SFL",
+      "name": "Southern Florida",
+      "division": "Southeastern"
+    },
+    {
+      "code": "VI",
+      "name": "Virgin Islands",
+      "division": "Southeastern"
+    },
+    {
+      "code": "WCF",
+      "name": "West Central Florida",
+      "division": "Southeastern"
+    },
+    {
+      "code": "AZ",
+      "name": "Arizona",
+      "division": "Southwestern"
+    },
+    {
+      "code": "LAX",
+      "name": "Los Angeles",
+      "division": "Southwestern"
+    },
+    {
+      "code": "ORG",
+      "name": "Orange",
+      "division": "Southwestern"
+    },
+    {
+      "code": "SB",
+      "name": "Santa Barbara",
+      "division": "Southwestern"
+    },
+    {
+      "code": "SDG",
+      "name": "San Diego",
+      "division": "Southwestern"
+    },
+    {
+      "code": "NTX",
+      "name": "North Texas",
+      "division": "West Gulf"
+    },
+    {
+      "code": "OK",
+      "name": "Oklahoma",
+      "division": "West Gulf"
+    },
+    {
+      "code": "STX",
+      "name": "South Texas",
+      "division": "West Gulf"
+    },
+    {
+      "code": "WTX",
+      "name": "West Texas",
+      "division": "West Gulf"
+    },
+    {
+      "code": "MAR",
+      "name": "Maritime",
+      "division": "RAC"
+    },
+    {
+      "code": "NL",
+      "name": "Newfoundland/Labrador",
+      "division": "RAC"
+    },
+    {
+      "code": "QC",
+      "name": "Quebec",
+      "division": "RAC"
+    },
+    {
+      "code": "ONE",
+      "name": "Ontario East",
+      "division": "RAC"
+    },
+    {
+      "code": "ONN",
+      "name": "Ontario North",
+      "division": "RAC"
+    },
+    {
+      "code": "ONS",
+      "name": "Ontario South",
+      "division": "RAC"
+    },
+    {
+      "code": "GTA",
+      "name": "Greater Toronto Area",
+      "division": "RAC"
+    },
+    {
+      "code": "MB",
+      "name": "Manitoba",
+      "division": "RAC"
+    },
+    {
+      "code": "SK",
+      "name": "Saskatchewan",
+      "division": "RAC"
+    },
+    {
+      "code": "AB",
+      "name": "Alberta",
+      "division": "RAC"
+    },
+    {
+      "code": "BC",
+      "name": "British Columbia",
+      "division": "RAC"
+    },
+    {
+      "code": "NT",
+      "name": "Northern Territories",
+      "division": "RAC"
+    }
+  ]
+}

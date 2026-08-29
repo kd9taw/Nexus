@@ -2,8 +2,8 @@
 # resolution (see scripts/gen-cty.mjs + crates/propagation/src/dxcc.rs — the embedded copy is
 # the seed; a downloaded one activates at the next launch).
 #
-# AD1C publishes new releases every few weeks; this runs weekly and publishes the ~100 KB
-# file + manifest as a rolling GitHub Release asset (`cty`), which needs NO secrets — the
+# AD1C publishes new releases every few weeks; this runs weekly and publishes the ~358 KB
+# BIG CTY file + manifest as a rolling GitHub Release asset (`cty`), which needs NO secrets — the
 # built-in GITHUB_TOKEN is enough. The manifest's `ver` is the content-derived AD1C release
 # date, and the in-app client keys its "is newer" compare on it — so a week with no new AD1C
 # release re-publishes identical content harmlessly (installs skip the download). Serving it

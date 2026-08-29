@@ -395,6 +395,13 @@ impl FieldDayLog {
             "CATEGORY-OPERATOR: MULTI-OP\nLOCATION: {}\nCREATED-BY: Nexus\n",
             self.myexch.section
         ));
+        // Which rules data scored this log (X- headers are Cabrillo-legal and
+        // ignored by robots) — a fetched rules file with different parameters
+        // is visible on the artifact an operator actually submits.
+        s.push_str(&format!(
+            "X-NEXUS-RULES-YEAR: {}\n",
+            crate::fd_rules::ruleset(self.event, crate::fd_rules::CURRENT_RULES_YEAR).rules_year
+        ));
         for q in &self.qsos {
             // QSO: freq mo date time mycall myexch call exch — ARRL requires a
             // REAL `yyyy-mm-dd hhmm`; the old `----------` placeholder failed
@@ -851,6 +858,8 @@ mod tests {
         assert!(cab.contains(" DG "));
         assert!(cab.contains(" CW "));
         assert!(cab.contains(" PH "));
+        // The rules-data stamp (Cabrillo-legal X- header, robots ignore it).
+        assert!(cab.contains("X-NEXUS-RULES-YEAR: 2026\n"));
         // WFD event flips the contest ids in both exports.
         log.event = FdEvent::WinterFd;
         assert!(log.cabrillo(14074).contains("CONTEST: WFD"));

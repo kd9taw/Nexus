@@ -8718,6 +8718,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Which rules data is scoring (rules year + generated date) — quiet, end of the banner. */
+.fd-event-rules {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 
 /* Score math formula */
 .fd-score-math {

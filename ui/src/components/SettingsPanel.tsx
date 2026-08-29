@@ -100,6 +100,7 @@ import { AssistanceNote } from './AssistanceNote'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { fetchFccStates, getFccStatesStatus, type FccStatesStatus } from '../api'
 import { fetchCty, getCtyStatus, type CtyStatus } from '../api'
+import { fetchFdRules, getFdRulesStatus, type FdRulesStatus } from '../api'
 import { fetchTlesNow, getTleStatus, importTles, type TleStatus } from '../api'
 import { tleRefreshMessage } from '../features/tleMessages'
 import { elementBandParts } from '../features/elementBands'
@@ -1076,6 +1077,15 @@ export function SettingsPanel({
   // AD1C's `=VER` dates are `yyyymmdd`; show them as ISO dates.
   const ctyVerDate = (v: string) =>
     v.length === 8 ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6)}` : v
+  // Field Day rules data — same set-once-at-launch discipline as the country
+  // file: a downloaded update applies at the NEXT launch and the row says so.
+  const [fdRules, setFdRules] = useState<FdRulesStatus | null>(null)
+  const [fdRulesFetching, setFdRulesFetching] = useState(false)
+  useEffect(() => {
+    getFdRulesStatus()
+      .then(setFdRules)
+      .catch(() => {})
+  }, [])
   // Orbital elements (TLE snapshot) — the satellite currency pipeline's
   // operator surface: status + manual refresh + the file-import escape hatch.
   const [tleStatus, setTleStatus] = useState<TleStatus | null>(null)
@@ -9608,6 +9618,75 @@ export function SettingsPanel({
                 </div>
                 <span className="settings-hint">{t('settings.fieldDay.power.hint')}</span>
               </div>
+            </div>
+            {/* Rules data currency (fd-rules.json): the parameters behind scoring, windows,
+                bonuses and sections. No cron — rules change ~yearly, so this pre-event
+                button is the refresh path; a download applies at the NEXT launch. */}
+            <div className="settings-field">
+              <div className="lotw-users-row">
+                <button
+                  type="button"
+                  className="settings-test-btn"
+                  disabled={fdRulesFetching}
+                  onClick={() => {
+                    setFdRulesFetching(true)
+                    fetchFdRules()
+                      .then((st) => {
+                        setFdRules(st)
+                        const pending =
+                          st.installedGenerated !== '' &&
+                          st.installedGenerated > st.activeGenerated
+                        pushToast(
+                          pending
+                            ? t('settings.fdRules.update.done', {
+                                date: st.installedGenerated.slice(0, 10),
+                              })
+                            : t('settings.fdRules.update.current', {
+                                date: st.activeGenerated.slice(0, 10),
+                              }),
+                          'success',
+                          5000,
+                        )
+                      })
+                      .catch((e) =>
+                        pushToast(
+                          t('settings.fdRules.update.failed', {
+                            detail: e instanceof Error ? e.message : String(e),
+                          }),
+                          'error',
+                        ),
+                      )
+                      .finally(() => setFdRulesFetching(false))
+                  }}
+                >
+                  {fdRulesFetching
+                    ? t('settings.fdRules.update.busy')
+                    : t('settings.fdRules.update.action')}
+                </button>
+                <span className="settings-hint">
+                  {fdRules === null
+                    ? t('settings.fdRules.empty')
+                    : t('settings.fdRules.status', {
+                        year: fdRules.rulesYear,
+                        date: fdRules.activeGenerated.slice(0, 10),
+                      })}
+                </span>
+              </div>
+              {fdRules !== null &&
+                fdRules.installedGenerated !== '' &&
+                fdRules.installedGenerated > fdRules.activeGenerated && (
+                  <span className="settings-hint">
+                    {t('settings.fdRules.pending', {
+                      date: fdRules.installedGenerated.slice(0, 10),
+                    })}
+                  </span>
+                )}
+              {fdRules !== null && fdRules.rulesYear < new Date().getUTCFullYear() && (
+                <span className="settings-hint">
+                  {t('settings.fdRules.stale', { year: fdRules.rulesYear })}
+                </span>
+              )}
+              <span className="settings-hint">{t('settings.fdRules.hint')}</span>
             </div>
           </fieldset>
           )}

@@ -4148,6 +4148,174 @@ async fn fetch_cty() -> Result<CtyStatus, String> {
     Ok(cty_status())
 }
 
+// --- Field Day rules data (downloaded to the SHARED data dir; the parameters behind FD
+// scoring, windows, bonuses, sections — tempo_core::fd_rules). The cty block's shape with
+// TWO deltas: the freshness key is the file's own `generated` ISO stamp (no separate
+// manifest — the rules file is small and self-describing), and there is NO weekly staleness
+// cron (rules change ~yearly; the pre-event Settings button is the refresh path).
+//
+// ⚠️ STARTUP-ONLY SWAP, exactly like cty: the rules table is a set-once OnceLock serving
+// `&'static` borrows, so a downloaded file activates at the NEXT launch —
+// `fd_rules_load_from_disk` runs in `run()` right after `cty_load_from_disk`, BEFORE the
+// engine builds (fd_score runs in its very first snapshot), and `fetch_fd_rules` only
+// stages bytes on disk. See tempo_core::fd_rules::install_from for the seed-floor rule. ---
+
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+struct FdRulesMeta {
+    /// The installed file's `generated` ISO stamp — the freshness key.
+    generated: String,
+    rules_year: u16,
+    fetched_at: i64,
+}
+
+fn fd_rules_path() -> PathBuf {
+    shared_data_dir().join("fd-rules.json")
+}
+fn fd_rules_meta_path() -> PathBuf {
+    shared_data_dir().join("fd-rules.meta.json")
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FdRulesStatus {
+    /// Newest rules year in the ACTIVE table (the one scoring this session).
+    rules_year: u16,
+    /// `generated` stamp of the ACTIVE rules data.
+    active_generated: String,
+    /// `generated` stamp of the INSTALLED (downloaded) file, `""` if none — when it is
+    /// newer than `active_generated`, the UI shows "applies at next launch".
+    installed_generated: String,
+    fetched_at: i64,
+}
+
+fn fd_rules_meta() -> FdRulesMeta {
+    std::fs::read_to_string(fd_rules_meta_path())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn fd_rules_status() -> FdRulesStatus {
+    let m = fd_rules_meta();
+    FdRulesStatus {
+        rules_year: tempo_core::fd_rules::active_rules_year(),
+        active_generated: tempo_core::fd_rules::active_generated().to_string(),
+        installed_generated: m.generated,
+        fetched_at: m.fetched_at,
+    }
+}
+
+/// Activate the downloaded fd-rules.json, if there is one and it beats the seed floor.
+/// MUST run before anything reads the ruleset (see the `run()` call site). Milestone-logs
+/// which data won either way; an `AlreadyInitialized` is logged as an ERROR because it
+/// means a read beat us here — a code-ordering regression to fix, not a state to accept.
+fn fd_rules_load_from_disk() {
+    let seed = tempo_core::fd_rules::seed_generated();
+    let text = match std::fs::read_to_string(fd_rules_path()) {
+        Ok(t) => t,
+        Err(_) => {
+            tempo_core::applog::info(
+                "startup",
+                &format!("fd-rules: no downloaded file — bundled seed ({seed}) active"),
+            );
+            return;
+        }
+    };
+    match tempo_core::fd_rules::install_from(&text) {
+        Ok(stats) => tempo_core::applog::info(
+            "startup",
+            &format!(
+                "fd-rules: downloaded data active (rules year {}, generated {})",
+                stats.rules_year, stats.generated
+            ),
+        ),
+        Err(tempo_core::fd_rules::RulesInitError::AlreadyInitialized) => {
+            tempo_core::applog::error(
+                "startup",
+                "fd-rules: table was already loaded before the startup install — \
+                 something read the ruleset too early (code-ordering regression); the \
+                 bundled seed is locked in for this session",
+            )
+        }
+        Err(e) => tempo_core::applog::info(
+            "startup",
+            &format!("fd-rules: downloaded file rejected ({e}) — bundled seed ({seed}) active"),
+        ),
+    }
+}
+
+/// BLOCKING: download fd-rules.json if the hosted file's `generated` differs from what we
+/// hold (or we hold nothing), VALIDATE it with the tempo-core loader's scratch parse (never
+/// the global table — a corrupt download must never replace a good local copy), persist it
+/// atomically to the shared data dir, and stamp the meta. NO table swap — the file
+/// activates at the next launch. Returns Ok(true) when it installed a new file.
+fn fd_rules_download_if_newer() -> Result<bool, String> {
+    let local = fd_rules_meta();
+    let have = fd_rules_path().exists();
+    let c = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let text = c
+        .get(format!("{FCC_STATES_BASE}/fd-rules.json"))
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .text()
+        .map_err(|e| e.to_string())?;
+    let stats = tempo_core::fd_rules::validate(&text)
+        .map_err(|e| format!("downloaded fd-rules.json failed validation: {e}"))?;
+    if stats.generated == local.generated && have {
+        // Same content — just refresh the fetched_at stamp (the status line's
+        // "checked" date) without rewriting the file.
+        let _ = std::fs::write(
+            fd_rules_meta_path(),
+            serde_json::to_string(&FdRulesMeta {
+                fetched_at: now_unix(),
+                ..local
+            })
+            .unwrap_or_default(),
+        );
+        return Ok(false);
+    }
+    if let Some(dir) = fd_rules_path().parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Atomic install: per-process temp then rename, so two radio instances sharing this dir
+    // can never read a half-written file (same shape as the cty install above).
+    let final_path = fd_rules_path();
+    let tmp = final_path.with_extension(format!("json.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, &text).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &final_path).map_err(|e| e.to_string())?;
+    let _ = std::fs::write(
+        fd_rules_meta_path(),
+        serde_json::to_string(&FdRulesMeta {
+            // Stamp the VALIDATED file's own values, not a manifest's claim.
+            generated: stats.generated.clone(),
+            rules_year: stats.rules_year,
+            fetched_at: now_unix(),
+        })
+        .unwrap_or_default(),
+    );
+    Ok(true)
+}
+
+#[tauri::command]
+fn get_fd_rules_status() -> FdRulesStatus {
+    fd_rules_status()
+}
+
+/// The Settings "Check for rules updates" button (Field Day Setup). The downloaded file
+/// applies at the NEXT launch; the returned status carries both stamps so the UI can say so.
+#[tauri::command]
+async fn fetch_fd_rules() -> Result<FdRulesStatus, String> {
+    tauri::async_runtime::spawn_blocking(fd_rules_download_if_newer)
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(fd_rules_status())
+}
+
 /// The LEGACY per-profile TLE cache (a bare `Vec<Tle>` array, pre-snapshot
 /// builds) — read once at startup for migration onto the shared path, never
 /// written again.
@@ -17560,6 +17728,12 @@ pub fn run() {
     // swap; the Settings status line says so).
     cty_load_from_disk();
 
+    // Field Day rules data: same startup-only OnceLock discipline as cty — activate a
+    // downloaded fd-rules.json (if any, and only if it beats the bundled seed) BEFORE the
+    // engine builds, because fd_score reads the ruleset in the engine's very first
+    // snapshot and whoever touches the table first locks the data in for the session.
+    fd_rules_load_from_disk();
+
     let bound_radio = bound_radio_id();
 
     // Union in any radio the BASE config has that this window's config doesn't, and adopt base's
@@ -18969,6 +19143,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             fetch_fcc_states,
             get_cty_status,
             fetch_cty,
+            get_fd_rules_status,
+            fetch_fd_rules,
             get_tle_status,
             fetch_tles_now,
             import_tles,

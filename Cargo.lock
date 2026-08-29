@@ -2370,6 +2370,7 @@ dependencies = [
  "modes",
  "msk144",
  "q65",
+ "serde",
  "serde_json",
  "tempo-fast",
  "wspr",
