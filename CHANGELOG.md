@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Your amplifier can follow the radio's band.** Switch it on under **Settings ▸ Radio ▸
+  Amplifier** and the amp steps to whatever band you tune to, without being asked. It is off
+  until you turn it on, which is deliberate — this is the one amplifier control that acts on its
+  own, and you should choose it rather than discover it. It never moves the amplifier while you
+  are transmitting, and it steps one band at a time, checking where the amplifier actually is
+  after each step rather than assuming it arrived. If your radio is on a band the amplifier does
+  not have, it does nothing at all instead of picking the nearest.
+
+### Changed
+
+- **The Windows download installs about 32 MB less.** Turning on link-time optimisation took
+  `Nexus.exe` from 87 MB to 55 MB, which is most of what the audio-library upgrade in 1.9.2 cost.
+  Nothing about the app changes; it is the same build, compiled more tightly. The installer
+  itself only shrinks a little because it was already compressed — the saving is disk space on
+  your machine, not download size.
+
 ## [1.9.2] — 2026-08-29
 
 ### Added
