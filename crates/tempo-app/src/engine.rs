@@ -8350,6 +8350,9 @@ impl Engine {
                     let mut st = FieldDayStation::running(&mycall, &mygrid, exch, &band);
                     st.log.event =
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                    // The submode funnel: the sequencer's log() calls record
+                    // the tier actually keyed (set_tier re-stamps on a change).
+                    st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st
                 }),
                 running: true,
@@ -8359,6 +8362,7 @@ impl Engine {
                     let mut st = FieldDayStation::search_and_pounce(&mycall, &mygrid, exch, &band);
                     st.log.event =
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                    st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st
                 }),
                 running: false,
@@ -9215,6 +9219,14 @@ impl Engine {
                     running: false,
                 };
             }
+        }
+        // Field Day records the ACTUAL on-air mode behind each "DIG" contact
+        // (`LoggedQso::submode`); a tier change moves what the sequencer keys,
+        // so the log's funnel follows it (FD entry stamps it the same way) —
+        // an FT4-tier WFD contact must never export or push as "FT8".
+        let fd_submode = self.adif_mode_for_tier();
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.log.current_submode = fd_submode.to_string();
         }
         // ⭐ MSK144 PARKS BOTH OFFSETS ON 1500 Hz, exactly as WSJT-X does on entering the
         // mode (mainwindow.cpp:8169-8173, clamp 1400-1600). The transmitter ALREADY keys
@@ -14791,6 +14803,7 @@ impl Engine {
                             section: q.section.clone(),
                             band: q.band.clone(),
                             mode: q.mode.clone(),
+                            submode: q.submode.clone(),
                             when_unix: q.when_unix,
                         })
                         .collect(),
@@ -27077,6 +27090,42 @@ mod tests {
         assert_eq!(fd.powered_points, 30);
         assert_eq!(fd.bonus_points, 150);
         assert_eq!(fd.total_score, 180);
+    }
+
+    /// THE SUBMODE FUNNEL, end to end: the engine stamps the ACTIVE tier's
+    /// ADIF name into `FieldDayLog::current_submode` at FD entry and on every
+    /// tier change, the digital sequencer's own `log()` calls pick it up, and
+    /// the snapshot's `FieldDayQso.submode` carries it to the interop push —
+    /// so a WFD FT4/RTTY contact is never pushed or exported as "FT8". CW/PH
+    /// manual entries ARE their on-air mode and stay submode-less.
+    #[test]
+    fn fd_digital_qsos_snapshot_the_active_tier_as_submode() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_tier(Tier::Ft8);
+        e.set_mode("fieldday-run").unwrap();
+        // A tier change mid-event must move the stamp with it.
+        e.set_tier(Tier::Ft4);
+        // The digital sequencer's own logging path (what `observe` calls on a
+        // completed exchange) — no submode argument anywhere in sight.
+        let Mode::FieldDay { station, .. } = &mut e.mode else {
+            panic!("in Field Day mode");
+        };
+        assert!(station.log.log("K1ABC", "2A", "EMA", 5));
+        // A CW manual entry, whose class IS its on-air mode: no submode.
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(
+            fd.log[0].submode, "FT4",
+            "the digital QSO snapshots the tier actually keyed, not a class map"
+        );
+        assert_eq!(fd.log[1].submode, "", "CW carries no submode");
     }
 
     /// Master switch OFF (spec §1.3): even when the engine is still in

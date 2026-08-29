@@ -923,6 +923,180 @@ mod tests {
         }
     }
 
+    /// `key: 'value'` from a one-object-per-line TS table row (quote-splitting,
+    /// the settings.rs RadioProfilePatch-guard tolerance — comments and
+    /// non-matching lines simply miss).
+    fn ts_str_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+        let pat = format!("{key}: '");
+        let i = line.find(&pat)?;
+        let rest = &line[i + pat.len()..];
+        let end = rest.find('\'')?;
+        Some(&rest[..end])
+    }
+
+    /// `key: <digits>` from the same row shape.
+    fn ts_num_field(line: &str, key: &str) -> Option<u32> {
+        let pat = format!("{key}:");
+        let i = line.find(&pat)?;
+        let digits: String = line[i + pat.len()..]
+            .trim_start()
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        digits.parse().ok()
+    }
+
+    /// CROSS-LANGUAGE SYNC GUARD (the settings.rs RadioProfilePatch idiom): the
+    /// UI hand-mirrors `ARRL_SECTIONS` in ui/src/features/arrlSections.ts so
+    /// the worked-sections board renders without a backend round-trip. The two
+    /// lists had no guard — a section respelled, moved, added or dropped on one
+    /// side would silently desynchronize the board from setup validation and
+    /// scoring. This reads the TS source itself and compares codes, names,
+    /// divisions, ORDER (the board layout contract — arrlSections.ts preserves
+    /// the Rust ordering by stated intent) and the division grouping, in both
+    /// directions, naming the drifted entry.
+    #[test]
+    fn the_typescript_section_mirror_matches_arrl_sections_exactly() {
+        let ts_src = include_str!("../../../ui/src/features/arrlSections.ts");
+        // Section rows are one object per line: { code: 'DE', name: 'Delaware',
+        // division: 'Atlantic' }. The per-division block headers carry a
+        // `division:` but no `code:`, so keying on `code:` skips them.
+        let ts: Vec<(&str, &str, &str)> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| {
+                Some((
+                    ts_str_field(l, "code")?,
+                    ts_str_field(l, "name")?,
+                    ts_str_field(l, "division")?,
+                ))
+            })
+            .collect();
+
+        // A parser that found nothing would pass every compare below it.
+        assert!(
+            ts.len() > 50,
+            "parsed only {} section rows out of arrlSections.ts — the parser is \
+             broken, not the mirror",
+            ts.len()
+        );
+
+        // Both directions by code first, so a missing entry is NAMED rather
+        // than surfacing as a count mismatch.
+        let rust_codes: Vec<&str> = ARRL_SECTIONS.iter().map(|s| s.code).collect();
+        let ts_codes: Vec<&str> = ts.iter().map(|r| r.0).collect();
+        let missing_in_ts: Vec<&&str> = rust_codes
+            .iter()
+            .filter(|c| !ts_codes.contains(c))
+            .collect();
+        assert!(
+            missing_in_ts.is_empty(),
+            "section(s) {missing_in_ts:?} exist in Rust ARRL_SECTIONS but NOT in \
+             ui/src/features/arrlSections.ts — the board can never show them worked"
+        );
+        let missing_in_rust: Vec<&&str> = ts_codes
+            .iter()
+            .filter(|c| !rust_codes.contains(c))
+            .collect();
+        assert!(
+            missing_in_rust.is_empty(),
+            "section(s) {missing_in_rust:?} exist in ui/src/features/arrlSections.ts \
+             but NOT in Rust ARRL_SECTIONS — the board shows a section \
+             valid_section() rejects"
+        );
+        assert_eq!(ts.len(), 83, "83 = 71 US ARRL + 12 RAC, both sides");
+
+        // Same entry at every index: order (the board layout), name and
+        // division per code.
+        for (i, (rust, ts_row)) in ARRL_SECTIONS.iter().zip(&ts).enumerate() {
+            assert_eq!(
+                (rust.code, rust.name, rust.division),
+                *ts_row,
+                "section #{i} diverged between Rust ARRL_SECTIONS and \
+                 arrlSections.ts (same-order is the board layout contract)"
+            );
+        }
+
+        // Division grouping order (first occurrence) matches — redundant with
+        // the per-index compare above, but it names a GROUPING drift as such.
+        let mut rust_divs: Vec<&str> = Vec::new();
+        for s in ARRL_SECTIONS {
+            if !rust_divs.contains(&s.division) {
+                rust_divs.push(s.division);
+            }
+        }
+        let mut ts_divs: Vec<&str> = Vec::new();
+        for (_, _, d) in &ts {
+            if !ts_divs.contains(d) {
+                ts_divs.push(d);
+            }
+        }
+        assert_eq!(
+            rust_divs, ts_divs,
+            "the division block order drifted between the two lists"
+        );
+    }
+
+    /// SAME GUARD for the hand-mirrored bonus menu: `FD_BONUSES` here vs the
+    /// `FD_BONUSES` table in ui/src/components/FieldDayView.tsx. Ids and points
+    /// only — the LABELS deliberately differ (the Rust labels are the moved
+    /// tuple-table strings; the TS labels are the invariant display strings the
+    /// checklist renders), so comparing them would pin an intentional
+    /// difference, not catch drift. A points or id drift is the one that
+    /// mis-scores a claimed bonus.
+    #[test]
+    fn the_typescript_bonus_mirror_matches_fd_bonuses_exactly() {
+        let ts_src = include_str!("../../../ui/src/components/FieldDayView.tsx");
+        // Pull just the FD_BONUSES table body (the file declares other objects).
+        let head = "export const FD_BONUSES";
+        let start = ts_src
+            .find(head)
+            .expect("FieldDayView.tsx declares FD_BONUSES");
+        // Slice from the initializer's `= [`, not the declaration (whose
+        // `FdBonus[]` type annotation carries the file's first `]`).
+        let body = &ts_src[start..];
+        let open = body.find("= [").expect("the table has an initializer");
+        let body = &body[open + 3..];
+        let end = body.find(']').expect("the table is closed");
+        let body = &body[..end];
+
+        let ts: Vec<(&str, u32)> = body
+            .lines()
+            .filter_map(|l| Some((ts_str_field(l, "id")?, ts_num_field(l, "points")?)))
+            .collect();
+        assert!(
+            ts.len() > 10,
+            "parsed only {} bonus rows out of FieldDayView.tsx — the parser is \
+             broken, not the mirror",
+            ts.len()
+        );
+
+        let rust_ids: Vec<&str> = FD_BONUSES.iter().map(|b| b.id).collect();
+        let ts_ids: Vec<&str> = ts.iter().map(|r| r.0).collect();
+        let missing_in_ts: Vec<&&str> = rust_ids.iter().filter(|c| !ts_ids.contains(c)).collect();
+        assert!(
+            missing_in_ts.is_empty(),
+            "bonus id(s) {missing_in_ts:?} exist in Rust FD_BONUSES but NOT in \
+             FieldDayView.tsx — the checklist can never claim them"
+        );
+        let missing_in_rust: Vec<&&str> = ts_ids.iter().filter(|c| !rust_ids.contains(c)).collect();
+        assert!(
+            missing_in_rust.is_empty(),
+            "bonus id(s) {missing_in_rust:?} exist in FieldDayView.tsx but NOT in \
+             Rust FD_BONUSES — a claimed checkbox that scores nothing"
+        );
+        assert_eq!(ts.len(), 15, "the full ARRL bonus menu, both sides");
+        for (i, (rust, ts_row)) in FD_BONUSES.iter().zip(&ts).enumerate() {
+            assert_eq!(
+                (rust.id, rust.points),
+                *ts_row,
+                "bonus #{i} diverged (id or points) between Rust FD_BONUSES and \
+                 FieldDayView.tsx"
+            );
+        }
+    }
+
     #[test]
     fn valid_section_accepts_known_case_insensitively_and_rejects_junk() {
         assert!(valid_section("WI"));

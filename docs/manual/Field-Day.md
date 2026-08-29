@@ -8,12 +8,10 @@ Nexus has a dedicated Field Day workspace that covers ARRL Field Day (June) and 
 
 In **Settings → Contesting ▸ Field Day Setup**, choose between:
 
-| Setting value | Event |
-|---|---|
-| _(empty, default)_ | ARRL Field Day — 4th Saturday of June, 1800 UTC start |
-| `wfd` | Winter Field Day — last full Sat+Sun of January, 1600 UTC start |
-
-Both events run exactly **24 hours** (start + 86 400 s = end).
+| Setting value | Event | Window |
+|---|---|---|
+| _(empty, default)_ | ARRL Field Day — 4th full weekend of June | **27 hours**: 1800 UTC Saturday → 2100 UTC Sunday |
+| `wfd` | Winter Field Day — last full Sat+Sun of January | **30 hours**: 1600 UTC Saturday → 21:59 UTC Sunday |
 
 The WFD date rule accounts for the "last full weekend" requirement: if the last Saturday of January would put Sunday in February, the code steps back one week. 2026 correctly resolves to Jan 24.
 
@@ -23,7 +21,7 @@ The FieldDay header shows a live countdown as the event approaches:
 
 - **starts in N days** / **starts tomorrow** / **starts in Nh** / **starting soon** / **active**
 
-The header reads **active** once the window opens and clears back to countdown immediately after the 24-hour window closes.
+The header reads **active** once the window opens and clears back to countdown after the event window closes (27 hours for ARRL FD, 30 hours for WFD).
 
 ---
 
@@ -31,7 +29,7 @@ The header reads **active** once the window opens and clears back to countdown i
 
 Run through this before the weekend. Most problems are discovered Saturday at 1759 UTC, not Friday evening.
 
-- [ ] **Verify fd_class and fd_section** in Settings → Contesting ▸ Field Day Setup (e.g. `3A`, `WI`). They default to `1D` and `WI` respectively — update them to match your actual class and section. The export will be malformed if you leave both blank.
+- [ ] **Set your class and section** in Settings → Contesting ▸ Field Day Setup (e.g. `3A`, `WI`). Both fields start **empty** — the greyed `1D` / `WI` you see are placeholder hints, not values. Field Day mode will not engage until both are filled in (the exchange goes on the air), and an export with blanks is malformed.
 - [ ] **Set power multiplier**: x5 (QRP/battery), x2 (≤100 W, the default), or x1 (>100 W). The engine clamps illegal values to the nearest legal tier.
 - [ ] **Configure N3FJP** (see [N3FJP Setup](#n3fjp-setup) below) and press **Test** to confirm the handshake before the event.
 - [ ] **Configure N1MM address** if your club runs N1MM dashboards (see [N1MM Broadcast](#n1mm-broadcast)).
@@ -80,6 +78,20 @@ Score updates every snapshot cycle (approximately every 300 ms).
 ### Winter Field Day Scoring
 
 WFD scoring in Nexus is partial. QSO points and the bonus checklist are tracked. WFD operator-count and objective multipliers are **not** computed in-app. The UI states *"WFD objective multipliers apply at submission (not tracked here)"* — use the raw point export and apply multipliers in the WACA WFD scoring tool at submission.
+
+### Winter Field Day Mode Rules
+
+The WFD rules ban the entire WSJT-X mode suite (FT8, FT4, FST4, JT4, JT9, JT65, Q65, MSK144, WSPR and friends) while explicitly keeping RTTY and SSTV legal as Digital. Nexus carries this list as advisory rules data — it does **not** block or disable any mode. Staying inside the rules is your call; what Nexus does guarantee is that a digital contact is exported and pushed under the mode actually used (an RTTY contact says RTTY, never FT8), so a legal contact can never be misreported as a banned one.
+
+---
+
+## Scoreboard, Sections Board and Pop-Out
+
+The FieldDay view carries a live scoreboard: QSO and section counts, per-mode chips (DIG / CW / PH), and the score math for the active event (WFD shows honest raw points, never the ARRL power×+bonus formula).
+
+- **Operator field** — Field Day rotates operators; type the call of whoever is at the key. It persists across restarts, and each QSO pushed to N3FJP is attributed to that operator (falling back to the station call when empty).
+- **Sections board** — all 83 ARRL/RAC sections laid out division by division, each cell turning green with a ✓ as the section is worked, with a worked/total count. It doubles as your multiplier tracker.
+- **Pop out** — the button in the scoreboard header tears the whole scoreboard (operator, tiles, sections board) off into its own window, sized for a second monitor or a club display facing the room. The docked view keeps working independently.
 
 ---
 
@@ -186,23 +198,31 @@ N1MM broadcast is **UDP emit-only**. Nexus does not receive or aggregate inbound
 
 ---
 
-## Cabrillo and ADIF Export
+## Exports: Cabrillo, ADIF, Summary and Dupe Sheet
 
-Both exports are available at any time during or after the event from the FieldDay view export buttons.
+All four exports are available at any time during or after the event from the FieldDay view export buttons.
 
 ### Cabrillo 3.0
 
 - Each QSO line carries a real `yyyy-mm-dd hhmm` UTC timestamp derived from the logged Unix timestamp.
-- Mode tokens follow Cabrillo 3.0: `DG` (digital), `CW`, `PH`.
+- Mode tokens follow Cabrillo 3.0: `CW`, `PH`, `RY` for RTTY contacts, `DG` for other (or unrecorded) digital.
 - `CONTEST:` header is `ARRL-FIELD-DAY` or `WFD` based on the event switch.
 - `CATEGORY-OPERATOR: MULTI-OP` is hardcoded; single-op categories are not selectable in this version.
 - Legacy contacts without a timestamp fall back to the `----------` placeholder rather than inventing a time.
 
 ### ADIF
 
-- Tags written per contact: `CALL`, `MODE` (CW / SSB / FT8), `BAND`, `CONTEST_ID` (ARRL-FIELD-DAY or WFD), `CLASS`, `ARRL_SECT`, `<EOR>`.
+- Tags written per contact: `CALL`, `MODE`, `BAND`, `CONTEST_ID` (ARRL-FIELD-DAY or WFD), `CLASS`, `ARRL_SECT`, `<EOR>`.
 - `PROGRAMID` is `Nexus`.
-- All digital contacts (FT8, FT4, TempoFast) map to `FT8` in the ADIF MODE tag; CW maps to `CW`, Phone maps to `SSB`.
+- `MODE` is the mode actually worked: CW maps to `CW`, Phone to `SSB`, and a digital contact carries its real mode (`FT8`, `FT4`, `RTTY`, …). Only legacy digital rows logged before the actual mode was recorded fall back to `FT8`.
+
+### Score Summary
+
+A one-page plain-text score summary: QSO counts by mode and by band, the sections worked, power multiplier, claimed bonuses and the score math (WFD prints raw QSO points and notes that objective multipliers apply at submission). Hand it to the club scorekeeper or check your entry against it before submitting.
+
+### Dupe / Multiplier Sheet
+
+A plain-text check sheet: every section multiplier with the call and band that first earned it, then an alphabetical callsign list showing how many times and where (band/mode) each station was worked, with dupes flagged `*`.
 
 Submit the Cabrillo file to the ARRL online submission system. ADIF can be imported into N3FJP or other loggers for cross-checking.
 
@@ -215,7 +235,7 @@ Submit the Cabrillo file to the ARRL online submission system. ADIF can be impor
 - **N3FJP errors are not surfaced in the UI** beyond the initial Test button; monitor N3FJP's own display to confirm pushes are landing.
 - **N1MM is emit-only**: Nexus does not receive inbound `<contactinfo>` from other network stations.
 - **CATEGORY-OPERATOR is hardcoded to MULTI-OP** in Cabrillo; single-op selection is not yet in the UI.
-- **ADIF MODE maps all digital modes to FT8** regardless of actual mode used (TempoFast, FT4, etc.).
+- **Legacy digital rows export as FT8**: contacts journaled before the actual on-air mode was recorded have no mode on file, so ADIF and the interop push fall back to `FT8` for them. New digital contacts carry the mode actually worked.
 - **TempoFast auto-sequencer requires operator initiation**: fully unattended automated operation is not implemented, consistent with ARRL FD rules requiring operator presence.
 - **Desktop-only** (Tauri v2); no mobile companion.
 

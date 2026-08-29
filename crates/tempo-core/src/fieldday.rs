@@ -96,6 +96,13 @@ pub struct FieldDayLog {
     pub myexch: Exchange,
     pub band: String,
     pub event: FdEvent,
+    /// The ACTUAL on-air digital mode currently keyed (ADIF-style name, e.g.
+    /// "FT8", "FT4"), stamped by the engine at FD entry and on every tier
+    /// change — the funnel that fills [`LoggedQso::submode`] for the digital
+    /// sequencer's own [`log`](Self::log) calls, so a WFD RTTY/FT4 contact is
+    /// never exported or pushed as "FT8". Applies to the "DIG" class only:
+    /// CW/PH manual entries ARE their on-air mode and keep an empty submode.
+    pub current_submode: String,
     qsos: Vec<LoggedQso>,
     worked: HashSet<(String, String, String)>, // (call, band, mode class)
 }
@@ -107,6 +114,7 @@ impl FieldDayLog {
             myexch,
             band: band.to_string(),
             event: FdEvent::ArrlFd,
+            current_submode: String::new(),
             qsos: Vec::new(),
             worked: HashSet::new(),
         }
@@ -155,7 +163,15 @@ impl FieldDayLog {
         slot: u64,
         when_unix: u64,
     ) -> bool {
-        self.log_submode_at(call, class, section, mode, "", slot, when_unix)
+        // The "DIG" class covers many on-air modes, so a digital entry stamps
+        // [`current_submode`](Self::current_submode) (what the engine says is
+        // actually keyed). CW/PH ARE their on-air mode — no submode.
+        let submode = if mode.eq_ignore_ascii_case("DIG") {
+            self.current_submode.clone()
+        } else {
+            String::new()
+        };
+        self.log_submode_at(call, class, section, mode, &submode, slot, when_unix)
     }
 
     /// As [`log_mode_at`](Self::log_mode_at) but also recording the ACTUAL

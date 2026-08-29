@@ -128,6 +128,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Winter Field Day RTTY contact no longer reaches your club logger labelled FT8.** The FD
+  log has always known the actual on-air mode behind a digital contact, but the push to N3FJP
+  and N1MM re-derived every digital row as FT8 — at WFD, a banned mode. The recorded mode now
+  travels the whole way: RTTY pushes as RTTY, and Cabrillo's RY rows, ADIF and the club logger
+  finally agree. Rows logged before this release keep the old fallback.
+
+- **The Field Day manual told you the event was 24 hours.** ARRL Field Day runs 27 and Winter
+  Field Day 30; the manual now carries the real windows, corrects the claim that class and
+  section have defaults (they must be set before FD mode engages), and documents what shipped
+  undocumented: the pop-out scoreboard, the Operator field, the sections board, WFD's advisory
+  mode restrictions, and all four exports. Two new build-time guards also pin the hand-mirrored
+  sections and bonus tables between Rust and the UI, so the 83-section board and the bonus list
+  can no longer drift apart silently.
+
 - **Spanish and French showed doubled text wherever a count was involved.** Fifty-two messages
   in each language — import results, sync summaries, alert batches — had both grammatical
   forms of the sentence glued together, so a French operator importing a log read

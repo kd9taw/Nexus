@@ -8874,11 +8874,7 @@ impl RadioLoop {
                         let fallback_unix = (now / 1000.0) as u64;
                         std::thread::spawn(move || {
                             for (i, q) in new_qsos.iter().enumerate() {
-                                let mode_str = match q.mode.as_str() {
-                                    "CW" => "CW",
-                                    "PH" => "SSB",
-                                    _ => "FT8",
-                                };
+                                let mode_str = fd_interop_mode(&q.mode, &q.submode);
                                 // Per-QSO log time (a multi-contact batch must not
                                 // collapse onto one wall-clock second).
                                 let when = if q.when_unix > 0 {
@@ -9003,6 +8999,26 @@ impl RadioLoop {
 // provable without a sound card, rig, or live socket. The loop calls these and
 // sends the result; the math (audio-offset → RF frequency) and the
 // callsign-gating live here where they can be tested.
+
+/// The mode token one Field Day QSO is pushed to N3FJP / N1MM with, from its
+/// scoring class (`FieldDayQso::mode`, "DIG" | "CW" | "PH") and recorded
+/// actual on-air mode (`FieldDayQso::submode`, e.g. "RTTY"; empty on legacy
+/// rows and on CW/PH where the class IS the mode). ONE function for both
+/// sinks, so they can never disagree about the same contact.
+fn fd_interop_mode(mode: &str, submode: &str) -> String {
+    // The recorded ACTUAL mode wins — a WFD RTTY QSO must push as RTTY, never
+    // as FT8 (a banned mode there). Rows without one (legacy journals, CW/PH)
+    // keep the historical class map, byte-identical to what always shipped.
+    if !submode.is_empty() {
+        return submode.to_string();
+    }
+    match mode {
+        "CW" => "CW",
+        "PH" => "SSB",
+        _ => "FT8",
+    }
+    .to_string()
+}
 
 /// The WSJT-X mode string for a link [`Tier`].
 fn tier_mode(tier: Tier) -> &'static str {
@@ -10431,6 +10447,27 @@ mod tests {
     }
     use super::*;
     use crate::backend::MockBackend;
+
+    /// THE WFD-RTTY-PUSHED-AS-FT8 BUG: the core records the actual on-air mode
+    /// behind a "DIG" contact (`LoggedQso::submode` — ADIF and Cabrillo already
+    /// honor it), but the interop push hardcoded the class map, so a WFD RTTY
+    /// QSO reached N3FJP/N1MM as "FT8" — a banned mode at Winter Field Day.
+    /// The one shared mapping both sinks use must prefer the recorded mode and
+    /// keep the historical class map for rows without one (legacy journals).
+    #[test]
+    fn fd_interop_push_honors_the_recorded_actual_mode() {
+        assert_eq!(
+            fd_interop_mode("DIG", "RTTY"),
+            "RTTY",
+            "a recorded RTTY contact must never push as FT8 (banned at WFD)"
+        );
+        assert_eq!(fd_interop_mode("DIG", "FT4"), "FT4");
+        // Legacy rows without a recorded mode keep the historical class map,
+        // so old journals push exactly as they always did.
+        assert_eq!(fd_interop_mode("DIG", ""), "FT8");
+        assert_eq!(fd_interop_mode("CW", ""), "CW");
+        assert_eq!(fd_interop_mode("PH", ""), "SSB");
+    }
 
     /// AUTO and OFF must survive the round trip, and must NEVER come back as "mid".
     ///

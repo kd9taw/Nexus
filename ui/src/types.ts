@@ -2324,6 +2324,9 @@ export interface FieldDayQso {
   section: string
   band: string  /** Scoring class: 'DIG' | 'CW' | 'PH'. */
   mode?: string
+  /** The ACTUAL on-air mode behind a 'DIG' row (RTTY, FT4, SSTV…). Empty/absent for CW/PH —
+   *  their class IS the mode — and for rows logged before submode was recorded. */
+  submode?: string
   whenUnix?: number
 }
 

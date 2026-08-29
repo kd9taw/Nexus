@@ -1117,6 +1117,12 @@ pub struct FieldDayQso {
     /// Scoring class: "DIG" | "CW" | "PH".
     #[serde(default)]
     pub mode: String,
+    /// The ACTUAL on-air mode behind a "DIG" class (ADIF-style, uppercase:
+    /// "FT8", "RTTY"…). Empty = not recorded (legacy rows, and CW/PH where the
+    /// class IS the mode). The interop push reads this so a WFD RTTY contact
+    /// is never pushed to N3FJP/N1MM as "FT8" — a banned mode there.
+    #[serde(default)]
+    pub submode: String,
     /// Unix seconds when logged (drives interop-push timestamps).
     #[serde(default)]
     pub when_unix: u64,
