@@ -29,6 +29,9 @@ import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/pan
 vi.mock('../api', () => {
   const nada = () => Promise.resolve(null)
   return {
+    // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
+    // which reads as a behaviour regression rather than the stale mock it actually is.
+    getCatCwUnprovenRigModels: vi.fn(async () => []),
     // The dial write every assertion below reads.
     setFrequency: vi.fn(nada),
     // …and everything the six cockpits + their un-stubbed children touch on mount. A verb a

@@ -6700,6 +6700,16 @@ input.cw-pitch::-webkit-inner-spin-button {
   border: 1px solid var(--state-weak);
   border-radius: var(--radius-sm);
 }
+/* The STANDING caution variant of that banner: CAT keying is unproven on this radio. Same box,
+   warning colour instead of the error colour, because `.settings-warn` versus `.settings-error`
+   draws exactly this line one screen away and for the same reason — "this stopped you" and
+   "this is worth knowing" must not look alike. This one never blocks and never disables the
+   keyer. `--alert-warning` is defined in both themes. */
+.cw-keyer-warn.caution {
+  color: var(--alert-warning);
+  background: color-mix(in srgb, var(--alert-warning) 12%, transparent);
+  border-color: var(--alert-warning);
+}
 /* CW copilot — decoded-call chips + (Guided) next-step prompt + the Guided/Expert toggle. */
 .cw-copilot {
   display: flex;

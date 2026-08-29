@@ -35,6 +35,7 @@ import {
   downloadLotwReport,
   getAllRigModels,
   getPortlessRigModels,
+  getCatCwUnprovenRigModels,
   getAudioDevices,
   getBandPlan,
   getRigModels,
@@ -944,6 +945,9 @@ export function SettingsPanel({
   const [rigChecks, setRigChecks] = useState<RigCheck[]>([])
   /** Models needing no serial port, from the backend. Empty = rule unread; see checkRigForm. */
   const [portlessRigModels, setPortlessRigModels] = useState<number[]>([])
+  /** Models whose CAT CW keyer is unproven and cannot report its own failure, from the backend.
+   *  Empty = rule unread, and no caution is shown. Notice only — never blocks a save. */
+  const [catCwUnprovenModels, setCatCwUnprovenModels] = useState<number[]>([])
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
   const [portLabels, setPortLabels] = useState<Record<string, string>>({})
@@ -1230,6 +1234,12 @@ export function SettingsPanel({
     // the pre-save port check declines to block — see checkRigForm.
     getPortlessRigModels()
       .then((m) => mounted && Array.isArray(m) && setPortlessRigModels(m))
+      .catch(() => {})
+    // The backend's "CAT CW keying is unproven on this model" rule, fetched once. On failure it
+    // stays empty and no caution is shown — a rule that cannot be read must not warn an operator
+    // off a keyer that works for him.
+    getCatCwUnprovenRigModels()
+      .then((m) => mounted && Array.isArray(m) && setCatCwUnprovenModels(m))
       .catch(() => {})
     getSerialPortsDetailed()
       .then((infos) => mounted && applyPorts(infos))
@@ -6403,6 +6413,17 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   <T k="settings.cw.keyer.hint" tags={{ b: <strong /> }} />
                 </span>
+                {/* CAT KEYING IS UNPROVEN ON THIS RADIO (field report, Yaesu FTX-1: "Try send a
+                    cw, never went to tx"). The rule is the backend's — see
+                    `rigmodels::cat_cw_unproven_rig_models` for the wire measurement behind it.
+                    A NOTICE, not a block: the keyer stays selectable and keeps working if it
+                    works. Shown only when the operator has actually CHOSEN the CAT keyer, so an
+                    FTX-1 owner on a WinKeyer is never nagged about a backend he is not using. */}
+                {(form.cwKeyer ?? 'cat') === 'cat' && catCwUnprovenModels.includes(form.rigModel) && (
+                  <span className="settings-warn" role="status">
+                    ⚠ <T k="settings.cw.keyer.unproven" tags={{ b: <strong /> }} />
+                  </span>
+                )}
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.cw.pitch.label')}</span>

@@ -2184,6 +2184,16 @@ export async function getPortlessRigModels(): Promise<number[]> {
   return invoke<number[]>('get_portless_rig_models')
 }
 
+/** Models whose CAT CW keyer is UNPROVEN and cannot report its own failure (today: the Yaesu
+ *  FTX-1). Drives a caution on the CW settings page — never a block, the keyer stays selectable.
+ *  The rule lives in Rust (`rigmodels::cat_cw_unproven_rig_models`) and is fetched rather than
+ *  duplicated here: membership changes as backends are fixed upstream, and a stale copy would
+ *  keep warning about a radio that had started working. An empty array means the rule could not
+ *  be read, and the caution is simply not shown. */
+export async function getCatCwUnprovenRigModels(): Promise<number[]> {
+  return invoke<number[]>('get_cat_cw_unproven_rig_models')
+}
+
 /** Zero-config: scan connected USB radios → suggested model + port + paired audio. */
 export async function detectRigs(): Promise<DetectedRig[]> {
   return invoke<DetectedRig[]>('detect_rigs')

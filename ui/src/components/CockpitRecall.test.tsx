@@ -82,6 +82,9 @@ const decodeState = {
 // Union of the two cockpits' api surfaces (the structure-test mocks) + LogEntry's own:
 // getLog feeds the prior-contact history, qrzLookup is the call resolution under test.
 vi.mock('../api', () => ({
+  // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
+  // which reads as a behaviour regression rather than the stale mock it actually is.
+  getCatCwUnprovenRigModels: vi.fn(async () => []),
   // LogEntry
   fdLogManual: vi.fn(async () => ({})),
   logQso: vi.fn(async () => ({})),

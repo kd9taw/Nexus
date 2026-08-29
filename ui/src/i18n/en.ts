@@ -4932,9 +4932,11 @@ export const EN = {
   'settings.cw.keyer.cat': 'CAT — the rig keys CW (Hamlib send_morse; newer rigs only)',
   'settings.cw.keyer.serial': "Serial keyline (DTR/RTS) — key the rig's KEY jack",
   'settings.cw.keyer.winkeyer': 'WinKeyer — K1EL hardware keyer',
-  'settings.cw.keyer.soundcard': 'Soundcard — audio tone through SSB (workaround)',
+  'settings.cw.keyer.soundcard': 'Soundcard — audio tone through a data mode (workaround)',
   'settings.cw.keyer.hint':
-    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — the clean N1MM/fldigi method, needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone through SSB — a workaround; set drive so ALC reads zero. Also switchable live from the CW cockpit.",
+    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — the clean N1MM/fldigi method, needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone — a workaround; set drive so ALC reads zero. <b>It takes your radio out of CW</b> into a data mode (DATA-U/DATA-L, so the tone reaches the transmitter instead of the mic jack); pick any other keyer and CW mode comes straight back. Also switchable live from the CW cockpit.",
+  'settings.cw.keyer.unproven':
+    "CAT CW keying is <b>unproven on this radio</b>. Its Hamlib backend sends a different keying command from the one other radios use, and it reports success either way — so if nothing is transmitted, Nexus cannot tell you. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.",
   'settings.cw.pitch.label': 'Sidetone pitch (Hz)',
   'settings.cw.pitch.hint':
     'CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope zero-beat marker.',
@@ -6922,7 +6924,7 @@ export const EN = {
   'cw.keyer.winkeyer.title':
     'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings ▸ CW.',
   'cw.keyer.soundcard.title':
-    "Soundcard keyer — a keyed audio tone through SSB (rig in USB). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
+    "Soundcard keyer — a keyed audio tone (this TAKES THE RADIO OUT OF CW, into a data mode like FT8 uses; CW mode returns when you pick another keyer). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
   'cw.pitch.label': 'Pitch',
   'cw.pitch.aria': 'CW pitch (Hz)',
   'cw.pitch.title': "Sidetone / zero-beat pitch (Hz) — the scope's dashed marker",

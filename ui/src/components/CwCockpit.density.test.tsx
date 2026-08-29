@@ -64,6 +64,9 @@ const decodeState = {
 
 vi.mock('../api', () => ({
   getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
+  // Hand-kept mock: an export the cockpit calls but this list omits makes it THROW ON MOUNT,
+  // which reads as a layout regression rather than the stale mock it is.
+  getCatCwUnprovenRigModels: vi.fn(async () => []),
   setSettings: vi.fn(async () => ({})),
   sendCw: vi.fn(async () => {}),
   setCwKeyer: vi.fn(async () => null),
@@ -460,7 +463,18 @@ describe('the deleted chrome said nothing the frame does not say', () => {
     for (const o of Array.from(sel.options)) {
       expect(o.title.length, `the ${o.value} back-end lost its explanation`).toBeGreaterThan(40)
     }
-    expect(Array.from(sel.options).find((o) => o.value === 'soundcard')!.title).toMatch(/below ALC/)
+    const scTitle = Array.from(sel.options).find((o) => o.value === 'soundcard')!.title
+    expect(scTitle).toMatch(/below ALC/)
+    // FIELD REPORT 2026-08-28 (Yaesu FTX-1): "Soundcard activated caused radio to switch from
+    // CW-U to USB, and had to manually change it back." The mode change is DELIBERATE — a keyed
+    // audio tone cannot be sent in CW, so the rig has to go to the SSB side (as a data mode, so
+    // the tone reaches the transmitter and not the mic jack). What was missing is that nobody
+    // told him, on either surface. This is the COCKPIT half of that copy; Settings ▸ CW is
+    // pinned in SettingsPanel.cwkeyer.test.tsx. It has to carry BOTH halves — that the radio
+    // leaves CW, and that CW comes back — because an operator who thinks the change is
+    // permanent will not try the keyer at all.
+    expect(scTitle, 'the live keyer switch does not say the radio leaves CW').toMatch(/out of CW/i)
+    expect(scTitle, 'it says CW is left, and never that CW comes back').toMatch(/CW mode returns/i)
     expect(sel.parentElement!.getAttribute('title'), 'the active back-end has no explanation').toBe(
       Array.from(sel.options).find((o) => o.value === sel.value)!.title,
     )

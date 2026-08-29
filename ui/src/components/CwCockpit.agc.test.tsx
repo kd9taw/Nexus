@@ -41,6 +41,9 @@ const decodeState = {
 const { setAgc } = vi.hoisted(() => ({ setAgc: vi.fn(async () => ({})) }))
 
 vi.mock('../api', () => ({
+  // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
+  // which reads as a behaviour regression rather than the stale mock it actually is.
+  getCatCwUnprovenRigModels: vi.fn(async () => []),
   setAgc,
   getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
   setSettings: vi.fn(async () => ({})),

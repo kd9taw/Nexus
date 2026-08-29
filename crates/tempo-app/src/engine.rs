@@ -860,6 +860,15 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// Deliberately well under the operator's own 2% — QRP is a legitimate way to operate, and a
 /// warning that fires on a level somebody is really using is one people learn to ignore, which
 /// costs more than it saves. Only a rig that rounds to 0% on the slider trips it.
+///
+/// ⚠️ AND THAT IS A SMALL MINORITY OF RADIOS — know this before reading the number as too low.
+/// Measured across all 117 catalog models on the bundled Hamlib 4.7.1: 28 report no `RFPOWER`
+/// at all (so this is never asked), and of the 89 that do, **75 have a floor above this
+/// threshold** — 61 of them at exactly `0.05`. Those rigs have no 0 W setting, so they cannot
+/// be in the state this describes and the silence is correct. Raising the constant to reach
+/// them would fire on 5 W of a 100 W radio, which is somebody's deliberate QRP.
+/// `the_zero_power_threshold_is_below_almost_every_rigs_own_floor_and_must_stay_there` holds
+/// the measurement and fails if this moves.
 const ZERO_RF_POWER: f32 = 0.005;
 
 /// How long a rig's own report of its split may be trusted before the gate stops granting on it.
@@ -23295,6 +23304,64 @@ mod tests {
             None,
             "NOTIFY, NEVER ACT — the warning must not command a power"
         );
+    }
+
+    /// ⭐ HOW FAR THIS WARNING ACTUALLY REACHES — measured, because the number looks wrong and
+    /// is not, and the next person to read it will want to raise it.
+    ///
+    /// The "keys but no audio" report (Yaesu FTX-1, 2026-08-28) is the exact fault this guard
+    /// was built for, and it did not fire. Asking why, with the bundled Hamlib 4.7.1
+    /// (`rigctl -m <model> --dump-caps`) across all 117 models in `rigmodels`:
+    ///
+    /// | rig's own `Get level: RFPOWER` floor | models |
+    /// |---|---|
+    /// | no RFPOWER at all (never read → never warns, correctly) | 28 |
+    /// | `0.000000` | 14 |
+    /// | `0.019608` (5/255 — the older Yaesus) | 13 |
+    /// | `0.025000` | 1 |
+    /// | `0.050000` (Icom, Kenwood, Elecraft, modern Yaesu incl. the FTX-1) | 61 |
+    ///
+    /// So of the 89 rigs that report power at all, **75 cannot report a value this low** — the
+    /// banner is unreachable on them. That is not a bug in the number: those radios have no 0 W
+    /// setting, so "0% RF power" is a state they cannot be in, and staying silent is right.
+    ///
+    /// ⚠️ AND THIS IS WHY THE FIX IS NOT TO RAISE IT. The lowest floor above the threshold is
+    /// 0.0196, and the common one is 0.05 — on a 100 W radio that is 5 W, which is a real QRP
+    /// level somebody is deliberately using. Any threshold high enough to reach those rigs
+    /// fires on legitimate QRP and contradicts `the_zero_power_warning_does_not_cry_wolf`
+    /// directly below. A false "NO RF POWER" is worse than the silence it replaces.
+    ///
+    /// What the FTX-1 operator actually needed is a DIFFERENT signal — that his power changed
+    /// when Nexus moved his mode, because a Yaesu keeps a separate level per mode — and that is
+    /// a feature, not a constant. Left for its own decision; this test exists so the constant is
+    /// not quietly "fixed" in the meantime.
+    #[test]
+    fn the_zero_power_threshold_is_below_almost_every_rigs_own_floor_and_must_stay_there() {
+        // The floors measured above, lowest first. Nothing in the catalog sits between the
+        // threshold and 0.0196 — there is no number that reaches more rigs without reaching QRP.
+        const MEASURED_FLOORS: [f32; 4] = [0.0, 0.019_608, 0.025, 0.05];
+
+        // A rig that CAN report zero is the only kind this can ever warn about, and it must.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tx_enabled(true);
+        e.observe_rig_power(MEASURED_FLOORS[0]);
+        assert!(
+            e.snapshot().radio.tx_power_zero,
+            "a rig sitting at a floor of 0.0 is exactly what this warns about",
+        );
+
+        // Every other measured floor is a level an operator is really using — silence, all of
+        // them. This is the assertion that fails if someone raises the constant.
+        for floor in MEASURED_FLOORS.iter().copied().skip(1) {
+            let mut r = Engine::new("W9XYZ", "EN37", 0);
+            r.set_tx_enabled(true);
+            r.observe_rig_power(floor);
+            assert!(
+                !r.snapshot().radio.tx_power_zero,
+                "{floor} is a rig's own minimum power, not an absent carrier — warning here \
+                 accuses a QRP operator who is working perfectly",
+            );
+        }
     }
 
     #[test]

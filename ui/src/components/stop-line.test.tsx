@@ -181,6 +181,9 @@ const sstvState = {
 
 // One api mock for four cockpits — the union of what they call on mount.
 vi.mock('../api', () => ({
+  // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
+  // which reads as a behaviour regression rather than the stale mock it actually is.
+  getCatCwUnprovenRigModels: vi.fn(async () => []),
   setPtt: vi.fn(async () => {}),
   setRfPower: vi.fn(async () => {}),
   setMicGain: vi.fn(async () => {}),

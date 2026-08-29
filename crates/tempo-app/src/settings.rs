@@ -4119,12 +4119,12 @@ impl Settings {
     /// side, and its callers gate on it before they get here.
     pub(crate) fn rig_mode_on_sideband(&self, lsb: bool) -> String {
         match self.operating_mode {
-            // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
-            // in USB so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
+            // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be in a
+            // DATA submode so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
             OperatingMode::Cw => match self.cw_keyer {
                 // CAT, WinKeyer, and the serial keyline all key the rig in CW mode (the rig
                 // shapes the envelope); only the soundcard keyer keys an audio tone, so that
-                // one needs the rig in SSB (band-aware sideband).
+                // one needs the rig on the SSB side — as a DATA submode, see its arm below.
                 //
                 // BAND-AWARE CW SIDEBAND (operator 2026-07-24, "40 m sets CW-U, should be
                 // CW-L"): same 10 MHz convention as the sideband rules below — CW-L
@@ -4134,7 +4134,24 @@ impl Settings {
                 CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer | CwKeyerBackend::Serial => {
                     if lsb { "CWR" } else { "CW" }.to_string()
                 }
-                CwKeyerBackend::Soundcard => if lsb { "LSB" } else { "USB" }.to_string(),
+                // SOUNDCARD: a DATA submode, exactly like every other soundcard-audio path
+                // here (Digital, Keyboard, RTTY-AFSK, and SSTV's `PKTFM`) — and for their
+                // reason, which this arm was the only one not to apply: on a normally-wired
+                // rig plain SSB takes TX audio from the MIC JACK, so a keyed tone played into
+                // the USB codec never reaches the modulator and the over radiates ZERO RF.
+                // That is the "keys but no audio" field report (Yaesu FTX-1, 2026-08-28).
+                //
+                // The SIDE is unchanged — the CW convention above still picks it — so this
+                // moves USB→PKTUSB and LSB→PKTLSB and nothing else, and it inherits the
+                // `data_modes_plain_ssb` opt-out that mic-jack interfaces need.
+                //
+                // ⚠️ NEEDS-BENCH (no rig on this box). What is proven here is the MODE WORD
+                // Nexus commands. What is NOT proven is a radio putting RF out in DATA-U
+                // where plain USB put none out — that is one key-down on a real rig with the
+                // power meter watched, and it is the whole point of the change.
+                CwKeyerBackend::Soundcard => {
+                    self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
+                }
             },
             // Phone: force the correct sideband — the hard convention is LSB below
             // 10 MHz (160/80/40 m), USB at 30 m and up. (AM comes later as an explicit
@@ -4842,10 +4859,77 @@ mod tests {
         assert_eq!(s.rig_mode(), "CW", "20 m CW is CW-U");
         s.dial_mhz = 10.110; // 30 m — at/above the 10 MHz line
         assert_eq!(s.rig_mode(), "CW", "30 m CW is CW-U");
-        // The soundcard keyer keeps its SSB mapping (audio-tone keying).
+        // The soundcard keyer keeps the same SIDE (audio-tone keying) — as the DATA submode
+        // its siblings use, see `the_soundcard_cw_keyer_commands_a_data_submode_…`.
         s.cw_keyer = CwKeyerBackend::Soundcard;
         s.dial_mhz = 7.030;
-        assert_eq!(s.rig_mode(), "LSB");
+        assert_eq!(s.rig_mode(), "PKTLSB");
+    }
+
+    /// ⭐ THE SOUNDCARD CW KEYER WAS THE ONE SOUNDCARD PATH THAT SKIPPED THE DATA SUBMODE
+    /// (field report, Yaesu FTX-1, 2026-08-28: "TX would send, but no audio heard while
+    /// listening for it").
+    ///
+    /// Every other path in this app that transmits SOUNDCARD AUDIO commands a DATA submode —
+    /// Digital/FT8, Keyboard/PSK31, RTTY-AFSK, and an SSTV image on FM — and the reason is
+    /// written out three times in this file and once in the tune path: on a normally-wired rig
+    /// plain SSB takes TX audio from the MIC JACK, so the codec audio never reaches the
+    /// modulator and the over radiates ZERO RF. The CW soundcard keyer commanded plain
+    /// `USB`/`LSB` and so keyed a carrier with nothing on it.
+    ///
+    /// This is a CLASS test, not an FTX-1 test: it pins the CW arm to the same rule as its four
+    /// siblings, including the `data_modes_plain_ssb` mic-jack opt-out, which the arm did not
+    /// consult either.
+    #[test]
+    fn the_soundcard_cw_keyer_commands_a_data_submode_like_every_other_soundcard_path() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Cw;
+        s.cw_keyer = CwKeyerBackend::Soundcard;
+
+        // USB-side above 10 MHz, LSB-side below — the CW sideband convention is unchanged;
+        // only the SUBMODE moves, so the audio reaches the modulator instead of the mic jack.
+        s.dial_mhz = 14.050;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "20 m soundcard CW must be the DATA submode — plain USB radiates no RF"
+        );
+        s.dial_mhz = 7.030;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTLSB",
+            "40 m soundcard CW keeps the LSB side AND gains the DATA submode"
+        );
+
+        // THE MIC-JACK OPT-OUT, which the old arm never consulted: an operator whose interface
+        // feeds the mic input gets plain SSB back, exactly like FT8 and PSK31 do for him.
+        s.data_modes_plain_ssb = true;
+        assert_eq!(
+            s.rig_mode(),
+            "LSB",
+            "mic-jack interface: plain SSB, as its siblings"
+        );
+        s.dial_mhz = 14.050;
+        assert_eq!(s.rig_mode(), "USB", "mic-jack interface, USB side");
+        s.data_modes_plain_ssb = false;
+
+        // AND THE OTHER THREE KEYERS ARE UNTOUCHED — they key the rig in CW, and a DATA
+        // submode there would be a different bug. This is the half that keeps the fix narrow.
+        for k in [
+            CwKeyerBackend::Cat,
+            CwKeyerBackend::WinKeyer,
+            CwKeyerBackend::Serial,
+        ] {
+            s.cw_keyer = k;
+            s.dial_mhz = 14.050;
+            assert_eq!(s.rig_mode(), "CW", "{k:?} keys the rig in CW");
+            s.dial_mhz = 7.030;
+            assert_eq!(
+                s.rig_mode(),
+                "CWR",
+                "{k:?} keys the rig in CW-L below 10 MHz"
+            );
+        }
     }
 
     #[test]
@@ -5641,12 +5725,13 @@ mod tests {
         // CW with the CAT keyer: force CW.
         s.operating_mode = OperatingMode::Cw;
         assert_eq!(s.rig_mode(), "CW");
-        // CW with the SOUNDCARD keyer: the rig must be in USB/LSB to send the tone.
+        // CW with the SOUNDCARD keyer: the rig must be on the SSB side to send the tone, and
+        // in a DATA submode so the tone reaches the modulator rather than the mic jack.
         s.cw_keyer = CwKeyerBackend::Soundcard;
         s.dial_mhz = 14.050;
-        assert_eq!(s.rig_mode(), "USB");
+        assert_eq!(s.rig_mode(), "PKTUSB");
         s.dial_mhz = 7.030;
-        assert_eq!(s.rig_mode(), "LSB");
+        assert_eq!(s.rig_mode(), "PKTLSB");
         s.cw_keyer = CwKeyerBackend::Cat;
 
         // Phone: band-aware sideband — LSB below 10 MHz, USB at/above.

@@ -60,6 +60,7 @@ import {
   haltTx,
   startQsoRecording,
   stopQsoRecording,
+  getCatCwUnprovenRigModels,
 } from '../api'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
@@ -71,6 +72,7 @@ import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeWindow, isRfScopeSource, sidebandSign, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
 import { t } from '../i18n'
+import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
 
 /** This cockpit's INVARIANT vocabulary — the words that are the mode's own technical tokens
@@ -571,6 +573,13 @@ export function CwCockpit({
   // exchange tokens) while FD mode is on. Keep the full settings so the switcher can
   // persist the new active-profile index without dropping other fields.
   const [cwSettings, setCwSettings] = useState<Settings | null>(null)
+  // Models whose CAT CW keyer is UNPROVEN and cannot report its own failure. Fetched from the
+  // backend, which owns the rule (`rigmodels::cat_cw_unproven_rig_models`) — the SAME list
+  // Settings ▸ CW reads, never a second copy here: membership changes as backends are fixed
+  // upstream, and two sources of truth is how the two surfaces come to disagree about a radio.
+  // Empty = rule unread (built without the `radio` feature, or the command failed), and no
+  // caution is shown — an unreadable rule must not warn an operator off a keyer that works.
+  const [catCwUnproven, setCatCwUnproven] = useState<number[]>([])
   const [profiles, setProfiles] = useState<{ name: string; macros: { key: string; label: string; text: string }[] }[]>(
     [],
   )
@@ -583,6 +592,11 @@ export function CwCockpit({
         setCwSettings(s)
         setProfiles(s.macros?.cwProfiles ?? [])
         setActiveProfile(s.macros?.activeCwProfile ?? 0)
+      })
+      .catch(() => {})
+    void getCatCwUnprovenRigModels()
+      .then((m) => {
+        if (alive && Array.isArray(m)) setCatCwUnproven(m)
       })
       .catch(() => {})
     return () => {
@@ -670,6 +684,13 @@ export function CwCockpit({
   // The four back-end descriptions, read once per render — the select wears the SELECTED
   // one's and each <option> wears its own.
   const keyerHelpText = keyerHelp()
+  // CAT KEYING IS UNPROVEN ON THIS RADIO (field report 2026-08-28, Yaesu FTX-1: "Try send a cw,
+  // never went to tx"). The rig's Hamlib backend reports success whether or not it keyed, so the
+  // keyer-error banner below can never light for this fault — the operator is told UP FRONT
+  // instead. Read off the LIVE `keyer` state, not the saved setting, because this header switch
+  // is where a backend gets changed without Settings ever being opened.
+  const catCwUnprovenHere =
+    keyer === 'cat' && !!cwSettings && catCwUnproven.includes(cwSettings.rigModel)
   const [text, setText] = useState('')
   // Sidetone pitch — local for instant marker response; persisted via set_cw_keyer.
   const [pitch, setPitch] = useState(pitchHz)
@@ -1425,6 +1446,17 @@ export function CwCockpit({
       {keyerError && (
         <div className="cw-keyer-warn" role="alert">
           ⚠ {keyerError}
+        </div>
+      )}
+
+      {/* The standing caution, BELOW a live error because an error outranks a notice. Same
+          sanctioned `.cw-keyer-warn` shell-child kind (the census admits one alert kind here,
+          not two), warning-toned rather than error-toned via `.caution`: this never blocks and
+          never disables the keyer, which keeps working if it works. The sentence is the SAME
+          catalog string Settings ▸ CW renders. */}
+      {catCwUnprovenHere && (
+        <div className="cw-keyer-warn caution" role="status">
+          ⚠ <T k="settings.cw.keyer.unproven" tags={{ b: <strong /> }} />
         </div>
       )}
 

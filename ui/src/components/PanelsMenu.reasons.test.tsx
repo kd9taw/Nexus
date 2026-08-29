@@ -48,6 +48,9 @@ let cwSentLines: string[] = []
 // Every engine call either cockpit's subtree makes on mount, stubbed harmlessly (the
 // union of the two structure suites' lists).
 vi.mock('../api', () => ({
+  // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
+  // which reads as a behaviour regression rather than the stale mock it actually is.
+  getCatCwUnprovenRigModels: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
   setSettings: vi.fn(async () => ({})),
   getMeters: vi.fn(async () => ({ rxLevel: 0, smeterDb: null })),

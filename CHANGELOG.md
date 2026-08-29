@@ -66,6 +66,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Soundcard CW keying now uses a data mode, so the audio actually reaches the transmitter.**
+  With the CW keyer set to Soundcard, Nexus put the radio into plain USB or LSB. On the common
+  Icom and default Yaesu wiring, plain SSB takes its transmit audio from the MIC socket, so the
+  rig keyed and radiated nothing — the red light came on and no signal went out. It now commands
+  the DATA submode (DATA-U/DATA-L), which is what FT8, PSK31, RTTY and SSTV have always done;
+  soundcard CW was the one path that did not. ⚠️ **If your interface feeds the rig's MIC socket
+  and soundcard CW was working for you, tick "plain SSB for data modes" on that radio in Settings
+  and it will work again** — that is the same switch the other four modes already use. Reported by
+  an FTX-1 operator.
+
+- **The CW cockpit and Settings now warn when CAT keying is unproven on your radio.** On the
+  Yaesu FTX-1, the keying command Hamlib sends differs from the one it uses on other radios, and
+  it reports success either way — so if nothing goes out, Nexus has no way to know and the keyer
+  error line stays dark. Rather than let you lose an evening to it, both the Settings picker and
+  the cockpit's live keyer switch now say it is unproven on that radio and point you at the
+  serial keyline, WinKeyer or the soundcard keyer. It is a notice, not a block: nothing stops you
+  using CAT keying, and nothing about what Nexus sends has changed.
+
+- **Switching to the Soundcard keyer says that it takes the radio out of CW.** It always did —
+  a keyed audio tone needs the rig in an SSB or data mode — but nothing on screen said so, so the
+  mode change looked like a bug. The Settings hint and the cockpit's keyer switch now both say it,
+  and say that CW mode comes back when you pick another keyer.
+
 - **The Work button left the markers behind.** Clicking Work on a station card in the Classic
   layout's Stations pane started the QSO but did not move your RX and TX markers onto the
   station, so you answered someone while still listening and transmitting on a different

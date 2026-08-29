@@ -10578,6 +10578,26 @@ fn get_portless_rig_models() -> Vec<u32> {
     }
 }
 
+/// Models whose CAT CW keyer is UNPROVEN and cannot report its own failure — the CW settings
+/// page shows a caution when the operator has picked the CAT keyer on one of them. See
+/// [`tempo_audio::rigmodels::cat_cw_unproven_rig_models`] for the measurement and for why this
+/// is a notice rather than a block.
+///
+/// An empty result means "could not be determined" (built without the `radio` feature), and the
+/// form simply shows no caution — the same direction as the portless rule: a rule that cannot be
+/// read must never be the reason an operator is warned off a keyer that works for him.
+#[tauri::command]
+fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rigmodels::cat_cw_unproven_rig_models()
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        Vec::new()
+    }
+}
+
 /// Tempo's proposed calling-frequency band plan (HF + VHF/UHF), for the band
 /// selector. Each entry is General-legal + clear of the existing watering holes.
 #[tauri::command(async)]
@@ -18508,6 +18528,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_rig_models,
             get_all_rig_models,
             get_portless_rig_models,
+            get_cat_cw_unproven_rig_models,
             get_band_plan,
             set_license_class,
             get_licensed_band_plan,
