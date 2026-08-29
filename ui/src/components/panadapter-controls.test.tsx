@@ -17,6 +17,10 @@ import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 
 vi.mock('../api', () => ({
+  // Added by the 1.9.x merge-forward: CwCockpit now asks which rig models have an
+  // UNPROVEN CAT-CW path. A mock missing it throws inside the component, which surfaces
+  // as three unrelated-looking panadapter failures rather than as a missing export.
+  getCatCwUnprovenRigModels: vi.fn(async () => []),
   setPtt: vi.fn(async () => {}),
   setRfPower: vi.fn(async () => {}),
   setMicGain: vi.fn(async () => {}),
