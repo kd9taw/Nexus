@@ -99,6 +99,48 @@ pub const ZERO_BEAT_HOLD_TICKS: u32 = 2_000 / TICK_MS as u32;
 /// BOTH sources and fails naming both values, because the `RadioProfilePatch` seam proved five
 /// times that a comment naming the other side is documentation, not a mechanism. Renaming this
 /// constant fails that guard too, rather than quietly making it stop looking.
+/// How close two consecutive tone estimates must sit to count as the SAME tone, in Hz.
+///
+/// ⭐ THIS IS WHAT STOPS THE NEEDLE FLYING AROUND ON A DEAD BAND, and it is a different problem
+/// from the SNR floor. [`MIN_TONE_SNR_DB`] is a false-alarm budget against PURE noise, and it is
+/// a good one — about 1e-7 per measurement. But the ±400 Hz search window on a real band is not
+/// pure noise: it holds other CW signals, birdies, carriers and atmospheric peaks, so the
+/// detector honestly reports the loudest thing in the window and that thing is simply not the
+/// signal being tuned. Operator report (2026-08-29): "the little line flies around a lot in dead
+/// air and looks too active, but the on-pitch detection when CW is being sent seems accurate" —
+/// both halves of which are exactly this.
+///
+/// A CW note being tuned holds its frequency; a noise peak hops hundreds of Hz between ticks.
+/// 12 Hz is about two raw bins at 5.86 Hz, so real drift and estimator wobble stay inside it
+/// while anything that moved to a different peak falls outside.
+///
+/// ⚠️ RAISING THE SNR FLOOR WOULD HAVE BEEN THE WRONG FIX. It is what costs weak-signal
+/// accuracy, and the operator's report is that the accuracy is already right.
+const ZERO_BEAT_STABLE_HZ: f32 = 12.0;
+
+/// How many agreeing measurements a tone needs before it is shown at all.
+///
+/// ⚠️ THIS IS NOT "A FEW TICKS", AND THE REASON IS THE WINDOW OVERLAP. Consecutive measurements
+/// are NOT independent evidence: the analysis window is 171 ms and it advances 20 ms per tick,
+/// so successive windows share ~88% of their audio and a peak that dominates one dominates the
+/// next eight for no better reason than still being inside the window. A three-tick rule looks
+/// like a stability test and is really a restatement of the window length.
+///
+/// Nine ticks is 180 ms — just past one whole window — so the first and last measurement of a
+/// run come from essentially non-overlapping audio. That is the shortest run that asks the
+/// signal to still be there after the evidence has completely turned over.
+const ZERO_BEAT_STABLE_TICKS: u8 = 9;
+
+/// How long a candidate survives ticks with NO detection, before the run is abandoned.
+///
+/// ⭐ WITHOUT THIS, FAST CW COULD NEVER ACQUIRE. A run has to span a whole analysis window, but
+/// at 25 wpm a dah is only 144 ms — shorter than that. Successive elements are the SAME tone
+/// though, so the run is allowed to continue across the gaps between them, and a real note
+/// accumulates its evidence over several elements. A hopping peak gains nothing from this: each
+/// new peak DISAGREES with the candidate and resets the run to one, whether or not a gap
+/// intervened. 400 ms outlasts an inter-letter gap without keeping a dead candidate alive.
+const ZERO_BEAT_GRACE_TICKS: u8 = 20;
+
 const ZERO_BEAT_SEARCH_HZ: f32 = 400.0;
 /// The search never runs into DC/rumble, whatever the pitch.
 const ZERO_BEAT_MIN_HZ: f32 = 50.0;
@@ -114,6 +156,13 @@ pub struct RxDsp {
     meter: f32,
     /// The last measured received CW tone (Hz), or `None` for "nothing to tune to".
     cw_tone: Option<f32>,
+    /// The last RAW estimate, whether or not it was published — the candidate a new one is
+    /// compared against. Distinct from `cw_tone`, which is what the operator can see.
+    cw_candidate: Option<f32>,
+    /// How many agreeing estimates `cw_candidate` has accumulated.
+    cw_agree: u8,
+    /// Ticks with no detection since the last one, while a candidate still stands.
+    cw_quiet: u8,
     /// Ticks that reading may still stand for — see [`ZERO_BEAT_HOLD_TICKS`].
     cw_hold: u32,
 }
@@ -133,6 +182,9 @@ impl RxDsp {
             rate: ANALYSIS_RATE_HZ,
             meter: 0.0,
             cw_tone: None,
+            cw_candidate: None,
+            cw_agree: 0,
+            cw_quiet: 0,
             cw_hold: 0,
         }
     }
@@ -257,14 +309,46 @@ impl RxDsp {
         };
         let lo = (target - ZERO_BEAT_SEARCH_HZ).max(ZERO_BEAT_MIN_HZ);
         let hi = target + ZERO_BEAT_SEARCH_HZ;
-        if let Some(est) = tempo_core::spectrum::dominant_tone(
+        let Some(est) = tempo_core::spectrum::dominant_tone(
             &self.window,
             ANALYSIS_RATE,
             lo,
             hi,
             target,
             tempo_core::spectrum::MIN_TONE_SNR_DB,
-        ) {
+        ) else {
+            // Nothing above the floor. A PUBLISHED reading is left alone — `age_zero_beat`
+            // owns its expiry, and blanking here would strobe the indicator on every
+            // inter-letter gap, which is what the hold exists to prevent.
+            //
+            // The CANDIDATE is kept for a grace period rather than dropped, so a run can span
+            // the gaps between CW elements; see ZERO_BEAT_GRACE_TICKS.
+            self.cw_quiet = self.cw_quiet.saturating_add(1);
+            if self.cw_quiet > ZERO_BEAT_GRACE_TICKS {
+                self.cw_candidate = None;
+                self.cw_agree = 0;
+            }
+            return;
+        };
+
+        // ⭐ STABILITY, NOT SENSITIVITY. A tone must be found in the SAME place on several
+        // consecutive ticks before it is shown. A CW note being tuned holds still; a noise peak
+        // or a distant signal hops, so it never accumulates a run and never reaches the needle.
+        // See ZERO_BEAT_STABLE_HZ for why this is the right knob and the SNR floor is not.
+        let agrees = self
+            .cw_candidate
+            .is_some_and(|prev| (prev - est.hz).abs() <= ZERO_BEAT_STABLE_HZ);
+        self.cw_agree = if agrees {
+            self.cw_agree.saturating_add(1)
+        } else {
+            1
+        };
+        self.cw_candidate = Some(est.hz);
+        self.cw_quiet = 0;
+
+        // An ESTABLISHED reading keeps updating on every agreeing tick, so once the operator is
+        // on a signal the needle tracks it live — the run requirement is paid once, at the start.
+        if self.cw_agree >= ZERO_BEAT_STABLE_TICKS || self.cw_tone.is_some() && agrees {
             self.publish_zero_beat(meters, Some(est.hz));
         }
     }
@@ -847,6 +931,47 @@ mod tests {
         assert!(
             (hz - 672.0).abs() < 3.0,
             "measured {hz} Hz for a 672 Hz signal against a 600 Hz pitch"
+        );
+    }
+
+    /// ⭐ THE FLYING NEEDLE. Operator report, 2026-08-29: "the little line flies around a lot in
+    /// dead air and looks too active, but the on-pitch detection when CW is being sent seems
+    /// accurate." Both halves are the same cause — the detector reports the loudest tone in the
+    /// ±400 Hz window, and on a real band that window is never empty even when the signal being
+    /// tuned is absent. The SNR floor cannot fix it (it is a budget against PURE noise, and it
+    /// is already right); what separates a signal from a peak is that a signal STAYS PUT.
+    #[test]
+    fn a_tone_that_hops_never_reaches_the_needle_while_a_steady_one_does() {
+        let (tap, ring, sp, meters, mut dsp) = zero_beat_rig();
+        meters.set_cw_target_hz(Some(600.0));
+
+        // Each burst is a loud, clean tone well above the SNR floor — every one of these WOULD
+        // have been published before this change — but each sits somewhere else in the window,
+        // the way successive noise peaks and distant signals do.
+        for hz in [520.0f32, 780.0, 610.0, 900.0, 470.0, 840.0] {
+            feed(&mut dsp, &tap, &ring, &sp, &meters, &keyed_cw(hz, 512));
+        }
+        assert_eq!(
+            meters.cw_tone_hz(),
+            None,
+            "a tone in a different place every tick is not a signal being tuned; showing one is \
+             the needle flying around on a dead band"
+        );
+
+        // POSITIVE CONTROL, and it is the half that matters most: the operator said the reading
+        // is ACCURATE when CW is actually being sent, so the fix must not cost that. The same
+        // rig, fed a tone that stays put, reads it.
+        // Enough audio for the window to turn over from the hops above and the run to build —
+        // about half a second, which is a couple of CW characters.
+        for _ in 0..3 {
+            feed(&mut dsp, &tap, &ring, &sp, &meters, &keyed_cw(640.0, 2048));
+        }
+        let hz = meters
+            .cw_tone_hz()
+            .expect("control: a tone that holds still is still measured");
+        assert!(
+            (hz - 640.0).abs() < 3.0,
+            "and it is measured accurately: {hz} Hz for a 640 Hz signal"
         );
     }
 
