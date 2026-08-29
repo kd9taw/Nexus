@@ -541,7 +541,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
         band={snap.radio.band}
         feedMode={snap.link.tier}
         onSelect={onSelect}
-        onCall={(call) => onCall(call)}
+        onCall={onCall}
         conversations={snap.conversations as Conv[]}
         onArchive={onArchive}
         bandActive={selected === '*'}

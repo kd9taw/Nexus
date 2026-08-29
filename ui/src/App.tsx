@@ -1138,14 +1138,19 @@ export default function App() {
     [handleWorkspace],
   )
 
-  // Roster/StationCard adapter: a card knows only the callsign + its protocol tier, so it
-  // calls onCall(call, tier). handleCall's other params (grid/message/snr/freq) are only used
-  // by the FT8 call-sequence path, so pass them undefined here and route by tier.
-  const handleWorkStation = useCallback(
-    (call: string, tier?: Tier | null) => handleCall(call, undefined, undefined, undefined, undefined, tier),
-    [handleCall],
-  )
-
+  // The Stations cards take `handleCall` DIRECTLY — there is deliberately no adapter here any
+  // more. A card hands over the callsign, the station's GRID, its audio offset and its
+  // protocol tier, in the shared handler's own argument order, so nothing in between can drop
+  // one. The offset is the RX/TX move, not sequencing data: passing it puts the marks on the
+  // station the same way Band Activity's double-click and the Roster table already do
+  // (WSJT-X: RX always follows, TX follows unless Hold Tx Freq is on).
+  //
+  // What stood here was an adapter that re-typed the callback as (call, tier) and passed
+  // undefined for grid/message/snr/freq, on the stated grounds that "a card knows only the
+  // callsign + its protocol tier". That was wrong — a card is handed the whole Station — and
+  // it is why Work started the QSO but left the markers behind while the other two panes
+  // moved them: one gesture, three behaviours in one cockpit (#183, against 1.7.0–1.9.0).
+  // An adapter is what made the drop possible, so the fix is to not have one.
   // Fire decode alerts (beep + toast) whenever the decode feed changes, gated by the
   // user's alert settings. processDecodes dedups internally. The third arg makes each
   // alert toast click-to-work — working the station is what you almost always want next
@@ -2181,7 +2186,7 @@ export default function App() {
       band={snap.radio.band}
       feedMode={tier}
       onSelect={handleSelect}
-      onCall={handleWorkStation}
+      onCall={handleCall}
       conversations={snap.conversations}
       onArchive={handleArchive}
       bandActive={activePeer === '*'}
@@ -2201,7 +2206,7 @@ export default function App() {
       band={snap.radio.band}
       feedMode={tier}
       onSelect={handleSelect}
-      onCall={handleWorkStation}
+      onCall={handleCall}
       conversations={snap.conversations}
       onArchive={handleArchive}
       bandActive={activePeer === '*'}
