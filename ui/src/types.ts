@@ -833,6 +833,17 @@ export interface BandChannel {
 export interface AudioDeviceInfo {
   name: string
   label: string
+  /**
+   * Which USB device (parent hub) this card is inside — i.e. WHICH RADIO, when that is
+   * resolvable. Two rigs with the same codec chip both enumerate as "USB Audio Device" and the
+   * `" #2"` that separates them is assigned by enumeration order, so a stored name silently
+   * means the OTHER rig after one is moved to a different socket; this is the fact that does not
+   * move with it.
+   *
+   * ⚠️ Validation and display only, never persisted. `undefined`/`null` wherever topology is
+   * unavailable (every non-macOS platform today), so nothing may be REFUSED on its absence.
+   */
+  usbHub?: number | null
 }
 
 /** Audio input + output devices discovered on the host. */

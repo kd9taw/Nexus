@@ -8304,6 +8304,34 @@ async fn get_serial_ports() -> Vec<String> {
 struct SerialPortInfo {
     name: String,
     label: String,
+    /// Which interface of a multi-interface bridge this is, when known. A CP2105 is DUAL and only
+    /// interface 0 carries CAT on the rigs this targets; interface 1 answers nothing and looks
+    /// exactly like a dead radio. `None` when there is one interface, or topology is unavailable —
+    /// and `None` must read as "unknown", never as "interface 0".
+    interface_index: Option<u32>,
+    /// How many serial interfaces this USB device exposes in total, when known.
+    ///
+    /// ⚠️ WITHOUT THIS, `interface_index` IS NOT ENOUGH. Plenty of single-interface devices number
+    /// their one interface something other than 0 — an LG monitor's control port on this desk is
+    /// interface 2 — so "index > 0" alone would tell an operator their only port is "port 3 of
+    /// this device, CAT is normally on port 1", which is both wrong and alarming. The advice is
+    /// only meaningful when there IS another port to have picked instead.
+    ///
+    /// Counted over ports sharing the EXACT same `locationID`, which on macOS is one physical USB
+    /// device. That is stricter than the parent-hub reasoning used for `paired_audio` below, and
+    /// deliberately so: it cannot be confused by two unrelated devices in one external hub.
+    sibling_ports: Option<u32>,
+    /// An audio device on the same physical USB device — i.e. inside the same radio. `None` when
+    /// nothing is paired, which is normal for a plain serial adapter and is also what every
+    /// non-macOS platform reports, so nothing may be REFUSED on its absence.
+    ///
+    /// ⚠️ This one is a HEURISTIC and weaker than `sibling_ports`. A rig's CAT bridge and codec
+    /// are separate USB devices behind the rig's own internal hub, so they can only be related by
+    /// their PARENT — and two unrelated things in one external hub share a parent too. A USB
+    /// headset plugged into the same hub as a rig's CAT adapter would look "inside" it. That is
+    /// why the only consumer is a warning, and why it speaks solely when both sides are known and
+    /// they DISAGREE.
+    paired_audio: Option<String>,
 }
 
 /// Serial ports WITH a descriptive USB-product label, for the Settings picker.
@@ -8312,6 +8340,17 @@ async fn get_serial_ports_detailed() -> Vec<SerialPortInfo> {
     #[cfg(feature = "radio")]
     {
         let usb = tempo_audio::ports::available_usb_ports();
+        // The product string alone is NOT an identity: two radios with the same bridge chip give
+        // every one of their ports the byte-identical label ("CP2105 Dual USB to UART Bridge
+        // Controller" ×8 on a two-radio station), and an operator picking their rig out of that
+        // list saved one radio's profile pointing at the other. So each port also carries the
+        // structured facts topology can prove — which interface of the bridge it is, and which
+        // sound card sits inside the same radio — for the form to validate against.
+        //
+        // ⚠️ ADDITIVE ONLY. Both fields are `Option` and both are `None` off macOS and on any Mac
+        // where IOKit answers nothing. The label and the name are unchanged, so a picker that
+        // ignores these fields behaves exactly as before.
+        let (ifaces, locs, audio) = tempo_audio::usbtopo::serial_topology();
         tempo_audio::ports::available_ports()
             .into_iter()
             .map(|name| {
@@ -8320,7 +8359,39 @@ async fn get_serial_ports_detailed() -> Vec<SerialPortInfo> {
                     .find(|u| u.port_name == name)
                     .map(|u| u.product.clone())
                     .unwrap_or_default();
-                SerialPortInfo { name, label }
+                // Same physical device = same parent hub. A rig's internal hub carries its CAT
+                // bridge and its codec; a bare USB-serial adapter shares its hub with nothing, and
+                // then this is correctly `None`.
+                let paired_audio = locs.get(&name).and_then(|l| {
+                    let hub = tempo_audio::usbtopo::parent_hub(*l);
+                    let mut mates: Vec<&String> = audio
+                        .iter()
+                        .filter(|(_, al)| tempo_audio::usbtopo::parent_hub(**al) == hub)
+                        .map(|(n, _)| n)
+                        .collect();
+                    mates.sort(); // stable across calls — the picker must not reshuffle
+                    mates.first().map(|n| (*n).clone())
+                });
+                // Distinct interface numbers on the exact same USB device. `None` rather than
+                // `Some(1)` when this port has no topology: "one interface" and "unknown" are not
+                // the same claim, and the check that reads it must be able to tell them apart.
+                let sibling_ports = locs.get(&name).map(|my_loc| {
+                    let mut seen: Vec<u32> = ifaces
+                        .iter()
+                        .filter(|(n, _)| locs.get(*n) == Some(my_loc))
+                        .map(|(_, i)| *i)
+                        .collect();
+                    seen.sort_unstable();
+                    seen.dedup();
+                    seen.len() as u32
+                });
+                SerialPortInfo {
+                    interface_index: ifaces.get(&name).copied(),
+                    sibling_ports,
+                    paired_audio,
+                    name,
+                    label,
+                }
             })
             .collect()
     }
@@ -8342,6 +8413,16 @@ async fn get_serial_ports_detailed() -> Vec<SerialPortInfo> {
 struct AudioDeviceDto {
     name: String,
     label: String,
+    /// The USB device (parent hub) this sound card belongs to, when resolvable — i.e. WHICH RADIO
+    /// it is inside. Lets the rig form check that a chosen codec and a chosen CAT port are the same
+    /// physical rig, which a name cannot: two rigs with the same codec chip both enumerate as
+    /// "USB Audio Device" and the positional `" #2"` that separates them is assigned by enumeration
+    /// order, so moving a rig to another USB socket swaps what each stored name means.
+    ///
+    /// ⚠️ Display and validation ONLY, and NEVER persisted — it describes where the hardware is
+    /// plugged in at this instant, so a stored copy would be wrong the next time a cable moves.
+    /// `None` off macOS and wherever topology is unavailable; nothing may be refused on its absence.
+    usb_hub: Option<u32>,
 }
 
 /// Available sound-card input/output devices (for the Settings dropdowns).
@@ -8358,18 +8439,29 @@ struct AudioDevices {
 async fn get_audio_devices() -> AudioDevices {
     #[cfg(feature = "radio")]
     {
-        fn dto(v: Vec<tempo_audio::audiodev::AudioDevice>) -> Vec<AudioDeviceDto> {
+        fn dto(
+            v: Vec<tempo_audio::audiodev::AudioDevice>,
+            locs: &std::collections::HashMap<String, u32>,
+        ) -> Vec<AudioDeviceDto> {
             v.into_iter()
                 .map(|d| AudioDeviceDto {
+                    usb_hub: locs
+                        .get(&d.name)
+                        .map(|l| tempo_audio::usbtopo::parent_hub(*l)),
                     name: d.name,
                     label: d.label,
                 })
                 .collect()
         }
         let (input, output) = tempo_audio::device::available_devices();
+        // Input and output are separate CoreAudio streams even on one card, so each side needs its
+        // own lookup; both are empty maps where topology is unavailable, and then every `usb_hub`
+        // is `None` and the lists are exactly what they were before.
+        let in_locs = tempo_audio::usbtopo::audio_locations(true);
+        let out_locs = tempo_audio::usbtopo::audio_locations(false);
         AudioDevices {
-            input: dto(input),
-            output: dto(output),
+            input: dto(input, &in_locs),
+            output: dto(output, &out_locs),
         }
     }
     #[cfg(not(feature = "radio"))]

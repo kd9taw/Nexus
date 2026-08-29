@@ -305,6 +305,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The VUCC box above it has always been VHF-only and is unchanged. Suggested by NT9E.
 
+- **macOS: the Settings pickers can now tell two identical radios apart.** On a station with
+  two rigs that use the same bridge and codec chips, every serial port carried the same product
+  label ("CP2105 Dual USB to UART Bridge Controller", eight times) and both sound cards
+  enumerated as "USB Audio Device" — with only a positional " #2" between them, assigned by
+  enumeration order. Moving one rig to a different USB socket therefore swapped which radio each
+  saved name referred to, silently, with nothing to warn you. Nexus now reads USB topology on
+  macOS and uses it three ways. **Rig auto-detect and the CAT port probe** no longer see the same
+  physical port twice: a Silicon Labs bridge is offered once by Apple's driver
+  (`cu.usbserial-…`) and again by the vendor's (`cu.SLAB_USBtoUART…`), two names no rule could
+  pair, so Detect listed each rig twice and the baud sweep spent a full ladder probing a port it
+  had already tried. **Saving now warns** if you picked the half of a dual bridge that carries no
+  CAT — the most convincing way to make a working radio look dead, because the port opens and the
+  writes succeed and nothing ever answers. **And saving warns** if the sound card you chose is
+  inside the *other* radio. Both warnings are advisory and never block a save: an
+  unusual-but-correct station is still yours to configure. The port list itself is unchanged —
+  every port you could pick before, you can still pick.
 ## [1.9.1] — 2026-08-26
 
 ### Fixed

@@ -88,6 +88,8 @@ pub mod sstv_store;
 #[cfg(feature = "device")]
 pub mod sstvrx;
 pub mod usbrig;
+/// Which rig a sound card or serial port belongs to, from USB topology (macOS).
+pub mod usbtopo;
 pub mod voice;
 pub mod winkeyer;
 

@@ -450,6 +450,18 @@ principal third-party components, not a substitute for that gate:
   seed its own scale on a high-DPI panel instead of rendering half-size until the operator
   finds the zoom control) — MIT. Not a new crate: already in the tree at the same version as a
   dependency of gtk, gdkx11 and webkit2gtk, which the Linux webview pulls in regardless.
+- **io-kit-sys**, **core-foundation-sys**, **coreaudio-sys** (macOS only: reading USB
+  topology from the IO registry, so the pickers can say WHICH RADIO a serial port or a sound
+  card belongs to — two rigs with the same bridge and codec chips are otherwise identical
+  strings) — MIT / Apache-2.0, MIT OR Apache-2.0, and MIT respectively (coreaudio-sys is MIT
+  only, not dual). io-kit-sys and core-foundation-sys were already in the tree at these
+  versions via serialport and cpal.
+  ⚠️ coreaudio-sys is a GENUINELY NEW crate as of the cpal 0.15 -> 0.18 upgrade, which
+  replaced it with the objc2-core-audio family and dropped it from the tree. The PR that
+  brought this code was written when cpal still pulled it in and said so; that stopped being
+  true underneath it. It is carried deliberately: the alternative was asking the contributor
+  to rewrite working IOKit/CoreAudio interop against a different binding for no
+  operator-visible difference. macOS builds only.
 - **serialport** (serial CAT / RTS-DTR keying) — MPL-2.0.
 - **sgp4** (SGP4/SDP4 orbital propagation for satellite geometry) — MIT.
 - **keyring** (OS-native credential vault for LoTW / QRZ / ClubLog / eQSL
