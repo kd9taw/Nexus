@@ -135,3 +135,16 @@ radio = ["dep:tempo-audio", "tempo-audio/device", "tempo-audio/serial", "tempo-a
 # functions. Dev builds keep full debug info.
 [profile.release]
 strip = "debuginfo"
+# ⭐ MEASURED, NOT ASSUMED: 87.3 MB -> 55.2 MB on the windows-gnu build, same commit, profile the
+# only difference. That is 32 MB off what an operator installs, and most of what the cpal 0.18
+# upgrade cost — that upgrade swapped `windows-sys` for the full `windows` crate family to reach
+# six sample formats Nexus had been refusing outright, and put 44 MB into the binary doing it.
+#
+# ⚠️ `panic = "abort"` is NOT here and must not be added to save more. There are 16 catch_unwind
+# sites in this codebase; abort turns every one of them into a hard crash. It belongs to crash
+# BEHAVIOUR, not to file size, and it was in the first draft of this change until it was caught.
+#
+# The cost is build time: fat LTO with one codegen unit is slow, and it is paid on release
+# builds only.
+lto = true
+codegen-units = 1
