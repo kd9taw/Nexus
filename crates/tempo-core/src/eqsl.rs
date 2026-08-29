@@ -182,19 +182,21 @@ fn force_https(url: &str) -> String {
 }
 
 /// True iff `body` is a genuine eQSL ADIF, so an HTML/error page is never parsed as
-/// ADIF. Like `lotw::is_lotw_adif`, this **prefix-checks** rather than `contains`:
-/// a real eQSL InBox export begins `ADIF 3 Export from eQSL.cc`, whereas an HTML
-/// page starts with `<` — even one whose chrome mentions the "eQSL.cc DownloadInBox"
-/// product name and embeds a literal `<eoh>`. Requires the PROGRAMID marker + an
-/// `<eoh>` too. Only the header region is inspected.
+/// ADIF. eQSL's human-readable preamble is not stable: older InBox exports began
+/// `ADIF 3 Export from eQSL.cc`, while current exports may begin `Received eQSLs
+/// for ...`. Validate the eQSL-specific PROGRAMID + `<eoh>` in the header instead,
+/// while retaining the leading-HTML rejection as defense in depth. Only the header
+/// region is inspected.
 pub fn is_eqsl_adif(body: &str) -> bool {
     let head: String = body
         .chars()
         .take(8192)
         .collect::<String>()
         .to_ascii_lowercase();
-    head.trim_start().starts_with("adif")
-        && head.contains("eqsl.cc downloadinbox")
+    let trimmed = head.trim_start();
+    !trimmed.starts_with('<')
+        && head.contains("<programid:")
+        && head.contains(">eqsl.cc downloadinbox")
         && head.contains("<eoh>")
 }
 
@@ -408,14 +410,23 @@ mod tests {
 <PROGRAMID:21>eQSL.cc DownloadInBox <ADIF_Ver:5>3.1.6 <EOH>\n\
 <CALL:5>W1AW/4 <BAND:3>20m <MODE:3>FT8 <EQSL_QSL_RCVD:1>Y <EOR>\n";
 
+    const EQSL_ADIF_CURRENT: &str = "Received eQSLs for KR8MER\n\
+for QSOs between 01-Jan-1999 and 31-Dec-2030\n\
+Generated on Tuesday, August 25, 2026 at 22:21:51 PM UTC\n\
+<PROGRAMID:21>eQSL.cc DownloadInBox\n\
+<ADIF_Ver:5>3.1.6\n\
+<EOH>\n\
+<CALL:5>KC4WQ<QSO_DATE:8:D>20260808<BAND:3>40M<MODE:3>FT8<EQSL_QSL_RCVD:1>Y <EOR>\n";
+
     #[test]
     fn is_eqsl_adif_accepts_real_and_rejects_html() {
         assert!(is_eqsl_adif(EQSL_ADIF));
-        // Rejects an HTML page even when its chrome mentions the product name AND
-        // embeds a literal <eoh> — the prefix check (HTML starts with '<', not
-        // 'ADIF') defeats the contains-both-markers false-accept.
+        assert!(is_eqsl_adif(EQSL_ADIF_CURRENT));
+        // Reject an HTML page even when its chrome mentions the product name and
+        // embeds ADIF-looking markers. Real eQSL exports begin with plain text;
+        // HTML/error responses begin with '<'.
         assert!(!is_eqsl_adif(
-            "<html><title>eQSL.cc DownloadInBox</title><body>oops <eoh> err</body></html>"
+            "<html><title>eQSL.cc DownloadInBox</title><body><PROGRAMID:21>eQSL.cc DownloadInBox <eoh> err</body></html>"
         ));
     }
 
