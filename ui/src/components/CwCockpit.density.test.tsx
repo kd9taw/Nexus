@@ -62,43 +62,59 @@ const decodeState = {
   name: null as string | null,
 }
 
-vi.mock('../api', () => ({
-  getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
-  // Hand-kept mock: an export the cockpit calls but this list omits makes it THROW ON MOUNT,
-  // which reads as a layout regression rather than the stale mock it is.
-  getCatCwUnprovenRigModels: vi.fn(async () => []),
-  setSettings: vi.fn(async () => ({})),
-  sendCw: vi.fn(async () => {}),
-  setCwKeyer: vi.fn(async () => null),
-  setCwWpm: vi.fn(async () => {}),
-  stopCw: vi.fn(async () => {}),
-  cwDecode: vi.fn(async () => decodeState),
-  cwClear: vi.fn(async () => {}),
-  setAiCw: vi.fn(async () => {}),
-  selectPeer: vi.fn(async () => null),
-  previewCw: vi.fn(async (t: string) => t),
-  pointRotatorAtCall: vi.fn(async () => 0),
-  setRigFunc: vi.fn(async () => ({})),
-  setFilterWidth: vi.fn(async () => ({})),
-  setNrLevel: vi.fn(async () => {}),
-  setAgc: vi.fn(async () => ({})),
-  setScopeSpan: vi.fn(async () => ({})),
-  setScopeRef: vi.fn(async () => {}),
-  setFlexPanSpan: vi.fn(async () => ({})),
-  setFlexPanRef: vi.fn(async () => ({})),
-  openPanelWindow: vi.fn(async () => {}),
-  setTune: vi.fn(async () => ({})),
-  setFrequency: vi.fn(async () => ({})),
-  haltTx: vi.fn(async () => ({})),
-  // RotorStrip is a real header child now that the header mock renders children.
-  readRotator: vi.fn(async () => null),
-  stopRotator: vi.fn(async () => {}),
-  getDeclination: vi.fn(async () => 0),
-  getSatTrackStatus: vi.fn(async () => null),
-  getSatTransponder: vi.fn(async () => null),
-  setSatTransponder: vi.fn(async () => {}),
-  stopSatTrack: vi.fn(async () => {}),
-}))
+vi.mock('../api', async (importOriginal) => {
+  // ⭐ DERIVED FROM THE REAL MODULE, not a hand-kept list. A hand-kept mock omits any export
+  // added after it was written, and a component that calls one THROWS ON MOUNT — so the suite
+  // goes red at a seam nothing in the diff explains, and the tempting fix is to make the test
+  // pass rather than ask why. That cost five files one evening when a single API call was added
+  // to the CW cockpit, this one among them.
+  //
+  // Every function the module exports is auto-stubbed here; the entries below override only the
+  // ones this file's assertions actually depend on, so their shapes are unchanged.
+  const actual = await importOriginal<Record<string, unknown>>()
+  const auto: Record<string, unknown> = {}
+  for (const k of Object.keys(actual)) {
+    auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => ({})) : actual[k]
+  }
+  return {
+    ...auto,
+    getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
+    // Hand-kept mock: an export the cockpit calls but this list omits makes it THROW ON MOUNT,
+    // which reads as a layout regression rather than the stale mock it is.
+    getCatCwUnprovenRigModels: vi.fn(async () => []),
+    setSettings: vi.fn(async () => ({})),
+    sendCw: vi.fn(async () => {}),
+    setCwKeyer: vi.fn(async () => null),
+    setCwWpm: vi.fn(async () => {}),
+    stopCw: vi.fn(async () => {}),
+    cwDecode: vi.fn(async () => decodeState),
+    cwClear: vi.fn(async () => {}),
+    setAiCw: vi.fn(async () => {}),
+    selectPeer: vi.fn(async () => null),
+    previewCw: vi.fn(async (t: string) => t),
+    pointRotatorAtCall: vi.fn(async () => 0),
+    setRigFunc: vi.fn(async () => ({})),
+    setFilterWidth: vi.fn(async () => ({})),
+    setNrLevel: vi.fn(async () => {}),
+    setAgc: vi.fn(async () => ({})),
+    setScopeSpan: vi.fn(async () => ({})),
+    setScopeRef: vi.fn(async () => {}),
+    setFlexPanSpan: vi.fn(async () => ({})),
+    setFlexPanRef: vi.fn(async () => ({})),
+    openPanelWindow: vi.fn(async () => {}),
+    setTune: vi.fn(async () => ({})),
+    setFrequency: vi.fn(async () => ({})),
+    haltTx: vi.fn(async () => ({})),
+    // RotorStrip is a real header child now that the header mock renders children.
+    readRotator: vi.fn(async () => null),
+    stopRotator: vi.fn(async () => {}),
+    getDeclination: vi.fn(async () => 0),
+    getSatTrackStatus: vi.fn(async () => null),
+    getSatTransponder: vi.fn(async () => null),
+    setSatTransponder: vi.fn(async () => {}),
+    stopSatTrack: vi.fn(async () => {}),
+  }
+})
 
 // The header, the scope and the log strip are OTHER surfaces' density problems; BandStrip and
 // the DSP rows are REAL here, because their own boxes are what this pass measures.
