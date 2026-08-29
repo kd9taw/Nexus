@@ -84,10 +84,48 @@ The panes you can assign:
 | Measured MUF | real ionosonde MUF measurements |
 | Satellite Passes | next amateur-satellite passes over your grid |
 | Rotor | rotator control + compass (appears once a rotctld is configured) |
+| Amplifier | your linear's own readings (appears once an amplifier is configured) |
 
 The default Basic layout puts the conditions reference on the left, the flagship
 **Chase** pane and Band Outlook on the right, and a live "now" ticker (Openings,
 Space Wx, Getting Out) across the bottom.
+
+### The Amplifier pane
+
+If you run a linear — an **SPE Expert** (1.3K-FA / 1.5K-FA / 2K-FA) or an **Elecraft
+KPA500/KPA1500** — put it on its own serial port, set it under
+[Settings ▸ Radio ▸ Amplifier](settings-reference.md#radio), and assign this pane to a
+slot. It shows power out, SWR at the antenna and before the tuner, supply volts and
+current, PA temperature, and the amplifier's own alarms and warnings.
+
+It has to be **its own port**. A serial port can only be opened once, so an amplifier
+typed onto the CAT port does not give you a silent amplifier — it gives you a radio
+that will not connect. Nexus checks for that and warns, naming the radio and the port.
+
+Two things it deliberately does not do. **Readings clear the moment a poll goes
+unanswered**, rather than holding the last value: a stale wattage beside a dead link is
+a fabricated number, and an em dash is not. And an **alarm code this build has never
+seen still shows as a fault** rather than going quiet — the failure direction in front
+of a kilowatt has to be toward telling you.
+
+The SPE temperature carries no °C or °F letter, because the protocol does not say which
+it is; the amplifier reports whatever its own front panel is set to. The Elecraft does
+carry one, because Elecraft documents it.
+
+**And you can drive it from wherever you are operating.** With an amplifier configured,
+every cockpit header — Phone, CW, Operate, RTTY, PSK and SSTV — carries a compact strip:
+**Standby/Operate**, band **◀ ▶**, and power out. Nothing is added for the stations that
+have no amplifier; the strip simply is not there.
+
+Operate reads from the amplifier itself rather than from your click, so the button shows
+where the amplifier actually is even when you press its front-panel key instead. Both
+controls are **refused while you are transmitting**: changing band on a keyed amplifier
+can damage it, and dropping to standby mid-over does not stop anything — the exciter
+keeps keying and the drive passes straight through. For the same reason, standby is not
+a way to stop a transmission and the strip is not a stop control.
+
+**Nexus will never switch your amplifier off.** That command is not merely unused; it
+does not exist in the code, so no future change can reach it by accident.
 
 <!-- TODO: capture screenshot — a pane's corner picker open, and the Basic / Expert toggle -->
 
