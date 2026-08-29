@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   telling you they were wrong. It now says what actually happened and states plainly that it is
   not a login problem.
 
+  The LoTW sync carried the identical fault and has been corrected the same way, before anyone
+  hit it — that is the one that matters for award credit.
+
 - **The SWR and ALC meters had no warning band.** The bar that should turn amber as SWR climbs
   was painting the same red as the "too hot" band, so there was nothing between "fine" and
   "trouble" — you saw a problem arriving rather than coming. Same on the ALC and the S-meter.

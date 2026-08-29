@@ -13684,8 +13684,20 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::lotw::is_lotw_adif(&body) {
+        // ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard below,
+        // and the same reasoning. `fetch_report` has already returned a body, so the login
+        // worked; a wrong password fails earlier with its own message. eQSL demonstrated the
+        // failure mode on 2026-08-28: it changed the wording its download opens with, the
+        // structural check started rejecting good files, and operators were told to re-enter
+        // passwords that were provably correct because their UPLOADS were still landing.
+        // LoTW can change its wording the same way, and it is the one that carries award
+        // credit, so it should not be the place we find this out again.
         return Err(
-            "LoTW returned an unexpected response — check your username/password.".to_string(),
+            "LoTW answered, but the download was not the report file it should have been. Your \
+             username and password are fine — this is not a login problem. LoTW may be \
+             returning an error page, or may be down for maintenance. Try again shortly, and \
+             if it keeps happening please report it."
+                .to_string(),
         );
     }
 
