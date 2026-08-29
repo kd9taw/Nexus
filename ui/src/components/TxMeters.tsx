@@ -42,10 +42,15 @@ export const TX_METERS_WHEN = 'readings appear on transmit'
 
 type Zone = 'ok' | 'warn' | 'hot'
 
+/* Three zones, three DISTINCT theme tokens. `--ok` and `--danger` were never defined by
+   either theme, so both painted their literal fallback; `--state-weak` IS defined, and it is
+   the sheet's red — so `warn` rendered #ec5b57 against `hot`'s #e5484d and the two zones were
+   indistinguishable, which is the whole job of a warn band. The amber the `#e0a030` fallback
+   was reaching for is `--alert-warning`. */
 const ZONE_COLOR: Record<Zone, string> = {
-  ok: 'var(--ok, #2fbf71)',
-  warn: 'var(--state-weak, #e0a030)',
-  hot: 'var(--danger, #e5484d)',
+  ok: 'var(--state-good)',
+  warn: 'var(--alert-warning)',
+  hot: 'var(--state-weak)',
 }
 
 /** SWR ratio → bar (1.0→0 %, 3.0→100 %); warn ≥ 1.5, hot ≥ 2.0 (the "retune / back off" line). */

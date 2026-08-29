@@ -64,10 +64,17 @@ for (const src of [...codeFiles.map(read), indexHtml]) {
   for (const m of src.matchAll(/(--[a-zA-Z0-9-]+)/g)) runtime.add(m[1])
 }
 
-/** Every token REFERENCED through var() in a stylesheet, with where it was referenced. */
+/** Every token REFERENCED through var() in a stylesheet, with where it was referenced.
+ *
+ * ⚠️ COMMENT BODIES ARE BLANKED IN PLACE, NOT DELETED — a token named in prose is not a
+ * reference, but this half also reports WHERE, so the line arithmetic has to survive the
+ * strip. Deleting a comment eats its newlines and every line after it shifts up: a probe
+ * appended to the LAST line of styles.css was reported at :19856 of a 22k-line file, which
+ * sends the next reader hunting through unrelated rules. styles-theme-cascade.test.ts blanks
+ * for the same reason. `declared` above may delete freely — it records no positions. */
 const references = new Map<string, string[]>()
 for (const f of cssFiles) {
-  const css = read(f).replace(/\/\*[\s\S]*?\*\//g, '') // a token named in prose is not a reference
+  const css = read(f).replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
   const lines = css.split('\n')
   lines.forEach((line, i) => {
     for (const m of line.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)) {
@@ -82,57 +89,41 @@ const undefinedRefs = [...references.keys()]
   .sort()
 
 /**
- * THE KNOWN SURVIVORS — a debt inventory, not an excuse list.
- *
- * Fixing `--surface`/`--surface-2` turned this guard on for the first time, and it found the
- * problem is not those two: SEVENTEEN distinct tokens are referenced and never defined, across
- * EIGHTY-THREE references. `--state-bad` (16), `--warn` (15), `--fs-small` (14) and
- * `--bg-elev-1` (10) are the bulk — and `--bg-elev-1` is the telling one, because `--bg-elev`
- * and `--bg-elev-2` both exist, so it reads as a typo that has been silently falling back for
- * as long as it has been there. Every one of these is the same silent-failure class described
- * at the top of this file, and each needs the same per-surface judgement about whether its
- * fallback was the intent — which is a piece of work in its own right, not something to fold
- * into a change about dropdown backgrounds.
+ * THE LIST IS EMPTY OF DEBT, and that is the point — it held nineteen names and 142 references
+ * when this guard was written, and every one has been resolved onto a token the sheet already
+ * has (2026-08-28). Nothing here is excused any more.
  *
  * ONE ENTRY IS NOT DEBT: `--radix-dropdown-menu-content-available-height` is set at runtime by
  * Radix on its own portaled content. It is correct and should stay.
  *
- * Shrinking this list is the point. Growing it needs a reason as specific as the two below.
+ * WHAT THE NINETEEN TURNED OUT TO BE — recorded because the next undefined token will be one of
+ * the same three shapes, and knowing which saves re-deriving it:
  *
- * The two that were looked at closely while fixing the thirteen:
+ *   A SECOND SPELLING of a role the sheet already names (the bulk). `--danger`/`--state-bad`'s
+ *   destructive half → `--state-weak`, the sheet's red (`.conn-dot.bad`, `.conn-test-result.fail`);
+ *   `--ok` → `--state-good`; `--warn`/`--warning`/`--state-bad`'s warn half → `--alert-warning`;
+ *   `--state-info` → `--alert-info`; `--critical` → `--state-weak`; `--fs-small`/`--fs-sm` →
+ *   `--fs-label`; `--text-lg` → `--fs-title`; `--text-3` → `--text-faint`; `--bg-panel` →
+ *   `--panel`; `--mono` → `--font-mono`; `--bg-hover`/`--surface-3` → `--bg-elev-2`.
  *
- * `--radius-md` — three references, every one carrying a fallback that matches an existing
- * token exactly (8px = `--radius-sm`, 12px = `--radius`). A mechanical rename with no visual
- * change, deliberately left for the maintainer to take rather than folded into a change about
- * backgrounds.
+ *   A TYPO in a ladder that exists. `--bg-elev-1` is `--bg-elev` — `.mv-grid th` paints
+ *   `--bg-elev` and `.mv-section-row td`, a header band in the SAME table, painted
+ *   `--bg-elev-1`. `--radius-md`'s fallbacks were 8px and 12px, exactly `--radius-sm` and
+ *   `--radius`. `--bg-raised` is `--bg-elev`.
  *
- * `--surface-3` — one reference, `.cw-chip`, fallback `rgba(255,255,255,.06)`. Rendered in
- * both themes and it reads correctly in both (a subtle raise on dark, carried by its border on
- * light), so by the rule that a token which was never needed is not a bug, it stays. It does
- * leave the chip with a fill on dark and none on light — a cosmetic asymmetry, not a defect.
+ *   THE WRONG FAMILY ENTIRELY, which no rename fixes. `var(--warn, #e6b800)` on `.rp-star.on`
+ *   and `.mv-star.on` was never a warning: they are FAVOURITE stars, and #e6b800 is the "second,
+ *   slightly-off gold" that `.sat-star.on` and `.sat-fav-mark` already carry a comment against.
+ *   Those took the app's one chase gold (#f5a524, light-overridden to #9d6500) — a literal,
+ *   because that is how the other three stars express it, not a new token.
  *
- * Shrinking this list is the point. Growing it needs a reason as specific as these.
+ * Three sites were RECESSED roles, so they took `--bg` rather than the ladder step their name
+ * implied: two inputs and a log well, where `--bg-elev` equals `--panel` in the light theme and
+ * would have rendered them invisible. `.sstv-tx-progress-track` carries the same note.
+ *
+ * Growing this list needs a reason as specific as the Radix entry.
  */
-const KNOWN_UNRESOLVED = [
-  '--bg-elev-1',
-  '--bg-hover',
-  '--bg-input',
-  '--bg-panel',
-  '--bg-raised',
-  '--critical',
-  '--fs-sm',
-  '--fs-small',
-  '--mono',
-  '--radius-md',
-  '--radix-dropdown-menu-content-available-height',
-  '--state-bad',
-  '--state-info',
-  '--surface-3',
-  '--text-3',
-  '--text-lg',
-  '--warn',
-  '--warning',
-]
+const KNOWN_UNRESOLVED = ['--radix-dropdown-menu-content-available-height']
 
 describe('CSS custom properties resolve', () => {
   it('is actually reading the sheets (control — an empty scan would pass everything)', () => {

@@ -66,6 +66,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The SWR and ALC meters had no warning band.** The bar that should turn amber as SWR climbs
+  was painting the same red as the "too hot" band, so there was nothing between "fine" and
+  "trouble" — you saw a problem arriving rather than coming. Same on the ALC and the S-meter.
+  The colour was written correctly and never took effect. Green, amber, red now, as intended.
+
+- **A paused waterfall looked like an error.** Same cause as the meters: the pause indicator was
+  reaching for an amber that never applied, and painted the error red instead.
+
+- **Small print was rendering at full size in twenty places.** Text written to be small — panel
+  tags, beacon and band rows, the CW decoder's status and age lines, the waterfall pop-out
+  controls, APRS beacon titles — was silently falling back to body size, so it sat at 14px beside
+  neighbours at 12px and 11px. Now the size it was always meant to be.
+
+- **Colours that could not follow the theme now do.** Around eighty surfaces were painting
+  hard-coded colours rather than the app's own palette: reds that did not match each other (three
+  different ones), greens likewise, and ambers that stayed identical whether you were in light or
+  dark. Worst of it was on the light theme, where several recessed areas — the connections log,
+  the waterfall pop-out, the SSTV picture area, the CW decode strip — rendered as grey slabs
+  because their colour was a fixed black wash chosen against a dark panel. The settings search
+  results list had no background at all and drew straight over whatever was behind it.
+
 - **eQSL sync refused a perfectly good download.** eQSL stopped starting its InBox export with
   the words Nexus was looking for, so the sync rejected the file and told you your credentials
   were wrong — at a point where the login had already succeeded. Nexus now checks the markers

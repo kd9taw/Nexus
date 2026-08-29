@@ -7623,7 +7623,7 @@ export function SettingsPanel({
                   {form.hrdLogging && radio?.hrdLinkUp != null && (
                     <span
                       className={`settings-hint ${radio.hrdLinkUp ? 'ok' : 'warn'}`}
-                      style={{ color: radio.hrdLinkUp ? 'var(--ok)' : 'var(--state-weak)' }}
+                      style={{ color: radio.hrdLinkUp ? 'var(--state-good)' : 'var(--state-weak)' }}
                     >
                       {radio.hrdLinkUp
                         ? t('settings.integrations.hrd.linkUp')
