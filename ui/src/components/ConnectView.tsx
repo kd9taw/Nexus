@@ -21,7 +21,7 @@ import type {
   Station,
   WorkableCard,
 } from '../types'
-import type { AlertView, MufStation, NoaaScalesView } from '../types'
+import type { AlertView, AmpStatus, MufStation, NoaaScalesView } from '../types'
 import type { Theme } from '../useTheme'
 import { getPathOutlook, getBandOutlook, getGettingOut, getSpaceWxScales, getKc2gMuf, getXrayNow, getDxpedWindows } from '../api'
 import type { DxpedWindow } from '../types'
@@ -110,6 +110,9 @@ interface Props {
   onPoint?: (call: string) => void
   /** Click a map satellite → open it in the Satellites section (forwarded to MapView). */
   onSelectSat?: (name: string) => void
+  /** The active radio's amplifier status, off App's existing 300 ms snapshot poll. Null when
+   * none is configured (the Amplifier pane then renders nothing). Read-only; it stops nothing. */
+  amp?: AmpStatus | null
   /** Open Connect in its own window (omit when already standalone). */
   onPopOut?: () => void
 }
@@ -124,6 +127,7 @@ export function ConnectView({
   onWorkSpot,
   needByCall,
   needAlerts,
+  amp,
   onPoint,
   onSelectSat,
   onPopOut,
@@ -324,6 +328,7 @@ export function ConnectView({
     prov,
     needByCall,
     needAlerts: needAlerts ?? [],
+    amp: amp ?? null,
     selectedCall,
     selStation,
     selSpot,

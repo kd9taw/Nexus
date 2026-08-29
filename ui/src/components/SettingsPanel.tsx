@@ -719,6 +719,25 @@ const ROTATOR_EXAMPLES = {
 } as const
 
 /**
+ * Amplifier family tokens and their names.
+ *
+ * Same category as `ROTATOR_EXAMPLES`: NOT prose. The values are the exact strings Rust stores
+ * in `amp_model` ('' | 'spe' | 'kpa') and the labels are manufacturers' product names, which are
+ * the same in every language — a translated "SPE Expert 1.3K-FA" names no amplifier anyone owns.
+ * The one word that IS prose, "no amplifier", goes through the catalog.
+ */
+const AMP_FAMILIES = [
+  { value: 'spe', label: 'SPE Expert 1.3K-FA / 2K-FA (1.5K-FA untested)' },
+  { value: 'kpa', label: 'Elecraft KPA500 / KPA1500' },
+] as const
+
+/** Serial-device examples for the amplifier port. Device paths, never translated. */
+const AMP_EXAMPLES = {
+  macPort: '/dev/cu.usbserial-1410',
+  port: 'COM8 / /dev/ttyUSB2',
+} as const
+
+/**
  * OmniRig's two rig slots, named the way OmniRig's own window names them.
  *
  * Same category as `RIG_EXAMPLES`: this is not prose, it is the string an operator reads in
@@ -5110,6 +5129,56 @@ export function SettingsPanel({
                   </span>
                 </span>
               </label>
+            </div>
+          </fieldset>
+
+          {/* The amplifier: a per-radio external device on its own serial port, the same shape
+              as the rotator above. READ-ONLY, and that is a safety decision rather than a
+              scope one — SPE's whole command set is front-panel KEYSTROKES (relative steps and
+              toggles whose meaning depends on a state we learn a poll late), and putting an
+              amplifier in standby is not a way to stop a transmission anyway: the exciter keeps
+              keying and the drive passes straight through. So there is no standby, operate,
+              reset or tune control here and none is planned. */}
+          <fieldset className="settings-section" id="settings-amplifier">
+            <legend>{t('settings.amplifier.legend')}</legend>
+            <p className="settings-note">{t('settings.amplifier.note')}</p>
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.amplifier.model.label')}</span>
+                <select
+                  className="settings-input"
+                  value={form.ampModel ?? ''}
+                  onChange={(e) => update('ampModel', e.target.value)}
+                  aria-label={t('settings.amplifier.model.label')}
+                >
+                  <option value="">{t('settings.amplifier.model.none')}</option>
+                  {AMP_FAMILIES.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">{t('settings.amplifier.model.hint')}</span>
+              </div>
+
+              {/* The port field appears only once a family is picked — the rotator's pattern,
+                  and the reason is the same: an empty port box under "no amplifier" invites an
+                  operator to fill it in and then wonder why nothing happened. */}
+              {(form.ampModel ?? '') !== '' && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.port.label')}</span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.ampPort ?? ''}
+                    placeholder={IS_MAC ? AMP_EXAMPLES.macPort : AMP_EXAMPLES.port}
+                    onChange={(e) => update('ampPort', e.target.value)}
+                    autoComplete="off"
+                    aria-label={t('settings.amplifier.port.label')}
+                  />
+                  <span className="settings-hint">{t('settings.amplifier.port.hint')}</span>
+                </div>
+              )}
             </div>
           </fieldset>
 

@@ -1620,6 +1620,81 @@ button.nb-chip:hover {
 .connect .pane-body .swx-strip {
   grid-template-columns: repeat(2, 1fr);
 }
+/* ── The Amplifier pane ────────────────────────────────────────────────────────────────
+   A readout, never a control surface. The cells auto-fit rather than taking a fixed column
+   count, so the same markup works in the ~250px Connect rail and in the wider bottom strip
+   without a viewport rule of its own — and `minmax(0, ...)` on both the track and the cell
+   keeps a long value (a four-digit wattage, a fault line) INSIDE the pane body's scroller
+   instead of widening the frame. No @media anywhere here: raw breakpoints are zoom-blind. */
+.amp-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.amp-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.amp-link {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--state-good);
+}
+/* A link that is down is stated, not merely dimmed — the reason text lives in this chip. */
+.amp-link.amp-down {
+  color: var(--alert-warning);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.amp-model,
+.amp-state {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.amp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(5.5em, 1fr));
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+.amp-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.amp-k {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.amp-v {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  line-height: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Faults wrap rather than clip: an alarm is the one thing on this pane that must be readable
+   in full, and the pane body is the scroller when the words run past the box. */
+.amp-fault {
+  margin: 0;
+  font-size: var(--fs-micro);
+  overflow-wrap: anywhere;
+}
+.amp-fault.amp-alarm {
+  color: var(--state-weak);
+}
+.amp-fault.amp-warn {
+  color: var(--alert-warning);
+}
 .connect .pane-body .ba-row {
   grid-template-columns: 40px 1fr 78px;
 }

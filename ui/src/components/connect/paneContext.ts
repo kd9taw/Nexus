@@ -6,6 +6,7 @@ import type { LatLon } from '../../grid'
 import type { MapIntent } from '../MapView'
 import type {
   AlertView,
+  AmpStatus,
   BandOutlook,
   DxpedWindow,
   GettingOut,
@@ -53,6 +54,10 @@ export interface PaneContext {
   // getting-out + band focus
   getout: GettingOut | null
   focusBand: string | null
+  /** The active radio's amplifier, straight off the snapshot App already polls at 300 ms —
+   * NOT a poll of its own. `null`/absent = no amplifier configured, which is what makes the
+   * Amplifier pane render nothing at all. Display-only: it gates and stops nothing. */
+  amp: AmpStatus | null
   // B3 live external data (desktop-only; null/empty until the feeds answer)
   scales: NoaaScalesView | null
   alerts: AlertView[]

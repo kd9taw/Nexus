@@ -582,6 +582,25 @@ pub struct RadioStatus {
     /// QSOs queued for HRD because it was unreachable — 0 when caught up.
     #[serde(default)]
     pub hrd_queued: u32,
+    /// The amplifier on THIS radio's amp port, when one is configured.
+    ///
+    /// THREE STATES, and the `Option` carries the first of them — the three the setting's own
+    /// doc commits to (`settings.rs`, `amp_port`: "unconfigured shows nothing,
+    /// configured-and-silent shows '—'"):
+    ///
+    /// - `None` — no amplifier configured on the active radio. Every amplifier surface renders
+    ///   NOTHING, and the snapshot is unchanged for the overwhelming majority of stations.
+    /// - `Some { linked: false, reason, .. }` — configured and not answering. The surface stays
+    ///   on screen with every reading '—' and the reason named, because a readout that vanishes
+    ///   on a bad poll is the rotator's shipped defect.
+    /// - `Some { linked: true, .. }` — live.
+    ///
+    /// Display-only, and this is a safety statement rather than a note: nothing keys, unkeys,
+    /// retunes or gates a transmission off this. Putting an amplifier in standby is NOT a way
+    /// to stop a transmission (the exciter keeps keying and the drive passes straight through),
+    /// so no field here may ever reach a cockpit's stop-line census.
+    #[serde(default)]
+    pub amp: Option<AmpStatusDto>,
     pub transmitting: bool,
     pub slot: u64,
     pub next_slot_ms: u64,
@@ -909,6 +928,93 @@ pub struct MeterReadout {
     ///
     /// ⛔ A DISPLAY ONLY. No command consumes this to move a radio, and none may.
     pub cw_tone_hz: Option<f32>,
+}
+
+/// The four values `AmpStatusDto::reason` can carry, and the whole vocabulary.
+///
+/// A TOKEN, NOT PROSE. `tx_power_zero` above states the rule for the field next to this one:
+/// "deliberately a flag rather than a message: the UI owns the wording so it can be translated,
+/// unlike `radio_config_warning`'s Rust-built string." An amplifier link's own `std::io::Error`
+/// text is English, is invisible to the hardcoded-string guard (it cannot see Rust `format!`),
+/// and would reach the screen untranslated.
+///
+/// `wrongModel` is the one that earns its place: an EXPERT 1K-FA speaks a different protocol on
+/// a link that is working perfectly, and its owner must not be told "no amplifier".
+pub const AMP_REASONS: [&str; 4] = ["portBusy", "noAnswer", "wrongModel", "malformed"];
+
+/// One amplifier reading, as the UI sees it. Read-only status; there is no write surface.
+///
+/// ⚠️ NEEDS-BENCH. Both codecs behind this are written from vendor specs. Two values are
+/// deliberately NOT here, and both absences are the honest reading:
+///
+/// - **No band index.** The SPE ladder is an inference from two published endpoints
+///   (`tempo_audio::amplifier`, `SpeStatus::band_index`), and a raw index tells an operator
+///   nothing their own rig does not already show.
+/// - **No temperature unit, unless the protocol states one.** SPE's §5 says "Temp in °C or F" —
+///   the amplifier reports whatever its own front panel is set to and the wire does not say
+///   which. `temp_celsius` is therefore per-family and is the ONLY thing that licenses a scale
+///   letter on screen: true for the KPA (`^TM` is documented Celsius), false for SPE. A guessed
+///   °C is a false statement half the time.
+///
+/// ⭐ NO ENUM CROSSES THIS BOUNDARY. `SpeAlarm`/`SpeWarning` each carry an `Unknown(char)`
+/// variant, and serde's external tagging would emit `"none"` for a unit variant and
+/// `{"unknown":"Z"}` for the newtype — one Rust type with two JSON shapes. A TS string union
+/// compiles, never matches the object form, and falls through to its default branch, inverting
+/// the invariant those enums exist to hold: the failure direction of a status decoder in front
+/// of a kilowatt has to be toward reporting a fault, not toward silence. So each flattens to a
+/// camelCase String tag plus a bool precomputed from `is_raised()`, the way
+/// `ClubLogPushResultDto`/`HrdLogPushResultDto` already flatten their result enums.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmpStatusDto {
+    /// Which protocol family answered: `"spe"` or `"kpa"`. Empty only before the first poll.
+    pub family: String,
+    /// SPE's raw model id as the amplifier reports it (`"13K"`, `"20K"`, and whatever a
+    /// 1.5K-FA calls itself) — kept raw on purpose: an id we do not recognise is a newer
+    /// amplifier, not a bad frame. Empty for the KPA, which does not report one here.
+    pub model: String,
+    /// `true` once a poll has succeeded. Flipped to false only after three CONSECUTIVE misses,
+    /// so one slow poll does not strobe the indicator; the readings below clear on the FIRST
+    /// miss regardless, because a stale number in front of a kilowatt is a lie and an absent
+    /// one is not.
+    pub linked: bool,
+    /// Why the link is down — one of [`AMP_REASONS`]. Empty while linked.
+    pub reason: String,
+    /// `true` = OPERATE, `false` = STANDBY. `None` when there is no reading.
+    pub operate: Option<bool>,
+    /// The amplifier sees the exciter keyed. SPE only — the KPA does not report it.
+    pub transmitting: Option<bool>,
+    /// Measured output power, watts.
+    pub output_watts: Option<u16>,
+    /// VSWR at the antenna. `None` when not transmitting — the KPA reads `000` off air, which
+    /// is "no reading", not a 0:1 match no antenna could produce.
+    pub swr: Option<f32>,
+    /// VSWR measured BEFORE the ATU. SPE only.
+    pub swr_atu: Option<f32>,
+    /// PA supply voltage.
+    pub volts: Option<f32>,
+    /// PA supply current.
+    pub amps: Option<f32>,
+    /// Heatsink / PA temperature — a bare number whose scale is `temp_celsius`.
+    pub temp: Option<i16>,
+    /// Is [`Self::temp`] known to be Celsius? True for the KPA ONLY. When false the UI must
+    /// render the number with a degree sign and NO scale letter.
+    pub temp_celsius: bool,
+    /// SPE alarm, flattened to a camelCase tag: `"none"`, `"swrExceedingLimits"`,
+    /// `"amplifierProtection"`, `"inputOverdriving"`, `"excessOverheating"`, `"combinerFault"`,
+    /// or `"unknown"` for a code this firmware reports and the spec does not list. Empty when
+    /// the family does not report alarms.
+    pub alarm: String,
+    /// Precomputed from `SpeAlarm::is_raised()` — an UNKNOWN code counts as raised. The UI
+    /// colours from this and never from a tag comparison, so a new alarm letter shipped by a
+    /// later firmware reads as a fault rather than as silence.
+    pub alarm_raised: bool,
+    /// SPE warning, flattened the same way. Empty when the family does not report warnings.
+    pub warning: String,
+    /// Precomputed from `SpeWarning::is_raised()`.
+    pub warning_raised: bool,
+    /// Elecraft `^FL` fault identifier; `0` = no fault. KPA only.
+    pub kpa_fault: Option<u8>,
 }
 
 /// The operating mode of the live engine.
@@ -1980,4 +2086,124 @@ pub struct AppSnapshot {
     pub upload_ok: bool,
     #[serde(default)]
     pub upload_tick: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ⭐ THE WIRE KEYS THE PANE READS, spelled out one at a time.
+    ///
+    /// `rename_all = "camelCase"` is the only thing turning `swr_atu` into `swrAtu`, and
+    /// `ui/src/types.ts` is hand-written — nothing else compares the two sides. A TS author
+    /// writing `swrATU` (the natural English spelling of an acronym) compiles clean on both
+    /// sides and renders "—" forever, which is the same shape as the shipped `decodeFLowHz`
+    /// rename. Each of these is a key whose camelCasing is not obvious from its Rust name.
+    #[test]
+    fn the_amp_status_wire_keys_are_the_exact_ones_the_ui_reads() {
+        let filled = AmpStatusDto {
+            family: "spe".into(),
+            model: "20K".into(),
+            linked: true,
+            reason: String::new(),
+            operate: Some(true),
+            transmitting: Some(false),
+            output_watts: Some(250),
+            swr: Some(1.5),
+            swr_atu: Some(1.2),
+            volts: Some(48.0),
+            amps: Some(32.5),
+            temp: Some(33),
+            temp_celsius: false,
+            alarm: "none".into(),
+            alarm_raised: false,
+            warning: "none".into(),
+            warning_raised: false,
+            kpa_fault: None,
+        };
+        let json = serde_json::to_string(&filled).unwrap();
+        for key in [
+            "\"swrAtu\"",
+            "\"outputWatts\"",
+            "\"tempCelsius\"",
+            "\"alarmRaised\"",
+            "\"warningRaised\"",
+            "\"kpaFault\"",
+        ] {
+            assert!(
+                json.contains(key),
+                "ui/src/types.ts reads {key}; if this key ever disagrees the reading renders \
+                 '—' forever and looks exactly like a dead amplifier. json = {json}"
+            );
+        }
+        // The snake_case spellings must be ABSENT — a `contains` on the camelCase key alone
+        // would pass just as happily if serde emitted both.
+        for wrong in ["swr_atu", "output_watts", "temp_celsius", "kpa_fault"] {
+            assert!(
+                !json.contains(wrong),
+                "snake_case {wrong} reached the wire — the container rename_all was lost"
+            );
+        }
+        // CONTROL: this is a real serialisation, not an empty haystack that would make every
+        // `contains` above vacuously true and every `!contains` vacuously true as well.
+        assert!(
+            json.contains("\"family\":\"spe\"") && json.contains("\"linked\":true"),
+            "control: the plain keys serialise too. json = {json}"
+        );
+    }
+
+    /// The three states the amplifier setting's own doc commits to (`settings.rs` `amp_port`:
+    /// "unconfigured shows nothing, configured-and-silent shows '—'"), pinned on the wire.
+    #[test]
+    fn the_three_amp_states_are_distinguishable_on_the_wire() {
+        // 1. No amplifier configured — the field is absent from the snapshot entirely.
+        let none: Option<AmpStatusDto> = None;
+        assert_eq!(serde_json::to_string(&none).unwrap(), "null");
+
+        // 2. Configured and not answering: present, linked false, every reading absent. A
+        // zeroed reading here would be a fabricated one — `amplifier.rs` forbids it in terms.
+        let silent = AmpStatusDto {
+            family: "kpa".into(),
+            linked: false,
+            reason: "noAnswer".into(),
+            ..AmpStatusDto::default()
+        };
+        let json = serde_json::to_string(&silent).unwrap();
+        assert!(json.contains("\"linked\":false"));
+        assert!(json.contains("\"reason\":\"noAnswer\""));
+        assert!(
+            json.contains("\"outputWatts\":null") && json.contains("\"swr\":null"),
+            "a failed poll clears every reading; it never writes a zero. json = {json}"
+        );
+
+        // 3. Live: linked, with readings.
+        let live = AmpStatusDto {
+            family: "kpa".into(),
+            linked: true,
+            output_watts: Some(500),
+            ..AmpStatusDto::default()
+        };
+        let json = serde_json::to_string(&live).unwrap();
+        assert!(json.contains("\"linked\":true") && json.contains("\"outputWatts\":500"));
+        assert!(
+            json.contains("\"reason\":\"\""),
+            "reason is empty while linked. json = {json}"
+        );
+    }
+
+    /// `reason` is a TOKEN, not prose. The whole vocabulary, so a UI switch can be exhaustive
+    /// and a Rust-authored English sentence can never reach the screen untranslated.
+    #[test]
+    fn the_reason_vocabulary_is_four_camel_case_tokens() {
+        for token in AMP_REASONS {
+            assert!(
+                !token.contains(' ') && token.is_ascii(),
+                "{token} looks like prose; `reason` is switched on by the UI, not rendered"
+            );
+        }
+        assert_eq!(
+            AMP_REASONS,
+            ["portBusy", "noAnswer", "wrongModel", "malformed"]
+        );
+    }
 }

@@ -36,6 +36,7 @@ import { ChaseFeedPane } from '../prop/ChaseFeedPane'
 import { SatPassesPane } from '../prop/SatPassesPane'
 import { OpeningsLogPane } from '../prop/OpeningsLogPane'
 import { RotorPane } from '../prop/RotorPane'
+import { AmpPane } from '../prop/AmpPane'
 import { MiniSpectrum } from '../MiniSpectrum'
 import { ContestCalendarPane } from '../ContestCalendarPane'
 import { getContests } from '../../api'
@@ -616,6 +617,22 @@ export const PANES: PaneDef[] = [
     // report its position keeps the pane and its STOP button; the hint used to name the
     // ADVANCED external-rotctld field, which is not where a rotator is set up.
     expert: () => <RotorPane />,
+  },
+  {
+    id: 'amp',
+    get title() {
+      return t('connect.pane.amp.title')
+    },
+    category: 'b3',
+    // Read-only station-device readout, the rotor's site-for-site shape. The Basic hint is
+    // STATIC and names where the amplifier is configured, because the pane hides itself only
+    // when none is — a configured amplifier that has gone quiet keeps the pane, with '—'.
+    //
+    // ⛔ It renders no control of any kind and stops nothing: an amplifier in standby does not
+    // stop an over (the exciter keeps keying and the drive passes straight through). This pane
+    // must never appear in any cockpit vocabulary or any sweep's `stopControls`.
+    basic: () => t('connect.pane.amp.basic'),
+    expert: (c) => <AmpPane amp={c.amp} />,
   },
   {
     id: 'scope',

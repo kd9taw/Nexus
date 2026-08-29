@@ -394,6 +394,7 @@ const MIGRATED = [
   'components/TxMeters.tsx',
   'components/RotorStrip.tsx',
   'components/prop/RotorPane.tsx',
+  'components/prop/AmpPane.tsx',
 ]
 
 /**

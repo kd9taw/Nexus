@@ -458,6 +458,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needByCall={needByCall}
           onWorkSpot={onWorkSpot}
           needAlerts={gatedAlerts}
+          amp={snap?.radio.amp ?? null}
           onPoint={
             // Same rotator gate as App (model-launched rotctld OR external host);
             // silent fire-and-forget — detached windows have no toast host.

@@ -948,7 +948,8 @@ pub struct Settings {
     #[serde(default = "default_rotator_baud")]
     pub rotator_baud: u32,
     /// The amplifier family on this radio's amp port: "" = none (the default, and the state of
-    /// most stations), "spe" = SPE Expert 1.3K-FA/1.5K-FA/2K-FA, "kpa" = Elecraft KPA500/KPA1500.
+    /// most stations), "spe" = SPE Expert 1.3K-FA/2K-FA (a 1.5K-FA is expected to speak the same
+    /// protocol and is selectable, but none has been linked), "kpa" = Elecraft KPA500/KPA1500.
     ///
     /// PER RADIO, like the rotator: an SO2R station has an amplifier per radio, and a field that
     /// lived only on the flat `Settings` would let one radio's amp config overwrite the other's.
@@ -2827,6 +2828,87 @@ pub fn cw_key_port_conflict(
                 p.name
             )
         })
+}
+
+/// An amplifier configured on a port some OTHER device on this station already owns.
+///
+/// ⭐ SERIAL PORTS ARE EXCLUSIVE-OPEN. The amplifier poller holds `amp_port` for the whole
+/// session the moment it is configured — the same thing `Engine::hold_cat_port` and its
+/// release/ack handshake exist to manage for CAT, and the reason the baud ladder says "our own
+/// live daemon holds the port even when the rig is mute". So an operator who types their CAT
+/// port into the amplifier field does not get an amplifier that fails to answer, they get a
+/// RADIO that fails to connect, and they will report it as a radio bug.
+///
+/// [`serial_port_conflicts`] cannot see this: it filters on `serial_port` alone and never looks
+/// at `amp_port`. This is its amplifier twin, and the exact sibling of [`cw_key_port_conflict`]
+/// — an auxiliary serial device colliding with something else that opens a port.
+///
+/// SOFT, like all three of its siblings in the warning chain: it is not a save-block. It rides
+/// `radio_config_warning` and self-clears the moment the ports differ.
+///
+/// Checked against every port a live station actually opens: each enabled serial radio's CAT
+/// port and its dedicated PTT keying port, the amplifier's own radio's rotator port, and the
+/// three global auxiliary serial devices (`cw_key_port`, `winkeyer_port`, `rtty_fsk_port`).
+pub fn amp_port_conflict(
+    radios: &[RadioProfile],
+    cw_key_port: &str,
+    winkeyer_port: &str,
+    rtty_fsk_port: &str,
+) -> Option<String> {
+    for p in radios
+        .iter()
+        .filter(|p| p.enabled && !p.amp_port.trim().is_empty() && !p.amp_model.trim().is_empty())
+    {
+        let ap = p.amp_port.trim();
+        let same = |other: &str| !other.trim().is_empty() && other.trim().eq_ignore_ascii_case(ap);
+
+        // Its own rotator, which this radio's rotctld opens.
+        if p.rotator_model > 0 && same(&p.rotator_port) {
+            return Some(format!(
+                "{}'s amplifier port {ap} is also its rotator port — a serial port can only be \
+                 open once, so one of the two will fail to connect. Give the amplifier its own \
+                 port.",
+                p.name
+            ));
+        }
+
+        // Any enabled serial radio's CAT port or dedicated keying port — including this one's.
+        for r in radios.iter().filter(|r| r.enabled) {
+            let serial_cat = r.rig_model > 0 && r.rig_conn.eq_ignore_ascii_case("serial");
+            if serial_cat && same(&r.serial_port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {}'s CAT port — a serial port can only be \
+                     open once, so the radio will fail to connect. Give the amplifier its own \
+                     port.",
+                    p.name, r.name
+                ));
+            }
+            if same(&r.ptt_serial_port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {}'s PTT keying port — a serial port can \
+                     only be open once, so the rig will not key. Give the amplifier its own port.",
+                    p.name, r.name
+                ));
+            }
+        }
+
+        // The global auxiliary serial devices.
+        for (port, what) in [
+            (cw_key_port, "the CW keyline"),
+            (winkeyer_port, "the WinKeyer"),
+            (rtty_fsk_port, "the RTTY FSK keyline"),
+        ] {
+            if same(port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {what}'s port — a serial port can only be \
+                     open once, so one of the two will fail to connect. Give the amplifier its \
+                     own port.",
+                    p.name
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Q65-60: the EME working period. See [`Settings::q65_period_s`].
@@ -6655,6 +6737,81 @@ mod tests {
         // Network-CAT radio owns no COM port, so no collision even on a matching string.
         let net = [rig("Flex", "COM3", "network", 2036, true)];
         assert!(cw_key_port_conflict(CwKeyerBackend::Serial, "COM3", &net).is_none());
+    }
+
+    /// ⭐ SERIAL PORTS ARE EXCLUSIVE-OPEN, and the amplifier poller takes a hold on `amp_port`
+    /// the moment it is configured. An operator who types their CAT port into the amplifier
+    /// field gets a CAT failure — a dead radio — and will report it as a radio bug, because
+    /// nothing on screen connects the two. `serial_port_conflicts` cannot see this: it filters
+    /// on `serial_port` alone and never looks at `amp_port`.
+    #[test]
+    fn amp_port_conflict_flags_an_amplifier_sharing_a_port_with_the_radio() {
+        let rig = |name: &str, port: &str, amp: &str| RadioProfile {
+            name: name.into(),
+            serial_port: port.into(),
+            rig_conn: "serial".into(),
+            rig_model: 1042,
+            amp_model: "spe".into(),
+            amp_port: amp.into(),
+            enabled: true,
+            ..Default::default()
+        };
+
+        // The amplifier on this radio's OWN CAT port, case-insensitively.
+        let radios = [rig("FTDX10", "COM3", "com3")];
+        let msg = amp_port_conflict(&radios, "", "", "").expect("conflict");
+        assert!(msg.contains("FTDX10"), "the message names the radio: {msg}");
+        assert!(msg.to_lowercase().contains("com3"), "and the port: {msg}");
+
+        // CONTROL, and it must NOT trip: a separate port for the amplifier is the normal
+        // station and must stay silent, or the warning lane cries wolf for everyone.
+        assert!(
+            amp_port_conflict(&[rig("FTDX10", "COM3", "COM7")], "", "", "").is_none(),
+            "an amplifier on its own port is the ordinary case"
+        );
+
+        // The OTHER radio's CAT port — an SO2R station's amplifier pointed at radio 2.
+        let so2r = [rig("FTDX10", "COM3", "COM4"), rig("IC-7300", "COM4", "")];
+        assert!(amp_port_conflict(&so2r, "", "", "").is_some());
+
+        // Its own rotator's port.
+        let mut rot = rig("FTDX10", "COM3", "COM8");
+        rot.rotator_model = 401;
+        rot.rotator_port = "COM8".into();
+        assert!(amp_port_conflict(&[rot], "", "", "").is_some());
+
+        // The global auxiliary serial devices, one at a time.
+        let aux = [rig("FTDX10", "COM3", "COM9")];
+        assert!(
+            amp_port_conflict(&aux, "COM9", "", "").is_some(),
+            "CW keyline"
+        );
+        assert!(
+            amp_port_conflict(&aux, "", "COM9", "").is_some(),
+            "WinKeyer"
+        );
+        assert!(
+            amp_port_conflict(&aux, "", "", "COM9").is_some(),
+            "RTTY FSK"
+        );
+
+        // No amplifier configured — nothing to collide, whatever the ports say.
+        let none = [rig("FTDX10", "COM3", "")];
+        assert!(amp_port_conflict(&none, "COM3", "", "").is_none());
+
+        // A network-CAT radio owns no COM port, so a matching string is not a collision.
+        let mut net = rig("Flex", "COM3", "COM3");
+        net.rig_conn = "network".into();
+        assert!(
+            amp_port_conflict(&[net], "", "", "").is_none(),
+            "the radio never opens COM3, so the amplifier may have it"
+        );
+
+        // A DISABLED radio's ports are not held.
+        let mut off = rig("FTDX10", "COM3", "");
+        off.enabled = false;
+        let live = rig("IC-7300", "COM7", "COM3");
+        assert!(amp_port_conflict(&[off, live], "", "", "").is_none());
     }
 
     #[test]

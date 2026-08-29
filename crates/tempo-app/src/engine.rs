@@ -698,6 +698,26 @@ pub struct RadioLive {
     pub smeter_db: Option<i32>,
     pub cat_ok: Option<bool>,
 }
+
+/// How many CONSECUTIVE failed amplifier polls before the link indicator goes down.
+///
+/// The twin of `MonitorConn::freq_misses`/`FREQ_MISS_LIMIT` in the radio monitor, and for the
+/// same reason: a single slow poll must not flash the indicator. It debounces the FLAG ONLY —
+/// the readings themselves clear on the first miss, because a stale wattage is a fabricated one.
+pub const AMP_MISS_LIMIT: u32 = 3;
+
+/// The last amplifier reading for one radio, plus the consecutive-miss run behind it.
+///
+/// One per radio, like the rotator and for the same reason the setting states: an SO2R station
+/// has an amplifier per radio, and a field that lived only on the flat state would let one
+/// radio's amplifier render under the other's name.
+#[derive(Debug, Clone, Default)]
+pub struct AmpLive {
+    /// What the UI will see. Its readings are cleared the moment a poll fails.
+    pub status: crate::dto::AmpStatusDto,
+    /// Consecutive failed polls; reset by any success.
+    pub misses: u32,
+}
 use modes::{NativeSource, SignalSource, WsjtxUdpSource};
 use std::sync::{Arc, Mutex};
 use tempo_core::message::{same_call, Msg};
@@ -2301,6 +2321,8 @@ pub struct Engine {
     /// its stale profile `last_*`. The ACTIVE radio is NOT in this map — its live state is the flat
     /// `rig_*`/`settings.dial_mhz` block, driven by the existing `observe_rig_*`.
     radio_live: std::collections::HashMap<u32, RadioLive>,
+    /// Last amplifier reading per radio, fed by the amplifier poll thread. Display-only.
+    amp_live: std::collections::HashMap<u32, AmpLive>,
     /// Set by `test_cat` to ask the radio loop to re-probe the current rig and
     /// refresh `cat_status`; the loop clears it via [`Engine::take_cat_reprobe`].
     cat_reprobe: bool,
@@ -3978,6 +4000,7 @@ impl Engine {
             cat_port_hold_until: None,
             cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
+            amp_live: std::collections::HashMap::new(),
             cat_reprobe: false,
             audio_error: None,
             recording_warning: None,
@@ -5441,6 +5464,63 @@ impl Engine {
     /// disconnected). The snapshot then falls back to its profile `last_*`.
     pub fn forget_radio_live(&mut self, id: u32) {
         self.radio_live.remove(&id);
+    }
+
+    // --- Amplifier: per-radio live status from the amplifier poll thread ---
+    //
+    // The same contract as the block above — update `amp_live[id]` WITHOUT touching the active
+    // flat state, the decode context or TX. Display-only: it gates nothing and keys nothing.
+    // Putting an amplifier in standby is not a way to stop a transmission (the exciter keeps
+    // keying and the drive passes straight through), so no reading here may ever become a
+    // condition on a transmit decision or reach a cockpit's stop-line census.
+
+    /// Record a SUCCESSFUL amplifier poll. Clears the miss run and marks the link up.
+    pub fn observe_amp_status(&mut self, id: u32, status: crate::dto::AmpStatusDto) {
+        let e = self.amp_live.entry(id).or_default();
+        e.misses = 0;
+        e.status = crate::dto::AmpStatusDto {
+            linked: true,
+            reason: String::new(),
+            ..status
+        };
+    }
+
+    /// Record a FAILED amplifier poll — `reason` is one of [`crate::dto::AMP_REASONS`].
+    ///
+    /// ⭐ TWO RULES PULLING OPPOSITE WAYS, AND BOTH ARE RIGHT. Every reading is cleared HERE,
+    /// on the first miss, because a poll that got no answer is a failure and a number left on
+    /// screen from the last good one is a fabrication in front of a kilowatt. The `linked` flag
+    /// is debounced to [`AMP_MISS_LIMIT`] instead, because one slow poll flashing the indicator
+    /// is the defect the radio monitor's `freq_misses` was written to stop. What survives a
+    /// miss is only the amplifier's IDENTITY — family and model — which is not a reading and is
+    /// what lets the surface say *which* amplifier went quiet.
+    pub fn observe_amp_miss(&mut self, id: u32, family: &str, reason: &str) {
+        let e = self.amp_live.entry(id).or_default();
+        e.misses = e.misses.saturating_add(1);
+        let family = if family.is_empty() {
+            std::mem::take(&mut e.status.family)
+        } else {
+            family.to_string()
+        };
+        e.status = crate::dto::AmpStatusDto {
+            family,
+            model: std::mem::take(&mut e.status.model),
+            linked: e.misses < AMP_MISS_LIMIT && e.status.linked,
+            reason: reason.to_string(),
+            ..Default::default()
+        };
+    }
+
+    /// Drop a radio's amplifier cache — it was unconfigured, or the radio was removed. The
+    /// snapshot then carries no `amp` at all, which is what makes every amplifier surface
+    /// render NOTHING rather than an empty frame.
+    pub fn forget_amp(&mut self, id: u32) {
+        self.amp_live.remove(&id);
+    }
+
+    /// One radio's last amplifier reading, or `None` when no amplifier is configured on it.
+    pub fn amp_live(&self, id: u32) -> Option<&crate::dto::AmpStatusDto> {
+        self.amp_live.get(&id).map(|a| &a.status)
     }
 
     /// The active tier's band plan with the operator's working-frequency
@@ -14493,6 +14573,10 @@ impl Engine {
         }
         .to_string();
         s.radio.audio_error = self.audio_error.clone();
+        // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
+        // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
+        // the radio loop.
+        s.radio.amp = self.amp_live(self.settings.active_radio).cloned();
         s.radio.recording_warning = self.recording_warning.clone();
         s.radio.radio_config_warning =
             crate::settings::serial_port_conflicts(&self.settings.radios)
@@ -14501,6 +14585,17 @@ impl Engine {
                         self.settings.cw_keyer,
                         &self.settings.cw_key_port,
                         &self.settings.radios,
+                    )
+                })
+                // The amplifier's port against everything else on the station that opens one.
+                // `serial_port_conflicts` above never looks at `amp_port`, so without this an
+                // amplifier typed onto the CAT port reads as a dead radio.
+                .or_else(|| {
+                    crate::settings::amp_port_conflict(
+                        &self.settings.radios,
+                        &self.settings.cw_key_port,
+                        &self.settings.winkeyer_port,
+                        &self.settings.rtty_fsk_port,
                     )
                 })
                 .or_else(|| crate::settings::audio_device_conflicts(&self.settings.radios))
@@ -36851,5 +36946,151 @@ mod stalled_qso_log_tests {
         assert!(e.log_current_qso());
         // qso_start_unix is consumed by the write; what matters is that the stash carried it
         // rather than the record defaulting to "now".
+    }
+}
+
+#[cfg(test)]
+mod amp_tests {
+    use super::*;
+    use crate::dto::AmpStatusDto;
+
+    fn live_spe() -> AmpStatusDto {
+        AmpStatusDto {
+            family: "spe".into(),
+            model: "15K".into(),
+            linked: true,
+            operate: Some(true),
+            output_watts: Some(900),
+            swr: Some(1.3),
+            temp: Some(41),
+            alarm: "none".into(),
+            warning: "none".into(),
+            ..AmpStatusDto::default()
+        }
+    }
+
+    /// ⭐ THE RULE THAT KEEPS A KILOWATT FROM LYING: a poll that got no answer clears every
+    /// reading on the FIRST miss. A stale 900 W and a stale 1.3:1 sitting on screen while the
+    /// link is actually dead is exactly the fabricated reading `amplifier.rs` refuses to
+    /// produce ("A POLL THAT GOT NO ANSWER IS A FAILURE … none of them is a default reading")
+    /// and `MeterCells::SMETER_NONE` refuses to keep ("absence stays absent").
+    #[test]
+    fn a_single_missed_poll_clears_every_reading_immediately() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_amp_status(0, live_spe());
+        assert_eq!(e.amp_live(0).unwrap().output_watts, Some(900));
+
+        e.observe_amp_miss(0, "spe", "noAnswer");
+        let a = e
+            .amp_live(0)
+            .expect("the amplifier is still CONFIGURED, so the cache stays");
+        assert_eq!(a.output_watts, None, "a stale watts reading is a lie");
+        assert_eq!(a.swr, None);
+        assert_eq!(a.temp, None);
+        assert_eq!(a.operate, None);
+        assert_eq!(a.reason, "noAnswer");
+        // CONTROL: the identity of the amplifier is NOT a reading and survives, otherwise the
+        // pane could not say which amplifier stopped answering.
+        assert_eq!(a.family, "spe");
+        assert_eq!(a.model, "15K");
+    }
+
+    /// …and the link indicator does NOT strobe on that first miss. Two rules pulling opposite
+    /// ways, split exactly where `FREQ_MISS_LIMIT`/`MonitorConn::freq_misses` split them: "a
+    /// single slow poll must not flash the pill", while no fabricated number is ever on screen.
+    #[test]
+    fn the_link_flag_flips_only_after_three_consecutive_misses_and_one_success_clears_it() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_amp_status(0, live_spe());
+
+        for n in 1..AMP_MISS_LIMIT {
+            e.observe_amp_miss(0, "spe", "noAnswer");
+            assert!(
+                e.amp_live(0).unwrap().linked,
+                "miss {n} of {AMP_MISS_LIMIT} must not flash the link indicator"
+            );
+        }
+        e.observe_amp_miss(0, "spe", "noAnswer");
+        assert!(
+            !e.amp_live(0).unwrap().linked,
+            "after {AMP_MISS_LIMIT} consecutive misses the link is down and must say so"
+        );
+
+        // One success clears the run outright — misses must be CONSECUTIVE.
+        e.observe_amp_status(0, live_spe());
+        assert!(e.amp_live(0).unwrap().linked);
+        assert_eq!(
+            e.amp_live(0).unwrap().reason,
+            "",
+            "linked carries no reason"
+        );
+        e.observe_amp_miss(0, "spe", "noAnswer");
+        e.observe_amp_miss(0, "spe", "noAnswer");
+        assert!(
+            e.amp_live(0).unwrap().linked,
+            "the counter restarted at the success, so two misses is not three"
+        );
+    }
+
+    /// PER RADIO, like the rotator: an SO2R station has an amplifier per radio, and one flat
+    /// field would let one radio's reading render under the other's name.
+    #[test]
+    fn amp_readings_are_keyed_per_radio_and_forget_drops_only_one() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_amp_status(0, live_spe());
+        e.observe_amp_status(
+            1,
+            AmpStatusDto {
+                family: "kpa".into(),
+                linked: true,
+                output_watts: Some(480),
+                ..AmpStatusDto::default()
+            },
+        );
+        assert_eq!(e.amp_live(0).unwrap().output_watts, Some(900));
+        assert_eq!(e.amp_live(1).unwrap().output_watts, Some(480));
+
+        e.forget_amp(0);
+        assert!(
+            e.amp_live(0).is_none(),
+            "radio 0's amplifier was unconfigured"
+        );
+        assert!(e.amp_live(1).is_some(), "radio 1's is untouched");
+    }
+
+    /// The delivery path, end to end: the snapshot the UI already polls carries the ACTIVE
+    /// radio's amplifier and nothing else — and carries `None` when none is configured, which
+    /// is what makes every amplifier surface render nothing at all.
+    #[test]
+    fn the_snapshot_carries_the_active_radios_amplifier_and_nothing_when_unconfigured() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        assert!(
+            e.snapshot().radio.amp.is_none(),
+            "no amplifier configured: the field is absent, not an empty frame"
+        );
+
+        e.observe_amp_status(e.settings().active_radio, live_spe());
+        let amp = e
+            .snapshot()
+            .radio
+            .amp
+            .expect("the active radio's amplifier");
+        assert_eq!(amp.model, "15K");
+        assert_eq!(amp.output_watts, Some(900));
+
+        // A NON-active radio's amplifier must not leak into the active readout.
+        e.forget_amp(e.settings().active_radio);
+        e.observe_amp_status(
+            e.settings().active_radio + 7,
+            AmpStatusDto {
+                family: "kpa".into(),
+                output_watts: Some(480),
+                ..AmpStatusDto::default()
+            },
+        );
+        assert!(
+            e.snapshot().radio.amp.is_none(),
+            "the other radio's amplifier is not this radio's"
+        );
     }
 }

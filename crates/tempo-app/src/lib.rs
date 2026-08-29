@@ -248,6 +248,7 @@ impl AppState {
                 rig_keyed: false,
                 hrd_link_up: None,
                 hrd_queued: 0,
+                amp: None,
                 transmitting: false,
                 // Nobody holds the transmitter at construction — the engine recomputes this
                 // from `tx_owner()` every snapshot.
