@@ -124,6 +124,25 @@ if [ "$GUI" = 1 ]; then
   ( cd "$REPO/ui" && npm ci >/dev/null )            # deps; cargo tauri runs the build
   [ -f "$REPO/src-tauri/icons/icon.ico" ] || python3 "$REPO/scripts/gen-icons.py"
   bash "$REPO/scripts/fetch-hamlib.sh"              # bundle Hamlib for CAT (no-op if staged)
+
+  # Remove the UNIX Hamlib binaries, the mirror of what build-linux.sh does for the Windows
+  # ones. `src-tauri/resources/hamlib/` is ONE staging directory shared by every target and
+  # tauri.conf.json globs it whole (`resources/hamlib/*`), so whichever platform builds SECOND
+  # ships both. build-linux.sh has always deleted *.dll/*.exe; nothing did the reverse, so a
+  # Linux-then-Windows build put 12.6 MB of ELF binaries inside the installer — files that can
+  # never run there. CI never saw it because it builds each platform on its own runner; it only
+  # bites a local build of both, which is the normal way to cut a tester pair.
+  # Extension-less here means an ELF executable (rigctl/rigctld/rotctl/rotctld). The tracked
+  # LGPL texts are all *.txt and are not matched.
+  find "$REPO/src-tauri/resources/hamlib" -type f \
+    \( -name '*.so' -o -name '*.so.*' -o ! -name '*.*' \) -delete
+  # Same safety net build-linux.sh carries: if that delete ever reaches a TRACKED file — the
+  # licence texts Hamlib's LGPL requires us to ship — stop rather than continue.
+  if git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$REPO" diff --quiet -- src-tauri/resources/hamlib || \
+      die "build-windows-cross.sh modified TRACKED files under src-tauri/resources/hamlib —
+  refusing to continue. Restore with 'git checkout -- src-tauri/resources/hamlib/'."
+  fi
   # THE SILENT-LOBOTOMY GUARD. The DeepCW engine is a PAIR of gitignored files
   # (weights + metadata sidecar), so a fresh clone — and every git WORKTREE,
   # which checks out tracked files only — builds an installer whose AI CW
