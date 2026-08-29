@@ -130,6 +130,79 @@ pub fn spe_status_request() -> Vec<u8> {
     spe_request(&[SPE_CMD_STATUS]).expect("a one-byte command always frames")
 }
 
+/// The ONLY commands Nexus will ever send an SPE amplifier beyond asking for status.
+///
+/// ⛔ THE DANGEROUS BYTE IS UNREPRESENTABLE, NOT MERELY UNUSED. §4's keystroke table puts
+/// `SWITCH OFF` at `0x0A`, immediately after `TUNE` at `0x09`, so an off-by-one anywhere in a
+/// command table turns a tune-up into powering the operator's amplifier off mid-session. That
+/// is not hypothetical: Hamlib maps its own "standby" to `0x0A` and switches SPE amplifiers
+/// OFF when an operator asks for standby. There is no variant here that can produce `0x0A`,
+/// `0x09`, or any of the menu/antenna/L/C keys — so no future edit, no arithmetic slip and no
+/// mis-mapping can reach them. Adding one means adding a variant, in this file, on purpose.
+///
+/// ⚠️ AND NONE OF THESE IS A STOP. Putting an amplifier in standby does not end a
+/// transmission — the exciter keeps keying and the drive passes straight through — so no
+/// control built on this enum may ever appear in a cockpit's stop-line census.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeCommand {
+    /// `0x02` — step DOWN one band. Sequential: there is no "set band" in this protocol.
+    BandDown,
+    /// `0x03` — step UP one band.
+    BandUp,
+    /// `0x0D` — OPERATE. ⭐ A TOGGLE, NOT A SET. The protocol offers no idempotent "go to
+    /// operate": this flips whatever state the amplifier is in. So a lost or duplicated frame
+    /// inverts it silently, and any control built on it must drive its own appearance from the
+    /// STATUS string's Standby/Operate field and reconcile against it — never from what it
+    /// believes it just sent.
+    Operate,
+}
+
+impl SpeCommand {
+    /// The single keystroke byte this command is (§4).
+    fn code(self) -> u8 {
+        match self {
+            SpeCommand::BandDown => 0x02,
+            SpeCommand::BandUp => 0x03,
+            SpeCommand::Operate => 0x0D,
+        }
+    }
+}
+
+/// Frame one command for the wire: `55 55 55 01 <code> <code>` (§3 — a one-byte checksum is
+/// the byte itself).
+pub fn spe_command(cmd: SpeCommand) -> Vec<u8> {
+    spe_request(&[cmd.code()]).expect("a one-byte command always frames")
+}
+
+/// The SPE band ladder — index as the status string reports it (field 6) to a band name.
+///
+/// ⚠️ DERIVED, AND THE DERIVATION IS THE WHOLE VALUE. §5 publishes only the two ends: `00` is
+/// 160m, and the top is `11` = 4m on the 1.3K-FA / `10` = 6m on the 2K-FA. Three things pin
+/// the middle. A real 1.5K-FA reported `01` while its operator was on 80m. And 60m MUST be in
+/// the ladder for the arithmetic to close: with it there are twelve bands and 4m lands exactly
+/// on 11; without it there are eleven and 4m would land on 10, contradicting the published
+/// endpoint. The 2K-FA then falls out as the same ladder minus 4m, putting 6m on 10 as stated.
+///
+/// Returns `None` for an index outside the ladder rather than guessing — a band an amplifier
+/// reports and we cannot name is a newer model, not a bad frame.
+pub fn spe_band_label(index: u8) -> Option<&'static str> {
+    Some(match index {
+        0 => "160m",
+        1 => "80m",
+        2 => "60m",
+        3 => "40m",
+        4 => "30m",
+        5 => "20m",
+        6 => "17m",
+        7 => "15m",
+        8 => "12m",
+        9 => "10m",
+        10 => "6m",
+        11 => "4m",
+        _ => return None,
+    })
+}
+
 /// How many bytes follow the 4-byte header of a STATUS reply — `cnt` data bytes plus the
 /// two-byte checksum and CRLF (§5).
 ///
@@ -538,8 +611,8 @@ impl KpaStatus {
 mod imp {
     use super::{
         kpa_parse_vi, kpa_parse_ws, kpa_payload, kpa_ping, kpa_ping_ok, kpa_query,
-        parse_spe_status, spe_looks_like_1k_fa, spe_status_reply_len, spe_status_request,
-        KpaStatus, SpeStatus, KPA_BAUDS, SPE_HEADER_LEN,
+        parse_spe_status, spe_command, spe_looks_like_1k_fa, spe_status_reply_len,
+        spe_status_request, KpaStatus, SpeCommand, SpeStatus, KPA_BAUDS, SPE_HEADER_LEN,
     };
     use serialport::SerialPort;
     use std::io::{Read, Write};
@@ -603,6 +676,25 @@ mod imp {
         ///
         /// On any framing failure the input buffer is drained, so a desync costs one poll rather
         /// than every poll after it.
+        /// Send ONE keystroke command (§4). Fire-and-forget by design.
+        ///
+        /// ⭐ NO REPLY IS READ, AND THAT IS DELIBERATE. §3 says a keystroke draws either an ACK
+        /// or a STATUS, and which one is not stated per command. Reading a reply here would
+        /// mean guessing its shape, and a wrong guess desyncs the stream for the poll that
+        /// follows — turning one uncertain command into every reading after it being wrong. The
+        /// next poll is 1 s away and reports the amplifier's ACTUAL state, which is the only
+        /// confirmation worth having: `OPERATE` is a toggle, so what matters is where the
+        /// amplifier ended up, never what we believe we sent. Anything the amplifier volunteers
+        /// in the meantime is drained by the poll's own framing recovery.
+        ///
+        /// ⛔ The caller must have established that the amplifier is NOT transmitting. This
+        /// method does not check — it cannot, having no reading of its own — and it is private
+        /// to the poll thread, which holds a status frame from one moment earlier.
+        pub fn send_command(&mut self, cmd: SpeCommand) -> std::io::Result<()> {
+            self.port.write_all(&spe_command(cmd))?;
+            self.port.flush()
+        }
+
         pub fn poll(&mut self) -> std::io::Result<SpeStatus> {
             self.port.write_all(&spe_status_request())?;
             self.port.flush()?;
@@ -1070,6 +1162,96 @@ mod tests {
         assert_eq!(s.tx_antenna, 1);
         assert_eq!(s.atu, SpeAtu::Enabled, "the 'a' of \"1a\"");
         assert_eq!(s.rx_antenna, None, "\"0r\" = no RX-only antenna");
+    }
+
+    /// ⛔ THE BYTE THAT MUST NEVER GO OUT. `SWITCH OFF` is `0x0A` and `TUNE` is `0x09` — the two
+    /// keystrokes either side of the commands we do send. This walks every variant the enum can
+    /// express and asserts none of them frames either byte. It is a guard against a future edit,
+    /// not against today's code: today's is obviously fine, and that is exactly when such a rule
+    /// gets broken.
+    #[test]
+    fn no_command_nexus_can_express_switches_the_amplifier_off() {
+        let all = [
+            SpeCommand::BandDown,
+            SpeCommand::BandUp,
+            SpeCommand::Operate,
+        ];
+        for c in all {
+            let f = spe_command(c);
+            assert!(
+                !f[4..].contains(&0x0A),
+                "{c:?} framed SWITCH OFF (0x0A) — an operator's amplifier would power down"
+            );
+            assert!(!f[4..].contains(&0x09), "{c:?} framed TUNE (0x09) unasked");
+        }
+
+        // The control: the framer CAN emit those bytes, so the assertions above are testing the
+        // enum's restraint and not a framer that is incapable of the mistake.
+        let danger = spe_request(&[0x0A]).expect("a frame");
+        assert!(
+            danger[4..].contains(&0x0A),
+            "the framer is not what protects us"
+        );
+    }
+
+    /// The three commands frame exactly as §3/§4 specify, checksum included.
+    #[test]
+    fn spe_commands_frame_as_the_document_specifies() {
+        // §3: a one-byte command's checksum is the byte itself.
+        assert_eq!(
+            spe_command(SpeCommand::BandDown),
+            vec![0x55, 0x55, 0x55, 0x01, 0x02, 0x02]
+        );
+        assert_eq!(
+            spe_command(SpeCommand::BandUp),
+            vec![0x55, 0x55, 0x55, 0x01, 0x03, 0x03]
+        );
+        // OPERATE is the same byte §3's own worked example uses for STANDBY→OPERATE.
+        assert_eq!(
+            spe_command(SpeCommand::Operate),
+            vec![0x55, 0x55, 0x55, 0x01, 0x0D, 0x0D]
+        );
+    }
+
+    /// The band ladder, checked against every anchor that exists rather than against itself.
+    #[test]
+    fn the_band_ladder_matches_every_published_and_measured_anchor() {
+        // §5's two published endpoints.
+        assert_eq!(spe_band_label(0), Some("160m"), "§5: 00 is 160m");
+        assert_eq!(
+            spe_band_label(11),
+            Some("4m"),
+            "§5: the 1.3K-FA's top index is 4m"
+        );
+        assert_eq!(
+            spe_band_label(10),
+            Some("6m"),
+            "§5: the 2K-FA's top index is 6m"
+        );
+
+        // Measured: a real 1.5K-FA reported 01 with its operator on 80m (2026-08-29).
+        assert_eq!(
+            spe_band_label(1),
+            Some("80m"),
+            "measured on hardware, not inferred"
+        );
+
+        // The arithmetic that forces 60m in: without it the ladder is 11 long and 4m could not
+        // land on 11. This asserts the consequence, so dropping 60m fails here loudly.
+        assert_eq!(
+            spe_band_label(2),
+            Some("60m"),
+            "60m must be present for 4m to reach 11"
+        );
+        assert_eq!(
+            (0..=11).filter(|i| spe_band_label(*i).is_some()).count(),
+            12,
+            "twelve bands, 160m through 4m"
+        );
+
+        // An index past the ladder is unknown, not guessed.
+        assert_eq!(spe_band_label(12), None);
+        assert_eq!(spe_band_label(255), None);
     }
 
     #[test]

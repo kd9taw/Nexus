@@ -613,6 +613,13 @@ export const DE: PartialCatalog = {
   // ── Endstufen-Panel (Connect) ───────────────────────────────────────────────────────
   "connect.pane.amp.title": "Endstufe",
   "connect.pane.amp.basic": "Die Messwerte der Endstufe erscheinen hier, sobald du unter Einstellungen ▸ Funkgerät ▸ Endstufe ein Modell und einen Port wählst.",
+  "amp.strip.aria": "Endstufe",
+  "amp.strip.toOperate.title": "Endstufe auf Betrieb schalten.",
+  "amp.strip.toStandby.title": "Endstufe auf Standby schalten. Das beendet KEINE Aussendung — der Treiber tastet weiter und die Ansteuerung läuft durch.",
+  "amp.strip.keyed.title": "Nicht während der Aussendung. Ein Band- oder Moduswechsel an einer getasteten Endstufe kann sie beschädigen.",
+  "amp.strip.bandDown.aria": "Endstufe Band abwärts",
+  "amp.strip.bandUp.aria": "Endstufe Band aufwärts",
+  "amp.strip.refused": "Nicht gesendet",
   "amp.link.up": "Verbunden",
   "amp.operate": "Betrieb",
   "amp.standby": "Standby",

@@ -7778,6 +7778,14 @@ export const EN = {
   // ratio, the meter names SWR / ATU / Vdc, and the amplifier's own raw model id. Those are
   // the instrument's vocabulary; a translated `SWR` names no meter on any amplifier's panel.
   // NO PLURAL ENTRIES — see the Settings ▸ Amplifier block for why.
+  // The amplifier's cockpit strip. Same invariant-token rule as the pane above: W stays W.
+  'amp.strip.aria': 'Amplifier',
+  'amp.strip.toOperate.title': 'Put the amplifier into Operate.',
+  'amp.strip.toStandby.title': 'Put the amplifier into Standby. This does NOT stop a transmission — the exciter keeps keying and the drive passes straight through.',
+  'amp.strip.keyed.title': 'Not while you are transmitting. Changing band or mode on a keyed amplifier can damage it.',
+  'amp.strip.bandDown.aria': 'Amplifier band down',
+  'amp.strip.bandUp.aria': 'Amplifier band up',
+  'amp.strip.refused': 'Not sent',
   'amp.link.up': 'Linked',
   'amp.operate': 'Operate',
   'amp.standby': 'Standby',

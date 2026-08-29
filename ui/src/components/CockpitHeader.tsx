@@ -11,6 +11,7 @@
 // the band-edge toast, the power slider (a CONFIGURATION control on the transmit path, which
 // moves exactly as PTT Method and the drive slider did) and the CAT pill's two states.
 import { useRef } from 'react'
+import { AmpStrip } from './AmpStrip'
 import type { ReactNode } from 'react'
 import type { AppSnapshot } from '../types'
 import { bandLabelForMhz, bandRangeForLabel } from '../band'
@@ -269,6 +270,12 @@ export function CockpitHeader({
 
       <div className="ch-actions">
         {actions}
+
+        {/* The amplifier's own controls. Rendered from `snap` with no prop of its own, so every
+            cockpit using this header gets it and none can forget to pass it — and it renders
+            NOTHING when no amplifier is configured, which is almost every station.
+            ⛔ Not a stop control: an amplifier in standby does not end a transmission. */}
+        <AmpStrip amp={snap?.radio?.amp ?? null} />
 
         {power && (
           <label

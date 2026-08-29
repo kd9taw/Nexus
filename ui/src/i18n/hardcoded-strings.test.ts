@@ -395,6 +395,11 @@ const MIGRATED = [
   'components/RotorStrip.tsx',
   'components/prop/RotorPane.tsx',
   'components/prop/AmpPane.tsx',
+  // The amplifier's cockpit strip — fully catalogued from the start. Its only bare literals are
+  // the same invariant tokens AmpPane carries (the unit symbol W, the em dash for an absent
+  // reading) plus the ◀/▶ glyphs, which are direction and not prose: both carry a translated
+  // aria-label, because an arrow names nothing to a screen reader and this one moves a kilowatt.
+  'components/AmpStrip.tsx',
 ]
 
 /**

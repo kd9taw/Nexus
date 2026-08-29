@@ -947,9 +947,13 @@ pub const AMP_REASONS: [&str; 4] = ["portBusy", "noAnswer", "wrongModel", "malfo
 /// ⚠️ NEEDS-BENCH. Both codecs behind this are written from vendor specs. Two values are
 /// deliberately NOT here, and both absences are the honest reading:
 ///
-/// - **No band index.** The SPE ladder is an inference from two published endpoints
-///   (`tempo_audio::amplifier`, `SpeStatus::band_index`), and a raw index tells an operator
-///   nothing their own rig does not already show.
+/// - **The band is carried as a NAME, never a raw index.** The ladder was an inference from two
+///   published endpoints when this struct was written, which is why the index used to be
+///   withheld. It is now anchored at three: §5's `00` = 160m and `11` = 4m, plus a measured
+///   `01` = 80m from a real 1.5K-FA, and 60m is forced into the middle because without it 4m
+///   cannot land on 11. `band_label` is `None` for an index outside that ladder — a band an
+///   amplifier reports and we cannot name is a newer model, not a bad frame, and a wrong name
+///   in front of a kilowatt is worse than no name.
 /// - **No temperature unit, unless the protocol states one.** SPE's §5 says "Temp in °C or F" —
 ///   the amplifier reports whatever its own front panel is set to and the wire does not say
 ///   which. `temp_celsius` is therefore per-family and is the ONLY thing that licenses a scale
@@ -986,6 +990,11 @@ pub struct AmpStatusDto {
     pub transmitting: Option<bool>,
     /// Measured output power, watts.
     pub output_watts: Option<u16>,
+    /// The band the amplifier says it is on, named (`"80m"`). `None` when it reports an index
+    /// outside the known ladder — unnamed rather than guessed. The raw index is deliberately
+    /// not on the wire: it means nothing to an operator and invites arithmetic on a value whose
+    /// middle is derived rather than published.
+    pub band_label: Option<String>,
     /// VSWR at the antenna. `None` when not transmitting — the KPA reads `000` off air, which
     /// is "no reading", not a 0:1 match no antenna could produce.
     pub swr: Option<f32>,
@@ -2109,6 +2118,7 @@ mod tests {
             operate: Some(true),
             transmitting: Some(false),
             output_watts: Some(250),
+            band_label: Some("80m".into()),
             swr: Some(1.5),
             swr_atu: Some(1.2),
             volts: Some(48.0),
@@ -2124,6 +2134,7 @@ mod tests {
         let json = serde_json::to_string(&filled).unwrap();
         for key in [
             "\"swrAtu\"",
+            "\"bandLabel\"",
             "\"outputWatts\"",
             "\"tempCelsius\"",
             "\"alarmRaised\"",
@@ -2138,7 +2149,13 @@ mod tests {
         }
         // The snake_case spellings must be ABSENT — a `contains` on the camelCase key alone
         // would pass just as happily if serde emitted both.
-        for wrong in ["swr_atu", "output_watts", "temp_celsius", "kpa_fault"] {
+        for wrong in [
+            "swr_atu",
+            "band_label",
+            "output_watts",
+            "temp_celsius",
+            "kpa_fault",
+        ] {
             assert!(
                 !json.contains(wrong),
                 "snake_case {wrong} reached the wire — the container rename_all was lost"

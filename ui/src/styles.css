@@ -12903,6 +12903,51 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: color-mix(in srgb, var(--state-weak) 16%, transparent);
   border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
 }
+/* The amplifier strip in the cockpit header — Operate/Standby, band ◀▶, watts.
+   Sits with the other header controls and matches .cockpit-pwr's metrics so it reads as one
+   row. It renders only when an amplifier is configured, so it costs nothing on the vast
+   majority of stations. Nothing here is a stop control: an amplifier in standby does not end
+   a transmission. */
+.amp-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.amp-strip button {
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 3px 6px;
+}
+/* Standby is the resting state and stays quiet. Operate means the amplifier is in line, which
+   is worth seeing at a glance from across the shack — but it is NOT an alert, so it takes the
+   good-state token rather than a warning colour. */
+.amp-op.on {
+  color: var(--state-good);
+  border-color: var(--state-good);
+}
+.amp-band {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.amp-band-label {
+  min-width: 3.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.amp-watts {
+  font-variant-numeric: tabular-nums;
+  min-width: 4.5em;
+  text-align: right;
+}
+/* A keystroke the queue refused. Amber, not red: nothing broke and nothing was transmitted —
+   the operator simply needs to click again. */
+.amp-strip-refused {
+  color: var(--alert-warning);
+}
+
 .cockpit-pwr {
   display: inline-flex;
   align-items: center;

@@ -1055,6 +1055,11 @@ export interface AmpStatus {
   /** The amplifier sees the exciter keyed. SPE only. */
   transmitting?: boolean | null
   outputWatts?: number | null
+  /** The band the AMPLIFIER says it is on, named ("80m"). Null when it reports an index outside
+   *  the ladder, or on a KPA, which reports no band on any polled verb. Never derived from the
+   *  radio — this field means "what the amplifier said", and filling it from elsewhere would
+   *  make an operator read our inference as their amplifier's own state. */
+  bandLabel?: string | null
   /** SWR at the antenna. Absent when not transmitting — a zero is 'no reading', never 0:1. */
   swr?: number | null
   /** SWR measured BEFORE the ATU. SPE only. */

@@ -147,6 +147,45 @@ fn swr_or_none(v: f32) -> Option<f32> {
 /// an operator nothing their rig does not already show), and the temperature's UNIT — §5 says
 /// "Temp in °C or F" and the amplifier reports whatever its own front panel is set to, so
 /// `temp_celsius` is FALSE here and the pane must print no scale letter.
+/// Commands waiting to reach the amplifier.
+///
+/// ⭐ THE PORT IS EXCLUSIVE-OPEN AND THE POLL THREAD OWNS IT, so a command cannot be sent from
+/// wherever the operator clicked — it has to be handed to the one thread holding the handle.
+/// This is that hand-off, and it is deliberately a tiny bounded queue rather than a channel:
+/// there is no meaningful backlog for a keystroke, and an unbounded one would let a wedged
+/// link accumulate every click an operator made while nothing was happening, then fire them
+/// all at a kilowatt when it recovered.
+static PENDING: std::sync::Mutex<Vec<crate::amplifier::SpeCommand>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// How many queued commands are kept. Small on purpose — see [`PENDING`].
+const PENDING_CAP: usize = 4;
+
+/// Queue one command for the amplifier. Returns false if the queue is full, which the caller
+/// should surface rather than swallow: silently dropping a keystroke an operator watched
+/// themselves make is how a toggle appears to be broken.
+pub fn queue_amp_command(cmd: crate::amplifier::SpeCommand) -> bool {
+    let mut q = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if q.len() >= PENDING_CAP {
+        return false;
+    }
+    q.push(cmd);
+    true
+}
+
+#[cfg(all(feature = "device", feature = "serial"))]
+/// Take everything queued. Used by the poll thread only.
+fn take_pending() -> Vec<crate::amplifier::SpeCommand> {
+    std::mem::take(&mut *PENDING.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+#[cfg(all(feature = "device", feature = "serial"))]
+/// Drop everything queued, without sending. Used when the link goes away — a command aimed at
+/// an amplifier that has since stopped answering must not be delivered to whatever answers next.
+fn drop_pending() {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
 pub fn spe_dto(s: &SpeStatus) -> AmpStatusDto {
     AmpStatusDto {
         family: FAMILY_SPE.to_string(),
@@ -158,6 +197,9 @@ pub fn spe_dto(s: &SpeStatus) -> AmpStatusDto {
         operate: Some(s.operate),
         transmitting: Some(s.transmitting),
         output_watts: Some(s.output_watts),
+        // Named, never the raw index — and `None` rather than a guess when the amplifier
+        // reports a band outside the ladder we can justify.
+        band_label: crate::amplifier::spe_band_label(s.band_index).map(str::to_string),
         swr: swr_or_none(s.swr_antenna),
         swr_atu: swr_or_none(s.swr_atu),
         volts: Some(s.volts),
@@ -195,6 +237,10 @@ pub fn kpa_dto(s: &KpaStatus) -> AmpStatusDto {
         // fabricated reading this whole path refuses.
         transmitting: None,
         output_watts: Some(s.output_watts),
+        // No polled KPA verb reports the band. `None`, not a value derived from the radio —
+        // this field says what the AMPLIFIER reports, and inferring it from elsewhere would
+        // make the two families' readings mean different things under one name.
+        band_label: None,
         swr: s.swr,
         swr_atu: None,
         volts: Some(s.volts),
@@ -213,7 +259,10 @@ pub fn kpa_dto(s: &KpaStatus) -> AmpStatusDto {
 /// shutdown flag; neither alone is enough, and src-tauri's `radio` feature turns on both.
 #[cfg(all(feature = "device", feature = "serial"))]
 mod imp {
-    use super::{backoff_ms, kpa_dto, reason_for, spe_dto, FAMILY_KPA, FAMILY_SPE, POLL};
+    use super::{
+        backoff_ms, drop_pending, kpa_dto, reason_for, spe_dto, take_pending, FAMILY_KPA,
+        FAMILY_SPE, POLL,
+    };
     use crate::amplifier::{KpaLink, SpeLink};
     use crate::service::SHUTDOWN;
     use std::sync::{Arc, Mutex};
@@ -354,13 +403,43 @@ mod imp {
 
             // Re-lock only to hand over the result.
             match read {
-                Ok(dto) => engine_lock(&engine).observe_amp_status(id, dto),
+                Ok(dto) => {
+                    // ⛔ THE INTERLOCK, ENFORCED HERE AND NOT ONLY IN THE UI. Stepping an
+                    // amplifier's band under drive pits relays and can take out a PA, and
+                    // dropping to standby mid-over passes full drive straight through. The
+                    // buttons are disabled while keyed, but a disabled button is a rendering
+                    // decision and this is a kilowatt: the backend refuses too, using the
+                    // amplifier's OWN transmit flag — the most direct evidence available, read
+                    // one moment ago from the frame we are holding.
+                    //
+                    // Commands are DROPPED rather than deferred. A band step that arrives after
+                    // the over it was meant for is a command the operator is no longer watching.
+                    if dto.transmitting == Some(true) {
+                        drop_pending();
+                    } else {
+                        for cmd in take_pending() {
+                            if let Some(Link::Spe(l)) = link.as_mut() {
+                                // A failed send drops the link so the next cycle reopens it,
+                                // exactly as a failed poll does. Nothing is retried: a keystroke
+                                // replayed onto a recovered link is a click nobody made.
+                                if l.send_command(cmd).is_err() {
+                                    link = None;
+                                    drop_pending();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    engine_lock(&engine).observe_amp_status(id, dto);
+                }
                 Err(e) => {
                     reason = reason_for(&e);
                     // Drop the link so the next cycle reopens it. A desynced or unplugged port
                     // is not recovered by asking it again on the same handle, and the backoff
                     // stops the reopen from becoming a port sweep every second.
                     link = None;
+                    // And anything queued dies with it — see `drop_pending`.
+                    drop_pending();
                     open_failures = open_failures.saturating_add(1);
                     retry_after = Instant::now()
                         + std::time::Duration::from_millis(backoff_ms(open_failures));

@@ -2194,6 +2194,19 @@ export async function getCatCwUnprovenRigModels(): Promise<number[]> {
   return invoke<number[]>('get_cat_cw_unproven_rig_models')
 }
 
+/** One keystroke to a configured SPE amplifier. The set is closed at the Rust boundary; an
+ *  unrecognised name is refused there rather than reaching an opcode.
+ *
+ *  Resolves false when the queue is full — surface that rather than swallowing it, because a
+ *  keystroke the operator watched themselves make and that vanished reads as a broken control.
+ *
+ *  The transmit interlock lives in the poll thread, not here: it holds a status frame from a
+ *  moment earlier and this layer has no reading of its own. Disabling the buttons while keyed
+ *  is a courtesy to the operator, never the thing that protects the amplifier. */
+export async function ampCommand(which: 'bandDown' | 'bandUp' | 'operate'): Promise<boolean> {
+  return invoke<boolean>('amp_command', { which })
+}
+
 /** Zero-config: scan connected USB radios → suggested model + port + paired audio. */
 export async function detectRigs(): Promise<DetectedRig[]> {
   return invoke<DetectedRig[]>('detect_rigs')

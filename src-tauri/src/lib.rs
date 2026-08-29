@@ -10598,6 +10598,38 @@ fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
     }
 }
 
+/// Send ONE keystroke to a configured SPE amplifier: `"bandDown"`, `"bandUp"` or `"operate"`.
+///
+/// ⛔ THREE COMMANDS, AND THE SET IS CLOSED. An unrecognised name is refused rather than
+/// forwarded, so this boundary cannot become a way to put an arbitrary byte on the wire — the
+/// keystroke table has `SWITCH OFF` at `0x0A` immediately after `TUNE`, and a string that
+/// reached a numeric opcode would put both one typo away from an operator's amplifier.
+///
+/// Returns false when the queue is full, which the caller must surface: a keystroke the
+/// operator watched themselves make and that silently vanished reads as a broken control.
+///
+/// The transmit interlock is NOT here. It lives in the poll thread, which holds a status frame
+/// from a moment earlier and so knows whether the amplifier is keyed; this layer has no reading
+/// of its own and a check written here would be a guess wearing a guard's clothes.
+#[tauri::command]
+fn amp_command(_which: String) -> bool {
+    #[cfg(feature = "radio")]
+    {
+        use tempo_audio::amplifier::SpeCommand;
+        let cmd = match _which.as_str() {
+            "bandDown" => SpeCommand::BandDown,
+            "bandUp" => SpeCommand::BandUp,
+            "operate" => SpeCommand::Operate,
+            _ => return false,
+        };
+        tempo_audio::amppoll::queue_amp_command(cmd)
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        false
+    }
+}
+
 /// Tempo's proposed calling-frequency band plan (HF + VHF/UHF), for the band
 /// selector. Each entry is General-legal + clear of the existing watering holes.
 #[tauri::command(async)]
@@ -18529,6 +18561,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_all_rig_models,
             get_portless_rig_models,
             get_cat_cw_unproven_rig_models,
+            amp_command,
             get_band_plan,
             set_license_class,
             get_licensed_band_plan,
