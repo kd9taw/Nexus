@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Amplifier controls in every cockpit.** With an SPE amplifier configured, each operating
+  screen's header carries a compact strip: Standby/Operate, band down and up, and power out —
+  so you can put the amp in line or move it a band without leaving the screen you are working
+  on. It appears only when an amplifier is set up, and nothing at all is added for the stations
+  that have none. Operate reads from the amplifier itself rather than from your click, so the
+  button always shows where the amplifier actually is. Both controls are refused while you are
+  transmitting: changing band on a keyed amplifier can damage it, and dropping to standby
+  mid-over does not stop anything — the exciter keeps keying and the drive passes straight
+  through. Nexus will never switch your amplifier off; that command does not exist in the code.
+  Asked for by KD9TAW.
+
 - **Nexus can read your amplifier.** Put an SPE Expert (1.3K-FA, 1.5K-FA, 2K-FA) or an Elecraft
   KPA500/KPA1500 on its own serial port, set it under **Settings ▸ Radio ▸ Amplifier**, and place
   the **Amplifier** pane in Connect: power out, SWR at the antenna and before the tuner, supply
