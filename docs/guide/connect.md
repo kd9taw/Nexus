@@ -127,6 +127,19 @@ a way to stop a transmission and the strip is not a stop control.
 **Nexus will never switch your amplifier off.** That command is not merely unused; it
 does not exist in the code, so no future change can reach it by accident.
 
+**Following the radio's band is optional and off by default.** Turn it on under
+[Settings ▸ Radio ▸ Amplifier](settings-reference.md#radio) and the amplifier steps to
+whatever band you tune to. It steps one band at a time and reads where the amplifier
+actually is after each step, so a step it ignored — or one you undid at the front panel
+— is seen and re-issued rather than assumed. On a band your amplifier does not have it
+does nothing rather than picking the nearest, and it never moves anything while you are
+transmitting.
+
+⚠️ **Most SPE stations should leave it off.** An SPE is normally wired to follow the
+radio through its own band-data cable, in hardware. Where that cable is fitted this
+setting is a second thing steering one band — redundant at best, and at worst two
+controllers disagreeing about where the amplifier should be.
+
 <!-- TODO: capture screenshot — a pane's corner picker open, and the Basic / Expert toggle -->
 
 ## Core workflows

@@ -329,14 +329,26 @@ because the exciter keeps keying and the drive passes straight through.
   it is spoken to, and the KPA remembers its own rate, so Nexus finds it by asking
   at each of the four rates Elecraft documents.
 
+- **Follow the radio's band** — step the amplifier to whatever band you tune to,
+  without being asked. **Off unless you turn it on**, and appears only once a model
+  and port are set. It never moves the amplifier while you are transmitting, and it
+  steps one band at a time, reading where the amplifier actually is after each step
+  rather than assuming it arrived — so a step the amplifier ignored, or one you undid
+  at its front panel, is simply seen and re-issued. On a band your amplifier does not
+  have it does nothing at all rather than picking the nearest.
+  ⚠️ **If your amplifier already follows the radio through its own band-data cable —
+  which is how most SPE installations are wired — leave this off.** The hardware is
+  doing the same job, and two things steering one band is worse than either alone.
+
 Per radio, like the rotator: an SO2R station with an amplifier on each radio
 configures each one on its own radio, and the pane follows the radio you are on.
 
-> ⚠️ **Not confirmed on real hardware yet.** Both protocols are written from the
-> manufacturers' published specifications and no reading has been checked against
-> an amplifier on a bench. Two things are deliberately left off the screen rather
-> than guessed: the band, because the SPE band numbering is an inference from two
-> published endpoints and your rig already shows you the band; and any °C/°F letter
+> ⚠️ **The SPE side is confirmed on hardware; the Elecraft side is not.** An
+> EXPERT 1.5K-FA was linked on 2026-08-29 — it identifies itself as `15K`, and its
+> readings and controls were checked against the amplifier's own front panel. The
+> KPA500/KPA1500 path is written from Elecraft's published references and has never
+> had an amplifier on the other end of the port, reading half included. One thing is
+> still deliberately left off the screen rather than guessed: any °C/°F letter
 > on an SPE temperature, because the SPE protocol does not say which scale the
 > number is in — the amplifier reports whatever its own display is set to, so the
 > pane shows `41°` with no letter. The Elecraft temperature *is* documented as
