@@ -88,6 +88,7 @@ keyring = { version = "3.6", features = [
 # tempo-core for the pure LoTW URL/validate/high-water helpers used by the
 # download command (the reconcile path is reached via tempo-app).
 tempo-core = { path = "../crates/tempo-core" }
+
 # SSTV encoder for the transmit command: the webview sends raw RGB, the command
 # resolves the mode + validates dims via `for_mode` and encodes via `encode_image`
 # (off the engine lock). Already in the lockfile transitively via tempo-audio; a
@@ -95,6 +96,27 @@ tempo-core = { path = "../crates/tempo-core" }
 tempo-sstv = { path = "../crates/tempo-sstv" }
 # Real sound-card + rig transport (optional; enabled by the `radio` feature).
 tempo-audio = { path = "../crates/tempo-audio", optional = true }
+
+# Reading the display's EDID physical size, which is the only way to learn a Linux panel's
+# true DPI: X11 reports scale factor 1 whatever the hardware is, so the UI scale had no
+# signal to work from (see `display_metrics`). LINUX ONLY and NOT A NEW PACKAGE — gdk 0.18.2
+# is already in this tree, pulled in by tao via tauri itself, and this pins the same version:
+# the Cargo.lock diff for adding it is one line, the crate's name against `tempo`. Nothing new
+# is fetched, built or linked.
+#
+# Licence: MIT (gtk-rs/gtk3-rs, verified against the crate's own LICENSE text, not just its
+# metadata) — compatible with our GPL-3.0-only.
+#
+# ⚠️ It is also UNMAINTAINED, and knowingly so: gtk3-rs is archived and RUSTSEC-2024-0412 is
+# already in deny.toml's ignore list with the reason ("every tauri v2 app carries these ten;
+# the fix is upstream tauri moving to gtk4"). Depending on it directly adds no exposure we do
+# not already have and stops mattering at the same moment the transitive one does — on a tauri
+# major. If that migration ever lands, this is one of the call sites to move.
+#
+# ⚠️ NOTICE ENTRY IS OUTSTANDING — it belongs in the "Rust crate dependencies" list and adding
+# it is approval-gated. Do not ship a release from this without it.
+[target.'cfg(target_os = "linux")'.dependencies]
+gdk = "0.18"
 
 [features]
 # FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge. OFF by default: it links

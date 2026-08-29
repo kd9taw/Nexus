@@ -37,6 +37,7 @@
   "radio": {
     "activeVfo": "A",
     "agc": null,
+    "amp": null,
     "atu": null,
     "audioError": null,
     "band": "20m",

@@ -9,6 +9,7 @@ import {
   importSettingsBundle,
   saveTextToDownloads,
   setBlockedCalls as apiSetBlockedCalls,
+  type SerialPortInfo,
 } from '../api'
 import type {
   AudioDevices,
@@ -34,6 +35,7 @@ import {
   downloadLotwReport,
   getAllRigModels,
   getPortlessRigModels,
+  getCatCwUnprovenRigModels,
   getAudioDevices,
   getBandPlan,
   getRigModels,
@@ -719,6 +721,25 @@ const ROTATOR_EXAMPLES = {
 } as const
 
 /**
+ * Amplifier family tokens and their names.
+ *
+ * Same category as `ROTATOR_EXAMPLES`: NOT prose. The values are the exact strings Rust stores
+ * in `amp_model` ('' | 'spe' | 'kpa') and the labels are manufacturers' product names, which are
+ * the same in every language — a translated "SPE Expert 1.3K-FA" names no amplifier anyone owns.
+ * The one word that IS prose, "no amplifier", goes through the catalog.
+ */
+const AMP_FAMILIES = [
+  { value: 'spe', label: 'SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA' },
+  { value: 'kpa', label: 'Elecraft KPA500 / KPA1500' },
+] as const
+
+/** Serial-device examples for the amplifier port. Device paths, never translated. */
+const AMP_EXAMPLES = {
+  macPort: '/dev/cu.usbserial-1410',
+  port: 'COM8 / /dev/ttyUSB2',
+} as const
+
+/**
  * OmniRig's two rig slots, named the way OmniRig's own window names them.
  *
  * Same category as `RIG_EXAMPLES`: this is not prose, it is the string an operator reads in
@@ -925,12 +946,23 @@ export function SettingsPanel({
   const [rigChecks, setRigChecks] = useState<RigCheck[]>([])
   /** Models needing no serial port, from the backend. Empty = rule unread; see checkRigForm. */
   const [portlessRigModels, setPortlessRigModels] = useState<number[]>([])
+  /** Models whose CAT CW keyer is unproven and cannot report its own failure, from the backend.
+   *  Empty = rule unread, and no caution is shown. Notice only — never blocks a save. */
+  const [catCwUnprovenModels, setCatCwUnprovenModels] = useState<number[]>([])
   // Port -> USB product label ("USB-Enhanced-SERIAL-B CH342"), so the picker can tell a
   // dual-serial rig's two interfaces apart (Xiegu CAT is on SERIAL-B).
   const [portLabels, setPortLabels] = useState<Record<string, string>>({})
-  const applyPorts = (infos: { name: string; label: string }[]) => {
+  /**
+   * The port rows exactly as the backend sent them, kept ALONGSIDE the names and labels above
+   * rather than replacing them. The pickers keep working on plain strings; only the two pre-save
+   * topology checks read these, and they read optional fields that are absent on every platform
+   * that cannot prove USB topology. See `checkRigForm`.
+   */
+  const [portInfos, setPortInfos] = useState<SerialPortInfo[]>([])
+  const applyPorts = (infos: SerialPortInfo[]) => {
     setSerialPorts(infos.map((i) => i.name))
     setPortLabels(Object.fromEntries(infos.map((i) => [i.name, i.label])))
+    setPortInfos(infos)
   }
   // Native CI-V bus diagnostic log: null = off, string = the log file path while capturing.
   // Transient (not persisted) — a support tool the operator arms to capture a fault. The
@@ -989,7 +1021,10 @@ export function SettingsPanel({
     input: Record<string, string>
     output: Record<string, string>
   }>({ input: {}, output: {} })
+  /** The device rows as sent, for the same-radio check only — see `portInfos` above. */
+  const [audioInfos, setAudioInfos] = useState<AudioDevices>({ input: [], output: [] })
   const applyAudio = (d: AudioDevices) => {
+    setAudioInfos(d)
     setAudio({ input: d.input.map((x) => x.name), output: d.output.map((x) => x.name) })
     setAudioLabels({
       input: Object.fromEntries(d.input.map((x) => [x.name, x.label])),
@@ -1200,6 +1235,12 @@ export function SettingsPanel({
     // the pre-save port check declines to block — see checkRigForm.
     getPortlessRigModels()
       .then((m) => mounted && Array.isArray(m) && setPortlessRigModels(m))
+      .catch(() => {})
+    // The backend's "CAT CW keying is unproven on this model" rule, fetched once. On failure it
+    // stays empty and no caution is shown — a rule that cannot be read must not warn an operator
+    // off a keyer that works for him.
+    getCatCwUnprovenRigModels()
+      .then((m) => mounted && Array.isArray(m) && setCatCwUnprovenModels(m))
       .catch(() => {})
     getSerialPortsDetailed()
       .then((infos) => mounted && applyPorts(infos))
@@ -2431,7 +2472,13 @@ export function SettingsPanel({
     // the symptom always shows up far from the cause. Errors block and name the fix; warnings are
     // stated and the operator proceeds, because an unusual-but-correct station must never be
     // locked out of its own configuration by a heuristic.
-    const rigProblems = checkRigForm(form, serialPorts, portlessRigModels)
+    const rigProblems = checkRigForm(
+      form,
+      serialPorts,
+      portlessRigModels,
+      portInfos,
+      audioInfos,
+    )
     setRigChecks(rigProblems)
     if (blocks(rigProblems)) {
       setTab('radio')
@@ -4838,6 +4885,7 @@ export function SettingsPanel({
                   return (
                     <>
                       <select
+                        className="settings-input"
                         value={isOther ? 'other' : modelStr}
                         onChange={(e) => {
                           const v = e.target.value
@@ -5115,6 +5163,56 @@ export function SettingsPanel({
                   </span>
                 </span>
               </label>
+            </div>
+          </fieldset>
+
+          {/* The amplifier: a per-radio external device on its own serial port, the same shape
+              as the rotator above. READ-ONLY, and that is a safety decision rather than a
+              scope one — SPE's whole command set is front-panel KEYSTROKES (relative steps and
+              toggles whose meaning depends on a state we learn a poll late), and putting an
+              amplifier in standby is not a way to stop a transmission anyway: the exciter keeps
+              keying and the drive passes straight through. So there is no standby, operate,
+              reset or tune control here and none is planned. */}
+          <fieldset className="settings-section" id="settings-amplifier">
+            <legend>{t('settings.amplifier.legend')}</legend>
+            <p className="settings-note">{t('settings.amplifier.note')}</p>
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.amplifier.model.label')}</span>
+                <select
+                  className="settings-input"
+                  value={form.ampModel ?? ''}
+                  onChange={(e) => update('ampModel', e.target.value)}
+                  aria-label={t('settings.amplifier.model.label')}
+                >
+                  <option value="">{t('settings.amplifier.model.none')}</option>
+                  {AMP_FAMILIES.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="settings-hint">{t('settings.amplifier.model.hint')}</span>
+              </div>
+
+              {/* The port field appears only once a family is picked — the rotator's pattern,
+                  and the reason is the same: an empty port box under "no amplifier" invites an
+                  operator to fill it in and then wonder why nothing happened. */}
+              {(form.ampModel ?? '') !== '' && (
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.amplifier.port.label')}</span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.ampPort ?? ''}
+                    placeholder={IS_MAC ? AMP_EXAMPLES.macPort : AMP_EXAMPLES.port}
+                    onChange={(e) => update('ampPort', e.target.value)}
+                    autoComplete="off"
+                    aria-label={t('settings.amplifier.port.label')}
+                  />
+                  <span className="settings-hint">{t('settings.amplifier.port.hint')}</span>
+                </div>
+              )}
             </div>
           </fieldset>
 
@@ -6339,6 +6437,17 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   <T k="settings.cw.keyer.hint" tags={{ b: <strong /> }} />
                 </span>
+                {/* CAT KEYING IS UNPROVEN ON THIS RADIO (field report, Yaesu FTX-1: "Try send a
+                    cw, never went to tx"). The rule is the backend's — see
+                    `rigmodels::cat_cw_unproven_rig_models` for the wire measurement behind it.
+                    A NOTICE, not a block: the keyer stays selectable and keeps working if it
+                    works. Shown only when the operator has actually CHOSEN the CAT keyer, so an
+                    FTX-1 owner on a WinKeyer is never nagged about a backend he is not using. */}
+                {(form.cwKeyer ?? 'cat') === 'cat' && catCwUnprovenModels.includes(form.rigModel) && (
+                  <span className="settings-warn" role="status">
+                    ⚠ <T k="settings.cw.keyer.unproven" tags={{ b: <strong /> }} />
+                  </span>
+                )}
               </label>
               <label className="settings-field">
                 <span className="settings-label">{t('settings.cw.pitch.label')}</span>
@@ -7256,6 +7365,7 @@ export function SettingsPanel({
             <label className="settings-field">
               <span className="settings-label">{t('settings.pounce.threshold.label')}</span>
               <select
+                className="settings-input"
                 value={form.pounceThreshold ?? 'off'}
                 onChange={(e) => update('pounceThreshold', e.target.value as never)}
               >
@@ -7627,7 +7737,7 @@ export function SettingsPanel({
                   {form.hrdLogging && radio?.hrdLinkUp != null && (
                     <span
                       className={`settings-hint ${radio.hrdLinkUp ? 'ok' : 'warn'}`}
-                      style={{ color: radio.hrdLinkUp ? 'var(--ok)' : 'var(--state-weak)' }}
+                      style={{ color: radio.hrdLinkUp ? 'var(--state-good)' : 'var(--state-weak)' }}
                     >
                       {radio.hrdLinkUp
                         ? t('settings.integrations.hrd.linkUp')
@@ -7793,6 +7903,7 @@ export function SettingsPanel({
                     {t('settings.integrations.saveWav.label')}
                   </span>
                   <select
+                    className="settings-input"
                     value={form.saveWav || 'none'}
                     onChange={(e) => update('saveWav', e.target.value)}
                   >
@@ -7957,6 +8068,7 @@ export function SettingsPanel({
                     {t('settings.integrations.propEngine.label')}
                   </span>
                   <select
+                    className="settings-input"
                     value={form.propEngine || 'heuristic'}
                     onChange={(e) => update('propEngine', e.target.value)}
                   >

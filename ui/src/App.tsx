@@ -55,6 +55,7 @@ import { loadWatchlist, type WatchFilter } from './watchlist'
 import { useTheme } from './useTheme'
 import { useFieldMode } from './useFieldMode'
 import { useScale } from './useScale'
+import { useDpiScaleSeed } from './useDpiSeed'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
 import { useMotion } from './useMotion'
@@ -235,6 +236,10 @@ export default function App() {
   // the useScale argument. Global — a fact about the station, like the theme.
   const [fieldMode, setFieldMode] = useFieldMode()
   const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale(fieldMode)
+  // First launch on a high-density display: raise the auto-fit ceiling so the UI can grow to
+  // the panel. Once only, raise only, and nothing at all on an ordinary 96-dpi monitor or on
+  // a platform whose OS already scales for us. See useDpiSeed.ts.
+  useDpiScaleSeed(setScaleCap)
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)
@@ -1147,14 +1152,19 @@ export default function App() {
     [handleWorkspace],
   )
 
-  // Roster/StationCard adapter: a card knows only the callsign + its protocol tier, so it
-  // calls onCall(call, tier). handleCall's other params (grid/message/snr/freq) are only used
-  // by the FT8 call-sequence path, so pass them undefined here and route by tier.
-  const handleWorkStation = useCallback(
-    (call: string, tier?: Tier | null) => handleCall(call, undefined, undefined, undefined, undefined, tier),
-    [handleCall],
-  )
-
+  // The Stations cards take `handleCall` DIRECTLY — there is deliberately no adapter here any
+  // more. A card hands over the callsign, the station's GRID, its audio offset and its
+  // protocol tier, in the shared handler's own argument order, so nothing in between can drop
+  // one. The offset is the RX/TX move, not sequencing data: passing it puts the marks on the
+  // station the same way Band Activity's double-click and the Roster table already do
+  // (WSJT-X: RX always follows, TX follows unless Hold Tx Freq is on).
+  //
+  // What stood here was an adapter that re-typed the callback as (call, tier) and passed
+  // undefined for grid/message/snr/freq, on the stated grounds that "a card knows only the
+  // callsign + its protocol tier". That was wrong — a card is handed the whole Station — and
+  // it is why Work started the QSO but left the markers behind while the other two panes
+  // moved them: one gesture, three behaviours in one cockpit (#183, against 1.7.0–1.9.0).
+  // An adapter is what made the drop possible, so the fix is to not have one.
   // Fire decode alerts (beep + toast) whenever the decode feed changes, gated by the
   // user's alert settings. processDecodes dedups internally. The third arg makes each
   // alert toast click-to-work — working the station is what you almost always want next
@@ -2190,7 +2200,7 @@ export default function App() {
       band={snap.radio.band}
       feedMode={tier}
       onSelect={handleSelect}
-      onCall={handleWorkStation}
+      onCall={handleCall}
       conversations={snap.conversations}
       onArchive={handleArchive}
       bandActive={activePeer === '*'}
@@ -2210,7 +2220,7 @@ export default function App() {
       band={snap.radio.band}
       feedMode={tier}
       onSelect={handleSelect}
-      onCall={handleWorkStation}
+      onCall={handleCall}
       conversations={snap.conversations}
       onArchive={handleArchive}
       bandActive={activePeer === '*'}
@@ -2520,6 +2530,9 @@ export default function App() {
           needByCall={needByCall}
           onWorkSpot={handleWorkMapSpot}
           needAlerts={visibleAlerts}
+          // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
+          // no new command. Absent when none is configured, and the pane then renders nothing.
+          amp={snap?.radio.amp ?? null}
           // Rotor is configured EITHER by picking a model (Nexus launches the
           // bundled rotctld) OR by the advanced external host — host-only was
           // the pre-rotctld gate and silently disabled point-at for model users.

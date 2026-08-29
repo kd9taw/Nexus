@@ -11,6 +11,7 @@
 //! errors** (a `reqwest::Error`'s `Display`/`source` can echo the request URL, so
 //! we never stringify it — only fixed, category-based messages).
 
+use super::neterr;
 use std::time::Duration;
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
@@ -66,15 +67,7 @@ fn read_body(resp: reqwest::blocking::Response) -> Result<String, String> {
 /// predicates — never `Display`/`to_string`/`source`, any of which can leak the
 /// password- or key-bearing URL.
 fn redact(e: reqwest::Error) -> String {
-    if e.is_timeout() {
-        "QRZ: request timed out — try again shortly".to_string()
-    } else if e.is_connect() {
-        "QRZ: could not connect — check your network".to_string()
-    } else if e.is_redirect() {
-        "QRZ: blocked an unexpected redirect".to_string()
-    } else {
-        "QRZ: request failed".to_string()
-    }
+    neterr::redact("QRZ", &e)
 }
 
 #[cfg(test)]

@@ -28,8 +28,26 @@ interface Props {
    * GridTracker roster (so the roster isn't missing pills the decodes show). */
   needAll: NeedTag[]
   onSelect: (call: string) => void
-  /** Work / call this station (enters QSO answering it). */
-  onCall: (call: string, tier?: Tier | null) => void
+  /** Work / call this station (enters QSO answering it). Same positional signature as the
+   * cockpit's shared handler, exactly like the roster table's — the card passes the station's
+   * GRID so the contact can log with one the DX never sent, and its LAST-HEARD offset in the
+   * `freq` slot so RX/TX move onto them like a Band Activity double-click (the engine then
+   * applies the Hold-Tx rule). `message`/`snr` stay undefined: there is no clicked decode
+   * line behind a roster row. The tier goes last, where the shared handler takes it, and is
+   * what routes a Tempo contact to the conversation instead of the FT8 call sequence.
+   *
+   * It is deliberately the SHARED signature rather than a card-shaped one. #183 was caused by
+   * a narrower re-typing here — the card fed an adapter that dropped everything past the
+   * tier, so Work started the QSO and left the markers behind while Band Activity and the
+   * roster table moved them. Matching the handler leaves nothing in between to drop. */
+  onCall: (
+    call: string,
+    grid?: string,
+    message?: string,
+    snr?: number,
+    freqHz?: number,
+    tier?: Tier | null,
+  ) => void
 }
 
 
@@ -66,12 +84,25 @@ export function StationCard({
   const az = azimuthTo(myGrid, station.grid, station.country, centroids)
   // Top need drives the row's dominant colour; needAll drives the chips.
   const chip = need ? NEED_CHIP[need] : null
+  // ONE definition of "work this station" for both gestures the card offers — the Work button
+  // and the double-click. They were two separate argument lists before, which is how they
+  // could have drifted apart; a caller that gets one right and the other wrong is exactly the
+  // bug #183 was, one level down.
+  const workThisStation = () =>
+    onCall(
+      station.call,
+      station.grid ?? undefined,
+      undefined,
+      undefined,
+      station.freqHz ?? undefined,
+      station.tier,
+    )
   return (
     <div
       className={`station-card${selected ? ' selected' : ''}${station.worked ? ' worked' : ''}${
         chip ? ` needed need-${chip.cls}` : ''
       }`}
-      onDoubleClick={() => onCall(station.call, station.tier)}
+      onDoubleClick={() => workThisStation()}
       title={t('roster.card.doubleClick', { call: station.call })}
     >
       <button
@@ -130,7 +161,7 @@ export function StationCard({
       <button
         type="button"
         className="station-work"
-        onClick={() => onCall(station.call, station.tier)}
+        onClick={() => workThisStation()}
         title={t('roster.card.work.title', { call: station.call })}
       >
         {t('roster.card.work.label')}

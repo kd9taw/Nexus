@@ -2912,6 +2912,13 @@ struct RadioLoop {
     /// `ensure_commanded` at the key sites, which sit in narrower scopes).
     cur_dial: u64,
     cur_md: String,
+    /// Is the operator in the CW SECTION this tick? Mirrored beside `cur_md` because the mode
+    /// word stopped being able to answer it: the soundcard CW keyer now commands `PKTUSB` /
+    /// `PKTLSB` (the DATA submode its audio needs to reach the modulator at all), which is
+    /// indistinguishable from an FT8 slot to anything reading the mode alone — and one of
+    /// those readers is the no-RF watch, which must never judge an over whose carrier is
+    /// intermittent. See [`Self::rf_watchable`].
+    cur_section_cw: bool,
     /// Fake-It split moved the VFO for the playing over — restore THIS dial
     /// (Hz) when the over ends (PTT drop / hard stop).
     fake_it_restore: Option<u64>,
@@ -3227,6 +3234,7 @@ impl RadioLoop {
             rig_asserted: false, // read-only launch: nothing asserted until a real command
             cur_dial: 0,
             cur_md: String::new(),
+            cur_section_cw: false,
             fake_it_restore: None,
             audio_rig_split: false,
             rig_split_restore: None,
@@ -3298,19 +3306,46 @@ impl RadioLoop {
     ///
     /// Half of that check's false-alarm defence, and it is deliberately NARROW: an over whose
     /// carrier is legitimately intermittent reads zero watts as a matter of course, so watching
-    /// one would accuse a station that is working perfectly. Four conditions, each excluding a
+    /// one would accuse a station that is working perfectly. Five conditions, each excluding a
     /// real shape of over:
     ///  - `tx_until_ms` — an over NEXUS scheduled. A transmitter another program (or the mic)
     ///    is holding is not ours to judge, and `rig_keyed` deliberately does not arm this.
     ///  - not tuning — a tune-up is excluded by the item's own contract.
     ///  - not live mic PTT — silence between words is what an SSB over is made of.
-    ///  - a continuous-carrier mode ([`mode_keys_a_continuous_carrier`]) — which is what takes
-    ///    CW out, elements and all.
+    ///  - a continuous-carrier mode ([`mode_keys_a_continuous_carrier`]).
+    ///  - not the CW section — which is what takes CW out, elements and all.
+    ///
+    /// ⚠️ THE LAST TWO USED TO BE ONE. The mode word alone took CW out, because CW commanded
+    /// `CW`/`CWR` and the soundcard keyer commanded plain `USB`/`LSB`, and neither is a
+    /// continuous-carrier word. The soundcard keyer now commands `PKTUSB`/`PKTLSB` — the DATA
+    /// submode its tone needs to reach the modulator instead of the mic jack — which is
+    /// indistinguishable from an FT8 slot here. A CW macro is silent between elements, so
+    /// judging one on a zero-watt reading accuses a station that is working perfectly, and it
+    /// would do it on EVERY over. The section is now asked directly.
     fn rf_watchable(&self) -> bool {
         self.tx_until_ms.is_some()
             && !self.tuning_keyed
             && !self.manual_ptt_applied
+            && !self.cur_section_cw
             && mode_keys_a_continuous_carrier(&self.cur_md)
+    }
+
+    /// Does the rig's mode mean the operator's waterfall is the AUDIO FFT rather than the native
+    /// RF panadapter — so the native scope stream stands down for this tick?
+    ///
+    /// The other half of [`Self::rf_watchable`]'s problem, and it reads the SAME two facts for
+    /// the same reason. A DATA mode means FT8/FT4, whose Operate waterfall is a 0–4000 Hz audio
+    /// view that the absolute-RF `civ` row cannot be mapped onto; feeding it one flattens the
+    /// display to the floor. Phone and CW keep the scope — their `PhoneScope` is source-aware.
+    ///
+    /// ⚠️ AND THE SECTION IS LOAD-BEARING HERE, not decoration. The mode word answered this on
+    /// its own while the soundcard CW keyer commanded plain `USB`/`LSB`. That keyer now commands
+    /// `PKTUSB`/`PKTLSB` (the DATA submode its tone needs to reach the modulator rather than the
+    /// mic jack), so on the mode word alone a soundcard-keyer operator's CW bandscope — the
+    /// zero-beat marker included — would go dark the moment he selected that keyer, on the one
+    /// native CI-V path where the scope is the fast one. The section is asked so it does not.
+    fn scope_yields_to_audio_waterfall(&self) -> bool {
+        mode_is_data(&self.last_mode) && !self.cur_section_cw
     }
 
     /// The backend attribution for the CURRENTLY-owned CAT channel, appended to probe and
@@ -4573,7 +4608,7 @@ impl RadioLoop {
             // last "off" — so the guard it was written to be was answering about
             // a rig that had not been transmitting when it was asked. See
             // `RadioLoop::operator_keyed`.
-            let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold) = {
+            let (want, dial, md, reprobe_req, force_retune, split_req, fm, cat_hold, section_cw) = {
                 let mut eng = engine_lock(engine);
                 // FM repeater config (shift, band-offset magnitude, CTCSS) — applied below
                 // only when the mode policy resolves to FM. Computed first (owned) so the
@@ -4624,6 +4659,9 @@ impl RadioLoop {
                     },
                     fm,
                     cat_hold,
+                    // Read HERE, from the same lock that produced `md`, so the section and the
+                    // mode word can never disagree about one tick (`rf_watchable`).
+                    eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 )
             };
             let can_push_dial = can_retune && !self.operator_keyed() && !self.manual_ptt_applied;
@@ -4631,6 +4669,7 @@ impl RadioLoop {
             // this block's scope; the key-ups happen in narrower ones.
             self.cur_dial = dial;
             self.cur_md = md.clone();
+            self.cur_section_cw = section_cw;
             // Falling edge of Test CAT's port hold → rebuild the CAT channel we dropped,
             // through the rig_differs branch below (same teardown-then-reopen path).
             let resume_after_hold = !cat_hold && self.cat_hold_active;
@@ -5202,8 +5241,10 @@ impl RadioLoop {
                 // fresh "civ" MHz-span row and the source-unaware FT8 waterfall maps it onto a
                 // 0–4000 Hz view → every bin clamps to the floor → a flat "purple" field (while FT8
                 // still decodes, since the decoder reads raw audio). Phone/CW keep the scope — their
-                // PhoneScope is source-aware and renders the civ row correctly.
-                let data_mode = mode_is_data(&self.last_mode);
+                // PhoneScope is source-aware and renders the civ row correctly, and CW keeps it
+                // even on the soundcard keyer, whose mode word is now a DATA submode too (see
+                // `RadioLoop::scope_yields_to_audio_waterfall`).
+                let data_mode = self.scope_yields_to_audio_waterfall();
                 d.set_scope_enabled(self.applied.baud >= 115_200 && !keyed_now && !data_mode);
                 // Tell the broker we're on the air, so its disconnect fail-safe unkey stands down
                 // while WE'RE transmitting — a transient reconnect of Nexus's own Rig must never
@@ -6516,7 +6557,7 @@ impl RadioLoop {
             // not polling HOLDS the word in the engine's queue, so the macro resumes on the
             // radio it was typed for instead of keying the one being switched away from.
             let ready = now >= self.cw_busy_until && self.may_key();
-            let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key) = {
+            let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
                 (
                     eng.take_cw_abort(),
@@ -6527,8 +6568,19 @@ impl RadioLoop {
                     eng.cw_winkeyer_port(),
                     eng.cw_serial_key_port()
                         .map(|p| (p, eng.cw_serial_key_line())),
+                    eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 )
             };
+            // ARM THE ZERO-BEAT MEASUREMENT at the operator's pitch while the CW section is
+            // up, and disarm it everywhere else. The rx-dsp thread does the measuring (see
+            // `rxdsp::measure_zero_beat`); this loop is simply the only thread that can see
+            // both the section and the settings, and it hands them over through the wait-free
+            // meter bus rather than by giving that thread an engine handle.
+            //
+            // ⛔ ONE-WAY. This arms a DISPLAY. Nothing reads the reading back to steer the
+            // radio, and nothing here may ever grow into an auto-tune: the operator's dial is
+            // the operator's (notify-never-act).
+            self.meter_feed.set_cw_target_hz(in_cw.then_some(pitch));
             #[cfg(not(feature = "serial"))]
             {
                 let _ = (&winkeyer_port, &serial_key); // only the serial build keys these
@@ -10111,13 +10163,18 @@ fn mode_is_data(md: &str) -> bool {
 
 /// Is the mode Nexus commanded one whose over is a CONTINUOUS carrier for its whole length?
 ///
-/// The discriminator for [`TxRfWatch`], and it is asked of the COMMANDED mode rather than of the
-/// operating section because the mode is what the section already resolved: every continuous over
-/// this app produces — an FT8/FT4 slot, RTTY (FSK `RTTY` or AFSK `PKT*`), PSK31, an SSTV image, an
-/// APRS beacon — is commanded into a DATA submode or into `RTTY`, while everything whose carrier
-/// is legitimately intermittent lands on a plain voice or CW word: Phone on USB/LSB/FM, the voice
-/// keyer with it, and CW on CW/CWR (or on USB/LSB for the soundcard keyer, which is excluded by
-/// the same test). Zero watts mid-over means something only in the first group.
+/// HALF the discriminator for [`TxRfWatch`]: every continuous over this app produces — an FT8/FT4
+/// slot, RTTY (FSK `RTTY` or AFSK `PKT*`), PSK31, an SSTV image, an APRS beacon — is commanded
+/// into a DATA submode or into `RTTY`, while everything whose carrier is legitimately intermittent
+/// lands on a plain voice or CW word: Phone on USB/LSB/FM, the voice keyer with it, and CW on
+/// CW/CWR. Zero watts mid-over means something only in the first group.
+///
+/// ⚠️ IT IS ONLY HALF NOW, AND IT USED TO BE THE WHOLE THING. The mode word could answer this
+/// alone while the SOUNDCARD CW keyer keyed its tone through plain `USB`/`LSB` — excluded here for
+/// free. That keyer now commands the DATA submode its audio needs to reach the modulator rather
+/// than the mic jack, so a `PKTUSB` CW macro is indistinguishable HERE from an FT8 slot, and a CW
+/// macro reads zero watts between elements. The operating SECTION is what separates them; see
+/// [`RadioLoop::rf_watchable`], which asks both.
 fn mode_keys_a_continuous_carrier(md: &str) -> bool {
     mode_is_data(md) || md.trim().eq_ignore_ascii_case("RTTY")
 }
@@ -11579,15 +11636,104 @@ mod tests {
             assert!(mode_keys_a_continuous_carrier(md), "{md} should be watched");
         }
         // Intermittent by nature. Phone and the voice keyer go quiet between words; a CW macro
-        // goes quiet between elements (and the SOUNDCARD keyer keys its tone through plain
-        // USB/LSB, which this same test excludes). Watching any of them would accuse a station
-        // that is working perfectly.
+        // goes quiet between elements. Watching any of them would accuse a station that is
+        // working perfectly. ⚠️ The SOUNDCARD CW keyer is no longer among them: it commands
+        // `PKTUSB`/`PKTLSB` now, so this test says "watch" for it and `rf_watchable`'s section
+        // check is what takes it back out — see
+        // `soundcard_cw_is_not_watched_even_though_its_mode_word_is_now_a_data_submode`.
         for md in ["USB", "LSB", "FM", "CW", "CWR", "AM", ""] {
             assert!(
                 !mode_keys_a_continuous_carrier(md),
                 "{md} must not be watched"
             );
         }
+    }
+
+    /// ⭐ THE SOUNDCARD CW KEYER MUST STILL NOT BE WATCHED, NOW THAT ITS MODE WORD IS `PKTUSB`.
+    ///
+    /// The mode word used to carry this by itself: soundcard CW commanded plain `USB`/`LSB`,
+    /// which [`mode_keys_a_continuous_carrier`] excludes, so the watch never armed on it. The
+    /// "keys but no audio" fix moved that keyer onto the DATA submode its four soundcard
+    /// siblings use (`Settings::rig_mode_on_sideband`) — which is the RIGHT mode and the WRONG
+    /// answer for this predicate, because a CW macro is silent between elements and reads zero
+    /// watts as a matter of course. Judged on `PKTUSB` alone it would accuse a station that is
+    /// working perfectly, on every over.
+    ///
+    /// So the discriminator can no longer be the mode word alone for CW: the loop mirrors the
+    /// operating SECTION and excludes it. This is the test that would have caught the fix
+    /// arming a transmit-path watchdog behind its own back.
+    #[test]
+    fn soundcard_cw_is_not_watched_even_though_its_mode_word_is_now_a_data_submode() {
+        let mut s = loop_state();
+        s.tx_until_ms = Some(1_000.0); // the soundcard keyer's own TX hold
+        s.cur_md = "PKTUSB".to_string(); // …and the mode it now commands
+
+        // The mode word alone says "watch me" — that is exactly the trap.
+        assert!(
+            mode_keys_a_continuous_carrier(&s.cur_md),
+            "scene guard: PKTUSB is a continuous-carrier mode word",
+        );
+
+        s.cur_section_cw = true;
+        assert!(
+            !s.rf_watchable(),
+            "a CW over is intermittent whatever mode word carries it",
+        );
+
+        // …and the same mode word in the section it belongs to is still watched, so the
+        // exclusion is CW's and not a hole punched in the check for everyone.
+        s.cur_section_cw = false;
+        assert!(
+            s.rf_watchable(),
+            "an FT8 slot in PKTUSB is still exactly what this watches",
+        );
+    }
+
+    /// ⭐ AND THE CW BANDSCOPE MUST SURVIVE THE SAME MODE-WORD CHANGE — the second reader of the
+    /// mode word that the "keys but no audio" fix walked into, found by sweeping every caller of
+    /// [`mode_is_data`] rather than by the fix's own tests, which did not reach here.
+    ///
+    /// `step` turns the native CI-V panadapter stream OFF in a DATA mode, because FT8's Operate
+    /// waterfall is a 0–4000 Hz AUDIO view and the absolute-RF `civ` row maps onto it as a flat
+    /// floor. Its own comment says Phone and CW keep the scope. Moving the soundcard CW keyer
+    /// onto `PKTUSB` would have taken CW off that list silently: an operator who switched to the
+    /// soundcard keyer would have watched his CW bandscope — the zero-beat marker with it — go
+    /// dark, with nothing on screen connecting the two.
+    ///
+    /// The exclusion is CW's alone, so the FT8 case it was written for is unchanged.
+    #[test]
+    fn the_cw_bandscope_survives_the_soundcard_keyers_new_data_mode_word() {
+        let mut s = loop_state();
+        s.last_mode = "PKTUSB".to_string(); // what soundcard CW now commands
+
+        // The mode word alone says "stand the scope down" — the trap, exactly as in the watch.
+        assert!(
+            mode_is_data(&s.last_mode),
+            "scene guard: PKTUSB is a DATA mode word",
+        );
+
+        s.cur_section_cw = true;
+        assert!(
+            !s.scope_yields_to_audio_waterfall(),
+            "CW keeps its bandscope whatever mode word the keyer commands",
+        );
+
+        // …and FT8 in the same mode word still yields, so this is not a hole punched in the
+        // rule for everyone.
+        s.cur_section_cw = false;
+        assert!(
+            s.scope_yields_to_audio_waterfall(),
+            "an FT8 slot in PKTUSB is still an audio-waterfall view",
+        );
+
+        // A CW section on a plain CW word never yielded and still does not — the section check
+        // must not be the only thing holding this up.
+        s.last_mode = "CW".to_string();
+        s.cur_section_cw = true;
+        assert!(
+            !s.scope_yields_to_audio_waterfall(),
+            "CW/CWR keeps the scope"
+        );
     }
 
     /// THE ARMING PREDICATE ITSELF, on a real loop state — the wiring the two pure tests above

@@ -58,6 +58,51 @@ const RX_METER_ATTACK: f32 = 0.6;
 /// per-callback meter had (0.85 per ~10–20 ms callback). Decay is smoothing the eye WANTS.
 const RX_METER_DECAY: f32 = 0.85;
 
+/// ---- THE CW ZERO-BEAT MEASUREMENT (2026-08-28) ----
+///
+/// The operator asked for "a light that comes on when you are zero beat to the CW signal".
+/// The app already draws the TARGET (the pitch marker on the CW scope) and had no way to
+/// measure what is actually coming in, so an operator had to eyeball the waterfall against
+/// the hairline. This tick closes that: [`tempo_core::spectrum::dominant_tone`] over the
+/// rolling window the row is already built from.
+///
+/// IT RIDES THIS THREAD ON PURPOSE, and the capture list in the module header is unchanged —
+/// the pitch comes IN and the reading goes OUT through the wait-free [`MeterFeed`], which this
+/// thread already holds. No `Engine`, no `Rig`, so a 2500 ms CAT stall cannot freeze the light
+/// any more than it can freeze the waterfall.
+///
+/// ⛔ IT DISPLAYS AND NEVER ACTS. Nothing downstream steers the radio from this reading: there
+/// is no path from here to a CAT command, and there must never be one. Auto-tuning the
+/// operator's dial to zero-beat would be a defect (notify-never-act), not a feature.
+///
+/// COST: one extra 2048-point rfft (~30 us) per 20 ms tick, and ONLY while the CW section has
+/// armed a target — every other section leaves it disarmed and this costs one atomic load.
+/// The row's own FFT cannot be reused: `power_spectrum_n` destroys its raw bins into 512
+/// peak-held, dB-mapped display bins, and interpolating a peak across THOSE is a different
+/// and wrong operation, not merely a coarser one.
+///
+/// How long a reading survives with no fresh measurement, in 20 ms ticks (2 s). CW IS KEYED:
+/// the 171 ms analysis window spends most of a QSO looking at a gap — at 10 wpm an inter-word
+/// gap alone is 840 ms — so a reading that expired at the first key-up would strobe the
+/// indicator on every letter. Two seconds outlasts any gap a human sends, and still blanks
+/// within a breath of the station actually stopping. A tuning aid may lag; it may not lie.
+pub const ZERO_BEAT_HOLD_TICKS: u32 = 2_000 / TICK_MS as u32;
+/// How far either side of the operator's pitch the tone search runs. ±400 Hz: the operator's
+/// own framing is that being 80 Hz off must not look like being 400 Hz off, so the guidance
+/// has to reach 400; and past it a signal is outside any CW filter he would be using, i.e.
+/// not the signal he is tuning. Reporting one would swing the needle at a station he cannot
+/// even hear.
+///
+/// ⚠️ MIRRORED IN TYPESCRIPT as `ZERO_BEAT_RANGE_HZ` (`ui/src/waterfall.ts`), which is the
+/// needle's full-scale deflection — the same quantity from the display's side. **This note is
+/// not what keeps them equal**: `ui/src/wire-consistency.test.ts` reads BOTH constants out of
+/// BOTH sources and fails naming both values, because the `RadioProfilePatch` seam proved five
+/// times that a comment naming the other side is documentation, not a mechanism. Renaming this
+/// constant fails that guard too, rather than quietly making it stop looking.
+const ZERO_BEAT_SEARCH_HZ: f32 = 400.0;
+/// The search never runs into DC/rumble, whatever the pitch.
+const ZERO_BEAT_MIN_HZ: f32 = 50.0;
+
 /// Rolling-window state for the spectrum producer. Split out from the thread so tests can drive
 /// it deterministically, with no sleeps and no threads.
 pub struct RxDsp {
@@ -67,6 +112,10 @@ pub struct RxDsp {
     rate: u32,
     /// The ballistics-shaped RX level (0..1 RMS) published to the meter feed each tick.
     meter: f32,
+    /// The last measured received CW tone (Hz), or `None` for "nothing to tune to".
+    cw_tone: Option<f32>,
+    /// Ticks that reading may still stand for — see [`ZERO_BEAT_HOLD_TICKS`].
+    cw_hold: u32,
 }
 
 impl Default for RxDsp {
@@ -83,6 +132,8 @@ impl RxDsp {
             epoch: 0,
             rate: ANALYSIS_RATE_HZ,
             meter: 0.0,
+            cw_tone: None,
+            cw_hold: 0,
         }
     }
 
@@ -91,6 +142,9 @@ impl RxDsp {
     /// Returns true when a row was published. Takes only the tap and the two publish seams —
     /// see the module header; this signature IS the safety argument.
     pub fn tick(&mut self, tap: &RxTap, feed: &SpectrumFeed, meters: &MeterFeed) -> bool {
+        // Age the held zero-beat reading FIRST, on every tick — including the ones that
+        // publish no row. A capture that goes quiet must expire the indicator, never freeze it.
+        self.age_zero_beat(meters);
         let Some(src) = tap.current() else {
             // No audio open. Publish an EMPTY row rather than nothing: an empty row makes the
             // UI stop cleanly, whereas publishing nothing sends the reader down the engine-lock
@@ -99,6 +153,9 @@ impl RxDsp {
             feed.publish_audio(empty_row());
             self.meter = 0.0;
             meters.set_rx_level(0.0);
+            // No capture, no reading — not even a held one, for the same reason the level
+            // goes to zero: there is no audio to have measured.
+            self.publish_zero_beat(meters, None);
             return false;
         };
         // A new source (device swap, rate change) must never smear two rates into one window.
@@ -149,6 +206,9 @@ impl RxDsp {
             self.window.drain(0..drop);
         }
         feed.publish_audio(compute_row(&self.window));
+        // The CW zero-beat reading, off the SAME rolling window the row was just built from —
+        // so the number and the picture can never describe different audio.
+        self.measure_zero_beat(meters);
         // The rig scope's own window, when one is on screen asking for it. One extra 2048-point
         // FFT (~30 us of a 20 ms budget) and no extra bytes — see `compute_row_over`. The
         // request expires on its own, so this costs nothing when no scope is up.
@@ -156,6 +216,57 @@ impl RxDsp {
             feed.publish_scope(compute_row_over(&self.window, lo, hi, win));
         }
         true
+    }
+
+    /// Store a zero-beat reading (or its absence) and restart its hold.
+    fn publish_zero_beat(&mut self, meters: &MeterFeed, tone: Option<f32>) {
+        self.cw_tone = tone;
+        self.cw_hold = if tone.is_some() {
+            ZERO_BEAT_HOLD_TICKS
+        } else {
+            0
+        };
+        meters.set_cw_tone_hz(tone);
+    }
+
+    /// Count down the hold on the standing reading, and blank it when it runs out.
+    fn age_zero_beat(&mut self, meters: &MeterFeed) {
+        if self.cw_tone.is_none() {
+            return;
+        }
+        if self.cw_hold > 0 {
+            self.cw_hold -= 1;
+            return;
+        }
+        self.cw_tone = None;
+        meters.set_cw_tone_hz(None);
+    }
+
+    /// Measure the dominant tone near the operator's CW pitch, when one is armed.
+    ///
+    /// A window with NO tone in it is not "no signal" — CW is keyed, and most windows land in
+    /// a gap — so a miss leaves the standing reading to [`Self::age_zero_beat`] rather than
+    /// blanking on the spot.
+    fn measure_zero_beat(&mut self, meters: &MeterFeed) {
+        let Some(target) = meters.cw_target_hz() else {
+            // Disarmed (any section but CW). Drop a reading left over from the last one.
+            if self.cw_tone.is_some() {
+                self.publish_zero_beat(meters, None);
+            }
+            return;
+        };
+        let lo = (target - ZERO_BEAT_SEARCH_HZ).max(ZERO_BEAT_MIN_HZ);
+        let hi = target + ZERO_BEAT_SEARCH_HZ;
+        if let Some(est) = tempo_core::spectrum::dominant_tone(
+            &self.window,
+            ANALYSIS_RATE,
+            lo,
+            hi,
+            target,
+            tempo_core::spectrum::MIN_TONE_SNR_DB,
+        ) {
+            self.publish_zero_beat(meters, Some(est.hz));
+        }
     }
 }
 
@@ -671,6 +782,136 @@ mod tests {
              tolerance {ROW_TOLERANCE}. A libm rounding difference is ~1e-7 here; this is not \
              that. Justify the DSP change, then regenerate \
              tests/fixtures/rxdsp_reference_row.txt on a known-good tree."
+        );
+    }
+
+    // ---- THE CW ZERO-BEAT READING ----
+    //
+    // The measurement rides THIS tick — same thread, same capture list, same rolling window,
+    // no new handle — so a CAT stall cannot freeze the zero-beat light any more than it can
+    // freeze the waterfall. These drive the tick directly, with no sleeps and no threads.
+
+    /// A window's worth of solid key-down at `pitch`, from the app's OWN tone generator.
+    fn keyed_cw(pitch: f32, n: usize) -> Vec<f32> {
+        let s = tempo_core::cw::morse_samples("TTTTTTTT", 5, pitch, 12_000);
+        s[s.len() - n..].to_vec()
+    }
+
+    /// Feed `audio` through the tick in capture-sized chunks.
+    fn feed(
+        dsp: &mut RxDsp,
+        tap: &RxTap,
+        ring: &SpscRing,
+        feed: &SpectrumFeed,
+        meters: &MeterFeed,
+        audio: &[f32],
+    ) {
+        for chunk in audio.chunks(256) {
+            ring.push_slice(chunk);
+            dsp.tick(tap, feed, meters);
+        }
+    }
+
+    fn zero_beat_rig() -> (RxTap, Arc<SpscRing>, SpectrumFeed, MeterFeed, RxDsp) {
+        let tap = RxTap::new();
+        let ring = Arc::new(SpscRing::new(48_000));
+        tap.publish_card(ring.clone(), 12_000);
+        (
+            tap,
+            ring,
+            SpectrumFeed::default(),
+            MeterFeed::default(),
+            RxDsp::new(),
+        )
+    }
+
+    #[test]
+    fn it_measures_the_received_cw_tone_only_when_a_target_is_armed() {
+        let (tap, ring, sp, meters, mut dsp) = zero_beat_rig();
+        let audio = keyed_cw(672.0, 4096);
+
+        // NO TARGET ARMED (not in the CW section) — the tick must not measure anything.
+        feed(&mut dsp, &tap, &ring, &sp, &meters, &audio);
+        assert_eq!(
+            meters.cw_tone_hz(),
+            None,
+            "with no CW target armed there is nothing to zero-beat against"
+        );
+
+        // Arm the operator's pitch → the SAME audio now reads out.
+        meters.set_cw_target_hz(Some(600.0));
+        feed(&mut dsp, &tap, &ring, &sp, &meters, &audio);
+        let hz = meters
+            .cw_tone_hz()
+            .expect("a keyed CW tone in the passband is measured");
+        assert!(
+            (hz - 672.0).abs() < 3.0,
+            "measured {hz} Hz for a 672 Hz signal against a 600 Hz pitch"
+        );
+    }
+
+    #[test]
+    fn a_dead_band_reads_nothing_rather_than_a_confident_zero() {
+        let (tap, ring, sp, meters, mut dsp) = zero_beat_rig();
+        meters.set_cw_target_hz(Some(600.0));
+        // Silence in the passband — no signal, so no reading, ever.
+        feed(&mut dsp, &tap, &ring, &sp, &meters, &vec![0.0f32; 4096]);
+        assert_eq!(meters.cw_tone_hz(), None, "silence must read as NO SIGNAL");
+        // POSITIVE CONTROL: the identical rig DOES read a tone, so the None above is a
+        // verdict about the audio and not a feature that never fires.
+        feed(&mut dsp, &tap, &ring, &sp, &meters, &keyed_cw(640.0, 4096));
+        assert!(
+            meters.cw_tone_hz().is_some(),
+            "control: the same tick reads a real tone"
+        );
+    }
+
+    #[test]
+    fn the_reading_is_held_across_keying_gaps_and_then_expires() {
+        let (tap, ring, sp, meters, mut dsp) = zero_beat_rig();
+        meters.set_cw_target_hz(Some(600.0));
+        feed(&mut dsp, &tap, &ring, &sp, &meters, &keyed_cw(640.0, 4096));
+        assert!(meters.cw_tone_hz().is_some(), "the signal is being read");
+
+        // KEY-UP. CW is keyed, so most windows contain no tone at all; the reading must
+        // survive an inter-word gap or the light would strobe on every letter. A second of
+        // silence is longer than any gap at any sending speed a human uses.
+        let hold = ZERO_BEAT_HOLD_TICKS as usize;
+        let silence = |n: usize| vec![0.0f32; 256 * n];
+        feed(&mut dsp, &tap, &ring, &sp, &meters, &silence(hold / 2));
+        assert!(
+            meters.cw_tone_hz().is_some(),
+            "a keying gap must not blank the indicator"
+        );
+
+        // …but a signal that has genuinely stopped expires. A stale reading points the
+        // operator at a station that is no longer there.
+        //
+        // The blank comes a little after the hold alone would say: the 171 ms analysis
+        // window carries its own tone history, so the countdown does not start until the
+        // audio IN it is gone. Asserted with margin rather than to the tick — the contract
+        // is "it blanks", not "it blanks on tick 109".
+        feed(&mut dsp, &tap, &ring, &sp, &meters, &silence(hold + 20));
+        assert_eq!(
+            meters.cw_tone_hz(),
+            None,
+            "past the hold the indicator goes blank, not stale"
+        );
+    }
+
+    #[test]
+    fn closing_the_capture_blanks_the_reading_immediately() {
+        let (tap, ring, sp, meters, mut dsp) = zero_beat_rig();
+        meters.set_cw_target_hz(Some(600.0));
+        feed(&mut dsp, &tap, &ring, &sp, &meters, &keyed_cw(640.0, 4096));
+        assert!(meters.cw_tone_hz().is_some(), "reading the signal");
+        // No audio open at all — the same honesty the row and the level meter get.
+        tap.clear_card();
+        dsp.tick(&tap, &sp, &meters);
+        assert_eq!(
+            meters.cw_tone_hz(),
+            None,
+            "no capture, no reading — not even a held one"
         );
     }
 

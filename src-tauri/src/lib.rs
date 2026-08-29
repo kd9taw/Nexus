@@ -33,11 +33,11 @@
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
 mod pouncer;
-mod window_state;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
 mod sstv_scope_test;
+mod window_state;
 
 use chains::{panel_key, panel_label, Instance};
 use std::path::PathBuf;
@@ -218,7 +218,11 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
         // therefore take the same arm in both, so where a click lands is unchanged.
         mode: propagation::digital_hole_mode(freq_mhz)
             .map(str::to_string)
-            .unwrap_or_else(|| propagation::classify_spot_mode(freq_mhz).label().to_string()),
+            .unwrap_or_else(|| {
+                propagation::classify_spot_mode(freq_mhz)
+                    .label()
+                    .to_string()
+            }),
         spotted_unix: sp.received_unix as i64,
     });
 }
@@ -1413,7 +1417,10 @@ fn radio_launch_info(state: State<'_, SharedEngine>) -> Result<RadioLaunchInfo, 
             in_use: profile_in_use(&radio_profile_key(r.id)),
         })
         .collect();
-    Ok(RadioLaunchInfo { show_picker, radios })
+    Ok(RadioLaunchInfo {
+        show_picker,
+        radios,
+    })
 }
 
 /// The operator picked a radio in the launch picker: relaunch this same binary bound to that
@@ -1602,6 +1609,82 @@ fn save_bandmap_window(slug: &str, inst: Instance, g: &BandmapWindow) {
     }
 }
 
+/// How physically large a CSS pixel is on this operator's display — the one input the UI
+/// scale has never had on Linux.
+///
+/// Windows and macOS answer this themselves: the OS picks a scale factor, the webview reports
+/// it as `devicePixelRatio`, and a CSS pixel lands near the 96-dpi reference on purpose. X11
+/// does not, and X11 is what Nexus runs on — `scripts/build-linux.sh` documents that the
+/// AppImage's AppRun forces `GDK_BACKEND=x11`, so even a Wayland session is an XWayland
+/// client. There the scale factor is 1 whatever the panel is. Measured against webkit2gtk-4.1
+/// 2.52.3 with this app's own stylesheet: `GDK_SCALE=2` and `GDK_DPI_SCALE=1.5` both reach the
+/// page as `devicePixelRatio`, but `gtk-xft-dpi=144` — what GNOME's text-scaling-factor and
+/// "Large Text" actually set, and the setting an operator on a small high-resolution laptop
+/// reaches for first — moves nothing in web content. Not one pixel: same devicePixelRatio,
+/// same viewport, same rendered rect for every element.
+///
+/// So on Linux we ask the display for its EDID physical size and let the UI do the
+/// arithmetic. `physical_dpi: None` means "nothing here needs correcting", which is the right
+/// answer on every platform where the OS is already doing this job.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayMetrics {
+    /// True pixel density of the display the app opened on, from its reported physical size.
+    /// `None` off Linux, and on Linux whenever the panel reports no size (many virtual
+    /// displays, some KVMs and projectors report 0 mm) — never a guess.
+    physical_dpi: Option<f64>,
+    /// The scale factor the OS applies, which the webview already reflects as
+    /// `devicePixelRatio`. The UI divides by it to get the density of a CSS pixel.
+    scale_factor: f64,
+}
+
+/// Probed once, on the main thread, during `setup()` — GDK is not safe to call from a command
+/// worker, and the answer cannot change without the app being restarted onto another monitor.
+static DISPLAY_DPI: OnceLock<Option<f64>> = OnceLock::new();
+
+/// Read the primary monitor's physical size and turn it into a true DPI.
+///
+/// `Monitor::geometry()` is in GDK's LOGICAL pixels, so it is multiplied back up by GDK's own
+/// integer scale before dividing by the physical width — otherwise a display already running
+/// at `GDK_SCALE=2` would report half its real density and we would "correct" a screen that
+/// needs no correcting.
+#[cfg(target_os = "linux")]
+fn probe_physical_dpi() -> Option<f64> {
+    // `Display::default` / `primary_monitor` / `monitor` are inherent in gdk 0.18; only the
+    // Monitor accessors come from a trait.
+    use gdk::prelude::MonitorExt;
+    let display = gdk::Display::default()?;
+    // Primary is the right monitor to ask: the main window opens there. A multi-head setup
+    // with mismatched densities is not solvable from one number, and guessing the wrong head
+    // is worse than the current behaviour — hence no per-window monitor walk.
+    let monitor = display.primary_monitor().or_else(|| display.monitor(0))?;
+    let width_mm = monitor.width_mm();
+    let width_px = monitor.geometry().width() * monitor.scale_factor().max(1);
+    if width_mm <= 0 || width_px <= 0 {
+        return None;
+    }
+    let dpi = width_px as f64 / (width_mm as f64 / 25.4);
+    // A sane-range gate rather than trust: EDID is operator-visible hardware data and some
+    // panels lie outright (a 0-mm or 1-mm width would divide into thousands). Outside this
+    // band we would rather change nothing than resize someone's app on bad data.
+    (40.0..=800.0).contains(&dpi).then_some(dpi)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn probe_physical_dpi() -> Option<f64> {
+    None
+}
+
+/// The display metrics for the window asking. Pure read of the cached probe plus this
+/// window's own scale factor, so it is cheap enough for the frontend to call at launch.
+#[tauri::command]
+fn display_metrics(window: tauri::WebviewWindow) -> DisplayMetrics {
+    DisplayMetrics {
+        physical_dpi: *DISPLAY_DPI.get_or_init(probe_physical_dpi),
+        scale_factor: window.scale_factor().unwrap_or(1.0),
+    }
+}
+
 /// Snapshot a band-map window's current size+position to its own per-surface file (logical px),
 /// preserving its dock choice. Called on close so the next open restores it. No-op otherwise.
 fn capture_bandmap_window(window: &tauri::WebviewWindow) {
@@ -1682,7 +1765,9 @@ fn sanitize_free_bandmap_rect(app: &tauri::AppHandle, g: &BandmapWindow) -> (f64
     // Cap w/h (logical) at the landing monitor's work area — or the primary's, where a
     // dropped-position window opens. If no monitor resolves at all (headless/API error),
     // leave w/h as saved; `min_inner_size` still floors them at build.
-    let cap = hit.cloned().or_else(|| app.primary_monitor().ok().flatten());
+    let cap = hit
+        .cloned()
+        .or_else(|| app.primary_monitor().ok().flatten());
     let (mut w, mut h) = (g.w, g.h);
     if let Some(m) = &cap {
         let sf = m.scale_factor();
@@ -1863,9 +1948,7 @@ fn journal_assistance(settings: &tempo_app::settings::Settings, note: &str, forc
             active: *active,
         })
         .collect();
-    let mut log = ASSISTANCE_JOURNAL
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut log = ASSISTANCE_JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
     if !force && !assistance_posture_changed(&log, settings.unassisted_mode, &sources) {
         return;
     }
@@ -2094,14 +2177,17 @@ fn legacy_sstv_gallery_dir() -> PathBuf {
 fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(), String> {
     let dir = sstv_gallery_dir();
     let target = std::path::Path::new(&path);
-    let canon_dir = dir.canonicalize().map_err(|e| format!("no gallery folder: {e}"))?;
+    let canon_dir = dir
+        .canonicalize()
+        .map_err(|e| format!("no gallery folder: {e}"))?;
     let canon = target
         .canonicalize()
         .map_err(|e| format!("Could not find {}: {e}", target.display()))?;
     if !canon.starts_with(&canon_dir) {
         return Err("That file is not in the SSTV gallery folder".into());
     }
-    std::fs::remove_file(&canon).map_err(|e| format!("Could not delete {}: {e}", canon.display()))?;
+    std::fs::remove_file(&canon)
+        .map_err(|e| format!("Could not delete {}: {e}", canon.display()))?;
     {
         let mut eng = engine_lock(&state);
         eng.remove_sstv_gallery(&path);
@@ -2135,11 +2221,14 @@ fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(),
 /// at zero rather than invented.
 ///
 /// Order is oldest-first by stamp, matching what the decoder appends.
-fn reconcile_gallery(dir: &std::path::Path, entries: Vec<tempo_app::dto::SstvGalleryEntry>)
-    -> Vec<tempo_app::dto::SstvGalleryEntry>
-{
-    let mut kept: Vec<tempo_app::dto::SstvGalleryEntry> =
-        entries.into_iter().filter(|e| std::path::Path::new(&e.path).is_file()).collect();
+fn reconcile_gallery(
+    dir: &std::path::Path,
+    entries: Vec<tempo_app::dto::SstvGalleryEntry>,
+) -> Vec<tempo_app::dto::SstvGalleryEntry> {
+    let mut kept: Vec<tempo_app::dto::SstvGalleryEntry> = entries
+        .into_iter()
+        .filter(|e| std::path::Path::new(&e.path).is_file())
+        .collect();
     let known: std::collections::HashSet<String> = kept.iter().map(|e| e.path.clone()).collect();
 
     if let Ok(rd) = std::fs::read_dir(dir) {
@@ -2163,7 +2252,10 @@ fn reconcile_gallery(dir: &std::path::Path, entries: Vec<tempo_app::dto::SstvGal
             if known.contains(&p) {
                 continue;
             }
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
             let (stamp, mode) = stem.split_once('_').unwrap_or((stem, ""));
             kept.push(tempo_app::dto::SstvGalleryEntry {
                 path: p,
@@ -2186,12 +2278,21 @@ fn iso_from_stamp(stamp: &str) -> Option<String> {
     if b.len() != 16 || b[8] != b'T' || b[15] != b'Z' {
         return None;
     }
-    if !stamp[..8].bytes().chain(stamp[9..15].bytes()).all(|c| c.is_ascii_digit()) {
+    if !stamp[..8]
+        .bytes()
+        .chain(stamp[9..15].bytes())
+        .all(|c| c.is_ascii_digit())
+    {
         return None;
     }
     Some(format!(
         "{}-{}-{}T{}:{}:{}Z",
-        &stamp[0..4], &stamp[4..6], &stamp[6..8], &stamp[9..11], &stamp[11..13], &stamp[13..15]
+        &stamp[0..4],
+        &stamp[4..6],
+        &stamp[6..8],
+        &stamp[9..11],
+        &stamp[11..13],
+        &stamp[13..15]
     ))
 }
 
@@ -2229,7 +2330,9 @@ fn migrate_sstv_gallery_between(from: &std::path::Path, to: &std::path::Path) {
     let mut moved = 0usize;
     for e in &mut entries {
         let src = PathBuf::from(&e.path);
-        let Some(name) = src.file_name() else { continue };
+        let Some(name) = src.file_name() else {
+            continue;
+        };
         // An entry whose file is already gone is left pointing where it always pointed. It renders
         // exactly as it did before — this is a move, not the gallery reconciliation that issue #23
         // is about, and quietly dropping someone's rows here would be answering that question by
@@ -2462,8 +2565,12 @@ fn write_qso_wav(call: &str, pcm: &[i16]) -> Result<PathBuf, String> {
 /// derived from the live profile's settings path, which a test cannot redirect, so the policy
 /// (create, name, write, and name the path in any error) lives here where it can be driven.
 fn write_qso_wav_in(dir: &std::path::Path, call: &str, pcm: &[i16]) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir)
-        .map_err(|e| format!("Could not create the recordings folder {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| {
+        format!(
+            "Could not create the recordings folder {}: {e}",
+            dir.display()
+        )
+    })?;
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -4160,8 +4267,10 @@ fn sat_excluded(
             },
         });
     }
-    let held: std::collections::HashSet<u32> =
-        tles.iter().filter_map(|t| sat::norad_id(&t.line1)).collect();
+    let held: std::collections::HashSet<u32> = tles
+        .iter()
+        .filter_map(|t| sat::norad_id(&t.line1))
+        .collect();
     for c in catalog.values() {
         if !held.contains(&c.norad) {
             excluded.push(SatExcludedDto {
@@ -4313,7 +4422,11 @@ async fn get_contests() -> Result<Vec<propagation::live::contests::ContestEvent>
 /// [`SatPassDto::aos_clamped`] — `aos_unix == now - VIEW_PASS_BACKSCAN_SECS`,
 /// the exact clamp shape — is how that honest admission reaches the wire.
 const VIEW_PASS_BACKSCAN_SECS: i64 = 21_600;
-fn view_passes(t: &propagation::sat::Tle, obs: (f64, f64), now: i64) -> Vec<propagation::sat::Pass> {
+fn view_passes(
+    t: &propagation::sat::Tle,
+    obs: (f64, f64),
+    now: i64,
+) -> Vec<propagation::sat::Pass> {
     propagation::sat::passes(t, obs, now - VIEW_PASS_BACKSCAN_SECS, 24 + 6)
         .into_iter()
         .filter(|p| p.los_unix > now)
@@ -5010,16 +5123,18 @@ fn tle_refresh_flight(
                 catalog,
                 generated,
                 etag,
-            }) => match tle::validate_tles(&elements, ratchet(TleFetchTarget::Mirror), now_unix()) {
-                Ok(clean) => {
-                    // A schema-1 mirror (or a rollback) sends no catalog:
-                    // keep the one we have rather than blanking every status.
-                    let catalog = (!catalog.is_empty()).then_some(catalog);
-                    tles_install(clean, "mirror", generated, etag, catalog);
-                    Ok(())
+            }) => {
+                match tle::validate_tles(&elements, ratchet(TleFetchTarget::Mirror), now_unix()) {
+                    Ok(clean) => {
+                        // A schema-1 mirror (or a rollback) sends no catalog:
+                        // keep the one we have rather than blanking every status.
+                        let catalog = (!catalog.is_empty()).then_some(catalog);
+                        tles_install(clean, "mirror", generated, etag, catalog);
+                        Ok(())
+                    }
+                    Err(e) => Err((TleFailKind::Failed, format!("mirror TLE set refused: {e}"))),
                 }
-                Err(e) => Err((TleFailKind::Failed, format!("mirror TLE set refused: {e}"))),
-            },
+            }
             Err(e) => {
                 let mirror_raw = format!("TLE mirror fetch failed: {e}");
                 if manual
@@ -5262,7 +5377,11 @@ fn tle_status() -> TleStatus {
         source,
         imported_count,
         element_age_days: currency.median_age_days,
-        blocked_until: if blocked_until > now { blocked_until } else { 0 },
+        blocked_until: if blocked_until > now {
+            blocked_until
+        } else {
+            0
+        },
         last_error: last.as_ref().map(|(_, raw)| raw.clone()),
         last_error_kind: last.map(|(kind, _)| kind.wire()),
     }
@@ -5320,8 +5439,8 @@ async fn fetch_tles_now() -> Result<TleStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         tle_refresh_flight(target, prev_count, prev_source, etag, true)
     })
-        .await
-        .map_err(|e| e.to_string())?;
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(tle_status())
 }
 
@@ -5880,8 +5999,9 @@ async fn set_sat_transponder(
         .and_then(|t| propagation::sat::norad_id(&t.line1))
         .ok_or_else(|| format!("{name}: not in the TLE set"))?;
 
-    let snap = satnogs_snapshot(vec![norad])
-        .ok_or_else(|| "satellite data not fetched yet — open the bird's detail first".to_string())?;
+    let snap = satnogs_snapshot(vec![norad]).ok_or_else(|| {
+        "satellite data not fetched yet — open the bird's detail first".to_string()
+    })?;
     let rows: Vec<_> = snap
         .transmitters
         .iter()
@@ -6264,7 +6384,10 @@ struct SatTrackDto {
 /// because it is an I/O outcome, not a policy: rotctld refuses `P az el` on a
 /// mount with no elevation axis, and the only way to find out is to try. The
 /// driver is told which happened and decides what it means.
-fn send_rot_step(addr: &str, step: tempo_core::rotator::RotStep) -> tempo_core::rotator::RotOutcome {
+fn send_rot_step(
+    addr: &str,
+    step: tempo_core::rotator::RotStep,
+) -> tempo_core::rotator::RotOutcome {
     use tempo_core::rotator::{RotOutcome, RotStep};
     match step {
         RotStep::Hold => RotOutcome::AzOk, // never reaches the wire
@@ -7503,6 +7626,7 @@ fn get_meters(meters: State<'_, tempo_app::engine::MeterFeed>) -> Result<MeterRe
     Ok(MeterReadout {
         rx_level: meters.rx_level(),
         smeter_db: meters.smeter_db(),
+        cw_tone_hz: meters.cw_tone_hz(),
     })
 }
 
@@ -7537,7 +7661,6 @@ fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
     s.sync_flat_from_active();
     Ok(s)
 }
-
 
 /// Reset the configuration to factory defaults, keeping the logbook and stored credentials.
 ///
@@ -7915,7 +8038,6 @@ fn export_general_log(
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
 
-
 /// Fields stripped from a settings backup (#28 item 4), by their serialised (camelCase) names.
 ///
 /// The bundle is written to Downloads and operators mail these to themselves, so anything a
@@ -8038,7 +8160,9 @@ fn import_settings_bundle(
         // PERSIST. Applying to the running engine alone is what made the restore evaporate on the
         // next launch while looking like it had worked.
         if let Err(e) = eng.settings().save(&settings_path()) {
-            return Err(format!("The settings were restored but could not be saved: {e}"));
+            return Err(format!(
+                "The settings were restored but could not be saved: {e}"
+            ));
         }
         // ...and into the base config, or the launch picker keeps offering the OLD roster.
         persist_roster_to_base(&eng.settings().radios);
@@ -8185,6 +8309,34 @@ async fn get_serial_ports() -> Vec<String> {
 struct SerialPortInfo {
     name: String,
     label: String,
+    /// Which interface of a multi-interface bridge this is, when known. A CP2105 is DUAL and only
+    /// interface 0 carries CAT on the rigs this targets; interface 1 answers nothing and looks
+    /// exactly like a dead radio. `None` when there is one interface, or topology is unavailable —
+    /// and `None` must read as "unknown", never as "interface 0".
+    interface_index: Option<u32>,
+    /// How many serial interfaces this USB device exposes in total, when known.
+    ///
+    /// ⚠️ WITHOUT THIS, `interface_index` IS NOT ENOUGH. Plenty of single-interface devices number
+    /// their one interface something other than 0 — an LG monitor's control port on this desk is
+    /// interface 2 — so "index > 0" alone would tell an operator their only port is "port 3 of
+    /// this device, CAT is normally on port 1", which is both wrong and alarming. The advice is
+    /// only meaningful when there IS another port to have picked instead.
+    ///
+    /// Counted over ports sharing the EXACT same `locationID`, which on macOS is one physical USB
+    /// device. That is stricter than the parent-hub reasoning used for `paired_audio` below, and
+    /// deliberately so: it cannot be confused by two unrelated devices in one external hub.
+    sibling_ports: Option<u32>,
+    /// An audio device on the same physical USB device — i.e. inside the same radio. `None` when
+    /// nothing is paired, which is normal for a plain serial adapter and is also what every
+    /// non-macOS platform reports, so nothing may be REFUSED on its absence.
+    ///
+    /// ⚠️ This one is a HEURISTIC and weaker than `sibling_ports`. A rig's CAT bridge and codec
+    /// are separate USB devices behind the rig's own internal hub, so they can only be related by
+    /// their PARENT — and two unrelated things in one external hub share a parent too. A USB
+    /// headset plugged into the same hub as a rig's CAT adapter would look "inside" it. That is
+    /// why the only consumer is a warning, and why it speaks solely when both sides are known and
+    /// they DISAGREE.
+    paired_audio: Option<String>,
 }
 
 /// Serial ports WITH a descriptive USB-product label, for the Settings picker.
@@ -8193,6 +8345,17 @@ async fn get_serial_ports_detailed() -> Vec<SerialPortInfo> {
     #[cfg(feature = "radio")]
     {
         let usb = tempo_audio::ports::available_usb_ports();
+        // The product string alone is NOT an identity: two radios with the same bridge chip give
+        // every one of their ports the byte-identical label ("CP2105 Dual USB to UART Bridge
+        // Controller" ×8 on a two-radio station), and an operator picking their rig out of that
+        // list saved one radio's profile pointing at the other. So each port also carries the
+        // structured facts topology can prove — which interface of the bridge it is, and which
+        // sound card sits inside the same radio — for the form to validate against.
+        //
+        // ⚠️ ADDITIVE ONLY. Both fields are `Option` and both are `None` off macOS and on any Mac
+        // where IOKit answers nothing. The label and the name are unchanged, so a picker that
+        // ignores these fields behaves exactly as before.
+        let (ifaces, locs, audio) = tempo_audio::usbtopo::serial_topology();
         tempo_audio::ports::available_ports()
             .into_iter()
             .map(|name| {
@@ -8201,7 +8364,39 @@ async fn get_serial_ports_detailed() -> Vec<SerialPortInfo> {
                     .find(|u| u.port_name == name)
                     .map(|u| u.product.clone())
                     .unwrap_or_default();
-                SerialPortInfo { name, label }
+                // Same physical device = same parent hub. A rig's internal hub carries its CAT
+                // bridge and its codec; a bare USB-serial adapter shares its hub with nothing, and
+                // then this is correctly `None`.
+                let paired_audio = locs.get(&name).and_then(|l| {
+                    let hub = tempo_audio::usbtopo::parent_hub(*l);
+                    let mut mates: Vec<&String> = audio
+                        .iter()
+                        .filter(|(_, al)| tempo_audio::usbtopo::parent_hub(**al) == hub)
+                        .map(|(n, _)| n)
+                        .collect();
+                    mates.sort(); // stable across calls — the picker must not reshuffle
+                    mates.first().map(|n| (*n).clone())
+                });
+                // Distinct interface numbers on the exact same USB device. `None` rather than
+                // `Some(1)` when this port has no topology: "one interface" and "unknown" are not
+                // the same claim, and the check that reads it must be able to tell them apart.
+                let sibling_ports = locs.get(&name).map(|my_loc| {
+                    let mut seen: Vec<u32> = ifaces
+                        .iter()
+                        .filter(|(n, _)| locs.get(*n) == Some(my_loc))
+                        .map(|(_, i)| *i)
+                        .collect();
+                    seen.sort_unstable();
+                    seen.dedup();
+                    seen.len() as u32
+                });
+                SerialPortInfo {
+                    interface_index: ifaces.get(&name).copied(),
+                    sibling_ports,
+                    paired_audio,
+                    name,
+                    label,
+                }
             })
             .collect()
     }
@@ -8223,6 +8418,16 @@ async fn get_serial_ports_detailed() -> Vec<SerialPortInfo> {
 struct AudioDeviceDto {
     name: String,
     label: String,
+    /// The USB device (parent hub) this sound card belongs to, when resolvable — i.e. WHICH RADIO
+    /// it is inside. Lets the rig form check that a chosen codec and a chosen CAT port are the same
+    /// physical rig, which a name cannot: two rigs with the same codec chip both enumerate as
+    /// "USB Audio Device" and the positional `" #2"` that separates them is assigned by enumeration
+    /// order, so moving a rig to another USB socket swaps what each stored name means.
+    ///
+    /// ⚠️ Display and validation ONLY, and NEVER persisted — it describes where the hardware is
+    /// plugged in at this instant, so a stored copy would be wrong the next time a cable moves.
+    /// `None` off macOS and wherever topology is unavailable; nothing may be refused on its absence.
+    usb_hub: Option<u32>,
 }
 
 /// Available sound-card input/output devices (for the Settings dropdowns).
@@ -8239,18 +8444,29 @@ struct AudioDevices {
 async fn get_audio_devices() -> AudioDevices {
     #[cfg(feature = "radio")]
     {
-        fn dto(v: Vec<tempo_audio::audiodev::AudioDevice>) -> Vec<AudioDeviceDto> {
+        fn dto(
+            v: Vec<tempo_audio::audiodev::AudioDevice>,
+            locs: &std::collections::HashMap<String, u32>,
+        ) -> Vec<AudioDeviceDto> {
             v.into_iter()
                 .map(|d| AudioDeviceDto {
+                    usb_hub: locs
+                        .get(&d.name)
+                        .map(|l| tempo_audio::usbtopo::parent_hub(*l)),
                     name: d.name,
                     label: d.label,
                 })
                 .collect()
         }
         let (input, output) = tempo_audio::device::available_devices();
+        // Input and output are separate CoreAudio streams even on one card, so each side needs its
+        // own lookup; both are empty maps where topology is unavailable, and then every `usb_hub`
+        // is `None` and the lists are exactly what they were before.
+        let in_locs = tempo_audio::usbtopo::audio_locations(true);
+        let out_locs = tempo_audio::usbtopo::audio_locations(false);
         AudioDevices {
-            input: dto(input),
-            output: dto(output),
+            input: dto(input, &in_locs),
+            output: dto(output, &out_locs),
         }
     }
     #[cfg(not(feature = "radio"))]
@@ -8574,9 +8790,8 @@ fn sync_rotctld(st: &tempo_app::settings::Settings) {
             }
             let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
-            match tempo_audio::rigctld_proc::spawn_rotctld(
-                params.0, &params.1, params.2, params.3,
-            ) {
+            match tempo_audio::rigctld_proc::spawn_rotctld(params.0, &params.1, params.2, params.3)
+            {
                 Ok(mut proc) => {
                     let port = params.3;
                     // Give it the moment it takes to fail. A rotctld that cannot open the port
@@ -8613,7 +8828,11 @@ fn sync_rotctld(st: &tempo_app::settings::Settings) {
                                      rotator will not answer. Check the port and that the baud \
                                      matches what this model needs.",
                                     params.0,
-                                    if params.1.is_empty() { "(no port set)" } else { &params.1 },
+                                    if params.1.is_empty() {
+                                        "(no port set)"
+                                    } else {
+                                        &params.1
+                                    },
                                     params.2
                                 ),
                                 &proc.said(),
@@ -9625,8 +9844,8 @@ fn get_sstv_state(state: State<'_, SharedEngine>) -> Result<SstvStateDto, String
 /// "scottiedx", "martin1", …) to its [`tempo_sstv::SstvMode`]. Case-insensitive.
 fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
     use tempo_sstv::SstvMode::{
-        Martin1, Martin2, Pd120, Pd160, Pd180, Pd240, Pd290, Pd50, Pd90, Robot24, Robot36,
-        Robot72, Scottie1, Scottie2, ScottieDx,
+        Martin1, Martin2, Pd120, Pd160, Pd180, Pd240, Pd290, Pd50, Pd90, Robot24, Robot36, Robot72,
+        Scottie1, Scottie2, ScottieDx,
     };
     Some(match slug.trim().to_ascii_lowercase().as_str() {
         "pd50" => Pd50,
@@ -9792,7 +10011,11 @@ fn b64_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
         out.push(ALPHABET[(n >> 18) as usize & 63] as char);
         out.push(ALPHABET[(n >> 12) as usize & 63] as char);
@@ -10360,6 +10583,26 @@ fn get_portless_rig_models() -> Vec<u32> {
     }
 }
 
+/// Models whose CAT CW keyer is UNPROVEN and cannot report its own failure — the CW settings
+/// page shows a caution when the operator has picked the CAT keyer on one of them. See
+/// [`tempo_audio::rigmodels::cat_cw_unproven_rig_models`] for the measurement and for why this
+/// is a notice rather than a block.
+///
+/// An empty result means "could not be determined" (built without the `radio` feature), and the
+/// form simply shows no caution — the same direction as the portless rule: a rule that cannot be
+/// read must never be the reason an operator is warned off a keyer that works for him.
+#[tauri::command]
+fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
+    #[cfg(feature = "radio")]
+    {
+        tempo_audio::rigmodels::cat_cw_unproven_rig_models()
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        Vec::new()
+    }
+}
+
 /// Tempo's proposed calling-frequency band plan (HF + VHF/UHF), for the band
 /// selector. Each entry is General-legal + clear of the existing watering holes.
 #[tauri::command(async)]
@@ -10480,9 +10723,15 @@ fn get_licensed_band_plan(
     let lower = mode.to_ascii_lowercase();
     if lower == "rtty" || lower == "sstv" || lower == "psk" {
         let (plan, priv_mode) = if lower == "rtty" {
-            (tempo_app::bandplan::rtty_band_plan(), OperatingMode::Digital)
+            (
+                tempo_app::bandplan::rtty_band_plan(),
+                OperatingMode::Digital,
+            )
         } else if lower == "psk" {
-            (tempo_app::bandplan::psk_band_plan(), OperatingMode::Keyboard)
+            (
+                tempo_app::bandplan::psk_band_plan(),
+                OperatingMode::Keyboard,
+            )
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
@@ -10693,7 +10942,11 @@ fn set_cw_peer_info(
 
 /// Set the CW keyer speed in WPM (5–50).
 #[tauri::command(async)]
-fn set_cw_wpm(state: State<'_, SharedEngine>, wpm: u32, commit: bool) -> Result<AppSnapshot, String> {
+fn set_cw_wpm(
+    state: State<'_, SharedEngine>,
+    wpm: u32,
+    commit: bool,
+) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     eng.set_cw_wpm(wpm);
     // `commit` gates the DISK write, not the live change. Two reasons it isn't unconditional:
@@ -11459,14 +11712,11 @@ async fn open_panel_window(
         Instance::Main => format!("index.html?panel={slug}"),
         other => format!("index.html?panel={slug}&instance={other}"),
     };
-    let mut builder = tauri::WebviewWindowBuilder::new(
-        &app,
-        &label,
-        tauri::WebviewUrl::App(url.into()),
-    )
-    .title(title)
-    .inner_size(w, h)
-    .min_inner_size(min_w, min_h);
+    let mut builder =
+        tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+            .title(title)
+            .inner_size(w, h)
+            .min_inner_size(min_w, min_h);
     if let Some(g) = &saved {
         if matches!(free, Some((_, _, false))) {
             // FREE window whose saved top-left no longer lands on any monitor (unplugged or
@@ -12954,7 +13204,7 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
                 st.eqsl_upload,
                 st.hrdlog_upload,
                 st.cloudlog_upload && !st.cloudlog_url.trim().is_empty(),
-            )
+            ),
         )
     };
     let (qrz_book_on, clublog_on, eqsl_on, hrdlog_on, cloudlog_on) = toggles;
@@ -13484,8 +13734,20 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::lotw::is_lotw_adif(&body) {
+        // ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard below,
+        // and the same reasoning. `fetch_report` has already returned a body, so the login
+        // worked; a wrong password fails earlier with its own message. eQSL demonstrated the
+        // failure mode on 2026-08-28: it changed the wording its download opens with, the
+        // structural check started rejecting good files, and operators were told to re-enter
+        // passwords that were provably correct because their UPLOADS were still landing.
+        // LoTW can change its wording the same way, and it is the one that carries award
+        // credit, so it should not be the place we find this out again.
         return Err(
-            "LoTW returned an unexpected response — check your username/password.".to_string(),
+            "LoTW answered, but the download was not the report file it should have been. Your \
+             username and password are fine — this is not a login problem. LoTW may be \
+             returning an error page, or may be down for maintenance. Try again shortly, and \
+             if it keeps happening please report it."
+                .to_string(),
         );
     }
 
@@ -13789,8 +14051,19 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::eqsl::is_eqsl_adif(&body) {
+        // ⚠️ DO NOT BLAME THE CREDENTIALS HERE. This point is only reached AFTER the fetch
+        // succeeded, so the login worked: a wrong password fails earlier, in `fetch_inbox`,
+        // with its own message. Saying "check your username/password" sent an operator to
+        // re-enter a password that was correct — reported 2026-08-28 by an operator whose
+        // uploads were landing in his eQSL Outbox (proving the credentials) while every sync
+        // returned this string. The real cause that day was eQSL changing the wording its
+        // download opens with, which `is_eqsl_adif` was matching on (#176).
         return Err(
-            "eQSL returned an unexpected response — check your username/password.".to_string(),
+            "eQSL answered, but the download was not the log file it should have been. Your \
+             username and password are fine — this is not a login problem. eQSL may be \
+             returning an error page, or may have changed the format again. Try once more in \
+             a few minutes, and if it keeps happening please report it."
+                .to_string(),
         );
     }
 
@@ -14118,9 +14391,12 @@ async fn qrz_lookup(
         if !hamqth_username.is_empty() {
             if let Ok(password) = hamqth_keychain()?.get_password() {
                 queried_any = true;
-                if let Some(dto) =
-                    hamqth_lookup_attempt(cand, &hamqth_username, &password, hamqth_session.inner())?
-                {
+                if let Some(dto) = hamqth_lookup_attempt(
+                    cand,
+                    &hamqth_username,
+                    &password,
+                    hamqth_session.inner(),
+                )? {
                     return Ok(dto);
                 }
                 // HamQTH was queried and answered — a genuine miss for THIS candidate. Only the
@@ -14760,7 +15036,10 @@ fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String
                 "ok",
                 // Deliberately not "logged" — we cannot know that. DXKeeper replies to
                 // nothing; its Server Log is the only place a rejection shows up.
-                format!("sent to {host}:{}", tempo_net::dxkeeper::port_for_base(base_port)),
+                format!(
+                    "sent to {host}:{}",
+                    tempo_net::dxkeeper::port_for_base(base_port)
+                ),
             ),
             Err(e) => conn_log("DXKeeper", "error", e),
         }
@@ -14823,7 +15102,7 @@ fn auto_push_one(
                 conn_log(
                     "QRZ Logbook",
                     if ok { "ok" } else { "error" },
-                    format!("auto-push {call} — {}", r.result),
+                    format!("auto-push QSO with {call} — {}", r.result),
                 );
                 let part = match r.result.as_str() {
                     "ok" => "QRZ ✓".to_string(),
@@ -14839,7 +15118,11 @@ fn auto_push_one(
                 (part, ok, false)
             }
             Err(e) => {
-                conn_log("QRZ Logbook", "error", format!("auto-push {call} — {e}"));
+                conn_log(
+                    "QRZ Logbook",
+                    "error",
+                    format!("auto-push QSO with {call} — {e}"),
+                );
                 (format!("QRZ ✗ {e}"), false, true) // transport error → retry
             }
         };
@@ -14856,7 +15139,7 @@ fn auto_push_one(
                 conn_log(
                     "ClubLog",
                     if ok { "ok" } else { "error" },
-                    format!("auto-push {call} — {}", r.result),
+                    format!("auto-push QSO with {call} — {}", r.result),
                 );
                 let part = match r.result.as_str() {
                     "ok" | "modified" => "ClubLog ✓".to_string(),
@@ -14869,7 +15152,11 @@ fn auto_push_one(
                 (part, ok, r.result.as_str() == "serverError")
             }
             Err(e) => {
-                conn_log("ClubLog", "error", format!("auto-push {call} — {e}"));
+                conn_log(
+                    "ClubLog",
+                    "error",
+                    format!("auto-push QSO with {call} — {e}"),
+                );
                 (format!("ClubLog ✗ {e}"), false, true)
             }
         };
@@ -14886,7 +15173,7 @@ fn auto_push_one(
                 conn_log(
                     "HRDLog.net",
                     if ok { "ok" } else { "error" },
-                    format!("auto-push {call} — {}", r.result),
+                    format!("auto-push QSO with {call} — {}", r.result),
                 );
                 // HRDLog.net is a live-logging/awards site — never DXCC/WAS credit.
                 let part = match r.result.as_str() {
@@ -14900,7 +15187,11 @@ fn auto_push_one(
                 (part, ok, r.result.as_str() == "unknown")
             }
             Err(e) => {
-                conn_log("HRDLog.net", "error", format!("auto-push {call} — {e}"));
+                conn_log(
+                    "HRDLog.net",
+                    "error",
+                    format!("auto-push QSO with {call} — {e}"),
+                );
                 (format!("HRDLog ✗ {e}"), false, true)
             }
         };
@@ -14920,7 +15211,7 @@ fn auto_push_one(
                 conn_log(
                     "eQSL",
                     if ok { "ok" } else { "error" },
-                    format!("auto-push {call} — {}", r.outcome),
+                    format!("auto-push QSO with {call} — {}", r.outcome),
                 );
                 let part = match r.outcome.as_str() {
                     "accepted" => "eQSL ✓".to_string(),
@@ -14939,7 +15230,7 @@ fn auto_push_one(
                 (part, ok, r.outcome.as_str() == "retry")
             }
             Err(e) => {
-                conn_log("eQSL", "error", format!("auto-push {call} — {e}"));
+                conn_log("eQSL", "error", format!("auto-push QSO with {call} — {e}"));
                 (format!("eQSL ✗ {e}"), false, true)
             }
         };
@@ -16174,7 +16465,11 @@ impl tempo_audio::rigctld_server::RigBackend for EngineRig {
             "info",
             format!(
                 "client {} {peer}",
-                if connected { "connected:" } else { "disconnected:" }
+                if connected {
+                    "connected:"
+                } else {
+                    "disconnected:"
+                }
             ),
         );
     }
@@ -16263,7 +16558,10 @@ fn update_install_block(state: State<'_, SharedEngine>) -> Result<Option<String>
 /// thread would skip those events entirely — its own docs say so.)
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) {
-    tempo_core::applog::info("updater", "install finished — restarting through quit_cleanup");
+    tempo_core::applog::info(
+        "updater",
+        "install finished — restarting through quit_cleanup",
+    );
     app.request_restart();
 }
 
@@ -16295,7 +16593,11 @@ struct UpdateInfo {
 fn fetch_text(url: &str) -> Result<String, String> {
     reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .user_agent(concat!("nexus/", env!("CARGO_PKG_VERSION"), " (+update-check)"))
+        .user_agent(concat!(
+            "nexus/",
+            env!("CARGO_PKG_VERSION"),
+            " (+update-check)"
+        ))
         .build()
         .map_err(|e| e.to_string())?
         .get(url)
@@ -16345,7 +16647,11 @@ async fn check_for_update(app: tauri::AppHandle) -> Result<UpdateInfo, String> {
         &format!(
             "checked: running {current}, feed says {}, update {}",
             latest.as_deref().unwrap_or("<unknown>"),
-            if update_available { "available" } else { "not needed" }
+            if update_available {
+                "available"
+            } else {
+                "not needed"
+            }
         ),
     );
     Ok(UpdateInfo {
@@ -16476,7 +16782,10 @@ struct PotaStampResult {
 }
 
 #[tauri::command(async)]
-fn import_pota_log(state: State<'_, SharedEngine>, text: String) -> Result<PotaStampResult, String> {
+fn import_pota_log(
+    state: State<'_, SharedEngine>,
+    text: String,
+) -> Result<PotaStampResult, String> {
     let mut eng = engine_lock(&state);
     let (stamped, already, unmatched) = eng.import_pota_log(&text);
     Ok(PotaStampResult {
@@ -16824,7 +17133,10 @@ fn rebuild_after_setting_webview_data_aside(
                 match std::fs::rename(&dir, &aside) {
                     Ok(()) => tempo_core::applog::warn(
                         "webview",
-                        &format!("set the WebView2 user-data folder aside as {}", aside.display()),
+                        &format!(
+                            "set the WebView2 user-data folder aside as {}",
+                            aside.display()
+                        ),
                     ),
                     Err(e) => tempo_core::applog::warn(
                         "webview",
@@ -17019,7 +17331,10 @@ pub fn run() {
     if settings.diag_debug_log {
         // Said out loud, because a reader months from now must never mistake the extra
         // traffic for a fault, nor a QUIET log for a healthy one when the level was simply low.
-        tempo_core::applog::info("diag", "DEBUG tier is ON for this session (operator setting)");
+        tempo_core::applog::info(
+            "diag",
+            "DEBUG tier is ON for this session (operator setting)",
+        );
     }
     // A milestone, not the settings themselves — this file is designed to be emailed to a
     // stranger, and `Settings` is where the operator's callsign and connector accounts live.
@@ -17120,9 +17435,9 @@ pub fn run() {
         }
         let mut changed = false;
         for f in fields {
-            if let Some(cu) = tempo_audio::ports::heal_tty_twin_with(f, |p| {
-                std::path::Path::new(p).exists()
-            }) {
+            if let Some(cu) =
+                tempo_audio::ports::heal_tty_twin_with(f, |p| std::path::Path::new(p).exists())
+            {
                 eprintln!(
                     "tempo: stored serial port {f} is a /dev/tty.* node (offered by a \
                      1.5.0–1.6.1 picker) — rewriting it to its callout twin {cu}"
@@ -17516,7 +17831,11 @@ pub fn run() {
             let (on, hours, last) = {
                 let eng = engine_lock(&sync_engine);
                 let s = eng.settings();
-                (s.qrz_auto_sync, s.qrz_sync_hours.max(1), s.qrz_last_sync_unix)
+                (
+                    s.qrz_auto_sync,
+                    s.qrz_sync_hours.max(1),
+                    s.qrz_last_sync_unix,
+                )
             };
             if !on {
                 continue;
@@ -17610,10 +17929,8 @@ pub fn run() {
                         // record: none of these heal on their own, so stop rather than
                         // re-sign the same batch every six hours.
                         "authfail" | "rejected" => {
-                            LOTW_AUTO_SUSPENDED
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
-                            if !LOTW_AUTO_ANNOUNCED
-                                .swap(true, std::sync::atomic::Ordering::Relaxed)
+                            LOTW_AUTO_SUSPENDED.store(true, std::sync::atomic::Ordering::Relaxed);
+                            if !LOTW_AUTO_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
                             {
                                 conn_log(
                                     "LoTW",
@@ -17681,7 +17998,18 @@ pub fn run() {
         let push_engine = engine.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            let (recs, qrz_on, clublog_on, eqsl_on, hrdlog_on, n3fjp_on, cloudlog_on, dxk, cl_email, cl_key) = {
+            let (
+                recs,
+                qrz_on,
+                clublog_on,
+                eqsl_on,
+                hrdlog_on,
+                n3fjp_on,
+                cloudlog_on,
+                dxk,
+                cl_email,
+                cl_key,
+            ) = {
                 // Recover a poisoned lock (conn_log pattern) — a panicked command
                 // holding the engine must not silently kill auto-upload forever.
                 let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
@@ -17880,9 +18208,7 @@ pub fn run() {
         // config dir, shared by every profile on purpose: any instance may sweep any dead
         // instance's orphans, and the identity+parent checks inside keep a LIVE sibling
         // instance's daemons untouched.
-        tempo_audio::rigctld_proc::init_orphan_ledger(
-            config_dir_for(None).join("daemon-pids"),
-        );
+        tempo_audio::rigctld_proc::init_orphan_ledger(config_dir_for(None).join("daemon-pids"));
         let radio_engine = engine.clone();
         std::thread::spawn(move || {
             // The radio loop is the heartbeat — if it dies (error OR panic), TX/RX
@@ -18114,6 +18440,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
+            display_metrics,
             update_install_block,
             prepare_update_install,
             restart_app,
@@ -18231,6 +18558,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_rig_models,
             get_all_rig_models,
             get_portless_rig_models,
+            get_cat_cw_unproven_rig_models,
             get_band_plan,
             set_license_class,
             get_licensed_band_plan,
@@ -18436,6 +18764,10 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             if let Ok(res) = app.path().resource_dir() {
                 let _ = RESOURCE_DIR.set(res);
             }
+            // Probe the display's physical density HERE, on the main thread, where GDK is safe
+            // to call. The frontend reads the cached answer through `display_metrics` and uses
+            // it to seed the UI scale cap on a first launch only. No-op off Linux.
+            let _ = DISPLAY_DPI.set(probe_physical_dpi());
             // The operator-facing folders. Captured here for the same reason as the resource dir:
             // the functions that need them are free functions with no handle. A failure to resolve
             // is not an error — the legacy in-config location is still a working default.
@@ -18559,11 +18891,24 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                     }
                 }
             }
-            // RTTY + PSK + SSTV RX decode threads — RX ONLY (arming is per-session
-            // runtime state; nothing here can key PTT or emit TX audio).
+            // RTTY + PSK + SSTV RX decode threads, and the amplifier status poll — RX ONLY
+            // (arming is per-session runtime state; nothing here can key PTT or emit TX audio).
+            //
+            // The amplifier belongs in THIS family and nowhere else, and that is the whole
+            // isolation argument spent in one place. It must never be folded into the radio
+            // loop's heavy CAT block: that loop ticks every 20 ms and caps its entire read-back
+            // at HEAVY_POLL_BUDGET_MS = 250, asking have_budget() before every single read,
+            // while ONE amplifier poll is 0.5-2.4 s of blocking serial (SPE: two read_exact at
+            // a 500 ms budget; KPA: six sequential verbs at 400 ms each) — 25 to 120 ticks. A
+            // reader that long inside the budget does not fail loudly; it silently STARVES the
+            // readers after it, which is exactly what \dump_caps did to the split read it was
+            // meant to qualify. Nor may it live in RadioLoop, and nor may it become a
+            // spawn_blocking per UI poll: that model reopens its transport on every call, which
+            // for a serial amplifier means opening and closing a COM port every second.
             #[cfg(feature = "radio")]
             {
                 tempo_audio::rttyrx::spawn_rtty_rx(app.state::<SharedEngine>().inner().clone());
+                tempo_audio::amppoll::spawn_amp_poll(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::pskrx::spawn_psk_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::aprsrx::spawn_aprs_rx(app.state::<SharedEngine>().inner().clone());
                 tempo_audio::sstvrx::spawn_sstv_rx(
@@ -18684,7 +19029,10 @@ mod tests {
         // the newline AND the next line's indent, or does not, depending on getting it right.
         let msg = super::qsl_via_arg(Some("")).unwrap_err();
         assert!(msg.contains("use B, D, or E"), "{msg}");
-        assert!(!msg.contains("  "), "the continuation escape left a gap: {msg}");
+        assert!(
+            !msg.contains("  "),
+            "the continuation escape left a gap: {msg}"
+        );
         assert_eq!(super::qsl_via_arg(Some("B")), Ok(Some(QslVia::Bureau)));
         assert_eq!(super::qsl_via_arg(Some("d")), Ok(Some(QslVia::Direct)));
         assert_eq!(
@@ -19051,7 +19399,10 @@ mod tests {
         note_conn_health(ID, true, String::new());
         let (ok3, fail3, detail3) = conn_health_of(ID);
         assert!(ok3.is_some());
-        assert_eq!(fail3, fail2, "the failure timestamp must survive a recovery");
+        assert_eq!(
+            fail3, fail2,
+            "the failure timestamp must survive a recovery"
+        );
         assert_eq!(detail3, detail2, "and so must its reason");
 
         // One slot per connector, not one per call — otherwise the vec grows unbounded
@@ -19093,7 +19444,10 @@ mod tests {
         );
         // Stale status: return it, but LABELED stale — never as this test's answer.
         let r = cat_test_timeout("CAT confirmed — rig accepted a command".to_string(), None);
-        assert!(!r.ok, "a timed-out test must not claim green off a stale status");
+        assert!(
+            !r.ok,
+            "a timed-out test must not claim green off a stale status"
+        );
         assert!(
             r.detail.contains("Last known status") && r.detail.contains("CAT confirmed"),
             "{}",
@@ -19110,11 +19464,22 @@ mod tests {
         assert!(w.contains("REJECTED") && w.contains("separate"), "{w}");
         // Exact match (or missing data) → silence.
         assert_eq!(qrz_book_mismatch_warning("F4MQS", "F4MQS"), "");
-        assert_eq!(qrz_book_mismatch_warning("f4mqs", "F4MQS"), "", "case-insensitive");
-        assert_eq!(qrz_book_mismatch_warning("F4MQS/P", ""), "", "unknown owner = silent");
+        assert_eq!(
+            qrz_book_mismatch_warning("f4mqs", "F4MQS"),
+            "",
+            "case-insensitive"
+        );
+        assert_eq!(
+            qrz_book_mismatch_warning("F4MQS/P", ""),
+            "",
+            "unknown owner = silent"
+        );
         // A genuinely different operator (wrong key) gets the milder warning.
         let w2 = qrz_book_mismatch_warning("K1ABC", "W9XYZ");
-        assert!(w2.contains("W9XYZ") && w2.contains("K1ABC") && !w2.contains("separate"), "{w2}");
+        assert!(
+            w2.contains("W9XYZ") && w2.contains("K1ABC") && !w2.contains("separate"),
+            "{w2}"
+        );
     }
 
     #[test]
@@ -19122,28 +19487,28 @@ mod tests {
         use super::plain_qrz_reason;
         let m = plain_qrz_reason("QRZ Internal Error: Unable to add QSO to database");
         assert!(m.contains("Unable to add QSO"), "keeps the raw string: {m}");
-        assert!(m.contains("per exact callsign"), "adds the plain explanation: {m}");
+        assert!(
+            m.contains("per exact callsign"),
+            "adds the plain explanation: {m}"
+        );
         // Unrecognised reasons pass through untouched.
         assert_eq!(plain_qrz_reason("some other error"), "some other error");
     }
 
     use super::{
-        callbook_candidates, redact_for_backup,
-        iso_from_stamp, reconcile_gallery,
-        migrate_sstv_gallery_between,
-        write_qso_wav_in,
-       assistance_posture_changed, b64_decode, b64_encode, catalog_marks, dxped_page_url,
-        engine_lock, install_block_reason, is_complete_lotw_body, iss_pass_from_tles,
-        load_tle_snapshot_from, own_decode_heards, parse_sstv_mode, profile_dir_name, qso_is_sat,
-        cluster_spot_heards, rect_lands_on_work_area, roster_local_spots, roster_spot_age_secs,
-        set_operator_qth, spotter_evidence_rank, spotter_evidence_rank_at,
-        resolve_bird, resolve_birds, run_sat_track, sanitize_profile, sat_excluded,
+        assistance_posture_changed, b64_decode, b64_encode, callbook_candidates, catalog_marks,
+        cluster_spot_heards, dxped_page_url, engine_lock, install_block_reason,
+        is_complete_lotw_body, iso_from_stamp, iss_pass_from_tles, load_tle_snapshot_from,
+        migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode, profile_dir_name,
+        qso_is_sat, reconcile_gallery, rect_lands_on_work_area, redact_for_backup, resolve_bird,
+        resolve_birds, roster_local_spots, roster_spot_age_secs, run_sat_track, sanitize_profile,
+        sat_excluded, set_operator_qth, spotter_evidence_rank, spotter_evidence_rank_at,
         tle_absorb_foreign, tle_act_gate, tle_extend_aliases, tle_merge_imports,
         tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path,
-        tle_set_currency, view_passes, write_json_atomic, AssistanceEvent,
+        tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in, AssistanceEvent,
         AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SharedEngine,
-        SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
-        TleFlightGuard, TleSnapshot
+        TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS, TLE_FETCHING,
+        TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -19308,7 +19673,10 @@ mod tests {
 
         let out = reconcile_gallery(
             &dir,
-            vec![entry(&gone, "2026-07-16T15:30:00Z"), entry(&there, "2026-07-17T15:30:00Z")],
+            vec![
+                entry(&gone, "2026-07-16T15:30:00Z"),
+                entry(&there, "2026-07-17T15:30:00Z"),
+            ],
         );
         assert_eq!(out.len(), 1, "the missing file's entry is dropped");
         assert_eq!(out[0].path, there.to_string_lossy());
@@ -19330,7 +19698,11 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), b"not an image").unwrap();
 
         let out = reconcile_gallery(&dir, vec![]);
-        assert_eq!(out.len(), 1, "only the .bmp is adopted, not every file in the folder");
+        assert_eq!(
+            out.len(),
+            1,
+            "only the .bmp is adopted, not every file in the folder"
+        );
         assert_eq!(out[0].path, orphan.to_string_lossy());
         assert_eq!(out[0].mode, "pd120");
         assert_eq!(out[0].finished_utc, "2026-07-17T15:30:00Z");
@@ -19342,7 +19714,10 @@ mod tests {
     /// Adoption must not invent a date from a filename that is not the decoder's shape.
     #[test]
     fn a_stray_bmp_gets_no_fabricated_timestamp() {
-        assert_eq!(iso_from_stamp("20260717T153000Z").as_deref(), Some("2026-07-17T15:30:00Z"));
+        assert_eq!(
+            iso_from_stamp("20260717T153000Z").as_deref(),
+            Some("2026-07-17T15:30:00Z")
+        );
         assert_eq!(iso_from_stamp("holiday-photo"), None);
         assert_eq!(iso_from_stamp("2026071xT153000Z"), None); // non-digit
         assert_eq!(iso_from_stamp("20260717X153000Z"), None); // wrong separator
@@ -19361,12 +19736,18 @@ mod tests {
         std::fs::write(&a, b"BM").unwrap();
         std::fs::write(&b, b"BM").unwrap();
 
-        let given = vec![entry(&b, "2026-07-17T10:00:00Z"), entry(&a, "2026-07-16T10:00:00Z")];
+        let given = vec![
+            entry(&b, "2026-07-17T10:00:00Z"),
+            entry(&a, "2026-07-16T10:00:00Z"),
+        ];
         let out = reconcile_gallery(&dir, given);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].path, a.to_string_lossy(), "oldest first");
         assert_eq!(out[1].path, b.to_string_lossy());
-        assert_eq!(out[0].freq_mhz, 14.23, "a known entry keeps its real metadata");
+        assert_eq!(
+            out[0].freq_mhz, 14.23,
+            "a known entry keeps its real metadata"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -19404,14 +19785,21 @@ mod tests {
         let dir = scratch("rec-ok");
         let _ = std::fs::remove_dir_all(&dir);
 
-        let path = write_qso_wav_in(&dir, "W1AW/P", &[0i16, 100, -100]).expect("write must succeed");
-        assert!(path.exists(), "the file the call returned must actually be there");
+        let path =
+            write_qso_wav_in(&dir, "W1AW/P", &[0i16, 100, -100]).expect("write must succeed");
+        assert!(
+            path.exists(),
+            "the file the call returned must actually be there"
+        );
         assert_eq!(path.parent(), Some(dir.as_path()));
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         // The slash is stripped rather than becoming a directory separator.
         assert!(name.starts_with("qso-W1AWP-"), "unexpected name: {name}");
         assert!(name.ends_with(".wav"));
-        assert!(std::fs::metadata(&path).unwrap().len() > 0, "an empty file is not a recording");
+        assert!(
+            std::fs::metadata(&path).unwrap().len() > 0,
+            "an empty file is not a recording"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -19605,7 +19993,11 @@ mod tests {
         // is one minute old, inside the 2-minute window, and carries its grid + state
         // hint through.
         let fresh = own_decode_heards(&[st(ft8_now - 4)], ft8_now, 15.0, "6m", "FT8", 120);
-        assert_eq!(fresh.len(), 1, "a one-minute-old own decode is the board's job");
+        assert_eq!(
+            fresh.len(),
+            1,
+            "a one-minute-old own decode is the board's job"
+        );
         assert_eq!(fresh[0].call, "VE3ABC");
         assert_eq!(fresh[0].band, "6m");
         assert_eq!(fresh[0].mode, "FT8");
@@ -19730,7 +20122,7 @@ mod tests {
         const HF: f64 = 14025.0; // 20 m CW
         const SIX: f64 = 50090.0; // 6 m CW
         const TWO: f64 = 144_050.0; // 2 m CW
-        // 78 km from EN52 — inside every VHF near radius, so it counts on both.
+                                    // 78 km from EN52 — inside every VHF near radius, so it counts on both.
         assert_eq!(spotter_evidence_rank_at("K9IMM", SIX, "KD9TAW", en52), 2);
         assert_eq!(spotter_evidence_rank_at("K9IMM", TWO, "KD9TAW", en52), 2);
         // 626 km from EN52 (EN91EF). Inside 2 m's 800 km radius, outside 6 m's 250 km:
@@ -20031,7 +20423,10 @@ mod tests {
         let path = scratch("legacy-tles.json");
         std::fs::write(&path, format!("[{TLE_JSON_BIRD}]")).unwrap();
         let s = load_tle_snapshot_from(&path).expect("legacy array must load");
-        assert_eq!(s.fetched_at, 0, "unknown provenance must read as due, never fresh");
+        assert_eq!(
+            s.fetched_at, 0,
+            "unknown provenance must read as due, never fresh"
+        );
         assert_eq!(s.source, "legacy");
         assert_eq!(s.elements.len(), 1);
         assert!(s.elements[0].line1.starts_with("1 25544U"));
@@ -20179,7 +20574,11 @@ mod tests {
     fn a_contact_logged_during_a_pass_earns_satellite_credit() {
         // SO-50: a V/U bird, so the operator's dial — and the record's band —
         // is the 70 cm downlink.
-        let mut e = engine_holding("SAUDISAT 1C (SO-50)|FM Voice Repeater", 145_850_000, 436_795_000);
+        let mut e = engine_holding(
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater",
+            145_850_000,
+            436_795_000,
+        );
         e.log_qso(pass_qso("W1AW", "FN31", "70cm", 436.795));
 
         let logged = &e.get_log()[0];
@@ -20334,7 +20733,8 @@ mod tests {
 
             // The real fold, over a real logged contact, through the real
             // engine — as the Satellites strip builds it, mid-pass, untagged.
-            let mut e = engine_holding("FOX-1B (AO-91)|FM Voice Repeater", 435_250_000, 145_960_000);
+            let mut e =
+                engine_holding("FOX-1B (AO-91)|FM Voice Repeater", 435_250_000, 145_960_000);
             e.log_qso(pass_qso("W1AW", "FN31", band, mhz));
             let logged = &e.get_log()[0];
             let s = awards_fold_over(logged);
@@ -20350,7 +20750,11 @@ mod tests {
                 on_bird.then_some("SAT"),
                 "{band}: the stamp must fire exactly on the downlink"
             );
-            assert_eq!(s.vucc.sat_worked, usize::from(on_bird), "{band}: sat bucket");
+            assert_eq!(
+                s.vucc.sat_worked,
+                usize::from(on_bird),
+                "{band}: sat bucket"
+            );
             assert_eq!(
                 s.vucc.worked,
                 usize::from(!on_bird),
@@ -20441,8 +20845,14 @@ mod tests {
         )));
         let con = super::SatDopplerConsent::read(&e);
         assert!(con.downlink, "the one dial IS driven (downlink leg)");
-        assert!(!con.uplink, "no split exists to drive — the wire must not claim one");
-        assert_eq!(con.offer, "none", "nothing to confirm on a one-channel bird");
+        assert!(
+            !con.uplink,
+            "no split exists to drive — the wire must not claim one"
+        );
+        assert_eq!(
+            con.offer, "none",
+            "nothing to confirm on a one-channel bird"
+        );
 
         // Same bird, mapping NOT confirmed: still no offer — confirming here
         // would change nothing this pass, and the promise in the offer copy
@@ -20889,7 +21299,10 @@ mod tests {
             aliases: Default::default(),
         };
         let json = serde_json::to_string(&snap).unwrap();
-        assert!(json.contains("\"fetchedAt\""), "wire keys are camelCase: {json}");
+        assert!(
+            json.contains("\"fetchedAt\""),
+            "wire keys are camelCase: {json}"
+        );
         assert!(write_json_atomic(&path, &json));
         let back = load_tle_snapshot_from(&path).expect("snapshot must load");
         assert_eq!(back.fetched_at, snap.fetched_at);
@@ -20920,10 +21333,16 @@ mod tests {
         let json = serde_json::to_string(&snap).unwrap();
         // A crash mid-write under a NON-atomic writer: half the JSON.
         std::fs::write(&path, &json[..json.len() / 2]).unwrap();
-        assert!(load_tle_snapshot_from(&path).is_none(), "torn file must not load");
+        assert!(
+            load_tle_snapshot_from(&path).is_none(),
+            "torn file must not load"
+        );
         // The atomic writer replaces it wholesale and leaves no temp behind.
         assert!(write_json_atomic(&path, &json));
-        assert_eq!(load_tle_snapshot_from(&path).map(|s| s.fetched_at), Some(42));
+        assert_eq!(
+            load_tle_snapshot_from(&path).map(|s| s.fetched_at),
+            Some(42)
+        );
         let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         assert!(!tmp.exists(), "the rename must consume the temp file");
         let _ = std::fs::remove_file(&path);
@@ -20968,7 +21387,11 @@ mod tests {
         // So must ONE source changing while the unassisted flag stays put (e.g. the operator
         // turning the AI decoder off by hand) — otherwise the record would claim the decoder
         // was running when it was not.
-        assert!(assistance_posture_changed(&log, false, &posture(false, true, true)));
+        assert!(assistance_posture_changed(
+            &log,
+            false,
+            &posture(false, true, true)
+        ));
     }
 
     /// THE SELF-UPDATE SAFETY GATE. Installing restarts the app, and this app keys a
@@ -21017,7 +21440,7 @@ mod tests {
         assert_eq!(sanitize_profile("radio-a").as_deref(), Some("radio-a"));
         assert_eq!(sanitize_profile("K9_2m").as_deref(), Some("K9_2m"));
         assert_eq!(sanitize_profile("  hf  ").as_deref(), Some("hf")); // trimmed
-        // Anything that could escape the config root or split it into junk → None (default).
+                                                                       // Anything that could escape the config root or split it into junk → None (default).
         assert_eq!(sanitize_profile(""), None);
         assert_eq!(sanitize_profile("../evil"), None); // path escape
         assert_eq!(sanitize_profile("a/b"), None);
@@ -21110,7 +21533,10 @@ mod tests {
             Ok(None)
         ));
         // No elements at all → Ok(None) (the no-TLE path get_iss_pass short-circuits).
-        assert!(matches!(iss_pass_from_tles(&[], EN52, ISS_EPOCH_UNIX), Ok(None)));
+        assert!(matches!(
+            iss_pass_from_tles(&[], EN52, ISS_EPOCH_UNIX),
+            Ok(None)
+        ));
     }
 
     #[test]
@@ -21126,7 +21552,10 @@ mod tests {
             .expect("fresh elements pass the gate")
             .expect("ISS pass found mid-pass");
         assert_eq!(got.name, ISS_NAME);
-        assert!(got.los_unix > now, "the reported pass is still above the horizon");
+        assert!(
+            got.los_unix > now,
+            "the reported pass is still above the horizon"
+        );
         assert!(got.status.is_none(), "geometry only — no status stamped");
     }
 
@@ -21156,7 +21585,10 @@ mod tests {
         assert!((age - 15.0).abs() < 0.01, "age {age}");
         assert!((epoch - ISS_EPOCH_UNIX).abs() <= 1, "epoch {epoch}");
         let err = tle_act_gate(&iss_tle(), ISS_EPOCH_UNIX + 40 * day).unwrap_err();
-        assert!(err.contains("40 days old") && err.contains(ISS_NAME), "{err}");
+        assert!(
+            err.contains("40 days old") && err.contains(ISS_NAME),
+            "{err}"
+        );
     }
 
     // --- the SET-WIDE readout (field report 2026-08-01) -----------------------
@@ -21179,7 +21611,11 @@ mod tests {
             .iter()
             .filter_map(|t| propagation::sat::tle_age_days(&t.line1, SEED_NOW))
             .collect();
-        assert!(raw.len() >= 300, "the bundle must be present: {}", raw.len());
+        assert!(
+            raw.len() >= 300,
+            "the bundle must be present: {}",
+            raw.len()
+        );
         let newest = raw.iter().copied().fold(f64::INFINITY, f64::min);
         let ages: Vec<Option<f64>> = raw.iter().map(|a| Some(a - newest)).collect();
 
@@ -21198,7 +21634,11 @@ mod tests {
              {oldest_admitted:.1} d) — this test no longer reproduces the bug"
         );
 
-        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        let c = tle_set_currency(
+            ages.iter().copied(),
+            TLE_STALE_LINE_DAYS,
+            TLE_ACT_STALE_DAYS,
+        );
         assert!(c.usable >= 300, "usable birds: {}", c.usable);
         assert!(
             c.held_back > 0,
@@ -21229,7 +21669,11 @@ mod tests {
                 .map(|i| Some(0.2 + f64::from(i) * 0.001))
                 .chain((0..12).map(|i| Some(tail_top - f64::from(i) * 0.5)))
                 .collect();
-            let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+            let c = tle_set_currency(
+                ages.iter().copied(),
+                TLE_STALE_LINE_DAYS,
+                TLE_ACT_STALE_DAYS,
+            );
             let headline = c.median_age_days.expect("usable birds exist");
             assert!(
                 headline < 1.0,
@@ -21249,12 +21693,20 @@ mod tests {
             .map(|i| Some(16.0 + f64::from(i) * 0.7))
             .chain((0..4).map(|_| Some(0.5)))
             .collect();
-        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        let c = tle_set_currency(
+            ages.iter().copied(),
+            TLE_STALE_LINE_DAYS,
+            TLE_ACT_STALE_DAYS,
+        );
         let headline = c.median_age_days.expect("usable birds exist");
         assert!(headline > 14.0, "a rotting set must warn: {headline:.1} d");
 
         let rotten: Vec<Option<f64>> = (0..20).map(|i| Some(31.0 + f64::from(i))).collect();
-        let c = tle_set_currency(rotten.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        let c = tle_set_currency(
+            rotten.iter().copied(),
+            TLE_STALE_LINE_DAYS,
+            TLE_ACT_STALE_DAYS,
+        );
         assert_eq!((c.usable, c.aging, c.held_back), (0, 0, 20));
         assert!(
             c.median_age_days.is_none(),
@@ -21268,11 +21720,19 @@ mod tests {
     #[test]
     fn unparseable_epochs_are_in_no_band_at_all() {
         let ages = [Some(0.4), Some(1.2), None, Some(44.0), None];
-        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        let c = tle_set_currency(
+            ages.iter().copied(),
+            TLE_STALE_LINE_DAYS,
+            TLE_ACT_STALE_DAYS,
+        );
         assert_eq!(c.usable, 2);
         assert_eq!(c.held_back, 1, "count - usable would say 3");
         assert_eq!(c.aging, 0);
-        assert_eq!(c.median_age_days, Some(1.2), "upper median, as validate_tles picks");
+        assert_eq!(
+            c.median_age_days,
+            Some(1.2),
+            "upper median, as validate_tles picks"
+        );
     }
 
     /// THE RESIDUAL FALSE CALM the median alone still allows: half the catalog
@@ -21290,7 +21750,11 @@ mod tests {
             .chain((0..49).map(|i| Some(29.0 - f64::from(i) * 0.01)))
             .chain((0..30).map(|i| Some(31.0 + f64::from(i))))
             .collect();
-        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        let c = tle_set_currency(
+            ages.iter().copied(),
+            TLE_STALE_LINE_DAYS,
+            TLE_ACT_STALE_DAYS,
+        );
         // ONE bucket per bird, and the bands are readable as a share:
         // `aging` sits INSIDE `usable` (those birds are still drawn),
         // `held_back` is disjoint from it (those sit out) — so
@@ -21310,7 +21774,11 @@ mod tests {
     #[test]
     fn the_band_edges_match_the_per_bird_gates() {
         let ages = [Some(14.0), Some(14.01), Some(30.0), Some(30.01)];
-        let c = tle_set_currency(ages.iter().copied(), TLE_STALE_LINE_DAYS, TLE_ACT_STALE_DAYS);
+        let c = tle_set_currency(
+            ages.iter().copied(),
+            TLE_STALE_LINE_DAYS,
+            TLE_ACT_STALE_DAYS,
+        );
         assert_eq!((c.usable, c.aging, c.held_back), (3, 2, 1));
     }
 
@@ -21494,7 +21962,11 @@ mod tests {
             .iter()
             .find(|t| propagation::sat::norad_id(&t.line1) == Some(99_999))
             .unwrap();
-        assert!(n99.line1.contains("26180."), "newest epoch kept: {}", n99.line1);
+        assert!(
+            n99.line1.contains("26180."),
+            "newest epoch kept: {}",
+            n99.line1
+        );
         // …and an OLDER re-import of 11111 is ignored.
         tle_merge_imports(&mut snap, vec![bird(11_111, 26, 120.0)], now);
         let n11 = snap
@@ -21502,7 +21974,11 @@ mod tests {
             .iter()
             .find(|t| propagation::sat::norad_id(&t.line1) == Some(11_111))
             .unwrap();
-        assert!(n11.line1.contains("26200."), "older import ignored: {}", n11.line1);
+        assert!(
+            n11.line1.contains("26200."),
+            "older import ignored: {}",
+            n11.line1
+        );
         // The MERGED view: 3 birds (group 2 + the new launch), with the
         // imported 11111 (day 200) beating the group's day-100 copy.
         let merged = tle_merged_elements(&snap);
@@ -21511,7 +21987,11 @@ mod tests {
             .iter()
             .find(|t| propagation::sat::norad_id(&t.line1) == Some(11_111))
             .unwrap();
-        assert!(m11.line1.contains("26200."), "import beats older group: {}", m11.line1);
+        assert!(
+            m11.line1.contains("26200."),
+            "import beats older group: {}",
+            m11.line1
+        );
         // A group refresh catching up PAST the import (day 300) wins back —
         // and the import list itself persisted untouched across it.
         snap.elements = vec![bird(11_111, 26, 300.0), iss_tle()];
@@ -21520,7 +22000,11 @@ mod tests {
             .iter()
             .find(|t| propagation::sat::norad_id(&t.line1) == Some(11_111))
             .unwrap();
-        assert!(m11.line1.contains("26300."), "fresher group wins: {}", m11.line1);
+        assert!(
+            m11.line1.contains("26300."),
+            "fresher group wins: {}",
+            m11.line1
+        );
         assert_eq!(snap.imported.len(), 2, "imports persist across refreshes");
     }
 
@@ -21543,7 +22027,10 @@ mod tests {
             bird(55_555, 26, 100.0),
         ];
         tle_record_aliases(&mut a);
-        assert!(write_json_atomic(&path, &serde_json::to_string(&a).unwrap()));
+        assert!(write_json_atomic(
+            &path,
+            &serde_json::to_string(&a).unwrap()
+        ));
         // Instance B's in-memory snapshot: a fresher group refresh, no
         // knowledge of A's import — plus its OWN fresher import of 55555.
         let mut b = snap_with(vec![bird(11_111, 26, 200.0)]);
@@ -21570,7 +22057,10 @@ mod tests {
             n55.line1
         );
         // …and elements stayed OURS — absorb never merges the group.
-        assert!(b.elements[0].line1.contains("26200."), "elements are last-writer-wins");
+        assert!(
+            b.elements[0].line1.contains("26200."),
+            "elements are last-writer-wins"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -21583,8 +22073,14 @@ mod tests {
         let now = 1_785_542_400i64;
         let path = scratch("shared-tles-catalog.json");
         let mut a = snap_with(vec![bird(11_111, 26, 100.0)]);
-        a.catalog = vec![catalog_entry(11_111, "alive"), catalog_entry(25_544, "alive")];
-        assert!(write_json_atomic(&path, &serde_json::to_string(&a).unwrap()));
+        a.catalog = vec![
+            catalog_entry(11_111, "alive"),
+            catalog_entry(25_544, "alive"),
+        ];
+        assert!(write_json_atomic(
+            &path,
+            &serde_json::to_string(&a).unwrap()
+        ));
 
         let mut b = snap_with(vec![bird(11_111, 26, 200.0)]); // catalog-less
         let disk = load_tle_snapshot_from(&path).expect("A's write must load");
@@ -21628,7 +22124,10 @@ mod tests {
         // And a catalog-bearing snapshot round-trips through the same writer.
         let mut with = snap_with(vec![bird(25_544, 26, 200.0)]);
         with.catalog = vec![catalog_entry(25_544, "alive")];
-        assert!(write_json_atomic(&path, &serde_json::to_string(&with).unwrap()));
+        assert!(write_json_atomic(
+            &path,
+            &serde_json::to_string(&with).unwrap()
+        ));
         let loaded = load_tle_snapshot_from(&path).expect("round-trip");
         assert_eq!(loaded.catalog, with.catalog);
         let _ = std::fs::remove_file(&path);
@@ -21753,7 +22252,10 @@ mod tests {
         assert_eq!(snap.elements.len(), n_el);
         assert_eq!(snap.catalog.len(), n_cat);
         assert_eq!(snap.count, n_el);
-        assert!(snap.etag.is_none(), "there is no ETag for a file we shipped");
+        assert!(
+            snap.etag.is_none(),
+            "there is no ETag for a file we shipped"
+        );
         assert!(snap.imported.is_empty());
         // …and the refresh decision agrees: no stamp = no cache age = fetch
         // at the first opportunity, and the ratchet treats a bundled set as
@@ -21807,7 +22309,10 @@ mod tests {
         // seed must never restamp a real fetch.
         assert_eq!(snap.fetched_at, was_fetched, "the seed restamped fetchedAt");
         assert_eq!(snap.source, was_source, "the seed rewrote the provenance");
-        assert_eq!(snap.etag, was_etag, "the seed cleared the conditional-GET ETag");
+        assert_eq!(
+            snap.etag, was_etag,
+            "the seed cleared the conditional-GET ETag"
+        );
         assert_eq!(snap.generated, was_generated);
     }
 
@@ -21881,7 +22386,7 @@ mod tests {
     #[test]
     fn a_bird_that_stops_being_workable_keeps_a_row_that_says_why() {
         let now = 1_785_542_400i64; // 2026-08-01T00:00:00Z (day 213)
-        // Two held element sets: one drawn on the map, one aged past 30 d.
+                                    // Two held element sets: one drawn on the map, one aged past 30 d.
         let held = vec![bird(25_544, 26, 213.0), bird(43_017, 26, 150.0)];
         let drawn: std::collections::HashSet<u32> = [25_544].into_iter().collect();
         let mut catalog = std::collections::HashMap::new();
@@ -21889,8 +22394,8 @@ mod tests {
         catalog.insert(43_017, catalog_entry(43_017, "alive"));
         // …and three the mirror LISTS but publishes no elements for.
         for (norad, status, amateur) in [
-            (53_106, "dead", true),      // silent orbit, transmitter record lags
-            (40_967, "alive", false),    // in orbit, every transmitter gone quiet
+            (53_106, "dead", true),       // silent orbit, transmitter record lags
+            (40_967, "alive", false),     // in orbit, every transmitter gone quiet
             (50_988, "re-entered", true), // gone
         ] {
             let mut c = catalog_entry(norad, status);
@@ -21900,9 +22405,20 @@ mod tests {
         }
 
         let out = sat_excluded(&held, &drawn, &catalog, now);
-        let row = |n: u32| out.iter().find(|e| e.norad == n).expect("a row for every one");
-        assert_eq!(out.len(), 4, "everything unplaceable is reported, nothing else");
-        assert!(!out.iter().any(|e| e.norad == 25_544), "a drawn bird is not excluded");
+        let row = |n: u32| {
+            out.iter()
+                .find(|e| e.norad == n)
+                .expect("a row for every one")
+        };
+        assert_eq!(
+            out.len(),
+            4,
+            "everything unplaceable is reported, nothing else"
+        );
+        assert!(
+            !out.iter().any(|e| e.norad == 25_544),
+            "a drawn bird is not excluded"
+        );
         assert_eq!(row(43_017).reason, "staleElements");
         assert_eq!(row(53_106).reason, "noElements");
         assert_eq!(row(53_106).status.as_deref(), Some("dead"));
@@ -21910,7 +22426,11 @@ mod tests {
         // THE regression: an alive-but-silent bird is exactly the case the
         // old `if c.amateur` filter deleted.
         assert_eq!(row(40_967).status.as_deref(), Some("alive"));
-        assert_eq!(row(40_967).amateur, Some(false), "and it says WHY it is gone");
+        assert_eq!(
+            row(40_967).amateur,
+            Some(false),
+            "and it says WHY it is gone"
+        );
         // The catalog's answer rides to the UI; a bird the catalog does not
         // know stays silent about it (absent = never asked, never "no").
         let json = serde_json::to_value(row(40_967)).unwrap();
@@ -21918,7 +22438,10 @@ mod tests {
         let unknown = sat_excluded(&held, &drawn, &Default::default(), now);
         assert_eq!(unknown.len(), 1);
         assert_eq!(unknown[0].amateur, None);
-        assert!(serde_json::to_value(&unknown[0]).unwrap().get("amateur").is_none());
+        assert!(serde_json::to_value(&unknown[0])
+            .unwrap()
+            .get("amateur")
+            .is_none());
     }
 
     /// The CATALOG marks a bird's row carries. `status` alone could not
@@ -22325,10 +22848,16 @@ mod tests {
             s.dxcc_credited, s.dxcc_confirmed,
             "CREDIT_GRANTED rode in on the same rows (the 23-of-248 gap)"
         );
-        assert_eq!(s.slots_confirmed, s.slots_worked, "Challenge entity×band slots");
+        assert_eq!(
+            s.slots_confirmed, s.slots_worked,
+            "Challenge entity×band slots"
+        );
         assert_eq!(s.ready_to_submit, 0, "confirmed − credited");
         assert_eq!(s.waz_confirmed, s.waz_worked, "WAZ zones");
-        assert_eq!(s.was.confirmed, 2, "WAS — STATE only rides on a matched row");
+        assert_eq!(
+            s.was.confirmed, 2,
+            "WAS — STATE only rides on a matched row"
+        );
         assert_eq!(s.was.worked, 2);
     }
 
@@ -22366,7 +22895,10 @@ mod tests {
     #[test]
     fn the_call_as_typed_is_always_asked_first() {
         let c = callbook_candidates("W1AW/1");
-        assert_eq!(c[0], "W1AW/1", "the operator asked for this call, not for its base");
+        assert_eq!(
+            c[0], "W1AW/1",
+            "the operator asked for this call, not for its base"
+        );
     }
 
     /// An ordinary call must not cost a second network round trip on every miss.
@@ -22388,7 +22920,6 @@ mod tests {
             );
         }
     }
-
 
     /// #28 item 4: a backup is only useful if a restore can tell it apart from any other JSON.
     /// These pin the REFUSALS, because a partial restore of a mangled file is worse than a
@@ -22438,5 +22969,4 @@ mod tests {
              now silently missing a live credential"
         );
     }
-
 }

@@ -41,8 +41,18 @@ const decodeState = {
   name: null as string | null,
 }
 
+/** What the mount-time `getSettings` resolves with. Mutable per test, like `decodeState` —
+ *  the cockpit reads `rigModel` from here to decide whether the CAT-keying caution applies. */
+const settingsState = {
+  macros: { cwProfiles: [] as unknown[], activeCwProfile: 0 },
+  rigModel: 0,
+}
+/** The backend's "CAT CW keying is unproven on this model" list. Empty = rule unread. */
+let unprovenModels: number[] = []
+
 vi.mock('../api', () => ({
-  getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
+  getSettings: vi.fn(async () => settingsState),
+  getCatCwUnprovenRigModels: vi.fn(async () => unprovenModels),
   setSettings: vi.fn(async () => ({})),
   sendCw: vi.fn(async () => {}),
   setCwKeyer: vi.fn(async () => null),
@@ -87,6 +97,8 @@ beforeEach(() => {
   fire = null
   decodeState.sent = []
   decodeState.keyerError = null
+  settingsState.rigModel = 0
+  unprovenModels = []
   globalThis.ResizeObserver = class {
     constructor(cb: () => void) {
       fire = cb
@@ -533,5 +545,85 @@ describe('CwCockpit pane-grid shell', () => {
     act(() => fire!())
     await frame()
     expect(region2.getAttribute('data-cols')).toBe('2')
+  })
+})
+
+/**
+ * ⭐ THE CAT-KEYING CAUTION, ON THE SURFACE WHERE THE FAULT IS ACTUALLY MET.
+ *
+ * Field report 2026-08-28 (Yaesu FTX-1, via KR4FQG): "Try send a cw, never went to tx." The
+ * rig's own Hamlib backend returns `RPRT 0` whether or not it keyed, so Nexus has no second
+ * source of truth and the cockpit's `.cw-keyer-warn` ERROR banner can never light for this
+ * fault. Settings ▸ CW gained a caution first; this is the other half, and it is the half that
+ * matters — the header keyer switch is where an operator changes backend WITHOUT ever opening
+ * Settings, so it is where the silent failure gets hit.
+ *
+ * The rule is the backend's (`rigmodels::cat_cw_unproven_rig_models`), fetched rather than
+ * copied, and the sentence is the SAME catalog string Settings renders. Two sources of truth
+ * for one fact is how the two surfaces would come to disagree about a radio.
+ */
+describe('the cockpit says when CAT keying is unproven on this radio', () => {
+  const caution = () => document.querySelector('.cw-keyer-warn.caution')
+
+  it('warns when the CAT keyer is selected on a flagged model', async () => {
+    settingsState.rigModel = 1051
+    unprovenModels = [1051]
+    await renderCockpit()
+    const el = caution()
+    expect(el, 'no caution on the model the field report names').not.toBeNull()
+    expect(el!.textContent).toMatch(/unproven on this radio/i)
+    // It must ROUTE him, not merely worry him — the keyers that do work, by name.
+    expect(el!.textContent).toMatch(/WinKeyer/i)
+  })
+
+  it('is a NOTICE, not the error banner — the two must not read alike', async () => {
+    // The keyer stays selectable and keeps working if it works. `.settings-warn` versus
+    // `.settings-error` draws this same line one screen away: "this stopped you" and "this is
+    // worth knowing" are different facts and must not look identical.
+    settingsState.rigModel = 1051
+    unprovenModels = [1051]
+    await renderCockpit()
+    expect(caution()!.getAttribute('role')).toBe('status')
+    expect(caution()!.getAttribute('role'), 'a standing notice is not an alert').not.toBe('alert')
+  })
+
+  it('stays silent on a rig whose CAT keyer works — no crying wolf', async () => {
+    settingsState.rigModel = 1042 // FTDX10: the newcat two-command form, proven
+    unprovenModels = [1051]
+    await renderCockpit()
+    expect(caution()).toBeNull()
+  })
+
+  it('stays silent when the operator is keying with something else', async () => {
+    // An FTX-1 owner on a WinKeyer must not be nagged about a backend he is not using.
+    settingsState.rigModel = 1051
+    unprovenModels = [1051]
+    await renderCockpit({ snap: makeSnap({ cwKeyer: 'winkeyer' }) })
+    expect(caution()).toBeNull()
+  })
+
+  it('stays silent when the rule could not be read', async () => {
+    // Built without the radio feature / the command failed. A rule that cannot be read must
+    // never be the reason an operator is warned off a keyer that works for him.
+    settingsState.rigModel = 1051
+    unprovenModels = []
+    await renderCockpit()
+    expect(caution()).toBeNull()
+  })
+
+  it('adds no new shell-child kind — it IS the sanctioned keyer-warn banner', async () => {
+    // The shell's four-child contract (design3 §5 rule 1) admits `.cw-keyer-warn` as CW's one
+    // extra alert kind. The caution reuses that kind rather than inventing a fifth, so the
+    // census test above still covers it with BOTH banners on screen at once.
+    decodeState.keyerError = 'no keying port'
+    settingsState.rigModel = 1051
+    unprovenModels = [1051]
+    await renderCockpit()
+    const shell = document.querySelector('main.layout.single.cw-cockpit')!
+    const warns = Array.from(shell.children).filter((el) => el.matches('.cw-keyer-warn'))
+    expect(warns.length, 'expected the error banner AND the caution, as siblings').toBe(2)
+    expect(warns.filter((el) => el.matches('.caution')).length, 'exactly one is the caution').toBe(1)
+    // The error outranks the standing notice, so it reads first.
+    expect(warns[0].matches('.caution'), 'the caution jumped ahead of a live error').toBe(false)
   })
 })

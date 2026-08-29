@@ -33,7 +33,16 @@ interface Props {
   band?: string
   feedMode?: string
   onSelect: (call: string) => void
-  onCall: (call: string, tier?: Tier | null) => void
+  /** Work a station — the cockpit's shared positional signature, forwarded straight from the
+   * card so nothing in between can drop the grid or the offset it carries (#183). */
+  onCall: (
+    call: string,
+    grid?: string,
+    message?: string,
+    snr?: number,
+    freqHz?: number,
+    tier?: Tier | null,
+  ) => void
   /** Open conversation threads (incl. the "*" band feed) — drives the recents list
    * so a thread stays reachable after its peer drops off the live roster. */
   conversations: Conv[]

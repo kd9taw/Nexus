@@ -1234,10 +1234,12 @@ export function PhoneScope({
     sm == null
       ? undefined
       : sm.zone === 'hot'
-        ? 'var(--danger, #e5484d)'
+        ? 'var(--state-weak)'
         : sm.zone === 'warn'
-          ? 'var(--state-weak, #e0a030)'
-          : 'var(--ok, #2fbf71)'
+          ? // --alert-warning, not --state-weak: the latter is the sheet's RED, so the warn
+            // band painted the same colour as hot (see the note on TxMeters' ZONE_COLOR).
+            'var(--alert-warning)'
+          : 'var(--state-good)'
   return (
     <div className="ph-scope">
       <div

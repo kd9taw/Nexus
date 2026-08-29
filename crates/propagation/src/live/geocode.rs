@@ -9,6 +9,7 @@
 //! that), so we sit far inside the policy. Results require the attribution
 //! "Geocoding © OpenStreetMap contributors" wherever they're shown.
 
+use super::neterr;
 use std::time::Duration;
 
 const UA: &str = "Nexus (radio programming; https://hamradiotools.io; kd9taw@protonmail.com)";
@@ -72,13 +73,7 @@ pub fn parse_nominatim(json: &str) -> Vec<GeoCandidate> {
 }
 
 fn redact(e: reqwest::Error) -> String {
-    if e.is_timeout() {
-        "Geocoding: request timed out — try again shortly".to_string()
-    } else if e.is_connect() {
-        "Geocoding: could not connect — check your network".to_string()
-    } else {
-        "Geocoding: request failed".to_string()
-    }
+    neterr::redact_following_redirects("Geocoding", &e)
 }
 
 #[cfg(test)]

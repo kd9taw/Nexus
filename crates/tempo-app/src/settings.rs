@@ -2904,6 +2904,87 @@ pub fn cw_key_port_conflict(
         })
 }
 
+/// An amplifier configured on a port some OTHER device on this station already owns.
+///
+/// ⭐ SERIAL PORTS ARE EXCLUSIVE-OPEN. The amplifier poller holds `amp_port` for the whole
+/// session the moment it is configured — the same thing `Engine::hold_cat_port` and its
+/// release/ack handshake exist to manage for CAT, and the reason the baud ladder says "our own
+/// live daemon holds the port even when the rig is mute". So an operator who types their CAT
+/// port into the amplifier field does not get an amplifier that fails to answer, they get a
+/// RADIO that fails to connect, and they will report it as a radio bug.
+///
+/// [`serial_port_conflicts`] cannot see this: it filters on `serial_port` alone and never looks
+/// at `amp_port`. This is its amplifier twin, and the exact sibling of [`cw_key_port_conflict`]
+/// — an auxiliary serial device colliding with something else that opens a port.
+///
+/// SOFT, like all three of its siblings in the warning chain: it is not a save-block. It rides
+/// `radio_config_warning` and self-clears the moment the ports differ.
+///
+/// Checked against every port a live station actually opens: each enabled serial radio's CAT
+/// port and its dedicated PTT keying port, the amplifier's own radio's rotator port, and the
+/// three global auxiliary serial devices (`cw_key_port`, `winkeyer_port`, `rtty_fsk_port`).
+pub fn amp_port_conflict(
+    radios: &[RadioProfile],
+    cw_key_port: &str,
+    winkeyer_port: &str,
+    rtty_fsk_port: &str,
+) -> Option<String> {
+    for p in radios
+        .iter()
+        .filter(|p| p.enabled && !p.amp_port.trim().is_empty() && !p.amp_model.trim().is_empty())
+    {
+        let ap = p.amp_port.trim();
+        let same = |other: &str| !other.trim().is_empty() && other.trim().eq_ignore_ascii_case(ap);
+
+        // Its own rotator, which this radio's rotctld opens.
+        if p.rotator_model > 0 && same(&p.rotator_port) {
+            return Some(format!(
+                "{}'s amplifier port {ap} is also its rotator port — a serial port can only be \
+                 open once, so one of the two will fail to connect. Give the amplifier its own \
+                 port.",
+                p.name
+            ));
+        }
+
+        // Any enabled serial radio's CAT port or dedicated keying port — including this one's.
+        for r in radios.iter().filter(|r| r.enabled) {
+            let serial_cat = r.rig_model > 0 && r.rig_conn.eq_ignore_ascii_case("serial");
+            if serial_cat && same(&r.serial_port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {}'s CAT port — a serial port can only be \
+                     open once, so the radio will fail to connect. Give the amplifier its own \
+                     port.",
+                    p.name, r.name
+                ));
+            }
+            if same(&r.ptt_serial_port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {}'s PTT keying port — a serial port can \
+                     only be open once, so the rig will not key. Give the amplifier its own port.",
+                    p.name, r.name
+                ));
+            }
+        }
+
+        // The global auxiliary serial devices.
+        for (port, what) in [
+            (cw_key_port, "the CW keyline"),
+            (winkeyer_port, "the WinKeyer"),
+            (rtty_fsk_port, "the RTTY FSK keyline"),
+        ] {
+            if same(port) {
+                return Some(format!(
+                    "{}'s amplifier port {ap} is also {what}'s port — a serial port can only be \
+                     open once, so one of the two will fail to connect. Give the amplifier its \
+                     own port.",
+                    p.name
+                ));
+            }
+        }
+    }
+    None
+}
+
 /// Q65-60: the EME working period. See [`Settings::q65_period_s`].
 fn default_q65_period_s() -> u16 {
     60
@@ -4122,12 +4203,12 @@ impl Settings {
     /// side, and its callers gate on it before they get here.
     pub(crate) fn rig_mode_on_sideband(&self, lsb: bool) -> String {
         match self.operating_mode {
-            // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be
-            // in USB so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
+            // CW: force CW for the CAT keyer; for the soundcard keyer the rig must be in a
+            // DATA submode so it transmits the keyed audio tone (band-aware: LSB <10 MHz).
             OperatingMode::Cw => match self.cw_keyer {
                 // CAT, WinKeyer, and the serial keyline all key the rig in CW mode (the rig
                 // shapes the envelope); only the soundcard keyer keys an audio tone, so that
-                // one needs the rig in SSB (band-aware sideband).
+                // one needs the rig on the SSB side — as a DATA submode, see its arm below.
                 //
                 // BAND-AWARE CW SIDEBAND (operator 2026-07-24, "40 m sets CW-U, should be
                 // CW-L"): same 10 MHz convention as the sideband rules below — CW-L
@@ -4137,7 +4218,24 @@ impl Settings {
                 CwKeyerBackend::Cat | CwKeyerBackend::WinKeyer | CwKeyerBackend::Serial => {
                     if lsb { "CWR" } else { "CW" }.to_string()
                 }
-                CwKeyerBackend::Soundcard => if lsb { "LSB" } else { "USB" }.to_string(),
+                // SOUNDCARD: a DATA submode, exactly like every other soundcard-audio path
+                // here (Digital, Keyboard, RTTY-AFSK, and SSTV's `PKTFM`) — and for their
+                // reason, which this arm was the only one not to apply: on a normally-wired
+                // rig plain SSB takes TX audio from the MIC JACK, so a keyed tone played into
+                // the USB codec never reaches the modulator and the over radiates ZERO RF.
+                // That is the "keys but no audio" field report (Yaesu FTX-1, 2026-08-28).
+                //
+                // The SIDE is unchanged — the CW convention above still picks it — so this
+                // moves USB→PKTUSB and LSB→PKTLSB and nothing else, and it inherits the
+                // `data_modes_plain_ssb` opt-out that mic-jack interfaces need.
+                //
+                // ⚠️ NEEDS-BENCH (no rig on this box). What is proven here is the MODE WORD
+                // Nexus commands. What is NOT proven is a radio putting RF out in DATA-U
+                // where plain USB put none out — that is one key-down on a real rig with the
+                // power meter watched, and it is the whole point of the change.
+                CwKeyerBackend::Soundcard => {
+                    self.plain_ssb_if_configured(if lsb { "PKTLSB" } else { "PKTUSB" })
+                }
             },
             // Phone: force the correct sideband — the hard convention is LSB below
             // 10 MHz (160/80/40 m), USB at 30 m and up. (AM comes later as an explicit
@@ -4924,10 +5022,77 @@ mod tests {
         assert_eq!(s.rig_mode(), "CW", "20 m CW is CW-U");
         s.dial_mhz = 10.110; // 30 m — at/above the 10 MHz line
         assert_eq!(s.rig_mode(), "CW", "30 m CW is CW-U");
-        // The soundcard keyer keeps its SSB mapping (audio-tone keying).
+        // The soundcard keyer keeps the same SIDE (audio-tone keying) — as the DATA submode
+        // its siblings use, see `the_soundcard_cw_keyer_commands_a_data_submode_…`.
         s.cw_keyer = CwKeyerBackend::Soundcard;
         s.dial_mhz = 7.030;
-        assert_eq!(s.rig_mode(), "LSB");
+        assert_eq!(s.rig_mode(), "PKTLSB");
+    }
+
+    /// ⭐ THE SOUNDCARD CW KEYER WAS THE ONE SOUNDCARD PATH THAT SKIPPED THE DATA SUBMODE
+    /// (field report, Yaesu FTX-1, 2026-08-28: "TX would send, but no audio heard while
+    /// listening for it").
+    ///
+    /// Every other path in this app that transmits SOUNDCARD AUDIO commands a DATA submode —
+    /// Digital/FT8, Keyboard/PSK31, RTTY-AFSK, and an SSTV image on FM — and the reason is
+    /// written out three times in this file and once in the tune path: on a normally-wired rig
+    /// plain SSB takes TX audio from the MIC JACK, so the codec audio never reaches the
+    /// modulator and the over radiates ZERO RF. The CW soundcard keyer commanded plain
+    /// `USB`/`LSB` and so keyed a carrier with nothing on it.
+    ///
+    /// This is a CLASS test, not an FTX-1 test: it pins the CW arm to the same rule as its four
+    /// siblings, including the `data_modes_plain_ssb` mic-jack opt-out, which the arm did not
+    /// consult either.
+    #[test]
+    fn the_soundcard_cw_keyer_commands_a_data_submode_like_every_other_soundcard_path() {
+        let mut s = Settings::default();
+        s.operating_mode = OperatingMode::Cw;
+        s.cw_keyer = CwKeyerBackend::Soundcard;
+
+        // USB-side above 10 MHz, LSB-side below — the CW sideband convention is unchanged;
+        // only the SUBMODE moves, so the audio reaches the modulator instead of the mic jack.
+        s.dial_mhz = 14.050;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "20 m soundcard CW must be the DATA submode — plain USB radiates no RF"
+        );
+        s.dial_mhz = 7.030;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTLSB",
+            "40 m soundcard CW keeps the LSB side AND gains the DATA submode"
+        );
+
+        // THE MIC-JACK OPT-OUT, which the old arm never consulted: an operator whose interface
+        // feeds the mic input gets plain SSB back, exactly like FT8 and PSK31 do for him.
+        s.data_modes_plain_ssb = true;
+        assert_eq!(
+            s.rig_mode(),
+            "LSB",
+            "mic-jack interface: plain SSB, as its siblings"
+        );
+        s.dial_mhz = 14.050;
+        assert_eq!(s.rig_mode(), "USB", "mic-jack interface, USB side");
+        s.data_modes_plain_ssb = false;
+
+        // AND THE OTHER THREE KEYERS ARE UNTOUCHED — they key the rig in CW, and a DATA
+        // submode there would be a different bug. This is the half that keeps the fix narrow.
+        for k in [
+            CwKeyerBackend::Cat,
+            CwKeyerBackend::WinKeyer,
+            CwKeyerBackend::Serial,
+        ] {
+            s.cw_keyer = k;
+            s.dial_mhz = 14.050;
+            assert_eq!(s.rig_mode(), "CW", "{k:?} keys the rig in CW");
+            s.dial_mhz = 7.030;
+            assert_eq!(
+                s.rig_mode(),
+                "CWR",
+                "{k:?} keys the rig in CW-L below 10 MHz"
+            );
+        }
     }
 
     #[test]
@@ -5723,12 +5888,13 @@ mod tests {
         // CW with the CAT keyer: force CW.
         s.operating_mode = OperatingMode::Cw;
         assert_eq!(s.rig_mode(), "CW");
-        // CW with the SOUNDCARD keyer: the rig must be in USB/LSB to send the tone.
+        // CW with the SOUNDCARD keyer: the rig must be on the SSB side to send the tone, and
+        // in a DATA submode so the tone reaches the modulator rather than the mic jack.
         s.cw_keyer = CwKeyerBackend::Soundcard;
         s.dial_mhz = 14.050;
-        assert_eq!(s.rig_mode(), "USB");
+        assert_eq!(s.rig_mode(), "PKTUSB");
         s.dial_mhz = 7.030;
-        assert_eq!(s.rig_mode(), "LSB");
+        assert_eq!(s.rig_mode(), "PKTLSB");
         s.cw_keyer = CwKeyerBackend::Cat;
 
         // Phone: band-aware sideband — LSB below 10 MHz, USB at/above.
@@ -6819,6 +6985,81 @@ mod tests {
         // Network-CAT radio owns no COM port, so no collision even on a matching string.
         let net = [rig("Flex", "COM3", "network", 2036, true)];
         assert!(cw_key_port_conflict(CwKeyerBackend::Serial, "COM3", &net).is_none());
+    }
+
+    /// ⭐ SERIAL PORTS ARE EXCLUSIVE-OPEN, and the amplifier poller takes a hold on `amp_port`
+    /// the moment it is configured. An operator who types their CAT port into the amplifier
+    /// field gets a CAT failure — a dead radio — and will report it as a radio bug, because
+    /// nothing on screen connects the two. `serial_port_conflicts` cannot see this: it filters
+    /// on `serial_port` alone and never looks at `amp_port`.
+    #[test]
+    fn amp_port_conflict_flags_an_amplifier_sharing_a_port_with_the_radio() {
+        let rig = |name: &str, port: &str, amp: &str| RadioProfile {
+            name: name.into(),
+            serial_port: port.into(),
+            rig_conn: "serial".into(),
+            rig_model: 1042,
+            amp_model: "spe".into(),
+            amp_port: amp.into(),
+            enabled: true,
+            ..Default::default()
+        };
+
+        // The amplifier on this radio's OWN CAT port, case-insensitively.
+        let radios = [rig("FTDX10", "COM3", "com3")];
+        let msg = amp_port_conflict(&radios, "", "", "").expect("conflict");
+        assert!(msg.contains("FTDX10"), "the message names the radio: {msg}");
+        assert!(msg.to_lowercase().contains("com3"), "and the port: {msg}");
+
+        // CONTROL, and it must NOT trip: a separate port for the amplifier is the normal
+        // station and must stay silent, or the warning lane cries wolf for everyone.
+        assert!(
+            amp_port_conflict(&[rig("FTDX10", "COM3", "COM7")], "", "", "").is_none(),
+            "an amplifier on its own port is the ordinary case"
+        );
+
+        // The OTHER radio's CAT port — an SO2R station's amplifier pointed at radio 2.
+        let so2r = [rig("FTDX10", "COM3", "COM4"), rig("IC-7300", "COM4", "")];
+        assert!(amp_port_conflict(&so2r, "", "", "").is_some());
+
+        // Its own rotator's port.
+        let mut rot = rig("FTDX10", "COM3", "COM8");
+        rot.rotator_model = 401;
+        rot.rotator_port = "COM8".into();
+        assert!(amp_port_conflict(&[rot], "", "", "").is_some());
+
+        // The global auxiliary serial devices, one at a time.
+        let aux = [rig("FTDX10", "COM3", "COM9")];
+        assert!(
+            amp_port_conflict(&aux, "COM9", "", "").is_some(),
+            "CW keyline"
+        );
+        assert!(
+            amp_port_conflict(&aux, "", "COM9", "").is_some(),
+            "WinKeyer"
+        );
+        assert!(
+            amp_port_conflict(&aux, "", "", "COM9").is_some(),
+            "RTTY FSK"
+        );
+
+        // No amplifier configured — nothing to collide, whatever the ports say.
+        let none = [rig("FTDX10", "COM3", "")];
+        assert!(amp_port_conflict(&none, "COM3", "", "").is_none());
+
+        // A network-CAT radio owns no COM port, so a matching string is not a collision.
+        let mut net = rig("Flex", "COM3", "COM3");
+        net.rig_conn = "network".into();
+        assert!(
+            amp_port_conflict(&[net], "", "", "").is_none(),
+            "the radio never opens COM3, so the amplifier may have it"
+        );
+
+        // A DISABLED radio's ports are not held.
+        let mut off = rig("FTDX10", "COM3", "");
+        off.enabled = false;
+        let live = rig("IC-7300", "COM7", "COM3");
+        assert!(amp_port_conflict(&[off, live], "", "", "").is_none());
     }
 
     #[test]

@@ -1355,6 +1355,19 @@ export async function getAudioDevices(): Promise<AudioDevices> {
   return invoke<AudioDevices>('get_audio_devices')
 }
 
+/** What the OS can say about this display's physical density — the input to the first-launch
+ *  UI-scale seed. `physicalDpi` is null wherever the platform already sizes CSS pixels
+ *  correctly (Windows, macOS) or the panel reports no physical size; that is a "change
+ *  nothing" answer, not a failure. See `display_metrics` in src-tauri and `dpiSeedCap`. */
+export interface DisplayMetrics {
+  physicalDpi: number | null
+  scaleFactor: number
+}
+
+export async function getDisplayMetrics(): Promise<DisplayMetrics> {
+  return invoke<DisplayMetrics>('display_metrics')
+}
+
 /**
  * Enable / disable transmit (the Monitor toggle). Enabling also clears a tripped
  * TX watchdog. Returns the fresh snapshot.
@@ -2126,6 +2139,32 @@ export interface SerialPortInfo {
   name: string
   /** USB product string, e.g. "USB-Enhanced-SERIAL-B CH342" ("" for non-USB ports). */
   label: string
+  /**
+   * Which interface of a multi-interface bridge this is. A CP2105 is DUAL and only interface 0
+   * carries CAT on the rigs this targets; interface 1 answers nothing and looks exactly like a
+   * dead radio. `undefined`/`null` means UNKNOWN (one interface, or no topology source) — never
+   * read it as 0.
+   */
+  interfaceIndex?: number | null
+  /**
+   * How many serial interfaces this USB device exposes in total.
+   *
+   * ⚠️ `interfaceIndex` is not usable without this. Plenty of single-interface devices number
+   * their one interface something other than 0 — an LG monitor's control port enumerates as
+   * interface 2 — so "index > 0" alone would tell an operator their only port is the wrong one.
+   * The advice only means something when there IS another port to have picked.
+   */
+  siblingPorts?: number | null
+  /**
+   * A sound card on the same physical USB device — i.e. inside the same radio. `null` for a plain
+   * serial adapter, which is correct, and `undefined` wherever topology is unavailable; both mean
+   * "nothing proven", so nothing may be refused on it.
+   *
+   * ⚠️ Weaker than `siblingPorts`: a rig's CAT bridge and its codec are separate USB devices
+   * behind the rig's own internal hub, so they can only be related by their PARENT — and two
+   * unrelated things in one external hub share a parent too. Warning-only for that reason.
+   */
+  pairedAudio?: string | null
 }
 
 /** Serial ports with a descriptive USB-product label (to tell dual-serial rigs apart). */
@@ -2160,6 +2199,16 @@ export async function getAllRigModels(): Promise<[number, string][]> {
  *  are in fact correct. An empty array means the rule could not be read. */
 export async function getPortlessRigModels(): Promise<number[]> {
   return invoke<number[]>('get_portless_rig_models')
+}
+
+/** Models whose CAT CW keyer is UNPROVEN and cannot report its own failure (today: the Yaesu
+ *  FTX-1). Drives a caution on the CW settings page — never a block, the keyer stays selectable.
+ *  The rule lives in Rust (`rigmodels::cat_cw_unproven_rig_models`) and is fetched rather than
+ *  duplicated here: membership changes as backends are fixed upstream, and a stale copy would
+ *  keep warning about a radio that had started working. An empty array means the rule could not
+ *  be read, and the caution is simply not shown. */
+export async function getCatCwUnprovenRigModels(): Promise<number[]> {
+  return invoke<number[]>('get_cat_cw_unproven_rig_models')
 }
 
 /** Zero-config: scan connected USB radios → suggested model + port + paired audio. */

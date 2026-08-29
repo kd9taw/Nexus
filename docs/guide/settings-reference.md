@@ -302,6 +302,46 @@ auto-track.
   elevation past 90°. Off by default: **many rotators cannot mechanically go past
   90° elevation.** Check your controller first.
 
+### Amplifier
+
+Reads a linear's own status — power out, SWR, temperature, supply volts and amps,
+and any alarm it is raising — and shows it in the **Amplifier** pane in Connect.
+Nothing here changes how the radio transmits.
+
+**Nexus only ever READS the amplifier.** There is no standby, operate, reset or
+tune button, and none is planned. Two reasons, and both are about a kilowatt: SPE's
+control protocol is front-panel *keystrokes* — relative steps and toggles whose
+meaning depends on a state Nexus learns a poll late, so every write is a guess —
+and putting an amplifier in standby is not a way to stop a transmission anyway,
+because the exciter keeps keying and the drive passes straight through.
+
+- **Amplifier** — the family: SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, or Elecraft
+  KPA500 / KPA1500. None is the default and the state of most stations; with None
+  picked nothing is opened, nothing is polled and no amplifier surface appears
+  anywhere. All three SPE models share one protocol; the 1.5K-FA reports itself as
+  `15K` and is confirmed working, even though SPE's programming guide for this
+  protocol names only the other two.
+- **Amplifier port** — the serial port the amplifier is on, and it must be **its
+  own**. A serial port can only be open once, so an amplifier pointed at the CAT
+  port takes the port away from the radio and the *radio* is what stops working —
+  Nexus warns in the status lane if you do it.
+  There is no baud setting, deliberately. The SPE adapts itself to whatever speed
+  it is spoken to, and the KPA remembers its own rate, so Nexus finds it by asking
+  at each of the four rates Elecraft documents.
+
+Per radio, like the rotator: an SO2R station with an amplifier on each radio
+configures each one on its own radio, and the pane follows the radio you are on.
+
+> ⚠️ **Not confirmed on real hardware yet.** Both protocols are written from the
+> manufacturers' published specifications and no reading has been checked against
+> an amplifier on a bench. Two things are deliberately left off the screen rather
+> than guessed: the band, because the SPE band numbering is an inference from two
+> published endpoints and your rig already shows you the band; and any °C/°F letter
+> on an SPE temperature, because the SPE protocol does not say which scale the
+> number is in — the amplifier reports whatever its own display is set to, so the
+> pane shows `41°` with no letter. The Elecraft temperature *is* documented as
+> Celsius and is labelled.
+
 ### Transmit limits & sharing
 
 What the rig is allowed to do, and who else may drive it. These used to sit at

@@ -15,6 +15,7 @@
 //! Unlike QRZ, HamQTH lookup is a plain GET both ways — there is no logbook-push
 //! POST, so this module has no `post_form`.
 
+use super::neterr;
 use std::time::Duration;
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
@@ -53,15 +54,7 @@ fn read_body(resp: reqwest::blocking::Response) -> Result<String, String> {
 /// predicates — never `Display`/`to_string`/`source`, any of which can leak the
 /// password- or id-bearing URL.
 fn redact(e: reqwest::Error) -> String {
-    if e.is_timeout() {
-        "HamQTH: request timed out — try again shortly".to_string()
-    } else if e.is_connect() {
-        "HamQTH: could not connect — check your network".to_string()
-    } else if e.is_redirect() {
-        "HamQTH: blocked an unexpected redirect".to_string()
-    } else {
-        "HamQTH: request failed".to_string()
-    }
+    neterr::redact("HamQTH", &e)
 }
 
 #[cfg(test)]

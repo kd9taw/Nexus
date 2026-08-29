@@ -833,6 +833,17 @@ export interface BandChannel {
 export interface AudioDeviceInfo {
   name: string
   label: string
+  /**
+   * Which USB device (parent hub) this card is inside — i.e. WHICH RADIO, when that is
+   * resolvable. Two rigs with the same codec chip both enumerate as "USB Audio Device" and the
+   * `" #2"` that separates them is assigned by enumeration order, so a stored name silently
+   * means the OTHER rig after one is moved to a different socket; this is the fact that does not
+   * move with it.
+   *
+   * ⚠️ Validation and display only, never persisted. `undefined`/`null` wherever topology is
+   * unavailable (every non-macOS platform today), so nothing may be REFUSED on its absence.
+   */
+  usbHub?: number | null
 }
 
 /** Audio input + output devices discovered on the host. */
@@ -1015,6 +1026,62 @@ export interface LinkState {
   quality: number
 }
 
+/** One amplifier reading — mirrors Rust `AmpStatusDto` exactly (this file is hand-written,
+ * so a key that disagrees compiles clean on BOTH sides and renders '—' forever).
+ *
+ * ⚠️ READ-ONLY STATUS. There is no write surface and none is planned: putting an amplifier in
+ * standby is not a way to stop a transmission — the exciter keeps keying and the drive passes
+ * straight through — so nothing built on this may become a stop control.
+ *
+ * Two things are deliberately NOT here and their absence is the honest reading: the band index
+ * (its SPE ladder is an inference, and it tells an operator nothing their rig does not show),
+ * and any unit on the temperature unless `tempCelsius` says so. */
+export interface AmpStatus {
+  /** 'spe' | 'kpa'. */
+  family: string
+  /** SPE's raw model id ('13K', '20K', and whatever a 1.5K-FA reports) — kept raw, because an
+   * id we do not recognise is a newer amplifier, not a bad frame. Empty for the KPA. */
+  model: string
+  /** True once a poll has succeeded; false only after three CONSECUTIVE misses, so one slow
+   * poll does not strobe the indicator. The readings clear on the FIRST miss regardless. */
+  linked: boolean
+  /** Why the link is down: 'portBusy' | 'noAnswer' | 'wrongModel' | 'malformed'. Empty while
+   * linked. A TOKEN the UI switches on, never text to render — the wording is ours so it can
+   * be translated. 'wrongModel' is an EXPERT 1K-FA: a working link on a protocol Nexus does
+   * not speak, which must never read as 'no amplifier'. */
+  reason: string
+  /** True = OPERATE, false = STANDBY. */
+  operate?: boolean | null
+  /** The amplifier sees the exciter keyed. SPE only. */
+  transmitting?: boolean | null
+  outputWatts?: number | null
+  /** SWR at the antenna. Absent when not transmitting — a zero is 'no reading', never 0:1. */
+  swr?: number | null
+  /** SWR measured BEFORE the ATU. SPE only. */
+  swrAtu?: number | null
+  volts?: number | null
+  amps?: number | null
+  /** Heatsink / PA temperature — a bare number whose scale is `tempCelsius`. */
+  temp?: number | null
+  /** Is `temp` known to be Celsius? TRUE FOR THE KPA ONLY. When false, render the number with
+   * a degree sign and NO scale letter: the SPE protocol does not state the unit (§5 says
+   * 'Temp in °C or F' — the amplifier reports whatever its own front panel is set to). */
+  tempCelsius: boolean
+  /** Alarm tag: 'none' | 'swrExceedingLimits' | 'amplifierProtection' | 'inputOverdriving' |
+   * 'excessOverheating' | 'combinerFault' | 'unknown' (SPE), or 'none' | 'fault' (KPA).
+   * Empty = this family has no alarm channel. */
+  alarm: string
+  /** The amplifier's OWN judgement, and the only thing to colour from — an alarm letter a later
+   * firmware ships arrives as `alarm: 'unknown'` with this TRUE. Never colour from a tag
+   * comparison: an unrecognised fault would go quiet, in front of a kilowatt. */
+  alarmRaised: boolean
+  /** Warning tag (SPE). Empty = this family has no warning channel. */
+  warning: string
+  warningRaised: boolean
+  /** Elecraft `^FL` fault identifier; 0 = no fault. KPA only. */
+  kpaFault?: number | null
+}
+
 export interface RadioStatus {
   dialMhz: number
   band: string
@@ -1030,6 +1097,11 @@ export interface RadioStatus {
   hrdLinkUp?: boolean | null
   /** QSOs queued for HRD because it was unreachable; 0 when caught up. */
   hrdQueued?: number
+  /** The amplifier on the ACTIVE radio's amp port. THREE STATES, and the absence carries
+   * the first: undefined/null = no amplifier configured (render nothing at all);
+   * `{linked:false}` = configured and not answering (stay on screen, every reading '—');
+   * `{linked:true}` = live. Display-only — nothing here may gate or stop a transmission. */
+  amp?: AmpStatus | null
   transmitting: boolean
   slot: number
   nextSlotMs: number
@@ -1434,6 +1506,11 @@ export interface MeterReadout {
   rxLevel: number
   /** CAT S-meter (dB relative to S9); null = the rig reports no STRENGTH (meter shows "—"). */
   smeterDb: number | null
+  /** The received CW tone measured around the operator's pitch (Hz) — the CW cockpit's
+   * zero-beat indicator. null = the measurement is off (any section but CW) or nothing
+   * stands above the noise, and the indicator reads "nothing to tune to". A DISPLAY ONLY:
+   * nothing consumes this to move a radio. */
+  cwToneHz: number | null
 }
 
 /** A single decoded signal in the most-recent RX slot (WSJT-X style row). */
@@ -2496,6 +2573,10 @@ export interface Settings {
   rotatorModel?: number
   rotatorPort?: string
   rotatorBaud?: number
+  /** Amplifier on this radio's amp port: '' = none, 'spe' = SPE Expert 1.3K/1.5K/2K-FA,
+   * 'kpa' = Elecraft KPA500/KPA1500. The flat mirror of the ACTIVE radio's profile. */
+  ampModel?: string
+  ampPort?: string
   /** ADVANCED: external rotctld host:port override (wins over the integrated
    * spawn). Empty + model 0 = no rotator. */
   rotatorHost: string
@@ -2984,6 +3065,10 @@ export interface RadioProfile {
   rotatorModel: number
   rotatorPort: string
   rotatorBaud: number
+  /** Amplifier family ('' | 'spe' | 'kpa') and its serial port. PER RADIO, like the rotator:
+   * an SO2R station has an amplifier per radio. */
+  ampModel: string
+  ampPort: string
   rotatorHost: string
   rotctldPort: number
   /** Bands this radio covers (empty = all) — for auto band-routing (P4). */

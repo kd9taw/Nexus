@@ -45,7 +45,7 @@ afterEach(() => {
 
 describe('the shared meter poll', () => {
   it('runs ONE cadence no matter how many widgets subscribe', async () => {
-    mocked.mockResolvedValue({ rxLevel: 0.1, smeterDb: null })
+    mocked.mockResolvedValue({ rxLevel: 0.1, smeterDb: null , cwToneHz: null })
     render(
       <>
         <LiveLevelMeter />
@@ -59,14 +59,14 @@ describe('the shared meter poll', () => {
   })
 
   it('costs nothing for an inactive (hidden-host) widget', async () => {
-    mocked.mockResolvedValue({ rxLevel: 0.1, smeterDb: null })
+    mocked.mockResolvedValue({ rxLevel: 0.1, smeterDb: null , cwToneHz: null })
     render(<LiveLevelMeter active={false} />)
     await advance(1000)
     expect(mocked).not.toHaveBeenCalled()
   })
 
   it('drops to an at-rest meter within the staleness bound when get_meters stops succeeding', async () => {
-    mocked.mockResolvedValueOnce({ rxLevel: 0.5, smeterDb: -10 })
+    mocked.mockResolvedValueOnce({ rxLevel: 0.5, smeterDb: -10 , cwToneHz: null })
     mocked.mockRejectedValue(new Error('backend gone'))
     render(<LiveLevelMeter />)
     await advance(100)
@@ -91,10 +91,10 @@ describe('the shared meter poll', () => {
       return null
     }
     mocked
-      .mockResolvedValueOnce({ rxLevel: 0.1, smeterDb: -5 })
-      .mockResolvedValueOnce({ rxLevel: 0.5, smeterDb: -5 })
-      .mockResolvedValueOnce({ rxLevel: 0.9, smeterDb: -5 })
-      .mockResolvedValue({ rxLevel: 0.2, smeterDb: 7 })
+      .mockResolvedValueOnce({ rxLevel: 0.1, smeterDb: -5 , cwToneHz: null })
+      .mockResolvedValueOnce({ rxLevel: 0.5, smeterDb: -5 , cwToneHz: null })
+      .mockResolvedValueOnce({ rxLevel: 0.9, smeterDb: -5 , cwToneHz: null })
+      .mockResolvedValue({ rxLevel: 0.2, smeterDb: 7 , cwToneHz: null })
     render(<Probe />)
     // One poll per act(): only an act() EXIT guarantees React flushes the queued render, so a
     // single advance(400) can legally collapse −5→7 into one commit and vanish the −5 (it did,
@@ -107,7 +107,7 @@ describe('the shared meter poll', () => {
   })
 
   it('stops polling while the document is hidden and resumes on return', async () => {
-    mocked.mockResolvedValue({ rxLevel: 0.1, smeterDb: null })
+    mocked.mockResolvedValue({ rxLevel: 0.1, smeterDb: null , cwToneHz: null })
     render(<LiveLevelMeter />)
     await advance(300)
     const whileVisible = mocked.mock.calls.length

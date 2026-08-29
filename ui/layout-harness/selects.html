@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-viewport="md">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Harness — every native &lt;select&gt; surface</title>
+    <!-- The REAL sheet. -->
+    <link rel="stylesheet" href="../src/styles.css" />
+    <style>
+      :root {
+        --ui-zoom: 1;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        padding: 16px;
+        font-family: var(--font-sans);
+      }
+      /* Harness chrome only — never touches a select. */
+      .h-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .h-name {
+        flex: 0 0 260px;
+        font-size: 11px;
+        color: var(--text-dim);
+        font-family: var(--font-mono, monospace);
+      }
+      .h-surface {
+        flex: 1;
+        min-width: 0;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Native &lt;select&gt; surfaces — real classes, real sheet</h1>
+
+    <div class="h-row">
+      <div class="h-name">.settings-input (Settings)</div>
+      <div class="h-surface">
+        <label class="settings-field">
+          <span class="settings-label">Rig model</span>
+          <select id="s-settings" class="settings-input">
+            <option>Yaesu FT-991A</option>
+            <option>Icom IC-7300</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.settings-field &gt; select (NO class)</div>
+      <div class="h-surface">
+        <label class="settings-field">
+          <span class="settings-label">Save WAV</span>
+          <select id="s-bare">
+            <option>Never</option>
+            <option>Every decode</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.wizard-field select</div>
+      <div class="h-surface">
+        <label class="wizard-field">
+          <span>Audio in</span>
+          <select id="s-wizard">
+            <option>USB Audio CODEC Analog Stereo</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.mv-field select (Memories)</div>
+      <div class="h-surface">
+        <label class="mv-field">
+          <span>Mode</span>
+          <select id="s-mv">
+            <option>USB</option>
+            <option>LSB</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.sstv-tx-mode select</div>
+      <div class="h-surface">
+        <div class="sstv-tx-mode">
+          <select id="s-sstv">
+            <option>Scottie 1</option>
+            <option>Martin 1</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.aprs-beacon select</div>
+      <div class="h-surface">
+        <div class="aprs-beacon">
+          <select id="s-aprs">
+            <option>Every 30 min</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.od-sort select (Operate decodes)</div>
+      <div class="h-surface">
+        <div class="od-sort">
+          <select id="s-od">
+            <option>Newest</option>
+            <option>SNR</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.band-picker-select</div>
+      <div class="h-surface">
+        <select id="s-band" class="band-picker-select">
+          <option>20m</option>
+          <option>40m</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.freq-channel (bare)</div>
+      <div class="h-surface">
+        <select id="s-freq" class="freq-channel">
+          <option>2m Calling</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.ch-band .freq-channel</div>
+      <div class="h-surface">
+        <div class="ch-band">
+          <select id="s-freq2" class="freq-channel">
+            <option>2m Calling</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.log-rowbtn (Logbook row)</div>
+      <div class="h-surface">
+        <select id="s-logrow" class="log-rowbtn">
+          <option>⋯</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.map-coverage-dim</div>
+      <div class="h-surface">
+        <select id="s-map" class="map-coverage-dim">
+          <option>Dim by reliability</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.cockpit-mode.cm-trperiod</div>
+      <div class="h-surface">
+        <select id="s-trp" class="cockpit-mode cm-trperiod">
+          <option>15 s</option>
+          <option>7.5 s</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.cockpit-specialop-select</div>
+      <div class="h-surface">
+        <select id="s-specialop" class="cockpit-specialop-select">
+          <option>None</option>
+          <option>Field Day</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.np-chip.aprs-freq</div>
+      <div class="h-surface">
+        <select id="s-npchip" class="np-chip aprs-freq">
+          <option>144.390</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.pane-pick (Connect pane frame)</div>
+      <div class="h-surface">
+        <select id="s-panepick" class="pane-pick">
+          <option>Spots</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.cal-lead (DXped calendar)</div>
+      <div class="h-surface">
+        <select id="s-cal" class="cal-lead">
+          <option>7 d</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.sat-lead</div>
+      <div class="h-surface">
+        <select id="s-satlead" class="sat-lead">
+          <option>10 min</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.sat-rail-vfo</div>
+      <div class="h-surface">
+        <select id="s-satvfo" class="sat-rail-vfo">
+          <option>VFO A</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.pota-sort-pick</div>
+      <div class="h-surface">
+        <select id="s-pota" class="pota-sort-pick">
+          <option>Distance</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.qso-globe-band-pick</div>
+      <div class="h-surface">
+        <select id="s-globe" class="qso-globe-band-pick">
+          <option>All bands</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.wf-palette.wf-zoom (Waterfall)</div>
+      <div class="h-surface">
+        <select id="s-wfzoom" class="wf-palette wf-zoom">
+          <option>Zoom ×2</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">.tuning-step (NO background declared)</div>
+      <div class="h-surface">
+        <select id="s-tuning" class="tuning-step">
+          <option>100 Hz</option>
+          <option>1 kHz</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
+      <div class="h-name">CONTROL: .settings-input INPUT</div>
+      <div class="h-surface">
+        <input id="s-control" class="settings-input" type="text" value="COM3 / ttyUSB0" />
+      </div>
+    </div>
+
+    <script>
+      const q = new URLSearchParams(location.search)
+      document.documentElement.setAttribute('data-theme', q.get('theme') === 'light' ? 'light' : 'dark')
+
+      const IDS = [
+        's-settings', 's-bare', 's-wizard', 's-mv', 's-sstv', 's-aprs', 's-od', 's-band',
+        's-freq', 's-freq2', 's-logrow', 's-map', 's-trp', 's-specialop', 's-npchip',
+        's-panepick', 's-cal', 's-satlead', 's-satvfo', 's-pota', 's-globe', 's-wfzoom',
+        's-tuning', 's-control',
+      ]
+
+      // ?report=1 dumps the numbers into the DOM so `chrome --headless --dump-dom` can read
+      // them — Blink has no scriptable snapshot path here the way WebKitGTK does.
+      window.addEventListener('load', () => {
+        if (q.get('report') !== '1') return
+        const pre = document.createElement('pre')
+        pre.id = 'report'
+        pre.textContent = JSON.stringify(window.measure(), null, 1)
+        document.body.replaceChildren(pre)
+      })
+
+      window.measure = () => {
+        const out = {}
+        for (const id of IDS) {
+          const el = document.getElementById(id)
+          const cs = getComputedStyle(el)
+          const r = el.getBoundingClientRect()
+          out[id] = {
+            rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+            bg: cs.backgroundColor,
+            color: cs.color,
+            appearance: cs.appearance || cs.webkitAppearance,
+            padRight: cs.paddingRight,
+            bgImage: cs.backgroundImage === 'none' ? 'none' : 'IMAGE',
+            borderColor: cs.borderTopColor,
+            borderWidth: cs.borderTopWidth,
+          }
+        }
+        return out
+      }
+    </script>
+  </body>
+</html>

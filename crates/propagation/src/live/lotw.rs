@@ -14,6 +14,7 @@
 //!   request URL (and thus the password), so we NEVER stringify the raw error —
 //!   only a fixed, category-based message derived from boolean predicates.
 
+use super::neterr;
 use std::time::Duration;
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
@@ -50,12 +51,8 @@ pub fn fetch_report(url: &str) -> Result<String, String> {
 fn redact(e: reqwest::Error) -> String {
     if e.is_timeout() {
         "LoTW: request timed out — LoTW can be slow, try again shortly".to_string()
-    } else if e.is_connect() {
-        "LoTW: could not connect — check your network".to_string()
-    } else if e.is_redirect() {
-        "LoTW: blocked an unexpected redirect".to_string()
     } else {
-        "LoTW: request failed".to_string()
+        neterr::redact("LoTW", &e)
     }
 }
 

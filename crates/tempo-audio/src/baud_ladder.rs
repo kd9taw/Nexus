@@ -634,6 +634,59 @@ pub fn classify_hamlib_probe(read: &RigctlRead, caps: &RigCaps) -> BaudProbe {
 /// three are in the captures under `tests/fixtures/rigctld/`.
 const OPEN_FAILURE_FRAGMENTS: &[&str] = &["does not exist", "is already open", "Unable to open"];
 
+/// Text a serial open produces when the OS refused it for PERMISSIONS rather than because
+/// something else holds it. Lower-cased before matching, so the case a driver chooses does not
+/// decide whether an operator gets the right cure.
+///
+/// ⚠️ **Windows\'s "Access is denied." is DELIBERATELY NOT HERE**, and adding it would be a
+/// regression. On Windows that text is what a port ANOTHER PROGRAM IS HOLDING commonly returns,
+/// so the existing "close WSJT-X/flrig" cure is the right one — pinned by
+/// `an_unopenable_port_reports_the_os_error_not_a_guess`, which caught exactly this when the
+/// first version of this list was too wide. The Unix errno text below is the one that means a
+/// group membership, and it is the only one that should reroute the advice.
+const OPEN_DENIED_FRAGMENTS: &[&str] = &["permission denied"];
+
+/// The cure sentence for a port that would not open, chosen from what the OS actually said.
+///
+/// ⚠️ **Why this is not one sentence.** Until 2026-08-28 every open failure got "usually another
+/// program is holding the port — close WSJT-X/flrig". That is right for the commonest fault and
+/// USELESS for a permission refusal: no amount of closing software grants a group membership. It
+/// was reported from Ubuntu 24.04 with an FT-991A, where the operator was told to close programs
+/// he did not have running, and the same rig worked on Windows on the same machine.
+///
+/// The two are distinguishable, and the evidence is the measured table above [`open_failure_line`]:
+/// a HELD port reports "is already open" / "All pipe instances are busy" and never says "denied".
+/// So denial text is a permission fault on either platform — it is not a held port wearing
+/// different words.
+///
+/// The Unix cure names the group AND THE RE-LOGIN. The re-login is the step people miss: adding
+/// yourself to `dialout` does nothing to a session that is already running, so an operator who
+/// follows half the advice sees the same failure and concludes the advice was wrong.
+pub fn open_failure_cure(os_err: &str) -> &'static str {
+    let lower = os_err.to_ascii_lowercase();
+    if OPEN_DENIED_FRAGMENTS.iter().any(|f| lower.contains(f)) {
+        #[cfg(target_os = "linux")]
+        return "That is a permission refusal, not a busy port — closing other software will not \
+                help. On most Linux systems the serial port belongs to the `dialout` group and \
+                your user is not in it yet. Run `sudo usermod -aG dialout $USER`, then LOG OUT \
+                and back in (a group does not apply to a session that is already running) and \
+                test again.";
+        #[cfg(target_os = "macos")]
+        return "That is a permission refusal, not a busy port — closing other software will not \
+                help. Check that the interface's driver is installed and allowed under System \
+                Settings » Privacy & Security, then test again.";
+        // Windows reaches this only for a literal "permission denied", which is not the
+        // phrasing a held port produces there ("Access is denied." / "All pipe instances are
+        // busy" / "is already open") — so say the neutral thing rather than send them to a
+        // group that does not exist on this platform.
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return "That is a permission refusal rather than a busy port. Check the port is not \
+                claimed by a driver or a policy, and that Nexus is allowed to use it.";
+    }
+    "Usually another program is holding the port: close other CAT/logging software (WSJT-X, \
+     flrig, N1MM) and test again."
+}
+
 /// The one line of a failed `rigctl` run that says the port could not be opened, if it said so.
 /// A busy COM port is one of the commonest CAT faults and its verdict ("close WSJT-X/flrig") is
 /// completely different from a baud verdict, so it must not be reported as silence.
@@ -844,10 +897,10 @@ pub fn compose_ladder_message(
                 _ => None,
             })
             .unwrap_or("unknown error");
+        let cure = open_failure_cure(os_err);
         return format!(
             "Test CAT could not open {port} at any rate (tried {tried}) — the system said: \
-             {os_err}. Usually another program is holding the port — close other CAT/logging \
-             software (WSJT-X, flrig, RS-BA1) and test again."
+             {os_err}. {cure}"
         );
     }
     let noise = if r
@@ -1024,10 +1077,9 @@ pub fn compose_hamlib_ladder_message(r: &LadderReport, model_name: &str) -> Stri
         .iter()
         .find(|(_, o)| matches!(o, BaudProbe::OpenFailed(_)))
     {
+        let cure = open_failure_cure(e);
         return format!(
-            "Test CAT could not open {port} (tried {tried}) — the system said: {e}. Usually \
-             another program is holding the port: close other CAT/logging software (WSJT-X, \
-             flrig, N1MM) and test again."
+            "Test CAT could not open {port} (tried {tried}) — the system said: {e}. {cure}"
         );
     }
     let noise = if r
@@ -1357,6 +1409,66 @@ pub fn run(port: &str, configured_baud: u32, civ_addr: u8) -> LadderReport {
 
 #[cfg(test)]
 mod tests {
+
+    /// A port refused for PERMISSIONS is not a port another program is holding, and the cure is
+    /// not the same one. Reported 2026-08-28 on Ubuntu 24.04 LTS with an FT-991A: Test CAT said
+    /// "permission denied" and then told the operator to close WSJT-X — which cannot grant a
+    /// group membership. They close everything, test again, fail again, and conclude Nexus does
+    /// not do CAT on Linux. The same rig worked on Windows on the same machine.
+    ///
+    /// ⚠️ The two really are distinguishable, and the evidence is the measured table above
+    /// [`open_failure_line`]: a HELD port reports "is already open" / "All pipe instances are
+    /// busy". It never reports "denied". So text that says denied is a permission fault on
+    /// either platform, not a held port.
+    #[test]
+    fn a_permission_refusal_names_the_permission_cure_not_the_other_program() {
+        let denied = LadderReport {
+            port: "/dev/ttyUSB1".into(),
+            configured_baud: 38400,
+            not_tried: Vec::new(),
+            outcomes: vec![(
+                38400,
+                BaudProbe::OpenFailed(
+                    "serial_open: Unable to open /dev/ttyUSB1 - Permission denied".into(),
+                ),
+            )],
+        };
+        let m = compose_hamlib_ladder_message(&denied, "Yaesu FT-991A");
+        assert!(
+            !m.contains("WSJT-X"),
+            "closing WSJT-X cannot grant a permission: {m}"
+        );
+        assert!(
+            m.to_lowercase().contains("permission"),
+            "the verdict must name the fault: {m}"
+        );
+        #[cfg(unix)]
+        assert!(
+            m.contains("dialout") && m.to_lowercase().contains("log out"),
+            "on Unix the cure is the group AND the re-login, which is the step people miss: {m}"
+        );
+
+        // POSITIVE CONTROL — a genuinely HELD port must still get the other-program cure, or
+        // this "fix" would just have deleted advice that is right for the commoner fault.
+        let held = LadderReport {
+            port: "/dev/ttyUSB1".into(),
+            configured_baud: 38400,
+            not_tried: Vec::new(),
+            outcomes: vec![(
+                38400,
+                BaudProbe::OpenFailed("serial_open: /dev/ttyUSB1 is already open".into()),
+            )],
+        };
+        let m = compose_hamlib_ladder_message(&held, "Yaesu FT-991A");
+        assert!(
+            m.contains("WSJT-X"),
+            "a held port still names the cure: {m}"
+        );
+        assert!(
+            !m.to_lowercase().contains("dialout"),
+            "and must not send them chasing a permission they already have: {m}"
+        );
+    }
     use super::*;
     use crate::civ::frame::Frame;
 

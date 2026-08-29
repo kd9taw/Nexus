@@ -65,7 +65,14 @@
 /// Which amplifier family a link speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmpModel {
-    /// SPE Expert 1.3K-FA / 2K-FA — one binary protocol, two amplifiers.
+    /// SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA — one binary protocol, three amplifiers.
+    ///
+    /// The 1.5K-FA is CONFIRMED ON HARDWARE (2026-08-29): it identifies itself as `15K` and
+    /// answers the documented status request in this protocol. SPE's own programming guide
+    /// never names it — "1.5" appears zero times in it — so its support was a hypothesis until
+    /// an operator's amplifier answered. The model id is still kept raw rather than matched
+    /// against a list, so an amplifier nobody here has seen reports itself rather than being
+    /// rejected.
     SpeExpert,
     /// Elecraft KPA500 / KPA1500 — line-oriented ASCII, from Elecraft's own published
     /// programmer's references (KPA500 Rev. A2; KPA1500 Rev. 2.03).
@@ -86,8 +93,16 @@ const SPE_AMP_SYNC: u8 = 0xAA;
 const SPE_CMD_STATUS: u8 = 0x90;
 /// Every SPE frame opens with three sync bytes and a count byte.
 const SPE_HEADER_LEN: usize = 4;
-/// A status reply's trailer after its data: two checksum bytes, then CR and LF (§5).
-const SPE_STATUS_TRAILER_LEN: usize = 4;
+/// A status reply's trailer after its data: two checksum bytes, a comma, then CR and LF (§5).
+///
+/// ⭐ FIVE, NOT FOUR, AND THE DOCUMENT CONTRADICTS ITSELF ABOUT IT. §5's field table says the
+/// string is "terminated with bytes CR (13) and LF (10)" — four trailer bytes. §5's own worked
+/// example prints `…,N,N,%^,CRLF`, with a comma between the checksum pair and the terminator —
+/// five. A real EXPERT 1.5K-FA settles it: it sends the comma. Reading the table rather than
+/// the example cost us a link that could never parse a single frame, on ANY model, because the
+/// length check rejected the frame before anything else ran — and it left one byte unread in
+/// the port buffer, desyncing the next poll too.
+const SPE_STATUS_TRAILER_LEN: usize = 5;
 /// The status string is 19 comma-separated fields (§5).
 const SPE_STATUS_FIELDS: usize = 19;
 
@@ -270,7 +285,11 @@ pub fn parse_spe_status(frame: &[u8]) -> Option<SpeStatus> {
         return None;
     }
     let cnt = frame[3] as usize;
-    if frame.len() != SPE_HEADER_LEN + cnt + SPE_STATUS_TRAILER_LEN {
+    // Accept BOTH trailers the document describes — 5 bytes as its worked example and real
+    // hardware show, 4 as its field table says. Being strict about the example would reject an
+    // amplifier that followed the table, and we have no frame from one to know either way.
+    let trailer_len = frame.len().checked_sub(SPE_HEADER_LEN + cnt)?;
+    if trailer_len != SPE_STATUS_TRAILER_LEN && trailer_len != SPE_STATUS_TRAILER_LEN - 1 {
         return None;
     }
     let data = &frame[SPE_HEADER_LEN..SPE_HEADER_LEN + cnt];
@@ -282,13 +301,25 @@ pub fn parse_spe_status(frame: &[u8]) -> Option<SpeStatus> {
     if trailer[0] != (sum % 256) as u8 || trailer[1] != (sum / 256) as u8 {
         return None;
     }
-    if trailer[2] != b'\r' || trailer[3] != b'\n' {
+    // CRLF terminates, wherever it falls; a separator before it must be the documented comma.
+    if trailer[trailer_len - 2] != b'\r' || trailer[trailer_len - 1] != b'\n' {
+        return None;
+    }
+    if trailer_len == SPE_STATUS_TRAILER_LEN && trailer[2] != b',' {
         return None;
     }
 
     let text = std::str::from_utf8(data).ok()?;
+    // ⭐ THE DATA OPENS WITH A COMMA (§5's example, confirmed on a real 1.5K-FA), so a plain
+    // split yields an empty first part and EVERY field index below shifts by one — the model
+    // reads back blank and each reading belongs to its neighbour. Silent and total.
+    let text = text.strip_prefix(',').unwrap_or(text);
     let f: Vec<&str> = text.split(',').collect();
     if f.len() < SPE_STATUS_FIELDS {
+        return None;
+    }
+    // A blank model is the visible symptom of a shifted split. Refuse rather than report it.
+    if f[0].trim().is_empty() {
         return None;
     }
 
@@ -518,6 +549,27 @@ mod imp {
     /// speed Nexus ever needs to offer and there is no baud setting to get wrong.
     const SPE_BAUD: u32 = 115_200;
 
+    /// Turn a `serialport::Error` into an `io::Error` **keeping its kind**.
+    ///
+    /// ⭐ THE KIND IS THE ONLY THING THAT DISTINGUISHES A BUSY PORT FROM AN ABSENT ONE, and the
+    /// poller has to tell an operator which. Flattening every open failure to
+    /// `io::Error::other` — which this did — threw that away and left only an English sentence
+    /// to parse, so "the amplifier is on your CAT port" and "the amplifier is switched off"
+    /// arrived indistinguishable.
+    fn io_from_serial(e: serialport::Error) -> std::io::Error {
+        match e.kind {
+            serialport::ErrorKind::Io(k) => std::io::Error::new(k, e.description),
+            // "The device is not available. This could indicate that the device is in use by
+            // another process or was disconnected" — the crate's own words, and it does not
+            // separate the two. NotFound is the honest reading of an ambiguous answer: it is
+            // the one that does NOT accuse another program of holding the port.
+            serialport::ErrorKind::NoDevice => {
+                std::io::Error::new(std::io::ErrorKind::NotFound, e.description)
+            }
+            _ => std::io::Error::other(e.description),
+        }
+    }
+
     /// One status string is ~71 bytes — under a millisecond of wire time at 115200. This bounds
     /// an amplifier that accepted the connection and then went quiet, not the transfer.
     const SPE_TIMEOUT: Duration = Duration::from_millis(500);
@@ -537,7 +589,7 @@ mod imp {
                 .flow_control(serialport::FlowControl::None)
                 .timeout(SPE_TIMEOUT)
                 .open()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                .map_err(io_from_serial)?;
             Ok(Self { port: sp })
         }
 
@@ -565,7 +617,8 @@ mod imp {
                 Some(n) => n,
                 None => {
                     self.drain();
-                    return Err(std::io::Error::other(
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
                         "not an SPE reply: the frame did not open with the amplifier sync bytes",
                     ));
                 }
@@ -583,15 +636,22 @@ mod imp {
             // reason this check exists.
             if spe_looks_like_1k_fa(&frame) {
                 self.drain();
-                return Err(std::io::Error::other(
+                // `Unsupported` is what makes this reach the operator as "wrong model"
+                // rather than as "no amplifier": the link is working perfectly and the
+                // amplifier is answering — in the other dialect.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
                     "this is an EXPERT 1K-FA, which speaks a different protocol Nexus does not \
-                     support yet — the 1.3K-FA, 1.5K-FA and 2K-FA are the supported models",
+                     support yet — the 1.3K-FA, 1.5K-FA and 2K-FA are the models Nexus speaks to",
                 ));
             }
 
             parse_spe_status(&frame).ok_or_else(|| {
                 self.drain();
-                std::io::Error::other("SPE status frame failed its checksum or was malformed")
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "SPE status frame failed its checksum or was malformed",
+                )
             })
         }
 
@@ -640,7 +700,7 @@ mod imp {
                 {
                     Ok(sp) => sp,
                     Err(e) => {
-                        last = Some(std::io::Error::other(e.to_string()));
+                        last = Some(io_from_serial(e));
                         continue;
                     }
                 };
@@ -653,8 +713,11 @@ mod imp {
                     return Ok((Self { port: sp }, baud));
                 }
             }
+            // Every open SUCCEEDED and nothing answered: the port is fine and the amplifier
+            // is not talking. `TimedOut` says that; `other` would have looked like a fault.
             Err(last.unwrap_or_else(|| {
-                std::io::Error::other(
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
                     "no KPA answered on any of its four data rates — check the port, and that \
                      the amplifier is powered on",
                 )
@@ -761,8 +824,13 @@ mod imp {
         ))
     }
 
+    /// `InvalidData`, not `other`: the poller maps the KIND to the operator-facing reason, and
+    /// "the amplifier said something we cannot read" is a different fact from "it said nothing".
     fn malformed(what: &str) -> std::io::Error {
-        std::io::Error::other(format!("the amplifier sent {what} this cannot read"))
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("the amplifier sent {what} this cannot read"),
+        )
     }
 
     fn bad<E>(what: &'static str) -> impl Fn(E) -> std::io::Error {
@@ -880,13 +948,25 @@ mod tests {
         f.extend_from_slice(data.as_bytes());
         f.push((sum % 256) as u8);
         f.push((sum / 256) as u8);
-        f.extend_from_slice(b"\r\n");
+        // The comma §5's worked example shows between the checksum and the terminator, and
+        // that a real 1.5K-FA sends. This helper once emitted a bare CRLF, which made every
+        // fixture in this module agree with the parser and disagree with every amplifier.
+        f.extend_from_slice(b",\r\n");
         f
     }
 
-    /// The spec's own worked example (§5), verbatim. 65 characters against a stated 67 — the
-    /// document disagrees with itself, which is exactly why nothing here reads a fixed offset.
-    const SPEC_EXAMPLE: &str = "20K,S,R,x,1,00,1a,0r,L,0000, 0.00, 0.00, 0.0, 0.0, 33,  0,  0,N,N";
+    /// The spec's own worked example (§5), verbatim — INCLUDING the comma at each end.
+    ///
+    /// ⭐ THIS CONSTANT USED TO BE WRONG, AND ITS COMMENT EXPLAINED THE WRONGNESS AWAY. It was
+    /// transcribed without the opening and closing commas, giving 65 characters against §5's
+    /// stated 67, and the old comment called that "the document disagrees with itself". It does
+    /// not: 65 + 2 commas = 67 exactly. Reading the shortfall as a document defect rather than a
+    /// transcription slip is what let the leading-comma field shift survive.
+    ///
+    /// The count is now self-checking (below), and the checksum is checkable against the
+    /// document too: §5 prints the low byte as `%`, and 0x25 is what this string sums to.
+    const SPEC_EXAMPLE: &str =
+        ",20K,S,R,x,1,00,1a,0r,L,0000, 0.00, 0.00, 0.0, 0.0, 33,  0,  0,N,N,";
 
     #[test]
     fn spe_frames_the_documented_request_examples() {
@@ -935,16 +1015,61 @@ mod tests {
         // which underflows on a short frame) and not 64 (Hamlib's cnt-3).
         assert_eq!(
             spe_status_reply_len(&[0xAA, 0xAA, 0xAA, 0x43]),
-            Some(67 + 4)
+            Some(67 + 5),
+            "trailer is checksum pair + comma + CRLF; reading 4 leaves a byte in the port \
+             buffer and desyncs the next poll"
         );
 
         // And a small count must not UNDERFLOW: the old cnt-4 returned None for every frame
         // with fewer than four data bytes, which is most of them.
-        assert_eq!(spe_status_reply_len(&[0xAA, 0xAA, 0xAA, 0x01]), Some(5));
+        assert_eq!(spe_status_reply_len(&[0xAA, 0xAA, 0xAA, 0x01]), Some(6));
 
         // Not a frame at all.
         assert_eq!(spe_status_reply_len(&[0xAA, 0xAA, 0xAA]), None);
         assert_eq!(spe_status_reply_len(&[]), None);
+    }
+
+    /// ⭐ REAL HARDWARE. The exact 76 bytes an **EXPERT 1.5K-FA** put on the wire on
+    /// 2026-08-29, captured with the standalone probe. Until this landed, every fixture in this
+    /// module was built by `status_frame` from our own reading of §5 — so the tests agreed with
+    /// the parser and neither agreed with an amplifier. This is the first frame here that a
+    /// machine actually sent, and it is the arbiter.
+    ///
+    /// Two things it settles, both of which the document states ambiguously:
+    /// - the 67 data bytes OPEN AND CLOSE WITH A COMMA, and
+    /// - a comma sits between the checksum pair and the CRLF.
+    ///
+    /// It also answers the question the model list could not: **a 1.5K-FA calls itself `15K`**.
+    #[test]
+    fn a_real_1_5k_fa_frame_off_the_wire_parses() {
+        let mut frame = vec![0xAA, 0xAA, 0xAA, 0x43];
+        let data = b",15K,S,R,A,1,01,1a,0r,M,0000, 0.00, 0.00, 0.0, 0.0,081,000,000,N,N,";
+        assert_eq!(
+            data.len(),
+            0x43,
+            "the CNT byte counts these, commas and spaces included"
+        );
+        frame.extend_from_slice(data);
+        // Checksum as the amplifier sent it: lo = SUM % 256, hi = SUM / 256.
+        frame.extend_from_slice(&[0x47, 0x0D]);
+        // The trailer the field table omits and the worked example shows.
+        frame.extend_from_slice(b",\r\n");
+        assert_eq!(frame.len(), 76, "what actually arrived");
+
+        let s = parse_spe_status(&frame).expect("a real amplifier's own status frame must parse");
+
+        assert_eq!(
+            s.model, "15K",
+            "the 1.5K-FA names itself; no document says this"
+        );
+        assert!(!s.operate, "S = standby");
+        assert!(!s.transmitting, "R = receive");
+        assert_eq!(s.bank, Some('A'));
+        assert_eq!(s.input, 1);
+        assert_eq!(s.band_index, 1);
+        assert_eq!(s.tx_antenna, 1);
+        assert_eq!(s.atu, SpeAtu::Enabled, "the 'a' of \"1a\"");
+        assert_eq!(s.rx_antenna, None, "\"0r\" = no RX-only antenna");
     }
 
     #[test]
@@ -1066,15 +1191,35 @@ mod tests {
         assert_eq!(parse_spe_status(&status_frame("20K,S,R,x,1,00")), None);
     }
 
-    /// The parser must key off the wire's own count, not either of the two lengths §5 gives.
+    /// The parser must key off the wire's own count byte, not a length assumed from the page.
+    ///
+    /// ⭐ THIS TEST USED TO ASSERT THE BUG. It pinned `SPEC_EXAMPLE.len() == 65` and called the
+    /// gap to §5's stated 67 a contradiction in the document. The document was right and the
+    /// transcription was wrong — the two absent characters are the commas that open and close
+    /// the string, and the missing leading one shifted every field index by one.
     #[test]
     fn spe_status_length_comes_from_the_wire_not_from_the_document() {
-        // The spec's example is 65 characters while §5 says the string is 67. Both parse,
-        // because the count byte is believed and the fields are split on commas.
-        assert_eq!(SPEC_EXAMPLE.len(), 65, "the document's example, measured");
+        // §5 states 67 characters "included commas and spaces", and its example is 67 once
+        // transcribed whole. The document agrees with itself.
+        assert_eq!(
+            SPEC_EXAMPLE.len(),
+            67,
+            "§5's stated count, and its example, agree"
+        );
         assert!(parse_spe_status(&status_frame(SPEC_EXAMPLE)).is_some());
 
-        // A 67-character variant of the same reading — wider padding, same 19 fields.
+        // The low checksum byte the DOCUMENT prints for that example is `%`. Computing it from
+        // the transcription above and getting the same character is what proves the string was
+        // copied correctly — the check the 65-character version could never have passed.
+        let sum: u32 = SPEC_EXAMPLE.bytes().map(u32::from).sum();
+        assert_eq!(
+            (sum % 256) as u8,
+            b'%',
+            "§5 prints the low checksum byte as '%'"
+        );
+
+        // A same-length variant with different padding and no leading comma — the field table's
+        // reading. Still 19 fields, still parses, so neither form is rejected.
         let padded = "20K,S,R,x,1,00,1a,0r,L,0000, 0.00, 0.00,  0.0,  0.0, 33,  0,  0,N,N";
         assert_eq!(padded.len(), 67, "and the length §5 states");
         let s = parse_spe_status(&status_frame(padded)).expect("parses too");

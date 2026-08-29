@@ -4332,6 +4332,27 @@ export const EN = {
   // (batch 7), composed there and interpolated whole here.
   'settings.orbitalElements.lastRefresh': 'Last refresh: {{detail}}',
 
+  // ── Settings ▸ Radio ▸ Amplifier ────────────────────────────────────────────────────
+  // ⚠️ NOT HERE, and none of it may move: the AMPLIFIER FAMILY NAMES ("SPE Expert 1.3K-FA /
+  // 2K-FA", "Elecraft KPA500 / KPA1500") and the serial device examples. Those are
+  // manufacturers' product names and OS device paths — a translated one names no amplifier
+  // anyone owns and no port any machine has. `SWR` and `ATU` are the vocabulary of the thing
+  // being configured and stay verbatim inside these sentences.
+  //
+  // NO PLURAL ENTRIES IN THIS BLOCK. es.ts and fr.ts carry English's plural entries flattened
+  // into single concatenated strings, so a `{one, other}` key added here would ship rendering
+  // both forms at once in two languages, and no guard sees it.
+  'settings.amplifier.legend': 'Amplifier',
+  'settings.amplifier.note':
+    'Read-only status from a linear on its own serial port — power out, SWR, temperature and any alarm. Nexus never commands the amplifier: it only reads it.',
+  'settings.amplifier.model.label': 'Amplifier',
+  'settings.amplifier.model.none': 'None',
+  'settings.amplifier.model.hint':
+    'Place the Amplifier pane in Connect to see the readings. Nothing here changes how the radio transmits.',
+  'settings.amplifier.port.label': 'Amplifier port',
+  'settings.amplifier.port.hint':
+    'Its own port, not the one CAT uses — a serial port can only be open once, so sharing it stops the radio connecting. The speed is worked out for you.',
+
   // ── Settings ▸ Radio ▸ Rotator ──────────────────────────────────────────────────────
   // ⚠️ NOT HERE, and none of it may move: the ROTATOR MODEL NAMES and their Hamlib model
   // numbers (`ROTATOR_MODELS` — checked against the generated caps fixture, so they cannot
@@ -4920,9 +4941,11 @@ export const EN = {
   'settings.cw.keyer.cat': 'CAT — the rig keys CW (Hamlib send_morse; newer rigs only)',
   'settings.cw.keyer.serial': "Serial keyline (DTR/RTS) — key the rig's KEY jack",
   'settings.cw.keyer.winkeyer': 'WinKeyer — K1EL hardware keyer',
-  'settings.cw.keyer.soundcard': 'Soundcard — audio tone through SSB (workaround)',
+  'settings.cw.keyer.soundcard': 'Soundcard — audio tone through a data mode (workaround)',
   'settings.cw.keyer.hint':
-    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — the clean N1MM/fldigi method, needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone through SSB — a workaround; set drive so ALC reads zero. Also switchable live from the CW cockpit.",
+    "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — the clean N1MM/fldigi method, needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone — a workaround; set drive so ALC reads zero. <b>It takes your radio out of CW</b> into a data mode (DATA-U/DATA-L, so the tone reaches the transmitter instead of the mic jack); pick any other keyer and CW mode comes straight back. Also switchable live from the CW cockpit.",
+  'settings.cw.keyer.unproven':
+    "CAT CW keying is <b>unproven on this radio</b>. Its Hamlib backend sends a different keying command from the one other radios use, and it reports success either way — so if nothing is transmitted, Nexus cannot tell you. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.",
   'settings.cw.pitch.label': 'Sidetone pitch (Hz)',
   'settings.cw.pitch.hint':
     'CW tone pitch (300–1200 Hz) — the soundcard keyer tone and the CW scope zero-beat marker.',
@@ -5685,6 +5708,7 @@ export const EN = {
   'connect.pane.chaseFeed.title': 'Chase Feed',
   'connect.pane.satPasses.title': 'Satellite Passes',
   'connect.pane.rotor.title': 'Rotor',
+  'connect.pane.amp.title': 'Amplifier',
   'connect.pane.scope.title': 'Band Scope',
   'connect.pane.contests.title': 'Contests',
 
@@ -5696,6 +5720,8 @@ export const EN = {
     'Upcoming amateur-satellite passes over your QTH appear here once orbital elements load.',
   'connect.pane.rotor.basic':
     'Rotator control appears here once you pick a rotator model and port in Settings ▸ Radio ▸ Rotator.',
+  'connect.pane.amp.basic':
+    'Amplifier readings appear here once you pick an amplifier and its port in Settings ▸ Radio ▸ Amplifier.',
   'connect.pane.scope.basic':
     "A live spectrum of the active radio's passband — band noise and signals at a glance.",
   'connect.pane.scope.idle': "Flat — the radio's audio isn't reaching Nexus right now.",
@@ -6907,7 +6933,7 @@ export const EN = {
   'cw.keyer.winkeyer.title':
     'K1EL WinKeyer — hardware keyer over serial (rig in CW). Set its port in Settings ▸ CW.',
   'cw.keyer.soundcard.title':
-    "Soundcard keyer — a keyed audio tone through SSB (rig in USB). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
+    "Soundcard keyer — a keyed audio tone (this TAKES THE RADIO OUT OF CW, into a data mode like FT8 uses; CW mode returns when you pick another keyer). A workaround: works ONLY if Nexus's audio output is routed to the rig (like FT8) AND PTT works, and you must keep drive below ALC. WinKeyer or the serial keyline are the clean options.",
   'cw.pitch.label': 'Pitch',
   'cw.pitch.aria': 'CW pitch (Hz)',
   'cw.pitch.title': "Sidetone / zero-beat pitch (Hz) — the scope's dashed marker",
@@ -6942,6 +6968,11 @@ export const EN = {
   'cw.scope.nativeRf.label': 'RF Panadapter',
   'cw.scope.nativeRf.title': 'Native RF panadapter — the real RF spectrum around your dial.',
   'cw.scope.audio.label': 'CW audio',
+  'cw.zeroBeat.label': 'Zero beat',
+  'cw.zeroBeat.aria': 'Zero-beat tuning indicator',
+  'cw.zeroBeat.none': 'no signal',
+  'cw.zeroBeat.locked': 'ON PITCH',
+  'cw.zeroBeat.title': 'Where the received tone sits against your CW pitch. The light comes on within {{tol}} Hz. Tune until the needle centres — it runs the same way as the scope below it. Display only: it never moves your radio.',
   'cw.scope.audio.title':
     'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
   'cw.scope.audio.sub': 'zero-beat',
@@ -7763,6 +7794,55 @@ export const EN = {
     'The rotator stopped answering mid-pass, so the track let it go — point the antenna yourself. Check the model, port and baud in Settings ▸ Radio ▸ Rotator (the baud belongs to the model), or the external rotctld, and the Connections log',
   'rotor.strip.lost.open.aria': '{{state}} — open the rotator settings',
   'rotor.strip.lost.open.title': '{{detail}}. Click to open it',
+
+  // ── The Amplifier pane (Connect) ────────────────────────────────────────────────────
+  // ⚠️ NOT HERE, and none of it may move: the unit symbols W, V, A, ° and the `:1` of an SWR
+  // ratio, the meter names SWR / ATU / Vdc, and the amplifier's own raw model id. Those are
+  // the instrument's vocabulary; a translated `SWR` names no meter on any amplifier's panel.
+  // NO PLURAL ENTRIES — see the Settings ▸ Amplifier block for why.
+  'amp.link.up': 'Linked',
+  'amp.operate': 'Operate',
+  'amp.standby': 'Standby',
+  'amp.k.power': 'Power out',
+  'amp.k.temp': 'PA temp',
+  'amp.k.current': 'Current',
+  'amp.swr.title': 'Standing-wave ratio measured at the antenna.',
+  'amp.swrAtu.title': "Standing-wave ratio measured before the amplifier's tuner.",
+  // ⚠️ THE ONE PLACE THE MISSING UNIT IS EXPLAINED RATHER THAN GUESSED AT. The SPE protocol
+  // does not carry the scale, so no letter is printed and this says why.
+  'amp.temp.unknownScale':
+    "The SPE protocol does not say whether this is °C or °F — the amplifier reports whatever its own display is set to. Check the amplifier's front panel.",
+
+  // Why the link is down. Four states, and `wrongModel` is the one that earns its own sentence:
+  // a working link on a protocol Nexus does not speak must never read as "no amplifier".
+  'amp.reason.noAnswer': 'Not answering',
+  'amp.reason.portBusy': 'Port in use by something else',
+  'amp.reason.wrongModel': 'Answering, but in a protocol Nexus does not read yet',
+  'amp.reason.malformed': 'Answering with something Nexus cannot read',
+
+  // Alarms — the amplifier's own, rendered as faults. `unknown` is a fault too: a code a later
+  // firmware ships must reach the operator, not go quiet in front of a kilowatt.
+  'amp.alarm.swrExceedingLimits': 'Alarm: SWR beyond limits',
+  'amp.alarm.amplifierProtection': 'Alarm: amplifier protection tripped',
+  'amp.alarm.inputOverdriving': 'Alarm: input overdriven',
+  'amp.alarm.excessOverheating': 'Alarm: overheating',
+  'amp.alarm.combinerFault': 'Alarm: combiner fault',
+  'amp.alarm.fault': 'Fault',
+  'amp.alarm.unknown': 'Alarm the amplifier did not name',
+
+  'amp.warning.alarmAmplifier': 'Warning: amplifier alarm',
+  'amp.warning.noSelectedAntenna': 'Warning: no antenna selected',
+  'amp.warning.swrAntenna': 'Warning: antenna SWR',
+  'amp.warning.noValidBand': 'Warning: no valid band',
+  'amp.warning.powerLimitExceeded': 'Warning: power limit exceeded',
+  'amp.warning.overheating': 'Warning: overheating',
+  'amp.warning.atuNotAvailable': 'Warning: tuner not available',
+  'amp.warning.tuningWithNoPower': 'Warning: tuning with no drive',
+  'amp.warning.atuBypassed': 'Warning: tuner bypassed',
+  'amp.warning.powerSwitchHeldByRemote': 'Warning: power switch held by remote',
+  'amp.warning.combinerOverheating': 'Warning: combiner overheating',
+  'amp.warning.combinerFault': 'Warning: combiner fault',
+  'amp.warning.unknown': 'Warning the amplifier did not name',
 
   'rotor.pane.rose.aria': 'Rotator at {{deg}} degrees — click to slew',
   'rotor.pane.rose.aria.unknown': 'Rotator — position not reported; click to slew',

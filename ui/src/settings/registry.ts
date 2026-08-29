@@ -190,6 +190,22 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'rotctld', 'yaesu g-5500'],
   },
   {
+    id: 'amplifier',
+    label: 'Amplifier',
+    tab: 'radio',
+    // Top-level on the Radio tab, NOT nested under rig-control: an amplifier is a per-radio
+    // EXTERNAL DEVICE on its own serial port, exactly the shape of the rotator above, and
+    // rig-control's own header states the exclusion — "if it is not a model, port, baud,
+    // framing or keying line, it does not belong here".
+    //
+    // Keywords are ENGLISH-ONLY DATA and are never translated (the search matches these
+    // strings, not the rendered legend), and at least one must be a word the label does not
+    // already contain — 'amp' alone is a substring of 'amplifier' and the registry guard
+    // rejects a section whose every keyword is.
+    keywords: ['linear', 'spe', 'expert', '1.3k-fa', '1.5k-fa', '2k-fa', 'elecraft',
+      'kpa500', 'kpa1500', 'swr', 'pa temp', 'watts out'],
+  },
+  {
     id: 'transmit-limits',
     label: 'Transmit limits & sharing',
     tab: 'radio',

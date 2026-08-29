@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus can read your amplifier.** Put an SPE Expert (1.3K-FA, 1.5K-FA, 2K-FA) or an Elecraft
+  KPA500/KPA1500 on its own serial port, set it under **Settings ▸ Radio ▸ Amplifier**, and place
+  the **Amplifier** pane in Connect: power out, SWR at the antenna and before the tuner, supply
+  volts and current, PA temperature, and the amplifier's own alarms and warnings. It only ever
+  asks — the one thing Nexus can send this amplifier is the six-byte status request, so it cannot
+  switch it off, put it in standby, change band or start a tune. Readings clear the moment a poll
+  goes unanswered, because a stale wattage beside a dead link is worse than no wattage; an alarm
+  code this build has never seen still shows as a fault rather than going quiet; and the port is
+  checked against everything else on the station, since a serial port opens only once and an
+  amplifier typed onto the CAT port takes the *radio* down. Verified against a real 1.5K-FA. The
+  Elecraft side is written from Elecraft's published references and has not been run on hardware.
+
+- **A zero-beat light in the CW cockpit.** The scope has always drawn a marker at your CW
+  pitch; now the app measures the tone actually coming in and tells you where it sits against
+  it. A light comes on when you are on pitch, and beside it a needle and a signed offset in Hz
+  say which way and how far off you are — being 80 Hz out no longer looks the same as being
+  400 Hz out. How close counts as on pitch follows your rig's CW filter (25 Hz behind the usual
+  500 Hz one, tighter behind a narrow filter). When several signals are in the passband it
+  follows the one nearest your marker rather than the loudest, so it does not jump to a strong
+  station 300 Hz away while you are closing in. On a dead band it reads "no signal" rather than
+  a confident zero, and it is a display only — it never touches your dial. Asked for by KD9TAW.
+
 - **Tune can key at its own power.** Set a tune power under **Settings ▸ Digital ▸ Transmit &
   Sequencing** and a tune-up keys at that level instead of whatever you are running. It can only
   ever turn the rig *down* — it keys at whichever is lower, your setting or your current power —
@@ -45,7 +67,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by upgrading. They exist for one fault: a rig that keys the transmitter the moment Nexus opens.
   If that is not happening to you, leave them alone.
 
+- **The app sizes itself to a high-resolution screen on Linux.** On a 4K panel, or a small sharp
+  laptop screen, Nexus used to open at 1:1 with the screen's pixels and read half the size the same
+  app does on Windows — Windows and macOS tell an app how dense the screen is, and Linux does not.
+  Nexus now asks the display for its physical size on first launch and lifts its own zoom ceiling to
+  match, so the interface can grow to the screen instead of being pinned at 100%. It only ever makes
+  things bigger, only on a screen that genuinely needs it, and only once: set the zoom yourself under
+  **Settings ▸ Appearance** and your choice stands for good. On an ordinary monitor, and on Windows
+  and macOS, nothing changes at all. Reported by an operator running 1920×1080 on a twelve-inch panel.
+
 ### Fixed
+
+- **Soundcard CW keying now uses a data mode, so the audio actually reaches the transmitter.**
+  With the CW keyer set to Soundcard, Nexus put the radio into plain USB or LSB. On the common
+  Icom and default Yaesu wiring, plain SSB takes its transmit audio from the MIC socket, so the
+  rig keyed and radiated nothing — the red light came on and no signal went out. It now commands
+  the DATA submode (DATA-U/DATA-L), which is what FT8, PSK31, RTTY and SSTV have always done;
+  soundcard CW was the one path that did not. ⚠️ **If your interface feeds the rig's MIC socket
+  and soundcard CW was working for you, tick "plain SSB for data modes" on that radio in Settings
+  and it will work again** — that is the same switch the other four modes already use. Reported by
+  an FTX-1 operator.
+
+- **The CW cockpit and Settings now warn when CAT keying is unproven on your radio.** On the
+  Yaesu FTX-1, the keying command Hamlib sends differs from the one it uses on other radios, and
+  it reports success either way — so if nothing goes out, Nexus has no way to know and the keyer
+  error line stays dark. Rather than let you lose an evening to it, both the Settings picker and
+  the cockpit's live keyer switch now say it is unproven on that radio and point you at the
+  serial keyline, WinKeyer or the soundcard keyer. It is a notice, not a block: nothing stops you
+  using CAT keying, and nothing about what Nexus sends has changed.
+
+- **Switching to the Soundcard keyer says that it takes the radio out of CW.** It always did —
+  a keyed audio tone needs the rig in an SSB or data mode — but nothing on screen said so, so the
+  mode change looked like a bug. The Settings hint and the cockpit's keyer switch now both say it,
+  and say that CW mode comes back when you pick another keyer.
+
+- **The Work button left the markers behind.** Clicking Work on a station card in the Classic
+  layout's Stations pane started the QSO but did not move your RX and TX markers onto the
+  station, so you answered someone while still listening and transmitting on a different
+  offset. Band Activity's double-click and the Roster table both moved them; the card did not,
+  which made one gesture behave three ways in the same cockpit. Both marks now follow the
+  station, RX always and TX unless you have Hold Tx Freq set, the same as WSJT-X. Reported by
+  bitslave.
+
+- **eQSL sync blamed your password when the password was fine.** If the download came back as
+  anything other than the log file, Nexus told you to check your username and password — at a
+  point where the login had already succeeded. Uploads kept working, because they never go
+  through that check, so the app was simultaneously proving your credentials were right and
+  telling you they were wrong. It now says what actually happened and states plainly that it is
+  not a login problem.
+
+  The LoTW sync carried the identical fault and has been corrected the same way, before anyone
+  hit it — that is the one that matters for award credit.
+
+- **The SWR and ALC meters had no warning band.** The bar that should turn amber as SWR climbs
+  was painting the same red as the "too hot" band, so there was nothing between "fine" and
+  "trouble" — you saw a problem arriving rather than coming. Same on the ALC and the S-meter.
+  The colour was written correctly and never took effect. Green, amber, red now, as intended.
+
+- **A paused waterfall looked like an error.** Same cause as the meters: the pause indicator was
+  reaching for an amber that never applied, and painted the error red instead.
+
+- **Small print was rendering at full size in twenty places.** Text written to be small — panel
+  tags, beacon and band rows, the CW decoder's status and age lines, the waterfall pop-out
+  controls, APRS beacon titles — was silently falling back to body size, so it sat at 14px beside
+  neighbours at 12px and 11px. Now the size it was always meant to be.
+
+- **Colours that could not follow the theme now do.** Around eighty surfaces were painting
+  hard-coded colours rather than the app's own palette: reds that did not match each other (three
+  different ones), greens likewise, and ambers that stayed identical whether you were in light or
+  dark. Worst of it was on the light theme, where several recessed areas — the connections log,
+  the waterfall pop-out, the SSTV picture area, the CW decode strip — rendered as grey slabs
+  because their colour was a fixed black wash chosen against a dark panel. The settings search
+  results list had no background at all and drew straight over whatever was behind it.
+
+- **eQSL sync refused a perfectly good download.** eQSL stopped starting its InBox export with
+  the words Nexus was looking for, so the sync rejected the file and told you your credentials
+  were wrong — at a point where the login had already succeeded. Nexus now checks the markers
+  that identify an eQSL export rather than a sentence eQSL can reword whenever it likes. An HTML
+  error page is still refused, which is what that check was for in the first place. Found,
+  diagnosed and fixed by KR8MER.
+
+- **Dropdowns were white on white on Linux.** Every dropdown in the app drew as a white box with
+  the app's own pale text on it, which on a dark theme meant you could not read what was selected
+  — including the radio and sound-card pickers in step 2 of first-time setup, so a new operator
+  could not see what they were choosing while setting the app up. Linux draws form controls with
+  its own widget theme unless an app takes them over, and Nexus never did; Windows and macOS were
+  never affected, which is why the same build looked fine there. Every dropdown is now drawn by
+  Nexus itself, in your theme, with its own arrow. Reported by an operator on Ubuntu 24.04 with an
+  FT-991A, and by M0LHJ on Fedora. **The open list is a separate problem** and is not fixed here:
+  Linux draws that as a system menu that an application cannot style at all, so the list you see
+  after clicking may still use your desktop's colours.
+
+- **Grey slabs in the light theme.** On the light theme, the CW decode strip, the copilot strip,
+  and the SSTV image area, drop zone and progress bar all drew as flat mid-grey blocks — the SSTV
+  picture area worst of all, since it is the largest. Each was asking the stylesheet for a colour
+  that had never been defined, and falling back to a fixed dark wash that happens to look right on
+  the dark theme and muddy on the light one. They now use the same recessed colour the rest of the
+  app uses, which is defined for both themes. The dark theme is unchanged.
+
+- **Four Settings dropdowns were the wrong size.** The rotator model, pounce threshold, WAV
+  recording and propagation engine pickers rendered noticeably shorter than every other control on
+  the same page. They now match.
+
+- **A guessed radio model no longer looks confirmed.** When auto-detect proves the port but has to
+  guess the model — an FT-991A answers a probe meant for an FTDX10 — the wizard marks the model box
+  for you to confirm. That marking had never actually appeared on screen, on any platform, so the
+  one moment you could catch a wrong radio passed by silently. The box is now outlined.
+
+- **APRS reported packets that were never there.** With the squelch open, the APRS panel counted
+  plain noise as packets failing their checksum — about one every four seconds — so within moments
+  of listening you were told the channel was full of traffic Nexus could not read. Nothing was
+  wrong with the decoder; the counter simply accepted any burst of noise that happened to look
+  frame-shaped. It now checks that what it found could actually be an AX.25 frame before counting
+  it. A real packet that genuinely fails its checksum is still counted, which is what that reading
+  is for. APRS also writes to the diagnostic log now — it was the only mode that said nothing at
+  all, so an APRS problem arrived with a log that talked exclusively about FT8. Reported by swinn.
+
+- **"Check your network" was the answer to problems that had nothing to do with your network.**
+  Every connector — QRZ, ClubLog, LoTW, eQSL, HRDLog and the rest — reported a rejected secure
+  connection as a network failure. So if antivirus or a company proxy inspects your HTTPS traffic,
+  Nexus would fail to upload while your browser worked perfectly and every check you could run said
+  your connection was fine. It now tells the two apart and says when interception is the likely
+  cause. A genuinely unreachable network still says so. Raised by lz2aov.
+
+- **Test CAT told you to close other software when the real problem was permissions.** On Linux,
+  a serial port your user is not permitted to open reports "permission denied" — and Nexus
+  answered with the advice for a *busy* port, telling you to close WSJT-X and flrig. No amount of
+  closing programs grants a group membership, so you would close everything, test again, fail
+  again, and reasonably conclude Nexus does not do CAT on Linux. It now recognises a permission
+  refusal and gives the actual cure: add yourself to the `dialout` group, then log out and back in
+  — the second half matters, because a group does not apply to a session already running. A port
+  another program really is holding still gets the advice it always did. Reported from Ubuntu
+  24.04 with an FT-991A that worked on Windows on the same machine.
+
+- **Audio broke up badly on Windows, and worse on battery.** The sound-card callback and the code
+  feeding it were fighting over the same lock, and the feeding side held it while copying a whole
+  transmission — so when Windows slowed the cores down on battery, the callback missed its deadline
+  and put silence on the air. That is why raising Nexus's priority helped, and why WSJT-X on the
+  same laptop was clean. The two no longer share a lock. There are underrun counters behind it now,
+  so the next report comes with a number instead of an impression. Reported by KR8MER.
+
+- **No decodes, and a log that grew to 294 MB.** Nexus opened the playback side of your sound card
+  at startup whether or not you ever transmitted. On a codec that cannot record and play at the same
+  time, that open wedges, and the error retried forever — millions of identical lines — while
+  capture kept working, so the waterfall looked healthy and nothing ever decoded. Nexus now opens
+  the playback side when you first transmit, so a station that is only listening opens it at all.
+  Repeated errors are also capped: 22 lines with a count on each, instead of filling your disk.
+  Reported by M0LHJ, who did the diagnostic work that found it.
+
+- **Your radio's audio card could be missing from the transmit list on macOS.** A card that only
+  plays and does not record was dropped from the list entirely, so the rig keyed with no audio and
+  nothing on screen explained why. Two operators hit it on different interfaces. Reported by
+  pvanderp and crabtreejw; the cause was found by M7HNF-Ian, whose diagnosis this fix follows.
+
+- **Some sound cards were refused outright, with no audio at all.** Nexus understood four of the ten
+  audio formats a card can report. A card whose natural format was any of the other six got an
+  "unsupported format" message and silence — not a setting you could change, and nothing you did
+  wrong. All formats are carried now. If you have an interface that never worked with Nexus and you
+  could never find out why, it is worth another try.
 
 - **Nexus no longer adopts a rigctld that is driving a different radio.** When a rigctld was already
   listening on a radio's CAT port, Nexus connected through it — which is the right thing, and is how
@@ -165,6 +344,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A station that is only receiving no longer opens your sound card's playback side at all.** You
+  will see this if you look — the playback stream simply is not there until the first time you
+  transmit. That is the fix for the wedged-open problem above, and it also means one fewer thing
+  holding your card if you share it with another program.
+
+- **Your sound card may open at a different rate or format after this update.** The audio library
+  Nexus uses now picks the card's default differently — 48 kHz where it might previously have chosen
+  44.1 kHz, and a different sample format on some cards. Nexus adapts either way and you should not
+  hear a difference, but if you keep notes on your station's audio settings, this is the release
+  where a number may move on its own.
+
 - **Backup and Restore moved to their own Config tab.** They existed, but sat under **Radio ▸
   Transmit limits & sharing**, which is why operators did not find them: backing up a whole
   station has nothing to do with transmit limits. Same controls, same behaviour — a findable
@@ -188,6 +378,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bands** button if you want the full count back.
 
   The VUCC box above it has always been VHF-only and is unchanged. Suggested by NT9E.
+
+- **macOS: the Settings pickers can now tell two identical radios apart.** On a station with
+  two rigs that use the same bridge and codec chips, every serial port carried the same product
+  label ("CP2105 Dual USB to UART Bridge Controller", eight times) and both sound cards
+  enumerated as "USB Audio Device" — with only a positional " #2" between them, assigned by
+  enumeration order. Moving one rig to a different USB socket therefore swapped which radio each
+  saved name referred to, silently, with nothing to warn you. Nexus now reads USB topology on
+  macOS and uses it three ways. **Rig auto-detect and the CAT port probe** no longer see the same
+  physical port twice: a Silicon Labs bridge is offered once by Apple's driver
+  (`cu.usbserial-…`) and again by the vendor's (`cu.SLAB_USBtoUART…`), two names no rule could
+  pair, so Detect listed each rig twice and the baud sweep spent a full ladder probing a port it
+  had already tried. **Saving now warns** if you picked the half of a dual bridge that carries no
+  CAT — the most convincing way to make a working radio look dead, because the port opens and the
+  writes succeed and nothing ever answers. **And saving warns** if the sound card you chose is
+  inside the *other* radio. Both warnings are advisory and never block a save: an
+  unusual-but-correct station is still yours to configure. The port list itself is unchanged —
+  every port you could pick before, you can still pick.
 
 - **The FT-710 can draw its own band scope.** The radio has a real spectrum display inside it and
   an internal USB bridge that will hand it over; until now Nexus could only show the sound card's

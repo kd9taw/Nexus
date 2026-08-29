@@ -458,6 +458,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needByCall={needByCall}
           onWorkSpot={onWorkSpot}
           needAlerts={gatedAlerts}
+          amp={snap?.radio.amp ?? null}
           onPoint={
             // Same rotator gate as App (model-launched rotctld OR external host);
             // silent fire-and-forget — detached windows have no toast host.
@@ -541,7 +542,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
         band={snap.radio.band}
         feedMode={snap.link.tier}
         onSelect={onSelect}
-        onCall={(call) => onCall(call)}
+        onCall={onCall}
         conversations={snap.conversations as Conv[]}
         onArchive={onArchive}
         bandActive={selected === '*'}
