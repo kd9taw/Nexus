@@ -81,6 +81,18 @@ describe('AmpStrip', () => {
     ).toBe(true)
   })
 
+  it('⛔ falls back to the RADIO when the amplifier reports no transmit flag', () => {
+    // Elecraft reports none. `transmitting === true` would have left every control live while
+    // keyed — a guard that cannot fire on that family, which reads as covered and is not.
+    render(<AmpStrip amp={linked({ transmitting: null })} radioTransmitting />)
+    expect((screen.getByRole('button', { name: /band up/i }) as HTMLButtonElement).disabled).toBe(true)
+    cleanup()
+    // Control: the same null-reporting amplifier is usable when the radio is NOT transmitting,
+    // so this is the fallback working rather than a family that can never be controlled.
+    render(<AmpStrip amp={linked({ transmitting: null })} radioTransmitting={false} />)
+    expect((screen.getByRole('button', { name: /band up/i }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('disables the controls when the link is down but keeps the strip on screen', () => {
     render(<AmpStrip amp={linked({ linked: false, reason: 'noAnswer', outputWatts: null })} />)
     // The strip must not vanish: gone looks identical to never-placed.

@@ -10598,12 +10598,16 @@ fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
     }
 }
 
-/// Send ONE keystroke to a configured SPE amplifier: `"bandDown"`, `"bandUp"` or `"operate"`.
+/// Ask a configured amplifier for one thing: `"bandDown"`, `"bandUp"` or `"operate"`.
 ///
-/// ⛔ THREE COMMANDS, AND THE SET IS CLOSED. An unrecognised name is refused rather than
-/// forwarded, so this boundary cannot become a way to put an arbitrary byte on the wire — the
+/// ⛔ THREE INTENTS, AND THE SET IS CLOSED. An unrecognised name is refused rather than
+/// forwarded, so this boundary cannot become a way to put an arbitrary byte on the wire — SPE's
 /// keystroke table has `SWITCH OFF` at `0x0A` immediately after `TUNE`, and a string that
 /// reached a numeric opcode would put both one typo away from an operator's amplifier.
+///
+/// These are INTENTS, not commands: the poll thread translates each one for the family that is
+/// actually connected, because only it knows the current state. SPE flips Operate with a
+/// keystroke; Elecraft names the state it wants and needs a reading to know which.
 ///
 /// Returns false when the queue is full, which the caller must surface: a keystroke the
 /// operator watched themselves make and that silently vanished reads as a broken control.
@@ -10615,11 +10619,11 @@ fn get_cat_cw_unproven_rig_models() -> Vec<u32> {
 fn amp_command(_which: String) -> bool {
     #[cfg(feature = "radio")]
     {
-        use tempo_audio::amplifier::SpeCommand;
+        use tempo_audio::amplifier::AmpIntent;
         let cmd = match _which.as_str() {
-            "bandDown" => SpeCommand::BandDown,
-            "bandUp" => SpeCommand::BandUp,
-            "operate" => SpeCommand::Operate,
+            "bandDown" => AmpIntent::BandDown,
+            "bandUp" => AmpIntent::BandUp,
+            "operate" => AmpIntent::ToggleOperate,
             _ => return false,
         };
         tempo_audio::amppoll::queue_amp_command(cmd)

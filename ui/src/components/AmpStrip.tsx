@@ -24,7 +24,14 @@ import type { AmpStatus } from '../types'
  *    This disabling is a COURTESY, not the protection — the poll thread refuses to send while
  *    the amplifier reports transmitting, and that is what actually guards the hardware.
  */
-export function AmpStrip({ amp }: { amp: AmpStatus | null | undefined }) {
+export function AmpStrip({
+  amp,
+  radioTransmitting = false,
+}: {
+  amp: AmpStatus | null | undefined
+  /** The RADIO's transmit state, used when the amplifier does not report its own. */
+  radioTransmitting?: boolean
+}) {
   // A command the queue refused. Shown once, cleared on the next successful click, because a
   // keystroke the operator watched themselves make and that silently vanished reads as broken.
   const [refused, setRefused] = useState(false)
@@ -36,7 +43,11 @@ export function AmpStrip({ amp }: { amp: AmpStatus | null | undefined }) {
   // the dark. The strip STAYS (so the operator can see the link is down where they expect the
   // amplifier to be) but nothing is clickable.
   const live = amp.linked
-  const keyed = amp.transmitting === true
+  // ⛔ ONLY SPE REPORTS ITS OWN TRANSMIT FLAG. On an Elecraft it is null, and `=== true` would
+  // leave every control live while the operator was keyed — a disabled state that can never
+  // happen on that family. When the amplifier does not say, fall back to the radio, which is
+  // the exciter driving it. The backend refuses on the same rule; this is the visible half.
+  const keyed = amp.transmitting ?? radioTransmitting
   const usable = live && !keyed
 
   const send = async (which: 'bandDown' | 'bandUp' | 'operate') => {

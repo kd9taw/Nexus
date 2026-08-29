@@ -275,7 +275,10 @@ export function CockpitHeader({
             cockpit using this header gets it and none can forget to pass it — and it renders
             NOTHING when no amplifier is configured, which is almost every station.
             ⛔ Not a stop control: an amplifier in standby does not end a transmission. */}
-        <AmpStrip amp={snap?.radio?.amp ?? null} />
+        <AmpStrip
+          amp={snap?.radio?.amp ?? null}
+          radioTransmitting={snap?.radio?.transmitting ?? false}
+        />
 
         {power && (
           <label

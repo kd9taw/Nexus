@@ -155,7 +155,7 @@ fn swr_or_none(v: f32) -> Option<f32> {
 /// there is no meaningful backlog for a keystroke, and an unbounded one would let a wedged
 /// link accumulate every click an operator made while nothing was happening, then fire them
 /// all at a kilowatt when it recovered.
-static PENDING: std::sync::Mutex<Vec<crate::amplifier::SpeCommand>> =
+static PENDING: std::sync::Mutex<Vec<crate::amplifier::AmpIntent>> =
     std::sync::Mutex::new(Vec::new());
 
 /// How many queued commands are kept. Small on purpose — see [`PENDING`].
@@ -164,7 +164,7 @@ const PENDING_CAP: usize = 4;
 /// Queue one command for the amplifier. Returns false if the queue is full, which the caller
 /// should surface rather than swallow: silently dropping a keystroke an operator watched
 /// themselves make is how a toggle appears to be broken.
-pub fn queue_amp_command(cmd: crate::amplifier::SpeCommand) -> bool {
+pub fn queue_amp_command(cmd: crate::amplifier::AmpIntent) -> bool {
     let mut q = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     if q.len() >= PENDING_CAP {
         return false;
@@ -175,7 +175,7 @@ pub fn queue_amp_command(cmd: crate::amplifier::SpeCommand) -> bool {
 
 #[cfg(all(feature = "device", feature = "serial"))]
 /// Take everything queued. Used by the poll thread only.
-fn take_pending() -> Vec<crate::amplifier::SpeCommand> {
+fn take_pending() -> Vec<crate::amplifier::AmpIntent> {
     std::mem::take(&mut *PENDING.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
@@ -237,10 +237,11 @@ pub fn kpa_dto(s: &KpaStatus) -> AmpStatusDto {
         // fabricated reading this whole path refuses.
         transmitting: None,
         output_watts: Some(s.output_watts),
-        // No polled KPA verb reports the band. `None`, not a value derived from the radio —
-        // this field says what the AMPLIFIER reports, and inferring it from elsewhere would
-        // make the two families' readings mean different things under one name.
-        band_label: None,
+        // ⭐ THIS WAS WRONG AND SAID SO CONFIDENTLY. It read `None`, with a comment claiming no
+        // polled KPA verb reports the band — an absence asserted without checking. `poll` asks
+        // `^BN` and has all along, and Elecraft publishes the whole ladder. The claim was the
+        // defect, not the missing feature.
+        band_label: crate::amplifier::kpa_band_label(s.band_index).map(str::to_string),
         swr: s.swr,
         swr_atu: None,
         volts: Some(s.volts),
@@ -263,7 +264,7 @@ mod imp {
         backoff_ms, drop_pending, kpa_dto, reason_for, spe_dto, take_pending, FAMILY_KPA,
         FAMILY_SPE, POLL,
     };
-    use crate::amplifier::{KpaLink, SpeLink};
+    use crate::amplifier::{KpaLink, KpaStatus, SpeLink};
     use crate::service::SHUTDOWN;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -395,9 +396,17 @@ mod imp {
 
             // THE POLL ITSELF, ENTIRELY OFF THE LOCK — up to 2.4 s of blocking serial. Holding
             // the engine mutex across it would stall the 20 ms radio loop AND `get_snapshot`.
+            // The KPA's own reading is KEPT for this iteration, not just converted: Elecraft
+            // SETs name the state they want, so translating an intent needs to know which state
+            // the amplifier is in. The SPE needs no such thing — its OPERATE is a flip.
+            let mut kpa_now: Option<KpaStatus> = None;
             let read = match link.as_mut() {
                 Some(Link::Spe(l)) => l.poll().map(|s| spe_dto(&s)),
-                Some(Link::Kpa(l)) => l.poll().map(|s| kpa_dto(&s)),
+                Some(Link::Kpa(l)) => l.poll().map(|s| {
+                    let d = kpa_dto(&s);
+                    kpa_now = Some(s);
+                    d
+                }),
                 None => continue,
             };
 
@@ -414,19 +423,40 @@ mod imp {
                     //
                     // Commands are DROPPED rather than deferred. A band step that arrives after
                     // the over it was meant for is a command the operator is no longer watching.
-                    if dto.transmitting == Some(true) {
+                    // ⛔ THE INTERLOCK, AND ITS FALLBACK. `dto.transmitting` is the amplifier's
+                    // OWN flag and the most direct evidence there is — but only SPE reports one.
+                    // On a KPA it is `None`, and `None != Some(true)` would have taken the send
+                    // branch while the operator was keyed: a guard that exists and can never fire
+                    // on that family, which is worse than no guard because it reads as covered.
+                    // So when the amplifier does not say, the RADIO does: `radio.transmitting` is
+                    // what the engine already knows about the exciter driving it.
+                    let keyed = dto
+                        .transmitting
+                        .unwrap_or_else(|| engine_lock(&engine).snapshot().radio.transmitting);
+                    if keyed {
                         drop_pending();
                     } else {
-                        for cmd in take_pending() {
-                            if let Some(Link::Spe(l)) = link.as_mut() {
-                                // A failed send drops the link so the next cycle reopens it,
-                                // exactly as a failed poll does. Nothing is retried: a keystroke
-                                // replayed onto a recovered link is a click nobody made.
-                                if l.send_command(cmd).is_err() {
-                                    link = None;
-                                    drop_pending();
-                                    break;
-                                }
+                        for intent in take_pending() {
+                            // Each family translates the SAME intent its own way, here rather
+                            // than in the UI, because this is where the current state is known:
+                            // SPE flips with a keystroke, Elecraft names the state it wants and
+                            // needs the reading to know which.
+                            let sent = match (link.as_mut(), kpa_now.as_ref()) {
+                                (Some(Link::Spe(l)), _) => l.send_intent(intent),
+                                (Some(Link::Kpa(l)), Some(now)) => l.send_intent(intent, now),
+                                // A KPA with no reading yet: nothing to compute a SET from, and
+                                // guessing a band number is how an amplifier ends up somewhere
+                                // nobody asked for. Dropped, not deferred.
+                                (Some(Link::Kpa(_)), None) => Ok(()),
+                                (None, _) => break,
+                            };
+                            // A failed send drops the link so the next cycle reopens it, exactly
+                            // as a failed poll does. Nothing is retried: a command replayed onto
+                            // a recovered link is a click nobody made.
+                            if sent.is_err() {
+                                link = None;
+                                drop_pending();
+                                break;
                             }
                         }
                     }
