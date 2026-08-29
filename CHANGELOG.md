@@ -55,7 +55,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by upgrading. They exist for one fault: a rig that keys the transmitter the moment Nexus opens.
   If that is not happening to you, leave them alone.
 
+- **The app sizes itself to a high-resolution screen on Linux.** On a 4K panel, or a small sharp
+  laptop screen, Nexus used to open at 1:1 with the screen's pixels and read half the size the same
+  app does on Windows — Windows and macOS tell an app how dense the screen is, and Linux does not.
+  Nexus now asks the display for its physical size on first launch and lifts its own zoom ceiling to
+  match, so the interface can grow to the screen instead of being pinned at 100%. It only ever makes
+  things bigger, only on a screen that genuinely needs it, and only once: set the zoom yourself under
+  **Settings ▸ Appearance** and your choice stands for good. On an ordinary monitor, and on Windows
+  and macOS, nothing changes at all. Reported by an operator running 1920×1080 on a twelve-inch panel.
+
 ### Fixed
+
+- **Dropdowns were white on white on Linux.** Every dropdown in the app drew as a white box with
+  the app's own pale text on it, which on a dark theme meant you could not read what was selected
+  — including the radio and sound-card pickers in step 2 of first-time setup, so a new operator
+  could not see what they were choosing while setting the app up. Linux draws form controls with
+  its own widget theme unless an app takes them over, and Nexus never did; Windows and macOS were
+  never affected, which is why the same build looked fine there. Every dropdown is now drawn by
+  Nexus itself, in your theme, with its own arrow. Reported by an operator on Ubuntu 24.04 with an
+  FT-991A, and by M0LHJ on Fedora. **The open list is a separate problem** and is not fixed here:
+  Linux draws that as a system menu that an application cannot style at all, so the list you see
+  after clicking may still use your desktop's colours.
+
+- **Grey slabs in the light theme.** On the light theme, the CW decode strip, the copilot strip,
+  and the SSTV image area, drop zone and progress bar all drew as flat mid-grey blocks — the SSTV
+  picture area worst of all, since it is the largest. Each was asking the stylesheet for a colour
+  that had never been defined, and falling back to a fixed dark wash that happens to look right on
+  the dark theme and muddy on the light one. They now use the same recessed colour the rest of the
+  app uses, which is defined for both themes. The dark theme is unchanged.
+
+- **Four Settings dropdowns were the wrong size.** The rotator model, pounce threshold, WAV
+  recording and propagation engine pickers rendered noticeably shorter than every other control on
+  the same page. They now match.
+
+- **A guessed radio model no longer looks confirmed.** When auto-detect proves the port but has to
+  guess the model — an FT-991A answers a probe meant for an FTDX10 — the wizard marks the model box
+  for you to confirm. That marking had never actually appeared on screen, on any platform, so the
+  one moment you could catch a wrong radio passed by silently. The box is now outlined.
 
 - **APRS reported packets that were never there.** With the squelch open, the APRS panel counted
   plain noise as packets failing their checksum — about one every four seconds — so within moments

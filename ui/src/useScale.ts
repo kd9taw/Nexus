@@ -118,6 +118,67 @@ const DEFAULT_CAP: Scale = 100
  * current one — kills flip-flop when the window sits on a step boundary. */
 const HYST = 0.03
 
+/** The density a CSS pixel is nominally drawn at. Not a preference — the number the whole
+ *  web platform sizes against, so a display at 96 must come out unchanged. */
+const REFERENCE_DPI = 96
+
+/**
+ * Below this the display needs no help and we must not touch it.
+ *
+ * NOT a round number and not taste — it clears the densest display that is ALREADY being
+ * handled properly. A macOS Retina laptop is a 227-dpi panel at dpr 2, so its CSS pixel sits
+ * at ~113 dpi, a factor of 1.18; Windows at 150% on a 141-dpi laptop lands at 0.98; a 27"
+ * 1440p desktop monitor is 1.14. All of those are somebody's deliberate choice or the OS
+ * doing its job, and none of them wants Nexus second-guessing it. The displays this seed
+ * exists for are not marginal — the reported machine is 1.92 and a 4K panel with no scaling
+ * is 1.70. 1.2 sits in the empty valley between the two populations.
+ *
+ * The first step above the default cap is 110, so a factor under 1.10 could never produce a
+ * seed anyway; this threshold is the deliberate margin ON TOP of that, and it is the knob to
+ * turn if this ever proves too shy or too eager.
+ */
+const SEED_MIN_FACTOR = 1.2
+
+/**
+ * The auto-fit CEILING this display deserves, or `null` to leave the operator's scale alone.
+ *
+ * WHY THIS EXISTS. `DEFAULT_CAP` is 100, so auto-fit can shrink the UI for a small window but
+ * can never GROW it for a dense one — and on Linux nothing else grows it either. Windows and
+ * macOS hand the webview a `devicePixelRatio` that already accounts for the panel, so a CSS
+ * pixel arrives near the reference density and everything is sized correctly. X11 hands over
+ * 1 whatever the hardware is, and the GNOME setting an operator reaches for (text-scaling-
+ * factor → `gtk-xft-dpi`) was measured to move nothing in web content at all. The result is a
+ * 4K or a small-and-sharp panel rendering the app at 1:1 physical pixels: everything half the
+ * size it is on the same machine booted into Windows. That is a real field report (1.9.0,
+ * 1920×1080 on a twelve-inch panel, ~184 dpi).
+ *
+ * THE ARITHMETIC. `physicalDpi / dpr` is the density of a CSS pixel — how sharp, and so how
+ * SMALL, the app's own units land on this glass. Divided by the 96-dpi reference it is
+ * exactly the factor the UI is undersized by. It is deliberately the same expression on all
+ * three platforms: Windows and macOS choose a `dpr` that makes it come out at ~1, so they
+ * take the `null` branch and nothing changes, which is the correct answer rather than a
+ * special case.
+ *
+ * SNAPPED DOWN, NEVER UP, AND NEVER BELOW 100. Down because a UI slightly too small is a
+ * squint and a UI too large hides controls; never below 100 because this may only ever RAISE
+ * a ceiling — shrinking is auto-fit's job and it is already good at it.
+ *
+ * Note this returns a CAP, not a scale: auto-fit still takes `min(what fits, this)`, so a
+ * window too small to hold the content whole is unaffected. On the reporter's own 1920×1080
+ * that fit ceiling is 110, so he gets 110% rather than the 100% he has now; on a 4K panel,
+ * where the fit allows far more, the cap is what binds and the change is large.
+ */
+export function dpiSeedCap(physicalDpi: number | null | undefined, dpr: number): Scale | null {
+  if (physicalDpi == null || !Number.isFinite(physicalDpi) || physicalDpi <= 0) return null
+  if (!Number.isFinite(dpr) || dpr <= 0) return null
+  const factor = physicalDpi / dpr / REFERENCE_DPI
+  if (factor < SEED_MIN_FACTOR) return null
+  const target = factor * 100
+  let seed: Scale | null = null
+  for (const s of SCALE_STEPS) if (s <= target && s > DEFAULT_CAP) seed = s
+  return seed
+}
+
 /**
  * Largest scale step that keeps `nat` whole in `innerW × innerH`, clamped to
  * [Z_MIN, cap] and snapped DOWN so content never overflows. Pure + testable.
@@ -217,6 +278,22 @@ export function capPinnedScale(
   if (mainSurface) return pin
   const ceil = fitScale(innerW, innerH, MAX_STEP, undefined, nat)
   return pin <= ceil ? pin : ceil
+}
+
+/** True when nobody has ever chosen an auto-fit ceiling on this install.
+ *
+ * THE FIRST-LAUNCH GATE, and the whole of it: the DPI seed writes this key, so this is false
+ * for the rest of the install's life. An upgrade cannot re-seed, and a scale the operator
+ * chose — including choosing to leave it at 100 — is never moved under them. Absence of the
+ * key is the only signal used; a stored value is treated as an answer even when it equals the
+ * default, because it IS one. A storage failure returns false, so the seed does nothing rather
+ * than firing on every launch. */
+export function capNeverChosen(): boolean {
+  try {
+    return localStorage.getItem(CAP_KEY) === null
+  } catch {
+    return false
+  }
 }
 
 function readCap(): Scale {

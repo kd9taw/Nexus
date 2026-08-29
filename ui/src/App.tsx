@@ -55,6 +55,7 @@ import { loadWatchlist, type WatchFilter } from './watchlist'
 import { useTheme } from './useTheme'
 import { useFieldMode } from './useFieldMode'
 import { useScale } from './useScale'
+import { useDpiScaleSeed } from './useDpiSeed'
 import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
 import { useMotion } from './useMotion'
@@ -235,6 +236,10 @@ export default function App() {
   // the useScale argument. Global — a fact about the station, like the theme.
   const [fieldMode, setFieldMode] = useFieldMode()
   const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale(fieldMode)
+  // First launch on a high-density display: raise the auto-fit ceiling so the UI can grow to
+  // the panel. Once only, raise only, and nothing at all on an ordinary 96-dpi monitor or on
+  // a platform whose OS already scales for us. See useDpiSeed.ts.
+  useDpiScaleSeed(setScaleCap)
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)

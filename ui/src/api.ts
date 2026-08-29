@@ -1347,6 +1347,19 @@ export async function getAudioDevices(): Promise<AudioDevices> {
   return invoke<AudioDevices>('get_audio_devices')
 }
 
+/** What the OS can say about this display's physical density — the input to the first-launch
+ *  UI-scale seed. `physicalDpi` is null wherever the platform already sizes CSS pixels
+ *  correctly (Windows, macOS) or the panel reports no physical size; that is a "change
+ *  nothing" answer, not a failure. See `display_metrics` in src-tauri and `dpiSeedCap`. */
+export interface DisplayMetrics {
+  physicalDpi: number | null
+  scaleFactor: number
+}
+
+export async function getDisplayMetrics(): Promise<DisplayMetrics> {
+  return invoke<DisplayMetrics>('display_metrics')
+}
+
 /**
  * Enable / disable transmit (the Monitor toggle). Enabling also clears a tripped
  * TX watchdog. Returns the fresh snapshot.

@@ -4814,6 +4814,7 @@ export function SettingsPanel({
                   return (
                     <>
                       <select
+                        className="settings-input"
                         value={isOther ? 'other' : modelStr}
                         onChange={(e) => {
                           const v = e.target.value
@@ -7232,6 +7233,7 @@ export function SettingsPanel({
             <label className="settings-field">
               <span className="settings-label">{t('settings.pounce.threshold.label')}</span>
               <select
+                className="settings-input"
                 value={form.pounceThreshold ?? 'off'}
                 onChange={(e) => update('pounceThreshold', e.target.value as never)}
               >
@@ -7769,6 +7771,7 @@ export function SettingsPanel({
                     {t('settings.integrations.saveWav.label')}
                   </span>
                   <select
+                    className="settings-input"
                     value={form.saveWav || 'none'}
                     onChange={(e) => update('saveWav', e.target.value)}
                   >
@@ -7933,6 +7936,7 @@ export function SettingsPanel({
                     {t('settings.integrations.propEngine.label')}
                   </span>
                   <select
+                    className="settings-input"
                     value={form.propEngine || 'heuristic'}
                     onChange={(e) => update('propEngine', e.target.value)}
                   >

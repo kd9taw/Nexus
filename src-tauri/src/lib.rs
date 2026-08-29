@@ -1609,6 +1609,82 @@ fn save_bandmap_window(slug: &str, inst: Instance, g: &BandmapWindow) {
     }
 }
 
+/// How physically large a CSS pixel is on this operator's display — the one input the UI
+/// scale has never had on Linux.
+///
+/// Windows and macOS answer this themselves: the OS picks a scale factor, the webview reports
+/// it as `devicePixelRatio`, and a CSS pixel lands near the 96-dpi reference on purpose. X11
+/// does not, and X11 is what Nexus runs on — `scripts/build-linux.sh` documents that the
+/// AppImage's AppRun forces `GDK_BACKEND=x11`, so even a Wayland session is an XWayland
+/// client. There the scale factor is 1 whatever the panel is. Measured against webkit2gtk-4.1
+/// 2.52.3 with this app's own stylesheet: `GDK_SCALE=2` and `GDK_DPI_SCALE=1.5` both reach the
+/// page as `devicePixelRatio`, but `gtk-xft-dpi=144` — what GNOME's text-scaling-factor and
+/// "Large Text" actually set, and the setting an operator on a small high-resolution laptop
+/// reaches for first — moves nothing in web content. Not one pixel: same devicePixelRatio,
+/// same viewport, same rendered rect for every element.
+///
+/// So on Linux we ask the display for its EDID physical size and let the UI do the
+/// arithmetic. `physical_dpi: None` means "nothing here needs correcting", which is the right
+/// answer on every platform where the OS is already doing this job.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayMetrics {
+    /// True pixel density of the display the app opened on, from its reported physical size.
+    /// `None` off Linux, and on Linux whenever the panel reports no size (many virtual
+    /// displays, some KVMs and projectors report 0 mm) — never a guess.
+    physical_dpi: Option<f64>,
+    /// The scale factor the OS applies, which the webview already reflects as
+    /// `devicePixelRatio`. The UI divides by it to get the density of a CSS pixel.
+    scale_factor: f64,
+}
+
+/// Probed once, on the main thread, during `setup()` — GDK is not safe to call from a command
+/// worker, and the answer cannot change without the app being restarted onto another monitor.
+static DISPLAY_DPI: OnceLock<Option<f64>> = OnceLock::new();
+
+/// Read the primary monitor's physical size and turn it into a true DPI.
+///
+/// `Monitor::geometry()` is in GDK's LOGICAL pixels, so it is multiplied back up by GDK's own
+/// integer scale before dividing by the physical width — otherwise a display already running
+/// at `GDK_SCALE=2` would report half its real density and we would "correct" a screen that
+/// needs no correcting.
+#[cfg(target_os = "linux")]
+fn probe_physical_dpi() -> Option<f64> {
+    // `Display::default` / `primary_monitor` / `monitor` are inherent in gdk 0.18; only the
+    // Monitor accessors come from a trait.
+    use gdk::prelude::MonitorExt;
+    let display = gdk::Display::default()?;
+    // Primary is the right monitor to ask: the main window opens there. A multi-head setup
+    // with mismatched densities is not solvable from one number, and guessing the wrong head
+    // is worse than the current behaviour — hence no per-window monitor walk.
+    let monitor = display.primary_monitor().or_else(|| display.monitor(0))?;
+    let width_mm = monitor.width_mm();
+    let width_px = monitor.geometry().width() * monitor.scale_factor().max(1);
+    if width_mm <= 0 || width_px <= 0 {
+        return None;
+    }
+    let dpi = width_px as f64 / (width_mm as f64 / 25.4);
+    // A sane-range gate rather than trust: EDID is operator-visible hardware data and some
+    // panels lie outright (a 0-mm or 1-mm width would divide into thousands). Outside this
+    // band we would rather change nothing than resize someone's app on bad data.
+    (40.0..=800.0).contains(&dpi).then_some(dpi)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn probe_physical_dpi() -> Option<f64> {
+    None
+}
+
+/// The display metrics for the window asking. Pure read of the cached probe plus this
+/// window's own scale factor, so it is cheap enough for the frontend to call at launch.
+#[tauri::command]
+fn display_metrics(window: tauri::WebviewWindow) -> DisplayMetrics {
+    DisplayMetrics {
+        physical_dpi: *DISPLAY_DPI.get_or_init(probe_physical_dpi),
+        scale_factor: window.scale_factor().unwrap_or(1.0),
+    }
+}
+
 /// Snapshot a band-map window's current size+position to its own per-surface file (logical px),
 /// preserving its dock choice. Called on close so the next open restores it. No-op otherwise.
 fn capture_bandmap_window(window: &tauri::WebviewWindow) {
@@ -18199,6 +18275,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
         .invoke_handler(tauri::generate_handler![
+            display_metrics,
             update_install_block,
             prepare_update_install,
             restart_app,
@@ -18520,6 +18597,10 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             if let Ok(res) = app.path().resource_dir() {
                 let _ = RESOURCE_DIR.set(res);
             }
+            // Probe the display's physical density HERE, on the main thread, where GDK is safe
+            // to call. The frontend reads the cached answer through `display_metrics` and uses
+            // it to seed the UI scale cap on a first launch only. No-op off Linux.
+            let _ = DISPLAY_DPI.set(probe_physical_dpi());
             // The operator-facing folders. Captured here for the same reason as the resource dir:
             // the functions that need them are free functions with no handle. A failure to resolve
             // is not an error — the legacy in-config location is still a working default.

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-viewport="md">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Harness — the undefined-token surfaces</title>
+    <link rel="stylesheet" href="../src/styles.css" />
+    <style>
+      :root {
+        --ui-zoom: 1;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        padding: 16px;
+        font-family: var(--font-sans);
+      }
+      /* Harness chrome. `.h-panel` stands in for the pane these elements really sit in —
+         a recessed surface is only judgeable against the thing it is recessed INTO. */
+      .h-panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 10px;
+        flex: 1;
+        min-width: 0;
+      }
+      .h-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .h-name {
+        flex: 0 0 250px;
+        font-size: 11px;
+        color: var(--text-dim);
+        font-family: var(--font-mono, monospace);
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Surfaces whose background resolves through an UNDEFINED token</h1>
+
+    <!-- GROUP A — recessed wells, fallback rgba(0,0,0,0.2) -->
+    <div class="h-row">
+      <div class="h-name">.cw-decode (recessed well)</div>
+      <div class="h-panel"><div class="cw-decode" id="s-cwdecode">CQ CQ DE KD9TAW K</div></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.cw-copilot</div>
+      <div class="h-panel"><div class="cw-copilot" id="s-cwcopilot">Copilot: suggest 599 TU</div></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.sstv-canvas</div>
+      <div class="h-panel"><div class="sstv-canvas" id="s-sstvcanvas">image area</div></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.sstv-tx-drop (drop zone)</div>
+      <div class="h-panel"><div class="sstv-tx-drop" id="s-sstvdrop">Drop an image here</div></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.sstv-tx-progress-track</div>
+      <div class="h-panel"><div class="sstv-tx-progress-track" id="s-sstvtrack"></div></div>
+    </div>
+
+    <!-- GROUP B — raised chip, fallback rgba(255,255,255,0.06) -->
+    <div class="h-row">
+      <div class="h-name">.cw-chip (raised chip)</div>
+      <div class="h-panel"><span class="cw-chip" id="s-cwchip">TU 73</span></div>
+    </div>
+
+    <!-- GROUP D — no fallback at all -->
+    <div class="h-row">
+      <div class="h-name">.heartbeat-btn (NO fallback)</div>
+      <div class="h-panel"><button class="heartbeat-btn" id="s-heartbeat">Beacon</button></div>
+    </div>
+
+    <!-- GROUP C — fallback `transparent`, believed correct as-is -->
+    <div class="h-row">
+      <div class="h-name">.wf-palette (C: transparent)</div>
+      <div class="h-panel"><select class="wf-palette" id="s-wfpal"><option>Viridis</option></select></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.cockpit-depth-chip (C)</div>
+      <div class="h-panel"><button class="cockpit-depth-chip" id="s-depth">Depth 3</button></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.setup-health (C)</div>
+      <div class="h-panel"><div class="setup-health" id="s-health">Radio OK · Audio OK</div></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.cluster-node-remove (C)</div>
+      <div class="h-panel"><button class="cluster-node-remove" id="s-clusterrm">Remove</button></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.map-coverage-dim (C)</div>
+      <div class="h-panel"><select class="map-coverage-dim" id="s-mapdim"><option>Grids</option></select></div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">.aprs-beacon input (C)</div>
+      <div class="h-panel">
+        <div class="aprs-beacon"><input id="s-aprsin" type="text" value="30 min" /></div>
+      </div>
+    </div>
+
+    <!-- TASK A — the four bare SettingsPanel selects, against a proper sibling -->
+    <div class="h-row">
+      <div class="h-name">TASK A: settings select (bare)</div>
+      <div class="h-panel">
+        <label class="settings-field">
+          <span class="settings-label">Save WAV</span>
+          <select id="s-bare"><option>Never</option></select>
+        </label>
+      </div>
+    </div>
+    <div class="h-row">
+      <div class="h-name">TASK A: sibling WITH .settings-input</div>
+      <div class="h-panel">
+        <label class="settings-field">
+          <span class="settings-label">Rig model</span>
+          <select id="s-sibling" class="settings-input"><option>Yaesu FT-991A</option></select>
+        </label>
+      </div>
+    </div>
+
+    <script>
+      const q = new URLSearchParams(location.search)
+      document.documentElement.setAttribute('data-theme', q.get('theme') === 'light' ? 'light' : 'dark')
+
+      const IDS = [
+        's-cwdecode', 's-cwcopilot', 's-sstvcanvas', 's-sstvdrop', 's-sstvtrack', 's-cwchip',
+        's-heartbeat', 's-wfpal', 's-depth', 's-health', 's-clusterrm', 's-mapdim', 's-aprsin',
+        's-bare', 's-sibling',
+      ]
+
+      window.addEventListener('load', () => {
+        if (q.get('report') !== '1') return
+        const pre = document.createElement('pre')
+        pre.id = 'report'
+        pre.textContent = JSON.stringify(window.measure(), null, 1)
+        document.body.replaceChildren(pre)
+      })
+
+      window.measure = () => {
+        const out = {}
+        for (const id of IDS) {
+          const el = document.getElementById(id)
+          const cs = getComputedStyle(el)
+          const r = el.getBoundingClientRect()
+          out[id] = {
+            rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+            bg: cs.backgroundColor,
+            color: cs.color,
+          }
+        }
+        // The surface these sit ON, so "recessed" and "raised" are judgeable rather than vibes.
+        out.__panel = getComputedStyle(document.querySelector('.h-panel')).backgroundColor
+        return out
+      }
+    </script>
+  </body>
+</html>

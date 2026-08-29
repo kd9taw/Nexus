@@ -2968,7 +2968,7 @@ button.nb-chip:hover {
   padding: 2px 6px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: var(--surface, transparent);
+  background: transparent;
   color: var(--text);
 }
 
@@ -4059,9 +4059,76 @@ body.resizing {
   border-radius: 999px;
   padding: var(--space-1) 6px var(--space-1) var(--space-2);
 }
-/* Native <select> popups render on the OS's (usually light) background, so the app's dim
+/* ── THE CLOSED <select> BOX — the one rule that owns it, on every platform ──────────────
+   On Linux the runtime is WebKitGTK, and its RenderThemeAdwaita paints its own form-control
+   chrome OVER the author's background box whenever the used `appearance` is still `auto`.
+   The cascade resolves correctly and is then overpainted: measured in webkit2gtk-4.1 2.52.3,
+   the wizard's audio pickers computed `background: rgb(19,25,37)` and PAINTED #F4F4F4, with
+   the app's near-white --text on top — 1.07:1, invisible. The setup wizard's radio and audio
+   selectors were unreadable on a stock Ubuntu 24.04 desktop (field report, 1.9.0). Blink
+   (Windows/macOS) honours the author background, which is why the same build looked fine
+   there and why this went unseen for so long. `appearance: none` is the whole fix: it takes
+   the box back from the engine, and the same measurement then reads 14.95:1.
+
+   THE ARROW IS PART OF THE FIX, NOT A GARNISH. `appearance: none` also removes the arrow the
+   engine was drawing, and a select with no arrow is a text input to look at. The engine also
+   RESERVED the width that arrow needed, so replacing it with our own is width-neutral rather
+   than a density change — measured across all 23 select surfaces, see ui/layout-harness.
+
+   ⚠️ WHY `!important`, deliberately, on exactly the chrome half. Every one of the ~20 rules
+   in this sheet that styles a select does so with the `background` and `padding` SHORTHANDS
+   (`.wizard-field select`, `.settings-input`, `.np-chip`, `.pane-pick`, …). A shorthand
+   resets `background-image` to `none` and `padding-right` to its own value, so a normal base
+   rule would have its arrow silently deleted by every one of them — and by the next select
+   rule anyone writes. The shorthands are also shared with <input> siblings, so they cannot
+   simply be unpicked. Marking the chrome important makes the arrow a property of BEING a
+   select rather than something each surface has to remember. The look half below it
+   (background-color / color / border) is deliberately NOT important: it is only a default
+   for the handful of selects that declare no styling of their own, and every surface that
+   has an opinion still wins. */
+select {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  /* Two triangles meeting into one arrowhead — gradients, not an SVG data URI, because the
+     colour has to be a theme token and a data URI cannot carry one. */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%) !important;
+  /* Order matters and is easy to get backwards: the 45° half is the LEFT stroke of the
+     arrowhead, so it sits FURTHER from the right edge. Swapped, the two halves render as a
+     mirrored tick instead of a triangle (caught in the harness, not in review). */
+  background-position: right 13px center, right 8px center !important;
+  background-size: 5px 5px, 5px 5px !important;
+  background-repeat: no-repeat !important;
+  /* The room the arrow needs, as a TOKEN so the narrow-viewport `--space-scale` tightening
+     reaches it like every other spacing value (styles-spacing.test.ts enforces this, and
+     caught it here). At the tightest scale, 0.86, this is 20.6px against an arrow that ends
+     18px from the edge — the text still clears it. */
+  padding-right: var(--space-6) !important;
+  cursor: pointer;
+  /* The default LOOK, overridable by every surface below. Only the five selects that style
+     themselves not at all land here (`.tuning-step`, four in SettingsPanel) — until now they
+     took the OS widget's colours, which is a white box in a dark app on every platform. */
+  background-color: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+/* The Logbook's per-row QSL menu is a 22×22 icon button, not a field: the arrow IS its whole
+   content, so it centres instead of sitting after text there is no room for. Higher
+   specificity + important is what it takes to beat the important above. */
+select.log-rowbtn {
+  background-position: center !important;
+  padding-right: 0 !important;
+}
+/* Native <select> POPUPS render on the OS's (usually light) background, so the app's dim
    text is nearly unreadable there. Force a dark popup + readable text for EVERY dropdown
-   (band pickers on each mode, settings, sorts). */
+   (band pickers on each mode, settings, sorts).
+   ⚠️ THIS HALF DOES NOT WORK ON LINUX AND CANNOT BE MADE TO. WebKitGTK draws the open popup
+   as a separate GTK toplevel (WebPopupMenuProxyGtk), not as web content, so it never sees
+   these declarations — that is issue #169, a DIFFERENT bug from the closed box above, with a
+   different fix (an in-page listbox) that is tracked separately. Keep this rule: it is what
+   makes the popup readable on Windows and macOS. */
 select option,
 select optgroup {
   background: var(--bg-elev);
@@ -5341,8 +5408,13 @@ select optgroup {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-2);
+  /* Two tokens from a vocabulary that never existed (`--surface-2`, `--text-2`), and
+     unlike every other reference to it these carried NO fallback — so the fill silently
+     computed to `transparent` and the label inherited whatever it sat on. `.heartbeat-btn.on`
+     turning the label `--state-good` is what says the resting label was meant to be the muted
+     one: dim → green is the on/off signal, and it was reading bright → green. */
+  background: var(--bg-elev);
+  color: var(--text-dim);
   cursor: pointer;
   font-size: 13px;
 }
@@ -6380,7 +6452,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   gap: var(--space-1);
   padding: var(--space-1) var(--space-2);
   margin-bottom: var(--space-2);
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
@@ -6557,7 +6633,11 @@ input.cw-pitch::-webkit-inner-spin-button {
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
   margin-bottom: var(--space-2);
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
@@ -9519,11 +9599,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   opacity: 0.4;
   cursor: not-allowed;
 }
-select.settings-input {
-  -webkit-appearance: none;
-  appearance: none;
-  cursor: pointer;
-}
 .settings-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -9555,7 +9630,7 @@ select.settings-input {
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2, transparent);
+  background: transparent;
   color: var(--text-dim);
   font-size: 0.78rem;
   cursor: pointer;
@@ -10015,7 +10090,7 @@ select.settings-input {
   margin-left: auto;
   font-size: 10px;
   padding: 1px var(--space-1);
-  background: var(--surface-2, transparent);
+  background: transparent;
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -17790,7 +17865,14 @@ button.sat-chip:disabled {
   font-size: 14px;
   padding: 6px 10px;
 }
-.wizard-field input.bad {
+/* ⚠️ BOTH ELEMENTS, and the select is the one that matters. The wizard puts `bad` on the
+   RADIO MODEL <select> (SetupWizard.tsx) to mark a model the probe GUESSED rather than
+   confirmed — an FT-991A answers the FTDX10 seed, so the guess is wrong more often than not.
+   This rule was `input.bad` only, so that border had never rendered on any platform: the one
+   moment an operator could catch a wrong radio, marked invisibly. `aria-invalid` and the red
+   hint text were doing the whole job alone. */
+.wizard-field input.bad,
+.wizard-field select.bad {
   border-color: var(--band-marginal);
 }
 .wizard-field-hint {
@@ -19465,7 +19547,11 @@ button.sat-chip:disabled {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
@@ -19651,7 +19737,11 @@ button.sat-chip:disabled {
   padding: var(--space-2) var(--space-3);
   border: 1px dashed var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
 }
 .sstv-tx-drop.loaded {
   border-style: solid;
@@ -19841,7 +19931,11 @@ button.sat-chip:disabled {
 .sstv-tx-progress-track {
   height: 8px;
   border-radius: 999px;
-  background: var(--surface-2, rgba(0, 0, 0, 0.2));
+  /* `--bg` IS the recessed role in both themes (dark #0b0f17 under #111722 panel,
+     light #e5eaf0 under #fbfcfe). Was `var(--surface-2, rgba(0,0,0,.2))` — an
+     undefined token whose fallback is a fixed black wash, correct-looking in dark
+     and a muddy grey slab in light. */
+  background: var(--bg);
   border: 1px solid var(--border);
   overflow: hidden;
 }
@@ -19923,7 +20017,7 @@ button.sat-chip:disabled {
 }
 .aprs-beacon input,
 .aprs-beacon select {
-  background: var(--surface-2, transparent);
+  background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -20338,7 +20432,7 @@ tr.sel .aprs-sym {
   padding: 2px 6px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
-  background: var(--surface-2, transparent);
+  background: transparent;
   color: var(--text-dim);
   cursor: pointer;
 }
@@ -20377,7 +20471,7 @@ tr.sel .aprs-sym {
   margin-bottom: var(--space-2);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md, 8px);
-  background: var(--surface-2, transparent);
+  background: transparent;
 }
 .setup-health-title {
   font-size: 11px;

@@ -4902,6 +4902,7 @@ dependencies = [
 name = "tempo"
 version = "1.9.1"
 dependencies = [
+ "gdk",
  "keyring",
  "propagation",
  "reqwest 0.12.28",
