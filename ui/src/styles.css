@@ -10037,6 +10037,19 @@ select.settings-input {
 }
 .ph-scope-title {
   margin-right: auto; /* push the Colors/palette controls to the right edge */
+  /* TRUNCATE, NEVER WRAP (2026-08-28). `.ph-scope-head` is a nowrap flex row, but the title's
+     TEXT still wrapped inside its own box under pressure, and a second head line comes
+     straight out of the scope canvas below it (the panel is `flex: 0 1 var(--cw-scope-h)`
+     with an 8em floor — the head takes its height off the picture). Measured in headless
+     Chrome at 1024x768 pinned to 175%: without this the head went 31px -> 46px the moment
+     the zero-beat indicator joined the row; with it the head height is IDENTICAL with and
+     without the indicator at 100/125/150/175% and at 1024 and 1280, the title simply
+     ellipsising 8px at the tightest of them. The full text is on its own `title` attribute
+     either way. */
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -10055,6 +10068,102 @@ select.settings-input {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--text-faint);
+}
+
+/* THE CW ZERO-BEAT INDICATOR (ZeroBeat.tsx) — lamp + needle + signed offset, riding the CW
+   scope head beside the marker it complements (the scope draws the TARGET; this is where the
+   signal actually is). CHROME ONLY, and deliberately so: it lives inside the EXISTING
+   .ph-scope-head flex row, so it adds no shell child, no pane and no ⊞ id, and the scope
+   panel's `flex: 0 1 var(--cw-scope-h)` basis and 8em floor are untouched. It must never
+   wrap — a second head line would come straight out of the canvas below it. */
+.zb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  /* SHRINKABLE, so pressure in the row lands on this widget's own name before it lands on
+     the scope title or the palette controls — but never on the reading, which is the thing
+     the operator is looking at (`.zb-read` keeps its floor). */
+  flex: 0 1 auto;
+  min-width: 0;
+  /* A little air before the palette controls: the head's own 4px gap is right between two
+     labels and too tight between a live reading and the next control group. */
+  margin-right: var(--space-2);
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+}
+.zb-name {
+  text-transform: uppercase;
+  /* THE ONLY PART THAT GIVES. Every shrink in this widget lands on its own name, which
+     ellipsises; the lamp, the needle track and the reading are `flex: 0 0 auto` and keep
+     their size, because a clipped or overlapped READING is the one thing here that would
+     actually mislead. Measured at 1024x768 pinned to 175%: the name truncates, the reading
+     stays whole. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zb-lamp {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+.zb.on .zb-lamp {
+  background: var(--state-good);
+  border-color: var(--state-good);
+  box-shadow: 0 0 4px var(--state-good);
+}
+/* The needle track. Its full width is the backend's whole search range (±400 Hz), so every
+   reading the measurement can produce has its own position — being 80 Hz off and being
+   400 Hz off must not look the same, which is the entire request. */
+.zb-bar {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.zb-centre {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+.zb-needle {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-dim);
+}
+.zb.on .zb-needle {
+  background: var(--state-good);
+}
+.zb.on .zb-read {
+  color: var(--state-good);
+}
+/* NO SIGNAL recedes and draws no needle at all: a needle resting at centre with nothing
+   behind it is indistinguishable from a perfect tune, which is the one lie this must not
+   tell. The words say so too (ZeroBeat.tsx). */
+.zb.idle {
+  opacity: 0.55;
+}
+.zb-read {
+  flex: 0 0 auto;
+  min-width: 4.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Spot band-activity strip — proportional band scale with SSB cluster spots, licensed-phone

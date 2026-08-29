@@ -1420,6 +1420,11 @@ export interface MeterReadout {
   rxLevel: number
   /** CAT S-meter (dB relative to S9); null = the rig reports no STRENGTH (meter shows "—"). */
   smeterDb: number | null
+  /** The received CW tone measured around the operator's pitch (Hz) — the CW cockpit's
+   * zero-beat indicator. null = the measurement is off (any section but CW) or nothing
+   * stands above the noise, and the indicator reads "nothing to tune to". A DISPLAY ONLY:
+   * nothing consumes this to move a radio. */
+  cwToneHz: number | null
 }
 
 /** A single decoded signal in the most-recent RX slot (WSJT-X style row). */

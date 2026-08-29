@@ -1112,6 +1112,38 @@ export function axisTicks(loHz: number, hiHz: number, maxTicks = 6): number[] {
 export const CW_SCOPE_SPAN_HZ = 800
 
 /**
+ * How far either side of the pitch the zero-beat needle can point (Hz).
+ *
+ * ⚠️ THIS MIRRORS `ZERO_BEAT_SEARCH_HZ` in `crates/tempo-audio/src/rxdsp.rs`, and the two must
+ * agree: the backend will never report a tone further off than its own search, so a display
+ * range wider than the search leaves needle travel that can never be reached, and a narrower
+ * one pins readings the backend can genuinely produce. Equal means every reading has its own
+ * distinct needle position — which is the whole request ("80 Hz off must not look like 400").
+ *
+ * **The warning above is not what holds it.** `wire-consistency.test.ts` reads both constants
+ * out of both sources and fails naming both values — the `RadioProfilePatch` seam drifted five
+ * times behind exactly this kind of comment. Renaming either constant fails the guard too.
+ */
+export const ZERO_BEAT_RANGE_HZ = 400
+
+/**
+ * ±Hz within which the CW zero-beat light comes on — TIED TO THE RIG'S FILTER, not a magic
+ * number, because how close is "close enough" genuinely depends on how narrow you are copying.
+ *
+ * 5% of the filter width, clamped to 15..50 Hz. At the shipped 500 Hz CW filter that is 25 Hz:
+ * comfortably inside the passband (so a signal the light accepts is centred in the filter and
+ * copies cleanly), more than two clicks at the 10 Hz CW tuning step most rigs default to (so
+ * the light is actually REACHABLE and does not flicker on the last click), and wider than the
+ * 11.7 Hz half-lobe of the 171 ms analysis window (so it never claims precision the
+ * measurement does not have). The floor holds that last property at any filter width; the
+ * ceiling is where "zero beat" stops meaning anything for CW.
+ */
+export function zeroBeatToleranceHz(filterHz?: number | null): number {
+  const f = typeof filterHz === 'number' && Number.isFinite(filterHz) && filterHz > 0 ? filterHz : 500
+  return Math.min(50, Math.max(15, f * 0.05))
+}
+
+/**
  * The CW cockpit's audio scope window, CENTERED ON THE OPERATOR'S PITCH.
  *
  * It was a hardcoded 300–1100, which centers a 600 Hz pitch and nothing else: at 900 Hz the

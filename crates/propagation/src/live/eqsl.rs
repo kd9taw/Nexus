@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+use super::neterr;
 use tempo_core::eqsl;
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
@@ -98,12 +99,8 @@ fn get_text(client: &reqwest::blocking::Client, url: &str) -> Result<String, Str
 fn redact(e: reqwest::Error) -> String {
     if e.is_timeout() {
         "eQSL: request timed out — eQSL can be slow, try again shortly".to_string()
-    } else if e.is_connect() {
-        "eQSL: could not connect — check your network".to_string()
-    } else if e.is_redirect() {
-        "eQSL: blocked an unexpected redirect".to_string()
     } else {
-        "eQSL: request failed".to_string()
+        neterr::redact("eQSL", &e)
     }
 }
 

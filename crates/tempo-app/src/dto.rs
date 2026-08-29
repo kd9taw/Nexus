@@ -902,6 +902,13 @@ pub struct MeterReadout {
     /// CAT S-meter (dB relative to S9). `None` = the rig reports no STRENGTH (the meter shows
     /// "—" — absence stays absent, never a stale or invented level).
     pub smeter_db: Option<i32>,
+    /// The received CW tone measured in the passband around the operator's pitch, in Hz —
+    /// the CW cockpit's zero-beat indicator. `None` = the zero-beat measurement is off (any
+    /// section but CW) or nothing stands above the noise, and the indicator must then read
+    /// "nothing to tune to". Never a confident zero on a dead band.
+    ///
+    /// ⛔ A DISPLAY ONLY. No command consumes this to move a radio, and none may.
+    pub cw_tone_hz: Option<f32>,
 }
 
 /// The operating mode of the live engine.

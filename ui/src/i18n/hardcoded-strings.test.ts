@@ -355,6 +355,9 @@ const MIGRATED = [
   // word is the only entry, the same split the AI decoder's 400–1200 Hz window and the BW
   // nudge's ±50 Hz take inside their sentences.
   'components/CwCockpit.tsx',
+  // The CW zero-beat indicator (2026-08-28) — born migrated, so it never joins the
+  // un-migrated backlog. Its only invariants are `Hz` and the signed offset it formats.
+  'components/ZeroBeat.tsx',
   // Batch 22 (2026-08-19) — THE SHARED COCKPIT FURNITURE, and the last batch of the phase. The
   // instruments every cockpit hangs on the same frame: the dial readout, the tuning strip, the
   // rig scope and the FT wide graph, the RX and TX meters, the MSK144 Fast Graph, and the

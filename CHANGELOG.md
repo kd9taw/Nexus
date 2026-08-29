@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A zero-beat light in the CW cockpit.** The scope has always drawn a marker at your CW
+  pitch; now the app measures the tone actually coming in and tells you where it sits against
+  it. A light comes on when you are on pitch, and beside it a needle and a signed offset in Hz
+  say which way and how far off you are — being 80 Hz out no longer looks the same as being
+  400 Hz out. How close counts as on pitch follows your rig's CW filter (25 Hz behind the usual
+  500 Hz one, tighter behind a narrow filter). When several signals are in the passband it
+  follows the one nearest your marker rather than the loudest, so it does not jump to a strong
+  station 300 Hz away while you are closing in. On a dead band it reads "no signal" rather than
+  a confident zero, and it is a display only — it never touches your dial. Asked for by KD9TAW.
+
 - **Tune can key at its own power.** Set a tune power under **Settings ▸ Digital ▸ Transmit &
   Sequencing** and a tune-up keys at that level instead of whatever you are running. It can only
   ever turn the rig *down* — it keys at whichever is lower, your setting or your current power —
@@ -46,6 +56,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   If that is not happening to you, leave them alone.
 
 ### Fixed
+
+- **APRS reported packets that were never there.** With the squelch open, the APRS panel counted
+  plain noise as packets failing their checksum — about one every four seconds — so within moments
+  of listening you were told the channel was full of traffic Nexus could not read. Nothing was
+  wrong with the decoder; the counter simply accepted any burst of noise that happened to look
+  frame-shaped. It now checks that what it found could actually be an AX.25 frame before counting
+  it. A real packet that genuinely fails its checksum is still counted, which is what that reading
+  is for. APRS also writes to the diagnostic log now — it was the only mode that said nothing at
+  all, so an APRS problem arrived with a log that talked exclusively about FT8. Reported by swinn.
+
+- **"Check your network" was the answer to problems that had nothing to do with your network.**
+  Every connector — QRZ, ClubLog, LoTW, eQSL, HRDLog and the rest — reported a rejected secure
+  connection as a network failure. So if antivirus or a company proxy inspects your HTTPS traffic,
+  Nexus would fail to upload while your browser worked perfectly and every check you could run said
+  your connection was fine. It now tells the two apart and says when interception is the likely
+  cause. A genuinely unreachable network still says so. Raised by lz2aov.
 
 - **Test CAT told you to close other software when the real problem was permissions.** On Linux,
   a serial port your user is not permitted to open reports "permission denied" — and Nexus

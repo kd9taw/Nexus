@@ -6933,6 +6933,11 @@ export const EN = {
   'cw.scope.nativeRf.label': 'RF Panadapter',
   'cw.scope.nativeRf.title': 'Native RF panadapter — the real RF spectrum around your dial.',
   'cw.scope.audio.label': 'CW audio',
+  'cw.zeroBeat.label': 'Zero beat',
+  'cw.zeroBeat.aria': 'Zero-beat tuning indicator',
+  'cw.zeroBeat.none': 'no signal',
+  'cw.zeroBeat.locked': 'ON PITCH',
+  'cw.zeroBeat.title': 'Where the received tone sits against your CW pitch. The light comes on within {{tol}} Hz. Tune until the needle centres — it runs the same way as the scope below it. Display only: it never moves your radio.',
   'cw.scope.audio.title':
     'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
   'cw.scope.audio.sub': 'zero-beat',

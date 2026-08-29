@@ -16,6 +16,7 @@ import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
+import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { MemoryStrip } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -1455,6 +1456,14 @@ export function CwCockpit({
             {nativeRf ? t('cw.scope.nativeRf.label') : t('cw.scope.audio.label')}{' '}
             <span className="ph-scope-sub">{scopeSub}</span>
           </span>
+          {/* ⭐ THE ZERO-BEAT INDICATOR sits in the SCOPE HEAD, beside the marker it
+              completes: the scope below draws your pitch, this says where the received
+              tone actually is, and its needle runs in the scope's own axis so the two can
+              never disagree. It is chrome in an existing row — no new shell child, no new
+              pane, no ⊞ id — and it is a display only: nothing here can move the radio. It
+              goes with the scope when the strip is hidden, which is right, because it is
+              the other half of that picture. */}
+          <ZeroBeat targetHz={pitch} filterHz={filterHz} />
           <span className="ph-scope-head-label">{t('cw.scope.colors.label')}</span>
           <PalettePicker />
         </div>

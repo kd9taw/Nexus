@@ -18,6 +18,7 @@ pub mod hrdlog;
 pub mod kc2g;
 pub mod lotw;
 pub mod lotw_users;
+mod neterr;
 pub mod pota;
 pub mod protons;
 pub mod pskreporter;

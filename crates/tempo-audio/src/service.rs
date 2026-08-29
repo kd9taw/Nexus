@@ -5869,7 +5869,7 @@ impl RadioLoop {
             // not polling HOLDS the word in the engine's queue, so the macro resumes on the
             // radio it was typed for instead of keying the one being switched away from.
             let ready = now >= self.cw_busy_until && self.may_key();
-            let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key) = {
+            let (abort, wpm, word, soundcard, pitch, winkeyer_port, serial_key, in_cw) = {
                 let mut eng = engine_lock(engine);
                 (
                     eng.take_cw_abort(),
@@ -5880,8 +5880,19 @@ impl RadioLoop {
                     eng.cw_winkeyer_port(),
                     eng.cw_serial_key_port()
                         .map(|p| (p, eng.cw_serial_key_line())),
+                    eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 )
             };
+            // ARM THE ZERO-BEAT MEASUREMENT at the operator's pitch while the CW section is
+            // up, and disarm it everywhere else. The rx-dsp thread does the measuring (see
+            // `rxdsp::measure_zero_beat`); this loop is simply the only thread that can see
+            // both the section and the settings, and it hands them over through the wait-free
+            // meter bus rather than by giving that thread an engine handle.
+            //
+            // ⛔ ONE-WAY. This arms a DISPLAY. Nothing reads the reading back to steer the
+            // radio, and nothing here may ever grow into an auto-tune: the operator's dial is
+            // the operator's (notify-never-act).
+            self.meter_feed.set_cw_target_hz(in_cw.then_some(pitch));
             #[cfg(not(feature = "serial"))]
             {
                 let _ = (&winkeyer_port, &serial_key); // only the serial build keys these

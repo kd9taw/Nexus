@@ -558,6 +558,12 @@ pub struct FastPowerSample {
 struct MeterCells {
     rx_level: std::sync::atomic::AtomicU32,
     smeter_db: std::sync::atomic::AtomicI32,
+    /// The operator's CW pitch, ARMING the zero-beat measurement — f32 bits, `0.0` = disarmed.
+    /// Written by the radio loop, read by the rx-dsp thread.
+    cw_target_hz: std::sync::atomic::AtomicU32,
+    /// The measured received CW tone — f32 bits, `0.0` = nothing to tune to. Written by the
+    /// rx-dsp thread, read by `get_meters`.
+    cw_tone_hz: std::sync::atomic::AtomicU32,
 }
 
 impl MeterCells {
@@ -571,6 +577,8 @@ impl Default for MeterCells {
         Self {
             rx_level: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
             smeter_db: std::sync::atomic::AtomicI32::new(Self::SMETER_NONE),
+            cw_target_hz: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
+            cw_tone_hz: std::sync::atomic::AtomicU32::new(0.0f32.to_bits()),
         }
     }
 }
@@ -625,6 +633,50 @@ impl MeterFeed {
         use std::sync::atomic::Ordering;
         let v = self.inner.smeter_db.load(Ordering::Relaxed);
         (v != MeterCells::SMETER_NONE).then_some(v)
+    }
+
+    // ---- THE CW ZERO-BEAT PAIR ----
+    //
+    // Two more wait-free cells on the SAME bus the level meter uses, and for the same reason:
+    // the producer is the rx-dsp thread, whose whole safety argument is that it can name no
+    // engine or CAT handle (see `tempo_audio::rxdsp`). A cell it can already reach is the only
+    // way to hand it the operator's pitch and take a reading back without reintroducing one.
+    //
+    // ⛔ THIS PAIR IS A DISPLAY, AND ONLY A DISPLAY. Nothing reads `cw_tone_hz` to steer a
+    // radio: there is no path from here to a CAT command, and there must never be one. An aid
+    // that moved the operator's dial to zero-beat unasked would be a defect, not a feature
+    // (the project's notify-never-act rule).
+    //
+    // `0.0` encodes "none" in both directions. It is not a sentinel that could collide with a
+    // real value — an audio pitch of exactly 0 Hz is not a CW tone — so absence needs no
+    // separate flag and cannot be read as a confident zero.
+
+    /// Arm the zero-beat measurement at the operator's CW pitch; `None` disarms it (every
+    /// section but CW). The radio loop, every tick.
+    pub fn set_cw_target_hz(&self, hz: Option<f32>) {
+        use std::sync::atomic::Ordering;
+        let v = hz.filter(|h| h.is_finite() && *h > 0.0).unwrap_or(0.0);
+        self.inner
+            .cw_target_hz
+            .store(v.to_bits(), Ordering::Relaxed);
+    }
+    /// The armed CW pitch, or `None` when the zero-beat measurement is off.
+    pub fn cw_target_hz(&self) -> Option<f32> {
+        use std::sync::atomic::Ordering;
+        let v = f32::from_bits(self.inner.cw_target_hz.load(Ordering::Relaxed));
+        (v > 0.0).then_some(v)
+    }
+    /// Publish the measured received CW tone; `None` = nothing to tune to. The rx-dsp thread.
+    pub fn set_cw_tone_hz(&self, hz: Option<f32>) {
+        use std::sync::atomic::Ordering;
+        let v = hz.filter(|h| h.is_finite() && *h > 0.0).unwrap_or(0.0);
+        self.inner.cw_tone_hz.store(v.to_bits(), Ordering::Relaxed);
+    }
+    /// The measured received CW tone, or `None` when no signal stands above the noise.
+    pub fn cw_tone_hz(&self) -> Option<f32> {
+        use std::sync::atomic::Ordering;
+        let v = f32::from_bits(self.inner.cw_tone_hz.load(Ordering::Relaxed));
+        (v > 0.0).then_some(v)
     }
 }
 
