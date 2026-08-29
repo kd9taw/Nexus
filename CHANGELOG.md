@@ -66,6 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Work button left the markers behind.** Clicking Work on a station card in the Classic
+  layout's Stations pane started the QSO but did not move your RX and TX markers onto the
+  station, so you answered someone while still listening and transmitting on a different
+  offset. Band Activity's double-click and the Roster table both moved them; the card did not,
+  which made one gesture behave three ways in the same cockpit. Both marks now follow the
+  station, RX always and TX unless you have Hold Tx Freq set, the same as WSJT-X. Reported by
+  bitslave.
+
 - **eQSL sync blamed your password when the password was fine.** If the download came back as
   anything other than the log file, Nexus told you to check your username and password — at a
   point where the login had already succeeded. Uploads kept working, because they never go
