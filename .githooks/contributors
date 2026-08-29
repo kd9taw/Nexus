@@ -39,3 +39,7 @@ g0fqb1@gmail.com
 # PRs #69/#70/#73/#74/#90/#91/#92 — audio recovery, add-radio roster safety, and
 # the macOS pass (linker paths, rigctld run-check, tty/cu dedup, golden portability)
 258096273+on8st@users.noreply.github.com
+
+# PR #177 — the eQSL InBox preamble check (#176): found the failing payload, diagnosed the
+# prefix test, and wrote the fix
+69276965+KR8MER@users.noreply.github.com
