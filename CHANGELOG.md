@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **eQSL sync refused a perfectly good download.** eQSL stopped starting its InBox export with
+  the words Nexus was looking for, so the sync rejected the file and told you your credentials
+  were wrong — at a point where the login had already succeeded. Nexus now checks the markers
+  that identify an eQSL export rather than a sentence eQSL can reword whenever it likes. An HTML
+  error page is still refused, which is what that check was for in the first place. Found,
+  diagnosed and fixed by KR8MER.
+
 - **Dropdowns were white on white on Linux.** Every dropdown in the app drew as a white box with
   the app's own pale text on it, which on a dark theme meant you could not read what was selected
   — including the radio and sound-card pickers in step 2 of first-time setup, so a new operator
