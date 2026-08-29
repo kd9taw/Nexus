@@ -28,7 +28,8 @@ fn conf() -> String {
 #[test]
 fn the_asset_scope_covers_where_sstv_images_are_actually_written() {
     let c = conf();
-    let v: serde_json::Value = serde_json::from_str(&c).expect("tauri.conf.json must be valid JSON");
+    let v: serde_json::Value =
+        serde_json::from_str(&c).expect("tauri.conf.json must be valid JSON");
     let scope = v["app"]["security"]["assetProtocol"]["scope"]
         .as_array()
         .expect("assetProtocol.scope must be an array");

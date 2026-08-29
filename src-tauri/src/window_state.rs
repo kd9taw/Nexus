@@ -106,12 +106,8 @@ fn live_geometry(window: &tauri::WebviewWindow) -> Option<WindowGeometry> {
 /// `center()`: centring the default box and *then* resizing would leave it off-centre.)
 fn restore(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     let (all, primary) = monitors(app);
-    let Some(r) = geom::restore(
-        geom::load(&geometry_path()),
-        &all,
-        primary,
-        geom::MIN_INNER,
-    ) else {
+    let Some(r) = geom::restore(geom::load(&geometry_path()), &all, primary, geom::MIN_INNER)
+    else {
         // First launch, no file, or a corrupt one: leave the window exactly as the shell
         // built it. `tauri.conf.json` already centres it at its default size, and this
         // module deliberately never invents a second default.
