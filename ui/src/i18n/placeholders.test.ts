@@ -332,7 +332,15 @@ describe('translated catalogs agree with English', () => {
   /** A digit, a comma, then digits — `14,074`. The shape a decimal comma takes in prose. */
   const DECIMAL_COMMA = /\d,\d/
 
-  /** The three checks, exported through the closure so the fixture can run them too. */
+  /** Every placeholder occurrence counted, not deduped — the flattened-plural detector needs
+   *  multiplicity, where `holesOf` collapses to a Set. */
+  const holeCounts = (text: string): Map<string, number> => {
+    const out = new Map<string, number>()
+    for (const m of text.matchAll(/\{\{(\w+)\}\}/g)) out.set(m[1], (out.get(m[1]) ?? 0) + 1)
+    return out
+  }
+
+  /** The checks, exported through the closure so the fixture can run them too. */
   function catalogProblems(locale: string, cat: Record<string, unknown>): string[] {
     const out: string[] = []
     for (const [key, value] of Object.entries(cat)) {
@@ -340,6 +348,26 @@ describe('translated catalogs agree with English', () => {
       if (en === undefined) {
         out.push(`${locale}/${key}: no such key in English`)
         continue
+      }
+      // ⚠️ THE FLATTENED-PLURAL DETECTOR. Spanish and French shipped 52 entries each where an
+      // English plural object had been collapsed into ONE string concatenating BOTH forms —
+      // "3 QSO importé3 QSO importés" on a French screen, live from 1.9.0 to 1.9.2, and no
+      // guard saw it because every placeholder-parity check here compares SETS, and the set
+      // of a doubled string equals the set of either form. The tell is multiplicity: a plain
+      // string standing in for an English plural may not use any placeholder more times than
+      // the English `other` form does. (A translation that is itself a plural object is
+      // checked per-form by the set rules above and is not this bug.)
+      if (typeof value === 'string' && typeof en === 'object' && en !== null) {
+        const enOther = (en as { other?: string }).other ?? ''
+        const enCounts = holeCounts(enOther)
+        for (const [name, got] of holeCounts(value)) {
+          const want = enCounts.get(name) ?? 0
+          if (got > Math.max(want, 1))
+            out.push(
+              `${locale}/${key}: {{${name}}} appears ${got}× in a plain string replacing an ` +
+                `English plural — both forms concatenated? English 'other' uses it ${want}×`,
+            )
+        }
       }
       const wantHoles = [...holesOf(en)].sort()
       const gotHoles = [...holesOf(value)].sort()
@@ -383,8 +411,19 @@ describe('translated catalogs agree with English', () => {
       'reveal.prompt': 'kein Markup hier', // dropped markers
       'reveal.notNow': 'Nicht jetzt — 14,074 MHz', // decimal comma
       'not.a.real.key': 'x',
+      // The exact shape fr/es shipped from 1.9.0 to 1.9.2: an English plural collapsed into
+      // one string carrying BOTH forms.
+      'logbook.import.imported': '{{count}} QSO importiert{{count}} QSOs importiert',
     }
     const found = catalogProblems('de', broken)
+    expect(
+      found.some((p) => p.includes('both forms concatenated')),
+      'the flattened-plural detector fires on the shipped fr/es shape',
+    ).toBe(true)
+    // …and a legitimate single-form flattening (Japanese has no plural) passes.
+    expect(
+      catalogProblems('ja-fixture', { 'logbook.import.imported': '{{count}}件のQSOをインポートしました' }),
+    ).toEqual([])
     expect(found.some((p) => p.includes('placeholders'))).toBe(true)
     expect(found.some((p) => p.includes('markers'))).toBe(true)
     expect(found.some((p) => p.includes('DECIMAL COMMA'))).toBe(true)
