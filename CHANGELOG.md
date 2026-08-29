@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus speaks Japanese.** 日本語に対応しました。 The whole application — all 4,765 phrases,
+  every screen, the same coverage the other languages have — picked up automatically from your
+  system language or chosen in Settings. Written to Japanese amateur-radio convention (ゼロイン
+  for zero-beat, Eスポ for sporadic-E, コンファーム for confirmations), with polite sentence
+  forms for messages and terse labels for controls. Frequencies, callsigns, reports, band and
+  mode names are never translated — 14.074 is 14.074 in every language.
+
 - **Your amplifier can follow the radio's band.** Switch it on under **Settings ▸ Radio ▸
   Amplifier** and the amp steps to whatever band you tune to, without being asked. It is off
   until you turn it on, which is deliberate — this is the one amplifier control that acts on its
@@ -120,6 +127,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and macOS, nothing changes at all. Reported by an operator running 1920×1080 on a twelve-inch panel.
 
 ### Fixed
+
+- **Spanish and French showed doubled text wherever a count was involved.** Fifty-two messages
+  in each language — import results, sync summaries, alert batches — had both grammatical
+  forms of the sentence glued together, so a French operator importing a log read
+  "3 QSO importé3 QSO importés". Shipped that way since 1.9.0. Every one is repaired, and a
+  guard now fails the build if the shape ever comes back.
 
 - **Soundcard CW keying now uses a data mode, so the audio actually reaches the transmitter.**
   With the CW keyer set to Soundcard, Nexus put the radio into plain USB or LSB. On the common
