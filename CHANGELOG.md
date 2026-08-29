@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Nexus can read your amplifier.** Put an SPE Expert (1.3K-FA, 1.5K-FA, 2K-FA) or an Elecraft
+  KPA500/KPA1500 on its own serial port, set it under **Settings ▸ Radio ▸ Amplifier**, and place
+  the **Amplifier** pane in Connect: power out, SWR at the antenna and before the tuner, supply
+  volts and current, PA temperature, and the amplifier's own alarms and warnings. It only ever
+  asks — the one thing Nexus can send this amplifier is the six-byte status request, so it cannot
+  switch it off, put it in standby, change band or start a tune. Readings clear the moment a poll
+  goes unanswered, because a stale wattage beside a dead link is worse than no wattage; an alarm
+  code this build has never seen still shows as a fault rather than going quiet; and the port is
+  checked against everything else on the station, since a serial port opens only once and an
+  amplifier typed onto the CAT port takes the *radio* down. Verified against a real 1.5K-FA. The
+  Elecraft side is written from Elecraft's published references and has not been run on hardware.
+
 - **A zero-beat light in the CW cockpit.** The scope has always drawn a marker at your CW
   pitch; now the app measures the tone actually coming in and tells you where it sits against
   it. A light comes on when you are on pitch, and beside it a needle and a signed offset in Hz
