@@ -276,6 +276,10 @@ auto-track.
   rotator attached; **Other Hamlib model #…** takes any model number `rotctl -l`
   knows. Entries say **(az)** or **(az/el)** where the backend declares it, so
   you can tell an azimuth-only model from a full az/el one before you buy into it.
+  One board worth naming: **DF9GR's Easy-Rotor-Control V4** speaks three protocols,
+  chosen in its own Service Tool. Configured the way its manual recommends
+  (GS-232B, 9600) it belongs on **Yaesu GS-232B**; only in DCU-1 mode does it
+  belong on the **DF9GR ERC** entry, which runs at 4800.
 - **Rotator port & baud** — the serial port the controller is on, and its line
   rate. **The baud is per MODEL**, and picking your model fills in the right one:
   SPID Rot2Prog runs at 600, Rot1Prog at 1200, and the Idiom Press Rotor-EZ,

@@ -428,10 +428,17 @@ export const baudForRotator = (modelNum: number, currentBaud: number): number | 
  * offered here with a serial-port box and a baud. It could not work as presented, and the brand
  * label steered ARS-USB owners — whose box speaks GS-232 over USB — away from the entry that
  * does work. They belong on **GS-232 (generic)**, which now says so.
+ *
+ * ⚠️ THE SAME TRAP, CAUGHT BEFORE IT BIT (2026-08-29): **DF9GR's Easy-Rotor-Control V4 is
+ * protocol-selectable** — its Service Tool sets GS-232B, GS-232A or DCU-1, and the vendor's
+ * own manual tells program users "Baudrate 9600 and Protocol GS232B". Hamlib's eponymous ERC
+ * backend (404) is the DCU-1 flavour at a FIXED 4800, so an ERC V4 owner following the
+ * vendor's setup who picks the entry with their board's name on it gets a rotator that never
+ * answers. Both labels now say which mode they are; the vendor-recommended path is model 603.
  */
 export const ROTATOR_MODELS: { model: number; label: string }[] = [
   { model: 601, label: 'Yaesu GS-232A (az/el)' },
-  { model: 603, label: 'Yaesu GS-232B (az/el)' },
+  { model: 603, label: 'Yaesu GS-232B (az/el) — also ERC V4 in its recommended mode (9600)' },
   { model: 602, label: 'GS-232 (generic, az/el) — also EA4TX ARS-USB, LVB, ST2' },
   { model: 605, label: 'Yaesu/Kenpro GS-23 (az/el)' },
   { model: 606, label: 'Yaesu/Kenpro GS-232 (az/el)' },
@@ -444,7 +451,7 @@ export const ROTATOR_MODELS: { model: number; label: string }[] = [
   { model: 401, label: 'Idiom Press Rotor-EZ (az)' },
   { model: 403, label: 'Hy-Gain DCU-1/DCU-1X (az)' },
   { model: 406, label: 'Hy-Gain DCU2/DCU3/YRC-1 (az)' },
-  { model: 404, label: 'DF9GR ERC (az)' },
+  { model: 404, label: 'DF9GR ERC, DCU-1 mode (az)' },
   { model: 405, label: 'Green Heron RT-21' },
   { model: 1001, label: 'M2 RC2800 (az/el)' },
   { model: 1701, label: 'Prosistel D (az)' },

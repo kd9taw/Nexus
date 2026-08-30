@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never make things worse. Works the N3FJP way: update at home before Field Day, operate all
   weekend offline.
 
+- **The rotator picker stops steering Easy-Rotor-Control owners wrong.** DF9GR's ERC V4 board
+  speaks three protocols, chosen in its own Service Tool — and configured the way its manual
+  recommends (GS-232B at 9600), the picker entry with the board's name on it was the one that
+  could never work: that entry is the DCU-1 flavour at a fixed 4800. Both labels now say which
+  mode they are, and the manual says which entry matches which Service-Tool setting. If you run
+  an ERC V4 as the vendor ships it, pick **Yaesu GS-232B** at 9600.
+
 - **The POTA/SOTA board tears off into its own window.** The hunter board's filters were
   already saved per-window — the code was written for this and the window never came. A pop-out
   button now opens it beside your operating screen (or one per program: a POTA board next to a
