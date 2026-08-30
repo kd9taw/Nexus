@@ -14461,6 +14461,62 @@ fn clublog_push_qso_impl(
     Ok(push.into())
 }
 
+/// Send a drained ClubLog backlog as ONE `putlogs.php` job. The per-QSO realtime
+/// helper remains the path for exactly one ready record. No engine lock is held
+/// over keychain/network I/O.
+fn clublog_push_batch_impl(
+    records: &[tempo_core::logbook::QsoRecord],
+    engine: &SharedEngine,
+) -> Result<(u16, String), String> {
+    use std::sync::atomic::Ordering;
+    if records.len() < 2 {
+        return Err("ClubLog batch upload requires at least two QSOs".to_string());
+    }
+    if CLUBLOG_SUSPENDED.load(Ordering::Relaxed) {
+        return Err("ClubLog uploads are paused after a server/credential error — fix ClubLog settings (or restart Nexus) to retry.".to_string());
+    }
+
+    let (email, callsign_setting, api_setting, mycall) = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (
+            s.clublog_email.trim().to_string(),
+            s.clublog_callsign.trim().to_string(),
+            s.clublog_api_key.trim().to_string(),
+            s.mycall.trim().to_string(),
+        )
+    };
+    let api_key = effective_clublog_key(&api_setting);
+    if api_key.is_empty() {
+        return Err("This build has no ClubLog application key.".to_string());
+    }
+    if email.is_empty() {
+        return Err("Set your ClubLog email in Settings first.".to_string());
+    }
+    let callsign = if callsign_setting.is_empty() {
+        mycall
+    } else {
+        callsign_setting
+    };
+    let password = clublog_keychain()?
+        .get_password()
+        .map_err(|_| "No ClubLog app-password stored — set it in Settings.".to_string())?;
+
+    let mut adif = String::new();
+    for rec in records {
+        adif.push_str(&tempo_core::logbook::adif_record(rec));
+        adif.push('\n');
+    }
+    let query = tempo_core::clublog::ClubLogBatchQuery {
+        email,
+        password,
+        callsign,
+        api_key,
+        adif,
+    };
+    propagation::live::clublog::push_batch(tempo_core::clublog::CLUBLOG_BATCH_URL, query)
+}
+
 // ----- eQSL ADIF QSO upload --------------------------------------------------
 
 /// Upload one logged QSO to eQSL.cc (ImportADIF.cfm, per-QSO `ADIFData`). Reads the
@@ -17299,6 +17355,64 @@ pub fn run() {
                 && creds_ready == Some(true)
                 && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
             let now_unix = now_unix();
+
+            // `realtime.php` is explicitly a ONE-QSO-as-worked API. A worker drain with
+            // multiple ClubLog-owed records is a backlog (credential rescan, outage,
+            // import/backfill, or a stalled worker), so send it as ONE documented
+            // `putlogs.php` multipart ADIF job instead of hammering realtime.php once per row.
+            let batch_records: Vec<tempo_core::logbook::QsoRecord> = if clublog_live {
+                recs.iter()
+                    .filter(|p| {
+                        p.retry_after_unix <= now_unix
+                            && p.legs & tempo_app::engine::upload_legs::CLUBLOG != 0
+                    })
+                    .map(|p| p.rec.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut clublog_batch_attempted = false;
+            let mut clublog_batch_retry = false;
+            if tempo_core::clublog::should_use_batch(batch_records.len()) {
+                clublog_batch_attempted = true;
+                match clublog_push_batch_impl(&batch_records, &push_engine) {
+                    Ok((200, response)) => {
+                        let detail = tempo_core::lotw_upload::sanitize_detail(&response);
+                        {
+                            let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
+                            for rec in &batch_records {
+                                eng.stamp_clublog_upload(
+                                    rec,
+                                    tempo_core::logbook::UploadOutcome::Accepted,
+                                    now_unix,
+                                    detail.clone(),
+                                );
+                            }
+                        }
+                        conn_log(
+                            "ClubLog",
+                            "ok",
+                            format!("batch uploaded {} QSO(s)", batch_records.len()),
+                        );
+                    }
+                    Ok((status, response)) => {
+                        CLUBLOG_SUSPENDED.store(true, std::sync::atomic::Ordering::Relaxed);
+                        let detail = tempo_core::lotw_upload::sanitize_detail(&response)
+                            .map(|d| format!(" — {d}"))
+                            .unwrap_or_default();
+                        conn_log(
+                            "ClubLog",
+                            "error",
+                            format!("batch upload returned HTTP {status}{detail}; ClubLog auto-upload paused to prevent IP blocking"),
+                        );
+                    }
+                    Err(e) => {
+                        clublog_batch_retry = true;
+                        conn_log("ClubLog", "error", format!("batch upload failed — {e}"));
+                    }
+                }
+            }
+
             for p in recs {
                 // BACKOFF: a record not yet due goes back on the queue untouched — no push,
                 // no attempt spent, no toast. This is what turns 20-in-40-seconds into one
@@ -17309,6 +17423,8 @@ pub fn run() {
                     continue;
                 }
                 let rec = p.rec.clone();
+                let clublog_batch_covered = clublog_batch_attempted
+                    && p.legs & tempo_app::engine::upload_legs::CLUBLOG != 0;
                 // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
                 // acknowledges, so there is no success to distinguish from failure and
                 // nothing meaningful to retry. A failed connect almost always just means
@@ -17325,13 +17441,19 @@ pub fn run() {
                     &push_engine,
                     LoggedQso::from(p.rec),
                     qrz_on,
-                    clublog_live,
+                    clublog_live && !clublog_batch_covered,
                     eqsl_on,
                     hrdlog_on,
                     n3fjp_on,
                     cloudlog_on,
                     p.legs,
                 );
+                let failed = failed
+                    | if clublog_batch_covered && clublog_batch_retry {
+                        tempo_app::engine::upload_legs::CLUBLOG
+                    } else {
+                        0
+                    };
                 // Transient failures (network down / service busy) → re-queue ONLY
                 // the legs that failed so the next tick retries them, without
                 // re-pushing the legs that already succeeded (no double-upload).

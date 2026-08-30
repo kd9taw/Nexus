@@ -12,6 +12,10 @@
 /// The ClubLog realtime per-QSO upload endpoint. Hard-coded https constant.
 pub const CLUBLOG_REALTIME_URL: &str = "https://clublog.org/realtime.php";
 
+/// ClubLog bulk-log endpoint. Historical/backlog QSOs belong here rather than
+/// being replayed one-by-one through `realtime.php`.
+pub const CLUBLOG_BATCH_URL: &str = "https://clublog.org/putlogs.php";
+
 /// Inputs for one realtime push. `email`/`callsign`/`api_key` identify the
 /// account+logbook+app; `adif` is exactly one record ending in `<eor>`. `Debug`
 /// redacts the password and api key.
@@ -39,6 +43,37 @@ impl std::fmt::Debug for ClubLogQuery {
             .field("adif", &self.adif)
             .finish()
     }
+}
+
+/// Inputs for one ClubLog `putlogs.php` batch. `adif` is an ADIF file containing
+/// two or more records. `clear` is deliberately not represented: Nexus must merge
+/// a backlog into the operator's existing ClubLog log, never replace that log.
+#[derive(Clone)]
+pub struct ClubLogBatchQuery {
+    pub email: String,
+    pub password: String,
+    pub callsign: String,
+    pub api_key: String,
+    pub adif: String,
+}
+
+impl std::fmt::Debug for ClubLogBatchQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClubLogBatchQuery")
+            .field("email", &self.email)
+            .field("password", &"<redacted>")
+            .field("callsign", &self.callsign)
+            .field("api_key", &"<redacted>")
+            .field("adif_bytes", &self.adif.len())
+            .finish()
+    }
+}
+
+/// The realtime API is for the QSO just worked. If a worker has two or more
+/// ClubLog-owed records ready on the same drain, it has a backlog and must use
+/// ClubLog's batch mechanism instead of looping over `realtime.php`.
+pub fn should_use_batch(ready_records: usize) -> bool {
+    ready_records > 1
 }
 
 /// Outcome of a realtime push, derived from the HTTP status (+ body keyword).
@@ -176,6 +211,31 @@ mod tests {
         assert!(dbg.contains("<redacted>"));
         assert!(!dbg.contains("app pw&1"));
         assert!(!dbg.contains("DEVKEY"));
+    }
+
+    #[test]
+    fn batch_policy_keeps_single_qso_realtime() {
+        assert!(!should_use_batch(0));
+        assert!(!should_use_batch(1));
+        assert!(should_use_batch(2));
+        assert!(should_use_batch(81));
+    }
+
+    #[test]
+    fn batch_debug_redacts_credentials() {
+        let q = ClubLogBatchQuery {
+            email: "a@b.com".into(),
+            password: "BATCHPW".into(),
+            callsign: "KD9TAW".into(),
+            api_key: "BATCHKEY".into(),
+            adif: "<call:4>W1AW<eor>
+<call:4>K1JT<eor>"
+                .into(),
+        };
+        let dbg = format!("{q:?}");
+        assert!(!dbg.contains("BATCHPW"));
+        assert!(!dbg.contains("BATCHKEY"));
+        assert!(dbg.contains("adif_bytes"));
     }
 
     #[test]
