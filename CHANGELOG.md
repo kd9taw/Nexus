@@ -211,6 +211,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **macOS: a fresh install could not connect to a radio at all.** Every new Mac install failed
+  at the setup wizard's Test CAT with "Nexus could not start its own rigctl", and the only way
+  round it was to install Hamlib separately with Homebrew. Nexus ships Hamlib inside the app —
+  correctly, and correctly signed — but on macOS it was looking for it one folder up from where
+  the build actually puts it, so it never found its own copy and fell back to searching the
+  system, which on a clean Mac has nothing to find. Windows and Linux were never affected. The
+  release build now also opens the shipped .app and runs the bundled rigctld, so this cannot
+  come back quietly. (#190)
+
+- **Band dropdowns no longer offer bands no radio in the shack can reach.** With an HF rig and
+  a 2 m/70 cm radio configured, the band lists still offered 23 cm and everything else your
+  licence allows. The list is now the bands your licence allows *and* at least one of your
+  enabled radios covers. A radio with no bands listed still means "covers everything", so if you
+  run one radio — or have not set any of this up — nothing changes. Manually tuning somewhere
+  outside the list still works and the picker still shows where you are. (#184)
+
 - **Erase now clears your own transmissions too.** Pressing Erase wiped the pane and the next
   quarter-second painted every one of your own overs straight back, so the only way to clear
   them was to restart Nexus. Received decodes cleared properly, which is why it looked like
