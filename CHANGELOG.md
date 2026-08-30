@@ -112,11 +112,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The club TV says who is on what band.** The spectator scoreboard — the page a club puts on
+  a screen facing the room — listed each operating position with its operator, QSOs and points,
+  but not the one thing a multi-station club actually walks over to ask: which band that tent is
+  on. Every position row now carries its current band and mode, coloured by band the same way the
+  globe and the band grid are. It is presence, not history, so it expires: when a position's link
+  has been quiet longer than the sync layer's own timeout the reading goes dim rather than
+  claiming, for the rest of the event, that somebody is still on 20 metres.
+
+- **The club band board pops out onto its own screen.** The board that shows every position's
+  band, mode, operator and rate now has a **Pop out board** button beside the club exports, so a
+  multi-station club can park it on a second monitor or a corner of the big one and keep it in
+  view all event instead of scrolling the dashboard back to it. The torn-off window is for
+  watching: it carries no operator field and no export buttons, both of which stay on the
+  dashboard where they can tell you what they did.
+
+- **The Field Day dashboard is a Field Day screen now, not the digital operating screen with a
+  scoreboard in the middle.** It used to be drawn inside the FT8 workspace, so it came with a
+  waterfall, a band-activity list and the stations rail either side of it — none of which a
+  score, log and setup screen has anything to do with, and all of which squeezed it into a
+  narrow middle column that left its top row of buttons crowded. It now gets the window to
+  itself: one column, no rails, and up to 1600 px of width instead of about 1180. The waterfall
+  and band activity have not gone anywhere — they are where they belong, in Operate and in the
+  Field Day cockpit, which are the screens that operate.
+
+- **The operator button is there before anyone has been named.** The OP button in the top bar
+  swaps who is at the key from any mode, but it only appeared once an operator had already been
+  set — which is backwards for a club station, where the first person to sit down is the one who
+  needs it. With Field Day switched on it is now always there, reading **Set operator** until
+  somebody claims the seat; pick anyone the log has seen in one click. On a single-operator
+  station with Field Day off, nothing changes and the button stays out of the way.
+
+- **Field Day: the club call, the position and the operator are explained side by side.** A club
+  site answers "who are you?" three different ways — the club callsign that goes on the air, the
+  position you are sitting at ("CW tent", "comms trailer"), and whoever is at the key right now —
+  and Nexus had all three, on three different screens, with nothing saying how they relate. The
+  position name in particular read as a mystery box. **Settings ▸ Contesting** now opens with
+  **Who's who at this event**: the three of them together, each with one plain line saying what it
+  is and how it differs from the other two. They are the same settings as before, not copies —
+  change one here and it changes everywhere, including the Station tab and the OPERATOR box on the
+  Field Day dashboard. The position name moved into that group from the club-sync section below it.
+
 - **The Windows download installs about 32 MB less.** Turning on link-time optimisation took
   `Nexus.exe` from 87 MB to 55 MB, which is most of what the audio-library upgrade in 1.9.2 cost.
   Nothing about the app changes; it is the same build, compiled more tightly. The installer
   itself only shrinks a little because it was already compressed — the saving is disk space on
   your machine, not download size.
+
+### Fixed
+
+
+- **Tune could interrupt itself: a blip and a brief power drop while the carrier was up.**
+  Reported by an operator running an FTDX-101D who saw the power fall 10–15 W for about a
+  second, on the waterfall and on an analogue wattmeter, and only in Nexus — never in WSJT-X on
+  the same station. Nexus was writing the VFO frequency to the radio *while it was
+  transmitting*: a tune deliberately cancels any pending transmission, and the code that puts
+  the dial back after a Split Operation offset read that as "nothing is on the air" and went
+  ahead. A Yaesu re-locks its synthesiser when the frequency changes, which is precisely a blip
+  and a momentary power drop. The dial now waits for the carrier to stop, which is what the rest
+  of the transmit path already did. Most likely to have bitten anyone who tunes up straight after
+  an FT8 over with Split Operation on. Power changes Nexus commands are also written to the
+  diagnostic log now, so a report like this one can be answered from a log instead of argued.
+
+- **Renaming a Field Day position now shows up on the club board straight away — and a position
+  is never nameless.** The position name was sent to the host once, when the position joined, so
+  naming a tent after the event had started — or renaming it — left the club band board showing
+  the old text, or the internal position id, until the connection happened to be rebuilt, with
+  nothing on screen to explain it. The name now travels with every position update, so a rename
+  reaches the board within seconds and every other position sees it. A position that has no name
+  set uses your callsign instead of the internal id, and if you deliberately clear the name while
+  hosting or joining a club event, Save says so rather than putting a blank row on the board.
+
+- **macOS: a fresh install could not connect to a radio at all.** Every new Mac install failed
+  at the setup wizard's Test CAT with "Nexus could not start its own rigctl", and the only way
+  round it was to install Hamlib separately with Homebrew. Nexus ships Hamlib inside the app —
+  correctly, and correctly signed — but on macOS it was looking for it one folder up from where
+  the build actually puts it, so it never found its own copy and fell back to searching the
+  system, which on a clean Mac has nothing to find. Windows and Linux were never affected. The
+  release build now also opens the shipped .app and runs the bundled rigctld, so this cannot
+  come back quietly. (#190)
+
+- **Band dropdowns no longer offer bands no radio in the shack can reach.** With an HF rig and
+  a 2 m/70 cm radio configured, the band lists still offered 23 cm and everything else your
+  licence allows. The list is now the bands your licence allows *and* at least one of your
+  enabled radios covers. A radio with no bands listed still means "covers everything", so if you
+  run one radio — or have not set any of this up — nothing changes. Manually tuning somewhere
+  outside the list still works and the picker still shows where you are. (#184)
+
+- **Erase now clears your own transmissions too.** Pressing Erase wiped the pane and the next
+  quarter-second painted every one of your own overs straight back, so the only way to clear
+  them was to restart Nexus. Received decodes cleared properly, which is why it looked like
+  Erase half-worked. Nexus keeps a short record of the overs you have already sent — that is
+  deliberate, and it is what stops your own calls disappearing when the app changes band under
+  you — but the pane was re-reading it after every wipe. Each pane now remembers being erased:
+  everything sent up to that moment stays gone, the next over you send still appears, and
+  erasing Band Activity leaves Rx Frequency alone, the way the two windows have always worked.
+
+- **Your own transmissions no longer vanish from Rx Frequency when the DX call looks like
+  P29YY.** Calling a station whose callsign starts letter-digit-digit (P29YY, T77C, SP2GIF —
+  the #178 sightings) completed the QSO fine, but none of your own overs appeared in the
+  Rx Frequency pane or in ALL.TXT — the own-transmission recorder mistook them for internal
+  chat-wire framing and skipped them. The skip is now scoped to the chat modes, the only
+  place that framing exists. Display and logging only; nothing about what goes on the air
+  changed.
+
+- **Field Day now warns when the rules disagree with what you're doing — and never blocks.**
+  Winter Field Day's ruleset has always known the WSJT modes are not permitted there; nothing
+  ever said so. A chip in the event banner and the Operate header now cites the event and rules
+  year ("FT8 is not permitted at Winter Field Day (2026 rules) — you can still log it, but it
+  will not count"). The same machinery covers spotting-assistance restrictions, citing the rule
+  when a ruleset restricts and the matching feed is live — dormant today for both events,
+  because the 2026 ARRL rules were read and contain no such restriction, and WFD's could not be
+  read; no advisory will ever cite a rule nobody verified. Score Summary exports say which
+  year's rules scored them.
+
+- **A Winter Field Day RTTY contact no longer reaches your club logger labelled FT8.** The FD
+  log has always known the actual on-air mode behind a digital contact, but the push to N3FJP
+  and N1MM re-derived every digital row as FT8 — at WFD, a banned mode. The recorded mode now
+  travels the whole way: RTTY pushes as RTTY, and Cabrillo's RY rows, ADIF and the club logger
+  finally agree. Rows logged before this release keep the old fallback.
+
+- **The Field Day manual told you the event was 24 hours.** ARRL Field Day runs 27 and Winter
+  Field Day 30; the manual now carries the real windows, corrects the claim that class and
+  section have defaults (they must be set before FD mode engages), and documents what shipped
+  undocumented: the pop-out scoreboard, the Operator field, the sections board, WFD's advisory
+  mode restrictions, and all four exports. Two new build-time guards also pin the hand-mirrored
+  sections and bonus tables between Rust and the UI, so the 83-section board and the bonus list
+  can no longer drift apart silently.
+
+- **Spanish and French showed doubled text wherever a count was involved.** Fifty-two messages
+  in each language — import results, sync summaries, alert batches — had both grammatical
+  forms of the sentence glued together, so a French operator importing a log read
+  "3 QSO importé3 QSO importés". Shipped that way since 1.9.0. Every one is repaired, and a
+  guard now fails the build if the shape ever comes back.
+
 
 ## [1.9.2] — 2026-08-29
 
@@ -210,69 +339,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and macOS, nothing changes at all. Reported by an operator running 1920×1080 on a twelve-inch panel.
 
 ### Fixed
-
-- **macOS: a fresh install could not connect to a radio at all.** Every new Mac install failed
-  at the setup wizard's Test CAT with "Nexus could not start its own rigctl", and the only way
-  round it was to install Hamlib separately with Homebrew. Nexus ships Hamlib inside the app —
-  correctly, and correctly signed — but on macOS it was looking for it one folder up from where
-  the build actually puts it, so it never found its own copy and fell back to searching the
-  system, which on a clean Mac has nothing to find. Windows and Linux were never affected. The
-  release build now also opens the shipped .app and runs the bundled rigctld, so this cannot
-  come back quietly. (#190)
-
-- **Band dropdowns no longer offer bands no radio in the shack can reach.** With an HF rig and
-  a 2 m/70 cm radio configured, the band lists still offered 23 cm and everything else your
-  licence allows. The list is now the bands your licence allows *and* at least one of your
-  enabled radios covers. A radio with no bands listed still means "covers everything", so if you
-  run one radio — or have not set any of this up — nothing changes. Manually tuning somewhere
-  outside the list still works and the picker still shows where you are. (#184)
-
-- **Erase now clears your own transmissions too.** Pressing Erase wiped the pane and the next
-  quarter-second painted every one of your own overs straight back, so the only way to clear
-  them was to restart Nexus. Received decodes cleared properly, which is why it looked like
-  Erase half-worked. Nexus keeps a short record of the overs you have already sent — that is
-  deliberate, and it is what stops your own calls disappearing when the app changes band under
-  you — but the pane was re-reading it after every wipe. Each pane now remembers being erased:
-  everything sent up to that moment stays gone, the next over you send still appears, and
-  erasing Band Activity leaves Rx Frequency alone, the way the two windows have always worked.
-
-- **Your own transmissions no longer vanish from Rx Frequency when the DX call looks like
-  P29YY.** Calling a station whose callsign starts letter-digit-digit (P29YY, T77C, SP2GIF —
-  the #178 sightings) completed the QSO fine, but none of your own overs appeared in the
-  Rx Frequency pane or in ALL.TXT — the own-transmission recorder mistook them for internal
-  chat-wire framing and skipped them. The skip is now scoped to the chat modes, the only
-  place that framing exists. Display and logging only; nothing about what goes on the air
-  changed.
-
-- **Field Day now warns when the rules disagree with what you're doing — and never blocks.**
-  Winter Field Day's ruleset has always known the WSJT modes are not permitted there; nothing
-  ever said so. A chip in the event banner and the Operate header now cites the event and rules
-  year ("FT8 is not permitted at Winter Field Day (2026 rules) — you can still log it, but it
-  will not count"). The same machinery covers spotting-assistance restrictions, citing the rule
-  when a ruleset restricts and the matching feed is live — dormant today for both events,
-  because the 2026 ARRL rules were read and contain no such restriction, and WFD's could not be
-  read; no advisory will ever cite a rule nobody verified. Score Summary exports say which
-  year's rules scored them.
-
-- **A Winter Field Day RTTY contact no longer reaches your club logger labelled FT8.** The FD
-  log has always known the actual on-air mode behind a digital contact, but the push to N3FJP
-  and N1MM re-derived every digital row as FT8 — at WFD, a banned mode. The recorded mode now
-  travels the whole way: RTTY pushes as RTTY, and Cabrillo's RY rows, ADIF and the club logger
-  finally agree. Rows logged before this release keep the old fallback.
-
-- **The Field Day manual told you the event was 24 hours.** ARRL Field Day runs 27 and Winter
-  Field Day 30; the manual now carries the real windows, corrects the claim that class and
-  section have defaults (they must be set before FD mode engages), and documents what shipped
-  undocumented: the pop-out scoreboard, the Operator field, the sections board, WFD's advisory
-  mode restrictions, and all four exports. Two new build-time guards also pin the hand-mirrored
-  sections and bonus tables between Rust and the UI, so the 83-section board and the bonus list
-  can no longer drift apart silently.
-
-- **Spanish and French showed doubled text wherever a count was involved.** Fifty-two messages
-  in each language — import results, sync summaries, alert batches — had both grammatical
-  forms of the sentence glued together, so a French operator importing a log read
-  "3 QSO importé3 QSO importés". Shipped that way since 1.9.0. Every one is repaired, and a
-  guard now fails the build if the shape ever comes back.
 
 - **Soundcard CW keying now uses a data mode, so the audio actually reaches the transmitter.**
   With the CW keyer set to Soundcard, Nexus put the radio into plain USB or LSB. On the common
