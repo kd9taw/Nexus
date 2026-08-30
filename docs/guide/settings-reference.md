@@ -1157,6 +1157,22 @@ Class and Section **start empty on purpose** and the station won't enter Field
 Day until both are set — a banner says so while the mode is on and they're blank.
 See [Contesting & POTA/SOTA](contesting-pota.md).
 
+### Field Day Club Sync
+
+Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
+port on the site LAN — the only time Nexus listens beyond the local computer,
+and only while the toggle is on); every other position joins it with **Find
+club events** or by typing the host's `host:port` into **Join event at**. Each
+position's contacts stream to the host as they're logged, and the host pushes
+back the club score, a live band board, and the club-wide dupe list that
+powers the while-typing dupe warning. **Event name** is what joining positions
+see; **Position name** ("CW tent") is how this station appears on the band
+board. Contacts logged while the network is down are re-sent automatically on
+reconnect, and if the host PC dies you can enable hosting on any other
+position — everyone re-joins and nothing is lost. The host's Field Day view
+gains **Club Cabrillo / Club ADIF** exports of the merged, deduplicated log.
+Full walkthrough: [Contesting & POTA/SOTA](contesting-pota.md).
+
 ---
 
 ## Appearance

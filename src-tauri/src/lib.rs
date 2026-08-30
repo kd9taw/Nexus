@@ -1831,15 +1831,49 @@ fn logbook_path() -> PathBuf {
     shared_data_dir().join("log.adi")
 }
 
-/// Where the Field Day contest log's durable ADIF journal lives (beside
-/// settings.json). The engine rewrites it on every FD contact and restores it
-/// when Field Day mode starts; the exit flush writes the SAME file.
+/// The LEGACY (pre-club-sync) Field Day journal location — kept only so the
+/// one-time rename in `run()` can find an existing file and carry it into the
+/// per-position name below. Never written to anymore.
 fn fd_backup_path() -> PathBuf {
     settings_path()
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
         .join("fieldday_backup.adi")
+}
+
+/// Where the Field Day contest log's durable ADIF journal lives (beside
+/// settings.json): `fieldday_backup_<posid8>.adi`. The engine rewrites it on
+/// every FD contact and restores it when Field Day mode starts. Suffixed by
+/// the club-sync position id so two instances sharing a settings dir stop
+/// clobbering (and cross-importing) each other's contest logs — the old
+/// shared name did both.
+fn fd_backup_path_for(posid: &str) -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(format!("fieldday_backup_{posid}.adi"))
+}
+
+/// The club host's append-only event journal (one merged row per NDJSON
+/// line), beside settings.json, named by the sanitized event name so a new
+/// event gets a fresh file while a host restart mid-event replays the old.
+fn fd_event_journal_path(event_name: &str) -> PathBuf {
+    let mut slug: String = event_name
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    slug.truncate(40);
+    let slug = slug.trim_matches('-');
+    let slug = if slug.is_empty() { "event" } else { slug };
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(format!("fd_event_{slug}.jsonl"))
 }
 
 /// Durable journal for the ONE QSO held by the prompt-to-log popup (beside settings.json).
@@ -15817,6 +15851,45 @@ fn fd_log_manual(
     Ok(eng.snapshot())
 }
 
+/// One club event heard on the LAN by [`fd_discover_events`].
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FdEventBeacon {
+    event: String,
+    call: String,
+    /// `ip:port`, ready to drop into the join-address field.
+    host: String,
+}
+
+/// Listen ~2 s for club-sync host beacons — the "Find club events" button.
+/// Empty = nothing announcing on this segment (or the Wi-Fi eats broadcast;
+/// the manual host:port field always remains).
+#[tauri::command(async)]
+fn fd_discover_events() -> Result<Vec<FdEventBeacon>, String> {
+    tempo_net::fdsync::discover(2)
+        .map(|found| {
+            found
+                .into_iter()
+                .map(|b| FdEventBeacon {
+                    event: b.event,
+                    call: b.call,
+                    host: b.host,
+                })
+                .collect()
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Export the merged CLUB log from the host, deduped earliest-wins by
+/// `(call, band, mode class)`. `format` = "cabrillo" | "adif". Err when this
+/// instance is not hosting (positions export their own log as before).
+#[tauri::command(async)]
+fn fd_club_export(state: State<'_, SharedEngine>, format: String) -> Result<String, String> {
+    let eng = engine_lock(&state);
+    eng.fd_club_export(format == "cabrillo")
+        .ok_or_else(|| "this station is not hosting a club event".to_string())
+}
+
 #[tauri::command(async)]
 fn clear_hunt_target(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
@@ -18197,10 +18270,27 @@ pub fn run() {
                 .is_some_and(|t| now_unix() - t <= max_secs)
         });
         eng.set_log_path(logbook_path());
+        // Club-sync position identity: generated once (8 hex), persisted, and
+        // never edited — QSO ids are (posid, seq), so a changed id would
+        // re-push every contact as new.
+        let (posid, generated) = eng.fd_ensure_position_id();
+        if generated {
+            if let Err(e) = eng.settings().save(&settings_path()) {
+                eprintln!("tempo: couldn't persist the FD position id: {e}");
+            }
+        }
         // The Field Day contest log journals to its own ADIF beside the logbook —
         // written per contact and restored when FD mode starts, so a mid-event
-        // restart loses nothing.
-        eng.set_fd_log_path(fd_backup_path());
+        // restart loses nothing. Per-POSITION file (suffixed by posid), with a
+        // one-time rename of the legacy shared name — which is also the fix for
+        // two instances in one settings dir clobbering each other's backup.
+        let fd_path = fd_backup_path_for(&posid);
+        if !fd_path.exists() && fd_backup_path().exists() {
+            if let Err(e) = std::fs::rename(fd_backup_path(), &fd_path) {
+                eprintln!("tempo: FD journal migration failed: {e}");
+            }
+        }
+        eng.set_fd_log_path(fd_path);
         // A contact left in the confirm-before-log popup by a previous session (crash, power
         // loss, or a quit with the popup open) is a REAL QSO — the other station logged it.
         // Restore the hold so the operator can still log it. Best-effort: a missing or corrupt
@@ -18771,6 +18861,165 @@ pub fn run() {
         });
     }
 
+    // Field Day club sync: one manager thread in the CAT-broker mold above —
+    // poll settings 1 s, hot-apply both roles. HOST role (fd_host_enable) =
+    // the club listener on 0.0.0.0:fd_host_port (the app's one deliberate
+    // non-loopback inbound socket — data-plane only, see tempo_net::fdsync's
+    // module header; enabling the setting IS the LAN opt-in) + the once-a-
+    // second discovery beacon + a loopback self-client, so the host's own
+    // contacts take the identical path as everyone else's ("a host is just
+    // another position"). POSITION role (fd_join_addr set) = one persistent
+    // client pump with reconnect backoff. The dual-push interop sinks
+    // (N3FJP/N1MM/WSJT-X in tempo-audio's slot loop) are untouched by all of
+    // this — the sync pump is a separate thread reading the engine outbox.
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mgr_engine = engine.clone();
+        std::thread::spawn(move || {
+            // Running host as (port, shutdown); running client as (addr, shutdown).
+            let mut hosting: Option<(u16, Arc<AtomicBool>)> = None;
+            let mut client: Option<(String, Arc<AtomicBool>)> = None;
+            // The failed-bind half of "not hosting" (#165's lesson): retry
+            // quietly on a timer instead of re-erroring every second.
+            let mut bind_failed: Option<(u16, std::time::Instant)> = None;
+            loop {
+                let (want_host, want_addr) = {
+                    let e = engine_lock(&mgr_engine);
+                    let s = e.settings();
+                    let want_host = s.fd_host_enable.then_some(s.fd_host_port);
+                    // The host joins ITSELF over loopback; otherwise the
+                    // operator's join address (empty = no client).
+                    let want_addr = if s.fd_host_enable {
+                        Some(format!("127.0.0.1:{}", s.fd_host_port))
+                    } else {
+                        let a = s.fd_join_addr.trim().to_string();
+                        (!a.is_empty()).then_some(a)
+                    };
+                    (want_host, want_addr)
+                };
+
+                // --- host listener + beacon reconcile ---
+                if want_host != hosting.as_ref().map(|(p, _)| *p) {
+                    if let Some((_, shutdown)) = hosting.take() {
+                        shutdown.store(true, Ordering::Relaxed);
+                        engine_lock(&mgr_engine).fd_host_stop();
+                        conn_log("FD sync", "info", "club hosting stopped");
+                    }
+                    let now = std::time::Instant::now();
+                    let may_try = |p: u16| {
+                        bind_failed
+                            .map(|(fp, at)| fp != p || now.duration_since(at).as_secs() >= 10)
+                            .unwrap_or(true)
+                    };
+                    if let Some(port) = want_host.filter(|p| may_try(*p)) {
+                        // Journal + club log first, so the first join sees state.
+                        let started = {
+                            let mut e = engine_lock(&mgr_engine);
+                            let name = e.settings().fd_event_name.clone();
+                            e.fd_host_start(fd_event_journal_path(&name))
+                        };
+                        let bound = started
+                            .map_err(|e| e.to_string())
+                            .and_then(|()| {
+                                std::net::TcpListener::bind(("0.0.0.0", port))
+                                    .map_err(|e| e.to_string())
+                            });
+                        match bound {
+                            Ok(listener) => {
+                                let shutdown = Arc::new(AtomicBool::new(false));
+                                let backend: Arc<dyn tempo_net::fdsync::ClubBackend> = Arc::new(
+                                    tempo_app::fdbridge::EngineClubBackend(mgr_engine.clone()),
+                                );
+                                let sd = shutdown.clone();
+                                std::thread::spawn(move || {
+                                    tempo_net::fdsync::serve_until(listener, backend, sd)
+                                });
+                                // The discovery beacon, once a second while
+                                // hosting (best-effort: AP-isolated Wi-Fi eats
+                                // broadcast, which is why manual entry stays).
+                                let sd = shutdown.clone();
+                                let beacon_engine = mgr_engine.clone();
+                                std::thread::spawn(move || {
+                                    let sock = tempo_net::fdsync::beacon_socket();
+                                    while !sd.load(Ordering::Relaxed) {
+                                        if let Ok(sock) = &sock {
+                                            let (event, call) = {
+                                                let e = engine_lock(&beacon_engine);
+                                                (
+                                                    e.fd_event_label().unwrap_or_default(),
+                                                    e.settings().mycall.clone(),
+                                                )
+                                            };
+                                            tempo_net::fdsync::send_beacon(
+                                                sock, &event, &call, port,
+                                            );
+                                        }
+                                        std::thread::sleep(std::time::Duration::from_secs(1));
+                                    }
+                                });
+                                hosting = Some((port, shutdown));
+                                bind_failed = None;
+                                conn_log(
+                                    "FD sync",
+                                    "info",
+                                    format!(
+                                        "hosting the club event on this LAN, port {port} \
+                                         (positions can Find club events or join by address)"
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                engine_lock(&mgr_engine).fd_host_stop();
+                                if bind_failed.map(|(p, _)| p != port).unwrap_or(true) {
+                                    conn_log(
+                                        "FD sync",
+                                        "error",
+                                        format!(
+                                            "couldn't host on port {port}: {e} — change the \
+                                             Host port in Settings ▸ Contesting or stop the \
+                                             program using it. Retrying quietly."
+                                        ),
+                                    );
+                                }
+                                bind_failed = Some((port, now));
+                            }
+                        }
+                    }
+                }
+
+                // --- position client reconcile ---
+                if want_addr != client.as_ref().map(|(a, _)| a.clone()) {
+                    if let Some((_, shutdown)) = client.take() {
+                        shutdown.store(true, Ordering::Relaxed);
+                        let mut e = engine_lock(&mgr_engine);
+                        e.fd_mirror_mut().on_link(false, now_unix() as u64);
+                    }
+                    if let Some(addr) = want_addr {
+                        // No posid yet (fresh profile that never finished
+                        // startup init) = don't connect; next tick retries.
+                        let ready = !engine_lock(&mgr_engine)
+                            .fd_sync_identity()
+                            .0
+                            .is_empty();
+                        if ready {
+                            let shutdown = Arc::new(AtomicBool::new(false));
+                            let backend: Arc<dyn tempo_net::fdsync::PositionSync> = Arc::new(
+                                tempo_app::fdbridge::EnginePositionSync(mgr_engine.clone()),
+                            );
+                            let (a2, sd) = (addr.clone(), shutdown.clone());
+                            std::thread::spawn(move || {
+                                tempo_net::fdsync::run_position_until(&a2, backend, sd)
+                            });
+                            client = Some((addr, shutdown));
+                        }
+                    }
+                }
+
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+            }
+        });
+    }
+
     let prop_cache: PropCache = Arc::new(Mutex::new(None));
     let aurora_cache: AuroraCache = Arc::new(Mutex::new(None));
     let kc2g_cache: Kc2gCache = Arc::new(Mutex::new(None));
@@ -19094,6 +19343,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             set_hunt_target,
             clear_hunt_target,
             fd_log_manual,
+            fd_discover_events,
+            fd_club_export,
             n3fjp_test_connection,
             set_hold_tx_freq,
             set_blocked_calls,

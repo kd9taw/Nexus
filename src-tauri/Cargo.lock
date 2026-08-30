@@ -5068,6 +5068,8 @@ version = "0.2.0"
 name = "tempo-net"
 version = "0.2.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "socket2",
 ]
 

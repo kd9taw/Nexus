@@ -22,6 +22,7 @@ import type {
   ClubLogPushResult,
   Activation,
   DetectedRig,
+  FdEventBeacon,
   OtaSpot,
   DiagnosticsReport,
   FeedHealth,
@@ -567,6 +568,18 @@ export async function fdLogManual(
   mode: 'CW' | 'PH',
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('fd_log_manual', { call, class: klass, section, mode })
+}
+
+/** Listen ~2 s for Nexus club-event beacons on the LAN ("Find club events").
+ * Empty = nothing announcing (or the Wi-Fi eats broadcast — manual entry stays). */
+export async function fdDiscoverEvents(): Promise<FdEventBeacon[]> {
+  return invoke<FdEventBeacon[]>('fd_discover_events', {})
+}
+
+/** Export the merged CLUB log from the host (deduped earliest-wins).
+ * Rejects when this instance is not hosting. */
+export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string> {
+  return invoke<string>('fd_club_export', { format })
 }
 
 /** Test the N3FJP TCP API ("N3FJP's Field Day Contest Log v6.6") — run at the

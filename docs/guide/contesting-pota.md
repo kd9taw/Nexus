@@ -78,6 +78,34 @@ so JTAlert/GridTracker auto-activate their FD behavior too.
 Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
 [N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
 
+### Run the whole club on Nexus (club sync)
+
+If every position runs Nexus, you don't need a third-party master log at all.
+One PC at the site turns on **Settings ▸ Contesting ▸ Field Day Club Sync ▸
+Host a club event**; every other position presses **Find club events** (or
+types the host's address) and joins. From then on:
+
+- Each logged contact streams to the host the moment it lands; the host merges
+  everything into one club log and pushes the club totals back.
+- Every position gets a **club dupe warning while typing** — if another tent
+  already worked that call on this band and mode, you're told before you call.
+  It's a warning, not a lock (N3FJP semantics); your own log's dupes still
+  refuse.
+- A live **band board** shows where every position is (band, mode, operator,
+  rate), stale-marked the moment one goes quiet.
+- The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
+  contacts logged offline are journaled and re-sent automatically on
+  reconnect. If the host PC dies, enable hosting on any other position;
+  everyone re-joins and nothing is lost.
+- The host exports the merged **club Cabrillo / ADIF**, deduplicated the way
+  the rules score it (earliest contact wins).
+
+Hosting is the one time Nexus listens beyond the local computer, and only
+while the toggle is on. There is no join password — a club site LAN is
+trusted; the connection can only carry log rows, never key a transmitter or
+change a setting. The N3FJP/N1MM pushes above keep working alongside if you
+want both.
+
 ---
 
 ## POTA / SOTA hunter

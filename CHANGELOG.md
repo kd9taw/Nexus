@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Field Day club sync — every position's contacts in one club log, live over the site
+  LAN, no third-party logger.** One PC at the club site turns on **Settings ▸ Contesting ▸
+  Field Day Club Sync ▸ Host a club event** (the one time Nexus listens beyond the local
+  computer, and the toggle says so); every other position joins it — **Find club events**
+  discovers the host on the network, or type its address — and from then on each logged
+  contact streams to the host the moment it lands. Every position sees the club's score,
+  QSO and section totals, a live band board (who is on which band/mode, with rate, stale-
+  marked the moment a position goes quiet), and a **club dupe warning while typing**: if
+  another tent already worked that call on this band and mode you are told before you call —
+  a warning, never a lock, exactly as N3FJP treats it (your own log's dupes still refuse).
+  Everything keeps working through failures: a position that loses the network logs on
+  paperlessly and re-syncs by itself when the cable comes back; if the host PC dies, turn on
+  hosting at any other position and everyone re-joins with nothing lost. The host exports
+  the merged club log as Cabrillo or ADIF, deduplicated the way the rules score it. A sync
+  chip on the Field Day view always tells the truth — Synced, Behind (with the count), or
+  Offline — and positions with clocks off by more than 30 seconds are told to fix them.
+  The N3FJP/N1MM interop pushes are untouched and keep running alongside.
+
 - **Field Day rules can now be refreshed as data — and the countdown finally knows how long
   the events really run.** The numbers behind Field Day — points per mode, power tiers, the
   bonus menu, the section list, event weekends, Winter Field Day's banned-mode list — now ship

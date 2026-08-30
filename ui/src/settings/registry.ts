@@ -432,6 +432,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['field day', 'arrl', 'class', 'section', 'exchange', 'power multiplier',
       'winter field day', 'rules', 'rules year', 'rules update', 'wfd'],
   },
+  {
+    id: 'field-day-club',
+    label: 'Field Day Club Sync',
+    tab: 'contesting',
+    keywords: ['club', 'sync', 'host', 'join', 'position', 'multi-op', 'multiop', 'lan',
+      'network', 'band board', 'scoreboard', 'dupe sharing', 'discover', 'find club events',
+      'tent', 'club log'],
+  },
 
   // ---- Appearance --------------------------------------------------------------
   {

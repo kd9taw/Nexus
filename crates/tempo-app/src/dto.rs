@@ -1181,6 +1181,64 @@ pub struct FieldDayStatus {
     #[serde(default)]
     pub assistance_on: Vec<String>,
     pub log: Vec<FieldDayQso>,
+    /// Club-sync state (the Nexus↔Nexus event sync) — `None` while neither
+    /// hosting nor joined, so a solo Field Day pays nothing for the feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub club: Option<FdClubDto>,
+}
+
+/// One club band-board row — where a position is and how it is doing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubBoardRow {
+    /// Friendly label ("CW tent"), or the raw position id when unnamed.
+    pub pos_name: String,
+    pub band: String,
+    pub mode: String,
+    pub operator: String,
+    /// Merged rows from this position (raw).
+    pub qsos: u64,
+    /// Merged rows in the trailing 60 min.
+    pub rate: u64,
+    /// Seconds since the host last heard from it — the UI stale-marks
+    /// rows past 15 s (readings are never silently stale).
+    pub last_seen_secs: u64,
+}
+
+/// The club block on [`FieldDayStatus`]: sync honesty + the down-flowed club
+/// state every position holds (host included — it mirrors itself over
+/// loopback, so this block is uniform across roles).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubDto {
+    /// "disabled" | "offline" | "behind" | "synced" — DERIVED from (link
+    /// liveness, queued), so the chip can never disagree with the queue.
+    pub sync_state: String,
+    /// Own rows the host has not acked yet.
+    pub queued: u64,
+    /// Unix seconds the link went down (0 unless offline).
+    pub offline_since_unix: u64,
+    /// True when this instance is the host (fd_host_enable).
+    pub hosting: bool,
+    /// Event name + host callsign from the welcome.
+    pub event: String,
+    pub host_call: String,
+    /// Club counters as pushed down: claimed score, raw merged QSOs,
+    /// distinct sections.
+    pub score: u32,
+    pub qsos: u64,
+    pub sections: u32,
+    /// Local minus host clock (secs) at the last welcome — the UI warns
+    /// above ±30 s ("check this PC's clock"); nothing is ever adjusted.
+    pub skew_secs: i64,
+    /// The last host `error` line, verbatim (version refusal etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Club dupe keys `(call, band, mode class)` NOT already in the own log —
+    /// the entry fields' while-typing warning checks own ∪ these. Club-only
+    /// keys keep the list small (the own log already ships in `log`).
+    pub dupes: Vec<(String, String, String)>,
+    pub board: Vec<FdClubBoardRow>,
 }
 
 /// Serializable per-source upload status (mirror of `tempo_core` `UploadStatus`).

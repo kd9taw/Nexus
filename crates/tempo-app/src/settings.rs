@@ -685,6 +685,35 @@ pub struct Settings {
     /// the QSO's operator; empty = fall back to `mycall`.
     #[serde(default)]
     pub fd_operator: String,
+    /// Host a Nexus↔Nexus club event on this box. **This toggle IS the LAN
+    /// opt-in**: while on, the fdsync listener binds 0.0.0.0 (the app's one
+    /// deliberate non-loopback inbound socket — data-plane only, see
+    /// `tempo_net::fdsync`) and a discovery beacon broadcasts once a second.
+    /// Default OFF; everything else keeps the loopback discipline.
+    #[serde(default)]
+    pub fd_host_enable: bool,
+    /// TCP port the club-sync host listens on (and the beacon advertises).
+    #[serde(default = "default_fd_host_port")]
+    pub fd_host_port: u16,
+    /// Operator-facing club event name ("W9ABC Field Day") — the beacon and
+    /// the welcome carry it; also names the host's event journal.
+    #[serde(default)]
+    pub fd_event_name: String,
+    /// Join a club event at `host:port` (manual entry, or filled by the
+    /// "Find club events" discovery). Empty = not joining. Ignored while
+    /// [`Self::fd_host_enable`] is on — the host joins itself over loopback.
+    #[serde(default)]
+    pub fd_join_addr: String,
+    /// Friendly position label for the club band board ("CW tent").
+    #[serde(default)]
+    pub fd_position_name: String,
+    /// This machine's club-sync position identity: 8 hex chars, generated
+    /// once at startup when empty and persisted. Non-edited (no UI control):
+    /// QSO ids are `(this, seq)`, so changing it would re-push every contact
+    /// as new. Also suffixes the FD ADIF journal, which is what stops two
+    /// instances sharing a settings dir from clobbering each other's backup.
+    #[serde(default)]
+    pub fd_position_id: String,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -2083,6 +2112,10 @@ fn default_lotw_auto_upload_hours() -> u32 {
     6
 }
 
+fn default_fd_host_port() -> u16 {
+    tempo_net::fdsync::DEFAULT_TCP_PORT
+}
+
 fn default_fd_power() -> u32 {
     2
 }
@@ -3009,6 +3042,12 @@ impl Default for Settings {
             // every operator outside Wisconsin).
             fd_section: String::new(),
             fd_operator: String::new(),
+            fd_host_enable: false, // hosting exposes a LAN port — operator-only opt-in
+            fd_host_port: default_fd_host_port(),
+            fd_event_name: String::new(),
+            fd_join_addr: String::new(),
+            fd_position_name: String::new(),
+            fd_position_id: String::new(), // generated (8-hex) at startup, then persisted
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),
@@ -6224,6 +6263,40 @@ mod tests {
         assert_eq!(s.ptt_method, "vox"); // default
         assert_eq!(s.rigctld_port, 4534); // default — broker owns 4532, rotctld 4533 (#53)
         assert_eq!(s.wsjtx_udp_addr, "127.0.0.1:2237"); // default
+    }
+
+    #[test]
+    fn fd_sync_settings_round_trip_and_default_safe() {
+        // A pre-sync settings file: hosting OFF (the LAN bind is opt-in and
+        // an upgrade must never open a port), the default port, no identity.
+        let partial = r#"{"mycall":"W9XYZ","mygrid":"EN37"}"#;
+        let s: Settings = serde_json::from_str(partial).unwrap();
+        assert!(!s.fd_host_enable, "an upgrade never turns hosting on");
+        assert_eq!(s.fd_host_port, 42073);
+        assert_eq!(s.fd_join_addr, "");
+        assert_eq!(s.fd_position_id, "");
+
+        let path = std::env::temp_dir()
+            .join("tempo_settings_fdsync")
+            .join("settings.json");
+        let s = Settings {
+            fd_host_enable: true,
+            fd_host_port: 42111,
+            fd_event_name: "W9ABC Field Day".into(),
+            fd_join_addr: "192.168.1.10:42073".into(),
+            fd_position_name: "CW tent".into(),
+            fd_position_id: "a1b2c3d4".into(),
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert!(back.fd_host_enable);
+        assert_eq!(back.fd_host_port, 42111);
+        assert_eq!(back.fd_event_name, "W9ABC Field Day");
+        assert_eq!(back.fd_join_addr, "192.168.1.10:42073");
+        assert_eq!(back.fd_position_name, "CW tent");
+        assert_eq!(back.fd_position_id, "a1b2c3d4");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

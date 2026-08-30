@@ -856,6 +856,31 @@ export function LogEntry({
   // sitting beside the operator can read the exchange at a glance — using the
   // vertical room at the bottom of the strip. Scoped to .log-entry-fd, so the
   // normal (non-FD) log strip keeps its compact single-row layout.
+  //
+  // While-typing dupe verdict, zero IPC: the full own log already rides every
+  // snapshot and the club-sync block ships club-ONLY keys, so both checks are
+  // plain lookups on data in hand. OWN dupe = the hard block fdLogManual will
+  // refuse (same key: call, band, mode class). CLUB dupe = another position
+  // already worked them — N3FJP semantics, a WARNING only; logging proceeds
+  // and the host keeps both rows.
+  const fdTypedCall = logCall.trim().toUpperCase()
+  const fdModeClass = fdMode ?? 'PH'
+  const fdOwnDupe =
+    fdActive &&
+    fdTypedCall !== '' &&
+    (fieldDay?.log ?? []).some(
+      (q) =>
+        q.call.toUpperCase() === fdTypedCall &&
+        q.band === snap.radio.band &&
+        (q.mode ?? '') === fdModeClass,
+    )
+  const fdClubDupe =
+    fdActive &&
+    !fdOwnDupe &&
+    fdTypedCall !== '' &&
+    (fieldDay?.club?.dupes ?? []).some(
+      ([c, b, m]) => c === fdTypedCall && b === snap.radio.band && m === fdModeClass,
+    )
   if (fdActive) {
     return (
       <div className="log-entry log-entry-fd">
@@ -932,6 +957,24 @@ export function LogEntry({
             {fdClass.trim() === ''
               ? t('logEntry.fd.needClass')
               : t('logEntry.fd.badSection', { section: fdSection.trim() || '—' })}
+          </div>
+        )}
+        {fdOwnDupe && (
+          <div className="le-fd-hint" role="alert">
+            {t('logEntry.fd.dupe.own', {
+              call: fdTypedCall,
+              band: snap.radio.band,
+              mode: fdModeClass,
+            })}
+          </div>
+        )}
+        {fdClubDupe && (
+          <div className="le-fd-hint" role="status">
+            {t('logEntry.fd.dupe.club', {
+              call: fdTypedCall,
+              band: snap.radio.band,
+              mode: fdModeClass,
+            })}
           </div>
         )}
       </div>

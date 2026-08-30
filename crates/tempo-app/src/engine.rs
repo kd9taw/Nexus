@@ -1700,6 +1700,14 @@ pub struct Engine {
     /// companion decodes off the network regardless of the selected tier.
     source_kind: SourceKind,
     mode: Mode,
+    /// Host-role Field Day club log (`None` = not hosting). Lives behind the
+    /// engine lock; the fdsync accept loop reaches it ONLY through the
+    /// shell's `ClubBackend` impl, which is data-plane by construction.
+    fd_club: Option<crate::fdevent::ClubLog>,
+    /// Position-side club mirror + link state (host included — it mirrors
+    /// itself over its loopback self-connection, so every role reads club
+    /// state the same way). Meaningful only while sync is configured.
+    fd_mirror: crate::fdevent::ClubMirror,
     /// Whether normal slot TX is enabled. False = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing. Also forced false by the watchdog.
     tx_enabled: bool,
@@ -3850,6 +3858,8 @@ impl Engine {
             capture_epoch: 0,
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
+            fd_club: None,
+            fd_mirror: crate::fdevent::ClubMirror::default(),
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
             // until the operator arms it. Passive monitor + beacon-off were not enough:
             // any path that leaves a pending message in the sequencer (a CQ-run state, a
@@ -7917,6 +7927,369 @@ impl Engine {
             .qso_and_powered(&station.log, self.settings.fd_power_mult);
         let bonus = rs.bonus_points(&self.settings.fd_bonuses);
         Some((qso_pts, powered, bonus))
+    }
+
+    // -----------------------------------------------------------------------
+    // Field Day club sync (the Nexus↔Nexus event sync).
+    //
+    // The wire lives in `tempo_net::fdsync`, the policy in `crate::fdevent`;
+    // these methods are the seam the shell's ClubBackend / PositionSync impls
+    // call under the engine lock. Everything here is data-plane: rows in,
+    // club state out — none of it can key TX, touch CAT, or change settings.
+    // -----------------------------------------------------------------------
+
+    /// Ensure this instance has its persistent 8-hex club-sync position id,
+    /// generating one on first run. Returns `(id, generated_now)` — the shell
+    /// saves settings when `generated_now` (this bypasses `apply_settings` on
+    /// purpose: identity init at startup must not run the full settings
+    /// apply, which clears TX queues and rebuilds decoders).
+    pub fn fd_ensure_position_id(&mut self) -> (String, bool) {
+        if !self.settings.fd_position_id.trim().is_empty() {
+            return (self.settings.fd_position_id.clone(), false);
+        }
+        // Uniqueness only has to hold across one club's machines; 32 bits of
+        // clock/pid/ASLR entropy through a hasher is plenty, with no new
+        // dependency. Ids are identity, not secrets.
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+            .hash(&mut h);
+        std::process::id().hash(&mut h);
+        (&self.settings as *const _ as usize).hash(&mut h); // ASLR salt
+        self.settings.mycall.hash(&mut h);
+        let id = format!("{:08x}", (h.finish() & 0xffff_ffff) as u32);
+        self.settings.fd_position_id = id.clone();
+        (id, true)
+    }
+
+    /// Start hosting: build the club log for the configured event and replay
+    /// its append-only journal (the host-restart recovery). Idempotent-ish:
+    /// called again it rebuilds from the same journal.
+    pub fn fd_host_start(&mut self, journal_path: PathBuf) -> std::io::Result<()> {
+        let event = tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+        let name = if self.settings.fd_event_name.trim().is_empty() {
+            // An unnamed event still needs an on-air label for the beacon.
+            format!("{} Field Day", self.settings.mycall)
+        } else {
+            self.settings.fd_event_name.trim().to_string()
+        };
+        let mut club = crate::fdevent::ClubLog::new(event, &name);
+        club.attach_journal(&journal_path)?;
+        self.fd_club = Some(club);
+        Ok(())
+    }
+
+    /// Stop hosting (the manager flipped `fd_host_enable` off, or is
+    /// re-porting). The journal file stays — a restart replays it.
+    pub fn fd_host_stop(&mut self) {
+        self.fd_club = None;
+    }
+
+    pub fn fd_hosting(&self) -> bool {
+        self.fd_club.is_some()
+    }
+
+    /// Whether sync is configured at all (drives `SyncState::Disabled`).
+    pub fn fd_sync_enabled(&self) -> bool {
+        self.settings.fd_host_enable || !self.settings.fd_join_addr.trim().is_empty()
+    }
+
+    /// The club event's display name (beacon + welcome), host role only.
+    pub fn fd_event_label(&self) -> Option<String> {
+        self.fd_club.as_ref().map(|c| c.event_name.clone())
+    }
+
+    // --- host half (the ClubBackend impl calls these) ----------------------
+
+    /// A position joined. Err when not hosting (a race with the toggle).
+    pub fn fd_club_join(
+        &mut self,
+        pos: &str,
+        name: &str,
+        call: &str,
+    ) -> Result<tempo_net::fdsync::JoinAccept, String> {
+        let now = now_unix_secs();
+        let Some(club) = self.fd_club.as_mut() else {
+            return Err("this station is not hosting a club event".into());
+        };
+        let acked = club.join(pos, name, call, now);
+        Ok(tempo_net::fdsync::JoinAccept {
+            event: club.event_name.clone(),
+            host_call: self.settings.mycall.clone(),
+            acked,
+        })
+    }
+
+    /// Merge one wire row (idempotent) → the position's ack high-water.
+    pub fn fd_club_merge(&mut self, row: &tempo_net::fdsync::WireQso) -> u64 {
+        let now = now_unix_secs();
+        self.fd_club
+            .as_mut()
+            .map(|c| c.merge(row, now))
+            .unwrap_or(0)
+    }
+
+    pub fn fd_club_counts(&self) -> (usize, usize) {
+        self.fd_club.as_ref().map(|c| c.counts()).unwrap_or((0, 0))
+    }
+
+    /// Down-flow state past the cursors, scored under the HOST's power
+    /// multiplier + bonuses (the design's flagged judgment call — per-position
+    /// multipliers are ignored; an ARRL entry is one station, one power tier,
+    /// and the operator saw and accepted this).
+    pub fn fd_club_state(
+        &mut self,
+        dupes_from: usize,
+        sections_from: usize,
+        mark_seen: &str,
+    ) -> tempo_net::fdsync::ClubState {
+        let now = now_unix_secs();
+        let (mycall, class, section, mult, bonuses) = (
+            self.settings.mycall.clone(),
+            self.settings.fd_class.clone(),
+            self.settings.fd_section.clone(),
+            self.settings.fd_power_mult,
+            self.settings.fd_bonuses.clone(),
+        );
+        match self.fd_club.as_mut() {
+            Some(club) => {
+                club.mark_seen(mark_seen, now);
+                let (_, _, _, total) = club.scored(&mycall, &class, &section, mult, &bonuses);
+                club.club_state(dupes_from, sections_from, total, now)
+            }
+            None => tempo_net::fdsync::ClubState::default(),
+        }
+    }
+
+    pub fn fd_club_pos_status(&mut self, pos: &str, band: &str, mode: &str, op: &str, freq: u64) {
+        let now = now_unix_secs();
+        if let Some(club) = self.fd_club.as_mut() {
+            club.position_status(pos, band, mode, op, freq, now);
+        }
+    }
+
+    pub fn fd_club_disconnect(&mut self, _pos: &str) {
+        // Presence is age-based (last_seen), so a disconnect needs no state
+        // change: the board row stale-marks itself past 15 s. Kept as a seam
+        // so the shell impl is total over the trait.
+    }
+
+    /// Club export from the host, deduped earliest-wins by `(call, band,
+    /// mode class)` — the submittable club artifact. `None` = not hosting.
+    pub fn fd_club_export(&self, cabrillo: bool) -> Option<String> {
+        let club = self.fd_club.as_ref()?;
+        let (mycall, class, section) = (
+            self.settings.mycall.as_str(),
+            self.settings.fd_class.as_str(),
+            self.settings.fd_section.as_str(),
+        );
+        Some(if cabrillo {
+            club.export_cabrillo(mycall, class, section)
+        } else {
+            club.export_adif(mycall, class, section)
+        })
+    }
+
+    /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.
+    /// `Some` ONLY in the host role — a non-host position holds just the
+    /// compact `ClubMirror` (no per-QSO attribution), which is why the HTTP
+    /// scoreboard runs at the host.
+    pub fn fd_board_snapshot(&self) -> Option<crate::fd_scoreboard::FdBoardData> {
+        let club = self.fd_club.as_ref()?;
+        let mut positions: Vec<crate::fd_scoreboard::FdBoardPosition> = club
+            .positions()
+            .iter()
+            .map(|(id, p)| crate::fd_scoreboard::FdBoardPosition {
+                id: id.clone(),
+                label: if p.label.is_empty() {
+                    id.clone()
+                } else {
+                    p.label.clone()
+                },
+                operator: p.operator.clone(),
+            })
+            .collect();
+        positions.sort_by(|a, b| a.id.cmp(&b.id));
+        Some(crate::fd_scoreboard::FdBoardData {
+            event: club.event,
+            call: self.settings.mycall.clone(),
+            class: self.settings.fd_class.clone(),
+            section: self.settings.fd_section.clone(),
+            power_mult: self.settings.fd_power_mult,
+            claimed: self.settings.fd_bonuses.clone(),
+            positions,
+            rows: club
+                .rows()
+                .iter()
+                .map(|r| crate::fd_scoreboard::FdBoardRow {
+                    posid: r.posid.clone(),
+                    seq: r.seq,
+                    call: r.call.clone(),
+                    class: r.class.clone(),
+                    section: r.section.clone(),
+                    band: r.band.clone(),
+                    mode_class: r.mode_class.clone(),
+                    submode: r.submode.clone(),
+                    when_unix: r.when_unix,
+                    operator: r.operator.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    // --- position half (the PositionSync impl calls these) -----------------
+
+    /// This position's JOIN identity: `(posid, label, call, own max seq)`.
+    /// An empty posid means the shell has not initialized identity yet — the
+    /// pump treats that as "don't connect".
+    pub fn fd_sync_identity(&self) -> (String, String, String, u64) {
+        let max_seq = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.max_seq(),
+            _ => 0,
+        };
+        (
+            self.settings.fd_position_id.clone(),
+            self.settings.fd_position_name.clone(),
+            self.settings.mycall.clone(),
+            max_seq,
+        )
+    }
+
+    /// THE OUTBOX: own FD rows with `seq > after`, as wire rows — derived
+    /// from the journal-backed log, so there is no separate queue file to
+    /// corrupt. Operator is stamped here (enqueue time) from `fd_operator`.
+    pub fn fd_sync_outbox(&self, after: u64) -> Vec<tempo_net::fdsync::WireQso> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return Vec::new();
+        };
+        let posid = &self.settings.fd_position_id;
+        if posid.is_empty() {
+            return Vec::new();
+        }
+        let op = if self.settings.fd_operator.trim().is_empty() {
+            self.settings.mycall.clone()
+        } else {
+            self.settings.fd_operator.trim().to_uppercase()
+        };
+        let mut rows: Vec<_> = station
+            .log
+            .qsos()
+            .iter()
+            .filter(|q| q.seq > after)
+            .map(|q| tempo_net::fdsync::WireQso {
+                pos: posid.clone(),
+                seq: q.seq,
+                call: q.call.clone(),
+                class: q.class.clone(),
+                sect: q.section.clone(),
+                band: q.band.clone(),
+                mode: q.mode.clone(),
+                sub: q.submode.clone(),
+                when: q.when_unix,
+                op: op.clone(),
+            })
+            .collect();
+        rows.sort_by_key(|r| r.seq);
+        rows
+    }
+
+    /// The mirror, for the pump's welcome/ack/club/link callbacks.
+    pub fn fd_mirror_mut(&mut self) -> &mut crate::fdevent::ClubMirror {
+        &mut self.fd_mirror
+    }
+
+    /// Presence for the club band board: `(band, mode class, operator,
+    /// dial Hz)` — the n3fjp `report_band` idea made native.
+    pub fn fd_position_report(&self) -> (String, String, String, u64) {
+        let mode = match self.settings.operating_mode {
+            crate::settings::OperatingMode::Phone => "PH",
+            crate::settings::OperatingMode::Cw => "CW",
+            _ => "DIG",
+        };
+        let op = if self.settings.fd_operator.trim().is_empty() {
+            self.settings.mycall.clone()
+        } else {
+            self.settings.fd_operator.trim().to_uppercase()
+        };
+        (
+            self.settings.band.clone(),
+            mode.to_string(),
+            op,
+            (self.settings.dial_mhz * 1e6) as u64,
+        )
+    }
+
+    /// The sync chip — DERIVED from (enabled, link, queued = own max seq −
+    /// host ack), so it can never disagree with the queue.
+    pub fn fd_sync_state(&self) -> crate::fdevent::SyncState {
+        let own_max = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.max_seq(),
+            _ => 0,
+        };
+        crate::fdevent::SyncState::derive(
+            self.fd_sync_enabled(),
+            self.fd_mirror.connected,
+            own_max.saturating_sub(self.fd_mirror.acked),
+            self.fd_mirror.down_since_unix,
+        )
+    }
+
+    /// The `FieldDayStatus.club` block, `None` while sync is not configured.
+    /// `own` is the live FD log (subtracts own keys from the club dupe set —
+    /// the UI's while-typing check is own ∪ club, and own already ships).
+    fn fd_club_dto(
+        &self,
+        own: &tempo_core::fieldday::FieldDayLog,
+    ) -> Option<crate::dto::FdClubDto> {
+        if !self.fd_sync_enabled() {
+            return None;
+        }
+        let m = &self.fd_mirror;
+        let state = self.fd_sync_state();
+        let (queued, offline_since) = match state {
+            crate::fdevent::SyncState::Offline { queued, since } => (queued, since),
+            crate::fdevent::SyncState::Behind { queued } => (queued, 0),
+            _ => (0, 0),
+        };
+        let mut dupes: Vec<(String, String, String)> = m
+            .dupes
+            .iter()
+            .filter(|(call, band, mode)| !own.worked_key(call, band, mode))
+            .cloned()
+            .collect();
+        dupes.sort();
+        let mut board: Vec<crate::dto::FdClubBoardRow> = m
+            .board
+            .iter()
+            .map(|r| crate::dto::FdClubBoardRow {
+                pos_name: r.name.clone(),
+                band: r.band.clone(),
+                mode: r.mode.clone(),
+                operator: r.op.clone(),
+                qsos: r.qsos,
+                rate: r.rate,
+                last_seen_secs: r.age,
+            })
+            .collect();
+        board.sort_by(|a, b| a.pos_name.cmp(&b.pos_name));
+        Some(crate::dto::FdClubDto {
+            sync_state: state.code().to_string(),
+            queued,
+            offline_since_unix: offline_since,
+            hosting: self.fd_club.is_some(),
+            event: m.event.clone(),
+            host_call: m.host_call.clone(),
+            score: m.score,
+            qsos: m.qsos,
+            sections: m.sections.len() as u32,
+            skew_secs: m.skew_secs,
+            last_error: m.last_error.clone(),
+            dupes,
+            board,
+        })
     }
 
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
@@ -14823,6 +15196,7 @@ impl Engine {
                             when_unix: q.when_unix,
                         })
                         .collect(),
+                    club: self.fd_club_dto(log),
                 });
             }
         }
@@ -27039,6 +27413,158 @@ mod tests {
             4,
             "distinct band / call / time still log"
         );
+    }
+
+    #[test]
+    fn fd_board_snapshot_is_some_only_in_the_host_role() {
+        // THE SCOREBOARD SEAM CONTRACT: a non-host position (even one deep in
+        // Field Day with a live log) hands the board NOTHING — it holds only
+        // the compact mirror. The host hands the bounded clone.
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_join_addr = "192.168.1.10:42073".into(); // a POSITION, not a host
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(
+            e.fd_board_snapshot().is_none(),
+            "a non-host position exposes no board data"
+        );
+
+        // Become the host: the snapshot appears, carrying merged rows +
+        // positions in the reconciled shape.
+        let dir = std::env::temp_dir().join(format!("fd-board-seam-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let _ = e.fd_club_join("aaaa0001", "CW tent", "KD9TAW");
+        e.fd_club_merge(&tempo_net::fdsync::WireQso {
+            pos: "aaaa0001".into(),
+            seq: 1,
+            call: "W1AW".into(),
+            class: "1D".into(),
+            sect: "CT".into(),
+            band: "20m".into(),
+            mode: "DIG".into(),
+            sub: "FT8".into(),
+            when: 1_782_583_500,
+            op: "OP1".into(),
+        });
+        let board = e.fd_board_snapshot().expect("host role → Some");
+        assert_eq!(board.call, "W9ABC");
+        assert_eq!((board.class.as_str(), board.section.as_str()), ("3A", "WI"));
+        assert_eq!(board.rows.len(), 1);
+        let r = &board.rows[0];
+        assert_eq!(
+            (
+                r.posid.as_str(),
+                r.seq,
+                r.call.as_str(),
+                r.mode_class.as_str(),
+                r.submode.as_str()
+            ),
+            ("aaaa0001", 1, "W1AW", "DIG", "FT8")
+        );
+        assert_eq!(
+            r.operator, "OP1",
+            "operator stamped at enqueue rides through"
+        );
+        assert_eq!(board.positions.len(), 1);
+        assert_eq!(board.positions[0].label, "CW tent");
+
+        e.fd_host_stop();
+        assert!(e.fd_board_snapshot().is_none(), "stop hosting → None again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_club_block_ships_club_only_dupes_and_an_honest_sync_chip() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Sync unconfigured → no club block at all (a solo FD pays nothing).
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        assert!(e.snapshot().field_day.unwrap().club.is_none());
+
+        // Configure a join → the block appears, honestly OFFLINE with the
+        // whole log queued (nothing has connected yet).
+        {
+            let mut s = e.settings().clone();
+            s.fd_join_addr = "192.168.1.10:42073".into();
+            s.fd_position_id = "eeee0001".into(); // the shell generates this at startup
+            e.apply_settings(s);
+        }
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        let club = e
+            .snapshot()
+            .field_day
+            .unwrap()
+            .club
+            .expect("configured → Some");
+        assert_eq!(club.sync_state, "offline");
+        assert_eq!(club.queued, 1, "the unacked row is the queue");
+
+        // The pump connects and delivers club state: one key we ALSO worked
+        // ourselves (subtracted — own log already ships) and one club-only
+        // key (kept — the while-typing warning's input).
+        {
+            let m = e.fd_mirror_mut();
+            m.on_link(true, 100);
+            m.on_welcome(1, "TEST FD", "W9ABC", 3);
+            m.apply(&tempo_net::fdsync::ClubState {
+                reset: true,
+                dupes: vec![
+                    ("K1ABC".into(), "20m".into(), "CW".into()),  // own too
+                    ("N0XYZ".into(), "40m".into(), "DIG".into()), // club-only
+                ],
+                sections: vec!["EMA".into(), "MN".into()],
+                score: 42,
+                qsos: 7,
+                board: vec![tempo_net::fdsync::WireBoardRow {
+                    pos: "bbbb".into(),
+                    name: "SSB tent".into(),
+                    band: "40m".into(),
+                    mode: "PH".into(),
+                    op: "OP2".into(),
+                    qsos: 5,
+                    uniq: 5,
+                    rate: 12,
+                    age: 3,
+                }],
+            });
+        }
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(club.sync_state, "synced", "acked == own max seq");
+        assert_eq!(
+            club.dupes,
+            vec![("N0XYZ".into(), "40m".into(), "DIG".into())],
+            "own-log keys are subtracted; club-only keys ship"
+        );
+        assert_eq!((club.score, club.qsos, club.sections), (42, 7, 2));
+        assert_eq!(club.skew_secs, 3);
+        assert_eq!(club.board.len(), 1);
+        assert_eq!(club.board[0].pos_name, "SSB tent");
+        assert_eq!(club.board[0].last_seen_secs, 3);
+
+        // A second local contact while connected but unacked → BEHIND, queued 1.
+        assert!(e.fd_log_manual("W5DEF", "1E", "STX", "PH").unwrap());
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(club.sync_state, "behind");
+        assert_eq!(club.queued, 1);
+        // The outbox agrees with the chip (derived from the same numbers).
+        let out = e.fd_sync_outbox(1);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].seq, out[0].call.as_str()), (2, "W5DEF"));
+        assert_eq!(out[0].op, "W9XYZ", "operator falls back to mycall");
     }
 
     #[test]

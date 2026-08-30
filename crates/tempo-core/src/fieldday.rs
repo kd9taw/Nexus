@@ -87,6 +87,14 @@ pub struct LoggedQso {
     /// FAIL ARRL submission). 0 in legacy/test paths = falls back to the
     /// placeholder rather than inventing a date.
     pub when_unix: u64,
+    /// Per-position monotonic sequence number — this contact's half of the
+    /// club-sync QSO id `(position id, seq)`. Stamped by
+    /// [`FieldDayLog::log_submode_at`] at log time (every entry point funnels
+    /// there), journaled as `APP_NEXUS_QSEQ`, and restored by
+    /// [`FieldDayLog::merge_adif`]. Deliberately clock-free: positions' clocks
+    /// disagree at a generator-powered site, so ids never derive from time.
+    /// 0 = never assigned (rows built by paths that predate sync).
+    pub seq: u64,
 }
 
 /// A dupe-checked Field Day log with scoring.
@@ -105,6 +113,11 @@ pub struct FieldDayLog {
     pub current_submode: String,
     qsos: Vec<LoggedQso>,
     worked: HashSet<(String, String, String)>, // (call, band, mode class)
+    /// The next [`LoggedQso::seq`] to stamp. Starts at 1; a journal restore
+    /// advances it past every restored seq so a fresh session's rows continue
+    /// the per-position monotonic sequence instead of colliding with rows the
+    /// club host already merged.
+    next_seq: u64,
 }
 
 impl FieldDayLog {
@@ -117,7 +130,15 @@ impl FieldDayLog {
             current_submode: String::new(),
             qsos: Vec::new(),
             worked: HashSet::new(),
+            next_seq: 1,
         }
+    }
+
+    /// The highest [`LoggedQso::seq`] this log has stamped or restored — the
+    /// position's sync high-water mark (`join.max_seq`, and the base the
+    /// outbox "rows past the host's ack" is computed from). 0 = empty log.
+    pub fn max_seq(&self) -> u64 {
+        self.next_seq - 1
     }
 
     /// Already worked this call on this band IN THIS MODE CLASS? (ARRL FD
@@ -131,6 +152,18 @@ impl FieldDayLog {
         self.worked.contains(&(
             call.to_uppercase(),
             self.band.clone(),
+            mode.to_ascii_uppercase(),
+        ))
+    }
+
+    /// Whether an EXPLICIT `(call, band, mode class)` key is in the dupe
+    /// index — unlike [`is_dupe_mode`](Self::is_dupe_mode) it does not assume
+    /// the log's current band. The club sync uses it to subtract own-log keys
+    /// from the club dupe set (only club-ONLY keys ship to the UI).
+    pub fn worked_key(&self, call: &str, band: &str, mode: &str) -> bool {
+        self.worked.contains(&(
+            call.to_uppercase(),
+            band.to_string(),
             mode.to_ascii_uppercase(),
         ))
     }
@@ -195,6 +228,8 @@ impl FieldDayLog {
         }
         self.worked
             .insert((call.to_uppercase(), self.band.clone(), mode.clone()));
+        let seq = self.next_seq;
+        self.next_seq += 1;
         self.qsos.push(LoggedQso {
             call: call.to_string(),
             class: class.to_string(),
@@ -204,6 +239,7 @@ impl FieldDayLog {
             submode: submode.trim().to_ascii_uppercase(),
             slot,
             when_unix,
+            seq,
         });
         true
     }
@@ -280,6 +316,12 @@ impl FieldDayLog {
             s.push_str(&adif_field("CONTEST_ID", self.event.contest_id()));
             s.push_str(&adif_field("CLASS", &q.class));
             s.push_str(&adif_field("ARRL_SECT", &q.section));
+            // The per-position sync sequence (APP_-namespaced per the ADIF
+            // spec, so every other consumer ignores it). Legacy 0 rows omit
+            // the tag — restore backfills them in row order.
+            if q.seq > 0 {
+                s.push_str(&adif_field("APP_NEXUS_QSEQ", &q.seq.to_string()));
+            }
             s.push_str("<EOR>\n");
         }
         s
@@ -373,6 +415,15 @@ impl FieldDayLog {
             return;
         }
         self.worked.insert(key);
+        // The journaled sync seq round-trips; a legacy row without the tag
+        // backfills the next free seq in row order (1..n on a whole legacy
+        // journal), so pre-sync journals join the sequence deterministically.
+        let seq = f
+            .get("APP_NEXUS_QSEQ")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(self.next_seq);
+        self.next_seq = self.next_seq.max(seq + 1);
         self.qsos.push(LoggedQso {
             call: call.clone(),
             class: f.get("CLASS").cloned().unwrap_or_default(),
@@ -382,6 +433,7 @@ impl FieldDayLog {
             submode,
             slot: 0,
             when_unix,
+            seq,
         });
     }
 
@@ -967,6 +1019,75 @@ mod tests {
             "re-export keeps RTTY"
         );
         assert!(restored.cabrillo(14_080).contains(" RY "));
+    }
+
+    #[test]
+    fn seq_is_stamped_monotonic_and_round_trips_as_app_nexus_qseq() {
+        // Every entry point funnels into log_submode_at, so seqs are 1..n in
+        // log order regardless of mode/path.
+        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        assert!(log.log_mode_at("K1ABC", "2A", "CT", "DIG", 0, 1_782_583_500));
+        assert!(log.log_mode_at("K2DEF", "1D", "EMA", "CW", 0, 1_782_583_560));
+        assert_eq!(log.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(log.max_seq(), 2);
+        let adif = log.adif();
+        assert!(
+            adif.contains("<APP_NEXUS_QSEQ:1>1") && adif.contains("<APP_NEXUS_QSEQ:1>2"),
+            "seq journaled per row: {adif}"
+        );
+
+        // Restore keeps each row's seq and the NEXT log entry continues past
+        // the restored high-water — the property that makes a restart safe
+        // against re-issuing an id the club host already merged.
+        let mut restored = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        restored.merge_adif(&adif, 0);
+        assert_eq!(
+            restored.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(),
+            [1, 2],
+            "seqs survive the round-trip"
+        );
+        assert!(restored.log_mode_at("N0GHI", "5A", "MN", "PH", 0, 1_782_583_620));
+        assert_eq!(
+            restored.qsos()[2].seq,
+            3,
+            "fresh rows continue the sequence"
+        );
+    }
+
+    #[test]
+    fn legacy_journal_without_qseq_backfills_in_row_order() {
+        // A pre-sync journal has no APP_NEXUS_QSEQ tags at all: restore assigns
+        // 1..n in row order (deterministic, so a re-restore re-derives the same
+        // ids) and new contacts continue from there.
+        let legacy = "<EOH>\n\
+            <CALL:5>K1ABC <MODE:3>FT8 <BAND:3>20m <QSO_DATE:8>20260627 <TIME_ON:6>180500 \
+            <CLASS:2>2A <ARRL_SECT:2>CT <EOR>\n\
+            <CALL:5>K2DEF <MODE:2>CW <BAND:3>20m <QSO_DATE:8>20260627 <TIME_ON:6>180600 \
+            <CLASS:2>1D <ARRL_SECT:3>EMA <EOR>\n";
+        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        log.merge_adif(legacy, 0);
+        assert_eq!(
+            log.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(),
+            [1, 2],
+            "legacy rows backfill 1..n in row order"
+        );
+        assert!(log.log_mode_at("N0GHI", "5A", "MN", "PH", 0, 1_782_583_620));
+        assert_eq!(log.qsos()[2].seq, 3);
+        // A mixed journal (one stamped row, one legacy) never collides: the
+        // backfill takes the next free seq at the point the row restores.
+        let mixed = "<EOH>\n\
+            <CALL:5>K1ABC <MODE:3>FT8 <BAND:3>20m <QSO_DATE:8>20260627 <TIME_ON:6>180500 \
+            <CLASS:2>2A <ARRL_SECT:2>CT <APP_NEXUS_QSEQ:1>5 <EOR>\n\
+            <CALL:5>K2DEF <MODE:2>CW <BAND:3>20m <QSO_DATE:8>20260627 <TIME_ON:6>180600 \
+            <CLASS:2>1D <ARRL_SECT:3>EMA <EOR>\n";
+        let mut log = FieldDayLog::new("W9XYZ", Exchange::new("3A", "WI"), "20m");
+        log.merge_adif(mixed, 0);
+        assert_eq!(
+            log.qsos().iter().map(|q| q.seq).collect::<Vec<_>>(),
+            [5, 6],
+            "backfill continues past a restored explicit seq"
+        );
+        assert_eq!(log.max_seq(), 6);
     }
 
     #[test]

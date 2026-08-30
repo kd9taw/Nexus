@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
-import type { FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
-import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import type { FdClubStatus, FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
+import { exportLog, fdClubExport, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
 import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
 import { fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
@@ -74,8 +74,15 @@ interface LogRowMeta {
   isDupe: boolean
 }
 
-type ExportFormat = 'cabrillo' | 'adif' | 'summary' | 'dupesheet'
-const EXT: Record<ExportFormat, string> = { cabrillo: 'cbr', adif: 'adi', summary: 'txt', dupesheet: 'txt' }
+type ExportFormat = 'cabrillo' | 'adif' | 'summary' | 'dupesheet' | 'club-cabrillo' | 'club-adif'
+const EXT: Record<ExportFormat, string> = {
+  cabrillo: 'cbr',
+  adif: 'adi',
+  summary: 'txt',
+  dupesheet: 'txt',
+  'club-cabrillo': 'cbr',
+  'club-adif': 'adi',
+}
 
 /**
  * Annotate each log entry with multiplier / dupe state. Sections are marked the
@@ -444,6 +451,195 @@ function computeFdScore(fieldDay: FieldDayStatus | null, settings: Settings | nu
   return { fdPowerMult, qsoPts, poweredPoints, claimedBonusIds, bonusPoints, totalScore }
 }
 
+// ---------------------------------------------------------------------------
+// Club sync (the Nexus↔Nexus event sync). Rendered only while the club block
+// rides the snapshot (hosting or joined) — a solo Field Day never sees it.
+// Inline styles off the shared tokens, the SectionsBoard idiom.
+// ---------------------------------------------------------------------------
+
+const CLUB_WRAP: CSSProperties = {
+  flex: '0 0 auto',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '10px 16px 12px',
+  borderBottom: '1px solid var(--border-soft)',
+}
+const CLUB_HEADER: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 10,
+}
+const CLUB_CHIP_BASE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '3px 10px',
+  borderRadius: 'var(--radius-sm)',
+  fontSize: 12,
+  fontWeight: 700,
+  letterSpacing: '0.03em',
+}
+/** The sync chip's ink per state — every token exists in BOTH themes. */
+function clubChipStyle(state: string): CSSProperties {
+  const ink =
+    state === 'synced'
+      ? 'var(--status-confirmed)'
+      : state === 'behind'
+        ? 'var(--status-new-band)'
+        : 'var(--status-new-entity)'
+  return {
+    ...CLUB_CHIP_BASE,
+    color: ink,
+    background: `color-mix(in srgb, ${ink} 14%, transparent)`,
+    border: `1px solid color-mix(in srgb, ${ink} 50%, transparent)`,
+  }
+}
+const CLUB_BOARD_GRID: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr',
+  columnGap: 10,
+  rowGap: 3,
+  fontSize: 13,
+  alignItems: 'baseline',
+}
+const CLUB_COL_HEAD: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--text-faint)',
+}
+const CLUB_WARN: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--status-new-entity)',
+}
+
+/** The chip's text for each derived state (honesty rule: the queue is IN the
+ * label, so "connected but behind" can never masquerade as synced). */
+function clubChipText(club: FdClubStatus): string {
+  switch (club.syncState) {
+    case 'synced':
+      return t('fieldDay.club.state.synced')
+    case 'behind':
+      return t('fieldDay.club.state.behind', { queued: club.queued })
+    default:
+      return t('fieldDay.club.state.offline', { queued: club.queued })
+  }
+}
+
+function FdClubSection({
+  club,
+  onExport,
+  busy,
+}: {
+  club: FdClubStatus
+  onExport: (format: 'club-cabrillo' | 'club-adif') => void
+  busy: boolean
+}) {
+  return (
+    <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
+      <div style={CLUB_HEADER}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
+          {t('fieldDay.club.head')}
+        </span>
+        <span style={clubChipStyle(club.syncState)} title={t('fieldDay.club.state.title')}>
+          {clubChipText(club)}
+        </span>
+        {(club.event || club.hostCall) && (
+          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+            {t('fieldDay.club.hostLine', { event: club.event || '—', call: club.hostCall || '—' })}
+          </span>
+        )}
+        <span style={{ flex: '1 1 auto' }} />
+        <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+          {t('fieldDay.club.counters', {
+            score: club.score,
+            qsos: club.qsos,
+            sections: club.sections,
+          })}
+        </span>
+        {club.hosting && (
+          <>
+            <button
+              type="button"
+              className="export-btn"
+              disabled={busy}
+              onClick={() => onExport('club-cabrillo')}
+              title={t('fieldDay.club.export.cabrillo.title')}
+            >
+              {t('fieldDay.club.export.cabrillo.label')}
+            </button>
+            <button
+              type="button"
+              className="export-btn"
+              disabled={busy}
+              onClick={() => onExport('club-adif')}
+              title={t('fieldDay.club.export.adif.title')}
+            >
+              {t('fieldDay.club.export.adif.label')}
+            </button>
+          </>
+        )}
+      </div>
+      {Math.abs(club.skewSecs) > 30 && (
+        <div style={CLUB_WARN} role="alert">
+          {t('fieldDay.club.skew', { secs: Math.abs(club.skewSecs) })}
+        </div>
+      )}
+      {club.lastError && (
+        <div style={CLUB_WARN} role="alert">
+          {t('fieldDay.club.error', { msg: club.lastError })}
+        </div>
+      )}
+      {club.board.length === 0 ? (
+        <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+          {t('fieldDay.club.board.empty')}
+        </span>
+      ) : (
+        <div style={CLUB_BOARD_GRID}>
+          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.position')}</span>
+          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.band')}</span>
+          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.mode')}</span>
+          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.operator')}</span>
+          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.qsos')}</span>
+          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.rate')}</span>
+          {club.board.map((row) => {
+            // Stale-mark past 15 s (the DEAD_SECS threshold): readings stay on
+            // screen but never silently stale.
+            const stale = row.lastSeenSecs > 15
+            const dim: CSSProperties = stale ? { opacity: 0.45 } : {}
+            return (
+              <Fragment key={row.posName}>
+                <span
+                  className="mono"
+                  style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={
+                    stale
+                      ? t('fieldDay.club.board.stale', { secs: row.lastSeenSecs })
+                      : undefined
+                  }
+                >
+                  {row.posName}
+                  {stale && <span aria-hidden="true"> ⚠</span>}
+                </span>
+                <span className="mono" style={dim}>{row.band}</span>
+                <span className="mono" style={dim}>{row.mode}</span>
+                <span className="mono" style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.operator}</span>
+                <span className="mono" style={dim}>{row.qsos}</span>
+                <span className="mono" style={dim}>
+                  {t('fieldDay.club.board.rate', { rate: row.rate })}
+                </span>
+              </Fragment>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Scoreboard header (operator + pop-out) — inline off the shared tokens so it stays
 // theme-aware without touching styles.css, like SectionsBoard above.
 const SCOREBOARD_HEADER: CSSProperties = {
@@ -727,11 +923,21 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
         })
       } else if (format === 'dupesheet') {
         text = buildDupeSheetText(rows)
+      } else if (format === 'club-cabrillo' || format === 'club-adif') {
+        // The MERGED club log from the host, deduped earliest-wins — the
+        // submittable club artifact (host role only; the backend refuses
+        // elsewhere and the buttons only render while hosting).
+        text = await fdClubExport(format === 'club-cabrillo' ? 'cabrillo' : 'adif')
       } else {
         text = await exportLog(format)
       }
       const stamp = new Date().toISOString().slice(0, 10)
-      const base = format === 'cabrillo' || format === 'adif' ? 'fd-log' : `fd-${format}`
+      const base =
+        format === 'cabrillo' || format === 'adif'
+          ? 'fd-log'
+          : format.startsWith('club-')
+            ? 'fd-club-log'
+            : `fd-${format}`
       // Real Rust write to Downloads, same as the Logbook exports — a `<a download>` blob is
       // silently CANCELLED by wry on macOS (no download handler is wired), so all four FD
       // export buttons produced no file there while looking successful. The toast fires only
@@ -839,6 +1045,11 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
           </button>
         </div>
       </div>
+
+      {/* CLUB SYNC (chip + counters + band board) — only while hosting/joined */}
+      {fieldDay?.club && (
+        <FdClubSection club={fieldDay.club} onExport={handleExport} busy={busy !== null} />
+      )}
 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} />

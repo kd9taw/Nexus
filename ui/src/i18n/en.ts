@@ -873,6 +873,8 @@ export const EN = {
     'Section "{{section}}" isn\'t a known ARRL/RAC section — required to log.',
   'logEntry.fd.logged': 'FD: logged {{call}} {{class}}/{{section}} ({{mode}})',
   'logEntry.fd.failed': 'FD log failed',
+  'logEntry.fd.dupe.own': 'Dupe: {{call}} is already in this position\'s log on {{band}} {{mode}}',
+  'logEntry.fd.dupe.club': 'Club dupe: another position already worked {{call}} on {{band}} {{mode}} — logging is allowed but adds no points',
 
   // ── Confirm-before-log prompt (WSJT-X's "Prompt me to log QSO") ─────────────────────
   // Its own area, not `logEntry.*`: this is the popup that reviews a contact the sequencer
@@ -2518,6 +2520,29 @@ export const EN = {
     'DX cluster assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
   'fieldDay.advisory.spotting':
     'Spotting assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
+  'fieldDay.club.aria': 'Club sync',
+  'fieldDay.club.head': 'Club',
+  'fieldDay.club.state.synced': 'Synced',
+  'fieldDay.club.state.behind': 'Behind — {{queued}} to send',
+  'fieldDay.club.state.offline': 'Offline — {{queued}} queued here',
+  'fieldDay.club.state.title': 'Live sync state, derived from the send queue — never a guess. Contacts logged while offline are journaled and re-sent automatically.',
+  'fieldDay.club.hostLine': '{{event}} · host {{call}}',
+  'fieldDay.club.counters': 'Club: {{score}} pts · {{qsos}} QSOs · {{sections}} sections',
+  'fieldDay.club.export.cabrillo.label': 'Club Cabrillo',
+  'fieldDay.club.export.cabrillo.title': 'Export the merged club log as Cabrillo (deduped — the earliest contact wins)',
+  'fieldDay.club.export.adif.label': 'Club ADIF',
+  'fieldDay.club.export.adif.title': 'Export the merged club log as ADIF (deduped — the earliest contact wins)',
+  'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
+  'fieldDay.club.error': 'Host: {{msg}}',
+  'fieldDay.club.board.empty': 'No positions heard yet',
+  'fieldDay.club.board.column.position': 'Position',
+  'fieldDay.club.board.column.band': 'Band',
+  'fieldDay.club.board.column.mode': 'Mode',
+  'fieldDay.club.board.column.operator': 'Operator',
+  'fieldDay.club.board.column.qsos': 'QSOs',
+  'fieldDay.club.board.column.rate': 'Rate',
+  'fieldDay.club.board.stale': 'Last heard {{secs}} s ago',
+  'fieldDay.club.board.rate': '{{rate}}/hr',
 
   // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
   // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time
@@ -2614,6 +2639,28 @@ export const EN = {
   'settings.fdRules.empty': 'Built-in rules data active.',
   'settings.fdRules.hint':
     'Scoring parameters, event windows, bonuses and sections for both Field Day events. Checked on demand; a downloaded update applies at the next launch.',
+  'settings.fdClub.legend': 'Field Day Club Sync',
+  'settings.fdClub.host.label': 'Host a club event',
+  'settings.fdClub.host.hint': 'Merges every position\'s contacts into one club log on this PC — and opens a port on your local network (the only time Nexus listens beyond this computer).',
+  'settings.fdClub.host.note': 'Positions on this network can now find and join this event. There is no join password — a club site LAN is trusted, and anyone on it could add rows to the club log, which you will see. If this PC dies, enable hosting on any other position: everyone re-joins and nothing is lost.',
+  'settings.fdClub.host.aria.enable': 'Enable club event hosting',
+  'settings.fdClub.host.aria.disable': 'Disable club event hosting',
+  'settings.fdClub.eventName.label': 'Event name',
+  'settings.fdClub.eventName.placeholder': 'W9ABC Field Day',
+  'settings.fdClub.eventName.hint': 'Shown to joining positions and in discovery.',
+  'settings.fdClub.hostPort.label': 'Host port',
+  'settings.fdClub.hostPort.hint': 'TCP port for the club sync (default 42073).',
+  'settings.fdClub.join.label': 'Join event at',
+  'settings.fdClub.join.hint': 'host:port of the club host — use Find club events, or type it from the host\'s screen.',
+  'settings.fdClub.join.hostingHint': 'Hosting — this position joins its own event automatically.',
+  'settings.fdClub.position.label': 'Position name',
+  'settings.fdClub.position.placeholder': 'CW tent',
+  'settings.fdClub.position.hint': 'How this position appears on the club band board.',
+  'settings.fdClub.discover.action': 'Find club events',
+  'settings.fdClub.discover.busy': 'Listening…',
+  'settings.fdClub.discover.empty': 'Nothing heard in 2 s — same network? Some Wi-Fi blocks discovery; type the host address instead.',
+  'settings.fdClub.discover.pick.label': '{{event}} — {{host}}',
+  'settings.fdClub.discover.pick.title': 'Use {{host}} as the join address',
 
   // ── Satellites ──────────────────────────────────────────────────────────────────────
   // The Satellites section, the Connect Passes pane, and the nine composers behind them.

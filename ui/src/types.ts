@@ -2364,6 +2364,60 @@ export interface FieldDayStatus {
    *  advisory reads this list; the UI never re-derives what counts as
    *  assistance from raw toggles. */
   assistanceOn?: string[]
+  /** Club-sync state (the Nexus↔Nexus event sync). Absent while neither
+   *  hosting nor joined — a solo Field Day pays nothing for the feature. */
+  club?: FdClubStatus | null
+}
+
+/** One club band-board row (host-computed, pushed to every position). */
+export interface FdClubBoardRow {
+  /** Friendly label ("CW tent"), or the raw position id when unnamed. */
+  posName: string
+  band: string
+  mode: string
+  operator: string
+  /** Merged rows from this position (raw). */
+  qsos: number
+  /** Merged rows in the trailing 60 min. */
+  rate: number
+  /** Seconds since the host last heard from it — stale-mark past 15 s
+   *  (readings are never silently stale). */
+  lastSeenSecs: number
+}
+
+/** The club block on FieldDayStatus: sync honesty + the down-flowed club state. */
+export interface FdClubStatus {
+  /** 'disabled' | 'offline' | 'behind' | 'synced' — derived from (link, queue),
+   *  so the chip can never disagree with the queue. */
+  syncState: string
+  /** Own contacts the host has not acked yet. */
+  queued: number
+  /** Unix seconds the link went down (0 unless offline). */
+  offlineSinceUnix: number
+  /** True when this instance is the host. */
+  hosting: boolean
+  event: string
+  hostCall: string
+  /** Club counters: claimed score, raw merged QSOs, distinct sections. */
+  score: number
+  qsos: number
+  sections: number
+  /** Local minus host clock (secs) — warn past ±30 s, never adjusted. */
+  skewSecs: number
+  /** The last host error line, verbatim (version refusal etc.). */
+  lastError?: string | null
+  /** Club dupe keys [call, band, modeClass] NOT already in the own log —
+   *  the entry-field warning checks own ∪ these. */
+  dupes: [string, string, string][]
+  board: FdClubBoardRow[]
+}
+
+/** One club event heard on the LAN (the "Find club events" scan). */
+export interface FdEventBeacon {
+  event: string
+  call: string
+  /** ip:port, ready for the join-address field. */
+  host: string
 }
 
 /** Result of the release-feed update check (Phase 1: notify + open the download page). */
@@ -2791,6 +2845,21 @@ export interface Settings {
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */
   fdBonuses?: string[]
+  /** Host a Nexus↔Nexus club event: while on, the sync listener binds the LAN
+   * (this toggle IS the opt-in — data-plane only) + a discovery beacon runs. */
+  fdHostEnable?: boolean
+  /** Club-sync host TCP port (default 42073). */
+  fdHostPort?: number
+  /** Operator-facing club event name ("W9ABC Field Day") — beacon + welcome. */
+  fdEventName?: string
+  /** Join a club event at host:port ('' = not joining; ignored while hosting —
+   * the host joins itself over loopback). */
+  fdJoinAddr?: string
+  /** Friendly position label for the club band board ("CW tent"). */
+  fdPositionName?: string
+  /** Persistent 8-hex club-sync position id (generated at startup; no UI edit —
+   * QSO ids are (posid, seq), so a changed id re-pushes everything as new). */
+  fdPositionId?: string
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number

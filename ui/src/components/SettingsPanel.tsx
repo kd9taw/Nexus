@@ -5,6 +5,7 @@ import { checkRigForm, blocks, MULTI_DATA_MODE_ICOMS, NATIVE_CIV_MODELS, nativeC
 import {
   confirmSatUplink,
   exportSettingsBundle,
+  fdDiscoverEvents,
   resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
@@ -16,6 +17,7 @@ import type {
   BandChannel,
   CatTestResult,
   DetectedRig,
+  FdEventBeacon,
   RadioStatus,
   RouteMode,
   RoutingRule,
@@ -1088,6 +1090,11 @@ export function SettingsPanel({
   // file: a downloaded update applies at the NEXT launch and the row says so.
   const [fdRules, setFdRules] = useState<FdRulesStatus | null>(null)
   const [fdRulesFetching, setFdRulesFetching] = useState(false)
+  // Club-sync discovery ("Find club events"): null = never scanned, [] = a
+  // scan that heard nothing (shown honestly — AP-isolated Wi-Fi eats broadcast,
+  // which is why the manual host:port field always remains).
+  const [fdScan, setFdScan] = useState<FdEventBeacon[] | null>(null)
+  const [fdScanBusy, setFdScanBusy] = useState(false)
   useEffect(() => {
     getFdRulesStatus()
       .then(setFdRules)
@@ -9694,6 +9701,128 @@ export function SettingsPanel({
                 </span>
               )}
               <span className="settings-hint">{t('settings.fdRules.hint')}</span>
+            </div>
+          </fieldset>
+          )}
+          {/* Club sync (Nexus↔Nexus): host one event per club, every position
+              streams its contacts to it over the LAN. HOSTING IS THE ONE
+              DELIBERATE NON-LOOPBACK LISTENER IN THE APP — the toggle's copy
+              says so, and the inbound surface is data-plane only (rows into
+              the club log; nothing can key TX, touch CAT, or change settings). */}
+          {tab === 'contesting' && (
+          <fieldset className="settings-section" id="settings-field-day-club">
+            <legend>{t('settings.fdClub.legend')}</legend>
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.fdClub.host.label')}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.fdHostEnable}
+                className={`toggle${form.fdHostEnable ? ' on' : ''}`}
+                onClick={() => updateBool('fdHostEnable', !form.fdHostEnable)}
+                aria-label={
+                  form.fdHostEnable
+                    ? t('settings.fdClub.host.aria.disable')
+                    : t('settings.fdClub.host.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.fdClub.host.hint')}</span>
+            </label>
+            {form.fdHostEnable && (
+              <p className="settings-note">{t('settings.fdClub.host.note')}</p>
+            )}
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.fdClub.eventName.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.fdEventName ?? ''}
+                  onChange={(e) => update('fdEventName', e.target.value)}
+                  placeholder={t('settings.fdClub.eventName.placeholder')}
+                />
+                <span className="settings-hint">{t('settings.fdClub.eventName.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.fdClub.hostPort.label')}</span>
+                <input
+                  className="settings-input mono"
+                  type="number"
+                  min={1024}
+                  max={65535}
+                  value={form.fdHostPort ?? 42073}
+                  onChange={(e) => {
+                    markDirty()
+                    setForm((prev) =>
+                      prev ? { ...prev, fdHostPort: Number(e.target.value) || 42073 } : prev,
+                    )
+                  }}
+                />
+                <span className="settings-hint">{t('settings.fdClub.hostPort.hint')}</span>
+              </div>
+            </div>
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.fdClub.join.label')}</span>
+                <input
+                  className="settings-input mono"
+                  value={form.fdJoinAddr ?? ''}
+                  onChange={(e) => update('fdJoinAddr', e.target.value)}
+                  placeholder="192.168.1.10:42073"
+                  disabled={!!form.fdHostEnable}
+                />
+                <span className="settings-hint">
+                  {form.fdHostEnable
+                    ? t('settings.fdClub.join.hostingHint')
+                    : t('settings.fdClub.join.hint')}
+                </span>
+              </div>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.fdClub.position.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.fdPositionName ?? ''}
+                  onChange={(e) => update('fdPositionName', e.target.value)}
+                  placeholder={t('settings.fdClub.position.placeholder')}
+                />
+                <span className="settings-hint">{t('settings.fdClub.position.hint')}</span>
+              </div>
+            </div>
+            <div className="settings-field">
+              <button
+                type="button"
+                className="settings-test-btn"
+                disabled={fdScanBusy}
+                onClick={() => {
+                  setFdScanBusy(true)
+                  fdDiscoverEvents()
+                    .then(setFdScan)
+                    .catch(() => setFdScan([]))
+                    .finally(() => setFdScanBusy(false))
+                }}
+              >
+                {fdScanBusy
+                  ? t('settings.fdClub.discover.busy')
+                  : t('settings.fdClub.discover.action')}
+              </button>
+              {fdScan !== null && fdScan.length === 0 && !fdScanBusy && (
+                <span className="settings-hint">{t('settings.fdClub.discover.empty')}</span>
+              )}
+              {(fdScan ?? []).map((b) => (
+                <button
+                  key={b.host}
+                  type="button"
+                  className="settings-test-btn"
+                  onClick={() => update('fdJoinAddr', b.host)}
+                  title={t('settings.fdClub.discover.pick.title', { host: b.host })}
+                >
+                  {t('settings.fdClub.discover.pick.label', {
+                    event: b.event || b.call,
+                    host: b.host,
+                  })}
+                </button>
+              ))}
             </div>
           </fieldset>
           )}
