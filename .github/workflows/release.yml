@@ -497,6 +497,24 @@ jobs:
           m="$app/Contents/Resources/resources/deepcw/model.onnx"
           [ -s "$m" ] || { echo "DeepCW model missing from the .app"; exit 1; }
           echo "$MODEL_SHA  $m" | shasum -a 256 -c -
+          # HAMLIB MUST BE IN THE .app, AND THE APP MUST LOOK WHERE IT LANDS (#190).
+          #
+          # The Linux job has had this gate since 1.9.0; macOS had the staging and the
+          # signing but no gate, and that is the hole 1.9.2 shipped through: the tools were
+          # in the bundle, correctly signed, at Contents/Resources/resources/hamlib — while
+          # the resolver looked one directory up the tree, so EVERY fresh macOS install had
+          # no CAT at all. Presence alone would not have caught it; the second check is the
+          # one that matters, because it asserts the shipped PATH against the shipped CODE
+          # instead of against a fixture that agrees with the code.
+          hl="$app/Contents/Resources/resources/hamlib"
+          for f in rigctld rigctl rotctld rotctl; do
+            [ -s "$hl/$f" ] || { echo "$f missing from the .app"; exit 1; }
+          done
+          grep -q '\.\./Resources/resources/hamlib/' crates/tempo-audio/src/rigctld_proc.rs \
+            || { echo "the app does not search Contents/Resources/resources/hamlib (#190)"; exit 1; }
+          # It also has to RUN from where it lands — a wrong install-name or a missing dylib
+          # looks identical to a working build until a user double-clicks.
+          "$hl/rigctld" --version || { echo "bundled rigctld will not run"; exit 1; }
           mkdir -p out
           ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           cp "$dmg" "out/Nexus_${ver}_aarch64.dmg"

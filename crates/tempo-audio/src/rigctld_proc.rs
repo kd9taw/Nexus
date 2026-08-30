@@ -1436,7 +1436,19 @@ fn bundled_candidates(exe_name: &str, tool: &str) -> Vec<String> {
         format!("resources/hamlib/{tool}"),
         // Linux .deb and AppImage: usr/bin/<exe> → usr/lib/<exe>/resources/
         format!("../lib/{exe_name}/resources/hamlib/{tool}"),
-        // macOS .app: Contents/MacOS/<exe> → Contents/Resources/
+        // macOS .app: Contents/MacOS/<exe> → Contents/Resources/resources/
+        //
+        // ⚠️ THE `resources/` COMPONENT IS NOT OPTIONAL (#190). tauri.conf.json maps
+        // "resources/hamlib/*" → "resources/hamlib/", and that destination is relative to the
+        // bundle's own resource dir, so the tools land at Contents/Resources/resources/hamlib/.
+        // Shipping only the shorter path meant the correctly-staged, correctly-signed Hamlib
+        // inside every .app was never looked at: the resolver fell through to PATH and the
+        // Homebrew/MacPorts dirs, and on a Mac that had never installed Hamlib the spawn
+        // failed with "could not start its own rigctl" — i.e. NO CAT on 100% of fresh macOS
+        // installs, while Windows and Linux (both of which carry the component) were fine.
+        format!("../Resources/resources/hamlib/{tool}"),
+        // The pre-#190 path, kept as a harmless fallback: it costs one stat, and an older or
+        // hand-assembled bundle that really does put them here still resolves.
         format!("../Resources/hamlib/{tool}"),
     ]
 }
@@ -3680,8 +3692,19 @@ mod tests {
             ("win", "win/resources/hamlib"),
             // Linux .deb + AppImage: usr/bin/Nexus, usr/lib/Nexus/resources/.
             ("linux/usr/bin", "linux/usr/lib/Nexus/resources/hamlib"),
-            // macOS .app: Contents/MacOS/Nexus, Contents/Resources/.
-            ("mac/Contents/MacOS", "mac/Contents/Resources/hamlib"),
+            // macOS .app: Contents/MacOS/Nexus, and resources land under
+            // Contents/Resources/**resources**/ — tauri.conf.json maps
+            // "resources/hamlib/*" to "resources/hamlib/", which is relative to the bundle's
+            // own resource dir. The fixture used to say Contents/Resources/hamlib, which is
+            // what the CODE assumed rather than what the BUILD produces, so this test
+            // confirmed the resolver against itself and passed while every fresh macOS
+            // install had no CAT at all (#190). release.yml opens the real shipped .app at
+            // Contents/Resources/resources/deepcw/model.onnx — a sibling entry of identical
+            // shape — which is the layout pinned here.
+            (
+                "mac/Contents/MacOS",
+                "mac/Contents/Resources/resources/hamlib",
+            ),
         ];
 
         for (exe_dir, res_dir) in layouts {
