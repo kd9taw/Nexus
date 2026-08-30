@@ -309,6 +309,12 @@ const SHELLS: Array<[string, Array<Set<string>>]> = [
   // against that clip, and the internet popover it hosts is `position: absolute` with the
   // shell as its nearest non-visible ancestor, so the panel's lower rows had nowhere to go.
   ['.layout.single.needed-panel.aprs-cockpit', APRS_CHAIN],
+  // The Field Day cockpit is the seventh, added with the shell itself (2026-08-30) rather
+  // than four weeks later like APRS. Its tail is the entry row — Call, exchange, Log — and its
+  // head carries STOP TX, so a clipped deficit costs the contact being typed at one end and
+  // the way to stop transmitting at the other. Plain shell chain: unlike APRS it wears no
+  // second view class, so nothing else of its specificity can win its overflow.
+  ['.layout.single.fd-cockpit', shellChain('fd-cockpit')],
 ]
 
 it('the APRS shell still wears the class list this census reasons about', () => {

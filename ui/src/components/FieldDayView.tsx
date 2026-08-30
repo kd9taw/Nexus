@@ -64,6 +64,9 @@ interface Props {
   /** The active digital tier (App's snap.link.tier) — the banned-mode chip
    *  checks it against the ruleset's bannedModes. */
   tier?: string
+  /** Switch this window to the Field Day operating cockpit. App owns the persisted choice
+   *  (`nexus.fdLayout`); omitted ⇒ no button, so every existing consumer is unchanged. */
+  onOpenCockpit?: () => void
 }
 
 interface LogRowMeta {
@@ -350,7 +353,7 @@ const CELL_UNWORKED: CSSProperties = {
 }
 
 /** The colored worked/unworked section grid, grouped by ARRL division. */
-function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
+export function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
   const workedCount = useMemo(
     () =>
       ARRL_SECTIONS_BY_DIVISION.reduce(
@@ -817,7 +820,7 @@ export function FieldDayScoreboard({
   )
 }
 
-export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier }: Props) {
+export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier, onOpenCockpit }: Props) {
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
   // contacts up) the moment the next contact landed. Pinned follows the run;
@@ -1002,6 +1005,18 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
             {t('fieldDay.role.sp')}
           </button>
         </div>
+        {/* The other face of this nav slot. Same pair as the cockpit's own Dashboard
+            button — one toggle, drawn on both sides, so neither screen is a dead end. */}
+        {onOpenCockpit && (
+          <button
+            type="button"
+            className="export-btn"
+            onClick={onOpenCockpit}
+            title={t('fieldDay.cockpit.enter.title')}
+          >
+            {t('fieldDay.cockpit.enter')}
+          </button>
+        )}
         {/* Export buttons */}
         <div className="fd-export">
           {exportError && (

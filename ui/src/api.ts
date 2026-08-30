@@ -559,13 +559,19 @@ export async function notifyErase(window: 0 | 1 | 2): Promise<void> {
   await invoke('notify_erase', { window })
 }
 
-/** Log a Field Day contact from the CW/Phone cockpits (all-mode FD).
- * Rejects with a message on a band+mode dupe. */
+/** Log a Field Day contact by hand (the CW/Phone cockpits, and the Field Day cockpit).
+ * Rejects with a message on a band+mode dupe.
+ *
+ * ⚠️ `mode` IS THE SCORING CLASS, and all THREE belong here. The engine's `log_mode_at`
+ * (tempo-core/src/fieldday.rs) has always taken 'DIG' and handled it specially — it stamps
+ * the real on-air submode behind the class so exports emit the actual mode — but this
+ * signature listed only the two classes its first two callers used. A digital position
+ * picking a station up by hand had no way to say so, and 'PH' credits the wrong class. */
 export async function fdLogManual(
   call: string,
   klass: string,
   section: string,
-  mode: 'CW' | 'PH',
+  mode: 'CW' | 'PH' | 'DIG',
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('fd_log_manual', { call, class: klass, section, mode })
 }

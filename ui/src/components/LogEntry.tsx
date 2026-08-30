@@ -167,10 +167,46 @@ interface Props {
    */
   fieldDay?: FieldDayStatus | null
   /**
-   * The FD mode code to pass to fdLogManual.
-   * Must be 'CW' or 'PH' when fieldDay is active.
+   * The FD mode code to pass to fdLogManual: the SCORING CLASS this position logs under.
+   *
+   * ⚠️ 'DIG' IS ONE OF THE THREE, and leaving it out was a silent scoring error. Field Day
+   * scores CW, phone and digital as three classes, and the engine's `log_mode_at`
+   * (tempo-core/src/fieldday.rs) already handles 'DIG' specially — it stamps the actual on-air
+   * submode behind the class so exports emit the real mode. A digital position picking a
+   * station up by hand (the FD cockpit's decode monitor prefills the Call field) was the first
+   * consumer with a DIG contact to log; before this it had to send 'PH', which credits the
+   * wrong class and dupes against the wrong cell.
    */
-  fdMode?: 'CW' | 'PH'
+  fdMode?: 'CW' | 'PH' | 'DIG'
+  /**
+   * FD ONLY — the in-progress exchange, mirrored out on every change so a host can paint
+   * boards from the DRAFT: the FD cockpit's band × mode grid lights the cells where the call
+   * being typed is already worked, and its sections checklist glows the section as it settles,
+   * before anything is logged.
+   *
+   * The values arrive normalized exactly as the dupe verdicts below normalize them — trimmed
+   * and uppercased — so a board and the dupe check can never disagree about the key. `cls` is
+   * the FD exchange class ('3A'), not the CW/PH mode class (that one is `fdMode`).
+   *
+   * Omitted by every consumer that logs the ordinary way (Phone, CW, Satellites): nothing is
+   * called and this strip behaves exactly as it did.
+   */
+  onFdDraftChange?: (draft: { call: string; cls: string; section: string }) => void
+  /**
+   * FD ONLY — land the caret in the callsign field when this strip MOUNTS.
+   *
+   * ⚠️ OPT-IN, AND THAT IS SAFETY RATHER THAN TASTE. The Field Day cockpit wants it: the strip
+   * IS that screen, so the first contact of a run is typed rather than clicked. The Phone and
+   * CW cockpits must NOT have it, because a focused text field disarms their window Space
+   * handler — Phone's Space keyup is a member of its stop-line census — and a strip that
+   * grabbed focus on mount would kill push-to-talk from the moment the cockpit appeared, for
+   * the whole of Field Day, in a shipped cockpit. Default false: every host that does not ask
+   * behaves exactly as it did.
+   *
+   * `reset()`'s refocus after a logged contact is a different thing and is NOT gated: that one
+   * follows an action the operator took in this strip.
+   */
+  autoFocusCall?: boolean
   /**
    * Does this strip render its OWN "Log this QSO" heading? Default true — today's
    * behaviour, unchanged, for every host that does not say otherwise.
@@ -208,6 +244,8 @@ export function LogEntry({
   cwLive,
   fieldDay,
   fdMode,
+  onFdDraftChange,
+  autoFocusCall = false,
   titled = true,
 }: Props) {
   const fdActive = fieldDay != null
@@ -283,6 +321,20 @@ export function LogEntry({
     fdSeenLen.current = fdLogLen
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
+
+  // FD: land focus in the callsign field the moment this strip MOUNTS, so the first contact of
+  // a run is typed rather than clicked — the same field `reset()` snaps back to after every
+  // logged contact, just from the first one too. preventScroll for reset()'s reason: this focus
+  // readies the field, it must never scroll the cockpit to the log.
+  // Mount only (empty deps, the flags read once): if Field Day starts while this strip is
+  // already on screen, focus stays wherever the operator put it.
+  // ⚠️ ONLY WHEN THE HOST ASKED (`autoFocusCall`) — see that prop. Focusing on `fdActive`
+  // alone reached the Phone and CW cockpits too, and a focused text field disarms Phone's
+  // window Space handler, which is on its stop-line census.
+  useEffect(() => {
+    if (fdActive && autoFocusCall) callInputRef.current?.focus({ preventScroll: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Live mirror of the typed call so a slow lookup can tell if the operator has since
   // changed the call (drop the stale result rather than fill the wrong call's data).
@@ -881,6 +933,20 @@ export function LogEntry({
     (fieldDay?.club?.dupes ?? []).some(
       ([c, b, m]) => c === fdTypedCall && b === snap.radio.band && m === fdModeClass,
     )
+  // …and the same draft, mirrored out to the host's boards (see `onFdDraftChange`). It reuses
+  // `fdTypedCall` rather than re-normalizing so the cell a board paints is the key this strip
+  // would log. Deliberately NOT keyed on the callback's identity: a host that passes an inline
+  // arrow re-renders on every 300 ms snapshot, and firing on that would repaint the boards on
+  // ticks where the operator typed nothing.
+  useEffect(() => {
+    if (!fdActive) return
+    onFdDraftChange?.({
+      call: fdTypedCall,
+      cls: fdClass.trim().toUpperCase(),
+      section: fdSection.trim().toUpperCase(),
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fdActive, fdTypedCall, fdClass, fdSection])
   if (fdActive) {
     return (
       <div className="log-entry log-entry-fd">
@@ -897,7 +963,12 @@ export function LogEntry({
               ref={callInputRef}
               className="settings-input mono le-fd-input le-fd-input-call"
               value={logCall}
-              onChange={(e) => setLogCall(e.target.value.toUpperCase())}
+              // SPACES ARE DROPPED, not kept: no callsign contains one, and the space bar is
+              // the phone position's push-to-talk. An operator who reaches for it out of habit
+              // while the caret is in this field would otherwise log "K1 ABC" verbatim —
+              // `logIt` only trims the ends. Costs nothing on any other path (a pasted call
+              // with a stray space comes out clean).
+              onChange={(e) => setLogCall(e.target.value.replace(/\s+/g, '').toUpperCase())}
               onKeyDown={onEnter}
               placeholder={LOG_EXAMPLES.call}
               autoComplete="off"
@@ -952,6 +1023,17 @@ export function LogEntry({
           </button>
         </div>
 
+        {/* THE VERDICT SLOT — always present, empty or not.
+
+            The dock this strip lives in (FD cockpit) is bottom-anchored, so anything that makes
+            the strip taller moves the fields UP, and these three verdicts appear and vanish PER
+            KEYSTROKE right under the fingers that are typing. Reserving the height here rather
+            than on the strip is the difference between a reservation and a coincidence: a floor
+            on `.log-entry-fd` has to be re-derived every time the header row or the field row
+            changes height, and the one this shipped with (8.5em = 119px against a 117px natural
+            strip) reserved two pixels of an eleven-pixel line — i.e. nothing. The wrapper is
+            zero-height in every other host, so Phone and CW are unchanged. */}
+        <div className="le-fd-verdicts">
         {logCall.trim() !== '' && !fdExchangeOk && (
           <div className="le-fd-hint" role="alert">
             {fdClass.trim() === ''
@@ -977,6 +1059,7 @@ export function LogEntry({
             })}
           </div>
         )}
+        </div>
       </div>
     )
   }

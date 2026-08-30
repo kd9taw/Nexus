@@ -269,7 +269,7 @@ const DEFAULT_MACROS: CwMacro[] = [
  * The engine fills {EXCH} = "{CLASS} {SECTION}" (e.g. "3A WI") from the FD settings, so
  * one template serves both events. Contest cadence: F1 CQ FD → F2 answer with your call →
  * F3 send the exchange (twice, for copy) → F4 confirm + TU. */
-const DEFAULT_FD_MACROS: CwMacro[] = [
+export const DEFAULT_FD_MACROS: CwMacro[] = [
   { key: 'F1', label: 'CQ FD', text: 'CQ FD DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'cw.macro.call.label', text: '! DE {MYCALL} K' },
   { key: 'F3', labelKey: 'cw.macro.exch.label', text: '! DE {MYCALL} {EXCH} {EXCH} K' },

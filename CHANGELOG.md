@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A Field Day operating cockpit — the whole contest on one screen, built for 2 AM.** A new
+  layout for Field Day that puts logging first: the callsign field is always the target, so any
+  key you press lands in it — a call you typed can't vanish because focus wandered to a board.
+  Enter logs the contact and the field is ready for the next one. The dupe verdict sits in a
+  slot that is always there, so the row never jumps under your fingers as it appears, and while
+  you type, the band-by-mode grid paints itself: red where you already worked him, amber where
+  another position in the club did, so you can see at a glance which band to move him to. The
+  sections checklist lights up when the section you just typed is a new one. The pane beside it
+  follows the radio — decodes on digital, your keyer macros on CW, push-to-talk on phone — and
+  Stop TX lives in the header, where no pane can cover it. Switch between the cockpit and the
+  full Field Day dashboard with one button; during a running event Nexus opens on the cockpit,
+  and outside one it opens on the dashboard, so there is nothing to set up. The sections board
+  here counts this position's own log (the club's totals are on the dashboard and the TV board).
+
 - **Field Day club sync — every position's contacts in one club log, live over the site
   LAN, no third-party logger.** One PC at the club site turns on **Settings ▸ Contesting ▸
   Field Day Club Sync ▸ Host a club event** (the one time Nexus listens beyond the local

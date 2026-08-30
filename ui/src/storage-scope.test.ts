@@ -35,6 +35,7 @@ export const PER_SURFACE = [
   'nexus.decodes.hideB4',
   'nexus.decodes.hideBlocked',
   'nexus.decodes.hideConfirmed',
+  'nexus.fdLayout',
   'nexus.logbook.globespin',
   'nexus.operate.layout',
   'nexus.operateLayout',
@@ -93,6 +94,10 @@ const SHARED = [
   'nexus.cw.tuneStep',
   'nexus.cwAssist',
   'nexus.dev.xray',
+  // The Field Day contacts-per-hour goal. SHARED: a target rate is a statement about how this
+  // operator is running the event, not about one window — a torn-off board showing a different
+  // goal than the cockpit would be two surfaces disagreeing about the same target.
+  'nexus.fd.rateGoal',
   'nexus.dxped.alarms',
   'nexus.dxped.chasing',
   'nexus.features.v1',

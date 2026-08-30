@@ -344,10 +344,15 @@ describe('the .panel-rooted views of .layout.single, as a class', () => {
 
 // ── the same defect class, in the THREE-PANE workspace ──────────────────────────────────
 //
-// Field Day is not a `.layout.single` view — it mounts as `.layout[data-three-pane]` →
-// `.grid-center` → `<section class="conversation panel fieldday">` — but it is the same
-// `.panel { overflow: hidden }` trap with the same fix shape, so it is computed with the
-// same machinery rather than a second copy of it.
+// Field Day has TWO faces, and this file is about the DASHBOARD one. The dashboard is not a
+// `.layout.single` view — it mounts as `.layout[data-three-pane]` → `.grid-center` →
+// `<section class="conversation panel fieldday">` — but it is the same `.panel { overflow:
+// hidden }` trap with the same fix shape, so it is computed with the same machinery rather
+// than a second copy of it. (Since 2026-08-30 the other face, the operating COCKPIT, IS a
+// `.layout.single` shell — `main.layout.single.fd-cockpit`, rendered outside `threePane`. It
+// is out of scope HERE for a structural reason rather than by omission: it is not
+// `.layout.single > .panel`, so the PANEL_VIEWS census below correctly excludes it, and its
+// own deficit valve is computed in `cockpit-shells.test.ts` SHELLS.)
 //
 // THE DEFECT (2026-08-04). The Field Day column is: banner, header, operator row, score
 // tiles, sections board, the Bonuses disclosure, the log. Every one of them is

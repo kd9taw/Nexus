@@ -22340,3 +22340,131 @@ tr.sel .aprs-sym {
 .settings-save.danger:hover:not(:disabled) {
   filter: brightness(1.06);
 }
+
+/* ===========================================================================
+   Field Day operating cockpit (phase 3) — the dedicated logging surface
+   =========================================================================== */
+/* Triple-class (0,3,0) so `.layout.single` (0,2,0) cannot collapse the flex chain — the same
+   fix as `.layout.single.phone-cockpit` / `.cw-cockpit`, and the same one truth per property:
+   ONE overflow declaration, so no later shorthand in this block can reset it (the CW trap,
+   guarded by cockpit-shells.test.ts, which computes the cascade winner rather than grepping).
+
+   THE DEFICIT VALVE. This cockpit's tail is the entry row — the Call field, the exchange and
+   the Log button — and its head carries STOP TX. Clipping either is the failure this valve
+   exists for, so the shell scrolls ONLY on a genuine deficit and the dock stays parked at the
+   bottom (`.cockpit-txdock` is sticky + `flex: 0 0 auto`, cockpit-panes.css). */
+.layout.single.fd-cockpit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* THE MODE-CLASS CHIP — the header's first and largest reading, and a control. The class
+   decides the dupe key and what the contact is submitted under, so it is sized to be read
+   across a tent, with the override select tucked beside it rather than under a menu. */
+.fd-cockpit .fd-modeclass {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.fd-cockpit .fd-modeclass-val {
+  font-family: var(--font-mono);
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+.fd-cockpit .fd-modeclass-sel {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-1);
+}
+
+/* THE ENTRY ROW NEVER MOVES UNDER THE OPERATOR'S HANDS. The FD log strip renders its verdicts
+   — the own-log dupe, the club warning, the incomplete-exchange note — as lines BELOW the
+   fields, and the dock is bottom-anchored, so a verdict appearing mid-callsign would otherwise
+   push the fields up by its own height exactly as the operator is typing into them. Reserving
+   one verdict line's height keeps the fields where they were: the line is already there and
+   simply fills. (Two verdicts can co-occur — a bad section AND a dupe — and that rare second
+   line does move the row; a permanently reserved second line costs every operator the height to
+   buy a case that is already a stop-and-look.)
+
+   ⚠️ THE RESERVATION IS ON THE VERDICT SLOT, NOT ON THE STRIP, and that is the whole of why it
+   works. It shipped as `min-height: 8.5em` on `.log-entry-fd` — 119px against a strip whose
+   natural height is 117px (measured in Chrome at 1024×768), so it reserved two pixels of an
+   11px line and the row still jumped. A floor on the strip has to be re-derived every time the
+   header row or the field row changes height; a floor on the slot cannot be silently swallowed
+   by either. `.le-fd-verdicts` is zero-height in the Phone and CW hosts, which have no floor. */
+.fd-cockpit .le-fd-verdicts {
+  min-height: 13px; /* one verdict line: `.le-fd-hint` is 11px type, 13px tall as measured */
+}
+.fd-cockpit .le-fd-input-call {
+  /* The one field a run is typed into. Big enough to read at arm's length in the dark — and
+     22px IS the enlargement, measured rather than read off the sheet: `.le-fd-input`'s 30px
+     never renders anywhere. `.settings-input` (0,1,0, line ~9569) carries `font-size: 14px`
+     and lands LATER than `.le-fd-input` (0,1,0, line ~8982) at equal specificity, so it wins
+     the cascade in every host — the same field is 14px in the Phone and CW cockpits, and this
+     (0,2,0) rule is the only thing that makes it big anywhere. Read the winner, not the rule
+     you meant to write. */
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+/* AT THE SUPPORTED FLOOR THE HEADER MUST NOT EAT THE BOARDS. Measured in headless Chrome at
+   1024×768 (and at an effective 1093, which is a 1366 laptop at 125% UI zoom): the chip block
+   wraps to three rows and takes the header from 44px to 197px, and every pixel of that comes
+   out of the pane region — 272px with the chips against 425px with the block emptied, i.e. the
+   band grid and the sections checklist lose 36% of their height to status text. `data-viewport`
+   rather than an `@media`: the size that matters is the ZOOM-ADJUSTED one, and a px media query
+   is blind to a pinned-zoom operator.
+   The advisory is the single widest item — a whole sentence, `max-width: 32em` — and it already
+   ellipsizes with the full text in its `title`, so capping it is a length change, not a loss.
+   Nothing is hidden: every chip and both buttons stay on screen and stay legible. */
+[data-viewport='xs'] .fd-cockpit .fd-advisory,
+[data-viewport='sm'] .fd-cockpit .fd-advisory {
+  max-width: 11em;
+}
+
+/* The PTT row and the CW macro grid carry their own `flex: 0 0 auto` belts on the base rules
+   (`.ph-ptt-row`, `.cw-macros`) — a one-click transmit must never be a shrink victim. All this
+   adds is the room Phone gives the button, so the two rows are the same target. */
+.fd-cockpit .ph-ptt {
+  min-height: 44px;
+  padding: 0 var(--space-5);
+}
+
+/* The digital strip: a sentence and one button. It is not a transmit control — the cockpit
+   never drives the FT sequencer — so it stays quiet chrome rather than dock furniture. */
+.fd-cockpit .fd-dig-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+}
+
+/* The NEW-MULT chip pulses — the one thing on this screen worth an animation, because it is
+   the fact that decides whether a marginal contact is worth working through the noise. It
+   remains fully legible without the animation (colour + border + the word), so a reduced-motion
+   operator loses nothing. */
+.fd-cockpit .fd-newmult {
+  animation: fd-newmult-pulse 1.1s ease-in-out infinite;
+}
+@keyframes fd-newmult-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-new-entity) 55%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--status-new-entity) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fd-cockpit .fd-newmult {
+    animation: none;
+  }
+}
