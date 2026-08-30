@@ -123,6 +123,43 @@ The bonus checklist models ARRL FD bonuses only. WFD has a different bonus struc
 
 ---
 
+## The Field Day Cockpit
+
+While an event is running, the Field Day section opens on the **cockpit**: a
+single-purpose operating screen. The **Cockpit / Dashboard** button switches to
+the full Field Day page (setup, bonus checklist, exports, club board) and back.
+The choice is remembered. Outside an event the dashboard opens first.
+
+**Entry.** The callsign field holds focus and reclaims it: any printable key
+typed anywhere in the cockpit is routed into it, so a partially typed call
+survives a stray click. `Enter` logs. Class and section carry over between
+contacts, since most of a Field Day log is the same handful of exchanges.
+
+**Verdicts.** The line under the entry row is reserved whether or not a warning
+is showing, so the row does not move when one appears. An own-log dupe blocks;
+a contact another position already worked warns and lets you proceed — N3FJP's
+semantics, and the club's own operators are the reason for the difference.
+
+**Boards.** The band × mode grid and the sections checklist are always on
+screen. Both react to what is being typed: the grid marks the cells where the
+call in the box is already worked (yours in red, the club's in amber), and the
+sections board highlights the section being entered, glowing if it is new. The
+sections checklist here is **this position's log** — the club-wide sections
+total is on the dashboard and on the spectator scoreboard.
+
+**Mode panes.** The left pane follows the rig's mode class: digital decodes, the
+CW macro strip, or the phone push-to-talk row. The class is derived from the
+radio and shown as a chip in the header, which can be **overridden** — a
+misdetected class would mislabel dupe keys and logged contacts alike.
+
+**Stop TX** is drawn in the cockpit header, outside the pane region. The cockpit
+ships no hideable panes at all, so no operator action can put the stop control
+out of reach.
+
+**Known gap:** the phone strip's own controls (push-to-talk, lock) still render
+in English in every language. They share deferred strings with the Phone
+cockpit and move with it.
+
 ## All-Mode Logging
 
 ### Digital (TempoFast auto-sequencer)
