@@ -73,7 +73,7 @@ import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
-import { FieldDayScoreboard } from './components/FieldDayView'
+import { FdClubSection, FieldDayScoreboard } from './components/FieldDayView'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
@@ -554,6 +554,27 @@ function DetachedPanelBody({ panel }: { panel: string }) {
         ) : (
           <div className="app loading">
             <span>{t('detached.fieldDay.inactive')}</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (panel === 'fdclub') {
+    // The CLUB BAND BOARD, torn off — who is on what band across every
+    // position on site, parked on a second monitor so the crew can keep up
+    // (the `fieldday` pop-out beside it is the scoreboard, a different
+    // surface). Read-only: no export buttons, because their success toast has
+    // no host in a detached window, and no operator box — this board is about
+    // the other tents, not this one.
+    const club = snap?.fieldDay?.club ?? null
+    return (
+      <div className="app detached">
+        {club ? (
+          <FdClubSection club={club} detached />
+        ) : (
+          <div className="app loading">
+            <span>{t('detached.fdClub.inactive')}</span>
           </div>
         )}
       </div>

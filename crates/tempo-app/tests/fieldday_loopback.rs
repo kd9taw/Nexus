@@ -228,3 +228,63 @@ fn host_three_positions_outage_and_host_restart_converge_on_the_union() {
     std::thread::sleep(Duration::from_millis(300));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The name a position shows on the club board, as the HOST holds it.
+fn board_label(eng: &Shared, posid: &str) -> String {
+    engine_lock(eng)
+        .fd_board_snapshot()
+        .and_then(|b| b.positions.iter().find(|p| p.id == posid).cloned())
+        .map(|p| p.label)
+        .unwrap_or_default()
+}
+
+#[test]
+fn renaming_a_position_reaches_the_club_board_on_the_live_connection() {
+    // THE OPERATOR'S BUG (club Field Day, 2026-08-30): "I started with no
+    // name, then added it, but it's still displaying the old name/number id."
+    // The name travelled in the JOIN line and nowhere else, so a rename only
+    // took effect when the connection was next rebuilt — and nothing said so.
+    // End-to-end here (real engines, real bridge, real sockets) because the
+    // fix spans the wire, the club log and the engine's identity seam.
+    let dir = std::env::temp_dir().join(format!("fd-rename-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let port = {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    let addr = format!("127.0.0.1:{port}");
+
+    let host = fd_engine("W9ABC", "aaaa0001", "HQ", &addr);
+    engine_lock(&host)
+        .fd_host_start(dir.join("fd_event_rename.jsonl"))
+        .unwrap();
+    let host_sd = start_host(&host, port);
+    let p2 = fd_engine("W9ABC", "bbbb0002", "CW tent", &addr);
+    let p2_sd = start_pump(&p2, &addr);
+
+    wait_until("the board knows the position by its name", 10, || {
+        board_label(&host, "bbbb0002") == "CW tent"
+    });
+    // The operator renames it in Settings, mid-event. Nothing touches the
+    // connection — that is the whole point.
+    {
+        let mut eng = engine_lock(&p2);
+        let mut s = eng.settings().clone();
+        s.fd_position_name = "GOTA tent".into();
+        eng.apply_settings(s);
+    }
+    wait_until("the rename reached the board", 10, || {
+        board_label(&host, "bbbb0002") == "GOTA tent"
+    });
+    assert!(
+        engine_lock(&p2).fd_mirror_mut().connected,
+        "on the SAME connection — a reconnect always carried the new name, \
+         which is exactly the workaround the operator did not have"
+    );
+
+    for sd in [host_sd, p2_sd] {
+        sd.store(true, Ordering::Relaxed);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = std::fs::remove_dir_all(&dir);
+}

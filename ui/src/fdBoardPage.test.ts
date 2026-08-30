@@ -180,6 +180,9 @@ function makeData(model: 'powered' | 'objectives') {
         id: 'aaaa1111',
         label: 'CW tent',
         operator: 'W9AAA',
+        band: '20m',
+        mode: 'CW',
+        stale: false,
         qsos_raw: 2,
         qsos_unique: 2,
         points: 4,
@@ -189,6 +192,9 @@ function makeData(model: 'powered' | 'objectives') {
         id: 'bbbb2222',
         label: 'Phone tent',
         operator: 'W9BBB',
+        band: '40m',
+        mode: 'PH',
+        stale: true,
         qsos_raw: 3,
         qsos_unique: 2,
         points: 2,
@@ -637,6 +643,44 @@ describe('fd scoreboard page', () => {
     expect(rows[0].textContent).toContain('4') // points
   })
 
+  it('says which band and mode each position is running', () => {
+    // The club band board, on the screen the whole tent can see: a
+    // multi-station club needs to know who is on 20m without walking the site
+    // (operator report, 2026-08-30). Read off the band/mode CELLS, not the
+    // row text — "CW tent" would satisfy a textContent match for CW without
+    // anything ever having been rendered.
+    const b = boot()
+    b.render(makeData('powered'), makeMeta('powered'))
+    const rows = [...document.querySelectorAll('#pos-list .pos-row')]
+    expect(rows[0].querySelector('.pos-band')!.textContent).toBe('20m')
+    expect(rows[0].querySelector('.pos-mode')!.textContent).toBe('CW')
+    expect(rows[1].querySelector('.pos-band')!.textContent).toBe('40m')
+    expect(rows[1].querySelector('.pos-mode')!.textContent).toBe('PH')
+  })
+
+  it('says nothing rather than guessing for a position that has never reported', () => {
+    const b = boot()
+    const data = makeData('powered')
+    data.positions[0].band = ''
+    data.positions[0].mode = ''
+    b.render(data, makeMeta('powered'))
+    const row = document.querySelectorAll('#pos-list .pos-row')[0]
+    expect(row.querySelector('.pos-band')!.textContent).toBe('—')
+    expect(row.querySelector('.pos-mode')!.textContent).toBe('')
+    expect(row.textContent).toContain('CW tent') // the rest of the row is intact
+  })
+
+  it('dims a band reading whose position has gone quiet, and only that reading', () => {
+    // Counts are cumulative and never expire; the band is a live claim about
+    // where a tent is sitting, so it is the one thing that goes dim.
+    const b = boot()
+    b.render(makeData('powered'), makeMeta('powered'))
+    const rows = [...document.querySelectorAll('#pos-list .pos-row')]
+    expect(rows[0].querySelector('.pos-where')!.classList.contains('stale')).toBe(false)
+    expect(rows[1].querySelector('.pos-where')!.classList.contains('stale')).toBe(true)
+    expect(rows[1].classList.contains('stale')).toBe(false)
+  })
+
   it('shows the stale badge on demand and clears it on recovery', () => {
     const b = boot()
     b.renderMeta(makeMeta('powered'))
@@ -661,8 +705,13 @@ describe('fd scoreboard page', () => {
     const b = boot()
     const data = makeData('powered')
     data.ticker[0].call = '<img src=x onerror=alert(1)>'
+    // A position's band arrives from another station over the LAN, so it is
+    // exactly as untrusted as a callsign heard on the air.
+    data.positions[0].band = '<img src=x onerror=alert(1)>'
     b.render(data, makeMeta('powered'))
     expect(document.querySelector('#hero img')).toBeNull()
     expect(document.getElementById('hero')!.textContent).toContain('<img')
+    expect(document.querySelector('#pos-list img')).toBeNull()
+    expect(document.querySelector('#pos-list .pos-band')!.textContent).toContain('<img')
   })
 })

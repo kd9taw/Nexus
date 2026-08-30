@@ -187,6 +187,18 @@ pub enum Msg {
         op: String,
         #[serde(default)]
         freq: u64,
+        /// The position's friendly name, re-sent on EVERY report so a rename
+        /// in Settings reaches the board without rebuilding the connection —
+        /// the `join` line's `name` is a one-shot, and renaming used to leave
+        /// the board showing the name (or the raw position id) the connection
+        /// was born with. Adding it needs no version bump in either
+        /// direction: every field here is `#[serde(default)]` and unknown
+        /// fields inside a known tag are ignored, so a v1 host reading a
+        /// newer position simply drops it and a newer host reading a v1
+        /// position sees `""`. That is why `""` MUST mean "no news" at the
+        /// host and never "clear the label".
+        #[serde(default)]
+        name: String,
     },
     /// host→pos on join: full club state (chunked by [`SNAP_DUPES_PER_LINE`]).
     Snap(ClubState),
@@ -271,8 +283,10 @@ pub trait ClubBackend: Send + Sync {
     /// Merge one row into the club log (idempotent on `(pos, seq)`); returns
     /// the new high-water ack for `row.pos`.
     fn merge(&self, row: &WireQso) -> u64;
-    /// A position's presence report (band board fodder).
-    fn position_status(&self, pos: &str, band: &str, mode: &str, op: &str, freq: u64);
+    /// A position's presence report (band board fodder). `report.name` is the
+    /// position's current friendly name — EMPTY MEANS "no news" (an older
+    /// peer sends none), never "clear the label".
+    fn position_status(&self, pos: &str, report: &PosReport);
     /// Cheap change detector: (dupe keys total, sections total). Both are
     /// append-only, so "count grew" == "there is a delta to send".
     fn counts(&self) -> (usize, usize);
@@ -436,9 +450,19 @@ fn serve_club_connection(
                         mode,
                         op,
                         freq,
+                        name,
                     } => {
                         if let Some(pos) = &joined {
-                            backend.position_status(pos, &band, &mode, &op, freq);
+                            backend.position_status(
+                                pos,
+                                &PosReport {
+                                    band,
+                                    mode,
+                                    op,
+                                    freq,
+                                    name,
+                                },
+                            );
                         }
                     }
                     Msg::Ping => {
@@ -534,6 +558,25 @@ pub fn serve_until(
 // Position side
 // ---------------------------------------------------------------------------
 
+/// One presence report: what a position is doing right now, plus the name it
+/// wants on the board. Built by the position for [`Msg::Pos`] and handed
+/// STRAIGHT ON to the host's [`ClubBackend`] — one shape, so the two ends
+/// cannot drift. A struct rather than the tuple the position half used to
+/// pass: four of its five fields are strings, so the compiler is the only
+/// thing that can stop `name` and `op` swapping places.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PosReport {
+    pub band: String,
+    /// Scoring mode class: "DIG" | "CW" | "PH".
+    pub mode: String,
+    pub op: String,
+    /// Dial, Hz.
+    pub freq: u64,
+    /// The position's friendly name ("CW tent"). Empty = "no news" to the
+    /// host, which keeps whatever label it already knows.
+    pub name: String,
+}
+
 /// The position pump's view of the application. Mirrors [`ClubBackend`]'s
 /// discipline: the pump can read the outbox and deliver club state, nothing
 /// more.
@@ -553,8 +596,10 @@ pub trait PositionSync: Send + Sync {
     fn on_club(&self, snap: bool, st: &ClubState);
     /// A host `error` line — shown to the operator verbatim.
     fn on_error(&self, msg: &str);
-    /// Current presence for the band board; `None` = don't report this tick.
-    fn position_report(&self) -> Option<(String, String, String, u64)>;
+    /// Current presence for the band board — `(band, mode class, operator,
+    /// dial Hz, friendly name)`; `None` = don't report this tick. The name
+    /// rides along on every report so a rename propagates live.
+    fn position_report(&self) -> Option<PosReport>;
     /// Link up/down transitions (drives the Offline/Behind/Synced chip).
     fn on_link(&self, connected: bool);
 }
@@ -598,7 +643,7 @@ fn run_position_session(
     let mut sent_to = 0u64; // rows in flight (seq high-water we already wrote)
     let mut last_rx = Instant::now();
     let mut last_beat = Instant::now();
-    let mut last_report: Option<(String, String, String, u64)> = None;
+    let mut last_report: Option<PosReport> = None;
     let result = loop {
         if shutdown.load(Ordering::Relaxed) {
             break Ok(welcomed);
@@ -655,13 +700,21 @@ fn run_position_session(
             let beat = last_beat.elapsed().as_secs() >= PING_SECS;
             let report = backend.position_report();
             if report.is_some() && (beat || report != last_report) {
-                if let Some((band, mode, op, freq)) = report.clone() {
+                if let Some(PosReport {
+                    band,
+                    mode,
+                    op,
+                    freq,
+                    name,
+                }) = report.clone()
+                {
                     writer.write_all(
                         encode_line(&Msg::Pos {
                             band,
                             mode,
                             op,
                             freq,
+                            name,
                         })
                         .as_bytes(),
                     )?;
@@ -834,6 +887,7 @@ mod tests {
                 mode: "CW".into(),
                 op: "KD9TAW".into(),
                 freq: 14_032_100,
+                name: "CW tent".into(),
             },
             Msg::Snap(ClubState {
                 reset: true,
@@ -1000,8 +1054,8 @@ mod tests {
             *e = (*e).max(row.seq);
             *e
         }
-        fn position_status(&self, pos: &str, band: &str, _mode: &str, _op: &str, _freq: u64) {
-            self.log(format!("pos {pos} {band}"));
+        fn position_status(&self, pos: &str, r: &PosReport) {
+            self.log(format!("pos {pos} {} name={}", r.band, r.name));
         }
         fn counts(&self) -> (usize, usize) {
             (self.merged.lock().unwrap().len(), 0)
@@ -1210,6 +1264,7 @@ mod tests {
                 mode: "CW".into(),
                 op: "OP".into(),
                 freq: 0,
+                name: "CW tent".into(),
             })
             .as_bytes(),
         )
@@ -1261,6 +1316,8 @@ mod tests {
         linked: Mutex<Vec<bool>>,
         errors: Mutex<Vec<String>>,
         welcome_now: Mutex<u64>,
+        /// The operator's Settings field, renameable mid-session.
+        name: Mutex<String>,
     }
     impl Default for FakePosition {
         fn default() -> Self {
@@ -1270,6 +1327,7 @@ mod tests {
                 linked: Mutex::new(Vec::new()),
                 errors: Mutex::new(Vec::new()),
                 welcome_now: Mutex::new(0),
+                name: Mutex::new("SSB tent".into()),
             }
         }
     }
@@ -1306,8 +1364,14 @@ mod tests {
         fn on_error(&self, msg: &str) {
             self.errors.lock().unwrap().push(msg.to_string());
         }
-        fn position_report(&self) -> Option<(String, String, String, u64)> {
-            Some(("20m".into(), "PH".into(), "OP".into(), 14_285_000))
+        fn position_report(&self) -> Option<PosReport> {
+            Some(PosReport {
+                band: "20m".into(),
+                mode: "PH".into(),
+                op: "OP".into(),
+                freq: 14_285_000,
+                name: self.name.lock().unwrap().clone(),
+            })
         }
         fn on_link(&self, up: bool) {
             self.linked.lock().unwrap().push(up);
@@ -1377,6 +1441,94 @@ mod tests {
             *posn.linked.lock().unwrap(),
             vec![true, false],
             "link chip saw up then down"
+        );
+    }
+    #[test]
+    fn a_rename_reaches_the_host_on_the_next_report_without_rejoining() {
+        // THE BUG (club Field Day, 2026-08): the position's name travelled in
+        // the JOIN line and nowhere else, so renaming it in Settings left the
+        // club band board showing whatever the connection was born with —
+        // the old name, or nothing (the raw position id) for a position that
+        // was unnamed when it joined. Only rebuilding the connection fixed
+        // it, and nothing told the operator that.
+        let club = Arc::new(FakeClub::default());
+        let (addr, host_sd) = start_host(club.clone());
+        let posn = Arc::new(FakePosition::default());
+        let pos_backend: Arc<dyn PositionSync> = posn.clone();
+        let pump_sd = Arc::new(AtomicBool::new(false));
+        let (a, sd2) = (addr.to_string(), pump_sd.clone());
+        let pump = std::thread::spawn(move || run_position_until(&a, pos_backend, sd2));
+
+        let saw = |needle: &str| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if club.calls.lock().unwrap().iter().any(|c| c == needle) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            false
+        };
+        assert!(
+            saw("pos dddd0001 20m name=SSB tent"),
+            "the first report carries the name at all: {:?}",
+            club.calls.lock().unwrap()
+        );
+        // The operator renames the position in Settings, mid-event.
+        *posn.name.lock().unwrap() = "GOTA tent".into();
+        assert!(
+            saw("pos dddd0001 20m name=GOTA tent"),
+            "the rename reached the host: {:?}",
+            club.calls.lock().unwrap()
+        );
+        // ...on the LIVE connection: no second join, and the link never
+        // dropped (a reconnect would have carried the new name anyway, which
+        // is exactly the bug's workaround, so this is the assertion that
+        // makes the test about the fix).
+        assert_eq!(
+            club.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.starts_with("join "))
+                .count(),
+            1,
+            "one join for the whole session"
+        );
+        assert_eq!(
+            *posn.linked.lock().unwrap(),
+            vec![true],
+            "the link stayed up across the rename"
+        );
+
+        pump_sd.store(true, Ordering::Relaxed);
+        pump.join().unwrap();
+        host_sd.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn an_older_peers_nameless_report_arrives_as_no_news() {
+        // Forward/backward compatibility under PROTO_VERSION 1: a v1 position
+        // that predates the field sends a `pos` line with no `name`, and the
+        // host must hear "" — which its backend reads as "no news", never as
+        // "clear the label" (pinned on the policy side in
+        // `tempo_app::fdevent`).
+        let club = Arc::new(FakeClub::default());
+        let (addr, sd) = start_host(club.clone());
+        let s = TcpStream::connect(addr).unwrap();
+        let mut w = s.try_clone().unwrap();
+        w.write_all(encode_line(&join_msg("eeee0001", 0)).as_bytes())
+            .unwrap();
+        w.write_all(b"{\"t\":\"pos\",\"band\":\"40m\",\"mode\":\"CW\",\"op\":\"OP\"}\n")
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        drop(w);
+        drop(s);
+        sd.store(true, Ordering::Relaxed);
+        let calls = club.calls.lock().unwrap().clone();
+        assert!(
+            calls.iter().any(|c| c == "pos eeee0001 40m name="),
+            "the nameless report still landed, with an empty name: {calls:?}"
         );
     }
 }

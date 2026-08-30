@@ -432,13 +432,32 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['field day', 'arrl', 'class', 'section', 'exchange', 'power multiplier',
       'winter field day', 'rules', 'rules year', 'rules update', 'wfd'],
   },
+  // A club site answers "who are you?" three different ways — the call that goes on the air,
+  // the tent you are sitting in, and the person at the key — and all three already existed as
+  // settings (`mycall`, `fd_position_name`, `fd_operator`). What did not exist was one place
+  // that showed them as a set: two lived on Station, the third sat under a networking heading
+  // on Contesting, and the club report that produced this section is an operator asking what
+  // the position name was even for. So this is a VIEW of three existing fields, deliberately
+  // not new state, placed where a Field Day operator meets them.
+  {
+    id: 'field-day-identity',
+    label: "Who's who at this event",
+    tab: 'contesting',
+    keywords: ['callsign', 'club call', 'position name', 'position', 'tent', 'trailer',
+      'operator', 'operator at the key', 'multi-op', 'multiop', 'swap seats', 'who is operating',
+      'station name', 'my call'],
+  },
   {
     id: 'field-day-club',
     label: 'Field Day Club Sync',
     tab: 'contesting',
-    keywords: ['club', 'sync', 'host', 'join', 'position', 'multi-op', 'multiop', 'lan',
+    // 'position' and 'tent' moved to `field-day-identity` with the control they name. Search
+    // scores an exact keyword above everything but a label, and ties break alphabetically, so
+    // leaving either word here would have kept sending "position"/"tent" to the networking
+    // section — which is exactly the section the operator could not make sense of.
+    keywords: ['club', 'sync', 'host', 'join', 'multi-op', 'multiop', 'lan',
       'network', 'band board', 'scoreboard', 'dupe sharing', 'discover', 'find club events',
-      'tent', 'club log', 'spectator', 'tv', 'projector', 'big screen'],
+      'club log', 'spectator', 'tv', 'projector', 'big screen'],
   },
 
   // ---- Appearance --------------------------------------------------------------

@@ -2364,8 +2364,11 @@ export default function App() {
     case 'fieldDay':
       // ONE nav slot, two faces (no second View, no registry entry, no ModeNav row): the
       // operating cockpit or the dashboard, swapped by the toggle each one carries for the
-      // other. The cockpit is a whole `main.layout.single` shell of its own, so it does NOT
-      // go through `threePane` — the dashboard keeps the rails it has always had.
+      // other. NEITHER goes through `threePane`, and the reason is the same for both: that
+      // helper is not a layout, it is the digital OPERATING workspace, and it hardcodes its
+      // furniture. The cockpit is a shell of its own (`main.layout.single.fd-cockpit`); the
+      // dashboard is a `.panel`, so it wears the plain `.layout.single` panel shell that
+      // Logbook, Settings, Program and POTA wear. See the dashboard branch below.
       workspace = fdShowCockpit ? (
         <FdCockpit
           snap={snap}
@@ -2378,7 +2381,24 @@ export default function App() {
           onOpenOperate={() => handleView('operate')}
         />
       ) : (
-        threePane(
+        // THE DASHBOARD IS A SETUP / SCORE / LOG SCREEN, and until 2026-08-30 it was drawn
+        // inside the digital operating workspace — stations/chat rail on the left, waterfall
+        // + band activity + the mesh link pill on the right. It reads and writes none of
+        // that. Operator, mid-event: "what screen is this supposed to represent? Why are
+        // theyere waterfalls in here when its not the primary working area?" The rails also
+        // cost it the width its header strip needs (class/section, RUN vs S&P, the cockpit
+        // toggle and four exports), which is the second half of the same report.
+        //
+        // Nothing is lost by leaving: the waterfall, band activity and the link pill all
+        // belong to the FT surface and are on screen in Operate and in the FD cockpit, which
+        // are the two faces that actually operate; the stations rail is the Tempo mesh
+        // roster and conversation picker, which the FD dashboard never consulted.
+        //
+        // No bespoke shell class, deliberately — unlike the cockpit this view's root IS a
+        // `.panel`, so `.layout.single > .panel` already gives it the definite height, the
+        // deficit valve and the measure it needs (styles.css; computed in
+        // layout-single-deficit.test.tsx and fdDashboardShell.test.tsx).
+        <main className="layout single">
           <FieldDayView
             fieldDay={snap.fieldDay}
             onSetMode={handleSetMode}
@@ -2386,8 +2406,8 @@ export default function App() {
             fdRuleset={fdRuleset}
             tier={tier}
             onOpenCockpit={() => handleFdLayout('cockpit')}
-          />,
-        )
+          />
+        </main>
       )
       break
     case 'logbook':
@@ -2834,10 +2854,13 @@ export default function App() {
         onOpenGuide={() => setShowGuide(true)}
         field={fieldMode}
         onFieldChange={setFieldMode}
-        // Who is at the key (#25). Absent/empty renders nothing — the single-op case.
+        // Who is at the key (#25). Absent/empty renders nothing — the single-op case —
+        // UNLESS Field Day is on, where the seat swap has to be reachable from every mode
+        // before anyone has claimed the first seat (operator, 2026-08-30).
         operator={settings?.fdOperator ?? ''}
         operatorRoster={opRoster}
         onSetOperator={handleSetOperator}
+        fdActive={settings?.fdActive ?? false}
       />
 
       <UpdateBanner update={selfUpdate} />

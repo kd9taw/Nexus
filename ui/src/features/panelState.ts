@@ -776,8 +776,9 @@ export const ALL_PANEL_VOCABULARIES: readonly PanelVocabulary<string>[] = [
  * Operate is the only cockpit that ever WRITES 'popped' into a visibility record —
  * OperateCockpit's waterfall pop-out holds the app's single `setPanelState(id, 'popped')`
  * call — and the only one with a re-dock bar. Pop-out AFFORDANCES are not rare, and an earlier
- * version of this note implied they were: DetachedPanel dispatches ten panel kinds (waterfall,
- * needed, memories, connect, dxped, sats, fieldday, operate, bandmapPhone, bandmapCw), and
+ * version of this note implied they were: DetachedPanel dispatches twelve panel kinds (waterfall,
+ * needed, memories, connect, dxped, sats, pota, fieldday, fdclub, operate, bandmapPhone,
+ * bandmapCw), and
  * Phone's and CW's band-map panes each carry one. Those call `openPanelWindow` directly and
  * never touch the record, which is exactly why they leave no stale 'popped' behind. In the
  * other four vocabularies a stored 'popped' renders the pane DOCKED while its ⊞ entry reads

@@ -141,11 +141,19 @@ body {
 #bm-table td.total { color: var(--accent); font-weight: 800; }
 
 /* positions */
-.pos-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: clamp(3px, 0.5vh, 8px) 0; border-bottom: 1px solid var(--line); }
+.pos-row { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 10px; padding: clamp(3px, 0.5vh, 8px) 0; border-bottom: 1px solid var(--line); align-items: center; }
 .pos-label { font-weight: 700; font-size: clamp(12px, 1.15vw, 22px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pos-op { color: var(--dim); font-family: var(--mono); font-size: clamp(10px, 0.9vw, 16px); }
 .pos-nums { text-align: right; font-family: var(--mono); font-size: clamp(11px, 1vw, 19px); }
 .pos-nums b { color: var(--accent); }
+/* Which band this position is on — the club band board, on the screen the
+   whole tent can see. The band hue is the one used by the globe and the band
+   grid, so 20m looks like 20m everywhere. */
+.pos-where { text-align: right; font-family: var(--mono); min-width: 4.5em; }
+.pos-band { font-weight: 800; font-size: clamp(11px, 1.05vw, 20px); }
+.pos-mode { color: var(--dim); font-size: clamp(9px, 0.85vw, 15px); }
+/* Presence expires; QSO counts do not. Only the live claim goes dim. */
+.pos-where.stale { opacity: 0.45; }
 
 /* bonuses / objectives */
 #bonus-list { overflow: hidden; }
@@ -1200,6 +1208,18 @@ function renderPositions(positions) {
     left.appendChild(el('div', 'pos-label', p.label));
     if (p.operator) left.appendChild(el('div', 'pos-op', STRINGS.opWord + ' ' + p.operator));
     row.appendChild(left);
+    /* WHERE THIS POSITION IS RIGHT NOW. Presence, not log history: a club
+       running several stations needs to see who is on which band without
+       walking the site. The host decides when a reading has expired (it owns
+       the sockets and the clock) and says so with `stale`; the page only
+       draws it. A position that has never reported shows a dash rather than
+       an invented band. */
+    var where = el('div', 'pos-where' + (p.stale ? ' stale' : ''));
+    var band = el('div', 'pos-band', p.band || '\u2014');
+    if (p.band) band.style.color = bandColor(p.band);
+    where.appendChild(band);
+    where.appendChild(el('div', 'pos-mode', p.mode || ''));
+    row.appendChild(where);
     var nums = el('div', 'pos-nums');
     nums.appendChild(el('div', '', p.qsos_raw + ' ' + STRINGS.qsosWord));
     var pts = el('div');

@@ -12155,6 +12155,7 @@ async fn open_panel_window(
         "needed" => "Nexus — Needed".to_string(),
         "operate" => "Nexus — Operate".to_string(),
         "fieldday" => "Nexus — Field Day".to_string(),
+        "fdclub" => "Nexus — Club band board".to_string(),
         "pota" => "Nexus — POTA / SOTA".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),
         "bandmapPhone" => "Nexus — Band map (Phone)".to_string(),

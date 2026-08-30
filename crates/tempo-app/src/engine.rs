@@ -8103,10 +8103,13 @@ impl Engine {
         }
     }
 
-    pub fn fd_club_pos_status(&mut self, pos: &str, band: &str, mode: &str, op: &str, freq: u64) {
+    /// A position's presence report. `report.name` is its current friendly
+    /// name — empty means "no news" (an older peer sends none), never
+    /// "clear it".
+    pub fn fd_club_pos_status(&mut self, pos: &str, report: &tempo_net::fdsync::PosReport) {
         let now = now_unix_secs();
         if let Some(club) = self.fd_club.as_mut() {
-            club.position_status(pos, band, mode, op, freq, now);
+            club.position_status(pos, report, now);
         }
     }
 
@@ -8149,6 +8152,9 @@ impl Engine {
                     p.label.clone()
                 },
                 operator: p.operator.clone(),
+                band: p.band.clone(),
+                mode: p.mode.clone(),
+                last_seen_unix: p.last_seen_unix,
             })
             .collect();
         positions.sort_by(|a, b| a.id.cmp(&b.id));
@@ -8181,6 +8187,29 @@ impl Engine {
 
     // --- position half (the PositionSync impl calls these) -----------------
 
+    /// What this position calls itself on the club band board: the operator's
+    /// position name, falling back to the station callsign.
+    ///
+    /// The fallback is COMPUTED here rather than written into
+    /// `settings.fd_position_name` as a default, for three reasons. A stored
+    /// default would be stamped at one moment — before the operator has typed
+    /// a callsign on a fresh install, or from the callsign of the day it ran —
+    /// while this reads the live one. Nothing writes settings behind the
+    /// operator's back, so the field keeps saying exactly what they typed.
+    /// And it covers EVERY route to a blank name, not just the ones that pass
+    /// through a particular save: an upgraded profile that predates the field,
+    /// a restored backup, a hand-edited settings.json. The Settings panel is
+    /// what refuses a deliberately-blanked name (it can say so where the
+    /// operator is looking); this is what guarantees the board never shows the
+    /// 8-hex position id, which is plumbing and means nothing to anybody.
+    pub fn fd_position_label(&self) -> String {
+        let name = self.settings.fd_position_name.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+        self.settings.mycall.trim().to_uppercase()
+    }
+
     /// This position's JOIN identity: `(posid, label, call, own max seq)`.
     /// An empty posid means the shell has not initialized identity yet — the
     /// pump treats that as "don't connect".
@@ -8191,7 +8220,7 @@ impl Engine {
         };
         (
             self.settings.fd_position_id.clone(),
-            self.settings.fd_position_name.clone(),
+            self.fd_position_label(),
             self.settings.mycall.clone(),
             max_seq,
         )
@@ -8240,9 +8269,11 @@ impl Engine {
         &mut self.fd_mirror
     }
 
-    /// Presence for the club band board: `(band, mode class, operator,
-    /// dial Hz)` — the n3fjp `report_band` idea made native.
-    pub fn fd_position_report(&self) -> (String, String, String, u64) {
+    /// Presence for the club band board — the n3fjp `report_band` idea made
+    /// native. The position NAME rides along on every report (not just the
+    /// join line) so renaming this position in Settings reaches the board on
+    /// the next tick instead of waiting for the connection to be rebuilt.
+    pub fn fd_position_report(&self) -> tempo_net::fdsync::PosReport {
         let mode = match self.settings.operating_mode {
             crate::settings::OperatingMode::Phone => "PH",
             crate::settings::OperatingMode::Cw => "CW",
@@ -8253,12 +8284,13 @@ impl Engine {
         } else {
             self.settings.fd_operator.trim().to_uppercase()
         };
-        (
-            self.settings.band.clone(),
-            mode.to_string(),
+        tempo_net::fdsync::PosReport {
+            band: self.settings.band.clone(),
+            mode: mode.to_string(),
             op,
-            (self.settings.dial_mhz * 1e6) as u64,
-        )
+            freq: (self.settings.dial_mhz * 1e6) as u64,
+            name: self.fd_position_label(),
+        }
     }
 
     /// The sync chip — DERIVED from (enabled, link, queued = own max seq −
@@ -27605,6 +27637,50 @@ mod tests {
     }
 
     #[test]
+    fn an_unnamed_position_calls_itself_by_its_callsign_never_by_its_id() {
+        // The operator's premise (club Field Day, 2026-08-30): the board must
+        // never show something meaningless. An unnamed position used to reach
+        // the board as its 8-hex position id — internal plumbing — so the
+        // name falls back to the station callsign, live, wherever identity is
+        // built.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_id = "9a85f060".into();
+            s.fd_position_name = String::new(); // never typed one
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "KD9TAW");
+        let (posid, label, call, _) = e.fd_sync_identity();
+        assert_eq!(
+            (posid.as_str(), label.as_str(), call.as_str()),
+            ("9a85f060", "KD9TAW", "KD9TAW"),
+            "the JOIN carries the callsign as the name, not the id"
+        );
+        assert_eq!(
+            e.fd_position_report().name,
+            "KD9TAW",
+            "and so does every presence report"
+        );
+        // Whitespace is not a name.
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_name = "   ".into();
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "KD9TAW");
+        // POSITIVE CONTROL: a real name wins over the fallback, trimmed.
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_name = "  CW tent  ".into();
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "CW tent");
+        assert_eq!(e.fd_sync_identity().1, "CW tent");
+        assert_eq!(e.fd_position_report().name, "CW tent");
+    }
+
+    #[test]
     fn fd_board_snapshot_is_some_only_in_the_host_role() {
         // THE SCOREBOARD SEAM CONTRACT: a non-host position (even one deep in
         // Field Day with a live log) hands the board NOTHING — it holds only
@@ -27667,6 +27743,65 @@ mod tests {
 
         e.fd_host_stop();
         assert!(e.fd_board_snapshot().is_none(), "stop hosting → None again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WHAT THE BAND BOARD IS BUILT FROM. "Who is on what band" is presence
+    /// the host already holds per position — the scoreboard seam simply
+    /// dropped it, carrying label + operator only, so the club TV could not
+    /// show the one thing a multi-station board exists for.
+    #[test]
+    fn the_board_snapshot_carries_each_positions_current_band_and_mode() {
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-presence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let _ = e.fd_club_join("aaaa0001", "CW tent", "KD9TAW");
+        let _ = e.fd_club_join("bbbb0002", "GOTA tent", "KD9TAW");
+        e.fd_club_pos_status(
+            "aaaa0001",
+            &tempo_net::fdsync::PosReport {
+                band: "20m".into(),
+                mode: "cw".into(),
+                op: "w9aaa".into(),
+                freq: 14_050_000,
+                name: "CW tent".into(),
+            },
+        );
+        let board = e.fd_board_snapshot().expect("hosting");
+        let cw = board
+            .positions
+            .iter()
+            .find(|p| p.id == "aaaa0001")
+            .expect("the reporting position");
+        assert_eq!(
+            (cw.band.as_str(), cw.mode.as_str()),
+            ("20m", "CW"),
+            "the presence report's band and mode reach the scoreboard seam"
+        );
+        assert!(
+            cw.last_seen_unix > 0,
+            "…with the liveness stamp the stale mark is computed from"
+        );
+        // POSITIVE CONTROL: a position that has joined but never reported has
+        // no band to show — the empty string is a real state, not a default
+        // the plumbing invented.
+        let gota = board
+            .positions
+            .iter()
+            .find(|p| p.id == "bbbb0002")
+            .expect("the silent position");
+        assert_eq!((gota.band.as_str(), gota.mode.as_str()), ("", ""));
+
+        e.fd_host_stop();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

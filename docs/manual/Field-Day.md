@@ -92,6 +92,7 @@ The FieldDay view carries a live scoreboard: QSO and section counts, per-mode ch
 - **Operator field** — Field Day rotates operators; type the call of whoever is at the key. It persists across restarts, and each QSO pushed to N3FJP is attributed to that operator (falling back to the station call when empty).
 - **Sections board** — all 83 ARRL/RAC sections laid out division by division, each cell turning green with a ✓ as the section is worked, with a worked/total count. It doubles as your multiplier tracker.
 - **Pop out** — the button in the scoreboard header tears the whole scoreboard (operator, tiles, sections board) off into its own window, sized for a second monitor or a club display facing the room. The docked view keeps working independently.
+- **Pop out board** — the matching button in the club header tears off the **club band board** (position, band, mode, operator, QSOs, rate) as a separate window, so a multi-station club can keep who-is-on-what-band in view all event. It is a monitoring window: no operator field and no export buttons, both of which live on the dashboard.
 
 ---
 

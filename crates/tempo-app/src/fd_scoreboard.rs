@@ -90,6 +90,16 @@ pub struct FdBoardPosition {
     pub id: String,
     pub label: String,
     pub operator: String,
+    /// PRESENCE — the band and mode this position last reported it is running,
+    /// empty until it has sent one. Not log history: this is where the tent is
+    /// sitting right now, which is the question a multi-station club board
+    /// exists to answer.
+    pub band: String,
+    pub mode: String,
+    /// Host clock when this position was last heard from on its socket. Never
+    /// serialized — it is the input to the payload's `stale` flag (see
+    /// [`PositionRow`]).
+    pub last_seen_unix: u64,
 }
 
 /// The bounded clone the host engine hands the board: identity + settings the
@@ -287,6 +297,20 @@ struct PositionRow {
     id: String,
     label: String,
     operator: String,
+    /// WHERE THIS POSITION IS RIGHT NOW — the band/mode it last reported, or
+    /// empty if it never has. Presence, not log history: the club board is
+    /// there so the tent can see who is on 20m at this moment.
+    band: String,
+    mode: String,
+    /// The presence above is older than `fdsync::DEAD_SECS` — the position's
+    /// link has gone quiet and its band reading is no longer something anyone
+    /// has confirmed.
+    ///
+    /// A FLAG rather than the `last_seen` timestamp on purpose: a timestamp
+    /// refreshed by every 5 s heartbeat differs on every build, so it would
+    /// bump `rev` — and repaint the whole board, globe included — twelve
+    /// times a minute with nothing actually changed.
+    stale: bool,
     /// Raw merged-row count — what the position board shows (N3FJP behaviour).
     qsos_raw: u32,
     /// Rows surviving the cross-position (call, band, modeclass) dedupe,
@@ -517,6 +541,10 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
                     id: p.id.clone(),
                     label: p.label.clone(),
                     operator: p.operator.clone(),
+                    band: p.band.clone(),
+                    mode: p.mode.clone(),
+                    stale: now_unix.saturating_sub(p.last_seen_unix.min(now_unix))
+                        > tempo_net::fdsync::DEAD_SECS,
                     qsos_raw: 0,
                     qsos_unique: 0,
                     points: 0,
@@ -531,6 +559,11 @@ pub fn build_data_core(d: &FdBoardData, now_unix: u64) -> String {
             id: r.posid.clone(),
             label: r.posid.clone(),
             operator: String::new(),
+            // A posid the positions list does not know: rows but no presence,
+            // so there is no band to claim and nothing to keep fresh.
+            band: String::new(),
+            mode: String::new(),
+            stale: true,
             qsos_raw: 0,
             qsos_unique: 0,
             points: 0,
@@ -916,11 +949,17 @@ mod tests {
                     id: "aaaa1111".into(),
                     label: "CW tent".into(),
                     operator: "W9AAA".into(),
+                    band: "20m".into(),
+                    mode: "CW".into(),
+                    last_seen_unix: s + 7495, // 5 s before "now" — live
                 },
                 FdBoardPosition {
                     id: "bbbb2222".into(),
                     label: "Phone tent".into(),
                     operator: "W9BBB".into(),
+                    band: "40m".into(),
+                    mode: "PH".into(),
+                    last_seen_unix: s + 7000, // 500 s — the link has gone quiet
                 },
             ],
             rows: vec![
@@ -1052,6 +1091,56 @@ mod tests {
         let control = build_data_core(&sfd, sfd_now);
         assert!(control.contains("\"power_mult\":"));
         assert!(control.contains("\"powered_points\":"));
+    }
+
+    /// WHO IS ON WHAT BAND. The in-app club board has carried each position's
+    /// band and mode from the start; the spectator page showed label,
+    /// operator, QSOs and points only — so the one board the whole tent can
+    /// see could not answer the question a multi-station club runs the board
+    /// for (operator report, 2026-08-30: "programs like N3FJP has a board to
+    /// show where everyone is in on the bands").
+    #[test]
+    fn positions_say_which_band_and_mode_each_one_is_running() {
+        let (d, now) = fixture(FdEvent::ArrlFd);
+        let v = parse(&build_data_core(&d, now));
+        let pos = v["positions"].as_array().unwrap();
+        assert_eq!(pos[0]["label"], "CW tent");
+        assert_eq!(pos[0]["band"], "20m");
+        assert_eq!(pos[0]["mode"], "CW");
+        assert_eq!(pos[1]["label"], "Phone tent");
+        assert_eq!(pos[1]["band"], "40m");
+        assert_eq!(pos[1]["mode"], "PH");
+    }
+
+    /// …and the reading EXPIRES. Presence is not log history: a band a
+    /// position last confirmed longer ago than the sync layer's own dead
+    /// timeout is not where that tent is now, and a TV asserting it for the
+    /// rest of the event is worse than saying nothing.
+    ///
+    /// Shipped as a FLAG, not as the `last_seen` timestamp, deliberately: a
+    /// timestamp refreshed by every 5 s heartbeat would differ on every build
+    /// and so bump `rev` twelve times a minute with nothing actually changed,
+    /// repainting the whole board (globe included) each time.
+    #[test]
+    fn a_band_reading_nobody_has_confirmed_lately_is_marked_stale() {
+        let (mut d, now) = fixture(FdEvent::ArrlFd);
+        let v = parse(&build_data_core(&d, now));
+        assert_eq!(v["positions"][0]["stale"], false, "heard from 5 s ago");
+        assert_eq!(v["positions"][1]["stale"], true, "last heard 500 s ago");
+        // The boundary is fdsync's dead timeout itself, never a second
+        // opinion about it — the in-app board marks the same rows.
+        d.positions[0].last_seen_unix = now - tempo_net::fdsync::DEAD_SECS;
+        assert_eq!(
+            parse(&build_data_core(&d, now))["positions"][0]["stale"],
+            false,
+            "exactly at the timeout is still live"
+        );
+        d.positions[0].last_seen_unix = now - tempo_net::fdsync::DEAD_SECS - 1;
+        assert_eq!(
+            parse(&build_data_core(&d, now))["positions"][0]["stale"],
+            true,
+            "one second past it is not"
+        );
     }
 
     // -- aggregation -------------------------------------------------------

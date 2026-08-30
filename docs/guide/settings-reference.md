@@ -1157,6 +1157,29 @@ Class and Section **start empty on purpose** and the station won't enter Field
 Day until both are set — a banner says so while the mode is on and they're blank.
 See [Contesting & POTA/SOTA](contesting-pota.md).
 
+### Who's who at this event
+
+A club site answers "who are you?" three different ways, and they are not the
+same answer. This section puts all three in one place, in the order broad to
+narrow.
+
+- **Callsign on the air** — the call that goes out and onto every contact you
+  log. At a club event that's the *club's* call, the same one at every position
+  on site. It is the same setting as **Callsign** on the Station tab.
+- **Position name** ("CW tent") — which tent, trailer or table this station is.
+  It names you on the club band board so everyone can see which position is on
+  which band, and it never goes on the air. Nexus refuses a save that turns on
+  hosting or sets a join address while this is blank, and falls back to your
+  callsign rather than an internal id if it somehow reaches the board empty.
+- **Operator at the key** — whoever is running this position right now. Change
+  it every time someone takes the seat; their contacts are stamped with it
+  (ADIF `OPERATOR`) so the club can split the log by operator afterwards. Blank
+  means the callsign above. It is the same setting as **Operator at the key** on
+  the Station tab and the OPERATOR box on the Field Day dashboard.
+
+Nothing here is a second copy: change one of them anywhere and it changes
+everywhere.
+
 ### Field Day Club Sync
 
 Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
@@ -1166,11 +1189,12 @@ club events** or by typing the host's `host:port` into **Join event at**. Each
 position's contacts stream to the host as they're logged, and the host pushes
 back the club score, a live band board, and the club-wide dupe list that
 powers the while-typing dupe warning. **Event name** is what joining positions
-see; **Position name** ("CW tent") is how this station appears on the band
-board. Contacts logged while the network is down are re-sent automatically on
-reconnect, and if the host PC dies you can enable hosting on any other
-position — everyone re-joins and nothing is lost. The host's Field Day view
-gains **Club Cabrillo / Club ADIF** exports of the merged, deduplicated log.
+see; the name this station shows under on the band board is **Position name**,
+one section up. Contacts logged while the network is down are re-sent
+automatically on reconnect, and if the host PC dies you can enable hosting on
+any other position — everyone re-joins and nothing is lost. The host's Field
+Day view gains **Club Cabrillo / Club ADIF** exports of the merged,
+deduplicated log.
 Full walkthrough: [Contesting & POTA/SOTA](contesting-pota.md).
 
 ---

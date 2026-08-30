@@ -273,14 +273,20 @@ describe('.layout.single cannot own its deficit — so the .panel it wraps must'
 })
 
 describe('the .panel-rooted views of .layout.single, as a class', () => {
-  // The four views App.tsx mounts as `.layout.single > .panel`. Two were the reported traps;
+  // The views App.tsx mounts as `.layout.single > .panel`. Two were the reported traps;
   // Settings and POTA were already safe and are here so the check cannot go vacuous — they
   // were green before the fix and must stay green after it.
+  //
+  // The Field Day DASHBOARD joined them on 2026-08-30, when it was moved out of the
+  // three-pane operating workspace (see the describe below for why). It arrives already
+  // safe — this rule is where its valve now comes from — but it is the view whose column
+  // has a proven deficit, so it is the one that most needs to stay in the census.
   const PANEL_VIEWS: { file: string; classes: string; what: string }[] = [
     { file: 'components/Logbook.tsx', classes: 'panel log-view logbook', what: 'Logbook' },
     { file: 'components/RadioProgView.tsx', classes: 'radioprog panel', what: 'Program' },
     { file: 'components/SettingsPanel.tsx', classes: 'panel settings-panel', what: 'Settings' },
     { file: 'components/PotaSotaView.tsx', classes: 'panel pota-view pota-hunter', what: 'POTA/SOTA' },
+    { file: 'components/FieldDayView.tsx', classes: 'conversation panel fieldday', what: 'Field Day dashboard' },
   ]
 
   /** The panel as App.tsx mounts it, attached so ancestor selectors really match. */
@@ -342,17 +348,21 @@ describe('the .panel-rooted views of .layout.single, as a class', () => {
   })
 })
 
-// ── the same defect class, in the THREE-PANE workspace ──────────────────────────────────
+// ── the same defect class, one level down inside the Field Day column ────────────────────
 //
-// Field Day has TWO faces, and this file is about the DASHBOARD one. The dashboard is not a
-// `.layout.single` view — it mounts as `.layout[data-three-pane]` → `.grid-center` →
-// `<section class="conversation panel fieldday">` — but it is the same `.panel { overflow:
-// hidden }` trap with the same fix shape, so it is computed with the same machinery rather
-// than a second copy of it. (Since 2026-08-30 the other face, the operating COCKPIT, IS a
-// `.layout.single` shell — `main.layout.single.fd-cockpit`, rendered outside `threePane`. It
-// is out of scope HERE for a structural reason rather than by omission: it is not
-// `.layout.single > .panel`, so the PANEL_VIEWS census below correctly excludes it, and its
-// own deficit valve is computed in `cockpit-shells.test.ts` SHELLS.)
+// Field Day has TWO faces, and this file is about the DASHBOARD one. It is now a plain
+// `.layout.single > .panel` view — `<main class="layout single">` → `<section class=
+// "conversation panel fieldday">` — and is in the PANEL_VIEWS census above accordingly.
+// (It used to mount in the three-pane operating workspace, `.layout[data-three-pane]` →
+// `.grid-center`; the operator asked on 2026-08-30 why a scoreboard was wearing a waterfall,
+// and App.tsx moved it. The shell swap is guarded in fdDashboardShell.test.tsx; what is
+// guarded HERE is that the column's own deficit story survived it, which is why this block
+// re-mounts the view in the new chain rather than trusting that it did.)
+//
+// (The other face, the operating COCKPIT, is `main.layout.single.fd-cockpit`. It is out of
+// scope here for a structural reason rather than by omission: it is not `.layout.single >
+// .panel`, so the census correctly excludes it, and its own valve is computed in
+// `cockpit-shells.test.ts` SHELLS.)
 //
 // THE DEFECT (2026-08-04). The Field Day column is: banner, header, operator row, score
 // tiles, sections board, the Bonuses disclosure, the log. Every one of them is
@@ -387,13 +397,13 @@ describe('Field Day: opening Bonuses must not pay for itself out of the sections
     log: [],
   }
 
-  /** The view inside the real three-pane chain App.tsx mounts it in (App.tsx ~2042/2075). */
+  /** The view inside the real chain App.tsx mounts it in — the single-column panel shell
+   *  (App.tsx, the `case 'fieldDay':` dashboard branch), NOT the three-pane workspace it
+   *  left. Pinned to the source in fdDashboardShell.test.tsx. */
   function mountFieldDay() {
     return render(
-      <main className="layout" data-three-pane>
-        <div className="grid-center">
-          <FieldDayView fieldDay={FD} onSetMode={() => {}} />
-        </div>
+      <main className="layout single">
+        <FieldDayView fieldDay={FD} onSetMode={() => {}} />
       </main>,
     )
   }

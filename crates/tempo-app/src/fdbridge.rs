@@ -14,7 +14,7 @@
 
 use crate::engine::{engine_lock, Engine};
 use std::sync::{Arc, Mutex};
-use tempo_net::fdsync::{ClubBackend, ClubState, JoinAccept, PositionSync, WireQso};
+use tempo_net::fdsync::{ClubBackend, ClubState, JoinAccept, PosReport, PositionSync, WireQso};
 
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
@@ -35,8 +35,8 @@ impl ClubBackend for EngineClubBackend {
         engine_lock(&self.0).fd_club_merge(row)
     }
 
-    fn position_status(&self, pos: &str, band: &str, mode: &str, op: &str, freq: u64) {
-        engine_lock(&self.0).fd_club_pos_status(pos, band, mode, op, freq);
+    fn position_status(&self, pos: &str, report: &PosReport) {
+        engine_lock(&self.0).fd_club_pos_status(pos, report);
     }
 
     fn counts(&self) -> (usize, usize) {
@@ -90,7 +90,7 @@ impl PositionSync for EnginePositionSync {
         engine_lock(&self.0).fd_mirror_mut().last_error = Some(msg.to_string());
     }
 
-    fn position_report(&self) -> Option<(String, String, String, u64)> {
+    fn position_report(&self) -> Option<PosReport> {
         Some(engine_lock(&self.0).fd_position_report())
     }
 

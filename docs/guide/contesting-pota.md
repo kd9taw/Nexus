@@ -127,7 +127,11 @@ types the host's address) and joins. From then on:
   It's a warning, not a lock (N3FJP semantics); your own log's dupes still
   refuse.
 - A live **band board** shows where every position is (band, mode, operator,
-  rate), stale-marked the moment one goes quiet.
+  rate), stale-marked the moment one goes quiet. **Pop out board** puts it in
+  its own window, for a second monitor or a corner of the big one — the same
+  board the club watches all event, without the rest of the dashboard around
+  it. The web scoreboard below carries the same band and mode per position, so
+  the screen facing the room answers "who's on 20?" too.
 - The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
   contacts logged offline are journaled and re-sent automatically on
   reconnect. If the host PC dies, enable hosting on any other position;

@@ -700,6 +700,14 @@ const LOGGER_EXAMPLES = {
 } as const
 
 /**
+ * The club-call example on Settings ▸ Contesting ▸ Who's who at this event. A callsign, so it
+ * is invariant — the same characters in every language, and a "localised" one is not a call.
+ */
+const FD_WHO_EXAMPLES = {
+  clubCall: 'W9ABC',
+} as const
+
+/**
  * The Confirmations placeholders that are TOKENS rather than prose — same rule as
  * `LOGGER_EXAMPLES`, one category up: a "localised" `rbuapp_` prefix matches no token
  * RepeaterBook issues, and a translated example hostname resolves nowhere. The station-profile
@@ -870,6 +878,7 @@ export function SettingsPanel({
       setForm(fresh)
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
+      savedRef.current = fresh
       onSaved?.()
       pushToast(t('settings.backup.restore.done'), 'success')
     }, t('settings.backup.restore.failed'))
@@ -904,6 +913,7 @@ export function SettingsPanel({
       setForm(fresh)
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
+      savedRef.current = fresh
       onSaved?.()
       pushToast(t('settings.backup.reset.done'), 'success')
     }
@@ -1275,6 +1285,7 @@ export function SettingsPanel({
       .then((s) => {
         setForm(s)
         dirtyRef.current = false
+      savedRef.current = s
         setEditingRadioId(activeRadioId) // form now mirrors the (new) active radio
       })
       .catch(() => {})
@@ -1288,6 +1299,7 @@ export function SettingsPanel({
         if (mounted) {
           setForm(s)
           dirtyRef.current = false
+      savedRef.current = s
           setStatus('idle')
         }
       })
@@ -1405,6 +1417,22 @@ export function SettingsPanel({
   // Tracks unsaved flat-form edits, so switching the active radio (which reloads the form) can warn
   // before discarding them. A ref (not state) — read synchronously in the switch handler, no re-render.
   const dirtyRef = useRef(false)
+  /**
+   * The last SAVED settings — what the form looked like when it last matched disk.
+   *
+   * ⚠️ A VALIDATION THAT FIRES ON STATE REFUSES EVERY SAVE FOREVER. The position-name rule
+   * below must ask "is this save turning club sync ON, or clearing a name that was there?",
+   * not "is the name blank right now?" — because `fd_position_name` ships empty, with no
+   * migration and no wizard step that fills it, so an existing club host who never typed one
+   * would have had EVERY save refused: change an audio device at 02:00 mid-event, get bounced
+   * to a tab you were not on, and your fix is not saved. Kept in step with `dirtyRef`, which
+   * already marks precisely the moments the form equals what is stored.
+   */
+  const savedRef = useRef<Settings | null>(null)
+  /** Marks the position-name box when a save is refused for it — the callsign refusal has
+   *  always marked ITS field, and a refusal that routes you to a tab without saying which box
+   *  is the problem is only half an answer. Cleared as soon as the operator types. */
+  const [posNameInvalid, setPosNameInvalid] = useState(false)
   const markDirty = () => {
     dirtyRef.current = true
     setStatus('idle')
@@ -1889,6 +1917,7 @@ export function SettingsPanel({
       void getSettings().then((full) => {
         setForm(full)
         dirtyRef.current = false
+      savedRef.current = full
         setEditingRadioId(id)
       })
       onSaved?.()
@@ -2531,6 +2560,37 @@ export function SettingsPanel({
       setError(t('settings.save.callsignFirst'))
       return
     }
+    // The position name is MANDATORY once club sync is configured, and only then — a station
+    // that never joins a club event owes nobody a tent name. It is what the club band board
+    // shows, and an operator who deliberately clears it has to be told here, at the moment they
+    // do it: the alternative is what the club Field Day report described, a board reading the
+    // name it was joined under (or the raw position id) with nothing on screen explaining why.
+    // Same shape as the callsign refusal above — route to the tab that holds the fix, never a
+    // greyed Save button with no reason.
+    //
+    // ⚠️ ON THE CHANGE, NEVER ON THE STATE. `fd_position_name` ships empty and nothing
+    // backfills it — no migration, no wizard step — so a club host who has been running for
+    // months without one would have had EVERY save refused by a state test: change an audio
+    // device at 02:00 mid-event and get bounced to a tab you were not on, with your fix
+    // unsaved. It also buys nothing there, because an unnamed position already calls itself
+    // by its callsign on the wire. So this asks only whether THIS save turns club sync on, or
+    // takes away a name that was already there. (The shipped settings reference described this
+    // narrower rule all along; the code was the half that overreached.)
+    const wasHosting = savedRef.current?.fdHostEnable === true
+    const hadJoin = (savedRef.current?.fdJoinAddr ?? '').trim() !== ''
+    const hadName = (savedRef.current?.fdPositionName ?? '').trim() !== ''
+    const turningClubSyncOn =
+      (form.fdHostEnable && !wasHosting) || ((form.fdJoinAddr ?? '').trim() !== '' && !hadJoin)
+    const clearingTheName = hadName && (form.fdPositionName ?? '').trim() === ''
+    if (
+      (turningClubSyncOn || clearingTheName) &&
+      (form.fdPositionName ?? '').trim() === ''
+    ) {
+      setTab('contesting')
+      setError(t('settings.save.fdPositionName'))
+      setPosNameInvalid(true)
+      return
+    }
     // Check the RADIO before saving it. Until now the callsign was the only validated field, so
     // every way of getting the rig wrong saved silently and then behaved like broken hardware —
     // the symptom always shows up far from the cause. Errors block and name the fix; warnings are
@@ -2559,6 +2619,7 @@ export function SettingsPanel({
       // re-syncs the flat mirror from the still-active radio). No live rig swap.
       await persistRadioForm(form)
       dirtyRef.current = false
+      savedRef.current = form
       setStatus('saved')
       onSaved?.()
     } catch (err) {
@@ -9731,6 +9792,62 @@ export function SettingsPanel({
             </div>
           </fieldset>
           )}
+          {/* WHO'S WHO — the three identities a club event uses, side by side.
+              A club site answers "who are you?" three ways and they are NOT the same
+              answer: the club call goes on the air, the position is which tent you are
+              sitting in, the operator is who is at the key right now and it changes when
+              people swap. All three already existed as settings; nothing showed them as a
+              set, which is why the position name read as a mystery box (club report,
+              2026-08-30). THIS IS A VIEW, NOT NEW STATE — every row edits the same `form`
+              field its other home does, so a change here saves and shows there. The
+              position name MOVED here from the club-sync section below: a second control
+              for the same field on the same tab would have deepened the confusion. */}
+          {tab === 'contesting' && (
+          <fieldset className="settings-section" id="settings-field-day-identity">
+            <legend>{t('settings.fdWho.legend')}</legend>
+            <p className="settings-note">{t('settings.fdWho.note')}</p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.fdWho.call.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.mycall}
+                  onChange={(e) => update('mycall', e.target.value)}
+                  placeholder={FD_WHO_EXAMPLES.clubCall}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.fdWho.call.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.fdWho.position.label')}</span>
+                <input
+                  className={`settings-input${posNameInvalid ? ' invalid' : ''}`}
+                  aria-invalid={posNameInvalid}
+                  value={form.fdPositionName ?? ''}
+                  onChange={(e) => {
+                    setPosNameInvalid(false)
+                    update('fdPositionName', e.target.value)
+                  }}
+                  placeholder={t('settings.fdWho.position.placeholder')}
+                />
+                <span className="settings-hint">{t('settings.fdWho.position.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.fdWho.operator.label')}</span>
+                <input
+                  className="settings-input"
+                  value={form.fdOperator ?? ''}
+                  onChange={(e) => update('fdOperator', e.target.value)}
+                  placeholder={t('settings.fdWho.operator.placeholder')}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.fdWho.operator.hint')}</span>
+              </label>
+            </div>
+          </fieldset>
+          )}
           {/* Club sync (Nexus↔Nexus): host one event per club, every position
               streams its contacts to it over the LAN. HOSTING IS THE ONE
               DELIBERATE NON-LOOPBACK LISTENER IN THE APP — the toggle's copy
@@ -9804,16 +9921,6 @@ export function SettingsPanel({
                     ? t('settings.fdClub.join.hostingHint')
                     : t('settings.fdClub.join.hint')}
                 </span>
-              </div>
-              <div className="settings-field">
-                <span className="settings-label">{t('settings.fdClub.position.label')}</span>
-                <input
-                  className="settings-input"
-                  value={form.fdPositionName ?? ''}
-                  onChange={(e) => update('fdPositionName', e.target.value)}
-                  placeholder={t('settings.fdClub.position.placeholder')}
-                />
-                <span className="settings-hint">{t('settings.fdClub.position.hint')}</span>
               </div>
             </div>
             <div className="settings-field">

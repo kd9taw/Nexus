@@ -107,6 +107,13 @@ export const PANEL_NATURAL = new Map<string, Natural>([
   // it) — under the generic 760×660 default inner and the 646×553 ceiling the
   // generic 420×360 min_inner allows at the 65% floor.
   ['pota', { w: 620, h: 540 }],
+  // Club band board: the fixed chrome is the header (label + sync chip + host
+  // line + club counters) and the six column heads; the position rows below it
+  // are the elastic part, so height is small. 640 is what keeps the six
+  // columns — position, band, mode, operator, QSOs, rate — readable without
+  // the position and operator cells collapsing, and it is the widest a window
+  // at the generic 420×360 minimum can still show whole at the 65% floor.
+  ['fdclub', { w: 640, h: 380 }],
 ])
 
 /** This surface's natural footprint. No panel (the main window) → the cockpit box. */

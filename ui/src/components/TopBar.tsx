@@ -112,6 +112,10 @@ interface Props {
   operatorRoster?: string[]
   /** Switch the operator at the key. Absent ⇒ the indicator is read-only. */
   onSetOperator?: (call: string) => void
+  /** The Field Day master switch (`settings.fdActive`). It does one thing here: it keeps the
+   *  operator chip on screen BEFORE anyone has been set, because that is the station where
+   *  seats get swapped. Off ⇒ the chip behaves exactly as it always has. */
+  fdActive?: boolean
 }
 
 // The robust tier is TempoDeep — a non-coherent, fading-resilient 15 s mode that
@@ -214,6 +218,7 @@ export function TopBar({
   operator,
   operatorRoster,
   onSetOperator,
+  fdActive,
   hideTxControls,
   hideFrequencyControl,
   hideDigitalChrome,
@@ -241,36 +246,56 @@ export function TopBar({
         {/* Help lives in the one group that renders in every section — the
             cockpits hide the TX cluster, the readout and the digital chrome,
             but never this one, so the guide is one click away everywhere. */}
-        {/* WHO IS AT THE KEY (#25). Shown ONLY when an operator is set — that is the
-            multi-op case, and for the single-op station that is nearly everyone this costs
-            no width at all. It has to be somewhere always visible rather than in Settings,
-            because a wrong operator is silent: nothing misbehaves, and it is discovered at
-            submission when the log is already wrong. Same group as Help, the one group no
-            cockpit hides. */}
-        {operator && operator.trim() !== '' && (
+        {/* WHO IS AT THE KEY (#25). Shown when an operator is set — that is the multi-op
+            case, and for the single-op station that is nearly everyone this costs no width
+            at all. It has to be somewhere always visible rather than in Settings, because a
+            wrong operator is silent: nothing misbehaves, and it is discovered at submission
+            when the log is already wrong. Same group as Help, the one group no cockpit hides.
+
+            ...AND WHEN FIELD DAY IS ON, EVEN BEFORE ONE IS (2026-08-30). "Only when set" made
+            the app-wide seat-swap button invisible at the one station that swaps seats: it
+            appeared only after somebody had already set an operator, and the only place to do
+            that first set is the Field Day dashboard — so the operator sitting down in Phone,
+            CW or Operate had to go find the screen this chip exists to save them from.
+            (Operator: "when people are swapping out, there needs to be a button to swap out
+            the operator easily across any mode".) The gate widens by exactly ONE case, not to
+            "always", because the width it costs is paid on every screen. */}
+        {(fdActive || (operator && operator.trim() !== '')) && (
           <Menu
             trigger={
               <button
                 type="button"
                 className="theme-chip op-chip"
-                title={t('topbar.operator.title', { call: operator })}
+                title={
+                  operator && operator.trim() !== ''
+                    ? t('topbar.operator.title', { call: operator })
+                    : t('topbar.operator.set.title')
+                }
               >
-                {OP} {operator}
+                {operator && operator.trim() !== '' ? `${OP} ${operator}` : t('topbar.operator.set')}
               </button>
             }
             items={[
               // The roster is the operators this log has already seen, so the second and
-              // every later seat swap is a click. The first one is still typed, in Settings.
+              // every later seat swap is a click.
               ...(operatorRoster ?? [])
-                .filter((o) => o.toUpperCase() !== operator.toUpperCase())
+                .filter((o) => o.toUpperCase() !== (operator ?? '').toUpperCase())
                 .map((o) => ({
                   label: t('topbar.operator.switch', { call: o }),
                   onSelect: () => onSetOperator?.(o),
                 })),
-              {
-                label: t('topbar.operator.single'),
-                onSelect: () => onSetOperator?.(''),
-              },
+              // Clearing is only offered when there is something to clear; with nobody set it
+              // would be a row that does nothing.
+              ...(operator && operator.trim() !== ''
+                ? [{ label: t('topbar.operator.single'), onSelect: () => onSetOperator?.('') }]
+                : []),
+              // ...which leaves ONE case with an empty menu, and it is the first event: the
+              // roster is built from operators already in the log, so a station that has never
+              // logged one opens this chip onto nothing. Say where the first name is typed
+              // instead. Disabled on purpose — it is a signpost, not a second control.
+              ...((operatorRoster ?? []).length === 0 && !(operator && operator.trim() !== '')
+                ? [{ label: t('topbar.operator.firstSet'), onSelect: () => {}, disabled: true }]
+                : []),
             ]}
           />
         )}

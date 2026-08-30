@@ -2532,6 +2532,8 @@ export const EN = {
   'fieldDay.club.export.cabrillo.title': 'Export the merged club log as Cabrillo (deduped — the earliest contact wins)',
   'fieldDay.club.export.adif.label': 'Club ADIF',
   'fieldDay.club.export.adif.title': 'Export the merged club log as ADIF (deduped — the earliest contact wins)',
+  'fieldDay.club.popOut.label': '⧉ Pop out board',
+  'fieldDay.club.popOut.title': 'Pop the club band board out to its own window (second monitor) — who is on what band, across every position',
   'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
   'fieldDay.club.error': 'Host: {{msg}}',
   'fieldDay.club.board.empty': 'No positions heard yet',
@@ -2693,6 +2695,32 @@ export const EN = {
   'settings.fdRules.empty': 'Built-in rules data active.',
   'settings.fdRules.hint':
     'Scoring parameters, event windows, bonuses and sections for both Field Day events. Checked on demand; a downloaded update applies at the next launch.',
+  // ── Settings ▸ Contesting ▸ Who's who at this event ─────────────────────────────────
+  // Three names, three different jobs, and until now nothing said so: the club call lived on
+  // Station, the position name under a networking heading on Contesting, the operator on
+  // Station and on the Field Day dashboard. The club report behind this section is an operator
+  // asking what the position name was even for. Each hint therefore names its own job in terms
+  // that separate it from the other two — what goes on the air, where you are sitting, who is
+  // sitting there — and every one of these rows edits the SAME setting as its other home.
+  'settings.fdWho.legend': "Who's who at this event",
+  'settings.fdWho.note':
+    'Three names, three different jobs — the club call goes on the air, the position is which tent you are sitting in, and the operator is whoever is at the key right now. Changing one of them here changes it everywhere in Nexus: the callsign and the operator are the same two boxes the Station tab holds.',
+
+  'settings.fdWho.call.label': 'Callsign on the air',
+  'settings.fdWho.call.hint':
+    'The call that goes on the air and onto every contact you log — at a club event that is the club\'s call, the same one at every position on site.',
+
+  'settings.fdWho.position.label': 'Position name',
+  'settings.fdWho.position.placeholder': 'CW tent',
+  'settings.fdWho.position.hint':
+    'Which tent, trailer or table this station is — it names you on the club band board so everyone can see which position is on which band, and it never goes on the air.',
+
+  // ⚠️ `OPERATOR` is the ADIF field name — a wire identifier. Keep it verbatim.
+  'settings.fdWho.operator.label': 'Operator at the key',
+  'settings.fdWho.operator.placeholder': 'blank = the callsign above',
+  'settings.fdWho.operator.hint':
+    'Whoever is running this position right now — change it every time someone takes the seat, and their contacts are stamped with it (ADIF OPERATOR) so the club can split the log by operator afterwards.',
+
   'settings.fdClub.legend': 'Field Day Club Sync',
   'settings.fdClub.host.label': 'Host a club event',
   'settings.fdClub.host.hint': 'Merges every position\'s contacts into one club log on this PC — and opens a port on your local network (the only time Nexus listens beyond this computer).',
@@ -2707,9 +2735,6 @@ export const EN = {
   'settings.fdClub.join.label': 'Join event at',
   'settings.fdClub.join.hint': 'host:port of the club host — use Find club events, or type it from the host\'s screen.',
   'settings.fdClub.join.hostingHint': 'Hosting — this position joins its own event automatically.',
-  'settings.fdClub.position.label': 'Position name',
-  'settings.fdClub.position.placeholder': 'CW tent',
-  'settings.fdClub.position.hint': 'How this position appears on the club band board.',
   'settings.fdClub.discover.action': 'Find club events',
   'settings.fdClub.discover.busy': 'Listening…',
   'settings.fdClub.discover.empty': 'Nothing heard in 2 s — same network? Some Wi-Fi blocks discovery; type the host address instead.',
@@ -3860,6 +3885,7 @@ export const EN = {
   // What Save says when the form is refused. The rig checks' own wording lives above, in
   // `settings.radio.check.*` — this is only the panel's fallback when one carries no message.
   'settings.save.callsignFirst': 'Enter your callsign on the Station tab before saving.',
+  'settings.save.fdPositionName': 'Name this position on the Contesting tab before hosting or joining a club event — the club band board shows this name.',
   'settings.save.checkRadio': 'Check the radio settings.',
   'settings.save.failed': 'Could not save settings.',
 
@@ -7563,6 +7589,7 @@ export const EN = {
   // ── A torn-off panel window ─────────────────────────────────────────────────────────
   'detached.connecting': 'Connecting to the radio…',
   'detached.fieldDay.inactive': 'Field Day isn’t active.',
+  'detached.fdClub.inactive': 'No club event — this station isn’t hosting one or joined to one.',
   'detached.unavailable': 'Panel “{{panel}}” isn’t available as a standalone window yet.',
 
   // ── The navigation rail ─────────────────────────────────────────────────────────────
@@ -8092,6 +8119,12 @@ export const EN = {
   'topbar.operator.title': 'Operating as {{call}} — click to change who is at the key',
   'topbar.operator.switch': 'Switch to {{call}}',
   'topbar.operator.single': 'Single operator (clear)',
+  // The chip before anyone has been set — Field Day only. It has to read as an invitation
+  // rather than as a callsign, because at that moment it is the only thing on screen that
+  // says an operator can be named at all.
+  'topbar.operator.set': 'Set operator',
+  'topbar.operator.set.title': 'Nobody is set as the operator — click to say who is at the key',
+  'topbar.operator.firstSet': 'No operators logged yet — set the first one on the Field Day dashboard',
   // `{{rig}}` and `{{believed}}` are mode names, straight through.
   'topbar.rigMode.chip': 'rig: {{mode}}',
   'topbar.rigMode.title':

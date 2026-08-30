@@ -532,14 +532,26 @@ function clubChipText(club: FdClubStatus): string {
   }
 }
 
-function FdClubSection({
+/**
+ * The club band board — who is on what band, across every position on site.
+ *
+ * Exported because it is also the whole content of the `fdclub` pop-out
+ * (DetachedPanel): a multi-station club watches this continuously and asked
+ * for it on a second monitor, and the `fieldday` pop-out is already taken by
+ * the scoreboard. `detached` is the torn-off copy, which drops the pop-out
+ * button; `onExport` is absent there, because the export buttons report where
+ * the file landed through a toast and a detached window hosts none.
+ */
+export function FdClubSection({
   club,
   onExport,
-  busy,
+  busy = false,
+  detached = false,
 }: {
   club: FdClubStatus
-  onExport: (format: 'club-cabrillo' | 'club-adif') => void
-  busy: boolean
+  onExport?: (format: 'club-cabrillo' | 'club-adif') => void
+  busy?: boolean
+  detached?: boolean
 }) {
   return (
     <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
@@ -563,7 +575,7 @@ function FdClubSection({
             sections: club.sections,
           })}
         </span>
-        {club.hosting && (
+        {club.hosting && onExport && (
           <>
             <button
               type="button"
@@ -584,6 +596,16 @@ function FdClubSection({
               {t('fieldDay.club.export.adif.label')}
             </button>
           </>
+        )}
+        {!detached && (
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => void openPanelWindow('fdclub')}
+            title={t('fieldDay.club.popOut.title')}
+          >
+            {t('fieldDay.club.popOut.label')}
+          </button>
         )}
       </div>
       {Math.abs(club.skewSecs) > 30 && (

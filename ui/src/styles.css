@@ -3679,6 +3679,30 @@ body.resizing {
 [data-viewport='xl'] .layout.single > .panel.radioprog {
   max-width: 1600px;
 }
+/* THE FIELD DAY DASHBOARD is a board, not prose — and it arrives here from somewhere else.
+   Until 2026-08-30 it was drawn in the three-pane operating workspace (App.tsx), which put a
+   waterfall and the stations rail on a scoreboard and left it a ~1180px centre column at
+   1920. Moving it to this shell removes the rails; inheriting the 1100px measure above would
+   have handed back a NARROWER panel than the column it left, so the fix would have answered
+   half the report and worsened the other half (the crowded header strip: class + section,
+   RUN / S&P, the cockpit toggle and four export buttons).
+
+   1600px, and not `none` like Settings: unlike a form of auto-fill grids, the widest thing
+   in here is the log's fixed column set, so past ~1600 the extra room stops buying anything
+   and only lengthens the eye's travel from the score tiles to the log. Same number the two
+   other DATA surfaces use.
+
+   md AND UP, the same scoping Settings uses below and for the same reason: md/lg/xl is
+   *exactly* the set of tiers where the 1100px cap could ever bind (classifyViewport starts md
+   at 1100 effective px), so listing them leaves the 1024x768 supported floor bit-identical
+   rather than merely "probably unchanged". **lg** is the one that matters — 1920 lands there,
+   not in xl, so the xl-only shape of the rule above would have missed the reported window
+   entirely. Computed per tier in fdDashboardShell.test.tsx. */
+[data-viewport='md'] .layout.single > .panel.fieldday,
+[data-viewport='lg'] .layout.single > .panel.fieldday,
+[data-viewport='xl'] .layout.single > .panel.fieldday {
+  max-width: 1600px;
+}
 /* SETTINGS IS NOT PROSE-SHAPED, and calling it that cost it half the window.
    (Operator, 2026-08-12: "make the settings full screen. It's small and in the middle.
    You have the opportunity to put far more on the page vs scrolling.")
@@ -8496,16 +8520,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    =========================================================================== */
 .fieldday {
   min-width: 0;
-  /* THE COLUMN'S DEFICIT VALVE — the same fix `.layout.single > .panel` got on 2026-08-04,
-     for the same reason, in the view the three-pane workspace reaches instead. This column
-     is banner + header + operator row + score tiles + sections board + the Bonuses
-     disclosure + the log, and every one of them is `flex: 0 0 auto` except the board. Once
-     the board is at its floor (FieldDayView.tsx SECTIONS_BOARD_WRAP) the residual has
-     nowhere left to go, and `.panel { overflow: hidden }` would CLIP it — the log off the
-     bottom with no scrollbar in the chain, which is what opening Bonuses at 1200×750 did.
-     Wins over `.panel` on source order alone (both are (0,1,0); `.panel` is ~4400 lines
-     earlier), which is exactly how two fixes shipped dead here before — so it is COMPUTED,
-     not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
+  /* THE COLUMN'S DEFICIT VALVE. This column is banner + header + operator row + score tiles
+     + sections board + the Bonuses disclosure + the log, and every one of them is
+     `flex: 0 0 auto` except the board. Once the board is at its floor (FieldDayView.tsx
+     SECTIONS_BOARD_WRAP) the residual has nowhere left to go, and `.panel { overflow: hidden }`
+     would CLIP it — the log off the bottom with no scrollbar in the chain, which is what
+     opening Bonuses at 1200×750 did.
+
+     ⚠️ IT IS NO LONGER THIS DECLARATION THAT DELIVERS IT. Written 2026-08-04 for the view as
+     the three-pane workspace reached it, where it won over `.panel` on source order alone
+     (both (0,1,0)). Since 2026-08-30 the dashboard mounts in the single-column panel shell
+     instead (App.tsx), so `.layout.single > .panel { overflow-y: auto }` — (0,2,1) — is the
+     rule that actually resolves, and this one is a redundant restatement of the same value.
+     Kept, not deleted, because it is the only thing that would carry the valve if `.fieldday`
+     were ever mounted outside that shell; it is NOT relied on, and which rule wins is
+     COMPUTED, not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
   overflow-y: auto;
 }
 .fd-header {

@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use tempo_core::fieldday::{Exchange, FdEvent, FieldDayLog};
-use tempo_net::fdsync::{ClubState, WireBoardRow, WireQso};
+use tempo_net::fdsync::{ClubState, PosReport, WireBoardRow, WireQso};
 
 /// One merged club-log row — the design's reconciled shape (also what the
 /// scoreboard seam's `FdBoardRow` mirrors). Serialized one-per-line into the
@@ -89,7 +89,9 @@ impl MergedRow {
 /// What the host remembers about one position (identity + presence).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClubPosition {
-    /// Friendly label ("CW tent") from the JOIN; falls back to the posid.
+    /// Friendly label ("CW tent"), from the JOIN and refreshed by every
+    /// presence report (so a rename mid-event lands). Empty until a position
+    /// sends one — what an unnamed position reads as is the UI's business.
     pub label: String,
     /// Station callsign from the JOIN.
     pub call: String,
@@ -239,21 +241,20 @@ impl ClubLog {
         pos.acked
     }
 
-    /// A position's presence report.
-    pub fn position_status(
-        &mut self,
-        posid: &str,
-        band: &str,
-        mode: &str,
-        operator: &str,
-        freq: u64,
-        now: u64,
-    ) {
+    /// A position's presence report. `r.name` is its CURRENT friendly name
+    /// and is applied exactly like [`Self::join`]'s label: a non-empty one
+    /// wins (that is how a rename mid-event reaches the board), an empty one
+    /// changes nothing — an older peer sends no name at all, and treating
+    /// that as "clear it" would blank a label the join already established.
+    pub fn position_status(&mut self, posid: &str, r: &PosReport, now: u64) {
         let pos = self.positions.entry(posid.to_string()).or_default();
-        pos.band = band.to_string();
-        pos.mode = mode.to_uppercase();
-        pos.operator = operator.to_uppercase();
-        pos.freq = freq;
+        if !r.name.trim().is_empty() {
+            pos.label = r.name.trim().to_string();
+        }
+        pos.band = r.band.clone();
+        pos.mode = r.mode.to_uppercase();
+        pos.operator = r.op.to_uppercase();
+        pos.freq = r.freq;
         pos.last_seen_unix = now;
     }
 
@@ -547,6 +548,17 @@ impl SyncState {
 mod tests {
     use super::*;
 
+    /// One presence report, dial fixed — these tests are about the name.
+    fn report(name: &str, band: &str, mode: &str, op: &str) -> PosReport {
+        PosReport {
+            band: band.into(),
+            mode: mode.into(),
+            op: op.into(),
+            freq: 14_032_100,
+            name: name.into(),
+        }
+    }
+
     fn wq(
         pos: &str,
         seq: u64,
@@ -700,7 +712,9 @@ mod tests {
     fn board_rows_carry_presence_uniq_and_rate() {
         let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
         club.join("aaaa", "CW tent", "KD9TAW", 1000);
-        club.position_status("aaaa", "20m", "cw", "op1", 14_032_100, 1000);
+        // An empty name = the older-peer shape: a presence report that carries
+        // none, which must leave the join's label alone (its own test is below).
+        club.position_status("aaaa", &report("", "20m", "cw", "op1"), 1000);
         club.merge(&wq("aaaa", 1, "W1AW", "20m", "CW", "CT", 900), 1000);
         club.merge(&wq("bbbb", 1, "W1AW", "20m", "CW", "CT", 950), 1010); // cross-pos dupe
         let rows = club.board_rows(1015);
@@ -732,6 +746,30 @@ mod tests {
         // Rate window: an arrival >1 h old stops counting.
         let rows = club.board_rows(1000 + 3700);
         assert_eq!(rows.iter().find(|r| r.pos == "aaaa").unwrap().rate, 0);
+    }
+
+    #[test]
+    fn a_presence_report_renames_a_position_and_a_nameless_one_leaves_it_alone() {
+        // The club-Field-Day bug (2026-08-30): the name travelled in the JOIN
+        // line only, so an operator who renamed the position — or named one
+        // that joined unnamed — watched the board keep the old text until the
+        // connection was rebuilt. Presence reports now carry it.
+        let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
+        club.join("aaaa", "CW tent", "KD9TAW", 1000);
+        club.position_status("aaaa", &report("GOTA tent", "20m", "cw", "op1"), 1001);
+        let label = |c: &ClubLog| c.positions()["aaaa"].label.clone();
+        assert_eq!(label(&club), "GOTA tent", "the rename landed");
+        // ...and the other direction, which is what keeps an older peer from
+        // blanking a label it simply doesn't know how to send.
+        club.position_status("aaaa", &report("", "20m", "cw", "op1"), 1002);
+        assert_eq!(label(&club), "GOTA tent", "a nameless report is no news");
+        club.position_status("aaaa", &report("   ", "20m", "cw", "op1"), 1003);
+        assert_eq!(label(&club), "GOTA tent", "whitespace is not a name either");
+        // A position the host has never heard a join from is still named by
+        // its report (the id is plumbing; nobody should ever read it).
+        club.position_status("bbbb", &report("SSB tent", "40m", "ph", "op2"), 1004);
+        assert_eq!(label(&club), "GOTA tent");
+        assert_eq!(club.positions()["bbbb"].label, "SSB tent");
     }
 
     #[test]
