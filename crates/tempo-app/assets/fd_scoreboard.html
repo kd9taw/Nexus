@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field Day Scoreboard</title>
+<style>
+/* Field Day spectator scoreboard — one self-contained page, served by the host
+   Nexus over the LAN. Dark, high-contrast, sized for a 16:9 TV read across a
+   room: fluid clamp() typography, all four blocks visible at once (a spectator
+   who glances up must find the block where it was — nothing auto-cycles).
+   No external reference of any kind lives in this file (a Rust test pins it). */
+:root {
+  --bg: #0b0f14;
+  --panel: #121924;
+  --panel-2: #0e141d;
+  --line: #26303d;
+  --text: #e8eef5;
+  --dim: #93a1b0;
+  --faint: #5c6a78;
+  --accent: #4cc2ff;
+  --lit: #2fd07a;
+  --lit-bg: #10321f;
+  --warn: #ffb454;
+  --hot: #ff6a5e;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+}
+#board {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: clamp(6px, 0.8vh, 12px);
+  padding: clamp(8px, 1vw, 18px);
+}
+
+/* ---- header ---- */
+#hdr {
+  display: flex;
+  align-items: baseline;
+  gap: clamp(10px, 1.5vw, 28px);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: clamp(4px, 0.6vh, 10px);
+}
+#ev-name { font-size: clamp(20px, 2.6vw, 44px); font-weight: 800; letter-spacing: 0.02em; }
+#ev-station { font-size: clamp(14px, 1.5vw, 26px); color: var(--dim); font-family: var(--mono); }
+#hdr-right { margin-left: auto; text-align: right; }
+#clock { font-size: clamp(18px, 2vw, 34px); font-family: var(--mono); font-weight: 700; }
+#time-label { font-size: clamp(11px, 1vw, 18px); color: var(--dim); }
+#timebar { height: clamp(4px, 0.5vh, 8px); background: var(--panel); border-radius: 4px; margin-top: 4px; overflow: hidden; }
+#timebar-fill { height: 100%; width: 0; background: var(--accent); border-radius: 4px; transition: width 1s linear; }
+
+/* ---- main grid ---- */
+#main {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.1fr) minmax(0, 2.6fr) minmax(220px, 1.3fr);
+  gap: clamp(6px, 0.8vw, 14px);
+  min-height: 0;
+}
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: clamp(8px, 1vw, 16px);
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.panel h2 {
+  font-size: clamp(10px, 0.9vw, 16px);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: clamp(4px, 0.6vh, 10px);
+}
+#col-left, #col-right { display: flex; flex-direction: column; gap: clamp(6px, 0.8vh, 14px); min-height: 0; }
+#col-center { display: flex; flex-direction: column; gap: clamp(6px, 0.8vh, 14px); min-height: 0; }
+
+/* score */
+#score-total { font-size: clamp(40px, 5.5vw, 110px); font-weight: 800; font-family: var(--mono); line-height: 1.05; }
+#score-caption { color: var(--dim); font-size: clamp(11px, 1vw, 18px); margin-bottom: clamp(4px, 0.8vh, 12px); }
+.score-line { display: flex; justify-content: space-between; font-size: clamp(12px, 1.1vw, 20px); padding: 2px 0; }
+.score-line .k { color: var(--dim); }
+.score-line .v { font-family: var(--mono); font-weight: 700; }
+.score-line.provisional .k, .score-line.provisional .v { color: var(--warn); }
+#qso-stats { display: flex; gap: clamp(8px, 1vw, 18px); align-items: baseline; }
+#qso-count { font-size: clamp(24px, 2.6vw, 48px); font-weight: 800; font-family: var(--mono); }
+.qso-sub { color: var(--dim); font-size: clamp(11px, 1vw, 18px); }
+#sparkline { width: 100%; height: clamp(30px, 5vh, 70px); margin-top: 4px; }
+#sparkline polyline { fill: none; stroke: var(--accent); stroke-width: 2; }
+#sparkline .fill { fill: rgba(76, 194, 255, 0.15); stroke: none; }
+
+/* sections board */
+#sec-head { display: flex; align-items: baseline; gap: 10px; }
+#sec-count { font-family: var(--mono); font-weight: 800; font-size: clamp(16px, 1.8vw, 32px); color: var(--accent); }
+#sec-board { overflow: hidden; flex: 1; display: flex; flex-wrap: wrap; gap: clamp(4px, 0.5vw, 10px); align-content: flex-start; }
+.division { display: flex; flex-direction: column; }
+.division .div-label { font-size: clamp(8px, 0.7vw, 13px); color: var(--faint); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px; }
+.division .chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.sec {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: clamp(9px, 0.85vw, 16px);
+  font-weight: 700;
+  padding: clamp(1px, 0.2vh, 4px) clamp(3px, 0.35vw, 8px);
+  border-radius: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--faint);
+}
+.sec.lit { background: var(--lit-bg); border-color: var(--lit); color: var(--lit); }
+
+/* band × mode */
+#bm-table { width: 100%; border-collapse: collapse; font-size: clamp(11px, 1.05vw, 20px); }
+#bm-table th, #bm-table td { text-align: right; padding: clamp(1px, 0.3vh, 5px) clamp(4px, 0.6vw, 12px); font-family: var(--mono); }
+#bm-table th { color: var(--faint); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: clamp(9px, 0.8vw, 14px); }
+#bm-table th:first-child, #bm-table td:first-child { text-align: left; }
+#bm-table td { border-top: 1px solid var(--line); }
+#bm-table td.z { color: var(--faint); }
+#bm-table td.total { color: var(--accent); font-weight: 800; }
+
+/* positions */
+.pos-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: clamp(3px, 0.5vh, 8px) 0; border-bottom: 1px solid var(--line); }
+.pos-label { font-weight: 700; font-size: clamp(12px, 1.15vw, 22px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pos-op { color: var(--dim); font-family: var(--mono); font-size: clamp(10px, 0.9vw, 16px); }
+.pos-nums { text-align: right; font-family: var(--mono); font-size: clamp(11px, 1vw, 19px); }
+.pos-nums b { color: var(--accent); }
+
+/* bonuses / objectives */
+#bonus-list { overflow: hidden; }
+.bonus { display: flex; align-items: center; gap: 6px; font-size: clamp(10px, 0.95vw, 17px); padding: 1px 0; color: var(--faint); }
+.bonus .tick { width: clamp(10px, 0.9vw, 16px); text-align: center; font-weight: 800; }
+.bonus.claimed { color: var(--text); }
+.bonus.claimed .tick { color: var(--lit); }
+
+/* footer / ticker */
+#ftr { border-top: 1px solid var(--line); padding-top: clamp(4px, 0.6vh, 10px); }
+#hero-label { font-size: clamp(9px, 0.8vw, 14px); color: var(--faint); letter-spacing: 0.12em; text-transform: uppercase; }
+#hero { font-size: clamp(18px, 2.2vw, 40px); font-weight: 800; font-family: var(--mono); }
+#hero .call { color: var(--accent); }
+#hero .attr { color: var(--dim); font-weight: 600; font-size: 0.7em; }
+#hero.flash { animation: flash 1.2s ease-out; }
+@keyframes flash { 0% { color: var(--lit); } 100% { color: var(--text); } }
+#recent { font-family: var(--mono); color: var(--dim); font-size: clamp(10px, 0.95vw, 17px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+#framing { color: var(--faint); font-size: clamp(10px, 0.95vw, 16px); margin-top: clamp(2px, 0.4vh, 6px); }
+
+/* status overlays */
+#stale {
+  display: none;
+  position: fixed; top: clamp(8px, 1vh, 16px); right: clamp(8px, 1vw, 16px);
+  background: var(--hot); color: #14090b; font-weight: 800;
+  padding: 4px 12px; border-radius: 6px; font-size: clamp(11px, 1vw, 18px);
+}
+#stale.on { display: block; }
+#inactive {
+  display: none;
+  position: fixed; inset: 0; background: rgba(11, 15, 20, 0.92);
+  align-items: center; justify-content: center; text-align: center;
+  font-size: clamp(18px, 2.4vw, 40px); color: var(--dim); padding: 10vw;
+}
+#inactive.on { display: flex; }
+</style>
+</head>
+<body>
+<div id="board">
+  <div id="hdr">
+    <div id="ev-name"></div>
+    <div id="ev-station"></div>
+    <div id="hdr-right">
+      <div><span id="clock"></span> <span id="clock-utc"></span></div>
+      <div id="time-label"></div>
+      <div id="timebar"><div id="timebar-fill"></div></div>
+    </div>
+  </div>
+  <div id="main">
+    <div id="col-left">
+      <div class="panel">
+        <h2 id="score-title"></h2>
+        <div id="score-total">0</div>
+        <div id="score-caption"></div>
+        <div id="score-lines"></div>
+      </div>
+      <div class="panel">
+        <h2 id="qso-title"></h2>
+        <div id="qso-stats">
+          <div id="qso-count">0</div>
+          <div class="qso-sub"><span id="qso-rate">0</span><span id="qso-rate-unit"></span></div>
+          <div class="qso-sub"><span id="qso-rate10">0</span> <span id="qso-rate10-unit"></span></div>
+        </div>
+        <svg id="sparkline" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
+      </div>
+    </div>
+    <div id="col-center">
+      <div class="panel" style="flex: 1.4;">
+        <div id="sec-head"><h2 id="sec-title"></h2><span id="sec-count"></span></div>
+        <div id="sec-board"></div>
+      </div>
+      <div class="panel">
+        <h2 id="bm-title"></h2>
+        <table id="bm-table">
+          <thead><tr>
+            <th id="bm-h-band"></th><th id="bm-h-ph"></th><th id="bm-h-cw"></th>
+            <th id="bm-h-dig"></th><th id="bm-h-total"></th>
+          </tr></thead>
+          <tbody id="bm-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="col-right">
+      <div class="panel" style="flex: 1.3;">
+        <h2 id="pos-title"></h2>
+        <div id="pos-list"></div>
+      </div>
+      <div class="panel">
+        <h2 id="bonus-title"></h2>
+        <div id="bonus-list"></div>
+      </div>
+    </div>
+  </div>
+  <div id="ftr">
+    <div id="hero-label"></div>
+    <div id="hero"></div>
+    <div id="recent"></div>
+    <div id="framing"></div>
+  </div>
+</div>
+<div id="stale"></div>
+<div id="inactive"></div>
+<script>
+'use strict';
+/* All page prose lives HERE — the locale seam. A later pass can inject a
+   translated dict server-side without touching the render code. Callsigns,
+   section codes, bands, modes and the event's own name are invariant. */
+var STRINGS = {
+  scoreTitle: 'Score',
+  rawPoints: 'QSO points (raw) — multipliers apply at submission',
+  totalPoints: 'total points',
+  qsoPointsLine: 'QSO points',
+  powerLine: 'power multiplier',
+  poweredLine: 'powered points',
+  bonusLine: 'bonus points',
+  objectivesLine: 'objectives completed',
+  atSubmission: 'at submission',
+  projectedWord: 'projected',
+  qsoTitle: 'Contacts',
+  perHour: '/hr',
+  last10: 'in last 10 min',
+  sectionsTitle: 'Sections reached',
+  ofWord: 'of',
+  bandModeTitle: 'Contacts by band and mode',
+  bandCol: 'Band',
+  phoneCol: 'Phone',
+  cwCol: 'CW',
+  digitalCol: 'Digital',
+  totalCol: 'Total',
+  positionsTitle: 'Operating positions',
+  qsosWord: 'QSOs',
+  ptsWord: 'pts',
+  opWord: 'op',
+  bonusesTitle: 'Bonuses claimed',
+  objectivesTitle: 'Objectives completed',
+  latestLabel: 'Latest contact',
+  waitingFirst: 'Waiting for the first contact…',
+  phoneWord: 'Phone',
+  cwWord: 'CW',
+  digitalWord: 'Digital',
+  utcWord: 'UTC',
+  endsIn: 'ends in',
+  startsIn: 'starts in',
+  endedWord: 'event complete',
+  hourShort: 'h',
+  minShort: 'm',
+  staleBadge: 'STALE — reconnecting…',
+  hostOnlyMsg: 'The scoreboard is served from the host station.',
+  framing: 'Ham radio operators here are contacting other stations across ' +
+    'North America using portable equipment and emergency power — each box ' +
+    'above lights up as a new region is reached.'
+};
+
+/* ------------------------------------------------------------------ */
+/* Pure render(data, meta) functions. Every DATA value goes through
+   textContent — calls and sections arrive over RF and are untrusted;
+   only static STRINGS skeletons are ever assigned as markup. */
+/* ------------------------------------------------------------------ */
+
+var $ = function (id) { return document.getElementById(id); };
+var metaDone = false;
+var lastHeroKey = '';
+var clockOffsetMs = 0;
+var eventWindow = { start: 0, end: 0 };
+
+function el(tag, cls, text) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function modeWord(mode) {
+  if (mode === 'PH') return STRINGS.phoneWord;
+  if (mode === 'CW') return STRINGS.cwWord;
+  return STRINGS.digitalWord;
+}
+
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+function fmtDuration(secs) {
+  var h = Math.floor(secs / 3600);
+  var m = Math.floor((secs % 3600) / 60);
+  return h + ' ' + STRINGS.hourShort + ' ' + pad2(m) + ' ' + STRINGS.minShort;
+}
+
+/* Static labels + the 83-chip section skeleton, from meta.json (the section
+   universe and the bonus menu are the RULES DATA — never hardcoded here). */
+function renderMeta(meta) {
+  $('score-title').textContent = STRINGS.scoreTitle;
+  $('qso-title').textContent = STRINGS.qsoTitle;
+  $('qso-rate-unit').textContent = STRINGS.perHour;
+  $('qso-rate10-unit').textContent = STRINGS.last10;
+  $('bm-title').textContent = STRINGS.bandModeTitle;
+  $('bm-h-band').textContent = STRINGS.bandCol;
+  $('bm-h-ph').textContent = STRINGS.phoneCol;
+  $('bm-h-cw').textContent = STRINGS.cwCol;
+  $('bm-h-dig').textContent = STRINGS.digitalCol;
+  $('bm-h-total').textContent = STRINGS.totalCol;
+  $('pos-title').textContent = STRINGS.positionsTitle;
+  $('bonus-title').textContent =
+    meta.scoring_model === 'objectives' ? STRINGS.objectivesTitle : STRINGS.bonusesTitle;
+  $('hero-label').textContent = STRINGS.latestLabel;
+  $('framing').textContent = STRINGS.framing;
+  $('stale').textContent = STRINGS.staleBadge;
+  $('inactive').textContent = STRINGS.hostOnlyMsg;
+  $('clock-utc').textContent = STRINGS.utcWord;
+  $('sec-title').textContent = STRINGS.sectionsTitle;
+
+  $('ev-name').textContent = meta.event.name + ' ' + meta.event.year;
+  eventWindow = { start: meta.event.start_unix, end: meta.event.end_unix };
+
+  /* Section chips grouped by ARRL division (+ RAC), in the data's order. */
+  var board = $('sec-board');
+  board.textContent = '';
+  var byDiv = {};
+  var divOrder = [];
+  meta.sections.forEach(function (s) {
+    if (!byDiv[s.division]) { byDiv[s.division] = []; divOrder.push(s.division); }
+    byDiv[s.division].push(s);
+  });
+  divOrder.forEach(function (div) {
+    var g = el('div', 'division');
+    g.appendChild(el('div', 'div-label', div));
+    var chips = el('div', 'chips');
+    byDiv[div].forEach(function (s) {
+      var c = el('span', 'sec', s.code);
+      c.setAttribute('data-code', s.code);
+      c.title = s.name;
+      chips.appendChild(c);
+    });
+    g.appendChild(chips);
+    board.appendChild(g);
+  });
+
+  /* Bonus / objective checklist skeleton. */
+  var bl = $('bonus-list');
+  bl.textContent = '';
+  meta.bonuses.forEach(function (b) {
+    var row = el('div', 'bonus');
+    row.setAttribute('data-id', b.id);
+    row.appendChild(el('span', 'tick', '☐'));
+    row.appendChild(el('span', '', b.label));
+    bl.appendChild(row);
+  });
+
+  metaDone = true;
+}
+
+function renderScore(score) {
+  var lines = $('score-lines');
+  lines.textContent = '';
+  var addLine = function (k, v, cls) {
+    var row = el('div', 'score-line' + (cls ? ' ' + cls : ''));
+    row.appendChild(el('span', 'k', k));
+    row.appendChild(el('span', 'v', v));
+    lines.appendChild(row);
+  };
+  $('score-total').textContent = String(score.total);
+  if (score.model === 'objectives') {
+    /* WFD: the headline is RAW QSO points — the payload carries no power
+       fields at all, so power math cannot be rendered here even by mistake.
+       The ×(n+1) projection is a labelled, provisional secondary. */
+    $('score-caption').textContent = STRINGS.rawPoints;
+    var n = score.objectives_claimed || 0;
+    addLine(STRINGS.objectivesLine, String(n));
+    if (score.bonus_points) addLine(STRINGS.bonusLine, String(score.bonus_points));
+    addLine(
+      STRINGS.atSubmission,
+      score.qso_points + ' × ' + (n + 1) + ' → ' +
+        score.projected_at_submission + ' ' + STRINGS.projectedWord,
+      'provisional'
+    );
+  } else {
+    $('score-caption').textContent = STRINGS.totalPoints;
+    addLine(STRINGS.qsoPointsLine, String(score.qso_points));
+    addLine(STRINGS.powerLine, '× ' + score.power_mult);
+    addLine(STRINGS.poweredLine, String(score.powered_points));
+    addLine(STRINGS.bonusLine, '+ ' + score.bonus_points);
+  }
+}
+
+function renderQsos(qsos) {
+  $('qso-count').textContent = String(qsos.count);
+  $('qso-rate').textContent = String(qsos.rate_hour);
+  $('qso-rate10').textContent = String(qsos.rate_10min);
+  var svg = $('sparkline');
+  var h = qsos.hourly;
+  if (!h || h.length < 2) { svg.innerHTML = ''; return; }
+  var max = Math.max.apply(null, h.concat([1]));
+  var pts = h.map(function (v, i) {
+    var x = (i / (h.length - 1)) * 100;
+    var y = 29 - (v / max) * 27;
+    return x.toFixed(2) + ',' + y.toFixed(2);
+  });
+  /* innerHTML on the <svg> keeps the children in the SVG namespace without
+     naming the namespace URL; the content is generated numerics only. */
+  svg.innerHTML =
+    '<polygon class="fill" points="0,30 ' + pts.join(' ') + ' 100,30"></polygon>' +
+    '<polyline points="' + pts.join(' ') + '"></polyline>';
+}
+
+function renderSections(worked, meta) {
+  var lit = {};
+  worked.forEach(function (s) { lit[s] = true; });
+  var chips = $('sec-board').querySelectorAll('.sec');
+  for (var i = 0; i < chips.length; i++) {
+    var code = chips[i].getAttribute('data-code');
+    if (lit[code]) chips[i].classList.add('lit');
+    else chips[i].classList.remove('lit');
+  }
+  $('sec-count').textContent =
+    worked.length + ' ' + STRINGS.ofWord + ' ' + meta.sections.length;
+}
+
+function renderBandMode(rows) {
+  var body = $('bm-body');
+  body.textContent = '';
+  rows.forEach(function (r) {
+    var tr = document.createElement('tr');
+    tr.appendChild(el('td', '', r.band));
+    [r.ph, r.cw, r.dig].forEach(function (v) {
+      tr.appendChild(el('td', v ? '' : 'z', String(v)));
+    });
+    tr.appendChild(el('td', 'total', String(r.ph + r.cw + r.dig)));
+    body.appendChild(tr);
+  });
+}
+
+function renderPositions(positions) {
+  var list = $('pos-list');
+  list.textContent = '';
+  positions.forEach(function (p) {
+    var row = el('div', 'pos-row');
+    var left = el('div');
+    left.appendChild(el('div', 'pos-label', p.label));
+    if (p.operator) left.appendChild(el('div', 'pos-op', STRINGS.opWord + ' ' + p.operator));
+    row.appendChild(left);
+    var nums = el('div', 'pos-nums');
+    nums.appendChild(el('div', '', p.qsos_raw + ' ' + STRINGS.qsosWord));
+    var pts = el('div');
+    var b = el('b', '', String(p.points));
+    pts.appendChild(b);
+    pts.appendChild(document.createTextNode(' ' + STRINGS.ptsWord));
+    nums.appendChild(pts);
+    row.appendChild(nums);
+    list.appendChild(row);
+  });
+}
+
+function renderBonuses(claimed) {
+  var have = {};
+  claimed.forEach(function (id) { have[id] = true; });
+  var rows = $('bonus-list').querySelectorAll('.bonus');
+  for (var i = 0; i < rows.length; i++) {
+    var id = rows[i].getAttribute('data-id');
+    var tick = rows[i].querySelector('.tick');
+    if (have[id]) { rows[i].classList.add('claimed'); tick.textContent = '☑'; }
+    else { rows[i].classList.remove('claimed'); tick.textContent = '☐'; }
+  }
+}
+
+function sectionName(code, meta) {
+  for (var i = 0; i < meta.sections.length; i++) {
+    if (meta.sections[i].code === code) return meta.sections[i].name;
+  }
+  return code;
+}
+
+function renderTicker(ticker, meta) {
+  var hero = $('hero');
+  hero.textContent = '';
+  if (!ticker.length) {
+    hero.appendChild(el('span', 'attr', STRINGS.waitingFirst));
+    $('recent').textContent = '';
+    return;
+  }
+  var t = ticker[0];
+  var key = t.when_unix + '|' + t.call;
+  hero.appendChild(el('span', 'call', t.call));
+  hero.appendChild(document.createTextNode(
+    ' · ' + sectionName(t.section, meta) +
+    ' · ' + t.band + ' ' + (t.submode || modeWord(t.mode)) + ' '
+  ));
+  hero.appendChild(el('span', 'attr',
+    '· ' + t.position + (t.operator ? ' (' + t.operator + ')' : '')));
+  if (key !== lastHeroKey) {
+    lastHeroKey = key;
+    hero.classList.remove('flash');
+    void hero.offsetWidth; /* restart the highlight animation */
+    hero.classList.add('flash');
+  }
+  $('recent').textContent = ticker.slice(1, 9).map(function (q) {
+    return q.call + ' ' + q.section + ' ' + q.band + ' ' + (q.submode || q.mode);
+  }).join('   ·   ');
+}
+
+/* The composite render — everything from one data.json + one meta.json. */
+function render(data, meta) {
+  if (!metaDone) renderMeta(meta);
+  $('ev-station').textContent =
+    data.event.call + ' — ' + data.event.class + ', ' + data.event.section;
+  eventWindow = { start: data.event.start_unix, end: data.event.end_unix };
+  renderScore(data.score);
+  renderQsos(data.qsos);
+  renderSections(data.sections_worked, meta);
+  renderBandMode(data.band_mode);
+  renderPositions(data.positions);
+  renderBonuses(data.claimed);
+  renderTicker(data.ticker, meta);
+}
+
+function setStale(on) {
+  $('stale').textContent = STRINGS.staleBadge;
+  $('stale').className = on ? 'on' : '';
+}
+
+function setInactive(on) {
+  $('inactive').textContent = STRINGS.hostOnlyMsg;
+  $('inactive').className = on ? 'on' : '';
+}
+
+/* UTC clock + time-remaining bar, off the host's clock (now_unix from the
+   last poll corrects the TV's own drift). */
+function tickClock() {
+  var now = new Date(Date.now() + clockOffsetMs);
+  $('clock').textContent =
+    pad2(now.getUTCHours()) + ':' + pad2(now.getUTCMinutes()) + ':' + pad2(now.getUTCSeconds());
+  var s = Math.floor(now.getTime() / 1000);
+  var label = '';
+  var pct = 0;
+  if (eventWindow.end > eventWindow.start) {
+    if (s < eventWindow.start) {
+      label = STRINGS.startsIn + ' ' + fmtDuration(eventWindow.start - s);
+    } else if (s < eventWindow.end) {
+      label = STRINGS.endsIn + ' ' + fmtDuration(eventWindow.end - s);
+      pct = ((s - eventWindow.start) / (eventWindow.end - eventWindow.start)) * 100;
+    } else {
+      label = STRINGS.endedWord;
+      pct = 100;
+    }
+  }
+  $('time-label').textContent = label;
+  $('timebar-fill').style.width = pct.toFixed(2) + '%';
+}
+
+/* ------------------------------------------------------------------ */
+/* Liveness: 3 s polling with the rev counter. A failed poll keeps the
+   last good board; three misses show the stale badge; recovery is
+   automatic — no user action ever required on the TV. Self-rescheduling
+   setTimeout, so browser throttling cannot pile requests up. */
+/* ------------------------------------------------------------------ */
+
+var META = null;
+var lastRev = -1;
+var misses = 0;
+
+function poll() {
+  fetch('/scoreboard/data.json', { cache: 'no-store' })
+    .then(function (r) {
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    })
+    .then(function (data) {
+      misses = 0;
+      setStale(false);
+      if (data.active === false) {
+        setInactive(true);
+        return;
+      }
+      setInactive(false);
+      clockOffsetMs = data.now_unix * 1000 - Date.now();
+      if (data.rev !== lastRev) {
+        lastRev = data.rev;
+        render(data, META);
+      }
+    })
+    .catch(function () {
+      misses += 1;
+      if (misses >= 3) setStale(true);
+    })
+    .then(function () { setTimeout(poll, 3000); });
+}
+
+function loadMeta() {
+  fetch('/scoreboard/meta.json', { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (meta) {
+      if (meta.active === false) {
+        setInactive(true);
+        setTimeout(loadMeta, 3000);
+        return;
+      }
+      META = meta;
+      renderMeta(meta);
+      poll();
+    })
+    .catch(function () { setTimeout(loadMeta, 3000); });
+}
+
+/* Test seam: the jsdom suite sets __FDBOARD_TEST__ and drives the pure
+   render functions directly — no network, no timers. */
+window.__fdboard = {
+  STRINGS: STRINGS,
+  render: render,
+  renderMeta: renderMeta,
+  setStale: setStale,
+  setInactive: setInactive,
+  tickClock: tickClock
+};
+if (!window.__FDBOARD_TEST__) {
+  loadMeta();
+  setInterval(tickClock, 1000);
+  tickClock();
+}
+</script>
+</body>
+</html>
