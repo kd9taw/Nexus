@@ -444,4 +444,39 @@ describe('translated catalogs agree with English', () => {
       expect(catalogProblems(locale, cat)).toEqual([])
     })
   }
+
+  // COMPLETENESS — the other direction, and the one nothing was watching.
+  //
+  // `catalogProblems` already fails a key a translation has that English does not ("no such
+  // key"). The reverse was uncovered: a key English has that a translation LACKS costs nothing
+  // at build time and nothing at runtime — `t()` falls back to English — so a German operator
+  // just reads English on that control and no test anywhere goes red. It is invisible by
+  // construction, which is exactly why it needs a guard rather than discipline: three Config-tab
+  // strings sat untranslated in de/es/fr for releases, and the way they were found was somebody
+  // counting keys by hand.
+  //
+  // Deliberately NO allowlist. All four catalogs are complete as this lands, so the honest
+  // enforcement is "complete, or this fails" — an allowlist here would be a place for the next
+  // gap to hide. A string that genuinely must stay English (a product name, a mode token) is
+  // still translated: its "translation" is the same text, which is a decision written down in
+  // the catalog rather than an absence.
+  //
+  // ⚠️ This counts KEYS, not quality. A catalog that holds the English text under every key
+  // passes here — see the invariant-token guard for what the values may say.
+  for (const [locale, cat] of OTHER) {
+    it(`${locale} translates every key English defines`, () => {
+      const missing = Object.keys(EN).filter((k) => !(k in cat))
+      expect({ locale, missing }).toEqual({ locale, missing: [] })
+    })
+  }
+
+  it('the completeness check fires', () => {
+    // The control: a catalog missing a key English defines must be caught. Without this, a
+    // future refactor that emptied the loop above would leave four green tests asserting
+    // nothing — the shape that let the decimal-comma rule cover German alone.
+    const short = { ...(DE as Record<string, unknown>) }
+    const victim = Object.keys(EN)[0]
+    delete short[victim]
+    expect(Object.keys(EN).filter((k) => !(k in short))).toEqual([victim])
+  })
 })
