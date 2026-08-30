@@ -7243,6 +7243,23 @@ impl RadioLoop {
                     && (force || Some(p) != self.last_rf_power)
                     && self.rf_power_giveup != Some(p)
                 {
+                    // ⚠️ THE ONE TRACE THAT WOULD HAVE ANSWERED THE FIELD REPORT. An operator
+                    // reporting the rig's power moving under them (KD9WES, FTDX-101D) sent two
+                    // machines' worth of symptoms and there was nothing on either to look at:
+                    // no path logged a power write — success, failure or tune — so "did Nexus
+                    // command this?" could not be answered from a log, only argued from code.
+                    // It is one line per ACTUAL write (the block above is change-gated, so a
+                    // steady station emits none), and it carries whether we were transmitting,
+                    // which is the fact that separates a normal set from one landing mid-over.
+                    tempo_core::applog::info(
+                        "cat",
+                        &format!(
+                            "set RF power {:.0}% (tx={} tune={})",
+                            p * 100.0,
+                            self.tx_until_ms.is_some() || self.manual_ptt_applied,
+                            self.tuning_keyed
+                        ),
+                    );
                     match rig.set_power(p) {
                         Ok(()) => {
                             self.last_rf_power = Some(p);
@@ -7589,7 +7606,19 @@ impl RadioLoop {
         // restores provably leaked (review: stranded shifted dial = every
         // subsequent decode/spot/log on a wrong frequency). Deferred while the
         // operator holds live phone PTT — never move the VFO under a live over.
-        if self.tx_until_ms.is_none() && !self.manual_ptt_applied {
+        // ⚠️ `!self.tuning_keyed` IS LOAD-BEARING, and its absence put a VFO write on the air
+        // (KD9WES, FTDX-101D). A tune deliberately clears `tx_until_ms` — a tune supersedes any
+        // pending slot tail — so without this the teardown believed no over was in progress and
+        // wrote the dial, and the split, into a TRANSMITTING radio on the very next tick. A
+        // Yaesu re-locks its synthesiser on a VFO write: a blip in the waterfall and the power
+        // dropping for about a second, which is exactly what was reported and what an analogue
+        // wattmeter confirmed. The comment above already stated the rule; a tune carrier simply
+        // was not counted as a live over. Every other end-of-over site in this loop pairs
+        // `tuning_keyed` with `tx_until_ms` — this was the one that did not.
+        //
+        // Nothing is lost by waiting: `fake_it_restore` is HELD, not dropped, so the dial goes
+        // back on the first tick after the carrier stops.
+        if self.tx_until_ms.is_none() && !self.manual_ptt_applied && !self.tuning_keyed {
             if let Some(hz) = self.fake_it_restore.take() {
                 let _ = rig.set_freq(hz);
                 // Settle the poll guards so the knob-QSY detector can't adopt
@@ -7785,6 +7814,13 @@ impl RadioLoop {
                     d.set_data_mode(true);
                 }
                 if let Some(p) = tune_power {
+                    tempo_core::applog::info(
+                        "cat",
+                        &format!(
+                            "tune keys at {:.0}% (operator level restored after)",
+                            p * 100.0
+                        ),
+                    );
                     // BEFORE the key, like the DATA flip above — the carrier must never come up
                     // at the operating level and then step down.
                     //
@@ -17915,6 +17951,93 @@ mod tests {
             "a blocking L RFPOWER per tick, for the whole tune-up, against a chunked carrier — \
              and the ceiling was already applied before the tune keyed: {:?}",
             log.lock().unwrap()
+        );
+    }
+
+    /// ⭐ A TUNE CARRIER IS A LIVE OVER: nothing may write the VFO while it is up.
+    ///
+    /// Field report (KD9WES, FTDX-101D, 2026-08-30): "it dosnt seem to matter if im keyed up
+    /// through the tune button or making a contact that i will see a blip in the ftdx 101d
+    /// waterfall and it will cut the power back about 10 to 15 watts just for a second", the
+    /// drop confirmed on an analogue MFJ-989 needle, and NOT reproducible under WSJT-X on the
+    /// same station.
+    ///
+    /// The mechanism: the Fake-It / rig-split TEARDOWN was guarded on `tx_until_ms.is_none()
+    /// && !manual_ptt_applied` only. Keying a tune deliberately clears `tx_until_ms` (a tune
+    /// supersedes any pending slot tail), so on the very next tick the teardown believed no
+    /// over was in progress and issued `set_freq` — and a split write — into a TRANSMITTING
+    /// radio. A Yaesu re-locks its synthesiser on a VFO write, which is precisely a waterfall
+    /// blip and a momentary power drop. The block's own comment already stated the rule
+    /// ("never move the VFO under a live over"); it simply did not count a tune as one, while
+    /// every other end-of-over site in this loop pairs `tuning_keyed` with `tx_until_ms`.
+    ///
+    /// WSJT-X will not write frequency while transmitting at all unless the operator ticks an
+    /// off-by-default box whose own tooltip says some rigs cannot process CAT while keyed.
+    #[test]
+    fn a_tune_carrier_is_never_interrupted_by_the_split_teardown() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let (addr, log) = mock_rigctld_on(14_074_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        let freqs = |log: &Arc<Mutex<Vec<String>>>, from: usize| -> usize {
+            log.lock().unwrap()[from..]
+                .iter()
+                .filter(|l| l.starts_with('F') || l.starts_with("S "))
+                .count()
+        };
+
+        // ⚠️ POSITIVE CONTROL: with no carrier up, an outstanding restore DOES get written —
+        // otherwise the assertion below would pass against a scene where nothing was pending.
+        state.fake_it_restore = Some(14_074_000);
+        let mark = log.lock().unwrap().len();
+        run(&mut state, &mut rig, 0.0);
+        assert!(
+            freqs(&log, mark) > 0,
+            "control: a pending restore is written when nothing is transmitting — {:?}",
+            log.lock().unwrap()
+        );
+
+        // THE TUNE. Key it FIRST — a restore consumed on the keying tick itself is legitimate
+        // (`tuning_keyed` is still false when the teardown runs there, and that is the last
+        // chance to put the dial back before the carrier starts, exactly as the RF-power
+        // ceiling is applied on that same tick). What must never happen is a write once the
+        // carrier is UP, which is the state this sets up: a Fake-It shift outstanding while
+        // the rig is transmitting — an FT8 over with Split Operation on, then Tune.
+        engine.lock().unwrap().set_tune(true);
+        run(&mut state, &mut rig, 200.0);
+        assert!(state.tuning_keyed, "control: the tune keyed");
+        state.fake_it_restore = Some(14_074_000);
+        let mark = log.lock().unwrap().len();
+        for i in 1..5 {
+            run(&mut state, &mut rig, 200.0 + f64::from(i) * 20.0);
+        }
+        assert_eq!(
+            freqs(&log, mark),
+            0,
+            "the VFO was written while a tune carrier was on the air — a Yaesu re-locks its \
+             synthesiser and the operator sees a blip and a power drop: {:?}",
+            log.lock().unwrap()
+        );
+        assert!(
+            state.fake_it_restore.is_some(),
+            "the restore must be HELD, not dropped — it still has to happen after the tune"
         );
     }
 
