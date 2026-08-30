@@ -2677,6 +2677,8 @@ export const DE: PartialCatalog = {
   "alerts.batch.decodes": { "one": "{{count}} neue Dekodierung.", "other": "{{count}} neue Dekodierungen." },
   "alerts.batch.cq": " CQ von {{calls}}.",
   "ota.subtitle": "Aktivierer jagen, die gerade QRV sind",
+  "ota.popOut.title": "Das POTA/SOTA-Board in einem eigenen Fenster öffnen (ein POTA-Board neben einem SOTA-Board)",
+  "ota.popOut.label": "⧉ Abdocken",
   "ota.program.aria": "Programm",
   "ota.program.both": "Beide",
   "ota.programs.both": "POTA oder SOTA",

@@ -9,6 +9,7 @@ import type { AppSnapshot, OtaSpot, Activation } from '../types'
 import {
   clearHuntTarget,
   getOtaSpots,
+  openPanelWindow,
   setHuntTarget,
   setActivation,
   clearActivation,
@@ -133,9 +134,13 @@ interface Props {
   onHunt: (arg: OtaSpotClickArg) => void
   /** Called after clearHuntTarget completes so App can apply the fresh snapshot. */
   onSnap: (s: AppSnapshot) => void
+  /** True in the torn-off window — hides the pop-out button there (the
+   *  FieldDayScoreboard shape: the view opens its own window directly, so the
+   *  docked and detached mounts stay one component). */
+  detached?: boolean
 }
 
-export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
+export function PotaSotaView({ snap, onHunt, onSnap, detached = false }: Props) {
   // Program + band filter persist for the same reason the sort and mode do: the operator
   // filed "leaving and returning resets all filters" as a bug. A stale/hand-edited value
   // falls back to the default rather than throwing.
@@ -406,6 +411,19 @@ export function PotaSotaView({ snap, onHunt, onSnap }: Props) {
       <div className="panel-header">
         <h2>{OTA_TITLE}</h2>
         <span className="awards-sub">{t('ota.subtitle')}</span>
+        {/* Multi-monitor tear-off — the pop-out the per-surface filter records were
+            built for: a POTA board beside a SOTA board, each keeping its own
+            program/filter/sort. Hidden in the already-torn-off window. */}
+        {!detached && (
+          <button
+            type="button"
+            className="pota-popout"
+            onClick={() => void openPanelWindow('pota')}
+            title={t('ota.popOut.title')}
+          >
+            {t('ota.popOut.label')}
+          </button>
+        )}
       </div>
 
       {/* Hunting banner — shown when a hunt target is active */}

@@ -2314,6 +2314,8 @@ export const EN = {
   // frequency, band and mode — is data and never passes through here either. Where a
   // programme name appears INSIDE a sentence below, a translator leaves it exactly as it is.
   'ota.subtitle': 'Hunt activators on the air now',
+  'ota.popOut.title': 'Open the POTA/SOTA board in its own window (a POTA board beside a SOTA board)',
+  'ota.popOut.label': '⧉ Pop out',
   // The programme picker. POTA and SOTA are names the operator reads on the programmes' own
   // sites; "Both" is an English word and this is the only part of that row a translator sees.
   'ota.program.aria': 'Program',

@@ -13717,9 +13717,11 @@ button.cq-skiptx1.on {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* Pop-out buttons on Connect + DXpeditions + Operate headers (multi-monitor tear-off). */
+/* Pop-out buttons on Connect + DXpeditions + POTA/SOTA + Operate headers (multi-monitor
+   tear-off). */
 .connect-popout,
 .dxped-popout,
+.pota-popout,
 .cockpit-popout {
   margin-left: auto;
   font-size: 0.75rem;
@@ -13733,7 +13735,8 @@ button.cq-skiptx1.on {
   white-space: nowrap;
 }
 .connect-popout:hover,
-.dxped-popout:hover {
+.dxped-popout:hover,
+.pota-popout:hover {
   border-color: var(--accent);
   color: var(--accent);
 }

@@ -66,6 +66,7 @@ import { markRecalled, memoriesStore, planRecall, type Memory } from './features
 import { bandLabelForMhz } from './band'
 import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
+import { PotaSotaView } from './components/PotaSotaView'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
 import { DxpeditionsView } from './components/DxpeditionsView'
@@ -475,6 +476,48 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     return (
       <div className="app detached">
         <DxpeditionsView snap={prop} onWorkSpot={onWorkSpot} onShowOnMap={onSelect} />
+      </div>
+    )
+  }
+
+  if (panel === 'pota') {
+    // The POTA/SOTA hunter, torn off — the pop-out its PER-SURFACE filter records
+    // were built for: a POTA board beside a SOTA board, each window keeping its own
+    // program/filter/sort. The board needs snap.hunt for its banner, so wait for the
+    // first snapshot like the Operate arm. Its own toasts (hunt set/cleared, refresh
+    // errors) are silent here — fire-and-forget with no toast host is the detached
+    // pattern (see the Connect arm's onPoint).
+    if (!snap) {
+      return (
+        <div className="app detached">
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="app detached">
+        <PotaSotaView
+          snap={snap}
+          onSnap={setSnap}
+          detached
+          // The board has already called setHuntTarget itself (and handed us the
+          // fresh snapshot via onSnap); this half is the QSY + rig-mode switch —
+          // the same atomic workSpot the Needed arm uses, with its same guard: a
+          // spot whose cockpit is a DISABLED feature only QSYs, because the main
+          // window's nav-hint effect would refuse to follow a hidden mode.
+          onHunt={(a) => {
+            const modes = readEnabledModes()
+            const view = a.modeClass === 'CW' ? 'cw' : a.modeClass === 'Phone' ? 'phone' : 'operate'
+            if ((view === 'cw' && !modes.cw) || (view === 'phone' && !modes.phone)) {
+              qsyBand(a.band, a.freqMhz)
+              return
+            }
+            const opMode = view === 'operate' ? 'digital' : view
+            apply(workSpot(opMode, a.freqMhz, a.band, a.call))
+          }}
+        />
       </div>
     )
   }

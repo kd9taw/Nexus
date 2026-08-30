@@ -2105,6 +2105,8 @@ export const FR: PartialCatalog = {
   "ota.spot.spottedBy": "Spotté par {{spotter}}",
   "ota.spots.failed": "Échec des spots {{program}}",
   "ota.subtitle": "Chasser les activateurs actuellement sur l'air",
+  "ota.popOut.title": "Ouvrir le tableau POTA/SOTA dans sa propre fenêtre (un tableau POTA à côté d'un tableau SOTA)",
+  "ota.popOut.label": "⧉ Détacher",
   "pane.hide.aria": "Masquer {{title}}",
   "pane.hide.title": "Masquer ce panneau (le rétablir depuis le menu ⊞ Panneaux)",
   "pane.popOut.aria": "Ouvrir {{title}} dans sa propre fenêtre",

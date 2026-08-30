@@ -87,6 +87,7 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
       'memories',
       'needed',
       'operate',
+      'pota',
       'sats',
       'waterfall',
     ])
@@ -135,6 +136,7 @@ describe('pop-out natural footprints vs the windows Rust builds', () => {
       fieldday: 100,
       memories: 100,
       needed: 100,
+      pota: 100,
       sats: 100,
       waterfall: 100,
     })

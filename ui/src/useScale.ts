@@ -100,6 +100,13 @@ export const PANEL_NATURAL = new Map<string, Natural>([
   // Field Day scoreboard: event banner + header + score tiles + bonuses + the log head.
   // `.fd-log-scroll` is the scroller below that, so height is elastic.
   ['fieldday', { w: 560, h: 540 }],
+  // POTA/SOTA hunter board: the fixed chrome is the header, the hunt/activation
+  // rows and the program + refresh + band/mode filter chip rows; the spot-card
+  // list below scrolls, so height is elastic. 620 keeps the program tabs and the
+  // refresh/timestamp cluster on one row (the chip rows wrap gracefully below
+  // it) — under the generic 760×660 default inner and the 646×553 ceiling the
+  // generic 420×360 min_inner allows at the 65% floor.
+  ['pota', { w: 620, h: 540 }],
 ])
 
 /** This surface's natural footprint. No panel (the main window) → the cockpit box. */

@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never make things worse. Works the N3FJP way: update at home before Field Day, operate all
   weekend offline.
 
+- **The POTA/SOTA board tears off into its own window.** The hunter board's filters were
+  already saved per-window — the code was written for this and the window never came. A pop-out
+  button now opens it beside your operating screen (or one per program: a POTA board next to a
+  SOTA board), and HUNT works from the pop-out exactly as it does docked — click a spot and the
+  radio QSYs, mode and all.
+
 - **Nexus speaks Japanese.** 日本語に対応しました。 The whole application — all 4,765 phrases,
   every screen, the same coverage the other languages have — picked up automatically from your
   system language or chosen in Settings. Written to Japanese amateur-radio convention (ゼロイン

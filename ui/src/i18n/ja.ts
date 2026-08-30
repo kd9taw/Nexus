@@ -1396,6 +1396,8 @@ export const JA: PartialCatalog = {
   "settings.alerts.rareGrid.hint": "レア／水上のみのグリッド（ローバー、海上移動、DXペディション）向けの大きな💎アラートです。通常のグリッドとは別枠なので、HFのアラートを消してもレアものは逃しません。対応するGRIDアイコンにも適用されます。",
   "settings.alerts.watchlist.label": "ウォッチリスト",
   "ota.subtitle": "オンエア中のアクティベーターをハント",
+  "ota.popOut.title": "POTA/SOTAボードを別ウィンドウで開く（POTAボードとSOTAボードを並べて表示）",
+  "ota.popOut.label": "⧉ ポップアウト",
   "ota.program.aria": "プログラム",
   "ota.program.both": "両方",
   "ota.programs.both": "POTAまたはSOTA",

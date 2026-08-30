@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react'
 import { DetachedPanel } from './DetachedPanel'
 import { confirmDialog } from './confirm'
-import { selectPeer, workSpot, setFrequency, getNeedAlerts } from './api'
+import { selectPeer, workSpot, setFrequency, getNeedAlerts, subscribeSnapshot } from './api'
 import { readEnabledModes } from './useFeatures'
 import type { NeedAlert } from './types'
 
@@ -230,5 +230,113 @@ describe('DetachedPanel Needed board work-guard', () => {
     fireEvent.click(screen.getByTestId('work-ft4'))
     expect(mockedWorkSpot).toHaveBeenCalledWith('digital', 14.083, '20m', 'DX2DEF', 'FT4')
     expect(mockedSetFrequency).not.toHaveBeenCalled()
+  })
+})
+
+// Stub the POTA/SOTA board — expose only the seams the arm wires: onHunt (the QSY +
+// cockpit-routing path under test) and a marker so "the arm renders the board" is a
+// rendered assertion. Mirrors the NeededPanel stub above.
+vi.mock('./components/PotaSotaView', () => ({
+  PotaSotaView: ({
+    onHunt,
+  }: {
+    onHunt: (a: {
+      call: string
+      freqMhz: number
+      band: string
+      modeClass: 'CW' | 'Phone' | 'Digital'
+      program: string
+      reference: string
+    }) => void
+  }) => (
+    <>
+      <button
+        data-testid="hunt-phone"
+        onClick={() =>
+          onHunt({
+            call: 'N0POTA',
+            freqMhz: 14.285,
+            band: '20m',
+            modeClass: 'Phone',
+            program: 'POTA',
+            reference: 'K-1234',
+          })
+        }
+      >
+        hunt
+      </button>
+      <button
+        data-testid="hunt-digital"
+        onClick={() =>
+          onHunt({
+            call: 'W1SOTA',
+            freqMhz: 14.074,
+            band: '20m',
+            modeClass: 'Digital',
+            program: 'SOTA',
+            reference: 'W7A/MN-001',
+          })
+        }
+      >
+        hunt digital
+      </button>
+    </>
+  ),
+}))
+
+describe('DetachedPanel POTA/SOTA board', () => {
+  // The arm gates on the first snapshot (the bandmap/operate shape), so the board
+  // needs the poll to have delivered one. The board itself is stubbed above, so the
+  // snapshot only has to satisfy DetachedPanelBody's own reads (snap?.link.tier).
+  const SNAP = { link: { tier: 'FT8' }, radio: {} } as unknown as import('./types').AppSnapshot
+  const mockedSubscribe = vi.mocked(subscribeSnapshot)
+
+  beforeEach(() => {
+    mockedSubscribe.mockImplementation((cb: (s: import('./types').AppSnapshot) => void) => {
+      cb(SNAP)
+      return () => {}
+    })
+  })
+  afterEach(() => {
+    // Restore the inert default so the suites above stay order-independent.
+    mockedSubscribe.mockImplementation(() => () => {})
+  })
+
+  it('the pota arm renders the board in the zoomed .app tree', async () => {
+    const { container } = render(<DetachedPanel panel="pota" />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const root = container.firstElementChild as HTMLElement
+    expect(root.className).toBe('app detached')
+    expect(screen.getByTestId('hunt-phone')).toBeTruthy()
+  })
+
+  it('hunt calls through: the atomic workSpot QSYs + switches the rig mode from the pop-out', async () => {
+    render(<DetachedPanel panel="pota" />)
+    // Let the mount pollers settle (getBandPlan → setBandPlan).
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    fireEvent.click(screen.getByTestId('hunt-phone'))
+    expect(mockedWorkSpot).toHaveBeenCalledWith('phone', 14.285, '20m', 'N0POTA')
+    expect(mockedSetFrequency).not.toHaveBeenCalled()
+
+    mockedWorkSpot.mockClear()
+    fireEvent.click(screen.getByTestId('hunt-digital'))
+    expect(mockedWorkSpot).toHaveBeenCalledWith('digital', 14.074, '20m', 'W1SOTA')
+  })
+
+  it('phone-disabled: QSYs to the spot instead of switching the rig into a hidden cockpit (the Needed-arm guard)', async () => {
+    mockedReadEnabledModes.mockReturnValue({ cw: true, phone: false })
+    render(<DetachedPanel panel="pota" />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    fireEvent.click(screen.getByTestId('hunt-phone'))
+    expect(mockedWorkSpot).not.toHaveBeenCalled()
+    expect(mockedSetFrequency).toHaveBeenCalled()
   })
 })
