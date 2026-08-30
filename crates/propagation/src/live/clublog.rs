@@ -46,6 +46,43 @@ pub fn push_realtime(url: &str, body: String) -> Result<(u16, String), String> {
     Ok((status, text))
 }
 
+/// Upload an ADIF backlog using ClubLog's documented bulk endpoint.
+///
+/// The form deliberately omits `clear`: a Nexus backlog must merge into the
+/// existing ClubLog log, never replace it. As with realtime, return every HTTP
+/// status to the caller; ClubLog's bulk guidance says a non-200 response must be
+/// surfaced and further requests stopped rather than hammered/retried immediately.
+pub fn push_batch(
+    url: &str,
+    q: tempo_core::clublog::ClubLogBatchQuery,
+) -> Result<(u16, String), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .user_agent(UA)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "ClubLog: HTTP client initialization failed".to_string())?;
+
+    let file = reqwest::blocking::multipart::Part::text(q.adif)
+        .file_name("nexus.adi")
+        .mime_str("text/plain")
+        .map_err(|_| "ClubLog: could not build the batch upload".to_string())?;
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("email", q.email)
+        .text("password", q.password)
+        .text("callsign", q.callsign)
+        .text("api", q.api_key)
+        .part("file", file);
+
+    let resp = client.post(url).multipart(form).send().map_err(redact)?;
+    let status = resp.status().as_u16();
+    let text = resp
+        .text()
+        .map_err(|_| "ClubLog: could not read the response body".to_string())?;
+    Ok((status, text))
+}
+
 /// Map a transport error to a safe, category-only message — never `Display`/
 /// `to_string`/`source` (which can echo the URL/credentials).
 fn redact(e: reqwest::Error) -> String {
@@ -55,6 +92,27 @@ fn redact(e: reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_http_url_rejected_without_leaking_credentials() {
+        let err = push_batch(
+            "http://clublog.example/putlogs.php",
+            tempo_core::clublog::ClubLogBatchQuery {
+                email: "a@b.com".into(),
+                password: "BATCHPW".into(),
+                callsign: "KD9TAW".into(),
+                api_key: "BATCHKEY".into(),
+                adif: "<call:4>W1AW<eor>
+<call:4>K1JT<eor>"
+                    .into(),
+            },
+        )
+        .unwrap_err();
+        assert!(!err.contains("BATCHPW"), "password leaked: {err}");
+        assert!(!err.contains("BATCHKEY"), "api key leaked: {err}");
+        assert!(!err.contains("clublog.example"), "host/URL leaked: {err}");
+        assert!(err.starts_with("ClubLog: "), "unexpected message: {err}");
+    }
 
     #[test]
     fn http_url_rejected_without_leaking_the_credentials_body() {
