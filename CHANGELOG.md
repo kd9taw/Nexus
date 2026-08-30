@@ -211,6 +211,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Erase now clears your own transmissions too.** Pressing Erase wiped the pane and the next
+  quarter-second painted every one of your own overs straight back, so the only way to clear
+  them was to restart Nexus. Received decodes cleared properly, which is why it looked like
+  Erase half-worked. Nexus keeps a short record of the overs you have already sent — that is
+  deliberate, and it is what stops your own calls disappearing when the app changes band under
+  you — but the pane was re-reading it after every wipe. Each pane now remembers being erased:
+  everything sent up to that moment stays gone, the next over you send still appears, and
+  erasing Band Activity leaves Rx Frequency alone, the way the two windows have always worked.
+
 - **Your own transmissions no longer vanish from Rx Frequency when the DX call looks like
   P29YY.** Calling a station whose callsign starts letter-digit-digit (P29YY, T77C, SP2GIF —
   the #178 sightings) completed the QSO fine, but none of your own overs appeared in the
