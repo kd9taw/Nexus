@@ -2860,6 +2860,11 @@ export interface Settings {
   /** Persistent 8-hex club-sync position id (generated at startup; no UI edit —
    * QSO ids are (posid, seq), so a changed id re-pushes everything as new). */
   fdPositionId?: string
+  /** Serve the read-only spectator scoreboard page on the LAN (this toggle IS
+   * the opt-in; real data only in the host role). Default off. */
+  fdScoreboard?: boolean
+  /** Spectator scoreboard TCP port (default 7373 — "73 73"). */
+  fdScoreboardPort?: number
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number

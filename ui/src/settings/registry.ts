@@ -438,7 +438,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     tab: 'contesting',
     keywords: ['club', 'sync', 'host', 'join', 'position', 'multi-op', 'multiop', 'lan',
       'network', 'band board', 'scoreboard', 'dupe sharing', 'discover', 'find club events',
-      'tent', 'club log'],
+      'tent', 'club log', 'spectator', 'tv', 'projector', 'big screen'],
   },
 
   // ---- Appearance --------------------------------------------------------------

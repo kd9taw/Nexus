@@ -6,6 +6,8 @@ import {
   confirmSatUplink,
   exportSettingsBundle,
   fdDiscoverEvents,
+  fdScoreboardStatus,
+  type FdScoreboardStatus,
   resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
@@ -1095,6 +1097,11 @@ export function SettingsPanel({
   // which is why the manual host:port field always remains).
   const [fdScan, setFdScan] = useState<FdEventBeacon[] | null>(null)
   const [fdScanBusy, setFdScanBusy] = useState(false)
+  // The spectator scoreboard's bound state (the URL for the TV / the bind
+  // error). Polled only while the Contesting tab shows the enabled toggle,
+  // so an idle Settings panel costs nothing — the effect sits below the
+  // `tab` declaration it reads.
+  const [fdBoard, setFdBoard] = useState<FdScoreboardStatus | null>(null)
   useEffect(() => {
     getFdRulesStatus()
       .then(setFdRules)
@@ -1188,6 +1195,26 @@ export function SettingsPanel({
   // unresolvable target leaves the default landing rather than doing nothing.
   const resolvedTarget = useMemo(() => (target ? resolveTarget(target) : null), [target])
   const [tab, setTab] = useState<SettingsTab>(resolvedTarget?.tab ?? 'station')
+  useEffect(() => {
+    if (tab !== 'contesting' || !form?.fdScoreboard) {
+      setFdBoard(null)
+      return
+    }
+    let live = true
+    const read = () => {
+      fdScoreboardStatus()
+        .then((s) => {
+          if (live) setFdBoard(s)
+        })
+        .catch(() => {})
+    }
+    read()
+    const timer = window.setInterval(read, 3000)
+    return () => {
+      live = false
+      window.clearInterval(timer)
+    }
+  }, [tab, form?.fdScoreboard])
   // The section a deep link is pointing at, published to collapsed `SettingsGroup`s so one
   // containing the target opens itself — a target the operator still cannot see is not found.
   const [openTarget, setOpenTarget] = useState<string | null>(resolvedTarget?.section ?? null)
@@ -9824,6 +9851,76 @@ export function SettingsPanel({
                 </button>
               ))}
             </div>
+            {/* The spectator scoreboard: a read-only page of the club score for
+                a TV/projector on the site LAN, served by the HOST position
+                (tempo_app::fd_scoreboard — GET/HEAD only; the toggle is the
+                LAN opt-in, and the data is what the event already broadcasts
+                on the air). */}
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.fdBoard.label')}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.fdScoreboard}
+                className={`toggle${form.fdScoreboard ? ' on' : ''}`}
+                onClick={() => updateBool('fdScoreboard', !form.fdScoreboard)}
+                aria-label={
+                  form.fdScoreboard
+                    ? t('settings.fdBoard.aria.disable')
+                    : t('settings.fdBoard.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.fdBoard.hint')}</span>
+            </label>
+            {form.fdScoreboard && (
+              <div className="settings-grid">
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.fdBoard.port.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={form.fdScoreboardPort ?? 7373}
+                    onChange={(e) => {
+                      markDirty()
+                      setForm((prev) =>
+                        prev
+                          ? { ...prev, fdScoreboardPort: Number(e.target.value) || 7373 }
+                          : prev,
+                      )
+                    }}
+                  />
+                  <span className="settings-hint">{t('settings.fdBoard.port.hint')}</span>
+                </div>
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.fdBoard.url.label')}</span>
+                  {fdBoard?.running && fdBoard.url ? (
+                    <>
+                      <code className="rig-share-addr mono">{fdBoard.url}</code>
+                      <button
+                        type="button"
+                        className="settings-linkbtn"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(fdBoard.url ?? '').catch(() => {})
+                        }}
+                      >
+                        {t('settings.fdBoard.url.copy')}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="settings-hint">
+                      {fdBoard?.error ?? t('settings.fdBoard.url.pending')}
+                    </span>
+                  )}
+                  {!form.fdHostEnable && (
+                    <span className="settings-hint">{t('settings.fdBoard.hostOnly')}</span>
+                  )}
+                </div>
+              </div>
+            )}
           </fieldset>
           )}
         </div>

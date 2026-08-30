@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Offline — and positions with clocks off by more than 30 seconds are told to fix them.
   The N3FJP/N1MM interop pushes are untouched and keep running alongside.
 
+- **Field Day spectator scoreboard — the club's score on the TV, from a web page the host
+  serves itself.** Turn on **Settings ▸ Contesting ▸ Field Day Club Sync ▸ Spectator
+  scoreboard** at the host position and any browser on the site network — a smart TV, a
+  projector's laptop, a visitor's phone — can open the address the Settings row shows
+  (port 7373 by default; nothing to install on the TV). One dark big-screen page shows the
+  live score, contact count and rate, all 83 ARRL/RAC sections lighting up as they are
+  worked, contacts by band and mode, a per-tent leaderboard, the bonus checklist, and each
+  new contact as it lands — plus one plain-language line so non-ham visitors know what they
+  are watching. The page is read-only by construction (viewers can only look; nothing on it
+  can reach the radio), works with zero internet, keeps itself updated, and rides out Wi-Fi
+  blips on its own. Scores are event-honest: ARRL FD shows the powered math, Winter Field
+  Day shows raw QSO points with the at-submission multiplier clearly labelled as projected —
+  never ARRL power math applied to an event that has none.
+
 - **Field Day rules can now be refreshed as data — and the countdown finally knows how long
   the events really run.** The numbers behind Field Day — points per mode, power tiers, the
   bonus menu, the section list, event weekends, Winter Field Day's banned-mode list — now ship

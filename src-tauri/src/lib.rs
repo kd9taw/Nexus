@@ -54,6 +54,17 @@ use tempo_app::settings::{Settings, VoiceMessage};
 /// The engine, shared between UI commands and the radio loop.
 type SharedEngine = Arc<Mutex<Engine>>;
 
+/// The spectator scoreboard's bound state — written by its manager thread,
+/// read by `fd_scoreboard_status` for the Settings row. Distinct payload
+/// type → distinct TypeId for `.manage()`.
+#[derive(Default)]
+struct FdBoardState {
+    running: bool,
+    port: u16,
+    error: Option<String>,
+}
+type SharedFdBoardState = Arc<Mutex<FdBoardState>>;
+
 /// Cached propagation nowcast: `(fetched_at, snapshot)`. Caching enforces PSK
 /// Reporter's ≥5-minute-per-dataset query limit across UI polls.
 type PropCache = Arc<Mutex<Option<(std::time::Instant, propagation::PropagationSnapshot)>>>;
@@ -15890,6 +15901,39 @@ fn fd_club_export(state: State<'_, SharedEngine>, format: String) -> Result<Stri
         .ok_or_else(|| "this station is not hosting a club event".to_string())
 }
 
+/// Best-effort LAN IP via the UDP-connect trick: no packet is sent — connect()
+/// on a datagram socket just resolves the route, so `local_addr` answers even
+/// on an offline site LAN. `None` = no route at all; the Settings row words
+/// the URL around a placeholder instead.
+fn lan_ip_hint() -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("10.254.254.254:1").ok()?;
+    Some(sock.local_addr().ok()?.ip().to_string())
+}
+
+/// What the Settings row shows for the spectator scoreboard: running?, the
+/// URL a TV on the LAN should open, the last bind error.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FdScoreboardStatusDto {
+    running: bool,
+    url: Option<String>,
+    error: Option<String>,
+}
+
+#[tauri::command(async)]
+fn fd_scoreboard_status(state: State<'_, SharedFdBoardState>) -> FdScoreboardStatusDto {
+    let s = state.lock().unwrap_or_else(|e| e.into_inner());
+    FdScoreboardStatusDto {
+        running: s.running,
+        url: s.running.then(|| {
+            let host = lan_ip_hint().unwrap_or_else(|| "<this computer's IP>".to_string());
+            format!("http://{host}:{}/scoreboard", s.port)
+        }),
+        error: s.error.clone(),
+    }
+}
+
 #[tauri::command(async)]
 fn clear_hunt_target(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
@@ -17565,6 +17609,7 @@ struct BuildDeps {
     parks: SharedParks,
     region_paths: SharedRegionPaths,
     health: SharedHealth,
+    fd_board: SharedFdBoardState,
     /// The pounce detector's receiver — the one thing here that cannot be cloned. Shared as a
     /// take-once cell; see where it is claimed in the setup hook.
     pounce_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<pouncer::SpotHint>>>>,
@@ -19020,6 +19065,106 @@ pub fn run() {
         });
     }
 
+    // Field Day spectator scoreboard: one manager thread in the same mold —
+    // poll settings 1 s, hot-apply. While `fd_scoreboard` is on, the
+    // read-only board server (`tempo_app::fd_scoreboard` — GET/HEAD only,
+    // fed snapshot JSON through a `BoardSource`, structurally unable to
+    // reach a setter) binds 0.0.0.0:fd_scoreboard_port; the toggle IS the
+    // LAN opt-in and the module header carries the threat model. Real data
+    // only in the host role — elsewhere the page says "served from the host
+    // station". Deliberately NOT under cfg(feature = "radio"): a scoreboard
+    // needs no soundcard.
+    let fd_board_state: SharedFdBoardState = Arc::new(Mutex::new(FdBoardState::default()));
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mgr_engine = engine.clone();
+        let mgr_state = fd_board_state.clone();
+        std::thread::spawn(move || {
+            // The running server as (port, shutdown flag); None = not serving.
+            let mut running: Option<(u16, Arc<AtomicBool>)> = None;
+            // The failed-bind half of "not serving" (#165's lesson): retry
+            // quietly on a timer instead of re-erroring every second.
+            let mut bind_failed: Option<(u16, std::time::Instant)> = None;
+            loop {
+                let want = {
+                    let e = engine_lock(&mgr_engine);
+                    let s = e.settings();
+                    s.fd_scoreboard.then_some(s.fd_scoreboard_port)
+                };
+                if want != running.as_ref().map(|(p, _)| *p) {
+                    if let Some((_, shutdown)) = running.take() {
+                        shutdown.store(true, Ordering::Relaxed);
+                        let mut st = mgr_state.lock().unwrap_or_else(|e| e.into_inner());
+                        st.running = false;
+                        st.error = None;
+                        drop(st);
+                        conn_log("FD board", "info", "spectator scoreboard stopped");
+                    }
+                    let now = std::time::Instant::now();
+                    let may_try = |p: u16| {
+                        bind_failed
+                            .map(|(fp, at)| fp != p || now.duration_since(at).as_secs() >= 10)
+                            .unwrap_or(true)
+                    };
+                    if let Some(port) = want.filter(|p| may_try(*p)) {
+                        match std::net::TcpListener::bind(("0.0.0.0", port)) {
+                            Ok(listener) => {
+                                let shutdown = Arc::new(AtomicBool::new(false));
+                                // The board's whole data path: one bounded
+                                // clone under the engine lock, everything else
+                                // built off-lock behind the 1 s cache.
+                                let eng = mgr_engine.clone();
+                                let source: Arc<dyn tempo_app::fd_scoreboard::BoardSource> =
+                                    Arc::new(tempo_app::fd_scoreboard::CachedBoard::new(
+                                        move || engine_lock(&eng).fd_board_snapshot(),
+                                    ));
+                                let sd = shutdown.clone();
+                                std::thread::spawn(move || {
+                                    tempo_app::fd_scoreboard::serve_until(listener, source, sd)
+                                });
+                                running = Some((port, shutdown));
+                                bind_failed = None;
+                                {
+                                    let mut st =
+                                        mgr_state.lock().unwrap_or_else(|e| e.into_inner());
+                                    st.running = true;
+                                    st.port = port;
+                                    st.error = None;
+                                }
+                                conn_log(
+                                    "FD board",
+                                    "info",
+                                    format!(
+                                        "spectator scoreboard serving on the LAN, port {port} \
+                                         — open this computer's IP :{port}/scoreboard on the TV"
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                let msg = format!(
+                                    "couldn't serve the scoreboard on port {port}: {e} — \
+                                     change the Board port in Settings ▸ Contesting or stop \
+                                     the program using it. Retrying quietly."
+                                );
+                                {
+                                    let mut st =
+                                        mgr_state.lock().unwrap_or_else(|e| e.into_inner());
+                                    st.running = false;
+                                    st.error = Some(msg.clone());
+                                }
+                                if bind_failed.map(|(p, _)| p != port).unwrap_or(true) {
+                                    conn_log("FD board", "error", msg);
+                                }
+                                bind_failed = Some((port, now));
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+            }
+        });
+    }
+
     let prop_cache: PropCache = Arc::new(Mutex::new(None));
     let aurora_cache: AuroraCache = Arc::new(Mutex::new(None));
     let kc2g_cache: Kc2gCache = Arc::new(Mutex::new(None));
@@ -19064,6 +19209,7 @@ pub fn run() {
         parks,
         region_paths,
         health,
+        fd_board: fd_board_state,
         // The pounce receiver is the one non-clonable thing the chain takes. Shared as a
         // take-once cell so both attempts can hold the bundle: whichever setup runs first
         // gets the receiver, and a retry whose predecessor already consumed it skips the
@@ -19131,6 +19277,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(d.parks)
         .manage(d.region_paths)
         .manage(d.health)
+        .manage(d.fd_board)
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
         .manage(SharedQrzSession::default())
@@ -19345,6 +19492,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             fd_log_manual,
             fd_discover_events,
             fd_club_export,
+            fd_scoreboard_status,
             n3fjp_test_connection,
             set_hold_tx_freq,
             set_blocked_calls,

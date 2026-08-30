@@ -582,6 +582,18 @@ export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string>
   return invoke<string>('fd_club_export', { format })
 }
 
+/** The spectator scoreboard's bound state, for the Settings row: running?,
+ * the URL a TV on the LAN should open, the last bind error. */
+export interface FdScoreboardStatus {
+  running: boolean
+  url: string | null
+  error: string | null
+}
+
+export async function fdScoreboardStatus(): Promise<FdScoreboardStatus> {
+  return invoke<FdScoreboardStatus>('fd_scoreboard_status', {})
+}
+
 /** Test the N3FJP TCP API ("N3FJP's Field Day Contest Log v6.6") — run at the
  * club site before the event. */
 export async function n3fjpTestConnection(): Promise<string> {

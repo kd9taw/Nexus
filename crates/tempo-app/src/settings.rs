@@ -714,6 +714,18 @@ pub struct Settings {
     /// instances sharing a settings dir from clobbering each other's backup.
     #[serde(default)]
     pub fd_position_id: String,
+    /// Serve the read-only spectator scoreboard — a self-contained web page of
+    /// the club score for a TV/projector on the site LAN. **This toggle IS the
+    /// LAN opt-in**: while on, `tempo_app::fd_scoreboard`'s GET/HEAD-only
+    /// server binds `0.0.0.0:fd_scoreboard_port` (threat model in that
+    /// module's header — the data is what the event broadcasts on the air).
+    /// Default OFF; shows real data only in the host role.
+    #[serde(default)]
+    pub fd_scoreboard: bool,
+    /// TCP port the spectator scoreboard serves on ("73 73" — unassigned,
+    /// memorable for hams).
+    #[serde(default = "default_fd_scoreboard_port")]
+    pub fd_scoreboard_port: u16,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -2116,6 +2128,10 @@ fn default_fd_host_port() -> u16 {
     tempo_net::fdsync::DEFAULT_TCP_PORT
 }
 
+fn default_fd_scoreboard_port() -> u16 {
+    7373
+}
+
 fn default_fd_power() -> u32 {
     2
 }
@@ -3048,6 +3064,8 @@ impl Default for Settings {
             fd_join_addr: String::new(),
             fd_position_name: String::new(),
             fd_position_id: String::new(), // generated (8-hex) at startup, then persisted
+            fd_scoreboard: false,          // serving a LAN page is an operator-only opt-in
+            fd_scoreboard_port: default_fd_scoreboard_port(),
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),
@@ -6296,6 +6314,30 @@ mod tests {
         assert_eq!(back.fd_join_addr, "192.168.1.10:42073");
         assert_eq!(back.fd_position_name, "CW tent");
         assert_eq!(back.fd_position_id, "a1b2c3d4");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn fd_scoreboard_settings_default_off_and_round_trip() {
+        // A pre-scoreboard settings file: the board OFF (serving a LAN page is
+        // opt-in and an upgrade must never open a port), the default port.
+        let partial = r#"{"mycall":"W9XYZ","mygrid":"EN37"}"#;
+        let s: Settings = serde_json::from_str(partial).unwrap();
+        assert!(!s.fd_scoreboard, "an upgrade never turns the board on");
+        assert_eq!(s.fd_scoreboard_port, 7373);
+
+        let path = std::env::temp_dir()
+            .join("tempo_settings_fdboard")
+            .join("settings.json");
+        let s = Settings {
+            fd_scoreboard: true,
+            fd_scoreboard_port: 7474,
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert!(back.fd_scoreboard);
+        assert_eq!(back.fd_scoreboard_port, 7474);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

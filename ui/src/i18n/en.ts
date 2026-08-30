@@ -2661,6 +2661,16 @@ export const EN = {
   'settings.fdClub.discover.empty': 'Nothing heard in 2 s — same network? Some Wi-Fi blocks discovery; type the host address instead.',
   'settings.fdClub.discover.pick.label': '{{event}} — {{host}}',
   'settings.fdClub.discover.pick.title': 'Use {{host}} as the join address',
+  'settings.fdBoard.label': 'Spectator scoreboard',
+  'settings.fdBoard.hint': 'Serves a read-only scoreboard page for a TV or projector on this network — nothing to install on the TV, and viewers can only look. The first enable may pop a Windows Firewall prompt; allow it or viewers see nothing.',
+  'settings.fdBoard.aria.enable': 'Enable the spectator scoreboard',
+  'settings.fdBoard.aria.disable': 'Disable the spectator scoreboard',
+  'settings.fdBoard.port.label': 'Board port',
+  'settings.fdBoard.port.hint': 'TCP port the scoreboard page is served on (default 7373).',
+  'settings.fdBoard.url.label': 'On the TV, open',
+  'settings.fdBoard.url.copy': 'Copy',
+  'settings.fdBoard.url.pending': 'Starting up — save settings, then this row shows the address.',
+  'settings.fdBoard.hostOnly': 'Live data appears when this position hosts the club event; otherwise the page points viewers to the host.',
 
   // ── Satellites ──────────────────────────────────────────────────────────────────────
   // The Satellites section, the Connect Passes pane, and the nine composers behind them.
