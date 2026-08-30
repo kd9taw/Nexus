@@ -60,7 +60,7 @@ body {
 /* ---- main grid ---- */
 #main {
   display: grid;
-  grid-template-columns: minmax(220px, 1.1fr) minmax(0, 2.6fr) minmax(220px, 1.3fr);
+  grid-template-columns: minmax(220px, 1.15fr) minmax(0, 2.1fr) minmax(220px, 1.45fr);
   gap: clamp(6px, 0.8vw, 14px);
   min-height: 0;
 }
@@ -99,25 +99,37 @@ body {
 #sparkline polyline { fill: none; stroke: var(--accent); stroke-width: 2; }
 #sparkline .fill { fill: rgba(76, 194, 255, 0.15); stroke: none; }
 
-/* sections board */
-#sec-head { display: flex; align-items: baseline; gap: 10px; }
+/* the globe — the sections display: one pin per ARRL/RAC section, lit as it
+   is reached, readable from the far side of a tent. Everything visual about
+   it is painted on the canvas; the CSS only gives it a box to fill. */
+#sec-head { display: flex; align-items: baseline; gap: clamp(6px, 0.8vw, 14px); flex-wrap: wrap; }
 #sec-count { font-family: var(--mono); font-weight: 800; font-size: clamp(16px, 1.8vw, 32px); color: var(--accent); }
-#sec-board { overflow: hidden; flex: 1; display: flex; flex-wrap: wrap; gap: clamp(4px, 0.5vw, 10px); align-content: flex-start; }
-.division { display: flex; flex-direction: column; }
-.division .div-label { font-size: clamp(8px, 0.7vw, 13px); color: var(--faint); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px; }
-.division .chips { display: flex; flex-wrap: wrap; gap: 3px; }
-.sec {
-  display: inline-block;
-  font-family: var(--mono);
-  font-size: clamp(9px, 0.85vw, 16px);
-  font-weight: 700;
-  padding: clamp(1px, 0.2vh, 4px) clamp(3px, 0.35vw, 8px);
-  border-radius: 4px;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  color: var(--faint);
-}
-.sec.lit { background: var(--lit-bg); border-color: var(--lit); color: var(--lit); }
+#globe-legend { margin-left: auto; display: flex; gap: clamp(8px, 1vw, 18px); font-size: clamp(9px, 0.8vw, 14px); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.leg { display: flex; align-items: center; gap: 5px; }
+.leg .dot { width: clamp(7px, 0.6vw, 11px); height: clamp(7px, 0.6vw, 11px); border-radius: 50%; background: var(--faint); }
+.leg.on { color: var(--lit); }
+.leg.on .dot { background: var(--lit); box-shadow: 0 0 8px rgba(47, 208, 122, 0.6); }
+#globe-wrap { flex: 1; min-height: 0; position: relative; margin-top: clamp(2px, 0.5vh, 8px); }
+/* ⚠️ THE GLOBE MUST NOT SHRINK AS THE EVENT FILLS UP. It used to be `flex: 3` beside a
+   content-sized band table with no flex of its own, so the table took its full height first
+   and the globe lived on the remainder: measured 592px tall at two worked bands and 246px at
+   thirteen. Every stroke width derives from the globe's radius and clamps to a floor, so at
+   hour 22 — every band worked, the fullest and most impressive the board ever gets — the pins
+   bottomed out around 1.3px and a spectator six metres away saw nothing. Exactly backwards.
+   The globe now claims a hard floor of most of the column and the band table takes what is
+   left, scrolling inside itself rather than pushing the globe down.
+
+   MEASURED, headless Chrome at 1920x1080, --force-device-scale-factor=1, globe RADIUS by
+   number of worked bands — before this rule, then after:
+       2 bands   R 290 -> 396
+       8 bands   R 195 -> 301
+      13 bands   R 117 -> 287     (every band worked: the fullest the board ever is)
+   At R=287 none of the stroke widths clamp to their floors any more, and the band table still
+   shows all thirteen rows by scrolling itself. The column does not overflow and the page never
+   scrolls sideways at any of the three. */
+#globe-panel { flex: 1 1 auto; min-height: min(58vh, 620px); }
+#bm-panel { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+#globe { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
 /* band × mode */
 #bm-table { width: 100%; border-collapse: collapse; font-size: clamp(11px, 1.05vw, 20px); }
@@ -200,11 +212,11 @@ body {
       </div>
     </div>
     <div id="col-center">
-      <div class="panel" style="flex: 1.4;">
-        <div id="sec-head"><h2 id="sec-title"></h2><span id="sec-count"></span></div>
-        <div id="sec-board"></div>
+      <div class="panel" id="globe-panel">
+        <div id="sec-head"><h2 id="sec-title"></h2><span id="sec-count"></span><div id="globe-legend"></div></div>
+        <div id="globe-wrap"><canvas id="globe"></canvas></div>
       </div>
-      <div class="panel">
+      <div class="panel" id="bm-panel">
         <h2 id="bm-title"></h2>
         <table id="bm-table">
           <thead><tr>
@@ -256,6 +268,8 @@ var STRINGS = {
   last10: 'in last 10 min',
   sectionsTitle: 'Sections reached',
   ofWord: 'of',
+  legendWorked: 'worked',
+  legendUnworked: 'not yet',
   bandModeTitle: 'Contacts by band and mode',
   bandCol: 'Band',
   phoneCol: 'Phone',
@@ -282,8 +296,9 @@ var STRINGS = {
   staleBadge: 'STALE — reconnecting…',
   hostOnlyMsg: 'The scoreboard is served from the host station.',
   framing: 'Ham radio operators here are contacting other stations across ' +
-    'North America using portable equipment and emergency power — each box ' +
-    'above lights up as a new region is reached.'
+    'North America using portable equipment and emergency power — every arc ' +
+    'on the globe is a contact just made, and its pin stays lit for the rest ' +
+    'of the event.'
 };
 
 /* ------------------------------------------------------------------ */
@@ -319,8 +334,9 @@ function fmtDuration(secs) {
   return h + ' ' + STRINGS.hourShort + ' ' + pad2(m) + ' ' + STRINGS.minShort;
 }
 
-/* Static labels + the 83-chip section skeleton, from meta.json (the section
-   universe and the bonus menu are the RULES DATA — never hardcoded here). */
+/* Static labels + the globe legend + the bonus skeleton, from meta.json (the
+   section universe and the bonus menu are the RULES DATA — never hardcoded
+   here; the page only ever counts them). */
 function renderMeta(meta) {
   $('score-title').textContent = STRINGS.scoreTitle;
   $('qso-title').textContent = STRINGS.qsoTitle;
@@ -345,28 +361,20 @@ function renderMeta(meta) {
   $('ev-name').textContent = meta.event.name + ' ' + meta.event.year;
   eventWindow = { start: meta.event.start_unix, end: meta.event.end_unix };
 
-  /* Section chips grouped by ARRL division (+ RAC), in the data's order. */
-  var board = $('sec-board');
-  board.textContent = '';
-  var byDiv = {};
-  var divOrder = [];
-  meta.sections.forEach(function (s) {
-    if (!byDiv[s.division]) { byDiv[s.division] = []; divOrder.push(s.division); }
-    byDiv[s.division].push(s);
-  });
-  divOrder.forEach(function (div) {
-    var g = el('div', 'division');
-    g.appendChild(el('div', 'div-label', div));
-    var chips = el('div', 'chips');
-    byDiv[div].forEach(function (s) {
-      var c = el('span', 'sec', s.code);
-      c.setAttribute('data-code', s.code);
-      c.title = s.name;
-      chips.appendChild(c);
-    });
-    g.appendChild(chips);
-    board.appendChild(g);
-  });
+  /* The globe legend. The section universe itself is the RULES DATA and is
+     never hardcoded here; the globe's pin table is keyed by the same codes
+     and is checked against that universe by the jsdom suite. */
+  var legend = $('globe-legend');
+  legend.textContent = '';
+  var addLeg = function (cls, text) {
+    var w = el('div', 'leg' + (cls ? ' ' + cls : ''));
+    w.appendChild(el('span', 'dot'));
+    w.appendChild(el('span', '', text));
+    legend.appendChild(w);
+  };
+  addLeg('on', STRINGS.legendWorked);
+  addLeg('', STRINGS.legendUnworked);
+  initGlobe();
 
   /* Bonus / objective checklist skeleton. */
   var bl = $('bonus-list');
@@ -435,17 +443,738 @@ function renderQsos(qsos) {
     '<polyline points="' + pts.join(' ') + '"></polyline>';
 }
 
-function renderSections(worked, meta) {
-  var lit = {};
-  worked.forEach(function (s) { lit[s] = true; });
-  var chips = $('sec-board').querySelectorAll('.sec');
-  for (var i = 0; i < chips.length; i++) {
-    var code = chips[i].getAttribute('data-code');
-    if (lit[code]) chips[i].classList.add('lit');
-    else chips[i].classList.remove('lit');
+/* ================================================================== */
+/* THE GLOBE — the sections display.
+   Hand-rolled Canvas 2D orthographic globe: no library, no texture, no
+   external reference of any kind (this page must render on a Field Day
+   site with no route to the internet). It replaces the 83-chip section
+   board and says the same thing — a lit pin is a section reached — but
+   readable from the far side of a tent.
+   Geometry below (projection, great-circle interpolation, the section
+   table, the subsolar point, which ticker rows are new) is PURE and
+   exposed on window.__fdboard.globe for the jsdom suite. Painting is
+   separate and bails out cleanly when there is no 2D context. */
+/* ------------------------------------------------------------------ */
+
+/* MIRROR of ui/src/bandColors.ts BAND_COLOR (and its neutral fallback) —
+   one hue per band so 20m looks like 20m on the map, in the cockpit band
+   picker and here. A hand copy because this page has no build step and no
+   imports; if that file changes, change this. */
+var BAND_COLOR = {
+  '2200m': '#6a4cff',
+  '630m': '#6e54ff',
+  '160m': '#7c5cff',
+  '80m': '#5c7cff',
+  '60m': '#4a8eff',
+  '40m': '#3aa0ff',
+  '30m': '#2bd4c0',
+  '20m': '#3ddc6a',
+  '17m': '#9bdc3d',
+  '15m': '#ffcc44',
+  '12m': '#ff9d3d',
+  '10m': '#ff6d3d',
+  '6m': '#ff4d6d',
+  '4m': '#ff4da6',
+  '2m': '#d24dff',
+  '1.25m': '#c04dff',
+  '70cm': '#b04dff',
+  '33cm': '#a24dff',
+  '23cm': '#944dff'
+};
+function bandColor(b) {
+  return Object.prototype.hasOwnProperty.call(BAND_COLOR, b) ? BAND_COLOR[b] : '#8aa0b0';
+}
+
+/* ARRL/RAC section -> a representative lat/lon for the globe pin. The code
+   universe is the canonical 83 from crates/tempo-core/src/fd_rules.seed.json
+   (mirrored in ui/src/features/arrlSections.ts); the jsdom suite pins that
+   every one of those 83 codes has an entry here.
+
+   A SECTION IS A REGION, NOT A POINT. Each pair is an APPROXIMATE CENTRE of
+   the POPULATED part of that region, good to roughly a degree. It is a TV
+   pin — never a QTH, and never to be presented as the location of the
+   station worked. Split-state sections sit on their own populated half
+   (EPA on Philadelphia, WPA on Pittsburgh, EWA east of the Cascades…);
+   PAC/PR/VI sit on their islands. */
+var SECTION_LATLON = {
+  'AB': [52.5, -113.5],
+  'AK': [63.0, -151.0],
+  'AL': [32.8, -86.8],
+  'AR': [34.8, -92.4],
+  'AZ': [34.0, -111.5],
+  'BC': [49.8, -122.5],
+  'CO': [39.0, -105.5],
+  'CT': [41.6, -72.7],
+  'DE': [39.1, -75.5],
+  'EB': [37.9, -122.1],
+  'EMA': [42.3, -71.3],
+  'ENY': [41.9, -73.9],
+  'EPA': [40.6, -75.9],
+  'EWA': [47.3, -118.6],
+  'GA': [32.8, -83.5],
+  'GTA': [43.7, -79.4],
+  'IA': [42.0, -93.5],
+  'ID': [44.2, -114.5],
+  'IL': [40.0, -89.2],
+  'IN': [39.9, -86.3],
+  'KS': [38.5, -97.3],
+  'KY': [37.6, -85.3],
+  'LA': [30.7, -91.9],
+  'LAX': [34.1, -118.2],
+  'MAR': [45.6, -63.6],
+  'MB': [50.0, -97.5],
+  'MDC': [39.1, -76.9],
+  'ME': [44.9, -69.3],
+  'MI': [43.6, -84.8],
+  'MN': [45.4, -93.8],
+  'MO': [38.5, -92.5],
+  'MS': [32.7, -89.7],
+  'MT': [47.0, -109.6],
+  'NC': [35.5, -79.4],
+  'ND': [47.5, -100.5],
+  'NE': [41.2, -98.0],
+  'NFL': [29.9, -82.6],
+  'NH': [43.7, -71.6],
+  'NL': [48.7, -55.5],
+  'NLI': [40.8, -73.3],
+  'NM': [34.4, -106.1],
+  'NNJ': [40.8, -74.4],
+  'NNY': [44.3, -74.7],
+  'NT': [62.5, -114.4],
+  'NTX': [32.8, -97.0],
+  'NV': [39.0, -117.0],
+  'OH': [40.3, -82.8],
+  'OK': [35.5, -97.5],
+  'ONE': [45.2, -76.0],
+  'ONN': [49.5, -85.0],
+  'ONS': [43.2, -80.6],
+  'OR': [44.0, -120.5],
+  'ORG': [33.7, -117.8],
+  'PAC': [21.3, -157.9],
+  'PR': [18.2, -66.4],
+  'QC': [46.5, -72.0],
+  'RI': [41.7, -71.5],
+  'SB': [34.6, -119.8],
+  'SC': [33.9, -80.9],
+  'SCV': [37.2, -121.8],
+  'SD': [44.3, -99.5],
+  'SDG': [32.9, -116.9],
+  'SF': [38.1, -122.6],
+  'SFL': [26.5, -80.5],
+  'SJV': [36.8, -119.9],
+  'SK': [51.5, -105.5],
+  'SNJ': [39.6, -74.8],
+  'STX': [29.5, -97.5],
+  'SV': [38.9, -121.6],
+  'TN': [35.9, -86.4],
+  'UT': [39.6, -111.6],
+  'VA': [37.5, -78.5],
+  'VI': [18.1, -64.8],
+  'VT': [44.1, -72.7],
+  'WCF': [27.6, -82.0],
+  'WI': [44.3, -89.6],
+  'WMA': [42.3, -72.6],
+  'WNY': [42.8, -77.3],
+  'WPA': [41.0, -79.3],
+  'WTX': [32.3, -101.5],
+  'WV': [38.6, -80.6],
+  'WWA': [47.4, -122.2],
+  'WY': [43.0, -107.5]
+};
+
+/* Section codes arrive over RF and are untrusted: the own-property check
+   keeps 'constructor'/'toString' from resolving to something on the
+   prototype. A code with no entry — a typo, 'DX', or a section added to
+   fd_rules before this table catches up — is a deliberate NO-OP: no pin,
+   no arc, silently. DX stations are the honest case: Field Day DX sends
+   "DX", which is not a section, and this page has no DXCC table to place
+   it by, so it is not placed at all. It still counts everywhere else on
+   the board — score, band/mode grid, ticker. */
+function sectionLatLon(code) {
+  var k = String(code === null || code === undefined ? '' : code).toUpperCase();
+  return Object.prototype.hasOwnProperty.call(SECTION_LATLON, k) ? SECTION_LATLON[k] : null;
+}
+
+/* ---- pure geometry ---------------------------------------------------- */
+
+var DEG = Math.PI / 180;
+var TAU = Math.PI * 2;
+/* Degrees the north pole tips toward the viewer: North America reads as a
+   continent rather than a band along the top edge. */
+var TILT_C = Math.cos(18 * DEG);
+var TILT_S = Math.sin(18 * DEG);
+
+function norm180(deg) { return ((deg + 540) % 360) - 180; }
+
+/* A lat/lon as a unit vector: x east at lon 0, y north, z toward the viewer
+   when lon 0 faces us. Every other routine here works in this frame. */
+function unitVec(lat, lon) {
+  var f = lat * DEG, l = lon * DEG, cf = Math.cos(f);
+  return [cf * Math.sin(l), Math.sin(f), cf * Math.cos(l)];
+}
+
+/* Orthographic projection of a lat/lon onto the unit disc, with the globe
+   turned `rotDeg` east. x right, y up, both in -1..1; z is depth — z <= 0
+   is the far side of the sphere and must not be drawn (the back-face cull). */
+function project(lat, lon, rotDeg) {
+  var v = unitVec(lat, lon + rotDeg);
+  return { x: v[0], y: v[1] * TILT_C - v[2] * TILT_S, z: v[1] * TILT_S + v[2] * TILT_C };
+}
+
+/* n+1 points along the GREAT CIRCLE from a=[lat,lon] to b=[lat,lon] (slerp
+   on the unit sphere), so an arc follows the path a signal would and not a
+   straight line across the screen. */
+/* THE slerp — n+1 unit vectors, flat [x,y,z,x,y,z,...], plus the angular
+   distance the caller needs for its arc lift.
+
+   ⚠️ ONE COPY ON PURPOSE. `arcPoints` (the test seam) and `buildArc` (what
+   actually renders) each carried their own identical loop, so the suite's
+   great-circle test guarded a function no production path called: changing
+   the interpolation that draws left every test green. Both go through here
+   now, so the test covers the maths that reaches the screen.
+
+   Coincident and near-antipodal points both collapse to A rather than
+   dividing by ~0. For two ARRL sections neither can happen; it is a
+   no-NaN guard, not a claim to handle a true antipode meaningfully. */
+function slerpXyz(a, b, n) {
+  var A = unitVec(a[0], a[1]), B = unitVec(b[0], b[1]);
+  var dot = Math.max(-1, Math.min(1, A[0] * B[0] + A[1] * B[1] + A[2] * B[2]));
+  var d = Math.acos(dot), sd = Math.sin(d);
+  var xyz = [];
+  for (var i = 0; i <= n; i++) {
+    var t = i / n, x, y, z, s1, s2;
+    if (sd < 1e-9) { x = A[0]; y = A[1]; z = A[2]; }
+    else {
+      s1 = Math.sin((1 - t) * d) / sd;
+      s2 = Math.sin(t * d) / sd;
+      x = A[0] * s1 + B[0] * s2; y = A[1] * s1 + B[1] * s2; z = A[2] * s1 + B[2] * s2;
+    }
+    var m = Math.sqrt(x * x + y * y + z * z) || 1;
+    xyz.push(x / m, y / m, z / m);
   }
+  return { xyz: xyz, d: d, B: B };
+}
+
+function arcPoints(a, b, n) {
+  var s = slerpXyz(a, b, n), out = [];
+  for (var i = 0; i <= n; i++) {
+    var x = s.xyz[i * 3], y = s.xyz[i * 3 + 1], z = s.xyz[i * 3 + 2];
+    out.push([Math.asin(Math.max(-1, Math.min(1, y))) / DEG,
+      norm180(Math.atan2(x, z) / DEG)]);
+  }
+  return out;
+}
+
+/* MIRROR of ui/src/mapGeo.ts subsolarPoint, itself a mirror of the Rust
+   source of truth in crates/propagation/src/geo.rs (Cooper's declination +
+   the equation of time). This page is the THIRD mirror; if the physics
+   changes it changes in geo.rs first. Good to about half a degree, which is
+   far better than a TV globe needs. */
+function dayOfYearUtc(ms) {
+  var d = new Date(ms);
+  return Math.floor((ms - Date.UTC(d.getUTCFullYear(), 0, 1)) / 86400000) + 1;
+}
+function subsolarPoint(nowMs) {
+  var b = ((2 * Math.PI) / 365) * (dayOfYearUtc(nowMs) - 81);
+  var declDeg = 23.45 * Math.sin(b);
+  var eqMin = 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b);
+  var d = new Date(nowMs);
+  var utcHours = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
+  /* solar elevation uses hra = ((utcHours + eq/60 - 12)*15 + lon); the
+     subsolar longitude is where the hour angle is zero. */
+  return { lat: declDeg, lon: norm180(-(utcHours + eqMin / 60 - 12) * 15) };
+}
+
+/* The day/night line: the great circle 90 deg from the subsolar point — the
+   circle whose POLE is the sun. Two unit vectors perpendicular to that pole
+   sweep it out. [0,1,0] is never parallel to the pole (|declination| stays
+   under 23.5 deg), so the cross product is always well conditioned. */
+function terminatorRing(nowMs, n) {
+  var ss = subsolarPoint(nowMs);
+  var p = unitVec(ss.lat, ss.lon);
+  var ux = p[2], uy = 0, uz = -p[0];
+  var m = Math.sqrt(ux * ux + uz * uz) || 1;
+  ux /= m; uz /= m;
+  var vx = p[1] * uz - p[2] * uy, vy = p[2] * ux - p[0] * uz, vz = p[0] * uy - p[1] * ux;
+  var out = [];
+  for (var i = 0; i < n; i++) {
+    var t = (i / n) * TAU, c = Math.cos(t), s = Math.sin(t);
+    var x = ux * c + vx * s, y = uy * c + vy * s, z = uz * c + vz * s;
+    out.push([Math.asin(Math.max(-1, Math.min(1, y))) / DEG, norm180(Math.atan2(x, z) / DEG)]);
+  }
+  return out;
+}
+
+/* One ticker row's identity. The board's rev counter already suppresses an
+   IDENTICAL payload, but a payload that changed for another reason (a bonus
+   ticked, a position joining) still re-delivers the same 25 ticker rows —
+   so "already drawn" is decided here, by key, not by the poll. */
+function contactKey(t) {
+  return t.when_unix + '|' + t.call + '|' + t.band + '|' + t.mode;
+}
+
+/* ---- land outlines ---------------------------------------------------- */
+
+/* Natural Earth 1:110m land, public domain. Decoded from the TopoJSON the
+   app's basemap already ships (world-atlas land-110m), Douglas-Peucker
+   simplified at 0.6 deg, rings under a 1.0 deg bbox diagonal dropped,
+   quantized to 0.1 deg (~11 km — under one pixel at TV size) and delta
+   coded: 88 rings, 1360 points, 8.8 KB. Embedded rather than fetched
+   because the Field Day site has no internet. Rings are pipe separated;
+   inside a ring the integers are deltas of (lon*10, lat*10) from the
+   running position. Coastlines are STROKED, never filled: a ring that
+   straddles the limb cannot be filled correctly without stitching it to
+   the limb, and a wire coastline is what a TV globe needs anyway. */
+var LAND_RAW = '-596,-800,-6,-10,-61,7,67,3|-1592,-795,-45,9,25,2,20,-11|-452,-780,13,-5,6,-15,-109,-6,55,26,35,0|-685,-710,-3,-12,-23,-3,-39,8,29,5,4,17,14,6,18,-21|-1800,-847,100,8,119,-15,150,4,-105,13,7,17,-39,9,62,-2,42,10,-89,12,-28,11,-3,11,71,-5,52,9,-1,11,13,2,310,15,16,-10,117,-6,5,4,-24,8,-12,15,74,-10,62,3,9,7,130,-14,73,10,18,10,-14,23,12,28,95,36,2,-6,-44,-9,-1,-14,-36,-18,39,-27,10,-30,-98,-29,-66,-1,35,-12,-42,-5,-1,-8,198,-40,84,15,70,-4,142,18,-11,10,-59,-2,3,14,178,30,18,6,-8,6,11,8,51,18,29,-4,5,8,67,-7,79,17,31,-9,26,8,137,-5,68,20,47,-13,159,40,69,-22,75,1,8,-13,-19,-11,13,-4,-12,-12,20,-4,40,24,141,37,17,-9,61,-3,39,2,31,16,34,-13,74,10,62,-14,150,11,3,9,24,-17,80,1,33,-15,55,-2,73,-20,96,-11,-19,-20,-32,-7,-25,-18,11,-20,23,-6,-52,-4,-20,-17,96,-29,89,-7,-3583,-2|-678,-538,27,-9,-41,-8,-55,27,36,-13,18,16,15,-13|-585,-511,5,-8,-32,1,27,7|703,-497,-16,-1,2,12,16,-5,-2,-6|1454,-408,29,-1,-4,-23,-19,-3,-13,23,7,4|1730,-409,12,-4,-11,-26,-16,-3,-22,-24,-26,4,3,11,60,42|1746,-362,22,-17,17,2,-33,-40,-3,18,-11,4,9,21,-21,29,20,-17|1784,-173,2,-9,-12,0,10,9|-1800,-166,3587,-4,7,6,-3594,-2|501,-136,3,-21,-7,0,-26,-92,-17,-7,-14,6,-7,29,11,20,0,39,33,16,15,26,9,-16|1436,-138,18,-12,10,-40,24,-14,43,-57,0,-48,-31,-65,-37,-16,-13,11,-14,-9,-30,8,-10,19,-15,5,1,12,-14,-9,10,24,-18,-20,-17,23,-30,11,-52,-7,-24,-17,-38,-1,-19,-11,-30,9,7,26,-24,55,9,-2,-8,19,7,26,1,-7,25,18,42,10,48,55,14,4,25,-12,10,25,20,4,-2,10,41,-8,-10,-31,47,-27,15,27,4,40,15,-28|1244,-101,-9,-1,5,9,33,9,-29,-17|1179,-81,12,-6,-24,-3,12,9|1086,-68,22,3,49,-19,-74,6,-29,9,7,10,25,-9|1347,-62,-5,-7,3,15,2,-8|1520,-55,-18,-8,-19,6,25,2,7,13,8,-1,-3,-12|1305,-31,3,-8,-29,5,26,3|1341,-12,14,-22,28,17,63,-22,30,-22,-4,-13,35,-32,-28,5,-32,25,-21,-17,-50,9,11,11,-8,19,-42,19,-7,-6,-10,13,17,6,-32,13,19,5,17,-8|1252,14,-15,-12,-35,0,7,-16,24,8,-18,-13,17,-34,-10,0,5,8,-12,-1,-5,20,-7,-3,1,-26,-10,1,-6,26,12,34,52,8|1287,11,-6,-20,-5,27,11,-7|1058,-59,-32,17,-73,97,22,-3,63,-51,-4,-8,27,-24,-3,-28|1179,18,11,-9,-12,-1,-17,-48,-59,11,-11,24,6,25,15,-1,18,12,37,38,25,-15,-19,-22,6,-14|1264,84,-10,-28,-18,22,-17,-6,16,15,20,3,-1,8,10,-14|812,62,-13,6,2,30,17,-23,-6,-13|-609,101,-11,0,9,8,2,-8|1240,103,-10,-13,-6,7,5,12,4,-6,8,9,-1,-9|1185,93,-13,-9,23,30,-10,-21|1219,119,12,-3,-11,-12,-1,15|1255,122,3,-12,-8,3,-2,-12,-5,25,12,-4|1215,131,-2,-9,-10,13,12,-4|1213,185,9,0,3,-14,-8,-28,23,-5,1,-13,-35,14,4,6,-9,5,-2,14,14,21|-726,199,43,-13,-31,-10,-25,4,-5,7,21,0,-11,9,8,3|1103,187,-16,-2,-1,9,22,7,-5,-14|-1555,191,-4,12,11,-8,-7,-4|-797,228,55,-25,-36,-4,7,5,-16,12,-31,10,-32,-7,27,13,26,-4|1212,228,-5,-8,-6,16,14,17,-3,-25|-770,266,-2,-7,-6,11,8,-4|1346,341,-4,-9,-18,-2,5,11,17,0|346,357,-16,-11,-7,5,23,6|237,357,26,-4,-16,-4,-10,8|155,382,-4,-16,-27,10,31,6|92,412,5,-20,-9,-3,-6,21,10,2|1410,371,-7,-20,-45,-16,-7,11,-41,-7,10,-8,-7,-16,-11,-1,-8,19,32,21,31,1,10,18,7,-5,20,14,9,30,11,2,5,-14,-9,-29|96,422,-4,-8,-7,9,9,7,2,-8|1439,442,14,2,2,-11,-55,-17,20,40,19,-14|-1235,485,-22,3,-27,20,26,-5,23,-18|-561,507,-7,-9,33,-6,4,-25,-11,1,0,10,-12,-9,-39,7,19,31,15,9,-2,-9|-1327,540,10,1,-4,-11,9,-8,-19,12,4,6|1436,507,11,-17,-15,3,-6,-14,9,-18,-8,6,-6,-7,-4,73,10,11,9,-37|-68,523,-32,-5,8,11,-5,10,30,13,10,-6,-11,-23|127,556,-6,-8,-12,10,18,-2|-1530,571,-17,4,21,4,-4,-8|-30,586,-11,-10,21,1,-11,-17,48,-33,-3,-14,-66,-13,18,14,-19,6,11,3,-4,12,17,5,-19,8,-2,10,-6,-5,-6,15,12,18,20,0|-852,657,51,-20,-71,-2,20,22|-145,665,9,-14,-51,-16,-41,5,10,4,-22,5,18,5,-21,2,22,8,15,-7,61,8|-759,671,-13,5,13,7,8,-3,-8,-9|-1800,690,57,-27,-3,8,27,-2,20,-9,-26,-6,-5,-11,-57,18,-12,-2,-1,-9,3600,0,-26,-4,18,-23,-55,-6,-34,-18,-14,7,-54,-7,-15,-17,12,-6,-11,-27,-17,-6,-4,-11,-15,-2,-17,-20,-14,44,5,14,78,43,8,15,-44,-21,-8,13,-26,-4,-25,-16,8,-7,-128,-1,-71,-43,31,-9,17,4,15,-20,-13,-38,-19,-21,-33,-29,-26,-1,-48,-35,20,-30,-4,-17,-26,-7,-4,23,8,2,-22,12,6,15,-42,-7,11,15,-6,5,-36,-17,-5,-5,14,-13,35,1,-32,-26,27,-32,-2,-35,-30,-37,-28,-17,-51,-14,-4,-11,-19,14,-26,-19,34,-64,-1,-17,-40,-31,-1,13,-50,35,-9,-42,38,-37,12,-42,-28,15,-13,37,-18,13,5,36,-16,55,-18,-12,-12,3,1,22,-29,46,-44,-13,-5,-13,-62,-43,-4,-55,-24,-24,-40,80,-9,54,-21,-5,-41,45,-90,3,-9,14,-18,-6,-32,14,-14,22,-21,-1,28,-52,8,10,2,-18,22,1,24,23,4,-22,30,-19,-21,-34,-24,-17,-66,-32,-52,-14,-8,42,-36,45,-6,24,-39,44,3,14,-10,-19,-15,23,31,-68,14,-11,6,-34,58,-62,-6,-7,19,-13,65,16,-1,-14,-33,-64,-74,-68,-11,-21,-4,-18,17,-43,3,-39,-13,-20,-47,-31,7,-43,-29,-16,-4,-31,-40,-40,-86,-20,-14,9,0,22,-30,46,-9,50,-25,40,19,74,-18,57,-31,39,6,48,-9,11,-26,-5,-16,20,-63,-16,-70,1,-34,25,-42,49,-10,25,15,34,-9,38,26,44,48,36,3,27,34,32,37,-6,37,14,80,8,16,-5,-8,-31,88,-35,10,19,14,6,74,-19,21,7,28,-6,22,36,2,21,-86,0,-14,28,30,17,43,8,48,-11,34,11,-50,32,24,21,-41,-10,13,-12,-24,-7,-14,9,8,8,-26,5,-30,-40,11,-15,-62,-8,14,-26,-9,2,1,-15,-7,0,-31,39,1,14,-64,40,-8,-3,3,-13,59,-39,-16,2,2,-15,-10,-9,-7,20,-65,44,-24,-13,-34,0,-1,-12,-22,-9,-7,-23,-22,-20,-33,-8,-11,10,-24,0,-5,61,80,10,2,20,-34,27,30,-1,-3,12,32,3,34,30,34,4,7,5,-3,31,21,6,3,-12,-13,-10,13,-15,88,4,16,8,3,22,25,-4,3,14,-11,8,58,8,-62,-2,-16,9,2,25,39,19,-32,6,-8,-13,-36,-17,-7,-14,17,-12,-20,-14,-9,-26,-30,-7,-25,41,-20,-12,-27,3,-7,34,9,6,133,72,53,12,37,2,31,-7,-13,-3,11,-6,92,-17,8,-11,-11,-5,-68,3,16,-7,1,-15,21,-5,-5,9,7,3,24,-6,8,3,-6,7,23,10,19,-4,5,7,-10,18,28,-4,5,-5,-12,-7,7,-3,74,22,8,-1,-10,-6,53,7,11,-6,12,6,-11,6,6,4,79,-18,7,5,-23,9,-2,15,25,18,34,0,-8,-14,10,-10,-2,-14,11,-6,-24,-21,11,-1,27,16,-2,12,-13,6,8,10,-13,8,18,7,-2,7,10,-5,-4,-10,11,-1,-5,7,17,4,39,-6,-10,19,63,3,-8,6,12,6,136,13,36,13,28,-12,69,-7,-47,-16,138,-12,1,7,37,-1,43,-28,10,10,76,-3,-8,9,14,4,90,-6,35,-14,60,1,19,-15,69,2,18,-9,12,3,-3,11,81,-7,-3586,-4|491,413,13,-10,-15,-15,3,-12,46,-6,1,20,-12,10,2,9,18,1,-10,11,-9,-10,-3,17,-22,18,27,7,0,16,-39,-5,-24,-18,24,-33|-956,691,-42,3,16,7,26,-10|-1800,715,24,-2,-24,-5,0,7|-905,695,0,-10,13,8,19,-21,18,27,29,-2,13,-5,-7,-11,7,-5,-20,-12,-25,2,-15,-18,-59,-28,-15,-31,15,-1,9,-17,100,-20,2,-18,22,-21,13,14,-12,21,33,18,-20,23,12,11,-8,24,43,1,42,-13,3,-21,16,-8,31,21,32,-33,-4,-7,45,-17,16,-25,-43,-19,-64,0,-47,-34,60,24,9,-5,-9,-6,6,-19,30,-3,10,11,7,-11,-56,-24,-8,10,18,8,-27,-2,-36,-21,7,-14,-37,-7,18,0,-21,-1,-9,-19,-6,6,4,-11,-8,-12,-5,19,1,-10,-7,1,13,-26,-56,-42,9,-62,-13,7,-24,42,-51,2,0,-10,-10,-2,-36,6,-28,-14,-13,-59,16,-31,19,-12,24,6,12,6,5,17,32,5,-18,-56,55,-6,-4,-42,24,-23,18,8,28,-10,19,25,31,13,7,-3,-8,-7,2,-23,3,19,15,12,17,-16,63,1,-5,-8,53,-39,31,-2,27,-16,13,-25,-4,-18,18,-1,0,-10,8,6,29,-10,3,-11,46,-2,44,-22,9,-22,-4,-17,-36,-41,-6,-48,-16,-40,-67,-30,-13,-38,-49,-57,-24,-5,-22,10,16,-30,-24,-18,-31,-1,-4,-22,-24,-1,1,-10,15,-5,-17,-9,-4,-15,-17,-6,-3,-7,20,-9,-4,-9,-31,-26,9,-17,-26,-5,-2,-9,-39,15,-7,36,15,18,-15,3,12,25,12,-4,5,21,-16,-8,11,39,-4,21,22,48,12,126,-13,24,-45,28,-38,74,-15,11,-1,14,16,20,-12,5,1,11,38,49,-11,45,-14,6,-13,-17,-48,27,-18,34,-37,6,-35,23,-19,-5,-69,26,-20,16,-5,29,-79,88,-9,2,1,-16,53,-68,-6,-6,-22,19,-1,13,-28,17,9,9,-31,44,-33,16,-38,57,5,52,-8,27,21,-11,-2,19,-46,18,-4,15,-63,58,-130,28,-46,-17,11,21,-78,-53,-64,-16,71,32,7,13,-50,-2,1,9,-19,2,-23,17,15,16,38,7,-7,6,7,4,-42,-4,-31,13,36,9,28,-5,-51,23,102,30,201,-25,84,16,23,-10,43,3,63,-9,13,-5,-14,-5,64,-5,11,5,-10,4,6,4,21,1,46,-12,38,10,16,-4,0,-9,19,18,-23,10,13,18,23,-6,14,-11,-9,-5,19,-2|-1142,731,43,-1,17,-13,-2,14,19,0,20,-21,35,-10,-17,-5,3,-7,-137,4,-12,8,49,4,-55,1,18,8,-33,3,15,11,37,4|-1045,734,-9,-6,-15,7,24,-1|-866,732,8,-7,35,13,15,-17,30,7,37,-15,19,3,43,-15,9,-9,-18,-5,69,-18,-20,-19,-41,13,33,-29,-3,-7,-38,10,26,-18,-86,28,-29,-5,-9,4,7,7,39,2,11,22,-61,25,-97,2,-8,4,10,4,-14,0,-3,10,18,13,26,3,-8,-6|-1004,738,30,0,-7,-8,16,-4,-2,-9,-26,-3,-32,11,21,2,-11,7,11,4|-932,728,-22,-7,-6,13,55,5,-27,-11|-1205,714,-26,-5,-28,10,20,18,-10,6,73,-1,21,-7,-50,-21|-936,750,-32,-1,19,7,13,-6|1451,756,-8,-8,-53,-2,-20,7,18,8,63,-5|-985,767,8,-4,-5,-13,-43,6,-1,7,41,4|-1082,762,23,-2,-4,-10,-74,-6,19,8,-59,0,23,13,63,-10,-14,9,23,-2|575,707,-59,8,40,36,133,14,-104,-22,-31,-19,21,-17|-947,771,55,-15,81,1,13,-8,-126,-1,-15,15,-32,5,24,3|-1162,776,-9,-11,-58,-4,67,15|247,779,-40,-2,22,8,18,-6|-958,781,-23,0,-5,8,28,-8|-1001,783,-51,1,10,3,-13,6,54,-10|1051,783,-57,-4,27,14,30,-10|183,797,32,-7,-56,-22,-55,29,79,0|254,804,20,-3,-44,-7,-56,9,80,1|999,789,-49,1,-38,13,47,10,43,-15,-3,-9|-870,797,12,-4,-50,-11,-59,20,43,11,54,-16|-685,831,66,-7,-58,-9,22,0,-57,-17,-57,-5,15,-8,-44,-13,19,-4,-27,-6,-89,3,17,7,-5,7,33,-4,-30,9,29,9,-18,10,51,2,-58,0,-40,14,231,12|-271,835,63,-8,-106,-7,192,-7,-78,-11,23,-1,-20,-13,0,-12,12,-6,-32,-4,19,-5,2,-9,-11,0,13,-9,-42,-10,13,-11,-25,1,30,-16,-37,7,3,-6,-12,-6,41,-1,-175,-46,-30,-28,-6,-26,-49,8,-33,27,-24,36,31,27,-38,-3,3,12,30,-2,-44,11,11,9,-39,29,-99,6,-29,9,46,4,-65,6,76,14,-23,7,54,17,122,6,59,-7,-23,9,34,6,163,3';
+
+function decodeLand(raw) {
+  var rings = raw.split('|'), out = [], i, j, n, x, y, pts;
+  for (i = 0; i < rings.length; i++) {
+    n = rings[i].split(',');
+    x = 0; y = 0; pts = [];
+    for (j = 0; j + 1 < n.length; j += 2) {
+      x += +n[j]; y += +n[j + 1];
+      pts.push(x / 10, y / 10); /* flat [lon,lat,…] — no per-point objects */
+    }
+    out.push(pts);
+  }
+  return out;
+}
+
+/* Everything the frame loop touches is precomputed ONCE into unit vectors:
+   a frame is then two trig calls (the rotation) plus a handful of multiplies
+   per point. Nothing here grows with the QSO count — the coastline is 1360
+   points and the pin set is 83, at hour 1 and at hour 24 alike. */
+function toXyz(flatLonLat) {
+  var out = new Array((flatLonLat.length / 2) * 3), k = 0, i;
+  for (i = 0; i + 1 < flatLonLat.length; i += 2) {
+    var v = unitVec(flatLonLat[i + 1], flatLonLat[i]);
+    out[k++] = v[0]; out[k++] = v[1]; out[k++] = v[2];
+  }
+  return out;
+}
+
+var LAND_XYZ = null; /* built lazily on the first paint */
+var PIN_CODE = [];
+var PIN_XYZ = [];
+(function buildPins() {
+  var codes = [], k;
+  for (k in SECTION_LATLON) {
+    if (Object.prototype.hasOwnProperty.call(SECTION_LATLON, k)) codes.push(k);
+  }
+  codes.sort();
+  for (var i = 0; i < codes.length; i++) {
+    var p = SECTION_LATLON[codes[i]];
+    var v = unitVec(p[0], p[1]);
+    PIN_CODE.push(codes[i]);
+    PIN_XYZ.push(v[0], v[1], v[2]);
+  }
+})();
+
+/* ---- globe state (updated by render(), never by the frame loop) -------- */
+
+var LIT = {};           /* section code -> true, from data.sections_worked */
+var HOME = null;        /* [lat,lon] of the club's OWN section, arcs start here */
+var ARCS = [];          /* in flight, at most ARC_MAX */
+var arcsFired = 0;      /* monotonic: every arc ever enqueued (a test seam) */
+var seenKeys = {};      /* contact keys already drawn */
+var seenOrder = [];     /* insertion order, so the map can be pruned */
+var seeded = false;     /* the FIRST payload lights pins without firing arcs */
+var motionOff = false;  /* prefers-reduced-motion: pins light, nothing flies */
+var ARC_MAX = 12;       /* a burst drops the oldest rather than piling up */
+var ARC_DRAW_S = 1.5;   /* the head takes 1.5 s to reach the section… */
+var ARC_LIFE_S = 2.6;   /* …then fades, leaving the pin lit */
+
+function buildArc(from, to, color, nowMs) {
+  var N = 40;
+  var sl = slerpXyz(from, to, N);
+  var d = sl.d, B = sl.B;
+  /* Lift the middle of the path off the sphere so the arc reads as an arc;
+     a long path climbs higher than a short one. */
+  var lift = 0.06 + 0.20 * (d / Math.PI);
+  var rad = [];
+  for (var i = 0; i <= N; i++) rad.push(1 + lift * Math.sin(Math.PI * (i / N)));
+  return { xyz: sl.xyz, rad: rad, n: N, color: color, born: nowMs, end: B };
+}
+
+/* State update for one payload. PURE with respect to the animation: it
+   never paints and never reads the clock beyond `nowMs`. */
+function updateGlobeState(data, nowMs) {
+  var lit = {}, i;
+  var worked = data.sections_worked || [];
+  for (i = 0; i < worked.length; i++) lit[String(worked[i]).toUpperCase()] = true;
+  LIT = lit;
+  HOME = sectionLatLon(data.event && data.event.section);
+
+  /* Newest first on the wire; fire oldest first so a burst reads in order. */
+  var ticker = data.ticker || [];
+  for (i = ticker.length - 1; i >= 0; i--) {
+    var t = ticker[i];
+    var key = contactKey(t);
+    if (Object.prototype.hasOwnProperty.call(seenKeys, key)) continue;
+    seenKeys[key] = true;
+    seenOrder.push(key);
+    /* The first payload SEEDS: a TV plugged in at hour 18 must not launch
+       25 arcs at once. Everything after it is genuinely new. */
+    if (!seeded || motionOff) continue;
+    var to = sectionLatLon(t.section);
+    if (!to || !HOME) continue; /* no place to draw it — silently skip */
+    ARCS.push(buildArc(HOME, to, bandColor(t.band), nowMs));
+    arcsFired += 1;
+    if (ARCS.length > ARC_MAX) ARCS.shift();
+  }
+  seeded = true;
+  /* The ticker only ever carries the last 25 rows, so a key that has fallen
+     off it can never come back — the map is bounded, whatever the QSO count. */
+  if (seenOrder.length > 400) {
+    for (i = 0; i < 200; i++) delete seenKeys[seenOrder[i]];
+    seenOrder = seenOrder.slice(200);
+  }
+}
+
+/* ---- painting (separate from everything above) ------------------------ */
+
+var gCanvas = null, gCtx = null;          /* null in jsdom: getContext() -> null */
+var nightCanvas = null, nightCtx = null, nightImg = null;
+/* The day/night mask is computed at 96x96 and scaled up: a soft twilight
+   gradient for a few thousand cheap iterations a frame, instead of stitching
+   a spherical cap to the limb. */
+var NIGHT_N = 96;
+var gW = 0, gH = 0, gDpr = 1;
+var rotDeg = 95;                           /* start over North America */
+var ROT_DEG_PER_S = 360 / 150;             /* one slow revolution every 150 s */
+var rafOn = false, lastFrameMs = 0;
+
+/* ANIMATION time is monotonic, never the host-corrected wall clock. The board
+   re-derives clockOffsetMs from now_unix on every poll, and now_unix is whole
+   seconds — so the corrected clock can step up to a second either way three
+   times a minute. An arc timed on it would be born in the future or die at
+   half its length. The sun's position still uses the corrected clock, because
+   that one is a real time and must be right. */
+function animClockMs() {
+  return (window.performance && typeof window.performance.now === 'function')
+    ? window.performance.now()
+    : Date.now();
+}
+
+function reducedMotion() {
+  return typeof window.matchMedia === 'function' &&
+    !!window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function initGlobe() {
+  if (gCanvas) return;
+  motionOff = reducedMotion();
+  gCanvas = $('globe');
+  if (!gCanvas || typeof gCanvas.getContext !== 'function') return;
+  gCtx = gCanvas.getContext('2d');
+  if (!gCtx) return; /* no 2D context (jsdom): the page stays fully functional */
+  LAND_XYZ = decodeLand(LAND_RAW).map(toXyz);
+  nightCanvas = document.createElement('canvas');
+  nightCanvas.width = NIGHT_N;
+  nightCanvas.height = NIGHT_N;
+  nightCtx = nightCanvas.getContext('2d');
+  if (nightCtx) nightImg = nightCtx.createImageData(NIGHT_N, NIGHT_N);
+  sizeGlobe();
+  paintGlobe(Date.now() + clockOffsetMs);
+  window.addEventListener('resize', function () {
+    if (sizeGlobe()) paintGlobe(Date.now() + clockOffsetMs);
+  });
+}
+
+/* Backing store sized to the device pixel ratio. Measured at most ONCE A
+   SECOND (never per frame — a 24-hour run must not re-measure layout 30 times
+   a second, and a backing store whose aspect drifts from its CSS box paints an
+   egg instead of a globe). A second is also the self-heal: boot can run before
+   the panel has a height, and a resize event is not the only way a TV browser
+   changes this box. Returns true when the size actually changed. */
+function sizeGlobe() {
+  if (!gCtx) return false;
+  var dpr = window.devicePixelRatio || 1;
+  var w = gCanvas.clientWidth || 320;
+  var h = gCanvas.clientHeight || 240;
+  if (w === gW && h === gH && dpr === gDpr) return false;
+  gW = w; gH = h; gDpr = dpr;
+  gCanvas.width = Math.max(1, Math.round(gW * gDpr));
+  gCanvas.height = Math.max(1, Math.round(gH * gDpr));
+  gCtx.setTransform(gDpr, 0, 0, gDpr, 0, 0);
+  return true;
+}
+
+/* The frame's rotation, applied to a precomputed unit vector: turn about the
+   polar axis, then the fixed viewing tilt. Two trig calls for the whole frame. */
+var frC = 1, frS = 0;
+function setFrameRotation(deg) { frC = Math.cos(deg * DEG); frS = Math.sin(deg * DEG); }
+var pv = { x: 0, y: 0, z: 0 };
+function rotXyz(x0, y0, z0) {
+  var x = x0 * frC + z0 * frS;
+  var z = z0 * frC - x0 * frS;
+  pv.x = x;
+  pv.y = y0 * TILT_C - z * TILT_S;
+  pv.z = y0 * TILT_S + z * TILT_C;
+  return pv;
+}
+
+function paintGlobe(nowMs) {
+  if (!gCtx) return;
+  var cx = gW / 2, cy = gH / 2;
+  var R = Math.max(24, Math.min(gW, gH) / 2 - 6);
+  setFrameRotation(rotDeg);
+  gCtx.clearRect(0, 0, gW, gH);
+
+  /* ocean */
+  var og = gCtx.createRadialGradient(cx - R * 0.35, cy - R * 0.4, R * 0.05, cx, cy, R);
+  og.addColorStop(0, '#123a5c');
+  og.addColorStop(0.65, '#0a2338');
+  og.addColorStop(1, '#050e18');
+  gCtx.beginPath();
+  gCtx.arc(cx, cy, R, 0, TAU);
+  gCtx.fillStyle = og;
+  gCtx.fill();
+
+  paintLand(cx, cy, R);
+  paintNight(cx, cy, R, nowMs);
+  paintGreyline(cx, cy, R, nowMs);
+
+  /* limb */
+  gCtx.beginPath();
+  gCtx.arc(cx, cy, R, 0, TAU);
+  gCtx.lineWidth = 1.2;
+  gCtx.strokeStyle = 'rgba(76,194,255,0.30)';
+  gCtx.stroke();
+
+  paintPins(cx, cy, R);
+  paintArcs(cx, cy, R, animClockMs());
+}
+
+function paintLand(cx, cy, R) {
+  if (!LAND_XYZ) return;
+  /* Two passes: a wide soft pass makes land read as a mass across a room,
+     the crisp pass keeps the coast a coast. */
+  var pass, i, j, ring, v, started;
+  for (pass = 0; pass < 2; pass++) {
+    gCtx.lineWidth = pass === 0 ? 4.5 : 1.1;
+    gCtx.strokeStyle = pass === 0 ? 'rgba(56,132,113,0.20)' : 'rgba(120,206,183,0.80)';
+    gCtx.beginPath();
+    for (i = 0; i < LAND_XYZ.length; i++) {
+      ring = LAND_XYZ[i];
+      started = false;
+      for (j = 0; j + 2 < ring.length; j += 3) {
+        v = rotXyz(ring[j], ring[j + 1], ring[j + 2]);
+        if (v.z <= 0) { started = false; continue; } /* back-face cull */
+        if (started) gCtx.lineTo(cx + v.x * R, cy - v.y * R);
+        else { gCtx.moveTo(cx + v.x * R, cy - v.y * R); started = true; }
+      }
+    }
+    gCtx.stroke();
+  }
+}
+
+/* Day/night. A point's solar elevation is asin(p . s) with both p and s unit
+   vectors IN THE VIEW FRAME — so the mask needs no inverse projection at all:
+   walk the disc, lift z off the sphere, dot with the sun. The ramp between
+   0 and about -18 deg is the twilight band, and it is why this is a gradient
+   and not a hard edge. */
+function paintNight(cx, cy, R, nowMs) {
+  if (!nightCtx || !nightImg) return;
+  var ss = subsolarPoint(nowMs);
+  var s = project(ss.lat, ss.lon, rotDeg);
+  var px = nightImg.data, n = NIGHT_N, k = 0, ix, iy;
+  for (iy = 0; iy < n; iy++) {
+    var yy = 1 - 2 * (iy + 0.5) / n;
+    for (ix = 0; ix < n; ix++, k += 4) {
+      var xx = 2 * (ix + 0.5) / n - 1;
+      var r2 = xx * xx + yy * yy;
+      if (r2 > 1) { px[k + 3] = 0; continue; }
+      var el = xx * s.x + yy * s.y + Math.sqrt(1 - r2) * s.z;
+      var a = el >= 0 ? 0 : (el <= -0.31 ? 1 : -el / 0.31);
+      px[k] = 2; px[k + 1] = 7; px[k + 2] = 16;
+      px[k + 3] = (a * 200) | 0;
+    }
+  }
+  nightCtx.putImageData(nightImg, 0, 0);
+  gCtx.save();
+  gCtx.beginPath();
+  gCtx.arc(cx, cy, R, 0, TAU);
+  gCtx.clip();
+  gCtx.drawImage(nightCanvas, cx - R, cy - R, R * 2, R * 2);
+  gCtx.restore();
+}
+
+/* The greyline itself, crisp — the line where the sun is on the horizon.
+   Rebuilt once a SECOND (it creeps 0.25 deg a minute); the frame loop only
+   turns the cached unit vectors, so this costs no trig per frame. */
+var glXyz = null, glAtSec = -1;
+function paintGreyline(cx, cy, R, nowMs) {
+  var sec = Math.floor(nowMs / 1000), i, u;
+  if (sec !== glAtSec || !glXyz) {
+    glAtSec = sec;
+    var ring = terminatorRing(nowMs, 180);
+    glXyz = [];
+    for (i = 0; i < ring.length; i++) {
+      u = unitVec(ring[i][0], ring[i][1]);
+      glXyz.push(u[0], u[1], u[2]);
+    }
+    glXyz.push(glXyz[0], glXyz[1], glXyz[2]); /* close the ring */
+  }
+  gCtx.beginPath();
+  var started = false;
+  for (i = 0; i + 2 < glXyz.length; i += 3) {
+    var v = rotXyz(glXyz[i], glXyz[i + 1], glXyz[i + 2]);
+    if (v.z <= 0) { started = false; continue; }
+    if (started) gCtx.lineTo(cx + v.x * R, cy - v.y * R);
+    else { gCtx.moveTo(cx + v.x * R, cy - v.y * R); started = true; }
+  }
+  gCtx.lineWidth = 1.4;
+  gCtx.strokeStyle = 'rgba(255,196,120,0.50)';
+  gCtx.stroke();
+}
+
+/* 83 pins a frame — never the QSO list. Lit is worked, dim is not yet. */
+function paintPins(cx, cy, R) {
+  var dim = Math.max(1.3, R * 0.009);
+  var big = Math.max(2.2, R * 0.017);
+  var i, v, lit, fade, sx, sy;
+  for (i = 0; i < PIN_CODE.length; i++) {
+    v = rotXyz(PIN_XYZ[3 * i], PIN_XYZ[3 * i + 1], PIN_XYZ[3 * i + 2]);
+    if (v.z <= 0.01) continue;
+    fade = Math.min(1, v.z * 7); /* fade in at the limb instead of popping */
+    sx = cx + v.x * R; sy = cy - v.y * R;
+    lit = Object.prototype.hasOwnProperty.call(LIT, PIN_CODE[i]);
+    if (lit) {
+      gCtx.beginPath();
+      gCtx.arc(sx, sy, big * 2.6, 0, TAU);
+      gCtx.fillStyle = 'rgba(47,208,122,' + (0.14 * fade).toFixed(3) + ')';
+      gCtx.fill();
+    }
+    gCtx.beginPath();
+    gCtx.arc(sx, sy, lit ? big : dim, 0, TAU);
+    gCtx.fillStyle = lit
+      ? 'rgba(70,232,144,' + fade.toFixed(3) + ')'
+      : 'rgba(146,168,188,' + (0.42 * fade).toFixed(3) + ')';
+    gCtx.fill();
+  }
+  /* the club's own site */
+  if (HOME) {
+    var h = project(HOME[0], HOME[1], rotDeg);
+    if (h.z > 0.01) {
+      gCtx.beginPath();
+      gCtx.arc(cx + h.x * R, cy - h.y * R, big * 1.5, 0, TAU);
+      gCtx.lineWidth = 2;
+      gCtx.strokeStyle = 'rgba(76,194,255,' + Math.min(1, h.z * 7).toFixed(3) + ')';
+      gCtx.stroke();
+    }
+  }
+}
+
+/* At most ARC_MAX short polylines — the arcs are the only per-contact work
+   the frame loop ever does, and they expire. */
+function paintArcs(cx, cy, R, nowMs) {
+  for (var a = ARCS.length - 1; a >= 0; a--) {
+    var arc = ARCS[a];
+    var age = (nowMs - arc.born) / 1000;
+    if (age < 0 || age > ARC_LIFE_S) { ARCS.splice(a, 1); continue; }
+    var grow = Math.min(1, age / ARC_DRAW_S);
+    var alpha = age <= ARC_DRAW_S ? 1 : 1 - (age - ARC_DRAW_S) / (ARC_LIFE_S - ARC_DRAW_S);
+    var last = Math.max(1, Math.round(grow * arc.n));
+    var hx = 0, hy = 0, haveHead = false;
+    for (var pass = 0; pass < 2; pass++) {
+      gCtx.beginPath();
+      var started = false;
+      for (var i = 0; i <= last; i++) {
+        var v = rotXyz(arc.xyz[3 * i], arc.xyz[3 * i + 1], arc.xyz[3 * i + 2]);
+        if (v.z <= 0) { started = false; continue; }
+        var r = arc.rad[i] * R;
+        var sx = cx + v.x * r, sy = cy - v.y * r;
+        if (started) gCtx.lineTo(sx, sy);
+        else { gCtx.moveTo(sx, sy); started = true; }
+        if (i === last) { hx = sx; hy = sy; haveHead = true; }
+      }
+      gCtx.lineCap = 'round';
+      gCtx.lineWidth = pass === 0 ? Math.max(7, R * 0.05) : Math.max(2.4, R * 0.017);
+      gCtx.globalAlpha = (pass === 0 ? 0.22 : 1) * alpha;
+      gCtx.strokeStyle = arc.color;
+      gCtx.stroke();
+    }
+    if (haveHead && grow < 1) {
+      gCtx.globalAlpha = alpha;
+      gCtx.fillStyle = arc.color;
+      gCtx.beginPath();
+      gCtx.arc(hx, hy, Math.max(6, R * 0.038), 0, TAU);
+      gCtx.globalAlpha = 0.25 * alpha;
+      gCtx.fill();
+      gCtx.beginPath();
+      gCtx.arc(hx, hy, Math.max(2.6, R * 0.017), 0, TAU);
+      gCtx.globalAlpha = alpha;
+      gCtx.fill();
+    }
+    /* the landing: a ring blooming on the section the arc just reached, the
+       beat between "an arc fired" and "that pin is lit from now on". */
+    if (grow >= 1) {
+      var e = rotXyz(arc.end[0], arc.end[1], arc.end[2]);
+      if (e.z > 0) {
+        var t = (age - ARC_DRAW_S) / (ARC_LIFE_S - ARC_DRAW_S);
+        gCtx.beginPath();
+        gCtx.arc(cx + e.x * R, cy - e.y * R, R * (0.016 + 0.08 * t), 0, TAU);
+        gCtx.lineWidth = Math.max(2, R * 0.014);
+        gCtx.globalAlpha = 1 - t;
+        gCtx.strokeStyle = arc.color;
+        gCtx.stroke();
+      }
+    }
+    gCtx.globalAlpha = 1;
+  }
+}
+
+/* Animation rides ALONGSIDE the 3 s poll, never inside it: one
+   self-rescheduling rAF, capped near 30 fps because this runs for 24 hours
+   on whatever laptop is driving the TV. The canvas box is re-measured once a
+   second here, which is also what heals a boot that ran before layout. */
+var lastSizeSec = -1;
+function globeFrame(ts) {
+  window.requestAnimationFrame(globeFrame);
+  if (lastFrameMs && ts - lastFrameMs < 32) return;
+  var dt = lastFrameMs ? (ts - lastFrameMs) / 1000 : 0;
+  lastFrameMs = ts;
+  var sec = Math.floor(ts / 1000);
+  if (sec !== lastSizeSec) { lastSizeSec = sec; sizeGlobe(); }
+  rotDeg = (rotDeg + ROT_DEG_PER_S * Math.min(dt, 0.5)) % 360;
+  paintGlobe(Date.now() + clockOffsetMs);
+}
+
+function startGlobe() {
+  initGlobe();
+  if (!gCtx) return;
+  if (motionOff) {
+    /* No motion at all: a static globe with the pins lit, no arcs enqueued
+       above. The terminator still creeps, so repaint once a minute — nothing
+       a viewer would see move. */
+    paintGlobe(Date.now() + clockOffsetMs);
+    setInterval(function () {
+      sizeGlobe();
+      paintGlobe(Date.now() + clockOffsetMs);
+    }, 60000);
+    return;
+  }
+  rafOn = true;
+  window.requestAnimationFrame(globeFrame);
+}
+
+/* The globe's half of render(): state in, count on the header, and a paint
+   only when no frame loop is running (reduced motion, or before boot). */
+function renderGlobe(data, meta) {
+  updateGlobeState(data, animClockMs());
+  var worked = data.sections_worked || [];
   $('sec-count').textContent =
     worked.length + ' ' + STRINGS.ofWord + ' ' + meta.sections.length;
+  if (!rafOn) { sizeGlobe(); paintGlobe(Date.now() + clockOffsetMs); }
+}
+
+function globeSnapshot() {
+  var lit = [], k;
+  for (k in LIT) { if (Object.prototype.hasOwnProperty.call(LIT, k)) lit.push(k); }
+  lit.sort();
+  return { lit: lit, home: HOME, arcs: ARCS.length, fired: arcsFired, seeded: seeded };
 }
 
 function renderBandMode(rows) {
@@ -538,7 +1267,7 @@ function render(data, meta) {
   eventWindow = { start: data.event.start_unix, end: data.event.end_unix };
   renderScore(data.score);
   renderQsos(data.qsos);
-  renderSections(data.sections_worked, meta);
+  renderGlobe(data, meta);
   renderBandMode(data.band_mode);
   renderPositions(data.positions);
   renderBonuses(data.claimed);
@@ -641,9 +1370,24 @@ window.__fdboard = {
   renderMeta: renderMeta,
   setStale: setStale,
   setInactive: setInactive,
-  tickClock: tickClock
+  tickClock: tickClock,
+  /* The globe's PURE half — geometry and state, no canvas required, so the
+     jsdom suite can check the maths and the arc bookkeeping exactly. */
+  globe: {
+    SECTION_LATLON: SECTION_LATLON,
+    sectionLatLon: sectionLatLon,
+    bandColor: bandColor,
+    project: project,
+    arcPoints: arcPoints,
+    subsolarPoint: subsolarPoint,
+    terminatorRing: terminatorRing,
+    contactKey: contactKey,
+    landRingCount: function () { return decodeLand(LAND_RAW).length; },
+    snapshot: globeSnapshot
+  }
 };
 if (!window.__FDBOARD_TEST__) {
+  startGlobe();
   loadMeta();
   setInterval(tickClock, 1000);
   tickClock();

@@ -333,6 +333,17 @@ the published Recommendation methods; no ITU code is included.
 Natural Earth 1:10m land polygons (via the `world-atlas` package), which are
 **public domain**. Regenerate with `scripts/gen-grid-rarity.mjs`.
 
+### Natural Earth geography (Field Day spectator globe)
+The `LAND_RAW` coastline blob inside
+`crates/tempo-app/assets/fd_scoreboard.html` (8,812 bytes: 88 rings, 1,360
+points) is derived from the Natural Earth 1:110m land polygons (via the
+`world-atlas` package), which are **public domain**. It is Douglas-Peucker
+simplified at 0.6°, quantised to 0.1° and delta-coded, then embedded in the
+page rather than fetched — the Field Day spectator board is served on a site
+LAN with no internet, and the page makes no external request of any kind.
+Regenerate with `python3 scripts/gen-fd-globe-land.py` (deterministic: the
+same input reproduces the shipped blob byte for byte).
+
 ### WAS grid-square → US-state table (grid_state.bin)
 `crates/propagation/data/grid_state.bin` (32,400 bytes, embedded via
 `include_bytes!`) maps each 4-character Maidenhead grid to a US state for the
