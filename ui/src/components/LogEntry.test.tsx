@@ -92,7 +92,11 @@ describe('LogEntry Field Day exchange gate', () => {
     fireEvent.change(section(), { target: { value: 'wi' } })
     expect(logBtn().disabled).toBe(false)
     fireEvent.click(logBtn())
-    expect(mockedFdLog).toHaveBeenCalledWith('W1AW', '2A', 'WI', 'PH')
+    // The fifth argument is the on-air submode, and a PHONE contact has none: 'PH' IS its
+    // mode. It exists for the 'DIG' class, whose scoring class covers every digital mode
+    // there is (see the `fdSubmode` prop) — passing one here would put a submode on a record
+    // that has no use for it.
+    expect(mockedFdLog).toHaveBeenCalledWith('W1AW', '2A', 'WI', 'PH', undefined)
   })
 })
 

@@ -15871,8 +15871,11 @@ fn set_hunt_target(
     Ok(eng.snapshot())
 }
 
-/// Log a Field Day contact from the CW/Phone cockpits (all-mode FD). `mode` =
-/// "CW" | "PH". Err when FD mode is off; Ok(false) = band+mode dupe.
+/// Log a Field Day contact from the CW/Phone/PSK/RTTY cockpits (all-mode FD).
+/// `mode` = the scoring class "CW" | "PH" | "DIG"; `submode` names the mode that
+/// was actually on the air behind a "DIG" class (RTTY, PSK31…) so the export
+/// emits it instead of the FT tier `current_submode` happens to hold. Err when
+/// FD mode is off; Ok(false) = band+mode dupe.
 #[tauri::command(async)]
 fn fd_log_manual(
     state: State<'_, SharedEngine>,
@@ -15880,9 +15883,13 @@ fn fd_log_manual(
     class: String,
     section: String,
     mode: String,
+    submode: Option<String>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
-    let logged = eng.fd_log_manual(&call, &class, &section, &mode)?;
+    let logged = match submode.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(sub) => eng.fd_log_manual_submode(&call, &class, &section, &mode, sub)?,
+        None => eng.fd_log_manual(&call, &class, &section, &mode)?,
+    };
     if !logged {
         return Err(format!("{call} is a dupe on this band/mode"));
     }

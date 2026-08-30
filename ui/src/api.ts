@@ -566,14 +566,28 @@ export async function notifyErase(window: 0 | 1 | 2): Promise<void> {
  * (tempo-core/src/fieldday.rs) has always taken 'DIG' and handled it specially — it stamps
  * the real on-air submode behind the class so exports emit the actual mode — but this
  * signature listed only the two classes its first two callers used. A digital position
- * picking a station up by hand had no way to say so, and 'PH' credits the wrong class. */
+ * picking a station up by hand had no way to say so, and 'PH' credits the wrong class.
+ *
+ * ⚠️ `submode` IS THE MODE THAT WAS ON THE AIR, and 'DIG' contacts outside the FT tiers need
+ * it. The engine fills a blank one from `FieldDayLog::current_submode`, which tracks the FT
+ * tier alone — so an RTTY or PSK Field Day contact logged without it is stamped "FT8": the
+ * wrong ADIF mode, Cabrillo "DG" where ARRL wants "RY", and a mode Winter Field Day bans
+ * outright on a QSO that was perfectly legal. Omit it for CW and PH, whose class IS their
+ * on-air mode. */
 export async function fdLogManual(
   call: string,
   klass: string,
   section: string,
   mode: 'CW' | 'PH' | 'DIG',
+  submode?: string,
 ): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('fd_log_manual', { call, class: klass, section, mode })
+  return invoke<AppSnapshot>('fd_log_manual', {
+    call,
+    class: klass,
+    section,
+    mode,
+    submode: submode ?? null,
+  })
 }
 
 /** Listen ~2 s for Nexus club-event beacons on the LAN ("Find club events").

@@ -7898,13 +7898,52 @@ impl Engine {
         section: &str,
         mode: &str,
     ) -> Result<bool, String> {
+        self.fd_log_contact(call, class, section, mode, None)
+    }
+
+    /// As [`fd_log_manual`], but NAMING the actual on-air mode behind a "DIG"
+    /// scoring class instead of letting the log fill it from
+    /// `FieldDayLog::current_submode`.
+    ///
+    /// ⚠️ THE KEYBOARD MODES NEED THIS. `current_submode` tracks the FT tier
+    /// alone (`adif_mode_for_tier` has no RTTY or PSK variant), so an RTTY or
+    /// PSK contact logged as bare "DIG" would be stamped "FT8" — the wrong
+    /// mode in ADIF, "DG" instead of "RY" in Cabrillo, and a mode Winter Field
+    /// Day bans on a QSO that was perfectly legal RTTY.
+    pub fn fd_log_manual_submode(
+        &mut self,
+        call: &str,
+        class: &str,
+        section: &str,
+        mode: &str,
+        submode: &str,
+    ) -> Result<bool, String> {
+        self.fd_log_contact(call, class, section, mode, Some(submode))
+    }
+
+    /// The one Field Day write seam behind both of the above: stamp the REAL
+    /// band (a knob-QSY between contacts), funnel through the log's own
+    /// methods — which own the dupe check and the per-position sequence number
+    /// — and journal. `submode: None` lets `log_mode_at` derive it.
+    fn fd_log_contact(
+        &mut self,
+        call: &str,
+        class: &str,
+        section: &str,
+        mode: &str,
+        submode: Option<&str>,
+    ) -> Result<bool, String> {
         self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
+        let now = now_unix_secs();
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Field Day mode is not active".into());
         };
-        let logged = station
-            .log
-            .log_mode_at(call, class, section, mode, 0, now_unix_secs());
+        let logged = match submode {
+            Some(sub) => station
+                .log
+                .log_submode_at(call, class, section, mode, sub, 0, now),
+            None => station.log.log_mode_at(call, class, section, mode, 0, now),
+        };
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
         }
@@ -8265,6 +8304,7 @@ impl Engine {
             .board
             .iter()
             .map(|r| crate::dto::FdClubBoardRow {
+                posid: r.pos.clone(),
                 pos_name: r.name.clone(),
                 band: r.band.clone(),
                 mode: r.mode.clone(),
@@ -8274,7 +8314,15 @@ impl Engine {
                 last_seen_secs: r.age,
             })
             .collect();
-        board.sort_by(|a, b| a.pos_name.cmp(&b.pos_name));
+        // Named positions first, alphabetically; unnamed ones after, in id order so
+        // the ordering is stable rather than "whichever empty string sorted first".
+        board.sort_by(|a, b| {
+            (a.pos_name.is_empty(), &a.pos_name, &a.posid).cmp(&(
+                b.pos_name.is_empty(),
+                &b.pos_name,
+                &b.posid,
+            ))
+        });
         Some(crate::dto::FdClubDto {
             sync_state: state.code().to_string(),
             queued,
@@ -13877,6 +13925,31 @@ impl Engine {
                 }
             }
             Action::LogQso { call, exchange } => {
+                // FIELD DAY IS ALL-MODE, AND THIS CONTACT IS A CONTEST CONTACT.
+                // `set_rtty_auto` already worked it with the FD exchange, so the
+                // completed QSO belongs to the CONTEST log and to nothing else:
+                // that is the log that scores it, claims its section and writes
+                // its Cabrillo line. A second copy in the general logbook would
+                // also re-broadcast it on the WSJT-X UDP sink and the connector
+                // upload queue — the rule the FT8 FD sequencer keeps
+                // structurally (see the two `a_field_day_contact_…` tests) and
+                // the manual FD strip keeps by returning early.
+                //
+                // Logged UNCONDITIONALLY, like that sequencer: auto-log and
+                // prompt-to-log are general-logbook preferences, and a contest
+                // log that silently drops a worked contact is this defect again.
+                if let (Some((class, section)), true) = (
+                    Self::fd_exchange(&exchange),
+                    matches!(self.mode, Mode::FieldDay { .. }),
+                ) {
+                    // "DIG" is the scoring class (2 points); "RTTY" is what was
+                    // actually on the air, so the export says RY and not FT8.
+                    // Ok(false) = already worked this band+class, the NORMAL
+                    // outcome for a repeat and nothing to report — the contact
+                    // is in the log already. Err is unreachable: FD is the mode.
+                    let _ = self.fd_log_manual_submode(&call, &class, &section, "DIG", "RTTY");
+                    return;
+                }
                 if self.settings.auto_log {
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
@@ -13890,6 +13963,22 @@ impl Engine {
             }
             Action::Abort => {}
         }
+    }
+
+    /// The Field Day pair out of a sequencer exchange: `Some((class, section))`
+    /// only when BOTH arrived non-blank. The FIELD_DAY schema marks both
+    /// required, so a completed FD QSO always has them and a CASUAL one
+    /// (RST/NAME/QTH) never does — which is what keeps the contest route off
+    /// the ordinary RTTY path without re-reading a settings flag.
+    fn fd_exchange(exchange: &[(String, String)]) -> Option<(String, String)> {
+        let get = |key: &str| {
+            exchange
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.trim())
+                .filter(|v| !v.is_empty())
+        };
+        Some((get("CLASS")?.to_string(), get("SECTION")?.to_string()))
     }
 
     /// Build a [`QsoRecord`] for an auto-sequenced RTTY contact from the peer's
@@ -19609,6 +19698,72 @@ mod tests {
         assert_eq!(log[0].rst_rcvd.as_deref(), Some("599"));
         assert_eq!(log[0].name.as_deref(), Some("BOB"), "copied exchange");
         assert_eq!(log[0].qth.as_deref(), Some("BOSTON"), "copied exchange");
+    }
+
+    /// As [`rtty_auto_engine`], with the Field Day master switch on — which is
+    /// what makes `set_rtty_auto` build the FIELD_DAY exchange (class/section)
+    /// AND puts the engine in `Mode::FieldDay`, so the contest log exists.
+    fn rtty_auto_fd_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s); // master on + class/section → enters Mode::FieldDay
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_auto(true);
+        e
+    }
+
+    /// FIELD DAY IS ALL-MODE, AND RTTY IS ITS DIGITAL CLASS. The auto-sequencer
+    /// already WORKS a Field Day contact correctly (`set_rtty_auto` builds the
+    /// class/section exchange the instant the master switch is on) — but the
+    /// completed contact went to the general logbook, which scores nothing:
+    /// not a QSO point, not the section multiplier, not a Cabrillo line. It
+    /// belongs to the contest log, and to that log ONLY.
+    #[test]
+    fn rtty_auto_field_day_qso_lands_in_the_contest_log_not_the_general_one() {
+        let mut e = rtty_auto_fd_engine();
+        e.rtty_auto_cq().unwrap();
+        assert!(e.poll_rtty_one().is_some(), "drain the CQ");
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW W1AW K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().peer.as_deref(), Some("W1AW"));
+        assert!(e.poll_rtty_one().is_some(), "drain our exchange");
+        // His Field Day exchange comes back — class + section, both required.
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW R 2A EMA K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().seq_state, "confirmed", "the QSO completed");
+
+        let fd = e.snapshot().field_day.expect("FD master is on");
+        assert_eq!(fd.qso_count, 1, "the contact never reached the FD log");
+        assert_eq!(fd.log[0].call, "W1AW");
+        assert_eq!(fd.log[0].class, "2A", "his class, as copied");
+        assert_eq!(fd.log[0].section, "EMA", "his section — the multiplier");
+        assert_eq!(
+            fd.log[0].mode, "DIG",
+            "RTTY is the digital class (2 points)"
+        );
+        assert_eq!(
+            fd.log[0].submode, "RTTY",
+            "the ACTUAL on-air mode, so Cabrillo emits RY and ADIF RTTY — never \
+             the FT tier `current_submode` happens to hold"
+        );
+        // …and NOT the general logbook: one contact, one log (the rule the FT8
+        // Field Day sequencer already keeps structurally). The two consequences
+        // that rule exists for, asserted at the site that used to break it —
+        // both broadcast sinks stay clear, so the club emitter that reads the FD
+        // log is the ONLY thing that sends this contact.
+        assert!(
+            e.get_log().is_empty(),
+            "double-logged — the FD contact also landed in the general logbook"
+        );
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "the FD contact was queued for the WSJT-X sink a second time"
+        );
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "the FD contact entered the general connector upload queue"
+        );
     }
 
     #[test]

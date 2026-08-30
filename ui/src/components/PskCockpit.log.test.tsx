@@ -41,6 +41,7 @@ const state: { current: PskState } = {
 }
 
 const logQso = vi.fn(async (rec: LoggedQso) => rec)
+const fdLogManual = vi.fn(async (..._args: unknown[]) => ({}))
 
 vi.mock('../api', () => ({
   // PskCockpit's own surface
@@ -65,7 +66,7 @@ vi.mock('../api', () => ({
   haltTx: vi.fn(async () => ({})),
   // …and the log strip's, which is the point of this file.
   logQso: (rec: LoggedQso) => logQso(rec),
-  fdLogManual: vi.fn(async () => ({})),
+  fdLogManual: (...args: unknown[]) => fdLogManual(...args),
   getLog: vi.fn(async () => [] as LoggedQso[]),
   qrzLookup: vi.fn(async () => null),
   resolveEntity: vi.fn(async () => null),
@@ -102,8 +103,8 @@ const snap = {
   },
 } as unknown as AppSnapshot
 
-async function renderCockpit() {
-  const r = render(<PskCockpit snap={snap} />)
+async function renderCockpit(s: AppSnapshot = snap) {
+  const r = render(<PskCockpit snap={s} />)
   await act(async () => {
     await Promise.resolve()
     await Promise.resolve()
@@ -130,7 +131,17 @@ async function logACall(call: string): Promise<LoggedQso> {
 beforeEach(() => {
   state.current = { ...state.current, mode: 'psk31', reverse: false } as PskState
   logQso.mockClear()
+  fdLogManual.mockClear()
 })
+
+/** The same rig, with the Field Day master switch on. `snap.fieldDay` non-null is the ONE
+ *  condition that makes a cockpit FD-aware (Engine::snapshot gates it on `fd_active`), and
+ *  it is unaffected by which section is on screen — FD mode is a single global engine mode,
+ *  not a per-cockpit one. */
+const fdSnap = {
+  ...snap,
+  fieldDay: { log: [], club: null },
+} as unknown as AppSnapshot
 afterEach(cleanup)
 
 describe('the PSK cockpit can log a contact (#159)', () => {
@@ -260,5 +271,76 @@ describe('the PSK cockpit can log a contact (#159)', () => {
     // BPSK31 is the same waveform under a logger's spelling and folds to PSK31 on import;
     // offering both would let one mode be logged under two names.
     expect(modes).not.toContain('BPSK31')
+  })
+})
+
+describe('the PSK cockpit works FIELD DAY (all-mode FD, digital class)', () => {
+  /** Fill the FD strip's call/class/section and press Log. */
+  async function logFd(call: string, cls: string, section: string) {
+    const pane = document.querySelector('[data-pane="log"]') as HTMLElement
+    const codes = pane.querySelectorAll('.le-fd-input-code')
+    await act(async () => {
+      fireEvent.change(pane.querySelector('.le-fd-input-call') as HTMLInputElement, {
+        target: { value: call },
+      })
+      fireEvent.change(codes[0] as HTMLInputElement, { target: { value: cls } })
+      fireEvent.change(codes[1] as HTMLInputElement, { target: { value: section } })
+    })
+    await act(async () => {
+      fireEvent.click(pane.querySelector('.le-fd-log-btn') as HTMLElement)
+    })
+  }
+
+  it('logs to the CONTEST log — as DIG, on the sub-mode actually keyed — and never twice', async () => {
+    // Field Day is all-mode and this cockpit was the mode with no way in: the log strip was
+    // rendered without `fieldDay`, so it showed the casual layout, had no class/section fields
+    // at all, and a PSK Field Day contact went to the general logbook — worked on the air,
+    // scoring nothing. THREE things are pinned, and each was a separate way to get it wrong:
+    //   · the strip is in its FD layout, so the exchange can be entered;
+    //   · the scoring class is DIG (2 points, dupes against the other digital modes) —
+    //     'PH' was the only class this signature could send before 'DIG' landed, and it
+    //     credits the wrong one;
+    //   · the SUBMODE is the waveform that was on the air. Without it the engine fills it
+    //     from `current_submode`, which tracks the FT tier alone, and stamps a PSK contact
+    //     "FT8" — the wrong ADIF mode, and a mode Winter Field Day bans outright.
+    await renderCockpit(fdSnap)
+    const pane = document.querySelector('[data-pane="log"]') as HTMLElement
+    expect(pane.querySelector('.log-entry-fd'), 'the strip is not in its FD layout').not.toBeNull()
+    expect((pane.querySelector('.le-fd-mode') as HTMLElement).textContent).toBe('DIG')
+
+    await logFd('w1aw', '2a', 'ema')
+    await waitFor(() => expect(fdLogManual).toHaveBeenCalled())
+    expect(fdLogManual.mock.calls[0]).toEqual(['W1AW', '2A', 'EMA', 'DIG', 'PSK31'])
+    // ONE LOG PER CONTACT. A Field Day contact belongs to the contest log alone — a copy in
+    // the general logbook would also re-broadcast it on the WSJT-X sink and the upload queue.
+    expect(logQso, 'the FD contact was double-logged as a casual QSO').not.toHaveBeenCalled()
+  })
+
+  it('follows the sub-mode into the contest log: a QPSK31 contact says QPSK31', async () => {
+    // Same reasoning as the general-logbook case above — the two are different waveforms and
+    // both are ADIF Mode values — except here it decides the Cabrillo mode token too.
+    await renderCockpit(fdSnap)
+    const select = screen.getByLabelText('PSK sub-mode') as HTMLSelectElement
+    await act(async () => {
+      fireEvent.change(select, { target: { value: 'qpsk31' } })
+    })
+    await waitFor(() =>
+      expect((document.querySelector('.psk-mode-select') as HTMLSelectElement).value).toBe('qpsk31'),
+    )
+    await logFd('w1aw', '2A', 'EMA')
+    await waitFor(() => expect(fdLogManual).toHaveBeenCalled())
+    expect(fdLogManual.mock.calls[0][4]).toBe('QPSK31')
+  })
+
+  it('master switch OFF is untouched: the casual strip and the general logbook', async () => {
+    // The positive control for the gate. `snap.fieldDay` null (the master is off, or the
+    // engine left FD mode) must leave this cockpit exactly as it was — no FD layout, and
+    // the contact in the ordinary logbook.
+    await renderCockpit()
+    const pane = document.querySelector('[data-pane="log"]') as HTMLElement
+    expect(pane.querySelector('.log-entry-fd'), 'FD layout with the master off').toBeNull()
+    const rec = await logACall('w1aw')
+    expect(rec.mode).toBe('PSK31')
+    expect(fdLogManual).not.toHaveBeenCalled()
   })
 })

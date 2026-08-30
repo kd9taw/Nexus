@@ -652,6 +652,20 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
                 ? { call: settledHisCall, rst: null, name: null, confirmed: true }
                 : null
             }
+            // FIELD DAY IS ALL-MODE, AND PSK IS ITS DIGITAL CLASS. Non-null `snap.fieldDay`
+            // (the master switch, gated engine-side on `fd_active`) flips this strip to the
+            // class/section exchange and routes the contact to the CONTEST log — the only
+            // log that scores it, claims its section and reaches Cabrillo. Phone and CW have
+            // passed these since the FD cockpit landed; PSK was rendered without them, so a
+            // PSK Field Day contact was worked on the air and scored nothing. The prop rides
+            // the snapshot this cockpit already has rather than a new App-level prop.
+            fieldDay={snap.fieldDay ?? null}
+            // The SCORING CLASS is DIG (2 points, dupes against the other digital modes);
+            // the SUBMODE is the waveform that was actually keyed, so the export says PSK31
+            // and not the FT tier the engine would otherwise fill in. Same table as `mode`
+            // above — one source for the ADIF token, casual log and contest log alike.
+            fdMode="DIG"
+            fdSubmode={mode.name}
           />
         </CockpitPaneFrame>
       )}

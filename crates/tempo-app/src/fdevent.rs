@@ -377,11 +377,14 @@ impl ClubLog {
                 let p = &self.positions[*id];
                 WireBoardRow {
                     pos: (*id).clone(),
-                    name: if p.label.is_empty() {
-                        (*id).clone()
-                    } else {
-                        p.label.clone()
-                    },
+                    // The position's OWN name, and empty when it has none — the raw
+                    // position id used to be the fallback, which put "9a85f060" on the
+                    // club board where an operator expects a tent name. That id is
+                    // internal plumbing (it exists so two positions' contacts can never
+                    // collide) and is not something to show anybody. The UI decides what
+                    // an unnamed position reads as, because that fallback is prose and
+                    // prose belongs in the catalogs, not in a Rust string literal.
+                    name: p.label.clone(),
                     band: p.band.clone(),
                     mode: p.mode.clone(),
                     op: p.operator.clone(),
@@ -713,7 +716,17 @@ mod tests {
             "the earliest holds the unique"
         );
         let b = rows.iter().find(|r| r.pos == "bbbb").unwrap();
-        assert_eq!(b.name, "bbbb", "an unnamed position renders under its id");
+        // An unnamed position sends NO name — it does not send its id as one. The id
+        // is on the row separately, for keying and nothing else; what an operator reads
+        // in place of a missing name is prose, and prose lives in the catalogs. The id
+        // WAS the fallback, and it put "9a85f060" on the club board where a tent name
+        // belongs (operator report, 2026-08-30).
+        assert!(
+            b.name.is_empty(),
+            "an unnamed position sends no name, not its id: {:?}",
+            b.name
+        );
+        assert_eq!(b.pos, "bbbb", "…while the id itself still rides the row");
         assert_eq!((b.qsos, b.uniq), (1, 0), "the dupe merges but scores 0");
         assert_eq!(a.age, 15, "age = seconds since last heard");
         // Rate window: an arrival >1 h old stops counting.

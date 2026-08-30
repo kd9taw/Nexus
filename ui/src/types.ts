@@ -2371,7 +2371,9 @@ export interface FieldDayStatus {
 
 /** One club band-board row (host-computed, pushed to every position). */
 export interface FdClubBoardRow {
-  /** Friendly label ("CW tent"), or the raw position id when unnamed. */
+  /** Stable identity — the row key, never shown to an operator. */
+  posid: string
+  /** Friendly label ("CW tent"). EMPTY when the position has not been named. */
   posName: string
   band: string
   mode: string

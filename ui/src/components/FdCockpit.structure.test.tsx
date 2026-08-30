@@ -715,7 +715,7 @@ describe('focus is the product', () => {
       fireEvent.click(log)
       await Promise.resolve()
     })
-    expect(fdLogManual).toHaveBeenCalledWith('W2XYZ', '3A', 'WI', 'PH')
+    expect(fdLogManual).toHaveBeenCalledWith('W2XYZ', '3A', 'WI', 'PH', undefined)
     await waitFor(() => expect(document.activeElement).toBe(callBox()))
     expect(callBox().value, 'the call did not clear for the next contact').toBe('')
   })
@@ -835,6 +835,27 @@ describe('the mode class picks the pane and the dock strip', () => {
     expect(copy.getAttribute('data-fit')).toBe('fill')
   })
 
+  it('the FD cockpit names the on-air mode when the rig is in one', async () => {
+    // ⚠️ THE ONE THE FIRST CUT MISSED. The RTTY and PSK cockpits were taught to name their
+    // on-air mode, but THIS cockpit — the surface a Field Day operator actually sits on —
+    // was not, and the engine fills a missing submode from the TIER. So a rig in RTTY,
+    // logged from here, wrote MODE=FT8 into the Field Day ADIF and DG into the Cabrillo
+    // where RY belonged: the exact defect the batch was written to close, on the most
+    // likely screen. The rig's own mode is the only honest source for it.
+    cleanup()
+    vi.clearAllMocks()
+    renderCockpit({ snap: makeSnap({ rigMode: 'RTTY' }) })
+    setClass('DIG')
+    fireEvent.change(callBox(), { target: { value: 'W2XYZ' } })
+    fireEvent.change(screen.getByPlaceholderText('1D'), { target: { value: '3A' } })
+    fireEvent.change(screen.getByPlaceholderText('WI'), { target: { value: 'WI' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /log fd/i }))
+      await Promise.resolve()
+    })
+    expect(fdLogManual).toHaveBeenCalledWith('W2XYZ', '3A', 'WI', 'DIG', 'RTTY')
+  })
+
   it('a contact is committed under the class the header shows — all three of them', async () => {
     // ⚠️ THE SCORING BUG THIS LANDING FOUND. `fdLogManual`'s TS signature and LogEntry's
     // `fdMode` prop both listed 'CW' | 'PH' only, because their first two callers were the CW
@@ -854,11 +875,18 @@ describe('the mode class picks the pane and the dock strip', () => {
         fireEvent.click(screen.getByRole('button', { name: /log fd/i }))
         await Promise.resolve()
       })
+      // The fifth argument is the ON-AIR mode behind the class. CW and PH ARE their on-air
+      // mode and carry none. DIG carries one only when the RIG NAMES a mode the FT tiers do
+      // not cover — see `fdSubmodeFromRig`. These fixtures report no rig mode, so DIG passes
+      // none here and the engine fills it from the tier, which is correct for an FT contact.
+      // A rig actually in RTTY is the case that used to log FT8; it is pinned separately in
+      // `the FD cockpit names the on-air mode when the rig is in one` below.
       expect(fdLogManual, `a ${cls} position logged under the wrong class`).toHaveBeenCalledWith(
         'W2XYZ',
         '3A',
         'WI',
         cls,
+        undefined,
       )
     }
   })

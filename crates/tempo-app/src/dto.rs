@@ -1191,7 +1191,12 @@ pub struct FieldDayStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FdClubBoardRow {
-    /// Friendly label ("CW tent"), or the raw position id when unnamed.
+    /// This position's identity — stable, unique, and NOT for display. It is the
+    /// row's key; the raw id used to double as the label, which put "9a85f060"
+    /// on the club board where a tent name belongs.
+    pub posid: String,
+    /// Friendly label ("CW tent"). EMPTY when the position has not been named —
+    /// what an unnamed position reads as is prose, so the UI decides it.
     pub pos_name: String,
     pub band: String,
     pub mode: String,

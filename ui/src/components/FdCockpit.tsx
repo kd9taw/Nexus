@@ -147,6 +147,27 @@ export function fdModeClassFromRig(
   }
 }
 
+/**
+ * The ON-AIR digital mode behind a DIG class, when the rig names one this app's FT tiers
+ * do not cover — else `undefined`.
+ *
+ * ⚠️ WITHOUT THIS THE FD COCKPIT STAMPS EVERY DIGITAL CONTACT "FT8". The engine fills a
+ * missing submode from `current_submode`, which the tier sets — so an operator sitting in
+ * this cockpit with the rig in RTTY logged `MODE=FT8` and a Cabrillo `DG` where `RY`
+ * belonged. That is the exact defect the RTTY and PSK cockpits were fixed for, on the
+ * surface a Field Day operator is most likely to be using.
+ *
+ * Only a mode the rig actually NAMES is returned. A rig reporting PKT/DATA/-D is carrying
+ * an FT tier over a data sub-mode, and there the tier's own answer is the right one — so
+ * `undefined`, and the engine keeps deciding. Values are ADIF MODE spellings.
+ */
+export function fdSubmodeFromRig(rigMode?: string | null): string | undefined {
+  const m = (rigMode ?? '').trim().toUpperCase()
+  if (/^(RTTY|FSK)/.test(m) || m.includes('RTTY')) return 'RTTY'
+  if (m.includes('PSK')) return 'PSK'
+  return undefined
+}
+
 /** Which licensed band plan the header's picker should offer for a mode class. */
 const BAND_PLAN_MODE: Record<FdModeClass, string> = { CW: 'cw', PH: 'phone', DIG: 'digital' }
 
@@ -790,6 +811,9 @@ export function FdCockpit({
             // here and the contact the engine commits all key off the SAME value, so they
             // cannot disagree about which cell a station is in.
             fdMode={modeClass}
+            // The on-air mode behind a DIG class when the rig names one — without it the
+            // engine falls back to the tier's submode and an RTTY contact logs as FT8.
+            fdSubmode={modeClass === 'DIG' ? fdSubmodeFromRig(snap.radio.rigMode) : undefined}
             onFdDraftChange={setDraft}
             // The one host that asks for it: this strip IS this screen, so the caret starts in
             // Call. Phone and CW must not (a focused field disarms their Space PTT) — see the

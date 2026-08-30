@@ -614,7 +614,7 @@ function FdClubSection({
             const stale = row.lastSeenSecs > 15
             const dim: CSSProperties = stale ? { opacity: 0.45 } : {}
             return (
-              <Fragment key={row.posName}>
+              <Fragment key={row.posid}>
                 <span
                   className="mono"
                   style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -624,7 +624,10 @@ function FdClubSection({
                       : undefined
                   }
                 >
-                  {row.posName}
+                  {/* An unnamed position falls back to who is sitting at it, and only
+                      then to a translated placeholder — never to the position id, which is
+                      internal plumbing an operator should never be shown. */}
+                  {row.posName || row.operator || t('fieldDay.club.board.unnamed')}
                   {stale && <span aria-hidden="true"> ⚠</span>}
                 </span>
                 <span className="mono" style={dim}>{row.band}</span>

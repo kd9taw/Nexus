@@ -179,6 +179,20 @@ interface Props {
    */
   fdMode?: 'CW' | 'PH' | 'DIG'
   /**
+   * FD ONLY, AND 'DIG' ONLY — the mode that was actually ON THE AIR behind the digital
+   * scoring class (an ADIF name: 'RTTY', 'PSK31', 'QPSK31').
+   *
+   * ⚠️ REQUIRED FOR A KEYBOARD-MODE POSITION. `fdMode` is the scoring class, and 'DIG' covers
+   * every digital mode there is; the engine fills the missing detail from
+   * `FieldDayLog::current_submode`, which tracks the FT tier ALONE (`adif_mode_for_tier` has
+   * no RTTY or PSK variant). So an RTTY or PSK contact logged as bare 'DIG' is stamped "FT8" —
+   * the wrong mode in the ADIF export, Cabrillo "DG" where ARRL wants "RY", and a mode Winter
+   * Field Day bans outright on a QSO that was perfectly legal RTTY.
+   *
+   * Ignored unless `fdMode` is 'DIG': CW and PH ARE their on-air mode and carry no submode.
+   */
+  fdSubmode?: string
+  /**
    * FD ONLY — the in-progress exchange, mirrored out on every change so a host can paint
    * boards from the DRAFT: the FD cockpit's band × mode grid lights the cells where the call
    * being typed is already worked, and its sections checklist glows the section as it settles,
@@ -244,6 +258,7 @@ export function LogEntry({
   cwLive,
   fieldDay,
   fdMode,
+  fdSubmode,
   onFdDraftChange,
   autoFocusCall = false,
   titled = true,
@@ -813,8 +828,11 @@ export function LogEntry({
       const cls = fdClass.trim().toUpperCase()
       const sec = fdSection.trim().toUpperCase()
       const fmode = fdMode ?? 'PH'
+      // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
+      // that class so a CW or phone contact can never acquire one it has no meaning for.
+      const fsub = fmode === 'DIG' ? fdSubmode : undefined
       const r = await withErrorToast(
-        () => fdLogManual(call, cls, sec, fmode),
+        () => fdLogManual(call, cls, sec, fmode, fsub),
         t('logEntry.fd.failed'),
       )
       if (r) {

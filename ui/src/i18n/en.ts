@@ -2542,6 +2542,7 @@ export const EN = {
   'fieldDay.club.board.column.qsos': 'QSOs',
   'fieldDay.club.board.column.rate': 'Rate',
   'fieldDay.club.board.stale': 'Last heard {{secs}} s ago',
+  'fieldDay.club.board.unnamed': 'Unnamed position',
   'fieldDay.club.board.rate': '{{rate}}/hr',
   // ── The Field Day operating cockpit (phase 3) ───────────────────────────────────────
   // The dedicated logging surface: the band × mode board, the two header chips and the
@@ -6700,6 +6701,7 @@ export const EN = {
   // The pane's own name is lower-case where the frame prints it and title-case in the ⊞
   // menu, because that is what each surface shipped; two keys rather than one re-cased.
   'rtty.pane.stream.title': 'Decoded text',
+  'rtty.pane.log.title': 'Log',
   'rtty.stream.title':
     "Decoded RTTY text — faint characters are low-confidence copy (the demodulator's soft metric)",
   'rtty.arm.on.label': 'RX armed',

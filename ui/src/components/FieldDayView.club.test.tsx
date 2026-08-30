@@ -34,6 +34,7 @@ const CLUB: FdClubStatus = {
   dupes: [],
   board: [
     {
+      posid: 'aaaa1111',
       posName: 'CW tent',
       band: '20m',
       mode: 'CW',
@@ -43,6 +44,7 @@ const CLUB: FdClubStatus = {
       lastSeenSecs: 2,
     },
     {
+      posid: 'bbbb2222',
       posName: 'SSB tent',
       band: '40m',
       mode: 'PH',
