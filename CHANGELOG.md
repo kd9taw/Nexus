@@ -183,6 +183,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Your own transmissions no longer vanish from Rx Frequency when the DX call looks like
+  P29YY.** Calling a station whose callsign starts letter-digit-digit (P29YY, T77C, SP2GIF —
+  the #178 sightings) completed the QSO fine, but none of your own overs appeared in the
+  Rx Frequency pane or in ALL.TXT — the own-transmission recorder mistook them for internal
+  chat-wire framing and skipped them. The skip is now scoped to the chat modes, the only
+  place that framing exists. Display and logging only; nothing about what goes on the air
+  changed.
+
 - **Field Day now warns when the rules disagree with what you're doing — and never blocks.**
   Winter Field Day's ruleset has always known the WSJT modes are not permitted there; nothing
   ever said so. A chip in the event banner and the Operate header now cites the event and rules

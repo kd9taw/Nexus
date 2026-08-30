@@ -16012,9 +16012,15 @@ impl Engine {
                 // ("A13DE KD9TAW") was the band-activity garble bug. Also skip a SINGLE
                 // bare broadcast frame ("DE <CALL> 73", the S3 fast-path) — likewise
                 // recorded once at source as the clean body.
-                let is_chunk = tempo_core::text::parse_chunk(&t).is_some();
-                let is_broadcast = tempo_core::inbox::parse_broadcast(&t).is_some();
-                if !is_chunk && !is_broadcast {
+                // Scoped to Mode::Chat — the only mode whose wire chunks messages at
+                // all. Unscoped, parse_chunk also matched any STRUCTURED over whose
+                // first word starts letter-digit-digit — i.e. a real DX call (P29YY,
+                // T77C, SP2GIF — issue #178): the operator's own overs to those calls
+                // vanished from Rx Frequency and ALL.TXT while the QSO completed fine.
+                let chat_wire = matches!(self.mode, Mode::Chat)
+                    && (tempo_core::text::parse_chunk(&t).is_some()
+                        || tempo_core::inbox::parse_broadcast(&t).is_some());
+                if !chat_wire {
                     self.record_own_tx(t.clone());
                     // ALL.TXT parity with WSJT-X: log OUR over as a `Tx` line too. The RX-only
                     // ALL.TXT left the operator's own CQ / reports / RR73 invisible — to tailing
@@ -22942,6 +22948,34 @@ mod tests {
             mine.iter().filter(|m| m.contains("73")).count(),
             1,
             "exactly one clean own-TX row (the bare frame isn't double-recorded): {mine:?}"
+        );
+    }
+
+    #[test]
+    fn own_tx_rows_survive_a_dx_call_shaped_like_a_chunk_header() {
+        // Field report (2026-08-28, 24.915 MHz): calling P29YY completed the QSO, but
+        // not one of our own overs ever appeared in Rx Frequency — and issue #178 is
+        // the same sighting against T77C and SP2GIF on the same band. The mechanism:
+        // the own-TX recorder skips chat-wire chunk frames, and parse_chunk reads ANY
+        // over whose first word starts letter-digit-digit — i.e. a DX call like
+        // P29YY — as a chunk header. The skip must be scoped to the chat wire, the
+        // only place chunked frames exist.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.call_station("P29YY");
+        for slot in [0u64, 1, 2, 3] {
+            let _ = e.poll_tx(slot); // both parities: whichever the call armed, it keys
+        }
+        let mine: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            mine.iter().any(|m| m.starts_with("P29YY ")),
+            "our own over to a letter-digit-digit DX call is recorded, got {mine:?}"
         );
     }
 
