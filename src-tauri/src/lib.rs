@@ -11087,6 +11087,30 @@ fn amp_command(_which: String) -> bool {
     }
 }
 
+/// Drop channels no configured radio can reach (#184).
+///
+/// The band dropdowns were filtered by LICENCE only, so an operator running an HF rig plus a
+/// 2 m/70 cm handheld was still offered 23 cm — a band nothing in the shack could tune. This
+/// intersects the plan with the union of the enabled radios' band coverage.
+///
+/// Coverage semantics come from [`Settings::any_radio_covers`] and are deliberately generous:
+/// an empty band list is a catch-all, and NO configured radios means no opinion. So the filter
+/// subtracts only when every enabled rig has named its bands and none named this one, which
+/// leaves the single-radio majority — and the first-run wizard — seeing exactly what they see
+/// today. Channel ids may carry a suffix ("2m-call"), so the canonicaliser decides the band,
+/// the same way the privilege filter above does.
+///
+/// DISPLAY ONLY. Privileges decide what may be transmitted; this decides what is worth
+/// offering, and the picker still shows a manually tuned band that is not in the list.
+fn radio_reachable(
+    settings: &tempo_app::settings::Settings,
+    plan: Vec<tempo_app::bandplan::BandChannel>,
+) -> Vec<tempo_app::bandplan::BandChannel> {
+    plan.into_iter()
+        .filter(|c| settings.any_radio_covers(&tempo_app::bandplan::canonical_band(&c.band)))
+        .collect()
+}
+
 /// Tempo's proposed calling-frequency band plan (HF + VHF/UHF), for the band
 /// selector. Each entry is General-legal + clear of the existing watering holes.
 #[tauri::command(async)]
@@ -11096,7 +11120,9 @@ fn get_band_plan(
     // Tier-aware (FT8/FT4 → the standard WSJT-X watering holes; FT1/DX1 →
     // native plan) WITH the operator's Settings ▸ Frequencies overrides applied
     // — the band picker must show the dials the engine will actually QSY to.
-    Ok(engine_lock(&state).band_plan())
+    let eng = engine_lock(&state);
+    let plan = eng.band_plan();
+    Ok(radio_reachable(eng.settings(), plan))
 }
 
 /// Set the operator's amateur license class (Technician/General/Extra/Open) — drives the
@@ -11219,6 +11245,7 @@ fn get_licensed_band_plan(
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
+        let plan = radio_reachable(eng.settings(), plan);
         return Ok(plan
             .into_iter()
             .filter(|c| {
@@ -11236,7 +11263,7 @@ fn get_licensed_band_plan(
         "cw" => OperatingMode::Cw,
         _ => OperatingMode::Digital,
     };
-    Ok(licensed_bands(class, mode))
+    Ok(radio_reachable(eng.settings(), licensed_bands(class, mode)))
 }
 
 /// Change band / dial frequency / mode live (does not reset the operating mode).

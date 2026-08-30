@@ -3455,6 +3455,29 @@ impl Settings {
             .count() as u32
     }
 
+    /// Does any ENABLED radio cover `band`? Drives the band dropdowns (#184).
+    ///
+    /// Same coverage semantics as [`Self::radio_for_band`]: an empty `bands` list is a
+    /// catch-all ("this rig covers everything"), a non-empty one is an explicit claim.
+    ///
+    /// ⚠️ TRUE WHEN NOTHING IS CONFIGURED, and that is the whole safety of this filter. A
+    /// station with no radios yet — the first-run wizard, or an operator who has not added one
+    /// — must see the full band list, not an empty dropdown. Likewise any catch-all rig makes
+    /// every band covered, so the single-radio majority is unaffected: the filter can only
+    /// remove a band when EVERY enabled radio has named its bands and none of them named this
+    /// one. It is a DISPLAY filter and must never be consulted by the transmit gate; privileges
+    /// decide what may be keyed, this decides only what is worth offering.
+    pub fn any_radio_covers(&self, band: &str) -> bool {
+        let mut any_enabled = false;
+        for p in self.radios.iter().filter(|p| p.enabled) {
+            any_enabled = true;
+            if p.bands.is_empty() || p.bands.iter().any(|b| b.eq_ignore_ascii_case(band)) {
+                return true;
+            }
+        }
+        !any_enabled
+    }
+
     /// Which radio should own `band` (Dual-Radio P4 auto band-routing). Returns `Some(id)` only when a
     /// DIFFERENT enabled radio covers the band *better* than the active one — else `None` (stay put).
     ///
@@ -5576,6 +5599,67 @@ mod tests {
         // Order in the roster must not change the answer.
         s.radios.swap(1, 2);
         assert_eq!(s.route_radio("2m", RouteMode::Ssb), Some(1));
+    }
+
+    #[test]
+    fn band_coverage_hides_a_band_only_when_every_rig_named_its_bands() {
+        // #184: akhepcat runs an FTdx10 (HF..4m) and an FT-817 (2m/70cm) and expected the band
+        // dropdown to stop offering 23 cm, which neither rig can reach. The filter may only
+        // subtract when EVERY enabled rig has named its bands — anything else and an operator
+        // ends up staring at an empty dropdown.
+        let mut s = three_radio_shack();
+        let ids: Vec<u32> = s.radios.iter().map(|p| p.id).collect();
+        for (i, id) in ids.iter().enumerate() {
+            let p = s.radios.iter_mut().find(|p| p.id == *id).unwrap();
+            p.enabled = true;
+            p.bands = if i == 0 {
+                vec!["20m".into(), "4m".into()]
+            } else {
+                vec!["2m".into(), "70cm".into()]
+            };
+        }
+        assert!(
+            s.any_radio_covers("20m"),
+            "an explicitly claimed band is offered"
+        );
+        assert!(s.any_radio_covers("4m"), "…on either rig");
+        assert!(s.any_radio_covers("2m"));
+        assert!(
+            !s.any_radio_covers("23cm"),
+            "no rig reaches 23 cm, so it is not worth offering"
+        );
+        // Case matters to nobody.
+        assert!(s.any_radio_covers("70CM"));
+
+        // ONE catch-all rig restores everything — the single-radio majority is untouched.
+        let first = ids[0];
+        s.radios.iter_mut().find(|p| p.id == first).unwrap().bands = Vec::new();
+        assert!(
+            s.any_radio_covers("23cm"),
+            "a rig that claims nothing claims everything"
+        );
+
+        // A disabled rig is not coverage…
+        s.radios.iter_mut().find(|p| p.id == first).unwrap().enabled = false;
+        assert!(
+            !s.any_radio_covers("23cm"),
+            "a disabled catch-all does not count"
+        );
+
+        // …and with NOTHING enabled the filter must open all the way up rather than
+        // leaving a fresh install with an empty band list.
+        for id in &ids {
+            s.radios.iter_mut().find(|p| p.id == *id).unwrap().enabled = false;
+        }
+        assert!(
+            s.any_radio_covers("23cm"),
+            "no radios configured = no opinion, show every band"
+        );
+        s.radios.clear();
+        assert!(
+            s.any_radio_covers("23cm"),
+            "…and likewise with an empty roster"
+        );
     }
 
     #[test]
