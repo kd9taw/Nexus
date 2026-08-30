@@ -4459,6 +4459,38 @@ mod tests {
         );
     }
 
+    /// The advisory UI matches assistance sources BY THEIR DISPLAY LABELS
+    /// (`FieldDayStatus.assistance_on` carries `assistance_sources()`'s labels;
+    /// `FdAdvisories.tsx` string-matches the spotting/cluster ones). A rename on
+    /// either side would silently kill the match — same drift class as the
+    /// sections mirror, same include_str! cure.
+    #[test]
+    fn the_advisory_ui_matches_real_assistance_source_labels() {
+        let ts = include_str!("../../../ui/src/components/FdAdvisories.tsx");
+        let labels: Vec<&str> = Settings::default()
+            .assistance_sources()
+            .iter()
+            .map(|&(label, _)| label)
+            .collect();
+        // Control: the Rust list is the full known set, so a miss below is a
+        // rename, not a parser hole.
+        assert_eq!(
+            labels.len(),
+            3,
+            "assistance_sources changed shape: {labels:?}"
+        );
+        for needed in ["DX cluster / RBN", "PSK Reporter needs"] {
+            assert!(
+                labels.contains(&needed),
+                "{needed:?} left assistance_sources() — update FdAdvisories.tsx's match list too"
+            );
+            assert!(
+                ts.contains(&format!("'{needed}'")),
+                "FdAdvisories.tsx no longer matches {needed:?} — it would miss a live source"
+            );
+        }
+    }
+
     /// ⭐ THE OTHER SIDE OF THE SAME DRIFT — and the half that was missing while the guard
     /// above was cited as covering it.
     ///

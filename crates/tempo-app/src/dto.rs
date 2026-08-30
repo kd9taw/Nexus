@@ -1174,6 +1174,12 @@ pub struct FieldDayStatus {
     pub rules_year: u16,
     #[serde(default)]
     pub rules_generated: String,
+    /// The assistance sources EFFECTIVELY ON right now — the display labels from
+    /// `Settings::assistance_sources()` whose flag is true. The single list the
+    /// warn-only assistance advisory reads: the UI never re-derives what counts
+    /// as assistance from raw toggles (it would get cluster/AI-CW gating wrong).
+    #[serde(default)]
+    pub assistance_on: Vec<String>,
     pub log: Vec<FieldDayQso>,
 }
 

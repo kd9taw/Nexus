@@ -366,6 +366,27 @@ export async function fetchFdRules(): Promise<FdRulesStatus> {
   return invoke<FdRulesStatus>('fetch_fd_rules')
 }
 
+/** The ACTIVE Field Day event's ruleset FACTS for the warn-only advisories
+ * (banned-mode chip, assistance advisory). Facts only — the advisory text lives
+ * in the catalogs, computed UI-side. `enforcement` ships `'warn'`: nothing is
+ * ever removed or disabled by rule (operator ruling). */
+export interface FdRulesetDto {
+  /** 'arrlfd' | 'wfd' — the snapshot's event convention. */
+  event: string
+  rulesYear: number
+  /** On-air modes this event's rules ban outright (uppercase ADIF-style). */
+  bannedModes: string[]
+  spottingAllowed: boolean
+  clusterAllowed: boolean
+  enforcement: string
+}
+
+/** Ruleset facts for the CONFIGURED event (`settings.fdEvent`) — independent of
+ * the master switch, so Settings can preview an event's rules before it's on. */
+export async function getFdRuleset(): Promise<FdRulesetDto> {
+  return invoke<FdRulesetDto>('get_fd_ruleset')
+}
+
 /** Orbital-element (TLE) currency status — Settings "Orbital elements" fieldset
  * + the Now-Bar `sat` lane. */
 export interface TleStatus {

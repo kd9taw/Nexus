@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { annotate } from './FieldDayView'
+import { annotate, buildSummaryText } from './FieldDayView'
 import type { FieldDayQso } from '../types'
 
 function qso(call: string, band: string, mode: string): FieldDayQso {
@@ -21,5 +21,35 @@ describe('annotate() FD dupe detection', () => {
   it('flags an exact (call, band, mode) repeat as a dupe', () => {
     const rows = annotate([qso('W1AW', '20m', 'CW'), qso('W1AW', '20m', 'CW')])
     expect(rows.map((r) => r.isDupe)).toEqual([true, true])
+  })
+})
+
+describe('the Score Summary rules line (design 3f)', () => {
+  const args = (rulesYear: number, rulesGenerated: string) => ({
+    eventName: 'ARRL Field Day',
+    isWfd: false,
+    rulesYear,
+    rulesGenerated,
+    myClass: '1A',
+    mySection: 'IL',
+    log: [],
+    modes: { dig: 0, cw: 0, ph: 0 },
+    workedSet: new Set<string>(),
+    powerMult: 2,
+    qsoPts: 0,
+    poweredPoints: 0,
+    bonusPoints: 0,
+    totalScore: 0,
+    claimedBonuses: [],
+  })
+
+  it('names the rules vintage scoring the document', () => {
+    const text = buildSummaryText(args(2026, '2026-08-29T00:00:00Z'))
+    expect(text).toContain('Scored under 2026 rules (data 2026-08-29)')
+  })
+
+  it('skips the line on an older backend with no rules stamp', () => {
+    const text = buildSummaryText(args(0, ''))
+    expect(text).not.toContain('Scored under')
   })
 })

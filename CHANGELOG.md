@@ -152,6 +152,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Field Day now warns when the rules disagree with what you're doing — and never blocks.**
+  Winter Field Day's ruleset has always known the WSJT modes are not permitted there; nothing
+  ever said so. A chip in the event banner and the Operate header now cites the event and rules
+  year ("FT8 is not permitted at Winter Field Day (2026 rules) — you can still log it, but it
+  will not count"). The same machinery covers spotting-assistance restrictions, citing the rule
+  when a ruleset restricts and the matching feed is live — dormant today for both events,
+  because the 2026 ARRL rules were read and contain no such restriction, and WFD's could not be
+  read; no advisory will ever cite a rule nobody verified. Score Summary exports say which
+  year's rules scored them.
+
 - **A Winter Field Day RTTY contact no longer reaches your club logger labelled FT8.** The FD
   log has always known the actual on-air mode behind a digital contact, but the push to N3FJP
   and N1MM re-derived every digital row as FT8 — at WFD, a banned mode. The recorded mode now

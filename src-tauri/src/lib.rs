@@ -4316,6 +4316,48 @@ async fn fetch_fd_rules() -> Result<FdRulesStatus, String> {
     Ok(fd_rules_status())
 }
 
+/// The ACTIVE event's ruleset FACTS for the warn-only advisories (banned-mode
+/// chip, assistance advisory). Facts only — the advisory TEXT is i18n catalog
+/// keys in the UI, never Rust prose. Enforcement ships "warn": nothing is ever
+/// removed or disabled by rule (operator ruling).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FdRulesetDto {
+    /// "arrlfd" | "wfd" — the snapshot's event convention.
+    event: String,
+    rules_year: u16,
+    /// On-air modes this event's rules ban outright (uppercase ADIF-style).
+    banned_modes: Vec<String>,
+    spotting_allowed: bool,
+    cluster_allowed: bool,
+    enforcement: String,
+}
+
+fn fd_ruleset_dto(fd_event: &str) -> FdRulesetDto {
+    let event = tempo_core::fieldday::FdEvent::from_code(fd_event);
+    let rs = tempo_core::fd_rules::ruleset(event, tempo_core::fd_rules::CURRENT_RULES_YEAR);
+    FdRulesetDto {
+        event: match event {
+            tempo_core::fieldday::FdEvent::WinterFd => "wfd".into(),
+            tempo_core::fieldday::FdEvent::ArrlFd => "arrlfd".into(),
+        },
+        rules_year: rs.rules_year,
+        banned_modes: rs.banned_modes.iter().map(|m| m.to_string()).collect(),
+        spotting_allowed: rs.assistance.spotting_allowed,
+        cluster_allowed: rs.assistance.cluster_allowed,
+        enforcement: rs.enforcement.to_string(),
+    }
+}
+
+/// Ruleset facts for the CONFIGURED event (`settings.fd_event`) — deliberately
+/// independent of `fd_active`, so Settings can preview an event's rules before
+/// the master switch goes on.
+#[tauri::command(async)]
+fn get_fd_ruleset(state: State<'_, SharedEngine>) -> Result<FdRulesetDto, String> {
+    let eng = engine_lock(&state);
+    Ok(fd_ruleset_dto(&eng.settings().fd_event))
+}
+
 /// The LEGACY per-profile TLE cache (a bare `Vec<Tle>` array, pre-snapshot
 /// builds) — read once at startup for migration onto the shared path, never
 /// written again.
@@ -19145,6 +19187,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             fetch_cty,
             get_fd_rules_status,
             fetch_fd_rules,
+            get_fd_ruleset,
             get_tle_status,
             fetch_tles_now,
             import_tles,
@@ -19488,6 +19531,33 @@ mod tests {
                 "{name} is not registered — invoking it from the UI would fail at runtime"
             );
         }
+    }
+
+    /// The advisory DTO carries the ruleset's facts verbatim — and pins the 2026
+    /// seed's DORMANCY: both events ship `spotting/cluster_allowed: true` (the
+    /// sponsors' rules were read 2026-08-29 and restrict neither — see the seed's
+    /// `_provenance`), so the assistance advisory renders NOWHERE today. Flipping
+    /// a flag is a data edit; this test is where that edit becomes visible.
+    #[test]
+    fn fd_ruleset_dto_carries_the_facts_and_the_seed_is_dormant() {
+        // WFD: the WSJT-suite ban (dead data since it was written — the DTO is
+        // what finally wires it to a consumer), warn-only enforcement.
+        let wfd = super::fd_ruleset_dto("wfd");
+        assert_eq!(wfd.event, "wfd");
+        assert!(
+            wfd.banned_modes.iter().any(|m| m == "FT8"),
+            "WFD bans the WSJT modes: {:?}",
+            wfd.banned_modes
+        );
+        assert_eq!(wfd.enforcement, "warn", "warn, never remove — operator ruling");
+        assert!(wfd.spotting_allowed && wfd.cluster_allowed, "2026 seed is dormant");
+
+        // ARRL FD ("" = the settings default): no banned modes, same dormancy.
+        let sfd = super::fd_ruleset_dto("");
+        assert_eq!(sfd.event, "arrlfd");
+        assert!(sfd.banned_modes.is_empty(), "ARRL FD bans no modes");
+        assert!(sfd.spotting_allowed && sfd.cluster_allowed, "2026 seed is dormant");
+        assert!(sfd.rules_year >= 2026);
     }
 
     /// …and the state the command hands back reflects the arm, through the DTO the cockpit

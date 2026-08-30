@@ -2507,6 +2507,15 @@ export const EN = {
   // Which rules data is scoring — the banner's identity line. {{year}} is the ruleset's
   // rules_year, {{date}} the rules file's `generated` stamp shown as YYYY-MM-DD.
   'fieldDay.rules.line': 'Rules {{year}} · data {{date}}',
+  // The warn-only rule advisories (FdAdvisories.tsx — warn, NEVER remove or disable;
+  // operator ruling). {{event}} is the event's own untranslated name, {{mode}} an on-air
+  // mode token, {{sources}} the live assistance-source labels — all invariant slots.
+  'fieldDay.advisory.banned':
+    '{{mode}} is not permitted at {{event}} ({{year}} rules) — you can still log it, but it will not count',
+  'fieldDay.advisory.cluster':
+    'DX cluster assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
+  'fieldDay.advisory.spotting':
+    'Spotting assistance is not permitted at {{event}} ({{year}} rules) — live now: {{sources}}',
 
   // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
   // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time

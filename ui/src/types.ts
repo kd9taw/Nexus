@@ -2359,6 +2359,11 @@ export interface FieldDayStatus {
   /** The active ruleset's rules year + the rules data's `generated` stamp. */
   rulesYear?: number
   rulesGenerated?: string
+  /** The assistance sources EFFECTIVELY ON right now — display labels from the
+   *  backend's `Settings::assistance_sources()`. The warn-only assistance
+   *  advisory reads this list; the UI never re-derives what counts as
+   *  assistance from raw toggles. */
+  assistanceOn?: string[]
 }
 
 /** Result of the release-feed update check (Phase 1: notify + open the download page). */

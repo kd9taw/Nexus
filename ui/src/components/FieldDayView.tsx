@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
-import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads } from '../api'
+import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
 import { fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -55,6 +56,14 @@ export const FD_BONUSES: FdBonus[] = [
 interface Props {
   fieldDay: FieldDayStatus | null
   onSetMode: (mode: ModeRequest) => void
+  /** The Field Day master switch (settings.fdActive) — gates the advisories. */
+  fdActive?: boolean
+  /** The active event's ruleset facts (App fetches get_fd_ruleset once per
+   *  configured event) — the warn-only advisories read these. */
+  fdRuleset?: FdRulesetDto | null
+  /** The active digital tier (App's snap.link.tier) — the banned-mode chip
+   *  checks it against the ruleset's bannedModes. */
+  tier?: string
 }
 
 interface LogRowMeta {
@@ -137,6 +146,10 @@ function bandCounts(log: FieldDayQso[]): { band: string; n: number }[] {
 interface SummaryArgs {
   eventName: string
   isWfd: boolean
+  /** Which rules data scored this summary (FieldDayStatus.rulesYear /
+   *  rulesGenerated) — 0/'' on an older backend skips the line. */
+  rulesYear: number
+  rulesGenerated: string
   myClass: string
   mySection: string
   log: FieldDayQso[]
@@ -160,11 +173,16 @@ interface SummaryArgs {
  * is submitted in. Localising the exports is a design decision of its own, not a mechanical
  * migration; it is recorded here rather than left looking like an omission.
  */
-function buildSummaryText(a: SummaryArgs): string {
+export function buildSummaryText(a: SummaryArgs): string {
   const L: string[] = []
   L.push(`${a.eventName.toUpperCase()} — SCORE SUMMARY`)
   L.push(`Station class ${a.myClass || '—'}   Section ${a.mySection || '—'}`)
   L.push(`Generated ${new Date().toISOString()}`)
+  // Which rules parameters scored this document (design 3f) — a data update
+  // that changes a number is visible on the artifact an operator hands over.
+  if (a.rulesYear) {
+    L.push(`Scored under ${a.rulesYear} rules (data ${a.rulesGenerated.slice(0, 10)})`)
+  }
   L.push('')
   L.push(`QSOs: ${a.log.length}`)
   L.push(`  By mode:  DIG ${a.modes.dig}   CW ${a.modes.cw}   PH ${a.modes.ph}`)
@@ -603,7 +621,7 @@ export function FieldDayScoreboard({
   )
 }
 
-export function FieldDayView({ fieldDay, onSetMode }: Props) {
+export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier }: Props) {
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
   // contacts up) the moment the next contact landed. Pinned follows the run;
@@ -693,6 +711,8 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
         text = buildSummaryText({
           eventName: isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd,
           isWfd,
+          rulesYear: fieldDay?.rulesYear ?? 0,
+          rulesGenerated: fieldDay?.rulesGenerated ?? '',
           myClass: fieldDay?.myClass ?? '',
           mySection: fieldDay?.mySection ?? '',
           log,
@@ -731,6 +751,15 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
       <div className="fd-event-banner">
         <span className="fd-event-name">{isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd}</span>
         <span className="fd-event-subtitle">{subtitle}</span>
+        {/* Warn-only rule advisories (banned mode + assistance) — passive status
+            lines; nothing is ever removed or disabled by rule. */}
+        <FdAdvisories
+          fdActive={fdActive}
+          ruleset={fdRuleset}
+          activeMode={tier}
+          assistanceOn={fieldDay?.assistanceOn ?? []}
+          showAssistance
+        />
         {fieldDay?.rulesYear ? (
           <span className="fd-event-rules">
             {t('fieldDay.rules.line', {

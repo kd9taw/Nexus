@@ -14801,6 +14801,15 @@ impl Engine {
                     event_end_unix: event_window.end_unix,
                     rules_year: rs.rules_year,
                     rules_generated: tempo_core::fd_rules::active_generated().to_string(),
+                    // The effectively-ON assistance sources, by their display
+                    // labels — the advisory UI's single source (never re-derived).
+                    assistance_on: self
+                        .settings
+                        .assistance_sources()
+                        .iter()
+                        .filter(|&&(_, on)| on)
+                        .map(|&(label, _)| label.to_string())
+                        .collect(),
                     log: log
                         .qsos()
                         .iter()
@@ -27186,6 +27195,51 @@ mod tests {
         assert!(!fd.running, "the master enters passive S&P, not a run");
         assert_eq!(fd.my_class, "3A");
         assert_eq!(fd.my_section, "WI");
+    }
+
+    /// `FieldDayStatus.assistance_on` mirrors `Settings::assistance_sources()`'s
+    /// effectively-ON labels — the single list the warn-only assistance advisory
+    /// reads. The UI must never re-derive cluster/AI-CW gating from raw toggles
+    /// (it would disagree with the journal about what counts as assistance), so
+    /// the DTO carries the answer.
+    #[test]
+    fn fd_snapshot_carries_the_live_assistance_sources() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.cluster_enabled = true;
+            s.unassisted_mode = false;
+            e.apply_settings(s);
+        }
+        let expected: Vec<String> = e
+            .settings()
+            .assistance_sources()
+            .iter()
+            .filter(|&&(_, on)| on)
+            .map(|&(label, _)| label.to_string())
+            .collect();
+        // Control: the setup really has a live source, so an empty DTO list fails.
+        assert!(
+            expected.iter().any(|l| l == "DX cluster / RBN"),
+            "control broken: cluster should be effectively ON in this setup"
+        );
+        let fd = e.snapshot().field_day.expect("in Field Day");
+        assert_eq!(fd.assistance_on, expected);
+
+        // Unassisted mode suppresses the feeds; the DTO tracks the EFFECTIVE state.
+        {
+            let mut s = e.settings().clone();
+            s.unassisted_mode = true;
+            e.apply_settings(s);
+        }
+        let fd = e.snapshot().field_day.expect("still in Field Day");
+        assert!(
+            !fd.assistance_on.iter().any(|l| l == "DX cluster / RBN"),
+            "Unassisted mode is on — cluster must no longer be listed as live"
+        );
     }
 
     /// ⚠️ "ADD IT TO THE FD LOG AFTERWARDS" STAMPS THE BAND YOU ARE ON THEN,

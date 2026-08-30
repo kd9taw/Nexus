@@ -166,6 +166,10 @@ const MIGRATED = [
   // fixed-width document rather than interface prose.
   'components/PotaSotaView.tsx',
   'components/FieldDayView.tsx',
+  // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
+  // chips are catalog keys from birth; the mode names, event names and assistance-source
+  // labels it interpolates are invariant tokens.
+  'components/FdAdvisories.tsx',
   'components/ContestCalendarPane.tsx',
   'fdEvent.ts',
   // Batch 7 (2026-08-18) — the Satellites section, the Connect Passes pane and the nine

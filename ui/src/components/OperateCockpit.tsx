@@ -35,7 +35,8 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { atuTune, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period } from '../api'
+import { atuTune, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
+import { FdAdvisories } from './FdAdvisories'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
@@ -68,6 +69,11 @@ interface Props {
   /** Configured companion UDP listen address (Settings) — shown instead of a
    * hardcoded :2237 so a moved WSJT-X port reads truthfully. */
   companionAddr?: string
+  /** Field Day master switch + the active event's ruleset facts — the warn-only
+   * banned-mode chip in the header (a passive status div, outside every
+   * ⊞-removable pane; nothing is ever removed or disabled by rule). */
+  fdActive?: boolean
+  fdRuleset?: FdRulesetDto | null
   snap: AppSnapshot
   theme: string
   /** Active mode/tier (authoritative from the snapshot's link). */
@@ -336,6 +342,8 @@ export function OperateCockpit({
   panels,
   active = true,
   companionAddr,
+  fdActive = false,
+  fdRuleset = null,
   onOpenSettings,
   wheelSensitivity,
 }: Props) {
@@ -944,6 +952,12 @@ export function OperateCockpit({
             ))}
           </select>
         </div>
+
+        {/* Warn-only Field Day banned-mode chip (e.g. FT8 at WFD — this cockpit is
+            where a banned mode would actually be keyed). A PASSIVE status div in
+            the header, outside every ⊞-removable pane: it is a status line, not a
+            control, so it carries no panel-vocabulary id and no stop-line role. */}
+        <FdAdvisories fdActive={fdActive} ruleset={fdRuleset} activeMode={tier} />
 
         <div className="cockpit-meta">
           <div

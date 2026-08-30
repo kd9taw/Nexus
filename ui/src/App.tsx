@@ -12,9 +12,11 @@ import {
   confirmPendingLog as apiConfirmPendingLog,
   discardPendingLog as apiDiscardPendingLog,
   getBandPlan,
+  getFdRuleset,
   getSettings,
   logOperators,
   getSnapshot,
+  type FdRulesetDto,
   selectPeer as apiSelectPeer,
   archiveConversation as apiArchiveConversation,
   sendMessage as apiSendMessage,
@@ -854,6 +856,19 @@ export default function App() {
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(null)
+  // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
+  // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
+  // the master switch off), so the fetch just re-runs when the configured event changes.
+  const [fdRuleset, setFdRuleset] = useState<FdRulesetDto | null>(null)
+  useEffect(() => {
+    let live = true
+    getFdRuleset()
+      .then((r) => live && setFdRuleset(r))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [settings?.fdEvent])
   // The operator's per-type alert BAND SCOPES (Settings ▸ Spots & Alerts). They gate the
   // need ICONS as well as the sound/toast — "I selected grids, vhf/uhf 6m and up ... and its
   // still showing the grid icons in ft8 in both roster and classic mode when on hf bands"
@@ -2314,7 +2329,13 @@ export default function App() {
   switch (effectiveView) {
     case 'fieldDay':
       workspace = threePane(
-        <FieldDayView fieldDay={snap.fieldDay} onSetMode={handleSetMode} />,
+        <FieldDayView
+          fieldDay={snap.fieldDay}
+          onSetMode={handleSetMode}
+          fdActive={settings?.fdActive ?? false}
+          fdRuleset={fdRuleset}
+          tier={tier}
+        />,
       )
       break
     case 'logbook':
@@ -2845,6 +2866,8 @@ export default function App() {
           <div className="operate-host" hidden={effectiveView !== 'operate'}>
             <OperateCockpit
               companionAddr={settings?.companionAddr}
+              fdActive={settings?.fdActive ?? false}
+              fdRuleset={fdRuleset}
               blockedCalls={settings?.blockedCalls ?? []}
               onToggleBlocked={handleToggleBlocked}
               snap={snap}

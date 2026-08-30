@@ -8725,6 +8725,25 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   white-space: nowrap;
 }
+/* Warn-only FD rule advisory (FdAdvisories.tsx) — a PASSIVE status line, never a
+   control, hosted by the FD event banner and the Operate cockpit header (outside
+   every ⊞-removable pane). --alert-warning exists in both themes. Ellipsizes in
+   a tight header; the title attribute carries the whole sentence. */
+.fd-advisory {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 32em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--alert-warning);
+  background: color-mix(in srgb, var(--alert-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 45%, transparent);
+}
 
 /* Score math formula */
 .fd-score-math {

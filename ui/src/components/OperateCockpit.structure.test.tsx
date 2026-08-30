@@ -120,7 +120,13 @@ function panelsApi(state: Partial<Record<OperatePanelId, PanelState>>): PanelLay
 
 function renderCockpit(
   state: Partial<Record<OperatePanelId, PanelState>>,
-  over: { transmitting?: boolean; atu?: boolean | null; layoutMode?: 'classic' | 'roster' } = {},
+  over: {
+    transmitting?: boolean
+    atu?: boolean | null
+    layoutMode?: 'classic' | 'roster'
+    fdActive?: boolean
+    fdRuleset?: import('../api').FdRulesetDto | null
+  } = {},
 ) {
   const noop = () => {}
   const onCall = vi.fn()
@@ -129,6 +135,8 @@ function renderCockpit(
       snap={makeSnap(over)}
       theme="dark"
       tier="FT8"
+      fdActive={over.fdActive ?? false}
+      fdRuleset={over.fdRuleset ?? null}
       onTierChange={noop}
       bandPlan={[]}
       onSetFrequency={noop}
@@ -384,5 +392,32 @@ describe('TX meters: a fixed strip cell, never a body row', () => {
   it("removing the 'txmeters' panel removes the cell entirely", () => {
     const { container } = renderCockpit({ txmeters: 'removed' })
     expect(container.querySelector('.cq-telemetry')).toBeNull()
+  })
+})
+
+describe('the warn-only FD banned-mode chip in the header (a status line, never a control)', () => {
+  const WFD: import('../api').FdRulesetDto = {
+    event: 'wfd',
+    rulesYear: 2026,
+    bannedModes: ['FST4', 'FT4', 'FT8', 'JT4', 'JT9', 'JT65', 'Q65', 'MSK144', 'WSPR', 'FST4W', 'ECHO'],
+    spottingAllowed: true,
+    clusterAllowed: true,
+    enforcement: 'warn',
+  }
+
+  it('renders in the header for a banned tier (FT8 at WFD), outside every ⊞-removable pane', () => {
+    // EVERY vocabulary id removed: the chip lives in the header shell child, so
+    // the screen that remains still carries it — and it is a passive div, so the
+    // stop-line census is untouched.
+    const { container } = renderCockpit(ALL_REMOVED, { fdActive: true, fdRuleset: WFD })
+    const chip = container.querySelector('.cockpit-header .fd-advisory.banned')
+    expect(chip, 'FT8 at WFD must warn in the Operate header').not.toBeNull()
+    expect(chip!.textContent).toContain('Winter Field Day')
+    expect(chip!.closest('button, a, [role="button"]'), 'the chip must be passive').toBeNull()
+  })
+
+  it('absent with FD off — the stock header is unchanged', () => {
+    const { container } = renderCockpit({})
+    expect(container.querySelector('.fd-advisory')).toBeNull()
   })
 })
