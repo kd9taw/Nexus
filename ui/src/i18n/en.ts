@@ -3798,6 +3798,11 @@ export const EN = {
   'freq.channel.aria': 'Band channel preset',
   'freq.channel.title': 'Pick a band-plan channel',
   'freq.channel.presets': '— Presets —',
+  // A band this licence class cannot transmit on is still LISTED and still tunable — no
+  // licence restricts receiving. The suffix says what you will and will not be able to do.
+  'freq.channel.rxOnly': 'receive only',
+  'freq.channel.rxOnly.title':
+    'Your licence class has no transmit privileges on this band. You can tune here and listen; transmitting will be refused.',
   'freq.channel.custom': '{{band}} (custom)',
   'freq.dial.label': 'Dial (MHz)',
   'freq.band.title': 'Current band',

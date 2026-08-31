@@ -948,6 +948,8 @@ export const ES: PartialCatalog = {
   "fieldDay.club.board.rate": "{{rate}}/h",
   "freq.band.title": "Banda actual",
   "freq.channel.aria": "Canal predefinido de banda",
+  "freq.channel.rxOnly": "solo escucha",
+  "freq.channel.rxOnly.title": "Tu clase de licencia no tiene privilegios de transmisión en esta banda. Puedes sintonizar y escuchar; transmitir será rechazado.",
   "freq.channel.custom": "{{band}} (personalizado)",
   "freq.channel.label": "Banda / Canal",
   "freq.channel.presets": "— Predefinidos —",

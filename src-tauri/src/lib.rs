@@ -11195,38 +11195,42 @@ fn licensed_bands(
 ) -> Vec<tempo_app::bandplan::BandChannel> {
     use tempo_app::bandplan::BandChannel;
     use tempo_app::settings::OperatingMode;
-    const BANDS: &[(&str, &str)] = &[
-        ("160m", "HF"),
-        ("80m", "HF"),
-        ("40m", "HF"),
-        ("30m", "HF"),
-        ("20m", "HF"),
-        ("17m", "HF"),
-        ("15m", "HF"),
-        ("12m", "HF"),
-        ("10m", "HF"),
-        ("6m", "VHF"),
+    // Band, UI group, and a LISTENING dial — somewhere sensible to park when this class has
+    // no transmit segment here (#184, akhepcat: "there are no restrictions on receiving").
+    // These are calling/activity frequencies, not segment starts, because a receive-only row
+    // has no segment to start at.
+    const BANDS: &[(&str, &str, f64)] = &[
+        ("160m", "HF", 1.845),
+        ("80m", "HF", 3.573),
+        ("40m", "HF", 7.074),
+        ("30m", "HF", 10.136),
+        ("20m", "HF", 14.074),
+        ("17m", "HF", 18.100),
+        ("15m", "HF", 21.074),
+        ("12m", "HF", 24.915),
+        ("10m", "HF", 28.074),
+        ("6m", "VHF", 50.313),
         // 4 m is IARU Region 1 only — the US has no allocation at any class (#75). It sits
         // here rather than being left to the FT dropdown because the privilege filter below
         // is what decides who sees it: a US class holds no 4 m segment and never sees the
         // row, while the non-US `Open` class does, in SSB and CW as well as in FT8.
-        ("4m", "VHF"),
-        ("2m", "VHF"),
-        ("1.25m", "VHF"),
-        ("70cm", "UHF"),
+        ("4m", "VHF", 70.200),
+        ("2m", "VHF", 144.174),
+        ("1.25m", "VHF", 222.100),
+        ("70cm", "UHF", 432.174),
         // Batch 3: the named microwave bands. Per-class privilege filtering below keeps
         // each operator's dropdown honest automatically — a band whose class holds no
         // segment (9 cm for every US class) is omitted for them and present for Open.
-        ("33cm", "UHF"),
-        ("23cm", "UHF"),
-        ("13cm", "UHF"),
-        ("9cm", "UHF"),
-        ("6cm", "UHF"),
-        ("3cm", "UHF"),
-        ("1.25cm", "UHF"),
+        ("33cm", "UHF", 903.100),
+        ("23cm", "UHF", 1296.100),
+        ("13cm", "UHF", 2304.100),
+        ("9cm", "UHF", 3400.100),
+        ("6cm", "UHF", 5760.100),
+        ("3cm", "UHF", 10368.100),
+        ("1.25cm", "UHF", 24192.100),
     ];
     let mut out = Vec::new();
-    for (band, group) in BANDS {
+    for (band, group, rx_dial) in BANDS {
         // PHONE goes through THE phone home (`privileges::phone_home`), which lifts an LSB
         // home clear of the segment edge — the bare edge is a dial the transmit gate refuses,
         // and this command recomputing it from `segment_start` is how the dropdown used to
@@ -11247,16 +11251,37 @@ fn licensed_bands(
                 (dial, "USB")
             })
         };
-        if let Some((dial, sideband)) = home {
-            out.push(BandChannel {
-                band: band.to_string(),
-                group: group.to_string(),
-                dial_mhz: dial,
-                mode: sideband.to_string(),
-                label: format!("{band} · {dial:.3} MHz"),
-                note: String::new(),
-            });
-        }
+        // ⚠️ A BAND WITH NO TRANSMIT SEGMENT IS LISTED, NOT DROPPED (#184, akhepcat).
+        //
+        // This used to `if let Some(..)` and skip, which applied a TRANSMIT rule to a TUNING
+        // list: no licence restricts listening, and the radio itself tunes there quite
+        // happily. A US General could not select 4 m at all — not "could listen but not
+        // key" — which is neither what the rules say nor what the rig does.
+        //
+        // So the row is emitted either way; `tx` carries which it is, and the UI marks the
+        // receive-only ones. Nothing here reaches the transmit gate:
+        // `privileges::tx_allowed` is untouched and still refuses the over, with the licence
+        // reason, exactly as before.
+        let (dial, sideband) = match home {
+            Some((dial, sideband)) => (dial, sideband),
+            None => (*rx_dial, "USB"),
+        };
+        // ⚠️ ASK THE GATE, do not re-derive it. The obvious spelling — "we found a segment
+        // start, therefore transmit is allowed" — is WRONG for the `Open` class: it holds no
+        // segments above 23 cm, yet `tx_allowed` short-circuits Open to true (it is the
+        // non-US / undeclared class and is trusted), so that spelling labelled a non-US
+        // operator's own microwave bands receive-only. Reading the real gate keeps this flag
+        // and the refusal in agreement by construction rather than by duplicated logic.
+        let tx = tempo_app::privileges::tx_allowed(class, dial, mode);
+        out.push(BandChannel {
+            band: band.to_string(),
+            group: group.to_string(),
+            dial_mhz: dial,
+            mode: sideband.to_string(),
+            label: format!("{band} · {dial:.3} MHz"),
+            note: String::new(),
+            tx,
+        });
     }
     out
 }
@@ -11295,11 +11320,14 @@ fn get_licensed_band_plan(
         let plan = radio_reachable(eng.settings(), plan);
         return Ok(plan
             .into_iter()
-            .filter(|c| {
+            .map(|mut c| {
                 // Channel band ids may carry a suffix ("2m-call") — privilege-check
                 // the base band, via THE canonicaliser (one home, not a hand-split).
-                let base = tempo_app::bandplan::canonical_band(&c.band);
-                tempo_app::privileges::segment_start(class, &base, priv_mode).is_some()
+                // MARK, don't drop: see the note in `licensed_bands`. A class with no
+                // segment here may still listen, and the transmit gate still refuses.
+                // Same rule as `licensed_bands`: ask the gate, so `Open` is not mislabelled.
+                c.tx = tempo_app::privileges::tx_allowed(class, c.dial_mhz, priv_mode);
+                c
             })
             .collect());
     }
@@ -20674,14 +20702,29 @@ mod tests {
             Some(70.200),
             "a CW pick parks on the 4 m SSB/CW calling frequency"
         );
-        // …and it stays unkeyable-by-omission for every US class: no FCC 4 m allocation
-        // exists, so the row must not reach their dropdown at all. The 2 m control is what
-        // makes each `None` evidence rather than an empty list.
+        // …and for every US class it is RECEIVE-ONLY rather than absent (#184, akhepcat).
+        //
+        // ⚠️ THIS ASSERTION WAS INVERTED ON 2026-08-31, DELIBERATELY. It used to require the
+        // row to be missing entirely — "unkeyable by omission" — which applied a transmit
+        // rule to a tuning list: no licence restricts LISTENING, and the radio tunes 4 m
+        // whatever the operator's class. The reporter put it exactly right: block transmit
+        // out of band, do not prevent reception.
+        //
+        // The safety half did NOT change and is asserted here alongside: no US class may
+        // KEY 4 m, and `privileges::tx_allowed` is what refuses it. Listing a band is not
+        // permission to transmit on it.
         for class in [Technician, General, Extra] {
             for mode in [Phone, Cw] {
+                let row = ch(class, mode).unwrap_or_else(|| {
+                    panic!("{class:?} {mode:?}: 4 m must be listed so it can be listened to")
+                });
                 assert!(
-                    ch(class, mode).is_none(),
-                    "{class:?} {mode:?}: the US has no 4 m allocation"
+                    !row.tx,
+                    "{class:?} {mode:?}: 4 m must be marked receive-only, not keyable"
+                );
+                assert!(
+                    !tempo_app::privileges::tx_allowed(class, row.dial_mhz, mode),
+                    "{class:?} {mode:?}: the US has no 4 m allocation — the gate must refuse"
                 );
                 assert!(
                     super::licensed_bands(class, mode)
@@ -24350,6 +24393,71 @@ mod tests {
         // A grid too short to resolve is also not a guess.
         let junk = propagation::OtaSpot { grid: Some("F".into()), ..base };
         assert!(crate::place_ota(&junk).is_none());
+    }
+
+
+    /// #184 (akhepcat): "just because I'm not licensed to transmit in the US, there are no
+    /// restrictions on receiving. The correct behavior should be to block transmit when
+    /// out-of-band, but not to prevent reception. This is what the radio does already."
+    ///
+    /// He is right, and the band dropdown was applying a TRANSMIT rule to a TUNING list: a
+    /// band whose class held no segment was omitted entirely, so a US General could not
+    /// select 4 m at all. Now every band is listed and `tx` says which may be keyed.
+    ///
+    /// ⚠️ THE HALF THAT MUST NOT MOVE: listing a band is not permission to transmit on it.
+    /// `privileges::tx_allowed` is the gate and it is untouched — this asserts both halves
+    /// together, because the fix is only correct if the second one still refuses.
+    #[test]
+    fn a_band_you_cannot_key_is_still_listed_for_listening() {
+        use tempo_app::settings::{LicenseClass, OperatingMode};
+
+        let general = crate::licensed_bands(LicenseClass::General, OperatingMode::Digital);
+        let four = general
+            .iter()
+            .find(|c| c.band == "4m")
+            .expect("4 m vanished from a General's band list — that is the reported bug");
+        assert!(!four.tx, "4 m must be marked receive-only for a US General");
+        assert!(
+            four.dial_mhz >= 70.0 && four.dial_mhz < 71.0,
+            "a receive-only row still needs a sensible listening dial, got {}",
+            four.dial_mhz
+        );
+
+        // The gate is unchanged: still no US 4 m transmit privilege at any class.
+        assert!(
+            !tempo_app::privileges::tx_allowed(LicenseClass::General, 70.2, OperatingMode::Digital),
+            "listing 4 m must NOT have granted transmit on it"
+        );
+
+        // A band the class CAN key is listed as before, and marked transmit-capable.
+        let twenty = general
+            .iter()
+            .find(|c| c.band == "20m")
+            .expect("20 m missing for a General");
+        assert!(twenty.tx, "20 m is a General's own band and must be keyable");
+        assert!(tempo_app::privileges::tx_allowed(
+            LicenseClass::General,
+            twenty.dial_mhz,
+            OperatingMode::Digital
+        ));
+
+        // A Technician has no 20 m data privilege — listed, and marked receive-only.
+        let tech = crate::licensed_bands(LicenseClass::Technician, OperatingMode::Digital);
+        let t20 = tech
+            .iter()
+            .find(|c| c.band == "20m")
+            .expect("20 m vanished for a Technician — they may still listen there");
+        assert!(!t20.tx, "a Technician must not be told they can key 20 m data");
+
+        // Open (non-US / undeclared) keeps everything transmit-capable.
+        let open = crate::licensed_bands(LicenseClass::Open, OperatingMode::Digital);
+        assert!(
+            open.iter().all(|c| c.tx),
+            "the Open class is trusted everywhere and must show nothing as receive-only"
+        );
+        // And nobody LOSES a band by this change: every class lists the same set.
+        assert_eq!(general.len(), open.len());
+        assert_eq!(tech.len(), open.len());
     }
 
 }

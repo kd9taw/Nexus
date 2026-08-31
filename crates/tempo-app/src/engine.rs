@@ -5627,6 +5627,9 @@ impl Engine {
                         mode: "USB".into(),
                         label: format!("{} · {} (custom)", wf.band, mode_name),
                         note: "operator working-frequency override".into(),
+                        // The operator typed this frequency in deliberately; the transmit
+                        // gate still judges it at key-down.
+                        tx: true,
                     });
                 }
             }

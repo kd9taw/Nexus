@@ -819,6 +819,11 @@ export interface BandChannel {
   mode: RadioMode
   label: string
   note: string
+  /** May this licence class transmit here? FALSE means RECEIVE-ONLY, not hidden — no
+   *  licence restricts listening, and the radio tunes there regardless. Display only: the
+   *  transmit gate is in Rust and refuses the over on its own. Optional so an older
+   *  backend (or a stored plan) reads as transmit-capable, which is what it used to mean. */
+  tx?: boolean
 }
 
 /**

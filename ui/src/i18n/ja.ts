@@ -2317,6 +2317,8 @@ export const JA: PartialCatalog = {
   "freq.channel.aria": "バンドチャンネルプリセット",
   "freq.channel.title": "バンドプランのチャンネルを選択",
   "freq.channel.presets": "— プリセット —",
+  "freq.channel.rxOnly": "受信のみ",
+  "freq.channel.rxOnly.title": "この免許区分ではこのバンドの送信権限がありません。受信はできますが、送信は拒否されます。",
   "freq.channel.custom": "{{band}}（カスタム）",
   "freq.dial.label": "ダイヤル（MHz）",
   "freq.band.title": "現在のバンド",

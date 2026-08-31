@@ -948,6 +948,8 @@ export const FR: PartialCatalog = {
   "fieldDay.club.board.rate": "{{rate}}/h",
   "freq.band.title": "Bande actuelle",
   "freq.channel.aria": "Canal préréglé de bande",
+  "freq.channel.rxOnly": "réception seule",
+  "freq.channel.rxOnly.title": "Votre classe de licence n'a pas de privilèges d'émission sur cette bande. Vous pouvez vous y accorder et écouter ; l'émission sera refusée.",
   "freq.channel.custom": "{{band}} (perso)",
   "freq.channel.label": "Bande / Canal",
   "freq.channel.presets": "— Préréglages —",

@@ -2056,6 +2056,8 @@ export const DE: PartialCatalog = {
   "freq.channel.aria": "Bandplan-Kanal",
   "freq.channel.title": "Kanal aus dem Bandplan wählen",
   "freq.channel.presets": "— Vorgaben —",
+  "freq.channel.rxOnly": "nur Empfang",
+  "freq.channel.rxOnly.title": "Deine Lizenzklasse hat auf diesem Band keine Senderechte. Du kannst hier abstimmen und hören; das Senden wird abgelehnt.",
   "freq.channel.custom": "{{band}} (eigene)",
   "freq.dial.label": "VFO (MHz)",
   "freq.band.title": "Aktuelles Band",

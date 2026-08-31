@@ -269,6 +269,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "3 QSO importé3 QSO importés". Shipped that way since 1.9.0. Every one is repaired, and a
   guard now fails the build if the shape ever comes back.
 
+- **A band you cannot transmit on is now listed anyway, so you can listen.** The band
+  dropdowns hid any band your licence class holds no transmit privileges for, which applied a
+  transmit rule to a tuning list — nothing restricts *receiving*, and the radio tunes there
+  regardless. A US General could not select 4 m at all rather than being able to listen on it.
+  Every band your radios can reach is now offered, with the ones you cannot key marked
+  "receive only". Transmitting on them is refused exactly as before — listing a band has never
+  been permission to transmit on it. Reported by akhepcat (#184).
+
 - **Parks on the air now show on the Connect map.** POTA activators appear where they
   actually are — the feed sends each park's own coordinates, which Nexus had been
   fetching and discarding in favour of the grid square, so a park that was placed to
