@@ -1,0 +1,144 @@
+# Deploy hamradiotools.io from the site repo's main — and nothing else.
+#
+# WHY THIS EXISTS. The Cloudflare Pages project is NOT git-connected, so pushing to the site
+# repo changes nothing on the live site; every update needs a deploy. Until now the only
+# mechanised deploy lived inside `publish.yml`, which is the whole downstream RELEASE chain:
+# it mirrors the source to SourceForge, re-uploads every installer to the file service,
+# rewrites version.json and only then builds the site. Running that to ship a one-line
+# `_redirects` edit means re-publishing a release that is already published, over a public
+# distribution surface, to move a static file.
+#
+# The gap was found the hard way: the in-app "Update country file" button had been requesting
+# hamradiotools.io/nexus/cty.json since the client shipped, the weekly `cty.yml` job that
+# produces it had never been dispatched, and the one-time `_redirects` entry that points the
+# path at the rolling release had never been added. Two of those three are a workflow run and
+# a commit. The third had no tool that did only itself.
+#
+# WHAT IT DOES NOT DO — deliberately, because these belong to a release and not to a deploy:
+#   * touch version.json. It builds whatever the site repo's main already carries. If you are
+#     shipping a release, use publish.yml — that is the workflow that owns the update feed,
+#     and it fails loudly if the built feed is not the version it was asked for.
+#   * touch SourceForge, the GitHub release, or any application code.
+#
+# ⚠️ VERIFY, DO NOT TRUST THE EXIT CODE. `wrangler pages deploy` prints "Deployment complete"
+# and exits 0 for a PREVIEW deployment that never moves the live site — that is what
+# `--branch=main` prevents and what the poll below proves. A deploy tool's exit code has
+# already lied once in this project's history (2026-08-07, the hand-worked release that
+# shipped nothing).
+name: Deploy the site
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_path:
+        description: 'Path that must answer after the deploy (e.g. /nexus/cty.json)'
+        required: true
+        default: '/nexus/version.json'
+      verify_status:
+        description: 'HTTP status that path must return (200, or 302 for a _redirects rule)'
+        required: true
+        default: '200'
+
+permissions:
+  contents: read
+
+# Never interleave with a release publish: both build and deploy the same Pages project from
+# the same site-repo main. Queue rather than cancel — a half-finished deploy is the worst
+# outcome of the three.
+concurrency:
+  group: publish-downstream
+  cancel-in-progress: false
+
+env:
+  SITE_REPO: kd9taw/hamradiotools
+  SITE_PROJECT: hamradiotools
+
+jobs:
+  deploy:
+    name: Build + deploy the site
+    runs-on: ubuntu-latest
+    # The scoped Cloudflare token and the site-repo token live here, not at repo level.
+    environment: production
+    steps:
+      - name: The secrets this run needs must exist
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SITE_TOKEN: ${{ secrets.SITE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=''
+          [ -n "$CF_TOKEN" ]   || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$CF_ACCOUNT" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          [ -n "$SITE_TOKEN" ] || missing="$missing SITE_REPO_TOKEN"
+          if [ -n "$missing" ]; then
+            echo "::error::missing secret(s):$missing — see docs/publish-secrets.md"
+            exit 1
+          fi
+
+      - name: Check out the site repo's main
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.SITE_REPO }}
+          token: ${{ secrets.SITE_REPO_TOKEN }}
+          ref: main
+          path: site
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          cd site
+          npm ci
+          # prebuild runs scripts/sync-manual.mjs, which finds no Nexus checkout here and so
+          # runs in verify-only mode: it still fails the build if a committed manual page has
+          # drifted from its manifest hash, it just does not re-sync.
+          npm run build
+          test -d dist || { echo "::error::the build produced no dist/"; exit 1; }
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          cd site
+          # --branch=main is the difference between a production deploy and a preview that
+          # exits 0 and changes nothing. wrangler pinned to its major so a CLI release cannot
+          # change deploy semantics under us; bump it deliberately.
+          npx --yes wrangler@4 pages deploy dist \
+            --project-name="$SITE_PROJECT" --branch=main --commit-dirty=true
+
+      # -------------------------------------------------------------------------------------
+      # The point of the workflow: prove the live site actually moved. Cache-busted on every
+      # attempt and sent with no-cache headers, because a stale edge response reads exactly
+      # like a successful deploy.
+      # -------------------------------------------------------------------------------------
+      - name: Verify the live site serves it
+        env:
+          VERIFY_PATH: ${{ inputs.verify_path }}
+          WANT: ${{ inputs.verify_status }}
+        run: |
+          set -euo pipefail
+          url="https://hamradiotools.io${VERIFY_PATH}"
+          for attempt in $(seq 1 40); do
+            # No -L: a 302 is the ANSWER for a _redirects rule, not something to follow.
+            got=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+                    -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+                    "${url}?cb=${GITHUB_RUN_ID}-${attempt}" || true)
+            if [ "$got" = "$WANT" ]; then
+              echo "$url answers $got (attempt $attempt)"
+              exit 0
+            fi
+            echo "attempt $attempt: $url answers ${got:-<no response>}, want $WANT"
+            sleep 15
+          done
+          echo "::error::$url still answers '${got:-<no response>}' (want $WANT) after ten minutes."
+          echo "wrangler exits 0 on a deploy that shipped nothing. Open the Cloudflare Pages"
+          echo "deployment list: if the newest deployment is a PREVIEW, --branch=main did not"
+          echo "take effect. If it is a production deploy, check that no static file at"
+          echo "$VERIFY_PATH is SHADOWING a _redirects rule."
+          exit 1
