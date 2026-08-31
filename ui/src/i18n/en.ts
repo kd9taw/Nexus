@@ -1521,6 +1521,7 @@ export const EN = {
   'map.layer.stations.label': 'My decodes',
   'map.layer.paths.label': 'Selected path',
   'map.layer.dxped.label': 'DXpeditions',
+  'map.layer.ota.label': 'Parks on the air',
 
   // The two legends, rendered by BOTH the 2-D map and the 3-D globe from one component —
   // the surfaces must explain their dots identically, so they share these keys. The band
@@ -1545,6 +1546,11 @@ export const EN = {
   'map.hover.workHint': ' — double-click to work',
   'map.hover.liveConfirmed': ' · live-confirmed',
   'map.hover.dxped': '{{call}} · {{entity}}{{az}} · {{need}} on {{band}} · {{likelihood}}',
+  // Parks on the air. `{{badge}}` marks a park never logged; `{{approx}}` admits a
+  // grid-placed marker is a ~4 km square rather than the park itself.
+  'map.hover.ota': '{{activator}} · {{reference}}{{name}} · {{freq}} MHz {{mode}}{{badge}}{{approx}}',
+  'map.hover.ota.new': ' · NEW PARK',
+  'map.hover.ota.approx': ' · approx',
   'map.hover.muf':
     'Ionosonde · measured MUF {{muf}} MHz here (KC2G) — a data point, not a station',
   // `{{what}}` (the symbol's own label), `{{moving}}` (speed/course) and `{{note}}` (the
@@ -5894,6 +5900,22 @@ export const EN = {
   'connect.pane.outlook.title': 'Band Outlook',
   'connect.pane.openings.title': 'Openings',
   'connect.pane.openingsLog.title': 'Openings Log',
+  // ---- The three-day planetary-K outlook (Connect pane + the map's storm cue).
+  // `kind` is SWPC's own word for how a sample was arrived at; only "observed" is a
+  // measurement, so the wording must never turn a forecast into a reading.
+  'connect.pane.kpOutlook.title': 'Kp outlook',
+  'connect.pane.kpOutlook.basic': 'Three-day planetary-K forecast from NOAA — when the bands settle down.',
+  'connect.kp.unavailable': 'No Kp outlook yet — NOAA has not answered.',
+  'connect.kp.noForward': 'NOAA has published no forecast beyond now.',
+  'connect.kp.now': 'Now Kp {{kp}} ({{when}}, measured)',
+  'connect.kp.peak': 'Worst ahead: Kp {{kp}} at {{when}}',
+  'connect.kp.onset': 'Storm level (Kp {{kp}}) expected from {{when}}',
+  'connect.kp.relief': 'Settling below storm level around {{when}}',
+  'connect.kp.chart.aria': 'Planetary K index, measured hours then forecast',
+  'connect.kp.bar.title': '{{when}} · Kp {{kp}} · {{kind}}{{scale}}',
+  'connect.kp.kind.observed': 'measured',
+  'connect.kp.kind.estimated': 'estimated by NOAA',
+  'connect.kp.kind.predicted': 'forecast',
   'connect.pane.spacewx.title': 'Space Wx',
   'connect.pane.getout.title': 'Getting Out',
   'connect.pane.bestband.title': 'Best Band → Region',

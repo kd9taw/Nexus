@@ -31,6 +31,7 @@ pub mod gridstate;
 pub mod insight;
 pub mod journey;
 pub mod kc2g;
+pub mod kpforecast;
 pub mod likelihood;
 pub mod mapspots;
 pub mod memchan;
@@ -81,6 +82,7 @@ pub use journey::{
     Tier as JourneyTier,
 };
 pub use kc2g::MufStation;
+pub use kpforecast::{parse_kp_forecast, KpForecast, KpKind, KpPoint};
 pub use likelihood::{
     mode_now_at, BandOutlook, ModeHourly, ModeNow, PathModel, PropParams, Workability,
 };

@@ -109,3 +109,19 @@ fn kp_to_ap(kp: f32) -> f32 {
     }
     AP[i] + (AP[i + 1] - AP[i]) * (k - i as f32)
 }
+
+/// The NOAA planetary-K outlook (3-hourly, about a week back and three days
+/// forward). See [`crate::kpforecast`] for what the samples mean; this is only the
+/// wire.
+pub fn fetch_kp_forecast() -> Result<crate::kpforecast::KpForecast, String> {
+    let c = client()?;
+    let body = c
+        .get("https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json")
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .text()
+        .map_err(|e| e.to_string())?;
+    Ok(crate::kpforecast::parse_kp_forecast(&body))
+}

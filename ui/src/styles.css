@@ -22640,3 +22640,59 @@ tr.sel .aprs-sym {
 .settings-save.danger:hover:not(:disabled) {
   filter: brightness(1.06);
 }
+
+/* ---- the three-day Kp outlook pane ----
+   Measured and modelled must not look alike: an observed bar is filled, a forecast
+   bar is a hollow outline of the same colour, so "this is a prediction" survives a
+   glance across the shack. The tone itself is the NOAA G-scale banding the rest of
+   the app uses, so a storm reads red here and red everywhere else. */
+.kp-outlook {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.kp-outlook.empty {
+  color: var(--text-faint);
+  font-size: 0.82rem;
+}
+.kp-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 64px;
+  /* A long forecast scrolls inside the pane rather than squeezing the bars to
+     nothing or pushing the pane wider than its grid slot. */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.kp-bar {
+  flex: 0 0 6px;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--kp-tone);
+}
+/* The forecast half: same colour, hollow — a prediction is not a reading. */
+.kp-bar.modelled {
+  background: transparent;
+  border: 1px solid var(--kp-tone);
+  /* Faint hatch so it still reads as "something is here" at 6 px wide. */
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--kp-tone) 45%, transparent) 0 2px,
+    transparent 2px 4px
+  );
+}
+.kp-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+.kp-line.warn {
+  color: var(--state-warn, #f5a524);
+}
+.kp-line.good {
+  color: var(--state-good, #30a46c);
+}

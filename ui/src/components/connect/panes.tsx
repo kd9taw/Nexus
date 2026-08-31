@@ -35,6 +35,7 @@ import { ChasePane } from '../prop/ChasePane'
 import { ChaseFeedPane } from '../prop/ChaseFeedPane'
 import { SatPassesPane } from '../prop/SatPassesPane'
 import { OpeningsLogPane } from '../prop/OpeningsLogPane'
+import { KpOutlookPane } from '../prop/KpOutlookPane'
 import { RotorPane } from '../prop/RotorPane'
 import { AmpPane } from '../prop/AmpPane'
 import { MiniSpectrum } from '../MiniSpectrum'
@@ -446,6 +447,17 @@ export const PANES: PaneDef[] = [
     // honest hint because the history lives inside the component.
     basic: () => t('connect.pane.openingsLog.basic'),
     expert: () => <OpeningsLogPane />,
+  },
+  {
+    id: 'kpOutlook',
+    get title() {
+      return t('connect.pane.kpOutlook.title')
+    },
+    category: 'b2',
+    // Self-fetching (get_kp_forecast, cached 15 min server-side), so the Basic line
+    // is a static honest hint rather than a value this context does not carry.
+    basic: () => t('connect.pane.kpOutlook.basic'),
+    expert: () => <KpOutlookPane />,
   },
   {
     id: 'spacewx',
