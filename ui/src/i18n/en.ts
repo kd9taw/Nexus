@@ -1830,6 +1830,11 @@ export const EN = {
   'prop.openingAlert.tropo':
     '📡 {{band}} tropo opening — DX to ~{{km}} km, point {{octant}} · {{stations}} stns',
   'prop.openingAlert.generic': '⚡ {{band}} open — point {{octant}} · {{stations}} stns',
+  // Geomagnetic storm heads-up (stormAlert.ts). A storm is hours-to-days of degraded
+  // HF, unlike a flare's minutes — the copy says what it means for operating, and the
+  // forecast line is explicitly a forecast.
+  'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
+  'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
   'prop.openingAlert.thin':
     '📻 {{band}} possible {{mode}} — thin evidence: {{stations}} stns to ~{{km}} km {{octant}}; may not be audible by ear',
 

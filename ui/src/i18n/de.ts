@@ -2305,6 +2305,8 @@ export const DE: PartialCatalog = {
   "prop.openingAlert.f2": "⚡ {{band}} F2-Öffnung — echtes DX, Richtung {{octant}} · ~{{km}} km · {{stations}} Stn",
   "prop.openingAlert.tropo": "📡 {{band}} Tropo-Öffnung — DX bis ~{{km}} km, Richtung {{octant}} · {{stations}} Stn",
   "prop.openingAlert.generic": "⚡ {{band}} offen — Richtung {{octant}} · {{stations}} Stn",
+  "prop.stormAlert.now": "🧲 Geomagnetischer Sturm G{{g}} (Kp {{kp}}) — KW gestört, am stärksten auf Polarwegen; Aurora auf UKW möglich",
+  "prop.stormAlert.forecast": "🧲 NOAA erwartet G{{g}} (Kp {{kp}}) ab {{when}} — KW dann wahrscheinlich gestört",
   "prop.openingAlert.thin": "📻 {{band}} möglicherweise {{mode}} — dünne Belege: {{stations}} Stn bis ~{{km}} km {{octant}}; womöglich nicht hörbar",
   "dxped.loading.title": "Expeditions-Feeds werden gelesen…",
   "dxped.loading.detail": "Kalender der angekündigten Aktivitäten und die derzeit aktiven Stationen werden abgerufen.",

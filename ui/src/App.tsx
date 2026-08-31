@@ -124,6 +124,7 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
+  getKpForecast,
 } from './api'
 import {
   hotkeyRecallTarget,
@@ -135,6 +136,7 @@ import {
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { processFlare, effectiveXray } from './flareAlert'
+import { processStorm, processStormForecast } from './stormAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
@@ -564,6 +566,9 @@ export default function App() {
   // Per-(band,mode) last-alert time so a band coming alive toasts once, not every
   // poll (defence in depth — the backend tracker already flags `isNew` once).
   const openingAlertRef = useRef<Map<string, number>>(new Map())
+  // Latest MEASURED Kp, so the forecast watcher below can tell a heads-up from a
+  // storm already in progress.
+  const kpNowRef = useRef<number | null>(null)
   // Freshest fast-lane X-ray reading (60 s poller below) — merged with each prop
   // snapshot so the flare heads-up fires app-wide, whatever view is open.
   const xrayFastRef = useRef<number | null>(null)
@@ -585,6 +590,12 @@ export default function App() {
           setProp(p)
           // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup).
           processFlare(effectiveXray(xrayFastRef.current, p.spaceWx.xrayLong))
+          // Geomagnetic storm heads-up, same edge-triggered shape over the MEASURED
+          // Kp already in this snapshot — no extra fetch. Until this existed a storm
+          // reached the operator only if they had the Space Weather pane in front of
+          // them, which is backwards: a flare is minutes, a storm is days.
+          processStorm(p.spaceWx.kp)
+          kpNowRef.current = p.spaceWx.kp
           // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
           processDxpedAlerts(
             p.dxpeditions.workableNow,
@@ -721,6 +732,24 @@ export default function App() {
         .catch(() => {})
     load()
     const id = setInterval(load, 60_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [])
+  // Storm FORECAST heads-up, app-wide. The Kp outlook pane fetches this too, but an
+  // alert that only fires while its own pane is open is not an alert — and the
+  // backend serves both from one 15-minute cache, so the second caller is free.
+  // stormAlert.ts dedups by the predicted onset time, so this announces once per
+  // forecast event however often it is polled.
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      getKpForecast()
+        .then((f) => live && processStormForecast(f, kpNowRef.current))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 900_000)
     return () => {
       live = false
       clearInterval(id)

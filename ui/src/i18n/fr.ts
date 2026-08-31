@@ -2536,6 +2536,8 @@ export const FR: PartialCatalog = {
   "prop.openingAlert.f2": "⚡ Ouverture F2 sur {{band}} — du vrai DX, pointez {{octant}} · ~{{km}} km · {{stations}} st",
   "prop.openingAlert.generic": "⚡ {{band}} ouverte — pointez {{octant}} · {{stations}} st",
   "prop.openingAlert.sporadicE": "⚡ {{band}} E SPORADIQUE — rare et bref, pointez {{octant}} MAINTENANT · DX ~{{km}} km · {{stations}} st",
+  "prop.stormAlert.now": "🧲 Tempête géomagnétique G{{g}} (Kp {{kp}}) — HF dégradée, surtout sur les trajets polaires ; aurore possible en VHF",
+  "prop.stormAlert.forecast": "🧲 NOAA prévoit G{{g}} (Kp {{kp}}) à partir de {{when}} — HF probablement dégradée alors",
   "prop.openingAlert.thin": "📻 {{mode}} possible sur {{band}} — indices ténus : {{stations}} st jusqu'à ~{{km}} km {{octant}} ; peut être inaudible à l'oreille",
   "prop.openingAlert.tropo": "📡 Ouverture tropo sur {{band}} — DX jusqu'à ~{{km}} km, pointez {{octant}} · {{stations}} st",
   "prop.openingsLog.column.band": "Bande",

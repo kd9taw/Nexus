@@ -108,6 +108,7 @@ const MIGRATED = [
   'components/QsoGlobe.tsx',
   'propViz.ts',
   'openingAlert.ts',
+  'stormAlert.ts',
   'components/DxpeditionsView.tsx',
   'features/dxpedChase.ts',
   'features/dxpedAlarm.ts',

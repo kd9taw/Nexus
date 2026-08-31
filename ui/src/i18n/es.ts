@@ -2536,6 +2536,8 @@ export const ES: PartialCatalog = {
   "prop.openingAlert.f2": "⚡ Apertura de F2 en {{band}} — DX de verdad, apunta {{octant}} · ~{{km}} km · {{stations}} est.",
   "prop.openingAlert.generic": "⚡ {{band}} abierta — apunta {{octant}} · {{stations}} est.",
   "prop.openingAlert.sporadicE": "⚡ {{band}} ESPORÁDICA-E — rara y breve, apunta {{octant}} YA · DX ~{{km}} km · {{stations}} est.",
+  "prop.stormAlert.now": "🧲 Tormenta geomagnética G{{g}} (Kp {{kp}}) — HF degradada, peor en rutas polares; posible aurora en VHF",
+  "prop.stormAlert.forecast": "🧲 NOAA prevé G{{g}} (Kp {{kp}}) desde {{when}} — HF probablemente degradada entonces",
   "prop.openingAlert.thin": "📻 Posible {{mode}} en {{band}} — indicios flojos: {{stations}} est. hasta ~{{km}} km {{octant}}; puede que no se oiga al oído",
   "prop.openingAlert.tropo": "📡 Apertura tropo en {{band}} — DX hasta ~{{km}} km, apunta {{octant}} · {{stations}} est.",
   "prop.openingsLog.column.band": "Banda",

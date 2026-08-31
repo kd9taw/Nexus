@@ -1088,6 +1088,8 @@ export const JA: PartialCatalog = {
   "prop.openingAlert.f2": "⚡ {{band}} F2オープン — 本物のDX、{{octant}}へ・約{{km}} km・{{stations}}局",
   "prop.openingAlert.tropo": "📡 {{band}} トロポオープン — 約{{km}} kmまでのDX、{{octant}}へ・{{stations}}局",
   "prop.openingAlert.generic": "⚡ {{band}}オープン — {{octant}}へ・{{stations}}局",
+  "prop.stormAlert.now": "🧲 磁気嵐 G{{g}}（Kp {{kp}}）— HFが劣化、特に極域パス。VHFでオーロラの可能性",
+  "prop.stormAlert.forecast": "🧲 NOAAは{{when}}からG{{g}}（Kp {{kp}}）を予測 — その頃HFは劣化の見込み",
   "prop.openingAlert.thin": "📻 {{band}}で{{mode}}の可能性 — 根拠は弱め: {{octant}} 約{{km}} kmまで{{stations}}局。耳では聞こえないかもしれません",
   "chase.row.show.title": "マップで{{call}}を表示",
   "chase.row.point.title": "アンテナを{{call}}に向ける",
