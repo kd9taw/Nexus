@@ -14,7 +14,7 @@
 // window (the two mirrors drifting apart is what put the guard here). The club-sync-off copy
 // is the router's because it is about a panel that ISN'T mounted: it names the Settings route
 // that would fill the board, and the board component never renders in that state.
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
 import { confirmDialog, ConfirmHost } from './confirm'
 import type {
@@ -147,17 +147,41 @@ function loadOperateLayout(): OperateLayout {
  *  action fails closed — it logs and answers "no" — which is how the ✕ on a conversation in this
  *  panel did nothing at all.
  *
- *  Mounted ONCE around the whole panel rather than beside each `<Toasts/>`, because the body
- *  below returns from nine separate branches and only two of them mount toasts. Per-branch would
- *  reproduce the very bug this fixes: a host present in one tree and absent in another, failing
- *  silently in whichever branch someone forgets. The dialog portals (`RD.Portal`), so where this
- *  sits in the tree has no bearing on layout — only on whether it exists at all. */
+ *  Mounted ONCE around the whole panel rather than beside each branch, because the body below
+ *  returns from fifteen of them. Per-branch would reproduce the very bug this fixes: a host
+ *  present in one tree and absent in another, failing silently in whichever branch someone
+ *  forgets. The dialog portals (`RD.Portal`), so where this sits in the tree has no bearing on
+ *  layout — only on whether it exists at all.
+ *
+ *  ⚠️ `<Toasts/>` CANNOT BE HOISTED TO SIT BESIDE IT, AND THAT IS NOT AN OVERSIGHT. `zoom` lives
+ *  on `.app` (styles.css) and the toast viewport sizes itself against `--vh-eff`, so a host
+ *  outside the branch's `.app` renders at the wrong scale in a window the operator has zoomed.
+ *  It has to be INSIDE that tree — which is why no branch writes its own
+ *  `<div className="app detached">` any more and every one returns [`DetachedShell`], which
+ *  carries the host. A new branch then gets one by construction and cannot omit it.
+ *
+ *  It WAS per-branch, and the Memories pop-out — one of the seven that never mounted one —
+ *  turned that into data loss: its bulk delete asks "Delete 40 memories?", promises in the
+ *  confirm body that "the toast that follows can undo it", deletes, and then the Undo it just
+ *  promised does not exist, because `pushToast` resolves through a module-level bus and that
+ *  document rendered nothing to receive it. */
 export function DetachedPanel({ panel }: { panel: string }) {
   return (
     <>
       <DetachedPanelBody panel={panel} />
       <ConfirmHost />
     </>
+  )
+}
+
+/** The root of every pop-out branch: the zoomed `.app` tree plus this window's toast host.
+ *  Use this, never a bare `<div className="app detached">` — see the warning above. */
+function DetachedShell({ className, children }: { className?: string; children?: ReactNode }) {
+  return (
+    <div className={className ? `app detached ${className}` : 'app detached'}>
+      {children}
+      <Toasts />
+    </div>
   )
 }
 
@@ -341,10 +365,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   const needAlertsByCall = grouped
 
   if (isBandMap) {
-    if (!snap) return <div className="app detached" />
+    if (!snap) return <DetachedShell />
     const spotMode: 'CW' | 'Phone' = panel === 'bandmapCw' ? 'CW' : 'Phone'
     return (
-      <div className="app detached">
+      <DetachedShell>
         <BandMap
           band={snap.radio.band}
           dialMhz={snap.radio.dialMhz}
@@ -368,7 +392,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })
           }
         />
-      </div>
+      </DetachedShell>
     )
   }
 
@@ -379,7 +403,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // missing it — the window ignored the operator's UI scale while its Toasts measured
     // a --vh-eff computed for a zoom that never applied.
     return (
-      <div className="app detached detached-waterfall">
+      <DetachedShell className="detached-waterfall">
         <Waterfall
           transmitting={snap?.radio.transmitting ?? false}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
@@ -393,14 +417,13 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           paletteScope={FT_PALETTE_SCOPE}
           txBlanks // the torn-off FT waterfall — same surface, same 13 s over.
         />
-        <Toasts />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'needed') {
     return (
-      <div className="app detached">
+      <DetachedShell>
         <NeededPanel
           // Full un-gated list — the board's own mode toggles decide what shows.
           alerts={needAlerts}
@@ -438,7 +461,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             apply(workSpot(opMode, t.freqMhz, t.band, t.call, spotTier))
           }}
         />
-      </div>
+      </DetachedShell>
     )
   }
 
@@ -477,20 +500,20 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       })()
     }
     return (
-      <div className="app detached">
+      <DetachedShell>
         <MemoriesView
           dialMhz={snap?.radio.dialMhz ?? 0}
           dialMode={snap?.radio.rigMode || snap?.radio.sideband || 'USB'}
           myGrid={snap?.mygrid ?? ''}
           onRecall={recall}
         />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'connect') {
     return (
-      <div className="app detached">
+      <DetachedShell>
         <ConnectView
           myGrid={snap?.mygrid ?? ''}
           theme={theme}
@@ -510,15 +533,15 @@ function DetachedPanelBody({ panel }: { panel: string }) {
               : undefined
           }
         />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'dxped') {
     return (
-      <div className="app detached">
+      <DetachedShell>
         <DxpeditionsView snap={prop} onWorkSpot={onWorkSpot} onShowOnMap={onSelect} />
-      </div>
+      </DetachedShell>
     )
   }
 
@@ -531,15 +554,15 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // pattern (see the Connect arm's onPoint).
     if (!snap) {
       return (
-        <div className="app detached">
+        <DetachedShell>
           <div className="app loading">
             <span>{t('detached.connecting')}</span>
           </div>
-        </div>
+        </DetachedShell>
       )
     }
     return (
-      <div className="app detached">
+      <DetachedShell>
         <PotaSotaView
           snap={snap}
           onSnap={setSnap}
@@ -560,25 +583,22 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             apply(workSpot(opMode, a.freqMhz, a.band, a.call))
           }}
         />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'sats') {
     return (
-      <div className="app detached">
+      <DetachedShell>
         <SatellitesView snap={snap} />
-        {/* This panel's Track/alarm actions report via toasts — unlike the older
-            detached panels (silent by design), it needs a host in this window. */}
-        <Toasts />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'fieldday') {
     const fd = snap?.fieldDay ?? null
     return (
-      <div className="app detached">
+      <DetachedShell>
         {fd ? (
           <FieldDayScoreboard
             fieldDay={fd}
@@ -603,7 +623,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             is the answer to "where can I move?". Only while a club event is running; a
             single-station Field Day has no bands to compete for. */}
         {fd?.club ? <FdBandOccupancy club={fd.club} big /> : null}
-      </div>
+      </DetachedShell>
     )
   }
 
@@ -623,11 +643,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // not the claim "sync is off".
     if (!snap) {
       return (
-        <div className="app detached">
+        <DetachedShell>
           <div className="app loading">
             <span>{t('detached.connecting')}</span>
           </div>
-        </div>
+        </DetachedShell>
       )
     }
     const club = snap.fieldDay?.club ?? null
@@ -642,7 +662,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     const syncConfigured =
       settings?.fdHostEnable === true || (settings?.fdJoinAddr ?? '').trim() !== ''
     return (
-      <div className="app detached">
+      <DetachedShell>
         {club ? (
           <FdClubSection club={club} detached />
         ) : syncConfigured ? (
@@ -664,18 +684,18 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             <p style={FDCLUB_OFF_WAIT}>{t('detached.fdClub.off.wait')}</p>
           </div>
         )}
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'operate') {
     if (!snap) {
       return (
-        <div className="app detached">
+        <DetachedShell>
           <div className="app loading">
             <span>{t('detached.connecting')}</span>
           </div>
-        </div>
+        </DetachedShell>
       )
     }
     // The cockpit's Call Roster — a wired StationList. Chat-overlay props (unread, archive)
@@ -702,7 +722,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       />
     )
     return (
-      <div className="app detached operate-detached">
+      <DetachedShell className="operate-detached">
         <OperateCockpit
           snap={snap}
           theme={theme}
@@ -743,15 +763,15 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           panels={operatePanels}
           active
         />
-      </div>
+      </DetachedShell>
     )
   }
 
   return (
-    <div className="app detached">
+    <DetachedShell>
       <div className="app loading">
         <span>{t('detached.unavailable', { panel })}</span>
       </div>
-    </div>
+    </DetachedShell>
   )
 }

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react'
 import { DetachedPanel } from './DetachedPanel'
 import { confirmDialog } from './confirm'
+import { pushToast } from './toast'
 import { selectPeer, workSpot, setFrequency, getNeedAlerts, subscribeSnapshot } from './api'
 import { readEnabledModes } from './useFeatures'
 import type { NeedAlert } from './types'
@@ -68,6 +69,12 @@ vi.mock('./components/Waterfall', () => ({
 
 // Engine calls under test are selectPeer, workSpot, and setFrequency; the other mount-time
 // pollers just need to resolve to something harmless so the effects settle.
+// Stub the satellites view — it self-fetches its TLE/pass data through api exports this
+// file's `./api` mock does not carry, and nothing here exercises it.
+vi.mock('./components/SatellitesView', () => ({
+  SatellitesView: () => <div data-testid="sats-stub" />,
+}))
+
 vi.mock('./api', () => ({
   subscribeSnapshot: vi.fn(() => () => {}),
   selectPeer: vi.fn(() => Promise.resolve(null)),
@@ -338,5 +345,79 @@ describe('DetachedPanel POTA/SOTA board', () => {
     fireEvent.click(screen.getByTestId('hunt-phone'))
     expect(mockedWorkSpot).not.toHaveBeenCalled()
     expect(mockedSetFrequency).toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// THE TOAST HOST. A torn-off window is its own JS realm, and `pushToast` resolves
+// through a module-level bus: with no host mounted in THAT document the call is
+// silently swallowed. It was mounted per-branch, and the Memories pop-out — one of
+// the seven branches that never mounted one — turned that into data loss. Its bulk
+// delete asks "Delete 40 memories?", says in the confirm body that "the toast that
+// follows can undo it", deletes, and then the Undo it just promised does not exist.
+//
+// The fix is structural — every branch returns `DetachedShell`, which carries the host —
+// so this asserts it for EVERY branch, not just the one that was reported. The host
+// must also sit INSIDE `.app`: zoom lives there, so a host hoisted out of it renders at
+// the wrong scale in a zoomed window (see the waterfall regression above).
+// ---------------------------------------------------------------------------
+describe('every torn-off panel can show a toast', () => {
+  const PANELS = [
+    'memories',
+    'connect',
+    'needed',
+    'sats',
+    'fieldday',
+    'waterfall',
+    'potasota',
+    'operate',
+    'nonsense-unknown-panel',
+  ]
+
+  for (const panel of PANELS) {
+    it(`${panel} has a toast host, so an Undo can actually be offered`, async () => {
+      const { container } = render(<DetachedPanel panel={panel} />)
+      act(() => {
+        pushToast(`bus reached ${panel}`, 'success', 5000, {
+          actionLabel: 'Undo',
+          action: () => {},
+        })
+      })
+      // Scoped to THIS render's tree: the bus is module-level, so toasts raised by
+      // earlier tests are still in it and a document-wide query would match those too.
+      const toastEl = await waitFor(() => {
+        const el = container.querySelector('.ui-toast-viewport')?.parentElement
+          ? null
+          : null
+        void el
+        const found = Array.from(container.querySelectorAll('.ui-toast')).find((n) =>
+          n.textContent?.includes(`bus reached ${panel}`),
+        )
+        expect(found, 'no toast host in this branch — an Undo here reaches nobody').toBeTruthy()
+        return found as HTMLElement
+      })
+      expect(
+        toastEl.querySelector('.ui-toast-action'),
+        'the toast rendered but its action did not — an undo nobody can press',
+      ).toBeTruthy()
+      // Inside the zoomed tree, not hoisted out of it.
+      const appRoot = container.querySelector('.app')
+      expect(
+        appRoot?.contains(toastEl),
+        'the toast host is outside .app, so it ignores the operator UI scale',
+      ).toBe(true)
+    })
+  }
+
+  it('mounts exactly ONE host, so a toast is never rendered twice', async () => {
+    const { container } = render(<DetachedPanel panel="sats" />)
+    act(() => pushToast('rendered once only', 'info', 5000))
+    await waitFor(() =>
+      expect(
+        Array.from(container.querySelectorAll('.ui-toast')).filter((n) =>
+          n.textContent?.includes('rendered once only'),
+        ),
+      ).toHaveLength(1),
+    )
   })
 })
