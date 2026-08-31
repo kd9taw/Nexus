@@ -4988,7 +4988,7 @@ dependencies = [
 
 [[package]]
 name = "tempo"
-version = "1.10.0-test1"
+version = "1.10.0-test2"
 dependencies = [
  "gdk",
  "keyring",
