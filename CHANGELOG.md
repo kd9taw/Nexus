@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.10.0] — 2026-08-30
 
 ### Added
 
@@ -112,6 +112,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Click a previous contact to see that station's log.** The callsign card lists every earlier
+  contact with the station in front of you. Those rows are now clickable: one takes you to the
+  Logbook with that callsign filtered, so you get the whole history instead of the few lines that
+  fit on the card. Works from every operating screen.
+
 - **The club TV says who is on what band.** The spectator scoreboard — the page a club puts on
   a screen facing the room — listed each operating position with its operator, QSOs and points,
   but not the one thing a multi-station club actually walks over to ask: which band that tent is
@@ -161,6 +166,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+
+- **A ClubLog catch-up no longer looks like a flood.** Saving your ClubLog password makes Nexus
+  send any contacts that never uploaded. It was sending them all at once, back to back, which
+  ClubLog reads as abusing the live-upload endpoint. One operator was warned his address would be
+  blocked. Contacts you just worked still upload immediately, as they should. A catch-up now goes
+  out one every 15 seconds, and if ClubLog is busy and the retries stack up, they stay spaced out
+  rather than arriving in one burst when it recovers. Worth knowing if you import an old log: the
+  imported contacts count as never uploaded, so the next time you save your password Nexus offers
+  them to ClubLog. It says so in the connection log while it works through them.
+
+- **RTTY on a radio that has no RTTY mode.** On a FlexRadio over SmartSDR CAT there is no RTTY
+  mode to select, so Nexus asked for one, was refused, and gave up silently — leaving the radio in
+  whatever the last mode was, usually the wide data mode FT8 had set. It now falls back to the
+  data sideband the radio does accept, which is what AFSK RTTY needs anyway.
+
+- **Your own transmissions no longer follow you to another band.** Nexus keeps a short record of
+  the overs you have sent so your calls do not vanish when the app changes band under you, but that
+  record never noted which band each one went out on. Change from 20 to 40 and your 20 m calls came
+  back, carrying the times they were originally sent.
 
 - **Tune could interrupt itself: a blip and a brief power drop while the carrier was up.**
   Reported by an operator running an FTDX-101D who saw the power fall 10–15 W for about a
