@@ -631,6 +631,14 @@ pub struct Settings {
     /// table). Stored as ids so the table can evolve.
     #[serde(default)]
     pub fd_bonuses: Vec<String>,
+    /// PLANNED bonus ids — what the club set out to earn, not what it earned.
+    /// A sibling list rather than a second meaning for [`Self::fd_bonuses`],
+    /// which stays exactly the EARNED set the score is made of: no scoring
+    /// path, export or club report may ever read this one. `#[serde(default)]`
+    /// so an older settings file loads with nothing planned and scores the
+    /// same points it always did.
+    #[serde(default)]
+    pub fd_bonuses_planned: Vec<String>,
     /// N3FJP real-time push: each FD QSO lands in the club's N3FJP master log
     /// over its TCP API. Empty host = off.
     #[serde(default)]
@@ -3046,6 +3054,7 @@ impl Default for Settings {
             fd_event: String::new(), // "" = arrlfd
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
+            fd_bonuses_planned: Vec::new(),
             n3fjp_host: String::new(),
             n3fjp_port: 1100,
             n3fjp_use_enter: true,
@@ -5872,6 +5881,47 @@ mod tests {
         assert!(json.contains("\"dataModesPlainSsb\":true"), "{json}");
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert!(back.data_modes_plain_ssb);
+    }
+
+    /// THE UPGRADE PATH for the Field Day bonus PLAN. `fd_bonuses` has always meant
+    /// EARNED — the score reads it — and the planned list is a new sibling rather than a
+    /// reinterpretation of it, precisely so an existing settings.json keeps scoring the
+    /// same points it scored yesterday. Proven by deserializing a blob that predates the
+    /// key, not by trusting the `#[serde(default)]`.
+    #[test]
+    fn an_older_settings_file_loads_with_its_earned_bonuses_and_no_plan() {
+        let before: Settings = serde_json::from_str(
+            r#"{"mycall":"KD9TAW","fdClass":"3A","fdPowerMult":5,
+                "fdBonuses":["w1aw-bulletin","web-submission"]}"#,
+        )
+        .expect("an older settings file must still load");
+        assert_eq!(
+            before.fd_bonuses,
+            vec!["w1aw-bulletin".to_string(), "web-submission".to_string()],
+            "the EARNED list is untouched — this is what the score is made of"
+        );
+        assert!(
+            before.fd_bonuses_planned.is_empty(),
+            "a file written before planning existed has planned nothing; inheriting the \
+             earned list as a plan would be a lie about what the club intends"
+        );
+        assert!(Settings::default().fd_bonuses_planned.is_empty());
+
+        // And it round-trips once set — a field that serialises but never deserialises
+        // would lose the club's Friday plan at the first restart.
+        let mut planned = Settings::default();
+        planned.fd_bonuses_planned = vec!["youth".into(), "safety-officer".into()];
+        let json = serde_json::to_string(&planned).unwrap();
+        assert!(
+            json.contains("\"fdBonusesPlanned\":[\"youth\",\"safety-officer\"]"),
+            "{json}"
+        );
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.fd_bonuses_planned, planned.fd_bonuses_planned);
+        assert!(
+            back.fd_bonuses.is_empty(),
+            "planning never fills the earned list"
+        );
     }
 
     /// The setting lives on the RADIO, so switching rigs must switch the behaviour with it —

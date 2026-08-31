@@ -8888,9 +8888,117 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: 10px;
   color: var(--text-faint);
 }
+/* Collapsed-header echoes of the two scoring inputs: the power multiplier's current
+   value and, when the club has planned anything, what it is still chasing. Both are
+   readouts — the controls are inside. */
+.fd-scoring-power-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.fd-bonuses-planned-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+/* The expanded body wraps the power row, the chase strip and the (capped, scrolling)
+   list. The cap stays on `.fd-bonuses-list` alone — see the note there; the body is
+   `flex: 0 0 auto` like the section it lives in, and the column's deficit still goes to
+   `.fieldday { overflow-y: auto }`. */
+.fd-bonuses-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.fd-power-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+  background: var(--bg-elev);
+}
+.fd-power-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fd-power-chips {
+  display: flex;
+  gap: var(--space-1);
+}
+.fd-power-chip {
+  padding: var(--space-1) 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.fd-power-chip:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+/* The selected tier wears the same filled-accent treatment as the Settings chips it
+   mirrors (`.theme-chip.active`) — one setting, one look. */
+.fd-power-chip.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+.fd-power-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fd-power-hint {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+/* THE CHASE. Earned is the real number and is the only one wearing the accent; planned is
+   deliberately quieter and says so in words, not just in colour. */
+.fd-chase {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+  background: var(--bg-elev);
+}
+.fd-chase-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.fd-chase-tile.earned {
+  border-color: var(--accent);
+}
+.fd-chase-tile.earned .fd-chase-val {
+  color: var(--accent);
+}
+.fd-chase-val {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.fd-chase-note {
+  font-size: 10px;
+  color: var(--text-faint);
+}
 .fd-bonuses-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 2px;
   padding: var(--space-2) var(--space-3) var(--space-3);
   background: var(--bg-elev);
@@ -8929,6 +9037,33 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .fd-bonus-row.checked {
   color: var(--text);
+}
+/* Planned but not yet earned: a dashed edge and the button's own "Planned" word — the
+   state is never carried by colour alone. */
+.fd-bonus-row.planned {
+  color: var(--text);
+  border: 1px dashed var(--border);
+  padding: 6px calc(var(--space-2) - 1px);
+}
+.fd-bonus-plan {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 10px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.fd-bonus-plan:hover {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+.fd-bonus-plan.on {
+  border-color: var(--text-dim);
+  color: var(--text);
+  font-weight: 700;
 }
 .fd-bonus-row input[type='checkbox'] {
   flex: 0 0 auto;

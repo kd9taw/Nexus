@@ -28268,6 +28268,70 @@ mod tests {
         assert!(!fd.rules_generated.is_empty());
     }
 
+    /// PLANNING IS NOT SCORING. A club knows on Friday which bonuses it expects
+    /// (media publicity, a safety officer, a youth op) and wants them tracked —
+    /// but an intention is worth nothing on a submitted entry. `fd_bonuses` is
+    /// the EARNED list and is the only one any scoring path reads;
+    /// `fd_bonuses_planned` is the chase list and must be invisible to the
+    /// score, the snapshot and the exports. A surface that quietly counted a
+    /// plan would hand the ARRL a score the club never made.
+    #[test]
+    fn planned_bonuses_are_a_plan_and_never_points() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let all: Vec<String> = tempo_core::fd_rules::ruleset(
+            tempo_core::fieldday::FdEvent::ArrlFd,
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        )
+        .bonuses
+        .iter()
+        .map(|b| b.id.to_string())
+        .collect();
+        assert_eq!(all.len(), 15, "the whole menu is planned below");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 5;
+            s.fd_bonuses = Vec::new(); // nothing earned yet
+            s.fd_bonuses_planned = all.clone(); // every bonus planned
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap()); // 2 pts
+
+        assert_eq!(
+            e.fd_score(),
+            Some((2, 10, 0)),
+            "15 planned bonuses (1450 pts if they were counted) must score ZERO"
+        );
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(
+            fd.bonus_points, 0,
+            "the scoreboard shows earned points only"
+        );
+        assert_eq!(fd.total_score, fd.powered_points, "planning adds nothing");
+
+        // And earning one of the planned bonuses is what moves the score — the
+        // plan list is untouched by that, so the positive control runs on the
+        // same fixture (a guard that can only ever read zero proves nothing).
+        {
+            let mut s = e.settings().clone();
+            s.fd_bonuses = vec!["w1aw-bulletin".into()];
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            e.fd_score(),
+            Some((2, 10, 100)),
+            "the one EARNED bonus scores, and only it"
+        );
+        assert_eq!(
+            e.settings().fd_bonuses_planned.len(),
+            15,
+            "earning a bonus does not empty the chase list"
+        );
+    }
+
     /// THE SUBMODE FUNNEL, end to end: the engine stamps the ACTIVE tier's
     /// ADIF name into `FieldDayLog::current_submode` at FD entry and on every
     /// tier change, the digital sequencer's own `log()` calls pick it up, and

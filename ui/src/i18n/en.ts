@@ -2482,6 +2482,23 @@ export const EN = {
   'fieldDay.bonus.aria': '{{label}} — {{points}} pts',
   'fieldDay.bonus.pts': '{{points}} pts',
 
+  // Three states per bonus: not planned / planned / earned. Only EARNED scores — a plan is
+  // a plan, not points — so these words carry that distinction and must keep carrying it in
+  // every language. `{{points}}` is a score, `{{count}}` a number of bonuses, `{{mult}}` the
+  // power multiplier and `{{label}}` a bonus name from FD_BONUSES (never translated).
+  'fieldDay.scoring.power.chip': '\u00d7{{mult}} power',
+  'fieldDay.bonuses.planned.count': '{{count}} planned \u00b7 +{{points}} pts',
+  'fieldDay.bonuses.chase.aria': 'Bonus points earned and planned',
+  'fieldDay.bonuses.chase.earned': 'Earned {{points}} pts',
+  'fieldDay.bonuses.chase.earned.note': 'counted in your score',
+  'fieldDay.bonuses.chase.planned': 'Planned +{{points}} pts',
+  'fieldDay.bonuses.chase.planned.note': 'not scored until you tick it',
+  'fieldDay.bonuses.chase.potential': 'If all land {{points}} pts',
+  'fieldDay.bonus.plan.off': 'Plan',
+  'fieldDay.bonus.plan.on': 'Planned',
+  'fieldDay.bonus.plan.aria': 'Plan {{label}} \u2014 planned bonuses do not score',
+  'fieldDay.bonus.plan.title': 'Planned = you mean to earn it. It scores only once you tick the box.',
+
   // The log. Column headings name a CONCEPT; every value under them is a token. ARRL calls
   // the exchange field Class and WFD calls it Category — two words for two events, not one
   // word with a variant.
@@ -2541,6 +2558,9 @@ export const EN = {
   'fieldDay.club.bands.column.band': 'Band',
   'fieldDay.club.bands.column.who': 'Who is there',
   'fieldDay.club.bands.free': 'free',
+  'fieldDay.club.bands.clash.mark': 'CLASH',
+  'fieldDay.club.bands.clash.why':
+    '{{band}} conflict: two positions are running {{mode}} at once. They will work each other\u2019s callers and split the run.',
   'fieldDay.club.board.column.band': 'Band',
   'fieldDay.club.board.column.mode': 'Mode',
   'fieldDay.club.board.column.operator': 'Operator',

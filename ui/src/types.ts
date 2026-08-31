@@ -2847,6 +2847,9 @@ export interface Settings {
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */
   fdBonuses?: string[]
+  /** PLANNED FD bonus ids — the club's intent, never the score. `fdBonuses` above stays
+   *  the EARNED set scoring reads; nothing on any scoring path reads this one. */
+  fdBonusesPlanned?: string[]
   /** Host a Nexus↔Nexus club event: while on, the sync listener binds the LAN
    * (this toggle IS the opt-in — data-plane only) + a discovery beacon runs. */
   fdHostEnable?: boolean

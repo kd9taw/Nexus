@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { FdClubStatus, FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
 import { exportLog, fdClubExport, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
 import { FdAdvisories } from './FdAdvisories'
@@ -8,6 +8,8 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
+import { bandColor } from '../bandColors'
+import { modeClassOf } from '../features/needs'
 
 /**
  * ⚠️ INVARIANT — the FD mode codes an entry is scored by, printed as they are logged and
@@ -48,6 +50,67 @@ export const FD_BONUSES: FdBonus[] = [
   { id: 'social-media',       label: 'Social Media',               points: 100 },
   { id: 'educational',        label: 'Educational Activity',        points: 100 },
 ]
+
+/**
+ * THREE STATES PER BONUS, out of two id lists.
+ *
+ * `settings.fdBonuses` is the EARNED set and keeps that meaning exactly — it is what the
+ * score is made of, on both sides of the wire (`fd_rules::bonus_points(&fd_bonuses)`).
+ * `settings.fdBonusesPlanned` is the club's Friday intent, and NOTHING that scores,
+ * exports or reports reads it. A plan is a plan, not points.
+ *
+ * Earned wins where an id sits in both lists, which is why confirming a bonus does not
+ * have to edit two lists — and why un-confirming a mis-click puts it back on the chase
+ * list instead of losing the plan.
+ */
+export type FdBonusState = 'none' | 'planned' | 'earned'
+
+export function fdBonusState(id: string, earned: string[], planned: string[]): FdBonusState {
+  if (earned.includes(id)) return 'earned'
+  if (planned.includes(id)) return 'planned'
+  return 'none'
+}
+
+/**
+ * The chase arithmetic. `earnedPoints` is the ONLY number here that reaches the score —
+ * it is the same sum `computeFdScore` falls back to. `plannedPoints` counts
+ * planned-but-not-yet-earned bonuses only, so a bonus never lands in both columns and
+ * "if all land" is a real ceiling rather than a double count.
+ */
+export function fdBonusTally(earned: string[], planned: string[]) {
+  let earnedCount = 0
+  let earnedPoints = 0
+  let plannedCount = 0
+  let plannedPoints = 0
+  for (const b of FD_BONUSES) {
+    const state = fdBonusState(b.id, earned, planned)
+    if (state === 'earned') {
+      earnedCount++
+      earnedPoints += b.points
+    } else if (state === 'planned') {
+      plannedCount++
+      plannedPoints += b.points
+    }
+  }
+  return {
+    earnedCount,
+    earnedPoints,
+    plannedCount,
+    plannedPoints,
+    potentialPoints: earnedPoints + plannedPoints,
+  }
+}
+
+/**
+ * The power tiers, one for one with Settings ▸ Contesting ▸ Field Day Setup. The SAME
+ * `fdPowerMult` field and the SAME catalog keys deliberately: two surfaces that edit one
+ * setting cannot drift, and they must not describe it in two different sets of words.
+ */
+const FD_POWER_TIERS = [
+  { value: 5, labelKey: 'settings.fieldDay.power.qrp.label',     hintKey: 'settings.fieldDay.power.qrp.hint' },
+  { value: 2, labelKey: 'settings.fieldDay.power.hundred.label', hintKey: 'settings.fieldDay.power.hundred.hint' },
+  { value: 1, labelKey: 'settings.fieldDay.power.high.label',    hintKey: 'settings.fieldDay.power.high.hint' },
+] as const
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -557,6 +620,64 @@ function clubChipText(club: FdClubStatus): string {
  *  so a board that offered them as "free" would be inviting an illegal contact. */
 const FD_BOARD_BANDS = ['160m', '80m', '40m', '20m', '15m', '10m', '6m', '2m', '1.25m', '70cm']
 
+/** The dead-man for a presence reading, matching the club board's own stale mark: past this
+ *  many seconds the host has not heard the position and the row is a memory, not a fact. */
+const FD_PRESENCE_DEAD_SECS = 15
+
+/**
+ * The FD SCORING CLASS a position is running — "CW" | "PH" | "DIG", the three modes Field Day
+ * scores by, and the only thing this board can honestly compare.
+ *
+ * ⚠️ WHY THE CLASS AND NOT THE SUBMODE. `Engine::fd_position_report` puts the class on the wire
+ * (`OperatingMode` → PH/CW/DIG) and never the submode, so FT8 and RTTY arrive here as the same
+ * three letters — there is no finer comparison available even in principle. It is also the
+ * comparison that matches the rules an operator is judged by: ARRL FD scores one QSO per band
+ * per MODE CLASS (a station worked on 20m RTTY pays nothing again on 20m FT8) and Class A
+ * permits one transmitted signal per band/mode, so two digital positions on one band are
+ * splitting a single pool of contacts — a real conflict, not a false alarm. Comparing the raw
+ * string instead would be the useless end of the trade: it would call "SSB" and "USB" a clash
+ * and let the pool-splitting pair through.
+ *
+ * A peer on an older or third-party build can still report a raw on-air mode; route that through
+ * the app's own classifier rather than dropping it into DIG by accident.
+ */
+function fdModeClass(mode: string): 'CW' | 'PH' | 'DIG' {
+  const m = (mode || '').trim().toUpperCase()
+  if (m === 'CW' || m === 'PH' || m === 'DIG') return m
+  const cls = modeClassOf(m)
+  return cls === 'CW' ? 'CW' : cls === 'Phone' ? 'PH' : 'DIG'
+}
+
+/**
+ * THE COLLISION — the FD mode classes on this band that more than one LIVE position is running.
+ * Empty means no conflict, and that is the common case.
+ *
+ * ⚠️ STALE POSITIONS DO NOT PARTICIPATE. Past `FD_PRESENCE_DEAD_SECS` the reading says where a
+ * tent WAS; it may have moved and the report simply has not reached the host. Raising an alarm
+ * off a reading we know is out of date is how a board earns the habit of being ignored, and the
+ * alarm that matters is the one at 2 AM after that habit forms. The stale position is still
+ * listed and still ⚠-marked — nothing is hidden, it just cannot ring the bell.
+ */
+function bandClashClasses(here: FdClubStatus['board']): string[] {
+  const seen = new Map<string, number>()
+  for (const r of here) {
+    if (r.lastSeenSecs > FD_PRESENCE_DEAD_SECS) continue
+    // ⚠️ AND NEITHER DOES A POSITION THAT HAS NOT WORKED ANYBODY. Presence carries DEFAULTS:
+    // a freshly launched Nexus reports band "20m", mode DIG before a rig is even plugged in,
+    // and the pump sends that first report the instant it connects. Three club laptops opened
+    // on the Friday afternoon — or one logging-only seat, or a spare with no CAT — therefore
+    // all announce 20m/DIG at once, and a detector that counted them would paint ⛔ CLASH
+    // across the board before anyone had keyed a transmitter. That is the alarm-that-cries-
+    // wolf failure exactly: by 2 AM, when a real collision costs contacts, nobody is looking
+    // at it any more. A contact in the log is the cheapest available proof that a position is
+    // genuinely on that band and mode rather than merely switched on.
+    if (r.qsos === 0) continue
+    const cls = fdModeClass(r.mode)
+    seen.set(cls, (seen.get(cls) ?? 0) + 1)
+  }
+  return [...seen.entries()].filter(([, n]) => n > 1).map(([cls]) => cls)
+}
+
 /**
  * WHO IS ON WHICH BAND — one row per BAND, not per position.
  *
@@ -570,6 +691,13 @@ const FD_BOARD_BANDS = ['160m', '80m', '40m', '20m', '15m', '10m', '6m', '2m', '
  * Two stations on the same band is shown rather than hidden: at a multi-transmitter club
  * that is either a mistake about to cost a QSO or a deliberate CW/phone split, and the
  * operator is the one who can tell which.
+ *
+ * COLOUR carries the two readings this board is glanced at for. A busy band takes its own
+ * `BAND_COLOR` — the same ink the map spots and the band picker use, so 20m looks like 20m
+ * everywhere — while a free band stays dim and uncoloured, because the gap is what the eye is
+ * hunting for. A band where two live positions share a mode class goes to the alert ink with a
+ * ⛔ and the word CLASH: it is read from across a tent, so it has to be wrong at a glance, and
+ * the word (not the colour) is what carries it to a colour-blind operator or a screen reader.
  */
 export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big?: boolean }) {
   const byBand = new Map<string, typeof club.board>()
@@ -593,21 +721,62 @@ export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big
       {[...FD_BOARD_BANDS, ...extra].map((band) => {
         const here = byBand.get(band) ?? []
         const busy = here.length > 0
+        const clash = bandClashClasses(here)
+        // The FD mode codes are invariant (FD_MODE_CODES), so the description names them as
+        // they are logged — a club board that said "digital" where the log says DIG is a
+        // second vocabulary to learn at 2 AM.
+        const why = clash.length
+          ? t('fieldDay.club.bands.clash.why', { band, mode: clash.join(' / ') })
+          : undefined
         return (
           <Fragment key={band}>
-            <span className="mono" style={{ ...cell, fontWeight: 800, opacity: busy ? 1 : 0.5 }}>
+            <span
+              className="mono"
+              style={{
+                ...cell,
+                fontWeight: 800,
+                opacity: busy ? 1 : 0.5,
+                color: clash.length
+                  ? 'var(--alert-critical)'
+                  : busy
+                    ? bandColor(band)
+                    : undefined,
+              }}
+            >
               {band}
             </span>
-            <span className="mono" style={{ ...cell, opacity: busy ? 1 : 0.45 }}>
+            <span
+              className="mono"
+              data-band-clash={clash.length ? band : undefined}
+              title={why}
+              style={{
+                ...cell,
+                opacity: busy ? 1 : 0.45,
+                ...(clash.length
+                  ? {
+                      color: 'var(--alert-critical)',
+                      fontWeight: 700,
+                      background: 'color-mix(in srgb, var(--alert-critical) 18%, transparent)',
+                      padding: big ? '4px 8px' : '2px 6px',
+                      borderRadius: 4,
+                    }
+                  : null),
+              }}
+            >
+              {clash.length > 0 && (
+                <span aria-hidden="true">⛔ {t('fieldDay.club.bands.clash.mark')} · </span>
+              )}
               {busy
                 ? here
                     .map((r) => {
                       const who = r.posName || r.operator || t('fieldDay.club.board.unnamed')
-                      const stale = r.lastSeenSecs > 15 ? ' ⚠' : ''
+                      const stale = r.lastSeenSecs > FD_PRESENCE_DEAD_SECS ? ' ⚠' : ''
                       return `${who} · ${r.mode}${stale}`
                     })
                     .join('   |   ')
                 : t('fieldDay.club.bands.free')}
+              {/* The alarm in words, for a reader who gets neither the ink nor the glyph. */}
+              {why && <span className="sr-only"> {why}</span>}
             </span>
           </Fragment>
         )
@@ -950,7 +1119,19 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
   const log = fieldDay?.log ?? []
   const [exportError, setExportError] = useState<string | null>(null)
   const [busy, setBusy] = useState<ExportFormat | null>(null)
+  // The 15 bonuses are worth ~1450 points — more than most clubs' QSO points — and they
+  // sat behind a collapsed disclosure an operator had to know was there. Once the event is
+  // running the panel opens itself, ONCE: `openedForRun` means a club that deliberately
+  // closes it is not fought on the next snapshot.
   const [bonusOpen, setBonusOpen] = useState(false)
+  const openedForRun = useRef(false)
+
+  useEffect(() => {
+    if (running && !openedForRun.current) {
+      openedForRun.current = true
+      setBonusOpen(true)
+    }
+  }, [running])
 
   // Settings round-trip for the bonus checklist (same pattern as specialOp in OperateCockpit).
   const [settings, setSettingsState] = useState<Settings | null>(null)
@@ -967,11 +1148,14 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
   // inside FieldDayScoreboard).
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
 
-  const toggleBonus = async (id: string) => {
+  // One optimistic writer for every scoring field on this panel (earned list, plan list,
+  // power multiplier) — the shape the single bonus checkbox already used. Each patches ONE
+  // field of the settings the panel is holding, so the three controls cannot write over
+  // each other's state, and the power chips edit the very same `fdPowerMult` the Settings
+  // panel does rather than a second copy of it.
+  const saveScoringPatch = async (patch: Partial<Settings>) => {
     if (!settings) return
-    const cur = settings.fdBonuses ?? []
-    const next = cur.includes(id) ? cur.filter((b) => b !== id) : [...cur, id]
-    const updated: Settings = { ...settings, fdBonuses: next }
+    const updated: Settings = { ...settings, ...patch }
     setSettingsState(updated)
     try {
       await setSettings(updated)
@@ -980,6 +1164,15 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
       setSettingsState(settings)
     }
   }
+  const toggle = (list: string[], id: string) =>
+    list.includes(id) ? list.filter((b) => b !== id) : [...list, id]
+  /** Confirm / un-confirm a bonus. THIS is the list the score is made of. */
+  const toggleEarned = (id: string) =>
+    saveScoringPatch({ fdBonuses: toggle(settings?.fdBonuses ?? [], id) })
+  /** Put a bonus on the chase list (or take it off). Never touches the score. */
+  const togglePlanned = (id: string) =>
+    saveScoringPatch({ fdBonusesPlanned: toggle(settings?.fdBonusesPlanned ?? [], id) })
+  const setPowerMult = (mult: number) => saveScoringPatch({ fdPowerMult: mult })
 
   // Persist the settable Field Day operator (optimistic). NOT the whole-struct save that
   // toggleBonus uses: a seat swap happens mid-QSO, and the heavyweight path drops the TX
@@ -1013,6 +1206,14 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
   // Summary export + the bonuses count.
   const { fdPowerMult, qsoPts, poweredPoints, claimedBonusIds: claimedBonuses, bonusPoints, totalScore } =
     computeFdScore(fieldDay, settings)
+
+  // The chase: earned vs planned. `computeFdScore` above is untouched by any of this —
+  // it reads `fdBonuses` and nothing else, which is what makes a plan unscoreable.
+  const plannedBonuses = settings?.fdBonusesPlanned ?? []
+  const tally = useMemo(
+    () => fdBonusTally(claimedBonuses, plannedBonuses),
+    [claimedBonuses, plannedBonuses],
+  )
 
   // Two words for two events, not one word with a variant: ARRL calls the exchange field
   // Class and WFD calls it Category.
@@ -1177,7 +1378,12 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} />
 
-      {/* BONUSES COLLAPSIBLE */}
+      {/* SCORING: the power multiplier and the bonus chase, in one place.
+          Both halves of the score used to live on different screens — the multiplier in
+          Settings ▸ Contesting, the bonuses down here — so nobody could see the sum they
+          make. The multiplier keeps its Settings home (that is the registry's, and the
+          manual's, address for it) and is MIRRORED here on the same field: an operator
+          meets scoring where the score is, and there is only ever one value. */}
       <div className="fd-bonuses-section">
         <button
           type="button"
@@ -1186,6 +1392,9 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
           aria-expanded={bonusOpen}
         >
           <span>{t('fieldDay.bonuses.head')}</span>
+          <span className="fd-scoring-power-chip">
+            {t('fieldDay.scoring.power.chip', { mult: fdPowerMult })}
+          </span>
           <span className="fd-bonuses-count">
             {t('fieldDay.bonuses.count', {
               claimed: claimedBonuses.length,
@@ -1193,25 +1402,102 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
               points: bonusPoints,
             })}
           </span>
+          {tally.plannedCount > 0 && (
+            <span className="fd-bonuses-planned-count">
+              {t('fieldDay.bonuses.planned.count', {
+                count: tally.plannedCount,
+                points: tally.plannedPoints,
+              })}
+            </span>
+          )}
           <span className="fd-bonuses-chevron">{bonusOpen ? '▲' : '▼'}</span>
         </button>
         {bonusOpen && (
-          <div className="fd-bonuses-list" role="group" aria-label={t('fieldDay.bonuses.aria')}>
-            {FD_BONUSES.map((b) => {
-              const checked = claimedBonuses.includes(b.id)
-              return (
-                <label key={b.id} className={`fd-bonus-row${checked ? ' checked' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => void toggleBonus(b.id)}
-                    aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
-                  />
-                  <span className="fd-bonus-label">{b.label}</span>
-                  <span className="fd-bonus-pts">{t('fieldDay.bonus.pts', { points: b.points })}</span>
-                </label>
-              )
-            })}
+          <div className="fd-bonuses-body">
+            {/* POWER MULTIPLIER — the same `fdPowerMult` Settings writes. A whole-settings
+                save, like the bonus checkboxes beside it: the engine keeps the contest log
+                across it (engine.rs pins that), and a power tier is set once per event. */}
+            <div className="fd-power-row">
+              <span className="fd-power-label">{t('settings.fieldDay.power.label')}</span>
+              <div
+                className="fd-power-chips"
+                role="group"
+                aria-label={t('settings.fieldDay.power.aria')}
+              >
+                {FD_POWER_TIERS.map((p) => (
+                  <button
+                    key={p.value}
+                    type="button"
+                    className={`fd-power-chip${fdPowerMult === p.value ? ' active' : ''}`}
+                    aria-pressed={fdPowerMult === p.value}
+                    title={t(p.hintKey)}
+                    disabled={!settings}
+                    onClick={() => void setPowerMult(p.value)}
+                  >
+                    {t(p.labelKey)}
+                  </button>
+                ))}
+              </div>
+              <span className="fd-power-hint">{t('settings.fieldDay.power.hint')}</span>
+            </div>
+
+            {/* THE CHASE. Which number is real is the whole point of this strip: earned
+                points are in the score, planned points are not, and the ceiling is what
+                the club is still chasing. */}
+            <div className="fd-chase" role="group" aria-label={t('fieldDay.bonuses.chase.aria')}>
+              <div className="fd-chase-tile earned">
+                <span className="fd-chase-val">
+                  {t('fieldDay.bonuses.chase.earned', { points: tally.earnedPoints })}
+                </span>
+                <span className="fd-chase-note">{t('fieldDay.bonuses.chase.earned.note')}</span>
+              </div>
+              <div className="fd-chase-tile planned">
+                <span className="fd-chase-val">
+                  {t('fieldDay.bonuses.chase.planned', { points: tally.plannedPoints })}
+                </span>
+                <span className="fd-chase-note">{t('fieldDay.bonuses.chase.planned.note')}</span>
+              </div>
+              <div className="fd-chase-tile potential">
+                <span className="fd-chase-val">
+                  {t('fieldDay.bonuses.chase.potential', { points: tally.potentialPoints })}
+                </span>
+              </div>
+            </div>
+
+            <div className="fd-bonuses-list" role="group" aria-label={t('fieldDay.bonuses.aria')}>
+              {FD_BONUSES.map((b) => {
+                const state = fdBonusState(b.id, claimedBonuses, plannedBonuses)
+                const earned = state === 'earned'
+                const onPlan = plannedBonuses.includes(b.id)
+                return (
+                  <div
+                    key={b.id}
+                    className={`fd-bonus-row${earned ? ' checked' : ''}${state === 'planned' ? ' planned' : ''}`}
+                    data-bonus-state={state}
+                  >
+                    <input
+                      id={`fd-bonus-${b.id}`}
+                      type="checkbox"
+                      checked={earned}
+                      onChange={() => void toggleEarned(b.id)}
+                      aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
+                    />
+                    <label className="fd-bonus-label" htmlFor={`fd-bonus-${b.id}`}>{b.label}</label>
+                    <button
+                      type="button"
+                      className={`fd-bonus-plan${onPlan ? ' on' : ''}`}
+                      aria-pressed={onPlan}
+                      title={t('fieldDay.bonus.plan.title')}
+                      aria-label={t('fieldDay.bonus.plan.aria', { label: b.label })}
+                      onClick={() => void togglePlanned(b.id)}
+                    >
+                      {onPlan ? t('fieldDay.bonus.plan.on') : t('fieldDay.bonus.plan.off')}
+                    </button>
+                    <span className="fd-bonus-pts">{t('fieldDay.bonus.pts', { points: b.points })}</span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
       </div>
