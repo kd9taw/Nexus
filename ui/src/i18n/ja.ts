@@ -2292,6 +2292,7 @@ export const JA: PartialCatalog = {
   "recall.note.title": "この局に関する最新のメモ",
   "recall.log.head": "過去の交信",
   "recall.log.aria": "{{call}}との過去の交信",
+  "recall.log.row.title": "{{call}}をログブックで表示",
   "bandPicker.select.title": "バンド — このセッションでこのモード・このバンドの最後の周波数へ。なければ免許範囲セグメントの先頭へ",
   "bandPicker.txLock.label": "🔒 送信ロック",
   "bandPicker.txLock.splitTitle": "送信ロック中 — スプリットの送信周波数 {{tx}} MHz が免許の範囲外です。{{rx}} MHz での受信は問題ありません。",

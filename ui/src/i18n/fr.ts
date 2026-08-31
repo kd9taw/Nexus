@@ -2630,6 +2630,7 @@ export const FR: PartialCatalog = {
   "recall.geo.title": "Distance orthodromique · azimut vrai depuis votre QTH",
   "recall.geo.title.approx": "Distance orthodromique · azimut vrai depuis votre QTH — approximatif : calculé depuis le centre de {{squares}}",
   "recall.log.aria": "Contacts précédents avec {{call}}",
+  "recall.log.row.title": "Afficher {{call}} dans le Journal",
   "recall.log.head": "Contacts précédents",
   "recall.need.band": "Nouveau créneau bande",
   "recall.need.entity": "Nouveau DXCC !",

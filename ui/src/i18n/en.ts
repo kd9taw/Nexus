@@ -3731,6 +3731,7 @@ export const EN = {
   'recall.note.title': 'Your most recent note on this station',
   'recall.log.head': 'Previous contacts',
   'recall.log.aria': 'Previous contacts with {{call}}',
+  'recall.log.row.title': 'Show {{call}} in the Logbook',
 
   // ── The band controls (the licensed-band picker, the frequency control) ─────────────
   // ⚠️ Band names are both the LABEL and the VALUE of the pickers' options — `pickBand` sends

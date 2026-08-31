@@ -44,6 +44,9 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
 
 interface Props {
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting; the shell
    * (stream / macros / compose) renders without it, only the header needs it. */
   snap?: AppSnapshot | null
@@ -151,7 +154,7 @@ function seqLabel(s: string): string {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, panels }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
   // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
   // bar are pinned; only the decoded-text stream is removable, filling the space between them.
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
@@ -685,6 +688,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {snap && (
         <CockpitPaneFrame title={t('rtty.pane.log.title')} paneId="log" weight={1.5}>
           <LogEntry
+            onOpenLogbook={onOpenLogbook}
             snap={snap}
             mode={RTTY}
             defaultRst="599"

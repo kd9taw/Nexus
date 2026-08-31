@@ -42,6 +42,9 @@ import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
 
 interface Props {
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting; the stream
    * pane renders without it, only the header needs it. */
   snap?: AppSnapshot | null
@@ -131,7 +134,7 @@ function fmtAfc(hz: number): string {
  * Mounted in a keep-alive host (like RTTY/SSTV) so the decoded stream keeps
  * accumulating while the operator is on another section.
  */
-export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, panels }: Props) {
+export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
   const host = panels
     ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels() })
     : null
@@ -632,6 +635,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       {snap && (
         <CockpitPaneFrame title={t('psk.pane.log.title')} paneId="log" weight={1.5}>
           <LogEntry
+            onOpenLogbook={onOpenLogbook}
             snap={snap}
             // The sub-mode table's names ARE the ADIF Mode tokens (PSK31 / QPSK31), so the
             // record says which waveform was actually on the air rather than folding QPSK

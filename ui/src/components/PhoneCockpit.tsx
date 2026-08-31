@@ -132,6 +132,9 @@ interface Props {
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
    * point at Settings stay plain text. */
   onOpenSettings?: (target: string) => void
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
 }
 
 /**
@@ -342,7 +345,7 @@ const FLEX_SPANS = [
   { label: '2M', hz: 2_000_000 },
 ] as const
 
-export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, panels }: Props) {
+export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, panels }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -1065,6 +1068,7 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
           card scrolls inside the log column and can never squeeze the cockpit — the operator
           gets the QRZ photo / bearing / history back while operating. */}
       <LogEntry
+        onOpenLogbook={onOpenLogbook}
         snap={snap}
         mode={commandedMode === 'FM' ? 'FM' : 'SSB'}
         defaultRst="59"

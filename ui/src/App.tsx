@@ -327,6 +327,12 @@ export default function App() {
   })
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
+  // Callsign handed off from a cockpit recall card's previous-contact row (#192) — the Logbook
+  // opens with it in the search box. `pendingWork`'s shape, not `satFocus`'s, and the `ts` nonce
+  // is the reason: the operator can type over the Logbook's search box, go back to the cockpit
+  // and click the same call again, and a bare `string | null` would not refire for that. Cleared
+  // once the Logbook has consumed it, so a later trip through the nav opens unfiltered.
+  const [logFocus, setLogFocus] = useState<{ call: string; ts: number } | null>(null)
   // Bumped when the wizard closes: remounts SettingsPanel so a stale full-struct
   // form under the modal can't Save over what the wizard just persisted.
   const [wizardGen, setWizardGen] = useState(0)
@@ -2132,6 +2138,17 @@ export default function App() {
   const navEnabled: Record<FeatureId, boolean> = { ...features.enabled, fieldDay: fdActive }
   const isViewEnabled = (v: View): boolean => navEnabled[v as FeatureId] !== false
 
+  // Recall card → Logbook, filtered to the call (#192, kr4fqg: "click a previous contact and
+  // land in the log"). Same shape as the `onOpenMemories` handoffs below — `undefined` when the
+  // section is switched off in this build, which is what keeps the row from advertising a
+  // navigation that would go nowhere. Every cockpit that mounts a recall card gets it.
+  const openLogbookFor = isViewEnabled('logbook')
+    ? (call: string) => {
+        setLogFocus({ call, ts: Date.now() })
+        setView('logbook')
+      }
+    : undefined
+
   // Defense in depth: if the current view's feature got disabled (e.g. toggled
   // off in Settings while viewing it), fall back to the profile's landing view.
   // The nav already hides disabled sections; this guards a stale selection. Never
@@ -2371,6 +2388,7 @@ export default function App() {
       // Logbook, Settings, Program and POTA wear. See the dashboard branch below.
       workspace = fdShowCockpit ? (
         <FdCockpit
+          onOpenLogbook={openLogbookFor}
           snap={snap}
           onSnap={setSnap}
           fieldDay={snap.fieldDay}
@@ -2414,6 +2432,8 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <Logbook
+            focusCall={logFocus}
+            onConsumeFocusCall={() => setLogFocus(null)}
             defaultBand={snap.radio.band}
             defaultFreqMhz={snap.radio.dialMhz}
             // Seed manual entries from the mode the operator was ACTUALLY running —
@@ -2504,6 +2524,7 @@ export default function App() {
     case 'cw':
       workspace = (
         <CwCockpit
+          onOpenLogbook={openLogbookFor}
           pitchHz={settings?.cwPitchHz ?? 600}
           wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
           snap={snap}
@@ -2526,6 +2547,7 @@ export default function App() {
     case 'phone':
       workspace = (
         <PhoneCockpit
+          onOpenLogbook={openLogbookFor}
           snap={snap}
           panels={phonePanels}
           theme={theme}
@@ -2652,6 +2674,7 @@ export default function App() {
       workspace = (
         <main className="layout single">
           <SatellitesView
+            onOpenLogbook={openLogbookFor}
             focusSat={satFocus}
             snap={snap}
             onPopOut={() => void openPanelWindow('sats')}
@@ -2949,6 +2972,7 @@ export default function App() {
               as before) and display:none when hidden. */}
           <div className="operate-host" hidden={effectiveView !== 'operate'}>
             <OperateCockpit
+              onOpenLogbook={openLogbookFor}
               companionAddr={settings?.companionAddr}
               fdActive={settings?.fdActive ?? false}
               fdRuleset={fdRuleset}
@@ -3002,6 +3026,7 @@ export default function App() {
           {isViewEnabled('rtty') && (
             <div className="rtty-host" hidden={effectiveView !== 'rtty'}>
               <RttyCockpit
+                onOpenLogbook={openLogbookFor}
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'rtty'}
@@ -3016,6 +3041,7 @@ export default function App() {
           {isViewEnabled('psk') && (
             <div className="psk-host" hidden={effectiveView !== 'psk'}>
               <PskCockpit
+                onOpenLogbook={openLogbookFor}
                 snap={snap}
                 onSnap={setSnap}
                 active={effectiveView === 'psk'}

@@ -211,6 +211,9 @@ interface Props {
   /** Open Settings at a section id (see settings/registry.ts). Absent ⇒ the surfaces that
    * point at Settings stay plain text. */
   onOpenSettings?: (target: string) => void
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
    *  Optional: without it every pane shows and there's no ⊞ menu. */
   panels?: PanelLayoutApi<CwPanelId>
@@ -313,6 +316,7 @@ export function CwCockpit({
   onRecallMemory,
   onOpenMemories,
   onOpenSettings,
+  onOpenLogbook,
   panels,
 }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
@@ -1200,6 +1204,7 @@ export function CwCockpit({
           pane grid made this pane's .pane-body the scroller, so the FULL recall card (photo /
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
       <LogEntry
+        onOpenLogbook={onOpenLogbook}
         snap={snap}
         mode="CW"
         defaultRst="599"

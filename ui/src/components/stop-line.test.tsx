@@ -692,6 +692,10 @@ const appProps = {
   tier: 'FT8' as const,
   onOpenDashboard: () => {},
   onOpenOperate: () => {},
+  // #192: hands a callsign to the Logbook from the log strip's recall card. Swept because the
+  // guard below demands set equality with App's real mount — every prop App passes has to be
+  // present here or the sweep is asserting against a cockpit App never renders.
+  onOpenLogbook: () => {},
 }
 
 /** Vite rewrites a LITERAL `new URL('…', import.meta.url)` into a served asset URL, and

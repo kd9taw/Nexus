@@ -79,6 +79,9 @@ interface Props {
   /** Active mode/tier (authoritative from the snapshot's link). */
   tier: Tier
   onTierChange: (t: Tier) => void
+  /** Open the Logbook filtered to a callsign (#192) — handed to the recall card in the side
+   *  rail, whose previous-contact rows become clickable when it is present. Omitted ⇒ inert. */
+  onOpenLogbook?: (call: string) => void
   /** Switch the RX signal source (native engine vs WSJT-X companion over UDP). */
   onSourceChange: (k: SourceKind) => void
   /** Click-to-tune on the waterfall: left=TX, right=RX, both buttons=TX+RX. */
@@ -307,6 +310,7 @@ export function OperateCockpit({
   theme,
   tier,
   onTierChange,
+  onOpenLogbook,
   bandPlan,
   onSetFrequency,
   onSourceChange,
@@ -819,7 +823,7 @@ export function OperateCockpit({
   // about who is being worked.
   const recallCall = selectedCall || snap.qso?.dxcall || null
   const recallCard = recallCall ? (
-    <OperateRecall snap={snap} call={recallCall} mode={tier} />
+    <OperateRecall snap={snap} call={recallCall} mode={tier} onOpenLog={onOpenLogbook} />
   ) : null
 
   return (
@@ -1490,7 +1494,17 @@ export function OperateCockpit({
  *     screen for a roster click. The card degrades to identity + history + badges, exactly
  *     as the CW cockpit's does today.
  */
-function OperateRecall({ snap, call, mode }: { snap: AppSnapshot; call: string; mode: string }) {
+function OperateRecall({
+  snap,
+  call,
+  mode,
+  onOpenLog,
+}: {
+  snap: AppSnapshot
+  call: string
+  mode: string
+  onOpenLog?: (call: string) => void
+}) {
   const cu = call.trim().toUpperCase()
   const [log, setLog] = useState<LoggedQso[]>([])
   const [book, setBook] = useState<QrzLookup | null>(null)
@@ -1585,6 +1599,7 @@ function OperateRecall({ snap, call, mode }: { snap: AppSnapshot; call: string; 
       // The rail is SHARED with the Stations roster; unbounded this card took it down to
       // ~2 rows at 1024x768 and off-screen at 175 % zoom. See `.cockpit-recall`.
       bounded
+      onOpenLog={onOpenLog}
     />
   )
 }

@@ -2015,6 +2015,7 @@ export const DE: PartialCatalog = {
   "recall.note.title": "Die letzte Notiz zu dieser Station",
   "recall.log.head": "Frühere QSOs",
   "recall.log.aria": "Frühere QSOs mit {{call}}",
+  "recall.log.row.title": "{{call}} im Logbuch anzeigen",
   "bandPicker.select.title": "Band — die zuletzt in dieser Sitzung auf diesem Band und in dieser Betriebsart genutzte Frequenz, sonst der Anfang des zugelassenen Bereichs",
   "bandPicker.txLock.label": "🔒 TX gesperrt",
   'bandPicker.txLock.splitTitle':

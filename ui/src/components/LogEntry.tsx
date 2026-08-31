@@ -145,6 +145,10 @@ interface Props {
    * the dial). Phone/CW ask (operator 2026-07-21); omitted = no button (FT8 has its
    * own roster-side spot affordance). */
   onSpot?: (call: string) => void
+  /** Open the Logbook filtered to a callsign — handed straight to the recall card below, whose
+   *  previous-contact rows become clickable when it is present (#192). Omitted = inert rows,
+   *  which is what a build with the Logbook section switched off gets. */
+  onOpenLogbook?: (call: string) => void
   /** Click-to-work handoff from the Needed board: the callsign to prefill + focus RST.
    * `ts` changes per click so re-working the same call refires the prefill. */
   pendingWork?: { call: string; ts: number } | null
@@ -253,6 +257,7 @@ export function LogEntry({
   defaultRst,
   exchange,
   onSpot,
+  onOpenLogbook,
   pendingWork,
   onConsumeWork,
   cwLive,
@@ -1522,6 +1527,7 @@ export function LogEntry({
         newEntity={newEntity}
         newBandSlot={newBandSlot}
         newModeSlot={newModeSlot}
+        onOpenLog={onOpenLogbook}
       />
     </div>
   )

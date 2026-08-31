@@ -226,6 +226,9 @@ interface Props {
   onOpenDashboard?: () => void
   /** Open the FT Operate cockpit — the DIG note's one action. Omitted ⇒ no button. */
   onOpenOperate?: () => void
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
 }
 
 /**
@@ -245,6 +248,7 @@ export function FdCockpit({
   tier,
   onOpenDashboard,
   onOpenOperate,
+  onOpenLogbook,
 }: Props) {
   // The class is DERIVED and OVERRIDABLE. `null` = follow the radio; a value pins it. Session
   // state on purpose: an override answers "the rig is lying right now", which is not a fact
@@ -801,6 +805,7 @@ export function FdCockpit({
       <div className="cockpit-txdock" ref={dockRef}>
         <div className="fd-entry" role="group" aria-label={t('fieldDay.cockpit.entry.aria')}>
           <LogEntry
+            onOpenLogbook={onOpenLogbook}
             snap={snap}
             mode={modeClass === 'CW' ? 'CW' : 'SSB'}
             defaultRst={modeClass === 'CW' ? '599' : '59'}

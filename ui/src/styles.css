@@ -7566,6 +7566,23 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .recall-log-row:nth-child(even) {
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }
+/* A prior-contact row that opens the Logbook filtered to this call (#192, kr4fqg). The
+   affordance is conditional on the host having wired the handoff — a row that navigates
+   nowhere must never advertise that it does — hence `.clickable` rather than styling every
+   row. Hover beats the zebra stripe on specificity (0,3,0 over 0,2,0), which it has to: the
+   even rows carry a background of their own.
+   The focus ring goes INSIDE the row. The global `:focus-visible` sits at `outline-offset: 2px`,
+   and this list is a bounded 12em scroller, so on the first and last visible rows an outset ring
+   is clipped by the scroller edge — exactly where a keyboard operator arrives. */
+.recall-log-row.clickable {
+  cursor: pointer;
+}
+.recall-log-row.clickable:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.recall-log-row.clickable:focus-visible {
+  outline-offset: -2px;
+}
 .recall-log-date {
   color: var(--text-dim);
 }

@@ -2630,6 +2630,7 @@ export const ES: PartialCatalog = {
   "recall.geo.title": "Distancia de círculo máximo · rumbo verdadero desde tu QTH",
   "recall.geo.title.approx": "Distancia de círculo máximo · rumbo verdadero desde tu QTH — aproximado: calculado desde el centro de {{squares}}",
   "recall.log.aria": "Contactos anteriores con {{call}}",
+  "recall.log.row.title": "Ver {{call}} en el Log",
   "recall.log.head": "Contactos anteriores",
   "recall.need.band": "Nuevo slot de banda",
   "recall.need.entity": "¡Nuevo DXCC!",

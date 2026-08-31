@@ -97,6 +97,9 @@ interface Props {
    * until it lands. */
   snap?: AppSnapshot | null
   onPopOut?: () => void
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
 }
 
 const SCHEDULE_HOURS = 48
@@ -1923,7 +1926,7 @@ function SatLockOn({ onLockOn }: { onLockOn: () => void }) {
   )
 }
 
-export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
+export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook }: Props) {
   const [view, setView] = useState<SatView | null>(null)
   const [favs, setFavs] = useState<Set<string>>(() => satChasingSet())
   const [schedule, setSchedule] = useState<SatPass[]>([])
@@ -3950,6 +3953,7 @@ export function SatellitesView({ focusSat, snap, onPopOut }: Props) {
                 what he asked for one message earlier — "make it smaller so
                 the logging and az/el map are visable together". */}
             <LogEntry
+              onOpenLogbook={onOpenLogbook}
               snap={snap}
               mode={logMode}
               defaultRst={logMode === 'CW' ? '599' : '59'}

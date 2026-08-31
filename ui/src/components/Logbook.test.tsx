@@ -334,3 +334,50 @@ describe('#152 — recording a QSL card does not depend on a filter, or on not h
   })
 })
 
+
+// The receiving half of #192 (kr4fqg): a previous-contact row in a cockpit's recall card switches
+// to the Logbook with that callsign already filtering it. The SEARCH BOX is the seam on purpose —
+// a `LoggedQso` has no stable id and the edit/delete API addresses rows by index, so an index
+// carried across a view switch is stale by construction. Landing in the visible box also means the
+// operator can SEE what is filtering the log and clear it with the ✕ that is already there.
+describe('recall-card handoff (#192)', () => {
+  it('opens filtered to the handed-over callsign, and reports the handoff consumed', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...fakeLog(1)[0], call: 'W1AW' },
+      { ...fakeLog(1)[0], call: 'K9XYZ', whenUnix: fakeLog(1)[0].whenUnix - 100 },
+    ])
+    const onConsume = vi.fn()
+    const { container } = render(
+      <Logbook
+        defaultBand="20m"
+        defaultFreqMhz={14.074}
+        defaultMode="FT8"
+        focusCall={{ call: 'W1AW', ts: 1 }}
+        onConsumeFocusCall={onConsume}
+      />,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+    // The box shows the filter rather than applying one invisibly.
+    const box = container.querySelector('.log-search') as HTMLInputElement
+    expect(box.value).toBe('W1AW')
+    await waitFor(() => {
+      const calls = [...container.querySelectorAll('.logbook-row:not(.head)')].map(
+        (r) => r.textContent ?? '',
+      )
+      expect(calls.some((c) => c.includes('W1AW'))).toBe(true)
+      expect(calls.some((c) => c.includes('K9XYZ'))).toBe(false)
+    })
+    // …and the parent is told to clear it, so a later trip through the nav opens unfiltered.
+    expect(onConsume).toHaveBeenCalled()
+  })
+
+  it('opens unfiltered when nothing was handed over', async () => {
+    ;(api.getLog as ReturnType<typeof vi.fn>).mockResolvedValue(fakeLog(3))
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
+    )
+    await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
+    expect((container.querySelector('.log-search') as HTMLInputElement).value).toBe('')
+    expect(container.querySelectorAll('.logbook-row:not(.head)').length).toBe(3)
+  })
+})
