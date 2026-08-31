@@ -75,7 +75,7 @@ import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
-import { FdClubSection, FieldDayScoreboard } from './components/FieldDayView'
+import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/FieldDayView'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
@@ -598,6 +598,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             <span>{t('detached.fieldDay.inactive')}</span>
           </div>
         )}
+        {/* WHO IS ON WHICH BAND, in the window the operator already tears off beside the
+            operator box — the place they asked for it. One row per band, so an empty row
+            is the answer to "where can I move?". Only while a club event is running; a
+            single-station Field Day has no bands to compete for. */}
+        {fd?.club ? <FdBandOccupancy club={fd.club} big /> : null}
       </div>
     )
   }

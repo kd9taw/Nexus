@@ -238,3 +238,69 @@ describe('the club band board pops out', () => {
     expect(screen.getByText(/Club sync is off/i)).toBeTruthy()
   })
 })
+describe('the band board answers "where can I move?"', () => {
+  // ⚠️ THE INVERSION IS THE FEATURE. The club board lists POSITIONS with a band column, which
+  // answers "what is the CW tent doing?". The operator asked four separate times for the other
+  // question — which band is free — and could not find it, because it did not exist: to get it
+  // from a position list you invert the whole thing in your head, at 2 AM, while somebody
+  // waits. Here an EMPTY ROW is the answer.
+  const twoUp: FdClubStatus = {
+    ...CLUB,
+    board: [
+      { posid: 'a1', posName: 'CW tent', band: '40m', mode: 'CW', operator: 'KD9TAW', qsos: 12, rate: 20, lastSeenSecs: 2 },
+      { posid: 'b2', posName: 'SSB tent', band: '20m', mode: 'PH', operator: 'W1ABC', qsos: 30, rate: 25, lastSeenSecs: 2 },
+    ],
+  }
+
+  it('shows every band, marks the busy ones, and calls the rest free', async () => {
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb(snapWithClub(twoUp))
+      return () => {}
+    })
+    render(<DetachedPanel panel="fieldday" />)
+    await settle()
+    const board = document.querySelector('[data-band-occupancy]') as HTMLElement
+    expect(board, 'the band board is in the pop-out beside the operator box').toBeTruthy()
+    const text = board.textContent ?? ''
+    // The two that are busy say who, and in which mode.
+    expect(text).toContain('CW tent')
+    expect(text).toContain('SSB tent')
+    // 15m is on nobody, and that is the whole point of the view.
+    expect(text).toContain('free')
+    // Every worked band is listed even when nobody is on it — the operator scans for a gap.
+    for (const b of ['160m', '80m', '40m', '20m', '15m', '10m']) {
+      expect(text, `${b} must be listed`).toContain(b)
+    }
+    // The barred bands are NOT offered as somewhere to go. Checked against the band CELLS,
+    // not the concatenated text — "160m" contains "60m", and a substring assertion here
+    // fails on a perfectly correct board.
+    const bandCells = [...board.querySelectorAll('span')]
+      .map((e) => (e.textContent ?? '').trim())
+      .filter((tx) => /^\d+(\.\d+)?(m|cm)$/.test(tx))
+    for (const b of ['60m', '30m', '17m', '12m']) {
+      expect(bandCells, `${b} is barred at Field Day and must not read as free`).not.toContain(b)
+    }
+    expect(bandCells, 'the standard Field Day bands are all listed').toContain('160m')
+  })
+
+  it('shows BOTH stations when two land on the same band', async () => {
+    // At a multi-transmitter club this is either a mistake about to cost a contact or a
+    // deliberate CW/phone split. Hiding one would make the collision invisible.
+    const clash: FdClubStatus = {
+      ...CLUB,
+      board: [
+        { posid: 'a1', posName: 'CW tent', band: '20m', mode: 'CW', operator: 'KD9TAW', qsos: 12, rate: 20, lastSeenSecs: 2 },
+        { posid: 'b2', posName: 'GOTA', band: '20m', mode: 'PH', operator: 'W1ABC', qsos: 3, rate: 4, lastSeenSecs: 2 },
+      ],
+    }
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb(snapWithClub(clash))
+      return () => {}
+    })
+    render(<DetachedPanel panel="fieldday" />)
+    await settle()
+    const text = (document.querySelector('[data-band-occupancy]') as HTMLElement).textContent ?? ''
+    expect(text).toContain('CW tent')
+    expect(text).toContain('GOTA')
+  })
+})

@@ -553,6 +553,69 @@ function clubChipText(club: FdClubStatus): string {
  * declares the larger box, so auto-fit opens the window big enough for it instead
  * of shrinking the type straight back.
  */
+/** Bands Field Day is actually worked on. 60/30/17/12 are barred by both ARRL FD and WFD,
+ *  so a board that offered them as "free" would be inviting an illegal contact. */
+const FD_BOARD_BANDS = ['160m', '80m', '40m', '20m', '15m', '10m', '6m', '2m', '1.25m', '70cm']
+
+/**
+ * WHO IS ON WHICH BAND — one row per BAND, not per position.
+ *
+ * ⚠️ THE INVERSION IS THE WHOLE POINT, and the reason the club board did not answer this.
+ * That board lists positions and puts each one's band in a column, which answers "what is
+ * the CW tent doing?". The question an operator actually has, four times over, is the other
+ * one: "which band can I move to?" — and to answer it from a position list you have to hold
+ * every row in your head and invert it yourself, at 2 AM, while somebody waits. Here an
+ * empty row IS the answer.
+ *
+ * Two stations on the same band is shown rather than hidden: at a multi-transmitter club
+ * that is either a mistake about to cost a QSO or a deliberate CW/phone split, and the
+ * operator is the one who can tell which.
+ */
+export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big?: boolean }) {
+  const byBand = new Map<string, typeof club.board>()
+  for (const row of club.board) {
+    const b = (row.band || '').trim()
+    if (!b) continue
+    const list = byBand.get(b) ?? []
+    list.push(row)
+    byBand.set(b, list)
+  }
+  // Bands somebody is on that are not in the standard list (an off-plan band, or one of the
+  // barred ones worked by mistake) still appear — never hide a station that is transmitting.
+  const extra = [...byBand.keys()].filter((b) => !FD_BOARD_BANDS.includes(b)).sort(
+    (a, b) => bandRank(a) - bandRank(b),
+  )
+  const cell: CSSProperties = { fontSize: big ? 20 : 13, padding: big ? '4px 0' : '2px 0' }
+  return (
+    <div data-band-occupancy="" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: big ? 18 : 10 }}>
+      <span style={colHead(big)}>{t('fieldDay.club.bands.column.band')}</span>
+      <span style={colHead(big)}>{t('fieldDay.club.bands.column.who')}</span>
+      {[...FD_BOARD_BANDS, ...extra].map((band) => {
+        const here = byBand.get(band) ?? []
+        const busy = here.length > 0
+        return (
+          <Fragment key={band}>
+            <span className="mono" style={{ ...cell, fontWeight: 800, opacity: busy ? 1 : 0.5 }}>
+              {band}
+            </span>
+            <span className="mono" style={{ ...cell, opacity: busy ? 1 : 0.45 }}>
+              {busy
+                ? here
+                    .map((r) => {
+                      const who = r.posName || r.operator || t('fieldDay.club.board.unnamed')
+                      const stale = r.lastSeenSecs > 15 ? ' ⚠' : ''
+                      return `${who} · ${r.mode}${stale}`
+                    })
+                    .join('   |   ')
+                : t('fieldDay.club.bands.free')}
+            </span>
+          </Fragment>
+        )
+      })}
+    </div>
+  )
+}
+
 export function FdClubSection({
   club,
   onExport,
