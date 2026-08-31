@@ -366,6 +366,13 @@ export function MemoriesView({
   }
 
   const addNew = () => {
+    // ⚠️ CLEAR THE SEARCH FIRST, or the button looks broken. `addNew` already matches the
+    // view's OTHER filters — it stars the row under Favorites, makes it a net under Nets,
+    // joins the selected group — but a search box was never one of them. A new memory has an
+    // empty name, no callsign and no notes, so any active query filters it straight back out:
+    // the row is created, the editor opens on a row nobody can see, and the operator presses
+    // the button again. Reported as "I cannot hit the add memories button".
+    setQ('')
     const id = newMemoryId()
     commit((b) =>
       addMemory(b, {

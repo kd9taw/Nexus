@@ -123,3 +123,41 @@ describe('the ★ view is the strip written down', () => {
     )
   })
 })
+
+describe('＋ New works while a search is active', () => {
+  // The other block scopes its own cleanup, so this one needs its own or the two renders
+  // stack and every query finds two of everything.
+  afterEach(cleanup)
+
+  it('clears the search so the new row is actually on screen', () => {
+    // ⚠️ REPORTED AS "I cannot hit the add memories button". The button was never dead —
+    // `addNew` matches the view's OTHER filters (it stars the row under Favorites, makes it a
+    // net under Nets, joins the selected group) but a SEARCH was never one of them. A new
+    // memory has an empty name, no callsign and no notes, so any active query filters it
+    // straight back out: the row is created, the editor opens on something invisible, and the
+    // operator presses the button again. From the operator's chair that is a broken button.
+    const { container } = render(view())
+    const before = container.querySelectorAll('.mv-row-name').length
+
+    const search = screen.getByPlaceholderText('Search all…') as HTMLInputElement
+    fireEvent.change(search, { target: { value: 'zzzz-matches-nothing' } })
+    expect(container.querySelectorAll('.mv-row-name').length).toBe(0)
+
+    fireEvent.click(screen.getByText('＋ New'))
+    expect(search.value, 'the search is cleared, or the new row stays hidden').toBe('')
+    expect(
+      container.querySelectorAll('.mv-row-name').length,
+      'the new memory is visible, not filtered out',
+    ).toBe(before + 1)
+  })
+
+  it('POSITIVE CONTROL: a search really does hide rows', () => {
+    // Otherwise the test above would pass against a build where search did nothing at all.
+    const { container } = render(view())
+    expect(container.querySelectorAll('.mv-row-name').length).toBeGreaterThan(0)
+    fireEvent.change(screen.getByPlaceholderText('Search all…'), {
+      target: { value: 'zzzz-matches-nothing' },
+    })
+    expect(container.querySelectorAll('.mv-row-name').length).toBe(0)
+  })
+})

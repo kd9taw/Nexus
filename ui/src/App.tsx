@@ -2681,7 +2681,16 @@ export default function App() {
                       // saved on Q65/WSPR/JT65 as FT8.
                       OPERATE_TIERS.includes(tier)
                       ? tier
-                      : 'FT8'
+                      : // ⚠️ NOT 'FT8' — ASK THE RADIO. This ladder reads the last OPERATING
+                        // section, and Memories is not one: entering it leaves the ref alone,
+                        // and on a fresh launch it starts at 'digital'. So a memory saved from
+                        // the Memories view itself — the surface whose whole job is saving
+                        // memories — was stamped FT8 no matter what the rig was doing, which is
+                        // the "new memories default to digital modes" report. The rig's own
+                        // reported mode is the honest answer here and is already on the
+                        // snapshot; the tier ladder above still wins wherever an operating
+                        // section really is active, because there the operator IS in that mode.
+                        snap.radio.rigMode?.trim() || snap.radio.sideband || 'USB'
             }
             onRecall={recallMemory}
           />
