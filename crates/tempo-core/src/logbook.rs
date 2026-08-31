@@ -1726,7 +1726,7 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
 ///
 /// Uppercase on the wire: TQSL uppercases everything anyway, ADIF enumeration values are
 /// case-insensitive, and house style for new submodes is uppercase (FST4W, SCAMP_FAST).
-fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
+pub(crate) fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
     match mode.trim().to_ascii_uppercase().as_str() {
         "TEMPOFAST" => Some(("MFSK", "TEMPOFAST")),
         "TEMPODEEP" => Some(("MFSK", "TEMPODEEP")),

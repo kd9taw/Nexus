@@ -136,6 +136,17 @@ pub struct ClubLog {
     journal: Option<std::fs::File>,
 }
 
+/// How far back a host journal replay reaches. Matches the position ADIF journal's own
+/// four-day expiry — see `ClubLog::attach_journal_since` for why they must agree.
+const STALE_EVENT_SECS: u64 = 4 * 86_400;
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 impl ClubLog {
     pub fn new(event: FdEvent, event_name: &str) -> Self {
         ClubLog {
@@ -149,6 +160,31 @@ impl ClubLog {
     /// any rows already in it — the host-restart recovery. Replayed rows are
     /// NOT re-journaled. Call once, before serving.
     pub fn attach_journal(&mut self, path: &PathBuf) -> std::io::Result<()> {
+        self.attach_journal_since(path, now_unix().saturating_sub(STALE_EVENT_SECS))
+    }
+
+    /// [`Self::attach_journal`] with the cutoff exposed, so a test can age a journal
+    /// without waiting days.
+    ///
+    /// ⚠️ THE CUTOFF EXISTS BECAUSE ITS ABSENCE SILENTLY ATE A WHOLE POSITION'S LOG, on
+    /// the DEFAULT settings. The host journal is named from the event name, and the shipped
+    /// default event name is EMPTY — which slugs to the literal "event", so every host that
+    /// never typed a name shares ONE file, for ever. Replaying it a year later restored last
+    /// year's rows AND their per-position ack watermarks; the position's own ADIF journal had
+    /// self-expired at four days, so it restarted its sequence at 1; and the host then
+    /// refused every new contact as a `(posid, seq)` it already held — while the sync chip
+    /// read "Synced", because the merge returns the stored ack whether or not the row landed.
+    /// A position worked a full event into a host that kept none of it, with nothing on
+    /// screen wrong, discovered at submission.
+    ///
+    /// Four days is the position journal's own expiry (see `restore_field_day_if_enabled`),
+    /// deliberately: the two halves of the same event must age out together or the watermark
+    /// outlives the log it describes, which is exactly this bug.
+    pub fn attach_journal_since(
+        &mut self,
+        path: &PathBuf,
+        oldest_unix: u64,
+    ) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -157,6 +193,15 @@ impl ClubLog {
                 // Tolerant per line: one torn tail line (power loss mid-append)
                 // must not poison the rest of the journal.
                 if let Ok(row) = serde_json::from_str::<MergedRow>(line) {
+                    // A row from a previous event carries a stale watermark; taking it
+                    // makes this event's contacts look like duplicates.
+                    //
+                    // A row with NO timestamp (0) is kept. It cannot be aged, and silently
+                    // dropping a contact we merely cannot date is the same class of mistake
+                    // this cutoff exists to fix — an undateable row is a row somebody worked.
+                    if row.when_unix != 0 && row.when_unix < oldest_unix {
+                        continue;
+                    }
                     self.merge_row(row, 0);
                 }
             }
@@ -428,8 +473,16 @@ impl ClubLog {
     }
 
     /// Club Cabrillo export, deduped earliest-wins.
+    ///
+    /// ⚠️ THE DIAL ARGUMENT IS A LAST RESORT AND MUST NOT LOOK LIKE A BAND. It used to be a
+    /// hardcoded `14_000`, which every row with an unmapped band silently borrowed — so a
+    /// 23 cm club contact exported as 20 m. A club log is multi-band by definition and the
+    /// host has no single dial to speak for it, so there is no honest frequency to pass:
+    /// `0` reaches the exporter only for a row that recorded no band at all, and a zero in
+    /// that field reads as missing rather than as a confident wrong answer. Every row that
+    /// HAS a band now carries its own, mapped or verbatim.
     pub fn export_cabrillo(&self, mycall: &str, class: &str, section: &str) -> String {
-        self.unique_log(mycall, class, section).cabrillo(14_000)
+        self.unique_log(mycall, class, section).cabrillo(0)
     }
 }
 
@@ -641,14 +694,16 @@ mod tests {
         let path = dir.join("fd_event_test.jsonl");
 
         let mut club = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
-        club.attach_journal(&path).expect("journal opens");
+        club.attach_journal_since(&path, 0).expect("journal opens");
         club.merge(&wq("aaaa", 1, "W1AW", "20m", "DIG", "CT", 100), 10);
         club.merge(&wq("bbbb", 1, "K1ABC", "40m", "CW", "EMA", 200), 11);
         club.merge(&wq("aaaa", 2, "N0XYZ", "20m", "PH", "MN", 300), 12);
 
         // The host restarts: a fresh ClubLog replays the same journal.
         let mut reborn = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
-        reborn.attach_journal(&path).expect("journal replays");
+        reborn
+            .attach_journal_since(&path, 0)
+            .expect("journal replays");
         assert_eq!(reborn.rows(), club.rows(), "identical rows after replay");
         assert_eq!(reborn.counts(), club.counts());
         assert_eq!(
@@ -670,7 +725,7 @@ mod tests {
         )
         .unwrap();
         let mut torn = ClubLog::new(FdEvent::ArrlFd, "TEST FD");
-        torn.attach_journal(&path)
+        torn.attach_journal_since(&path, 0)
             .expect("torn journal still opens");
         assert_eq!(
             torn.qsos_raw(),
@@ -746,6 +801,117 @@ mod tests {
         // Rate window: an arrival >1 h old stops counting.
         let rows = club.board_rows(1000 + 3700);
         assert_eq!(rows.iter().find(|r| r.pos == "aaaa").unwrap().rate, 0);
+    }
+
+    #[test]
+    fn last_years_journal_cannot_swallow_this_years_event() {
+        // ⚠️ THE DEFAULT-CONFIGURATION DATA LOSS. `fd_event_name` ships EMPTY, and the host
+        // journal is named from its slug — an empty slug becomes the literal "event", so
+        // every host that never typed a name writes to ONE file for ever. Replaying it a
+        // year later restored last year's rows AND their per-position ack watermarks. The
+        // position's own ADIF journal self-expires at four days, so it began this year at
+        // seq 1 — and the host refused every contact as a `(posid, seq)` it already held,
+        // while `merge` returned the stored ack so the position's chip read "Synced". A
+        // full event logged into a host that kept none of it, with nothing on screen wrong.
+        let dir = std::env::temp_dir().join(format!("nexus-fdj-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fd_event_event.jsonl");
+        let now = now_unix();
+        let last_year = now - 365 * 86_400;
+
+        // Last year's host wrote five rows for this position.
+        {
+            let mut old = ClubLog::new(FdEvent::ArrlFd, "event");
+            old.attach_journal_since(&path, 0).unwrap();
+            for seq in 1..=5 {
+                old.merge_row(
+                    MergedRow {
+                        posid: "aaaa1111".into(),
+                        seq,
+                        call: format!("W1OLD{seq}"),
+                        class: "2A".into(),
+                        section: "CT".into(),
+                        band: "20m".into(),
+                        mode_class: "PH".into(),
+                        submode: String::new(),
+                        when_unix: last_year + seq,
+                        operator: "KD9TAW".into(),
+                    },
+                    last_year,
+                );
+            }
+        }
+        assert!(path.exists(), "harness: last year's journal was written");
+
+        // This year's host replays the SAME file.
+        let mut host = ClubLog::new(FdEvent::ArrlFd, "event");
+        host.attach_journal_since(&path, now.saturating_sub(STALE_EVENT_SECS))
+            .unwrap();
+        assert_eq!(
+            host.rows().len(),
+            0,
+            "a year-old journal must not be replayed into this year's club log"
+        );
+
+        // …so this year's contacts, which restart at seq 1, are accepted.
+        for seq in 1..=4 {
+            host.merge_row(
+                MergedRow {
+                    posid: "aaaa1111".into(),
+                    seq,
+                    call: format!("W2NEW{seq}"),
+                    class: "2A".into(),
+                    section: "WI".into(),
+                    band: "40m".into(),
+                    mode_class: "CW".into(),
+                    submode: String::new(),
+                    when_unix: now + seq,
+                    operator: "KD9TAW".into(),
+                },
+                now,
+            );
+        }
+        assert_eq!(
+            host.rows().len(),
+            4,
+            "this year's four contacts are in the club log"
+        );
+
+        // POSITIVE CONTROL: with the cutoff opened up, the bug reappears exactly as reported —
+        // otherwise this test would pass against a change that simply broke journal replay.
+        let mut naive = ClubLog::new(FdEvent::ArrlFd, "event");
+        naive.attach_journal_since(&path, 0).unwrap();
+        assert_eq!(
+            naive.rows().len(),
+            5,
+            "control: without a cutoff last year's rows return"
+        );
+        let accepted = naive.merge_row(
+            MergedRow {
+                posid: "aaaa1111".into(),
+                seq: 1,
+                call: "W2NEW1".into(),
+                class: "2A".into(),
+                section: "WI".into(),
+                band: "40m".into(),
+                mode_class: "CW".into(),
+                submode: String::new(),
+                when_unix: now,
+                operator: "KD9TAW".into(),
+            },
+            now,
+        );
+        assert_eq!(
+            naive.rows().len(),
+            5,
+            "control: this year's contact was REFUSED as a dupe"
+        );
+        assert!(
+            !accepted,
+            "control: the row was refused as a duplicate — and nothing on screen said so"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

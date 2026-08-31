@@ -287,22 +287,30 @@ impl FieldDayLog {
         let mut s = String::from("ADIF Export from Nexus\n<PROGRAMID:5>Nexus\n<EOH>\n");
         for q in &self.qsos {
             s.push_str(&adif_field("CALL", &q.call));
-            s.push_str(&adif_field(
-                "MODE",
-                // The recorded ACTUAL mode wins (an RTTY WFD QSO must export
-                // MODE=RTTY — FT8 is a banned mode there); rows without one
-                // fall back to the historical class map. The reverse map lives
-                // in [`merge_adif`](Self::merge_adif) — keep the two in step.
-                if q.submode.is_empty() {
-                    match q.mode.as_str() {
-                        "CW" => "CW",
-                        "PH" => "SSB",
-                        _ => "FT8",
-                    }
-                } else {
-                    q.submode.as_str()
-                },
-            ));
+            // ⚠️ A MODE OUTSIDE ADIF'S ENUMERATION IS A DROPPED RECORD, NOT A COSMETIC ONE.
+            // This wrote `q.submode` raw, and the tiers stamp names ADIF has never heard of
+            // ("TempoFast", "TempoDeep", "FT2") — the main logbook already solved that with
+            // `logbook::adif_submode`, whose own comment spells out the cost: a bare
+            // <MODE:3>FT2 misses all three legs of TQSL's MODE%SUBMODE → SUBMODE → MODE
+            // cascade and the record is DROPPED with "Invalid MODE". The Field Day exporter
+            // simply never called it, so a Field Day contact worked on a Tempo tier was lost
+            // on upload. Same cascade now, so the two exports cannot disagree.
+            let recorded = if q.submode.is_empty() {
+                match q.mode.as_str() {
+                    "CW" => "CW",
+                    "PH" => "SSB",
+                    _ => "FT8",
+                }
+            } else {
+                q.submode.as_str()
+            };
+            match crate::logbook::adif_submode(recorded) {
+                Some((parent, sub)) => {
+                    s.push_str(&adif_field("MODE", parent));
+                    s.push_str(&adif_field("SUBMODE", sub));
+                }
+                None => s.push_str(&adif_field("MODE", recorded)),
+            }
             s.push_str(&adif_field("BAND", &q.band));
             // A real date/time so [`merge_adif`](Self::merge_adif) can restore
             // `when_unix` (and Cabrillo keeps its ARRL-required timestamps
@@ -473,9 +481,20 @@ impl FieldDayLog {
                 _ if q.submode == "RTTY" => "RY",
                 _ => "DG",
             };
-            // Per-QSO frequency from ITS band; the passed dial is only a fallback
-            // for a QSO logged with an unrecognized/blank band.
-            let freq = band_to_cabrillo_khz(&q.band).unwrap_or(freq_khz);
+            // Per-QSO frequency from ITS band. The caller's dial is a fallback ONLY for a
+            // row with no band recorded at all — never for a band we simply failed to map,
+            // because that is how a 23 cm club contact came to export as 20 m: the club
+            // exporter passes a hardcoded 14 MHz and every unmapped band took it. A band we
+            // do not recognise now rides through as itself; a wrong-looking token in one
+            // field beats a confident lie about which band a contact was made on, and ARRL
+            // Field Day requires the worked list sorted BY BAND.
+            let mapped = band_to_cabrillo_freq(&q.band);
+            let raw = q.band.trim();
+            let freq: String = match (mapped, raw.is_empty()) {
+                (Some(f), _) => f.to_string(),
+                (None, false) => raw.to_string(),
+                (None, true) => freq_khz.to_string(),
+            };
             s.push_str(&format!(
                 "QSO: {freq} {mo} {date} {time} {} {} {} {} {} {}\n",
                 self.mycall, self.myexch.class, self.myexch.section, q.call, q.class, q.section
@@ -498,22 +517,36 @@ fn now_unix() -> u64 {
 /// multi-band log must stamp each row with ITS band, not the single dial the
 /// export happened to be sitting on. `None` for an unrecognized band → caller's
 /// fallback.
-fn band_to_cabrillo_khz(band: &str) -> Option<u32> {
+fn band_to_cabrillo_freq(band: &str) -> Option<&'static str> {
     Some(match band.trim().to_ascii_lowercase().as_str() {
-        "160m" => 1800,
-        "80m" => 3500,
-        "60m" => 5330,
-        "40m" => 7000,
-        "30m" => 10100,
-        "20m" => 14000,
-        "17m" => 18068,
-        "15m" => 21000,
-        "12m" => 24890,
-        "10m" => 28000,
-        "6m" => 50000,
-        "2m" => 144000,
-        "1.25m" => 222000,
-        "70cm" => 420000,
+        // HF: a representative frequency in kHz.
+        "160m" => "1800",
+        "80m" => "3500",
+        "60m" => "5330",
+        "40m" => "7000",
+        "30m" => "10100",
+        "20m" => "14000",
+        "17m" => "18068",
+        "15m" => "21000",
+        "12m" => "24890",
+        "10m" => "28000",
+        // ⚠️ 50 MHz AND UP IS A BAND TOKEN, NOT KILOHERTZ. The Cabrillo QSO-data spec:
+        // "freq is frequency or band: 1800 or actual frequency in kHz […] 50 / 70 / 144 /
+        // 222 / 432 / 902 / 1.2G / 2.3G". Winter Field Day repeats the rule and machine-parses
+        // the QSO lines out of whatever is uploaded, so this is the half that actually gets
+        // read. We used to emit 50000 / 144000 / 222000, and 70 cm as 420000 — wrong form, and
+        // for 70 cm not even a sensible frequency; the token is 432.
+        "6m" => "50",
+        "4m" => "70",
+        "2m" => "144",
+        "1.25m" => "222",
+        "70cm" => "432",
+        "33cm" => "902",
+        "23cm" => "1.2G",
+        "13cm" => "2.3G",
+        "9cm" => "3.4G",
+        "6cm" => "5.7G",
+        "3cm" => "10G",
         _ => return None,
     })
 }
@@ -939,6 +972,129 @@ mod tests {
             "real date/time on the QSO line (ARRL submission requires it): {cab}"
         );
         assert!(!cab.contains("----------"), "no placeholder when stamped");
+    }
+
+    #[test]
+    fn a_tempo_tier_contact_exports_as_a_mode_adif_actually_defines() {
+        // ⚠️ THIS WAS A LOST CONTACT, not a formatting nit. The Field Day ADIF wrote the
+        // recorded mode straight into <MODE>, and the tiers stamp names ADIF has never heard
+        // of — TempoFast, TempoDeep, FT2. TQSL walks MODE%SUBMODE → SUBMODE → MODE and a bare
+        // <MODE:10>TempoFast misses all three legs, so the record is DROPPED with "Invalid
+        // MODE". The main logbook has solved this for years in `logbook::adif_submode`; the
+        // Field Day exporter just never called it, so a Field Day contact worked on a Tempo
+        // tier vanished on upload while an FT8 one beside it went through.
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            Exchange {
+                class: "3A".into(),
+                section: "WI".into(),
+            },
+            "20m",
+        );
+        assert!(log.log_submode_at("K1ABC", "2A", "CT", "DIG", "TempoFast", 4, 1_782_583_500));
+        let adif = log.adif();
+        assert!(
+            adif.contains("<MODE:4>MFSK") && adif.contains("<SUBMODE:9>TEMPOFAST"),
+            "a Tempo tier must ride as MODE=MFSK + SUBMODE, or TQSL drops the record: {adif}"
+        );
+        assert!(
+            !adif.contains("<MODE:9>TempoFast"),
+            "TempoFast is not an ADIF MODE and must never be written as one: {adif}"
+        );
+
+        // POSITIVE CONTROL: a mode ADIF really does define is written plainly, with no
+        // SUBMODE invented for it — otherwise this test would pass against a change that
+        // wrapped everything.
+        let mut plain = FieldDayLog::new(
+            "W9XYZ",
+            Exchange {
+                class: "3A".into(),
+                section: "WI".into(),
+            },
+            "20m",
+        );
+        assert!(plain.log_submode_at("K2DEF", "2A", "CT", "DIG", "RTTY", 4, 1_782_583_500));
+        let plain_adif = plain.adif();
+        assert!(
+            plain_adif.contains("<MODE:4>RTTY"),
+            "RTTY is a real MODE: {plain_adif}"
+        );
+        assert!(
+            !plain_adif.contains("SUBMODE"),
+            "…and needs no SUBMODE: {plain_adif}"
+        );
+    }
+
+    #[test]
+    fn cabrillo_says_the_band_the_contact_was_actually_made_on() {
+        // ⚠️ TWO WAYS THIS LIED ABOUT A CONTACT'S BAND, both found by auditing our output
+        // against the Cabrillo spec and Winter Field Day's parser.
+        //
+        // 1. ABOVE 50 MHz THE FIELD IS A BAND TOKEN, NOT KILOHERTZ. The spec's own words:
+        //    "freq is frequency or band: 1800 or actual frequency in kHz […] 50 / 70 / 144 /
+        //    222 / 432 / 902 / 1.2G". WFD states the same rule and MACHINE-PARSES the QSO
+        //    lines out of whatever is uploaded, so a 6-digit value where a token belongs is a
+        //    parse problem there. 70 cm was wrong twice over — the token is 432 and 420000 was
+        //    not even a sensible kHz for it.
+        // 2. AN UNRECOGNISED BAND TOOK THE CALLER'S FALLBACK, and the club exporter passed a
+        //    HARDCODED 14 MHz. A 23 cm club contact exported as 20 m. ARRL Field Day does not
+        //    read Cabrillo at all, but it DOES require a list of stations worked sorted BY
+        //    BAND — so this corrupted the one artifact they actually use.
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            Exchange {
+                class: "3A".into(),
+                section: "WI".into(),
+            },
+            "20m",
+        );
+        for (band, call) in [
+            ("20m", "K1ABC"),
+            ("6m", "K2DEF"),
+            ("2m", "K3GHI"),
+            ("70cm", "K4JKL"),
+            ("23cm", "K5MNO"),
+            ("4m", "K6PQR"),
+        ] {
+            log.band = band.to_string();
+            assert!(
+                log.log_at(call, "2A", "CT", 4, 1_782_583_500),
+                "{band} logged"
+            );
+        }
+        let cab = log.cabrillo(14_000);
+
+        // HF stays kHz.
+        assert!(
+            cab.contains("QSO: 14000 DG 2026-06-27 1805 W9XYZ 3A WI K1ABC"),
+            "20m: {cab}"
+        );
+        // Above 50 MHz is the BAND, per the spec's own list.
+        for (token, call) in [("50", "K2DEF"), ("144", "K3GHI"), ("432", "K4JKL")] {
+            assert!(
+                cab.contains(&format!(
+                    "QSO: {token} DG 2026-06-27 1805 W9XYZ 3A WI {call}"
+                )),
+                "expected band token {token} for {call}: {cab}"
+            );
+        }
+        // 4 m and 23 cm are legal Field Day bands and were not in the table at all — they
+        // took the caller's fallback and claimed to be somewhere else entirely.
+        assert!(
+            cab.contains("QSO: 70 DG 2026-06-27 1805 W9XYZ 3A WI K6PQR"),
+            "4m: {cab}"
+        );
+        assert!(
+            cab.contains("QSO: 1.2G DG 2026-06-27 1805 W9XYZ 3A WI K5MNO"),
+            "23cm: {cab}"
+        );
+        // THE PIN: nothing above 6 m may claim to be on 20 m.
+        assert_eq!(
+            cab.matches("QSO: 14000 ").count(),
+            1,
+            "only the 20 m contact may say 14000 — a band we cannot map must never borrow \
+             another band's frequency: {cab}"
+        );
     }
 
     #[test]
