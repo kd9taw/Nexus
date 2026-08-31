@@ -2861,7 +2861,7 @@ export function SettingsPanel({
                   <input
                     ref={backupFileRef}
                     type="file"
-                    accept=".json,application/json"
+                    accept=".json"
                     style={{ display: 'none' }}
                     onChange={onRestoreBackup}
                   />
@@ -4889,7 +4889,7 @@ export function SettingsPanel({
                 <input
                   ref={tleFileRef}
                   type="file"
-                  accept=".txt,.tle,text/plain"
+                  accept=".txt,.tle"
                   style={{ display: 'none' }}
                   onChange={(e) => {
                     const f = e.target.files?.[0]

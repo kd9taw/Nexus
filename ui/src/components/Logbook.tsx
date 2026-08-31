@@ -812,7 +812,7 @@ export function Logbook({
           <input
             ref={fileRef}
             type="file"
-            accept=".adi,.adif,text/plain"
+            accept=".adi,.adif,.txt"
             style={{ display: 'none' }}
             onChange={onImportFile}
           />
@@ -822,7 +822,7 @@ export function Logbook({
           <input
             ref={syncRef}
             type="file"
-            accept=".adi,.adif,text/plain"
+            accept=".adi,.adif,.txt"
             style={{ display: 'none' }}
             onChange={onSyncFile}
           />

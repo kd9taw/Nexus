@@ -934,7 +934,7 @@ export function MemoriesView({
           <input
             ref={fileRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv"
             style={{ display: 'none' }}
             onChange={(e) => {
               const f = e.target.files?.[0]

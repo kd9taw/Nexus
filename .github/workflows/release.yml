@@ -141,6 +141,17 @@ jobs:
           "$app" --appimage-extract >/dev/null
           hl=squashfs-root/usr/lib/Nexus/resources/hamlib
           [ -s "$hl/rigctld" ] || { echo "rigctld missing from the AppImage"; exit 1; }
+          # GSTREAMER PLUGINS, or every alert tone in the app is silently dead. linuxdeploy
+          # bundles GStreamer's core libraries and no plugins, then points the plugin search
+          # path INSIDE the AppImage at a directory it never created — which also suppresses
+          # the scan that would have found the host's. WebKit's Web Audio runs on appsrc,
+          # appsink and autoaudiosink, so the band-edge tones, alert sounds and DXped alarm
+          # all fail with "element not found" and nothing else says a word. build-linux.sh
+          # copies them in; this proves they survived into the shipped file.
+          gst=squashfs-root/usr/lib/gstreamer-1.0
+          for p in app autodetect coreelements; do
+            [ -s "$gst/libgst$p.so" ] || { echo "libgst$p.so missing from the AppImage — its alert tones cannot work"; exit 1; }
+          done
           # THE ONE THAT MATTERS: it has to find its own libhamlib, not the runner's. A CI box
           # with Hamlib installed would let a broken rpath pass a bare --version, which is exactly
           # how the first cut of fetch-hamlib-unix.sh looked correct while loading /lib's copy.

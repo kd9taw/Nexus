@@ -1016,7 +1016,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             <input
               ref={logFileRef}
               type="file"
-              accept=".adi,.adif,text/plain"
+              accept=".adi,.adif,.txt"
               style={{ display: 'none' }}
               onChange={onImportAdif}
             />
