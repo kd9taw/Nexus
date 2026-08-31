@@ -269,6 +269,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "3 QSO importé3 QSO importés". Shipped that way since 1.9.0. Every one is repaired, and a
   guard now fails the build if the shape ever comes back.
 
+- **Memories offered every mode and let you pick only one.** Adding a channel by hand showed a
+  mode list with eight entries in it, of which exactly one could be chosen — whichever mode the
+  radio happened to be on, so for most stations "USB is the only mode I can add". The list was
+  the kind that filters itself down to what is already typed in the box, and a new memory starts
+  on the rig's current mode. It is an ordinary dropdown now, with every mode always in it, and
+  an **Other…** row for a mode we do not list. The tone picker had the same fault — with 103.5
+  in the box the 38-tone list collapsed to that one tone — and got the same fix. A channel
+  imported from CHIRP carrying a mode or tone Nexus has never heard of keeps it: it appears in
+  the list as its own entry instead of being quietly rewritten the first time you touch the row.
+
+- **The ＋ New button looked dead, and new memories came out as digital modes.** With anything
+  typed in the search box, ＋ New created the channel and then the search filtered it straight
+  back out — a new memory has no name yet — so the row and its editor were invisible and the
+  button appeared to do nothing. ＋ New clears the search now. New memories also defaulted to
+  FT8 regardless of what the radio was doing; they take the rig's current mode.
+
+- **Adding a memory happened somewhere in the list; now it happens in one place.** ＋ New opened
+  the editor on the new row wherever the sort, the band sections and the filters had put it —
+  in a bank of 200 channels, usually off screen. It opens a panel pinned at the bottom of the
+  pane instead, and the new row is marked in the list and the grid so it can still be found.
+  Pressing Escape in a field reverts that field as it always did, without closing the form
+  around it; opening ＋ New and closing it again no longer leaves an unnamed channel behind
+  each time.
+
+- **Deleting memories: select several, and take it back.** Every row has a tick box, the grid
+  has a select-all in its header, and deleting names how many will go before it does it.
+  Deletion only ever takes rows you can actually see — narrow the list with a search and the
+  rows hidden by it are safe — and the bar says so when part of your selection is out of view.
+  Every delete, including the single ✕ on a row, offers an Undo for eight seconds, and rows
+  come back in the position they were deleted from, so favorite order and the cockpit strip are
+  unchanged. Asked for by KD9TAW.
+
+- **A memory deleted in the popped-out Memories window could not be undone.** Torn-off windows
+  had no way to show a message, so the Undo the confirmation promised was raised and dropped on
+  the floor — the rows went and nothing appeared. Seven of the pop-out windows were in that
+  state; all of them can show messages now.
+
 
 ## [1.9.2] — 2026-08-29
 
