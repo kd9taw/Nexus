@@ -12,6 +12,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { workedGridSet } from '../coverage'
 import type { AprsStation } from '../api'
+import { bandLabelForMhz } from '../band'
+import type { OtaMapSpot } from '../types'
 import {
   ageFade,
   aprsRedrawMs,
@@ -39,7 +41,7 @@ import type {
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
 import type { Theme } from '../useTheme'
-import { getAurora, getDeclination, getPca, getSatellites, getLog, getLogStats } from '../api'
+import { getAurora, getDeclination, getPca, getSatellites, getLog, getLogStats, getOtaMapSpots } from '../api'
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
 // as a raw asset and fetched lazily so the 2.7 MB never loads until toggled on.
 import cqzonesUrl from '../data/cqzones.geojson?url'
@@ -144,6 +146,8 @@ interface Props {
    * packet has nothing to put on a map. */
   /** The STATION roster (not the packet log) — see `AprsStation` for why that distinction matters. */
   aprs?: AprsStation[]
+  /** Parks-on-the-air activators for the `ota` layer (see `OtaMapSpot` in Rust). */
+  ota?: OtaMapSpot[]
   /** Minutes of silence after which a station fades / is dropped, from the same backend read. */
   aprsFadeAfterMin?: number
   aprsTtlMin?: number
@@ -200,7 +204,7 @@ const INTENT_PRESETS: Record<
   // other intent — Chase DX, Ragchew and 6m/VHF are all globes, and having one intent silently
   // flip the map to flat reads as a rendering bug, not a preset. Only the projection changed;
   // the rings/heat de-emphasis is still right for this intent.
-  pota: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: false, heat: false } },
+  pota: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: false, heat: false, ota: true } },
   // Ragchew: globe, who-can-I-hear (signal), calm — dxped off.
   casual: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
   // 6m/VHF: heat ON — visualizing the Es/F2 opening footprint IS this intent.
@@ -272,6 +276,7 @@ type LayerKey =
   | 'stations'
   | 'paths'
   | 'dxped'
+  | 'ota'
 interface Layer {
   visible: boolean
   opacity: number
@@ -301,6 +306,7 @@ const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
   stations: { labelKey: 'map.layer.stations.label' },
   paths: { labelKey: 'map.layer.paths.label' },
   dxped: { labelKey: 'map.layer.dxped.label' },
+  ota: { labelKey: 'map.layer.ota.label' },
 }
 const layerLabel = (k: LayerKey): string => t(LAYER_LABEL[k].labelKey)
 const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
@@ -336,6 +342,10 @@ const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   // Off by default: Connect is the PROPAGATION view (DXpeditions have their own area).
   // The layer toggle stays for anyone who wants DX-target markers on the map.
   dxped: { visible: false, opacity: 1 },
+  // Parks on the air. Off by default like the other activity overlays, but the
+  // POTA/SOTA intent preset turns it on — that preset's whole promise is
+  // "park/summit activators", and until this layer existed it could not keep it.
+  ota: { visible: false, opacity: 1 },
 }
 // The satellite-detail mini-globe (embedded mode) shows JUST the bird on a clean
 // planet: the basemap (day/night + coastline + graticule) plus the sat layer, and
@@ -448,6 +458,7 @@ export function MapView({
   onWorkSpot,
   onSelectSat,
   aprs,
+  ota,
   onSelectAprs,
   selectedAprs,
   aprsFadeAfterMin = 20,
@@ -813,6 +824,48 @@ export function MapView({
     }
     return out
   }, [me, kind, size, view, dxCards])
+
+  // Parks on the air — fetched only while the layer is on, the same politeness rule
+  // the aurora and PCA layers follow. An operator who never turns this on never
+  // touches the POTA feed, and the backend serves from a shared cache with its own
+  // TTL, so this poll and the POTA/SOTA board's refresh together still cost one
+  // request per TTL rather than two.
+  const [otaFetched, setOtaFetched] = useState<OtaMapSpot[]>([])
+  const otaOn = layers.ota.visible
+  useEffect(() => {
+    if (!otaOn) {
+      setOtaFetched([])
+      return
+    }
+    let live = true
+    const load = () =>
+      getOtaMapSpots()
+        .then((v) => live && setOtaFetched(v))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 120_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [otaOn])
+  // An explicit `ota` prop wins when a host supplies one (the APRS layer's shape);
+  // otherwise the layer feeds itself.
+  const otaSpots = ota ?? otaFetched
+
+  // Parks on the air, projected from the feed's own coordinates (a POTA row carries
+  // latitude/longitude, so the marker is the park rather than the 4 km square a grid
+  // would round it into).
+  const placedOta = useMemo(() => {
+    if (!me || size.w === 0) return [] as Array<{ sp: OtaMapSpot; xy: [number, number] }>
+    const proj = makeProjection(kind, me, size.w, size.h, view)
+    const out: Array<{ sp: OtaMapSpot; xy: [number, number] }> = []
+    for (const sp of otaSpots) {
+      const xy = project(proj, { lat: sp.lat, lon: sp.lon })
+      if (xy) out.push({ sp, xy })
+    }
+    return out
+  }, [me, kind, size, view, otaSpots])
 
   // Aurora oval — fetched only while the layer is on (polite; OVATION updates
   // ~30–45 min, so a 10-min refresh is ample). Cleared when the layer is off.
@@ -1914,6 +1967,35 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
+    // Parks on the air. A triangle rather than a dot, so an activator never reads as
+    // one more spot in the firehose: these are stations you go and work, at a fixed
+    // place, and the shape is the difference at a glance. A park never logged before
+    // is filled and accented; one already in the log is a hollow outline, so "what's
+    // new" is readable without a legend.
+    if (layers.ota.visible) {
+      const accent = cssVar('--accent')
+      const faint = cssVar('--text-faint')
+      for (const { sp, xy: p } of placedOta) {
+        // Same band-focus rule as the spot dots and dxped glyphs.
+        const band = bandLabelForMhz(sp.freqMhz)
+        ctx.globalAlpha = (band ? dimBand(band) : 1) * layers.ota.opacity
+        ctx.beginPath()
+        ctx.moveTo(p[0], p[1] - 5)
+        ctx.lineTo(p[0] + 4.5, p[1] + 3.5)
+        ctx.lineTo(p[0] - 4.5, p[1] + 3.5)
+        ctx.closePath()
+        if (sp.newRef) {
+          ctx.fillStyle = accent
+          ctx.fill()
+        } else {
+          ctx.strokeStyle = faint
+          ctx.lineWidth = 1.2
+          ctx.stroke()
+        }
+      }
+      ctx.globalAlpha = 1
+    }
+
     // Own station marker (on top) — a clear "you are here" QTH locus, one of the two
     // things an operator must read at a glance. A soft glow + two concentric rings +
     // crosshair make it unmistakable against the spot firehose, without animation
@@ -2160,6 +2242,7 @@ export function MapView({
     | { kind: 'spot'; d: number; sp: MapSpot }
     | { kind: 'sat'; d: number; name: string; norad?: number | null; chased: boolean }
     | { kind: 'aprs'; d: number; name: string }
+    | { kind: 'ota'; d: number; sp: OtaMapSpot }
     | { kind: 'muf'; d: number; muf: number }
   const hitTest = (mx: number, my: number): MapHit | null => {
     if (layers.stations.visible) {
@@ -2175,6 +2258,17 @@ export function MapView({
       for (const { card, xy } of placedDxped) {
         const d = Math.hypot(xy[0] - mx, xy[1] - my)
         if (d < 10 && (!best || d < best.d)) best = { kind: 'dxped', d, card }
+      }
+      if (best) return best
+    }
+    // Parks before the spot firehose: an activator is a deliberate target, and the
+    // triangle is drawn over the dots, so the hit order has to agree with the paint
+    // order or the top marker would not be the one you get.
+    if (layers.ota.visible) {
+      let best: MapHit | null = null
+      for (const { sp, xy } of placedOta) {
+        const d = Math.hypot(xy[0] - mx, xy[1] - my)
+        if (d < 10 && (!best || d < best.d)) best = { kind: 'ota', d, sp }
       }
       if (best) return best
     }
@@ -2253,6 +2347,21 @@ export function MapView({
         likelihood: c.likelihood,
       })
       return `${line}${c.liveConfirmed ? t('map.hover.liveConfirmed') : ''}${workHint}`
+    }
+    if (hit.kind === 'ota') {
+      const sp = hit.sp
+      // Reference first: a hunter logs the PARK, and the reference is what goes in
+      // the log. `approx` is stated rather than hidden — a grid-placed park is a
+      // 4 km square, and a marker that claims more precision than it has is a lie.
+      return t('map.hover.ota', {
+        activator: sp.activator,
+        reference: sp.reference,
+        name: sp.name ? ` · ${sp.name}` : '',
+        freq: sp.freqMhz.toFixed(3),
+        mode: sp.mode || '?',
+        badge: sp.newRef ? t('map.hover.ota.new') : '',
+        approx: sp.approx ? t('map.hover.ota.approx') : '',
+      })
     }
     if (hit.kind === 'muf') {
       return t('map.hover.muf', { muf: hit.muf.toFixed(1) })

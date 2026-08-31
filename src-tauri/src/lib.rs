@@ -82,6 +82,8 @@ type AuroraCache = Arc<
 /// TypeId for `.manage()`.
 type Kc2gCache = Arc<Mutex<Option<(std::time::Instant, Vec<propagation::MufStation>)>>>;
 type ProtonCache = Arc<Mutex<Option<(std::time::Instant, propagation::live::protons::ProtonFlux)>>>;
+/// TTL cache for the NOAA planetary-K outlook (the three-day forecast).
+type KpForecastCache = Arc<Mutex<Option<(std::time::Instant, propagation::KpForecast)>>>;
 /// TTL cache for the NOAA R/S/G scales + recent SWPC alerts (one fetch pair).
 /// Distinct payload type → distinct TypeId for `.manage()`.
 type ScalesCache = Arc<
@@ -7877,6 +7879,41 @@ fn get_sat_transponder(
             binding,
         }
     }))
+}
+
+/// The NOAA planetary-K outlook — what the disturbance is doing over the next three
+/// days, which is the one propagation question a nowcast cannot answer.
+///
+/// Cached 15 min: SWPC republishes this every 30 min, so a tighter poll would only
+/// re-fetch the same bytes. Serves the last-good outlook on a fetch failure and an
+/// EMPTY one if we never had it — a forecast is never fabricated, and an empty
+/// series is what tells the panel to say it has nothing rather than draw a flat line
+/// at zero.
+#[tauri::command]
+async fn get_kp_forecast(
+    cache: State<'_, KpForecastCache>,
+) -> Result<propagation::KpForecast, String> {
+    const KP_FORECAST_TTL_SECS: u64 = 900;
+    {
+        let g = cache.lock().map_err(|e| e.to_string())?;
+        if let Some((when, v)) = g.as_ref() {
+            if when.elapsed().as_secs() < KP_FORECAST_TTL_SECS {
+                return Ok(v.clone());
+            }
+        }
+    }
+    match propagation::live::swpc::fetch_kp_forecast() {
+        Ok(v) => {
+            if let Ok(mut g) = cache.lock() {
+                *g = Some((std::time::Instant::now(), v.clone()));
+            }
+            Ok(v)
+        }
+        Err(_) => {
+            let g = cache.lock().map_err(|e| e.to_string())?;
+            Ok(g.as_ref().map(|(_, v)| v.clone()).unwrap_or_default())
+        }
+    }
 }
 
 /// Real-time KC2G ionosonde MUF/foF2 station fixes for the Connect map's MUF
@@ -15874,6 +15911,105 @@ fn get_ota_spots(
         .collect())
 }
 
+/// One activator, placed, for the Connect map's parks-and-summits layer.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OtaMapSpot {
+    program: String,
+    reference: String,
+    name: String,
+    activator: String,
+    freq_mhz: f64,
+    mode: String,
+    lat: f64,
+    lon: f64,
+    /// Placed by grid square (~4 km) rather than the feed's own coordinates.
+    approx: bool,
+    age_secs: i64,
+    /// This reference has never been logged — a new park for the hunter.
+    new_ref: bool,
+}
+
+/// How long a cached activator list serves the map before it is refetched. The map
+/// polls faster than this on purpose: the TTL, not the poll, decides how often
+/// anyone's API is actually hit, so opening Connect and the POTA board at once
+/// still costs one request.
+const OTA_MAP_TTL_SECS: i64 = 120;
+
+/// Where a park goes on the map: the feed's own coordinates when it has them, else
+/// the grid square's centre, else nowhere.
+///
+/// Split out from the command so the fallback is testable — it is the part with a
+/// real decision in it. `approx` is the second case and must be reported, because a
+/// grid places a park only to ~4 km and a marker claiming more precision than it has
+/// is a lie the operator cannot see.
+fn place_ota(sp: &propagation::OtaSpot) -> Option<(f64, f64, bool)> {
+    match (sp.lat, sp.lon) {
+        (Some(la), Some(lo)) => Some((la, lo, false)),
+        _ => {
+            let (la, lo) = propagation::geo::maidenhead_to_latlon(sp.grid.as_deref()?)?;
+            Some((la, lo, true))
+        }
+    }
+}
+
+/// Activators for the map layer. Serves the shared cache when it is fresh and
+/// fetches only when it is not, so this can be polled from a view without adding
+/// load to the POTA feed.
+///
+/// POTA only, deliberately. A SOTA spot carries no position — its payload has an
+/// association and summit code and nothing else — so a summit cannot be plotted
+/// from that feed without a second lookup against a different endpoint.
+#[tauri::command(async)]
+fn get_ota_map_spots(
+    state: State<'_, SharedEngine>,
+    ota_cache: State<'_, SharedOtaSpots>,
+) -> Result<Vec<OtaMapSpot>, String> {
+    let now = now_unix();
+    let cached = ota_cache.lock().ok().and_then(|c| {
+        c.get("POTA")
+            .filter(|(stamp, _)| now.saturating_sub(*stamp) <= OTA_MAP_TTL_SECS)
+            .map(|(_, v)| v.clone())
+    });
+    let spots = match cached {
+        Some(v) => v,
+        None => {
+            let fresh = propagation::live::pota::fetch_pota_spots()?;
+            if let Ok(mut c) = ota_cache.lock() {
+                c.insert("POTA".into(), (now, fresh.clone()));
+            }
+            fresh
+        }
+    };
+    let worked: std::collections::HashSet<String> = {
+        let eng = engine_lock(&state);
+        spots
+            .iter()
+            .filter(|sp| eng.park_worked(&sp.reference))
+            .map(|sp| sp.reference.to_uppercase())
+            .collect()
+    };
+    Ok(spots
+        .into_iter()
+        .filter_map(|sp| {
+            let (lat, lon, approx) = place_ota(&sp)?;
+            Some(OtaMapSpot {
+                new_ref: !worked.contains(&sp.reference.to_uppercase()),
+                age_secs: sp.spot_time_unix.map(|t| now.saturating_sub(t)).unwrap_or(0),
+                program: sp.program,
+                reference: sp.reference,
+                name: sp.name,
+                activator: sp.activator,
+                freq_mhz: sp.freq_khz / 1000.0,
+                mode: sp.mode,
+                lat,
+                lon,
+                approx,
+            })
+        })
+        .collect())
+}
+
 /// One-click hunt: remember the activator + park so the next QSO logged with
 /// that call auto-tags SIG/SIG_INFO (the hunter-side ADIF credit).
 #[tauri::command(async)]
@@ -17652,6 +17788,7 @@ struct BuildDeps {
     prop_cache: PropCache,
     aurora_cache: AuroraCache,
     kc2g_cache: Kc2gCache,
+    kp_forecast_cache: KpForecastCache,
     proton_cache: ProtonCache,
     scales_cache: ScalesCache,
     spots: SharedSpots,
@@ -19262,6 +19399,7 @@ pub fn run() {
     let prop_cache: PropCache = Arc::new(Mutex::new(None));
     let aurora_cache: AuroraCache = Arc::new(Mutex::new(None));
     let kc2g_cache: Kc2gCache = Arc::new(Mutex::new(None));
+    let kp_forecast_cache: KpForecastCache = Arc::new(Mutex::new(None));
     let proton_cache: ProtonCache = Arc::new(Mutex::new(None));
     let scales_cache: ScalesCache = Arc::new(Mutex::new(None));
 
@@ -19295,6 +19433,7 @@ pub fn run() {
         prop_cache,
         aurora_cache,
         kc2g_cache,
+        kp_forecast_cache,
         proton_cache,
         scales_cache,
         spots,
@@ -19363,6 +19502,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(d.prop_cache)
         .manage(d.aurora_cache)
         .manage(d.kc2g_cache)
+        .manage(d.kp_forecast_cache)
         .manage(d.proton_cache)
         .manage(d.scales_cache)
         .manage(d.spots)
@@ -19643,6 +19783,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             clear_hrdlog_code,
             hrdlog_push_qso,
             get_ota_spots,
+            get_ota_map_spots,
+            get_kp_forecast,
             search_parks,
             parks_count,
             hunted_parks_count,
@@ -23941,4 +24083,55 @@ mod tests {
              now silently missing a live credential"
         );
     }
+
+    /// A park is placed by the feed's own coordinates when it has them, and by its
+    /// grid square only as a fallback — which must announce itself as approximate.
+    /// SOTA has neither, so a summit is not placeable from its spot feed at all and
+    /// must be dropped rather than plotted at a guess.
+    #[test]
+    fn parks_are_placed_by_coordinates_then_grid_then_not_at_all() {
+        let base = propagation::OtaSpot {
+            program: "POTA".into(),
+            reference: "US-1352".into(),
+            name: "Fort Washington".into(),
+            activator: "N3ES".into(),
+            freq_khz: 14049.0,
+            mode: "CW".into(),
+            spotter: None,
+            comment: None,
+            grid: None,
+            lat: None,
+            lon: None,
+            spot_time_unix: None,
+        };
+
+        // Exact coordinates win, and are NOT flagged approximate.
+        let exact = propagation::OtaSpot {
+            lat: Some(40.1209),
+            lon: Some(-75.2237),
+            grid: Some("FN20jc".into()),
+            ..base.clone()
+        };
+        let (la, lo, approx) = crate::place_ota(&exact).expect("a park with coordinates was dropped");
+        assert!((la - 40.1209).abs() < 1e-9 && (lo - -75.2237).abs() < 1e-9);
+        assert!(!approx, "exact coordinates were reported as approximate");
+
+        // No coordinates: the grid centre, flagged approximate.
+        let gridded = propagation::OtaSpot { grid: Some("FN20jc".into()), ..base.clone() };
+        let (gla, glo, gapprox) = crate::place_ota(&gridded).expect("a gridded park was dropped");
+        assert!(gapprox, "a grid-placed park did not admit it is approximate");
+        // Same square, so within a few km of the exact fix above.
+        assert!((gla - 40.1209).abs() < 0.1 && (glo - -75.2237).abs() < 0.1);
+
+        // Neither — the SOTA case. Dropped, never guessed.
+        assert!(
+            crate::place_ota(&base).is_none(),
+            "a spot with no position was placed anyway — a summit plotted at a guess"
+        );
+
+        // A grid too short to resolve is also not a guess.
+        let junk = propagation::OtaSpot { grid: Some("F".into()), ..base };
+        assert!(crate::place_ota(&junk).is_none());
+    }
+
 }

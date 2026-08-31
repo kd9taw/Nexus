@@ -42,6 +42,8 @@ import type {
   Spectrum,
   Tier,
   VoiceMessage,
+  OtaMapSpot,
+  KpForecast,
 } from './types'
 import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
@@ -2333,6 +2335,20 @@ export async function detectRigs(): Promise<DetectedRig[]> {
 /** Activators on the air now for the program ("POTA" | "SOTA") — the hunter feed. */
 export async function getOtaSpots(program: string): Promise<OtaSpot[]> {
   return invoke<OtaSpot[]>('get_ota_spots', { program })
+}
+
+/** The NOAA planetary-K outlook (three days ahead). Cached 15 min server-side; an
+ *  EMPTY series means we have never had one, which the panel must say rather than
+ *  draw as a quiet sky. */
+export async function getKpForecast(): Promise<KpForecast> {
+  return invoke<KpForecast>('get_kp_forecast')
+}
+
+/** Activators placed for the Connect map's parks layer. Served from a shared cache
+ *  with its own TTL, so polling this does not add load to the POTA feed — POTA only,
+ *  because a SOTA spot carries no position to plot. */
+export async function getOtaMapSpots(): Promise<OtaMapSpot[]> {
+  return invoke<OtaMapSpot[]>('get_ota_map_spots')
 }
 
 /** Begin an activation (validates + normalizes the reference); returns the state. */

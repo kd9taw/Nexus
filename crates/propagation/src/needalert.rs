@@ -2454,6 +2454,8 @@ mod tests {
             spotter: None,
             comment: None,
             grid: None,
+            lat: None,
+            lon: None,
             spot_time_unix: Some(1_780_000_000),
         }
     }

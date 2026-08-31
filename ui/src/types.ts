@@ -862,10 +862,52 @@ export interface OtaSpot {
   mode: string
   spotter: string | null
   comment: string | null
-  grid: string | null  /** This park/summit has never been logged (hunter side) — a NEW PARK. */
+  grid: string | null
+  /** Exact park position when the feed carries one. POTA sends it on every row;
+   *  SOTA sends no position at all, so a summit is null here AND in `grid`. */
+  lat?: number | null
+  lon?: number | null
+  /** This park/summit has never been logged (hunter side) — a NEW PARK. */
   newPark?: boolean
   /** Your own signal is being received on this band right now (live PSKR). */
   bandOpen?: boolean
+}
+
+/** One activator placed for the Connect map's parks layer (`get_ota_map_spots`).
+ *  POTA only — a SOTA spot carries no position to plot. */
+export interface OtaMapSpot {
+  program: string
+  reference: string
+  name: string
+  activator: string
+  freqMhz: number
+  mode: string
+  lat: number
+  lon: number
+  /** Placed by grid square (~4 km) rather than the feed's own coordinates. */
+  approx: boolean
+  ageSecs: number
+  /** Never logged before — a new park for the hunter. */
+  newRef: boolean
+}
+
+/** How a Kp sample was arrived at — SWPC's own word, not our inference.
+ *  Only `observed` is measured; `estimated` is SWPC's fill for a period whose
+ *  observations are not final, so it belongs with the modelled half. */
+export type KpKind = 'observed' | 'estimated' | 'predicted'
+
+/** One 3-hourly planetary-K sample. */
+export interface KpPoint {
+  timeUnix: number
+  kp: number
+  kind: KpKind
+  /** NOAA G-scale for the period ("G1".."G5"), null on a quiet sky. */
+  noaaScale: string | null
+}
+
+/** The NOAA planetary-K outlook: about a week back and three days forward. */
+export interface KpForecast {
+  points: KpPoint[]
 }
 
 /** The operator's current activation state (POTA/SOTA). */

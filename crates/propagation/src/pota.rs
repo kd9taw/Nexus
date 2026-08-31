@@ -22,6 +22,19 @@ pub struct OtaSpot {
     pub spotter: Option<String>,
     pub comment: Option<String>,
     pub grid: Option<String>,
+    /// Exact park/summit position when the feed carries one. POTA reports
+    /// `latitude`/`longitude` on every activator row, which places the park itself
+    /// rather than the ~4 km square a grid gives — so the map plots where the
+    /// operator actually is. `None` leaves placement to [`Self::grid`].
+    ///
+    /// ⚠️ SOTA carries NO position at all: its spot payload has only
+    /// `associationCode`/`summitCode`, and resolving those to a summit needs a
+    /// second lookup against a different endpoint. A SOTA spot is therefore
+    /// unplottable from this feed alone — see [`parse_sota_spots`].
+    #[serde(default)]
+    pub lat: Option<f64>,
+    #[serde(default)]
+    pub lon: Option<f64>,
     /// Spot time (unix seconds, UTC) from the feed's timestamp — POTA `spotTime`,
     /// SOTA `timeStamp`. `None` if absent/unparseable. Lets a consumer drop STALE
     /// activations, which matters for SOTA: its `spots/<n>/all` returns the last `n`
@@ -57,6 +70,8 @@ pub fn parse_pota_spots(json: &str) -> Vec<OtaSpot> {
                 spotter: s(v, "spotter"),
                 comment: s(v, "comments"),
                 grid: s(v, "grid6").or_else(|| s(v, "grid4")),
+                lat: num_field(v, "latitude").filter(|x| (-90.0..=90.0).contains(x)),
+                lon: num_field(v, "longitude").filter(|x| (-180.0..=180.0).contains(x)),
                 spot_time_unix: time_field(v, "spotTime"),
             })
         })
@@ -86,6 +101,9 @@ pub fn parse_sota_spots(json: &str) -> Vec<OtaSpot> {
                 spotter: s(v, "callsign"),
                 comment: s(v, "comments"),
                 grid: None,
+                // The feed carries no position — see the field docs on `OtaSpot::lat`.
+                lat: None,
+                lon: None,
                 spot_time_unix: time_field(v, "timeStamp"),
             })
         })
@@ -102,6 +120,16 @@ fn time_field(v: &serde_json::Value, k: &str) -> Option<i64> {
 }
 
 /// Read a frequency that may be a JSON string or number.
+/// A plain number field, accepting the string form the POTA feed sometimes uses.
+/// Unlike [`freq_field`] this does NOT require a positive value: a longitude in the
+/// western hemisphere is negative and the equator/prime meridian are 0.
+fn num_field(v: &serde_json::Value, k: &str) -> Option<f64> {
+    let f = v.get(k)?;
+    f.as_f64()
+        .or_else(|| f.as_str().and_then(|x| x.trim().parse::<f64>().ok()))
+        .filter(|x| x.is_finite())
+}
+
 fn freq_field(v: &serde_json::Value, k: &str) -> Option<f64> {
     let f = v.get(k)?;
     f.as_str()
@@ -113,6 +141,66 @@ fn freq_field(v: &serde_json::Value, k: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The map places a park by the coordinates the feed gives, not by its grid
+    /// square: POTA sends `latitude`/`longitude` on every activator row, which is the
+    /// park itself rather than the ~4 km square `grid6` rounds it into. A western
+    /// longitude is negative and the equator/meridian are 0, so the parser must not
+    /// treat "positive" as "valid" the way the frequency field does.
+    #[test]
+    fn pota_spots_carry_exact_coordinates() {
+        let json = r#"[
+          {"activator":"N3ES","reference":"US-1352","name":"Fort Washington State Park",
+           "frequency":"14049","mode":"CW","spotTime":"2026-08-31T20:47:50",
+           "grid4":"FN20","grid6":"FN20jc","latitude":40.1209,"longitude":-75.2237},
+          {"activator":"9M2X","reference":"XZ-0001","name":"Equator Park",
+           "frequency":"7032","mode":"CW","latitude":0,"longitude":0},
+          {"activator":"K0NO","reference":"US-0002","name":"No Coords",
+           "frequency":"7040","mode":"SSB","grid4":"EN52"}
+        ]"#;
+        let spots = parse_pota_spots(json);
+        assert_eq!(spots.len(), 3);
+        assert_eq!(spots[0].lat, Some(40.1209));
+        assert_eq!(
+            spots[0].lon,
+            Some(-75.2237),
+            "a western longitude was dropped"
+        );
+        // 0/0 is a real place, not a missing value.
+        assert_eq!(spots[1].lat, Some(0.0));
+        assert_eq!(
+            spots[1].lon,
+            Some(0.0),
+            "the prime meridian was treated as absent"
+        );
+        // No coordinates in the row: placement falls back to the grid.
+        assert_eq!(spots[2].lat, None);
+        assert_eq!(spots[2].grid.as_deref(), Some("EN52"));
+    }
+
+    /// Out-of-range junk is refused rather than plotted somewhere impossible.
+    #[test]
+    fn pota_rejects_impossible_coordinates() {
+        let json = r#"[{"activator":"K0X","reference":"US-1","name":"Bad",
+           "frequency":"7040","mode":"SSB","latitude":991.0,"longitude":-75.0}]"#;
+        let spots = parse_pota_spots(json);
+        assert_eq!(spots[0].lat, None, "a latitude of 991 was accepted");
+        assert_eq!(spots[0].lon, Some(-75.0));
+    }
+
+    /// ⚠️ SOTA SPOTS CANNOT BE PLACED FROM THIS FEED. The payload carries
+    /// `associationCode`/`summitCode` and no coordinates, so anything drawing summits
+    /// on a map needs a second lookup. Pinned so nobody assumes symmetry with POTA.
+    #[test]
+    fn sota_spots_carry_no_position() {
+        let json = r#"[{"activatorCallsign":"G0ABC","associationCode":"G","summitCode":"LD-001",
+           "frequency":"14.285","mode":"ssb","summitDetails":"Scafell Pike","timeStamp":"2026-08-31T12:00:00"}]"#;
+        let spots = parse_sota_spots(json);
+        assert_eq!(spots.len(), 1);
+        assert_eq!(spots[0].lat, None);
+        assert_eq!(spots[0].lon, None);
+        assert_eq!(spots[0].grid, None);
+    }
 
     #[test]
     fn parses_pota_activator_spots() {
