@@ -1336,6 +1336,14 @@ struct OwnTx {
     text: String,
     freq_hz: f32,
     when_unix: u64,
+    /// The BAND this over went out on. Without it the ring is band-blind and every over we
+    /// have ever sent is served to every pane: the decode panes wipe on a band change and
+    /// then immediately re-ingest the lot, so 20 m calls reappear on 40 m carrying their
+    /// original transmit times — reported as "changing the band doesn't change the
+    /// situation… the hours and bands change in the status lines" (#178). A pane cannot
+    /// filter on a fact the wire never carried, which is why this belongs here and not in
+    /// the UI.
+    band: String,
 }
 
 /// Drives transmit/receive against the modem and updates [`AppState`].
@@ -1355,11 +1363,31 @@ pub mod upload_legs {
     pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG;
 }
 
+/// Where a queued upload CAME FROM — the fact the transport could not previously
+/// recover (#193, KR8MER). A push to ClubLog's realtime endpoint is the same HTTP
+/// call either way, so without this marker a live contact and a replay of a QSO
+/// logged (or ADIF-imported) months ago are indistinguishable by the time they
+/// reach the wire — and ClubLog's objection is specifically to the replay.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UploadOrigin {
+    /// A contact just logged at the key. Goes out AT ONCE — that is what "realtime"
+    /// means, and pacing one of these would be a regression, not a fix.
+    Live,
+    /// A record swept back up by a catch-up scan ([`StationCore::requeue_failed_clublog`]):
+    /// history, not news. Paced — see [`CATCHUP_UPLOAD_SPACING_SECS`].
+    CatchUp,
+}
+
 /// One QSO awaiting connector auto-upload, plus which legs it still owes and how
 /// many times it has been retried.
 #[derive(Clone)]
 pub struct PendingUpload {
     pub rec: tempo_core::logbook::QsoRecord,
+    /// Live contact or catch-up replay — see [`UploadOrigin`]. Set at BOTH enqueue
+    /// points (`log_qso` = Live, `requeue_failed_clublog` = CatchUp) and CARRIED
+    /// THROUGH the worker's transient-failure re-queue, so a catch-up record that
+    /// blips on the network cannot come back as a live one and skip the pacing.
+    pub origin: UploadOrigin,
     /// Owed connector legs (see [`upload_legs`]); `ALL` on the first attempt.
     pub legs: u8,
     /// Retry count — a record is dropped once it hits [`MAX_UPLOAD_RETRIES`] so a
@@ -1384,6 +1412,31 @@ pub fn upload_backoff_secs(attempts: u8) -> i64 {
 /// Give up on a queued upload after this many transient-failure retries (~1 per
 /// worker tick / 2 s), so a permanently-down service eventually stops retrying.
 pub const MAX_UPLOAD_RETRIES: u8 = 20;
+
+/// Seconds between two CATCH-UP uploads (see [`UploadOrigin::CatchUp`]). Live contacts
+/// are never subject to this.
+///
+/// WHY THIS EXISTS (#193, KR8MER — live in 1.9.2): saving the ClubLog app-password fires
+/// `requeue_failed_clublog`, which sweeps up to 256 never-uploaded QSOs — including ones
+/// that arrived by ADIF import — and queued them all due-now. The drain worker takes the
+/// whole queue per tick and pushes in a bare loop, so the only thing rationing the pushes
+/// was ClubLog's own response latency: the reporter measured 81 realtime uploads in 4
+/// minutes (~20/min) and ClubLog threatened to block his source IP, naming Nexus.
+///
+/// WHY 15 SECONDS. ClubLog objects to BOTH shapes: a burst of historical contacts through
+/// the realtime endpoint, and a long trickle of many tiny uploads. Their answer to bulk is
+/// the batch endpoint — which this product does not implement (there is no `putlogs.php`
+/// call anywhere; realtime is our only write path), so we cannot satisfy both and must
+/// pick a point on that axis. 15 s is 4/min — a 5× cut on the rate that drew the
+/// complaint, and slower than a human can log by hand, so no burst detector has anything
+/// to fire on — while still draining the full 256-record cap in about an hour, i.e. inside
+/// one operating session. Going much slower would trade a rate complaint for a catch-up
+/// that never finishes: the queue is memory-only, so whatever is still pending when the
+/// app closes is dropped and waits for the next password save.
+///
+/// If a batch endpoint is ever added, bulk catch-up belongs there and this pacing becomes
+/// the fallback for the realtime-only path.
+pub const CATCHUP_UPLOAD_SPACING_SECS: i64 = 15;
 
 /// Where the STANDING N1MM broadcast should go, or `None` when it is off.
 ///
@@ -8601,6 +8654,9 @@ impl Engine {
         }
         self.station.pending_uploads.push_back(PendingUpload {
             rec,
+            // LIVE, and it must stay that way: this is the contact at the key, and the
+            // catch-up pacing added for #193 deliberately does not touch it.
+            origin: UploadOrigin::Live,
             legs: upload_legs::ALL,
             attempts: 0,
             retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
@@ -9498,6 +9554,7 @@ impl Engine {
             text,
             freq_hz: self.tx_offset_hz,
             when_unix: now_unix_secs(),
+            band: self.settings.band.clone(),
         });
         if self.own_tx.len() > OWN_TX_RING {
             self.own_tx.pop_front();
@@ -15529,7 +15586,16 @@ impl Engine {
         // their calls in the decode feed (WSJT-X own-TX). The UI keys these by
         // cycle so repeated identical calls stack as distinct timestamped lines.
         let mycall = self.settings.mycall.clone();
-        for tx in &self.own_tx {
+        // Only the overs sent on the band we are ON. An empty stored band is an over from
+        // before this was recorded (or an off-band excursion, where the backend reports no
+        // band claim) — those still ride, because dropping them would silently lose an
+        // operator's own record, which is the fault the ring exists to prevent.
+        let here = self.settings.band.clone();
+        for tx in self
+            .own_tx
+            .iter()
+            .filter(|t| t.band.is_empty() || t.band == here)
+        {
             s.recent_decodes.push(DecodeRow {
                 from: Some(mycall.clone()),
                 snr: 0,
@@ -17959,9 +18025,24 @@ impl Engine {
         legs: u8,
         attempts: u8,
         retry_after_unix: i64,
+        origin: UploadOrigin,
     ) {
         self.station
-            .requeue_upload_at(rec, legs, attempts, retry_after_unix)
+            .requeue_upload_at(rec, legs, attempts, retry_after_unix, origin)
+    }
+
+    /// See [`StationCore::requeue_after_failure`] — the re-queue path for an upload that
+    /// just failed, which paces a catch-up record instead of trusting its raw backoff.
+    pub fn requeue_after_failure(
+        &mut self,
+        rec: tempo_core::logbook::QsoRecord,
+        legs: u8,
+        attempts: u8,
+        earliest_due: i64,
+        origin: UploadOrigin,
+    ) {
+        self.station
+            .requeue_after_failure(rec, legs, attempts, earliest_due, origin)
     }
 
     /// See [`StationCore::requeue_failed_clublog`].
@@ -23139,6 +23220,45 @@ mod tests {
     }
 
     #[test]
+    fn own_tx_rows_do_not_follow_the_operator_to_another_band() {
+        // #178 (Luk73), the sentence that outlived the Erase fix: "Changing the band doesn't
+        // change the situation. Additionally, the hours and bands change in the status lines."
+        //
+        // The own-TX display ring recorded text, audio offset and time — and NOT the band. So
+        // every over we have sent is appended to every snapshot forever, and the decode pane,
+        // which wipes itself on a band change, immediately re-ingests them: 20 m calls reappear
+        // on 40 m carrying their original transmit times. Nothing about Erase caused this and
+        // fixing Erase could not fix it; a pane cannot filter on a fact the wire never carried.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.call_station("W1AW");
+        for slot in [0u64, 1, 2, 3] {
+            let _ = e.poll_tx(slot);
+        }
+        let on_20 = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .count();
+        assert!(on_20 > 0, "harness: we recorded an over on 20 m");
+
+        e.set_frequency(7.074, "40m", "USB");
+        let mine_on_40: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            mine_on_40.is_empty(),
+            "overs sent on 20 m are being shown on 40 m: {mine_on_40:?}"
+        );
+    }
+
+    #[test]
     fn own_tx_rows_survive_a_dx_call_shaped_like_a_chunk_header() {
         // Field report (2026-08-28, 24.915 MHz): calling P29YY completed the QSO, but
         // not one of our own overs ever appeared in Rx Frequency — and issue #178 is
@@ -26226,9 +26346,191 @@ mod tests {
             "only the ClubLog leg is owed — the catch-up must not re-push QRZ/eQSL etc."
         );
         assert!(
-            queued.iter().all(|p| p.retry_after_unix == 0),
-            "the catch-up is due immediately, no backoff"
+            queued.iter().all(|p| p.origin == UploadOrigin::CatchUp),
+            "a catch-up record is marked as one — the transport can't tell otherwise (#193)"
         );
+        // Was `all(retry_after_unix == 0)` — "due immediately, no backoff" — and that WAS
+        // the #193 defect: every swept record due at once, drained in one worker tick.
+        // They are paced now; `a_clublog_catch_up_is_paced_not_a_burst` owns the detail.
+        assert!(
+            queued[1].retry_after_unix > queued[0].retry_after_unix,
+            "the catch-up is paced, not a burst"
+        );
+    }
+
+    #[test]
+    fn a_failed_catch_up_record_stays_in_the_pacing_lane() {
+        // ⚠️ THE PACING FIX'S OWN BLOCKER, and it made things WORSE than the bug it fixed.
+        //
+        // The slot allocator only paced an UNSTAMPED record (`retry_after_unix == 0`). A
+        // transient failure re-queues with `now + backoff`, which is not zero — so the first
+        // time ClubLog was busy, that record left the pacing lane for good and was rationed
+        // only by the shared exponential backoff, which flattens at 300 s.
+        //
+        // The scenario that follows is the whole point: ClubLog throttles us (which is
+        // SELF-REINFORCING — being rate-limited is exactly the transient failure), records
+        // come due through the outage, each fails and takes a backoff, and when the service
+        // returns every one of them is due IN THE PAST. The drain worker takes the whole
+        // queue per tick and pushes in a bare loop, so they all leave inside one 2 s tick:
+        // the same burst that drew the complaint, only now compressed. Before the pacing the
+        // exposure to this was two seconds; after it, an hour.
+        //
+        // So a re-queue AFTER A FAILURE is a fresh scheduling decision and must be paced —
+        // never sooner than its backoff, and never on top of another catch-up record.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..6 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        assert_eq!(e.requeue_failed_clublog(), 6);
+        let queued = e.take_pending_uploads();
+
+        // Every one of them now fails, the way a busy ClubLog fails them: back on the queue
+        // with a backoff, carrying its CatchUp origin.
+        for (i, p) in queued.iter().enumerate() {
+            let attempts = (i as u8 % 3) + 1; // different rungs of the ladder, as in life
+            let due = now_unix_secs() as i64 + upload_backoff_secs(attempts);
+            e.requeue_after_failure(p.rec.clone(), p.legs, attempts, due, p.origin);
+        }
+        let after = e.take_pending_uploads();
+        assert_eq!(after.len(), 6, "harness: all six came back");
+
+        // THE PIN: no two of them may come due within a spacing of each other. Sort, because
+        // the backoff ladder means they do not necessarily return in slot order.
+        let mut dues: Vec<i64> = after.iter().map(|p| p.retry_after_unix).collect();
+        dues.sort_unstable();
+        for w in dues.windows(2) {
+            assert!(
+                w[1] - w[0] >= CATCHUP_UPLOAD_SPACING_SECS,
+                "two failed catch-up records are due {}s apart — on recovery they leave in \
+                 one tick: {dues:?}",
+                w[1] - w[0]
+            );
+        }
+        // …and none of them jumped its own backoff to get there.
+        let now = now_unix_secs() as i64;
+        assert!(
+            dues.iter().all(|d| *d > now),
+            "a failed record must still wait out its backoff: {dues:?}"
+        );
+    }
+
+    #[test]
+    fn a_clublog_catch_up_is_paced_not_a_burst() {
+        // #193 (KR8MER), live in 1.9.2 and the reason ClubLog threatened to block his IP:
+        // saving the app-password swept every never-uploaded QSO — ADIF-imported history
+        // included — into the queue due-now, and the drain worker takes the WHOLE queue
+        // per tick and pushes in a bare loop with no rate limit. 81 realtime uploads in 4
+        // minutes. The pacing is what makes a catch-up a non-event on ClubLog's side.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..12 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads(); // drop the fresh-log queue; this is about the CATCH-UP
+
+        let n = e.requeue_failed_clublog();
+        assert_eq!(n, 12);
+        let queued = e.take_pending_uploads();
+        let now = now_unix_secs() as i64;
+
+        // The first one goes at once — the operator gets immediate evidence the credential
+        // worked, and one upload is not a burst.
+        assert!(
+            queued[0].retry_after_unix <= now,
+            "the first catch-up record is due now, not held back"
+        );
+        // …and every one after it is exactly one spacing behind the last. THE PIN: before
+        // the fix these were all 0 and the whole sweep left in a single tick.
+        for w in queued.windows(2) {
+            assert_eq!(
+                w[1].retry_after_unix - w[0].retry_after_unix,
+                CATCHUP_UPLOAD_SPACING_SECS,
+                "consecutive catch-up records are one spacing apart"
+            );
+        }
+        // The rate an outside observer sees: 12 records can't leave in under 11 spacings.
+        assert!(
+            queued[11].retry_after_unix - now >= 11 * CATCHUP_UPLOAD_SPACING_SECS,
+            "the sweep is spread across the wall clock, not queued due-now"
+        );
+    }
+
+    #[test]
+    fn a_live_contact_is_never_delayed_by_a_catch_up_in_flight() {
+        // The other half of #193, and the one a pacing fix could easily break: realtime
+        // upload exists so a live contact appears on ClubLog while the QSO is still warm.
+        // A catch-up occupying the pacing slots must not push it back by even a second.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..30 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        // A big catch-up now owns slots minutes into the future…
+        e.requeue_failed_clublog();
+        e.take_pending_uploads();
+
+        // …and the contact at the key still goes NOW.
+        let rec = e.qso_record("K1ABC".into(), None, None);
+        e.log_qso(rec);
+        let live = e.take_pending_uploads();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].origin, UploadOrigin::Live);
+        assert_eq!(
+            live[0].retry_after_unix, 0,
+            "a live contact is due immediately — pacing is for catch-up only"
+        );
+        assert_eq!(
+            live[0].legs,
+            upload_legs::ALL,
+            "and still owes every enabled connector, not just ClubLog"
+        );
+
+        // Same through the re-queue door, which is the one the pacing actually guards:
+        // a LIVE record put back due-now (a leg retried) must not be handed a catch-up
+        // slot just because a catch-up happens to be running.
+        let rec = e.qso_record("K1ABC".into(), None, None);
+        e.requeue_upload(rec, upload_legs::CLUBLOG, 1);
+        let again = e.take_pending_uploads();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].origin, UploadOrigin::Live);
+        assert_eq!(
+            again[0].retry_after_unix, 0,
+            "a live re-queue keeps its own timing — the catch-up slots are not its queue"
+        );
+    }
+
+    #[test]
+    fn a_paced_catch_up_record_keeps_its_slot_when_the_worker_puts_it_back() {
+        // The worker drains the whole queue every 2 s and re-queues whatever isn't due
+        // yet. If that re-queue allocated a FRESH slot, every waiting record would be
+        // shoved another spacing into the future on every tick and the catch-up would
+        // march away from the present and never drain — a worse bug than the burst.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..4 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        e.requeue_failed_clublog();
+        let queued = e.take_pending_uploads();
+        let dues: Vec<i64> = queued.iter().map(|p| p.retry_after_unix).collect();
+
+        // Ten worker ticks' worth of "not due yet → put it back untouched".
+        let mut round = queued;
+        for tick in 0..10 {
+            for p in round {
+                e.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
+            }
+            round = e.take_pending_uploads();
+            let got: Vec<i64> = round.iter().map(|p| p.retry_after_unix).collect();
+            assert_eq!(
+                got, dues,
+                "tick {tick}: a re-queued record keeps the slot it already had"
+            );
+        }
     }
 
     #[test]

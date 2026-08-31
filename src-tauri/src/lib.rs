@@ -15117,10 +15117,19 @@ fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Res
         eng.requeue_failed_clublog()
     };
     if requeued > 0 {
+        // Say it is PACED and roughly how long (#193). The catch-up can run for the best
+        // part of an hour at the far end of the 256-record cap, and an operator watching
+        // old contacts trickle out with no explanation is the report this line prevents.
+        let spacing = tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS;
+        let mins = (requeued as u64 * spacing as u64).div_ceil(60);
         conn_log(
             "ClubLog",
             "info",
-            format!("app-password saved — re-queued {requeued} un-uploaded QSO(s) for ClubLog"),
+            format!(
+                "app-password saved — re-queued {requeued} un-uploaded QSO(s) for ClubLog, \
+                 sending one every {spacing}s (about {mins} min) so the catch-up doesn't \
+                 look like a flood"
+            ),
         );
     }
     set_upload_toggle(&state, UploadToggle::Clublog, true);
@@ -18714,7 +18723,19 @@ pub fn run() {
             // than a bool: collapsing "not asked" into "not ready" would fire the announcement
             // below at an operator whose credentials are perfectly fine, simply because their
             // upload queue was empty — a false "auto-upload paused" every session.
-            let creds_ready: Option<bool> = if recs.is_empty() {
+            //
+            // ⚠️ DUE, not merely QUEUED — and pacing is what made the difference matter.
+            // The guard above was written when a non-empty queue meant work this tick. A
+            // paced catch-up leaves up to 255 NOT-YET-DUE records sitting in the queue for
+            // the best part of an hour, so `!recs.is_empty()` would be true on every 2 s
+            // tick for that whole time: ~1900 keyring round trips where there used to be
+            // one, which on Linux is a Secret Service D-Bus call and is precisely what
+            // restarted gnome-keyring in a loop in #154. Asking only when something is
+            // actually due restores the original premise — a credential answer can only
+            // change the outcome for a record we are about to send.
+            let due_now = now_unix();
+            let anything_due = recs.iter().any(|p| p.retry_after_unix <= due_now);
+            let creds_ready: Option<bool> = if !anything_due {
                 None
             } else {
                 Some(clublog_credentials_ready(&cl_email, &cl_key))
@@ -18736,14 +18757,37 @@ pub fn run() {
                 && creds_ready == Some(true)
                 && !CLUBLOG_SUSPENDED.load(std::sync::atomic::Ordering::Relaxed);
             let now_unix = now_unix();
+            // How many CATCH-UP records this drain is carrying (#193). Counted before the
+            // loop so the operator-facing line below can say how much is left rather than
+            // just "one more went out" — "why are contacts from March uploading?" is the
+            // question this answers, and the Connections log is where they'll look.
+            let mut catchup_left = recs
+                .iter()
+                .filter(|p| p.origin == tempo_app::engine::UploadOrigin::CatchUp)
+                .count();
             for p in recs {
                 // BACKOFF: a record not yet due goes back on the queue untouched — no push,
                 // no attempt spent, no toast. This is what turns 20-in-40-seconds into one
-                // push every few minutes for a genuinely-down service.
+                // push every few minutes for a genuinely-down service. It is ALSO what
+                // paces the catch-up: `requeue_failed_clublog` stamps those records one
+                // spacing apart, so all but the one whose slot has come round land here.
                 if p.retry_after_unix > now_unix {
                     let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                    eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix);
+                    eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
                     continue;
+                }
+                if p.origin == tempo_app::engine::UploadOrigin::CatchUp {
+                    catchup_left = catchup_left.saturating_sub(1);
+                    conn_log(
+                        "ClubLog",
+                        "info",
+                        format!(
+                            "catch-up: sending an older QSO with {} — {catchup_left} still \
+                             queued, one every {}s so ClubLog isn't flooded",
+                            p.rec.call,
+                            tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
+                        ),
+                    );
                 }
                 let rec = p.rec.clone();
                 // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
@@ -18776,7 +18820,15 @@ pub fn run() {
                     let attempts = p.attempts.saturating_add(1);
                     let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
                     let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                    eng.requeue_upload_at(rec, failed, attempts, due);
+                    // `p.origin` CARRIED, not re-derived: a catch-up record that blips on
+                    // the network must come back as a catch-up record, or the retry would
+                    // re-enter the queue as if it were a live contact (#193).
+                    // PACED, not stamped-and-forgotten. `requeue_after_failure` keeps a
+                    // catch-up record in the pacing lane instead of letting its backoff put
+                    // it back in the free-for-all: a busy ClubLog fails everything that
+                    // comes due, and without this they would all be due in the past when it
+                    // recovers and leave inside one tick — the burst again, compressed.
+                    eng.requeue_after_failure(rec, failed, attempts, due, p.origin);
                 }
             }
             // HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from

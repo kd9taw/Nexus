@@ -83,6 +83,14 @@ pub struct StationCore {
     /// happen for any log path. Drained by [`Self::take_pending_uploads`];
     /// bounded so a worker outage can't grow it without limit.
     pub(crate) pending_uploads: VecDeque<PendingUpload>,
+    /// Earliest wall-clock second the NEXT catch-up upload may go out — the pacing slot
+    /// allocator for [`UploadOrigin::CatchUp`] (#193). Bumped by
+    /// [`CATCHUP_UPLOAD_SPACING_SECS`] every time a catch-up record is queued, so a scan
+    /// that enqueues 81 records hands out 81 slots 15 s apart instead of 81 due-nows.
+    /// Lives HERE, not in the caller, so every enqueue path is paced by construction —
+    /// including the worker's transient-failure re-queue. Memory-only, like the queue it
+    /// paces: nothing to restore at startup because nothing survives to be paced.
+    pub(crate) catchup_slot_unix: i64,
     /// Last connector-upload outcome (operator-facing toast text) + whether it
     /// succeeded; `upload_tick` bumps on every note so the UI can toast changes.
     pub(crate) upload_note: Option<String>,
@@ -196,6 +204,7 @@ impl StationCore {
             clock_offset_ms: None,
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
+            catchup_slot_unix: 0,
             upload_note: None,
             upload_ok: false,
             upload_tick: 0,
@@ -548,7 +557,7 @@ impl StationCore {
     /// already succeeded — a permanently-rejected or successful leg is never in
     /// `legs`. Dropped once past [`MAX_UPLOAD_RETRIES`] or with nothing owed.
     pub fn requeue_upload(&mut self, rec: tempo_core::logbook::QsoRecord, legs: u8, attempts: u8) {
-        self.requeue_upload_at(rec, legs, attempts, 0);
+        self.requeue_upload_at(rec, legs, attempts, 0, crate::engine::UploadOrigin::Live);
     }
 
     /// As [`requeue_upload`](Self::requeue_upload) but stamping when the record is next
@@ -560,25 +569,52 @@ impl StationCore {
         legs: u8,
         attempts: u8,
         retry_after_unix: i64,
+        origin: crate::engine::UploadOrigin,
     ) {
         if legs == 0 || attempts >= MAX_UPLOAD_RETRIES {
             return;
         }
+        // PACING, and only for catch-up (#193). An UNSTAMPED catch-up record (`0` = due
+        // now, the sentinel this API already uses) is handed the next free slot — never
+        // sooner than the last catch-up queued plus the spacing, never in the past — so
+        // the drain worker's existing not-due check trickles them out one every
+        // CATCHUP_UPLOAD_SPACING_SECS instead of pushing the lot in a single tick.
+        //
+        // ⚠️ ONLY when unstamped. The worker puts a not-yet-due record straight back on the
+        // queue every 2 s tick; re-slotting one that already holds a due time would shove
+        // every waiting record another spacing into the future on every tick, and a
+        // catch-up of any size would march away from the present and never drain. A stamp
+        // already set — a slot from this scan, or a transient-failure backoff — is kept.
+        //
+        // A Live record is untouched by all of it: it keeps the stamp it was given, which
+        // for a fresh contact is 0 = go now. That is the whole point of realtime upload.
+        let due = if origin == crate::engine::UploadOrigin::CatchUp && retry_after_unix == 0 {
+            let slot = self.catchup_slot_unix.max(now_unix_secs() as i64);
+            self.catchup_slot_unix = slot + crate::engine::CATCHUP_UPLOAD_SPACING_SECS;
+            slot
+        } else {
+            retry_after_unix
+        };
         if self.pending_uploads.len() >= 256 {
             self.pending_uploads.pop_front();
         }
         self.pending_uploads
             .push_back(crate::engine::PendingUpload {
                 rec,
+                origin,
                 legs,
                 attempts,
-                retry_after_unix,
+                retry_after_unix: due,
             });
     }
 
     /// Re-queue the CLUBLOG leg of every logged QSO whose ClubLog upload has NOT succeeded
     /// (never stamped, or stamped a failure) — the F4MQS "nothing retried after I fixed the
-    /// password" gap. Bounded and due-now. Returns how many were queued.
+    /// password" gap. Bounded, and PACED: these go out as [`UploadOrigin::CatchUp`], one
+    /// every [`CATCHUP_UPLOAD_SPACING_SECS`], because the log this scans holds
+    /// ADIF-imported history as well as this session's contacts and ClubLog objects to
+    /// history arriving through the realtime endpoint in a burst (#193). Returns how many
+    /// were queued.
     pub fn requeue_failed_clublog(&mut self) -> usize {
         let stale: Vec<tempo_core::logbook::QsoRecord> = self
             .logbook
@@ -595,9 +631,52 @@ impl StationCore {
             .collect();
         let n = stale.len();
         for rec in stale {
-            self.requeue_upload_at(rec, crate::engine::upload_legs::CLUBLOG, 0, 0);
+            self.requeue_upload_at(
+                rec,
+                crate::engine::upload_legs::CLUBLOG,
+                0,
+                0,
+                crate::engine::UploadOrigin::CatchUp,
+            );
         }
         n
+    }
+
+    /// Re-queue a record whose upload just FAILED, at no earlier than `earliest_due`.
+    ///
+    /// ⚠️ A FAILURE IS A FRESH SCHEDULING DECISION, which is why it does not go through
+    /// [`Self::requeue_upload_at`]'s unstamped-only pacing. That guard exists so the drain
+    /// worker's every-tick put-back of a not-yet-due record cannot shove the whole queue
+    /// further into the future; it is not a statement that a stamped record is already
+    /// paced. A transient failure stamps `now + backoff`, and taking that at face value let
+    /// a catch-up record leave the pacing lane for good on its first blip — after which it
+    /// was rationed only by the shared backoff, which flattens at 300 s.
+    ///
+    /// That is how the pacing turned back into a burst, and a worse one: ClubLog throttling
+    /// us IS a transient failure, so an outage sends every due record down the ladder, and
+    /// on recovery they are all due in the past and the worker pushes the lot inside one
+    /// 2 s tick. Pacing here keeps a recovering catch-up a trickle instead of the very
+    /// burst the pacing was added to prevent.
+    ///
+    /// A Live record keeps its backoff untouched: a just-worked contact that failed should
+    /// retry as soon as the ladder allows.
+    pub fn requeue_after_failure(
+        &mut self,
+        rec: tempo_core::logbook::QsoRecord,
+        legs: u8,
+        attempts: u8,
+        earliest_due: i64,
+        origin: crate::engine::UploadOrigin,
+    ) {
+        if origin != crate::engine::UploadOrigin::CatchUp {
+            self.requeue_upload_at(rec, legs, attempts, earliest_due, origin);
+            return;
+        }
+        // Never before its backoff, and never on top of another catch-up record.
+        let slot = self.catchup_slot_unix.max(earliest_due);
+        self.catchup_slot_unix = slot + crate::engine::CATCHUP_UPLOAD_SPACING_SECS;
+        // Already stamped, so `requeue_upload_at` leaves the slot alone.
+        self.requeue_upload_at(rec, legs, attempts, slot, origin);
     }
 
     /// Record a connector-upload outcome for the operator (toast text + level).
