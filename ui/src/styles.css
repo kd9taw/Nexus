@@ -19460,8 +19460,13 @@ button.sat-chip:disabled {
   width: 7rem;
   font-family: var(--font-mono);
 }
+/* The mode cell is a <select> (see MemoriesView's ChoiceSelect — a datalist filtered its own
+   suggestions down to the value already in the field). A select spends 24px of its right
+   padding on the arrow that the input it replaced did not, so the width grew by that much to
+   keep the same text room: measured in `layout-harness/selects.html`, 88px left 58px for the
+   text and 104px leaves 74px — what the 5.5rem input had. */
 .mv-cell-mode {
-  width: 5.5rem;
+  width: 6.5rem;
 }
 .mv-ro {
   color: var(--text-dim);
@@ -19482,6 +19487,120 @@ button.sat-chip:disabled {
 .mv-row-actions button:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* ---- selection + bulk delete ----
+   The bar appears only once a row is ticked. Every number on it is the SELECTED ROWS ON
+   SCREEN (MemoriesView's `selectedShown`), so what it counts, what it highlights and what
+   Delete removes are the same rows. */
+.mv-selbar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+}
+.mv-selbar-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mv-selbar-count {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.mv-selbar-del {
+  border-color: var(--state-weak);
+  color: var(--state-weak);
+}
+.mv-selbar-del:hover {
+  background: var(--state-weak);
+  border-color: var(--state-weak);
+  color: #fff;
+}
+.mv-pick {
+  flex: none;
+  margin: 0 2px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.mv-row.picked,
+.mv-grid tr.picked td {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* The row ＋ New just created, while its editor is open in the pinned panel below — so the
+   list still answers "where did it go?". The grid needs it more than the list does: it is the
+   200-channel spreadsheet view. Marked with an inset bar and the existing bottom border
+   recoloured, never an added border, so the row does not change height. */
+.mv-row.adding {
+  border-color: var(--accent);
+}
+.mv-grid tr.adding td {
+  border-bottom-color: var(--accent);
+}
+.mv-grid tr.adding td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---- the pinned add panel ----
+   ＋ New's editor, docked at the bottom of `.mv-main` instead of opening inline in the list
+   (the operator: "the add section adds inline … leading to difficulty and confusion").
+   `flex: none` keeps `.mv-scroll` the pane's one scroll owner; the cap is against --vh-eff
+   (raw vh is zoom-blind) so a tall repeater editor scrolls INSIDE the panel rather than
+   pushing the list off a 1024×768 window, and the background is opaque because a pinned
+   surface sits over scrolling content. */
+.mv-add {
+  flex: none;
+  max-height: calc(0.42 * var(--vh-eff, 100vh));
+  overflow-y: auto;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.mv-add-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+}
+.mv-add-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.mv-add-hint {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.mv-add-discard {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.mv-add-discard:hover {
+  border-color: var(--state-weak);
+  color: var(--state-weak);
+}
+/* The editor inside the panel has the head above it, so it needs no border of its own. */
+.mv-add > .mv-editor {
+  border-top: none;
 }
 
 /* Starter-packs modal — overlays the section, scrolls internally on short windows */

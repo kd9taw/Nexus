@@ -3439,6 +3439,54 @@ export const EN = {
   'memories.editor.groups.aria': 'Group membership',
   'memories.editor.done': 'Done',
 
+  // The mode and CTCSS pickers. Every choice is always offered (a datalist filtered them by
+  // what was already in the field, which left one mode reachable), and "Other…" is the escape
+  // that lets a mode or tone we do not list — a CHIRP import carries them — still be typed in.
+  'memories.picker.other': 'Other…',
+
+  // The pinned add panel ＋ New opens. The channel exists from the moment it is pressed, so
+  // backing out keeps it and Discard is what throws it away.
+  'memories.add.title': 'New memory',
+  'memories.add.hint': 'Enter saves · Esc closes — the channel is kept either way',
+  'memories.add.discard': 'Discard',
+  'memories.add.discard.title': 'Delete this new memory and close the panel',
+
+  // Selecting rows and deleting them together. Every count here is the SELECTED ROWS ON
+  // SCREEN — a bulk delete never touches a row the operator has narrowed away.
+  'memories.select.row.aria': 'Select {{name}}',
+  'memories.select.all.aria': 'Select all shown',
+  'memories.select.all.label': 'All shown',
+  'memories.select.count': {
+    one: '{{count}} selected',
+    other: '{{count}} selected',
+  },
+  // Shown INSTEAD of the plain count when part of the selection has been narrowed out of
+  // view: the numbers on this bar are the visible selection, so without this the count
+  // silently disagrees with how many rows are actually ticked.
+  'memories.select.countHidden': '{{count}} selected · {{hidden}} not in view',
+  'memories.select.clear': 'Clear',
+  'memories.select.delete.label': 'Delete {{count}}',
+  'memories.select.delete.title': 'Delete the selected memories in this view',
+  'memories.select.confirm.title': {
+    one: 'Delete {{count}} memory?',
+    other: 'Delete {{count}} memories?',
+  },
+  'memories.select.confirm.body':
+    'They leave every group and the cockpit strips too. The toast that follows can undo it.',
+  'memories.select.confirm.ok': {
+    one: 'Delete {{count}} memory',
+    other: 'Delete {{count}} memories',
+  },
+  'memories.select.deleted': {
+    one: 'Deleted {{count}} memory',
+    other: 'Deleted {{count}} memories',
+  },
+  'memories.select.undo': 'Undo',
+  'memories.select.restored': {
+    one: 'Restored {{count}} memory',
+    other: 'Restored {{count}} memories',
+  },
+
   // Starter packs. The pack's name, description and region are the pack's own data.
   'memories.packs.title': 'Starter packs',
   'memories.packs.close.aria': 'Close',

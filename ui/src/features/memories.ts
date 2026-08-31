@@ -475,6 +475,34 @@ export function deleteMemory(bank: MemoriesBank, id: string): MemoriesBank {
   return { ...bank, memories: bank.memories.filter((m) => m.id !== id) }
 }
 
+/** Delete several memories in one write — the Memories section's bulk delete. */
+export function deleteMemories(bank: MemoriesBank, ids: readonly string[]): MemoriesBank {
+  const doomed = new Set(ids)
+  if (doomed.size === 0) return bank
+  return { ...bank, memories: bank.memories.filter((m) => !doomed.has(m.id)) }
+}
+
+/** Put deleted memories back where they were — the bulk delete's undo.
+ *
+ * It re-inserts into the CURRENT bank rather than restoring a snapshot of the old one: this
+ * store is shared with the cockpit strips and with a torn-off Memories window, so putting a
+ * stale whole bank back would silently clobber anything they wrote in between. The index
+ * matters beyond tidiness — master-array position IS the ★ favorite rank the cockpit strip
+ * and Ctrl+1..9 read, so restoring to the end would quietly re-rank the strip. Entries are
+ * applied in ascending index order (each insert shifts the ones after it) and an id that is
+ * already back is skipped, so a double undo cannot duplicate a channel. */
+export function restoreMemories(
+  bank: MemoriesBank,
+  entries: readonly { memory: Memory; index: number }[],
+): MemoriesBank {
+  const memories = [...bank.memories]
+  for (const { memory, index } of [...entries].sort((a, b) => a.index - b.index)) {
+    if (memories.some((m) => m.id === memory.id)) continue
+    memories.splice(Math.max(0, Math.min(index, memories.length)), 0, memory)
+  }
+  return { ...bank, memories }
+}
+
 export function toggleFavorite(bank: MemoriesBank, id: string): MemoriesBank {
   return {
     ...bank,

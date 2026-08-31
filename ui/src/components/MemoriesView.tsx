@@ -9,7 +9,7 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog. What does NOT, because this screen is nearly all units: every
 // dial and TX frequency, every offset, every CTCSS tone and DTCS code, the mode names and the
-// mode/CTCSS datalists, the callsign, the group names the operator typed, the HF and VHF/UHF
+// mode/CTCSS pickers' choices, the callsign, the group names the operator typed, the HF and VHF/UHF
 // section labels, the POTA/SOTA programme names, the `value` of every <select> (the label is
 // prose, the value is what is stored), and the export FILE NAME's slug. The weekday
 // abbreviations are date formatting rather than catalog prose — the same ruling the DXpedition
@@ -20,6 +20,7 @@ import {
   addMemory,
   addMemoryDeduped,
   deleteGroup,
+  deleteMemories,
   deleteMemory,
   memoriesStore,
   moveFavorite,
@@ -27,6 +28,7 @@ import {
   newMemoryId,
   parseChirpCsv,
   renameGroup,
+  restoreMemories,
   setMemoryGroups,
   siteOffset,
   STRIP_FAVORITE_LIMIT,
@@ -43,6 +45,7 @@ import { octant } from '../features/radioprog'
 import { fmtDistanceKm, useUnits, type Units } from '../units'
 import { importPack, STARTER_PACKS, type Pack } from '../features/packs'
 import { saveTextToDownloads } from '../api'
+import { confirmDialog } from '../confirm'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -109,12 +112,15 @@ const KIND_LABEL: Record<MemoryKind, string> = {
 }
 
 const MODE_SUGGESTIONS = ['USB', 'LSB', 'FM', 'NFM', 'AM', 'CW', 'FT8', 'FT4']
-// The standard CTCSS ladder (EIA) — a datalist so typing is optional.
+// The standard CTCSS ladder (EIA).
 const CTCSS_SUGGESTIONS = [
   67, 71.9, 74.4, 77, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100, 103.5, 107.2, 110.9, 114.8,
   118.8, 123, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 162.2, 167.9, 173.8, 179.9, 186.2,
   192.8, 203.5, 210.7, 218.1, 225.7, 233.6, 241.8, 250.3,
 ]
+// The ladder as the picker's choices. String(number) on both sides is what makes the stored
+// tone match one of these exactly ("100", never "100.0").
+const CTCSS_CHOICES = CTCSS_SUGGESTIONS.map((hz) => String(hz))
 const DAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
 
 /** An uncontrolled input that COMMITS on blur/Enter instead of per keystroke.
@@ -150,12 +156,124 @@ function CommitInput({
       onKeyDown={(e) => {
         if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
         if (e.key === 'Escape') {
+          // Escape means "revert THIS field" here. It must not reach the add panel's own
+          // Escape handler, which closes the panel — an operator who mistypes a repeater
+          // name and hits Escape would lose the form they were filling in.
+          e.stopPropagation()
           ;(e.target as HTMLInputElement).value = value
           ;(e.target as HTMLInputElement).blur()
         }
       }}
       {...rest}
     />
+  )
+}
+
+/** True for the free-text fields whose Enter means "I'm done with this one" — never for a
+ * checkbox, a time picker or a button, where Enter has the widget's own meaning. */
+function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLInputElement)) return false
+  return target.type === 'text' || target.type === 'number' || target.type === ''
+}
+
+/** The sentinel behind "Other…". Never a mode or a tone anything writes — a mode is a trimmed
+ * short token and a tone is a number — so picking it can only mean "let me type one". */
+const OTHER_CHOICE = '__other__'
+
+/**
+ * A picker that always shows EVERY choice — and keeps one it has never heard of.
+ *
+ * ⚠️ **THIS REPLACES A `<datalist>`, WHICH IS THE WHOLE REASON IT EXISTS. A DATALIST FILTERS
+ * ITS SUGGESTIONS BY WHAT IS ALREADY IN THE FIELD.** A new memory is created on the rig's
+ * current mode — USB, nearly always — so opening the mode dropdown offered exactly one entry:
+ * USB. Eight modes listed, one reachable. Reported as "USB is the only mode I can add", and
+ * the CTCSS field had the identical shape: with 103.5 in the box the 38-tone ladder collapsed
+ * to 103.5.
+ *
+ * ⚠️ **AND IT MUST NOT BE A PLAIN `<select>`.** Memories round-trip through CHIRP CSV, which
+ * carries modes and tones our lists have never heard of (DV, P25, a 69.3 Hz tone). A select
+ * whose options cannot represent the stored value renders as "nothing selected", and the first
+ * touch of that row would rewrite the operator's imported value — silent data loss in a file
+ * they keep. So an unrecognised value is added to the list as its own option, and `Other…`
+ * opens a free-text escape so a new one can still be typed in.
+ *
+ * The escape commits on blur/Enter like [`CommitInput`]; Escape blanks it, which commits
+ * nothing and drops back to the list.
+ */
+function ChoiceSelect({
+  value,
+  options,
+  onCommit,
+  label,
+  className,
+  unsetPlaceholder,
+}: {
+  value: string
+  options: readonly string[]
+  onCommit: (v: string) => void
+  /** Names the control for a screen reader and labels the free-text escape. */
+  label: string
+  className?: string
+  /** Show a DISABLED "—" row so a field that has no value yet reads as unset rather than
+   *  silently displaying the first option. It is a placeholder, never a choice: picking it
+   *  could only mean "tone mode on, no tone", which programs the rig with a 0 Hz tone
+   *  ([`memoryPatch`] sends `ctcssEncHz ?? 0`) and opens no repeater. Tone Mode = None is
+   *  how tones are turned off, and it hides this field entirely. */
+  unsetPlaceholder?: boolean
+}) {
+  const [typing, setTyping] = useState(false)
+  if (typing) {
+    return (
+      <input
+        autoFocus
+        className={className}
+        aria-label={label}
+        placeholder={label}
+        defaultValue=""
+        onBlur={(e) => {
+          const v = e.target.value.trim()
+          setTyping(false)
+          if (v) onCommit(v)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          if (e.key === 'Escape') {
+            // Same reason as [`CommitInput`]: Escape here means "drop back to the list",
+            // the contract stated above, and the add panel must never see it.
+            e.stopPropagation()
+            ;(e.target as HTMLInputElement).value = ''
+            ;(e.target as HTMLInputElement).blur()
+          }
+        }}
+      />
+    )
+  }
+  // String equality, not a numeric compare: both sides of a tone are String(number), so
+  // "100" is "100" — and a mode is stored exactly as typed.
+  const known = value !== '' && options.includes(value)
+  return (
+    <select
+      className={className}
+      aria-label={label}
+      value={value}
+      onChange={(e) => {
+        if (e.target.value === OTHER_CHOICE) setTyping(true)
+        else onCommit(e.target.value)
+      }}
+    >
+      {unsetPlaceholder && (
+        <option value="" disabled>
+          —
+        </option>
+      )}
+      {!known && value !== '' && <option value={value}>{value}</option>}
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+      <option value={OTHER_CHOICE}>{t('memories.picker.other')}</option>
+    </select>
   )
 }
 
@@ -219,6 +337,19 @@ export function MemoriesView({
   const [q, setQ] = useState('')
   const [grid, setGrid] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  /** The row ＋ New just created — edited in the PINNED add panel, not inline. */
+  const [addingId, setAddingId] = useState<string | null>(null)
+  // The row the last ＋ New created, captured EXACTLY as created. If the operator closes the
+  // panel without typing anything and presses ＋ New again, that row is still sitting there
+  // unnamed at the dial frequency, and creating a second one just deposits junk — reported
+  // as identical rows piling up. Reusing it needs an exact test, not a guess at "untouched":
+  // a fuzzy one would silently swallow a row somebody had edited. So this stores the row's
+  // serialized form and reuse requires byte equality — type one character and it no longer
+  // matches, and ＋ New honestly gives you a second channel. That matters: two nets on the
+  // same frequency are ordinary, so ＋ New must NOT dedupe by frequency the way ＋ Save does.
+  const lastAdd = useRef<{ id: string; json: string } | null>(null)
+  /** Ticked rows, by id — deliberately NOT cleared when the view narrows (see `selectedShown`). */
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const [newGroupName, setNewGroupName] = useState('')
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
   const [sort, setSort] = useState<{ col: 'name' | 'rxMhz' | 'mode' | 'kind'; dir: 1 | -1 } | null>(null)
@@ -293,6 +424,15 @@ export function MemoriesView({
       ].filter((s) => s.rows.length > 0)
   const showSectionHeaders = !rankView && bandSections.length > 1
 
+  // ⚠️ THE BULK DELETE'S TARGET IS THE SELECTED ROWS THAT ARE ON SCREEN — never the whole
+  // selection. `selected` is a set of ids and survives everything that changes the visible set
+  // (search, ★/Nets/group, sort, the band sections), which is what lets the operator tick rows
+  // across two searches. But that same persistence is how a bulk delete would take channels the
+  // operator narrowed away and can no longer see. Intersecting with `shown` makes the count on
+  // the button, the rows highlighted, and the rows deleted one and the same thing.
+  const selectedShown = shown.filter((m) => selected.has(m.id))
+  const allShownSelected = shown.length > 0 && selectedShown.length === shown.length
+
   const commit = (fn: (b: typeof bank) => typeof bank) => memoriesStore.update(fn)
 
   // An operator edit to a channel's CONTENT makes the row theirs: a pack re-install
@@ -302,6 +442,17 @@ export function MemoriesView({
   // aren't content, and a starred pack channel should still receive pack corrections.
   const editRow = (id: string, patch: Partial<Memory>) =>
     commit((b) => updateMemory(b, id, { ...patch, source: 'user' }))
+
+  // The pinned add panel's row. Read back from the bank every render so a row deleted from
+  // under it (bulk delete, another window) simply closes the panel instead of stranding it.
+  const addingMem = addingId ? bank.memories.find((m) => m.id === addingId) : undefined
+  const addRef = useRef<HTMLDivElement>(null)
+  // Land in the Name field, which is what the operator came to type. preventScroll per the
+  // layout contract — a focus() that scrolls fights the list's own scroller.
+  useEffect(() => {
+    if (!addingId) return
+    addRef.current?.querySelector('input')?.focus({ preventScroll: true })
+  }, [addingId])
 
   // Initial focus goes to the DIALOG CONTAINER, not the ✕: autoFocus on the close
   // button meant the Enter that opened Starter packs immediately dismissed it.
@@ -366,6 +517,8 @@ export function MemoriesView({
   }
 
   const addNew = () => {
+    const newRx = dialMhz > 0 ? dialMhz : 14.074
+    const newMode = dialMode || 'USB'
     // ⚠️ CLEAR THE SEARCH FIRST, or the button looks broken. `addNew` already matches the
     // view's OTHER filters — it stars the row under Favorites, makes it a net under Nets,
     // joins the selected group — but a search box was never one of them. A new memory has an
@@ -373,12 +526,23 @@ export function MemoriesView({
     // the row is created, the editor opens on a row nobody can see, and the operator presses
     // the button again. Reported as "I cannot hit the add memories button".
     setQ('')
+    const prev = lastAdd.current
+    if (prev) {
+      const row = bank.memories.find((m) => m.id === prev.id)
+      // Still present, still exactly as created, and still the channel ＋ New would make
+      // now (the dial may have moved since) — so it IS the blank row being asked for.
+      if (row && JSON.stringify(row) === prev.json && row.rxMhz === newRx && row.mode === newMode) {
+        setAddingId(row.id)
+        setEditingId(null)
+        return
+      }
+    }
     const id = newMemoryId()
     commit((b) =>
       addMemory(b, {
         id,
-        rxMhz: dialMhz > 0 ? dialMhz : 14.074,
-        mode: dialMode || 'USB',
+        rxMhz: newRx,
+        mode: newMode,
         // Match the active view's filter so the new row is actually visible (and its editor
         // opens) instead of being created invisibly: star it under Favorites, make it a net
         // under Nets, join the selected group under a group.
@@ -387,7 +551,94 @@ export function MemoriesView({
         groups: groupSel ? [groupSel] : [],
       }),
     )
-    setEditingId(id)
+    // The row is created IMMEDIATELY, as it always was — a crash, a closed window or a stray
+    // click cannot lose it, and every filter-matching behaviour above depends on a real row
+    // existing. What changed is where its editor lives: the PINNED panel, not inline among the
+    // rows, where the thing being created was somewhere in a long list. Escape closes the panel
+    // and keeps the channel (it is a valid one, at the dial); Discard is how you throw it away.
+    setAddingId(id)
+    setEditingId(null)
+  }
+
+  // Snapshot the add-panel row AS CREATED, once, the first time it appears in the bank. The
+  // guard is what makes it "as created": while the panel stays open the id does not change,
+  // so a row the operator edits is never re-snapshotted and stops matching — which is exactly
+  // how [`addNew`] tells an untouched leftover from a real channel.
+  useEffect(() => {
+    if (!addingId || lastAdd.current?.id === addingId) return
+    const row = bank.memories.find((m) => m.id === addingId)
+    if (row) lastAdd.current = { id: addingId, json: JSON.stringify(row) }
+  }, [addingId, bank])
+
+  const toggleSelected = (id: string) =>
+    setSelected((s) => {
+      const next = new Set(s)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+
+  /** Delete rows and offer an Undo. THE ONE DELETE PATH — the row ✕ and the selection bar
+   *  both come here, so a channel deleted by either can be put back.
+   *
+   *  The ✕ used to delete outright with no confirm and no undo, which had it backwards: it
+   *  sits one button away from ✎, so it is the delete most easily hit by accident, and it was
+   *  the only one with nothing behind it. It stays confirm-free — a single channel should go
+   *  in one click — and the Undo is what makes that safe. */
+  const removeRows = (rows: readonly Memory[]) => {
+    if (rows.length === 0) return
+    // Snapshot WHERE each row sits, not the whole bank: the undo re-inserts into whatever the
+    // bank is by then, so a torn-off window or the cockpit strip writing in between is not
+    // clobbered — and master-array position IS the ★ rank the strip reads.
+    //
+    // Read the CURRENT bank, not the render closure: a caller may have awaited a confirm
+    // dialog first, and a co-writer moving a row while that dialog was open would otherwise
+    // have every index one bank stale — putting a favorite back at the wrong rank.
+    const live = memoriesStore.get()
+    const removed = rows.map((m) => ({
+      memory: m,
+      index: live.memories.findIndex((x) => x.id === m.id),
+    }))
+    const ids = rows.map((m) => m.id)
+    commit((b) => deleteMemories(b, ids))
+    setSelected((s) => {
+      const next = new Set(s)
+      for (const id of ids) next.delete(id)
+      return next
+    })
+    if (addingId && ids.includes(addingId)) setAddingId(null)
+    if (editingId && ids.includes(editingId)) setEditingId(null)
+    pushToast(t('memories.select.deleted', { count: removed.length }), 'success', 8000, {
+      actionLabel: t('memories.select.undo'),
+      action: () => {
+        commit((b) => restoreMemories(b, removed))
+        pushToast(t('memories.select.restored', { count: removed.length }), 'success', 2500)
+      },
+    })
+  }
+
+  const toggleAllShown = () =>
+    setSelected((s) => {
+      const next = new Set(s)
+      for (const m of shown) {
+        if (allShownSelected) next.delete(m.id)
+        else next.add(m.id)
+      }
+      return next
+    })
+
+  const deleteSelected = () => {
+    const doomed = selectedShown
+    if (doomed.length === 0) return
+    void (async () => {
+      const ok = await confirmDialog({
+        title: t('memories.select.confirm.title', { count: doomed.length }),
+        body: t('memories.select.confirm.body'),
+        confirmLabel: t('memories.select.confirm.ok', { count: doomed.length }),
+        danger: true,
+      })
+      if (!ok) return
+      removeRows(doomed)
+    })()
   }
 
   const exportCsv = () => {
@@ -435,8 +686,10 @@ export function MemoriesView({
       .catch((e) => pushToast(String(e), 'error'))
   }
 
-  // ---- the inline editor (list view) --------------------------------------
-  const editor = (m: Memory) => {
+  // ---- the channel editor -------------------------------------------------
+  // Two hosts, one editor: the ✎ opens it inline on an existing row, ＋ New opens it in the
+  // pinned add panel. `onDone` is whichever of those to close.
+  const editor = (m: Memory, onDone: () => void) => {
     const up = (patch: Partial<Memory>) => editRow(m.id, patch)
     const showOffset = m.kind === 'repeater' || m.kind === 'simplex' || m.kind === 'calling'
     return (
@@ -466,9 +719,10 @@ export function MemoriesView({
         </label>
         <label className="mv-field">
           <span>{t('memories.editor.mode.label')}</span>
-          <CommitInput
-            resetKey={`${m.id}:mode:${m.mode}`}
-            list="mv-modes"
+          <ChoiceSelect
+            key={`${m.id}:mode`}
+            label={t('memories.editor.mode.label')}
+            options={MODE_SUGGESTIONS}
             value={m.mode}
             onCommit={(v) => up({ mode: v })}
           />
@@ -525,10 +779,11 @@ export function MemoriesView({
             {(m.toneMode === 'tone' || m.toneMode === 'tsql') && (
               <label className="mv-field">
                 <span>{t('memories.editor.ctcss.label')}</span>
-                <CommitInput
-                  resetKey={`${m.id}:ctcss:${m.ctcssEncHz ?? ''}`}
-                  list="mv-ctcss"
-                  inputMode="decimal"
+                <ChoiceSelect
+                  key={`${m.id}:ctcss`}
+                  label={t('memories.editor.ctcss.label')}
+                  options={CTCSS_CHOICES}
+                  unsetPlaceholder
                   value={m.ctcssEncHz != null ? String(m.ctcssEncHz) : ''}
                   onCommit={(v) => withNumber(v, (n) => up({ ctcssEncHz: n }))}
                 />
@@ -684,7 +939,7 @@ export function MemoriesView({
             </div>
           </div>
         )}
-        <button type="button" className="mv-editor-done" onClick={() => setEditingId(null)}>
+        <button type="button" className="mv-editor-done" onClick={onDone}>
           {t('memories.editor.done')}
         </button>
       </div>
@@ -728,17 +983,6 @@ export function MemoriesView({
 
   return (
     <section className="memories-view" aria-label={t('memories.aria')}>
-      <datalist id="mv-modes">
-        {MODE_SUGGESTIONS.map((m) => (
-          <option key={m} value={m} />
-        ))}
-      </datalist>
-      <datalist id="mv-ctcss">
-        {CTCSS_SUGGESTIONS.map((t) => (
-          <option key={t} value={t} />
-        ))}
-      </datalist>
-
       {showPacks && (
         <div className="mv-packs-overlay" onClick={() => setShowPacks(false)}>
           <div
@@ -944,6 +1188,46 @@ export function MemoriesView({
           />
         </div>
 
+        {/* The selection bar. Delete only ever takes the VISIBLE selection (`selectedShown`),
+            but the BAR follows the whole selection: gating it on the visible part made it —
+            and Clear with it — vanish at exactly the moment a selection went out of view
+            behind a search, leaving rows ticked with nothing on screen saying so and no way
+            to drop them without widening the filter again. */}
+        {selected.size > 0 && (
+          <div className="mv-selbar">
+            <label className="mv-selbar-all">
+              <input
+                type="checkbox"
+                aria-label={t('memories.select.all.aria')}
+                checked={allShownSelected}
+                onChange={toggleAllShown}
+              />
+              <span>{t('memories.select.all.label')}</span>
+            </label>
+            <span className="mv-selbar-count">
+              {selected.size > selectedShown.length
+                ? t('memories.select.countHidden', {
+                    count: selectedShown.length,
+                    hidden: selected.size - selectedShown.length,
+                  })
+                : t('memories.select.count', { count: selectedShown.length })}
+            </span>
+            <span className="mv-toolbar-gap" />
+            <button type="button" className="mv-tool" onClick={() => setSelected(new Set())}>
+              {t('memories.select.clear')}
+            </button>
+            <button
+              type="button"
+              className="mv-tool mv-selbar-del"
+              onClick={deleteSelected}
+              disabled={selectedShown.length === 0}
+              title={t('memories.select.delete.title')}
+            >
+              {t('memories.select.delete.label', { count: selectedShown.length })}
+            </button>
+          </div>
+        )}
+
         {shown.length === 0 ? (
           <div className="mv-empty">
             {bank.memories.length === 0 ? (
@@ -965,6 +1249,18 @@ export function MemoriesView({
             <table className="mv-grid">
               <thead>
                 <tr>
+                  <th>
+                    {/* Select-all belongs in the column header in a spreadsheet view — and
+                        without it "select this whole group" costs a manual tick first, since
+                        the selection bar only exists once something is selected. */}
+                    <input
+                      type="checkbox"
+                      className="mv-pick"
+                      aria-label={t('memories.select.all.aria')}
+                      checked={allShownSelected}
+                      onChange={toggleAllShown}
+                    />
+                  </th>
                   <th aria-label={t('memories.grid.column.favorite')}>★</th>
                   {th('name', t('memories.grid.column.name'))}
                   {th('rxMhz', t('memories.grid.column.rx'))}
@@ -980,13 +1276,36 @@ export function MemoriesView({
                   <Fragment key={sec.key}>
                     {showSectionHeaders && (
                       <tr className="mv-section-row">
-                        <td colSpan={8}>
+                        <td colSpan={9}>
                           {sec.label} <span className="mv-section-count">{sec.rows.length}</span>
                         </td>
                       </tr>
                     )}
                     {sec.rows.map((m) => (
-                  <tr key={m.id} className={invalidRow(m) ? 'invalid' : undefined}>
+                  <tr
+                    key={m.id}
+                    className={
+                      // `adding` marks the row the pinned panel is filling in. It belongs
+                      // here MOST of all: the grid is the 200-channel spreadsheet, where a
+                      // freshly created row is hardest to find again.
+                      [
+                        invalidRow(m) ? 'invalid' : '',
+                        m.id === addingId ? 'adding' : '',
+                        selected.has(m.id) ? 'picked' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ') || undefined
+                    }
+                  >
+                    <td>
+                      <input
+                        type="checkbox"
+                        className="mv-pick"
+                        aria-label={t('memories.select.row.aria', { name: m.name })}
+                        checked={selected.has(m.id)}
+                        onChange={() => toggleSelected(m.id)}
+                      />
+                    </td>
                     <td>
                       <button
                         type="button"
@@ -1015,10 +1334,11 @@ export function MemoriesView({
                       />
                     </td>
                     <td>
-                      <CommitInput
+                      <ChoiceSelect
+                        key={`${m.id}:gmode`}
                         className="mv-cell mv-cell-mode"
-                        resetKey={`${m.id}:gmode:${m.mode}`}
-                        list="mv-modes"
+                        label={t('memories.editor.mode.label')}
+                        options={MODE_SUGGESTIONS}
                         value={m.mode}
                         onCommit={(v) => editRow(m.id, { mode: v })}
                       />
@@ -1038,7 +1358,7 @@ export function MemoriesView({
                       </button>
                       <button
                         type="button"
-                        onClick={() => commit((b) => deleteMemory(b, m.id))}
+                        onClick={() => removeRows([m])}
                         title={t('memories.row.delete.title')}
                       >
                         ✕
@@ -1064,8 +1384,20 @@ export function MemoriesView({
               const rank = favRank.get(m.id) ?? 0
               const offStrip = rank > STRIP_FAVORITE_LIMIT
               return (
-              <li key={m.id} className={`mv-row${invalidRow(m) ? ' invalid' : ''}`}>
+              <li
+                key={m.id}
+                className={`mv-row${invalidRow(m) ? ' invalid' : ''}${
+                  m.id === addingId ? ' adding' : ''
+                }${selected.has(m.id) ? ' picked' : ''}`}
+              >
                 <div className="mv-row-line">
+                  <input
+                    type="checkbox"
+                    className="mv-pick"
+                    aria-label={t('memories.select.row.aria', { name: m.name })}
+                    checked={selected.has(m.id)}
+                    onChange={() => toggleSelected(m.id)}
+                  />
                   {rankView && (
                     <span
                       className={`mv-rank${offStrip ? ' off' : ''}`}
@@ -1167,19 +1499,62 @@ export function MemoriesView({
                   <button
                     type="button"
                     className="mv-row-del"
-                    onClick={() => commit((b) => deleteMemory(b, m.id))}
+                    onClick={() => removeRows([m])}
                     title={t('memories.row.delete.title')}
                   >
                     ✕
                   </button>
                 </div>
-                {editingId === m.id && editor(m)}
+                {editingId === m.id && editor(m, () => setEditingId(null))}
               </li>
                   )
                 })}
               </Fragment>
             ))}
           </ul>
+        )}
+
+        {/* ---- the pinned add panel ------------------------------------------------
+            ＋ New's editor, docked at the bottom of the pane instead of opening inline
+            somewhere in the list. `flex: none` under `.mv-main`, so the list keeps being the
+            one scroll owner and the panel is always in front of the operator. */}
+        {addingMem && (
+          <div
+            className="mv-add"
+            ref={addRef}
+            role="group"
+            aria-label={t('memories.add.title')}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setAddingId(null)
+              // Enter: `CommitInput` has already blurred the field — which is what commits it —
+              // by the time this bubbles, so closing here IS "Enter commits". Only from a TEXT
+              // field: on a button (a day chip, a group chip) Enter must press the button, and
+              // `tagName === 'INPUT'` alone is not that test — the net reminder is an
+              // `<input type="checkbox">` and its time is an `<input type="time">`, so Enter on
+              // either shut the panel instead of doing the field's own thing.
+              else if (e.key === 'Enter' && isTextEntry(e.target)) {
+                setAddingId(null)
+              }
+            }}
+          >
+            <div className="mv-add-head">
+              <span className="mv-add-title">{t('memories.add.title')}</span>
+              <span className="mv-add-hint">{t('memories.add.hint')}</span>
+              <span className="mv-toolbar-gap" />
+              <button
+                type="button"
+                className="mv-add-discard"
+                title={t('memories.add.discard.title')}
+                onClick={() => {
+                  commit((b) => deleteMemory(b, addingMem.id))
+                  setAddingId(null)
+                }}
+              >
+                {t('memories.add.discard')}
+              </button>
+            </div>
+            {editor(addingMem, () => setAddingId(null))}
+          </div>
         )}
       </div>
     </section>
