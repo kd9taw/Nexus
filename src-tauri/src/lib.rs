@@ -65,6 +65,16 @@ struct FdBoardState {
 }
 type SharedFdBoardState = Arc<Mutex<FdBoardState>>;
 
+/// The Connect web page's bound state — same shape and same job as
+/// [`FdBoardState`], read by `connect_web_status` for its Settings row.
+#[derive(Default)]
+struct ConnectWebState {
+    running: bool,
+    port: u16,
+    error: Option<String>,
+}
+type SharedConnectWebState = Arc<Mutex<ConnectWebState>>;
+
 /// Cached propagation nowcast: `(fetched_at, snapshot)`. Caching enforces PSK
 /// Reporter's ≥5-minute-per-dataset query limit across UI polls.
 type PropCache = Arc<Mutex<Option<(std::time::Instant, propagation::PropagationSnapshot)>>>;
@@ -15936,6 +15946,111 @@ struct OtaMapSpot {
 /// still costs one request.
 const OTA_MAP_TTL_SECS: i64 = 120;
 
+/// Build the Connect TV page's payload from the caches the app already keeps.
+///
+/// This is the ENTIRE data path of the LAN page: the serve thread holds this closure
+/// and nothing else, so there is no route from an inbound request to a setter, to
+/// CAT, or to the transmit path.
+///
+/// ⚠️ What goes in is deliberate. The propagation nowcast is public weather; the
+/// callsign and grid are on every QSO the station makes anyway. The dial frequency,
+/// the log and the needs board are NOT here and must not be added — that is what the
+/// station is doing, which is a different thing from what the ionosphere is doing,
+/// and only the second is what a wall display is for. A payload-shape test in
+/// `tempo_app::connect_web` fails if a field like that appears.
+///
+/// `None` before the first propagation snapshot exists, which the page renders as
+/// "waiting" rather than as a quiet band plan.
+fn build_connect_board(
+    engine: &SharedEngine,
+    prop: &PropCache,
+    kp: &KpForecastCache,
+) -> Option<tempo_app::connect_web::ConnectBoardData> {
+    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
+    // One bounded clone under each lock; everything else is built off-lock.
+    let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
+    let (call, grid) = {
+        let e = engine_lock(engine);
+        let s = e.settings();
+        (s.mycall.clone(), s.mygrid.clone())
+    };
+    // The forecast is best-effort: the page simply omits the line when we have none,
+    // rather than showing a peak of zero, which would read as "quiet" — a forecast we
+    // do not have.
+    let peak = kp
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()))
+        .and_then(|f| f.peak_ahead().cloned());
+    Some(ConnectBoardData {
+        call,
+        grid,
+        headline: snap.advisory.headline.clone(),
+        banners: snap.advisory.banners.clone(),
+        bands: snap
+            .advisory
+            .bands
+            .iter()
+            .map(|b| ConnectBand {
+                band: b.band.clone(),
+                tier: format!("{:?}", b.tier),
+                modeled: b.modeled.clone(),
+                stations: b.n_i_hear.saturating_add(b.n_hear_me),
+                reason: b.reason.clone(),
+            })
+            .collect(),
+        openings: snap
+            .openings
+            .iter()
+            .map(|o| ConnectOpening {
+                band: o.band.clone(),
+                mode: o.mode.clone(),
+                octant: o.octant.clone(),
+                stations: o.stations,
+                confidence: o.confidence.clone(),
+                is_new: o.is_new,
+            })
+            .collect(),
+        sfi: snap.space_wx.sfi,
+        kp: snap.space_wx.kp,
+        a_index: snap.space_wx.a_index,
+        xray_class: snap.space_wx.xray_class.clone(),
+        insights: snap.insights.iter().map(|i| i.plain.clone()).collect(),
+        kp_peak_ahead: peak.as_ref().map(|p| p.kp),
+        kp_peak_unix: peak.as_ref().map(|p| p.time_unix),
+        source: snap.source.clone(),
+        as_of_unix: snap.as_of,
+    })
+}
+
+/// What the Settings row shows for the Connect web page: running?, the port, the URL
+/// to type into the TV, and the last bind error if it is not running.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectWebStatusDto {
+    running: bool,
+    port: u16,
+    url: String,
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn connect_web_status(state: State<'_, SharedConnectWebState>) -> ConnectWebStatusDto {
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let url = if st.running {
+        let host = lan_ip_hint().unwrap_or_else(|| "this-computer".to_string());
+        format!("http://{host}:{}", st.port)
+    } else {
+        String::new()
+    };
+    ConnectWebStatusDto {
+        running: st.running,
+        port: st.port,
+        url,
+        error: st.error.clone(),
+    }
+}
+
 /// Where a park goes on the map: the feed's own coordinates when it has them, else
 /// the grid square's centre, else nowhere.
 ///
@@ -17798,6 +17913,7 @@ struct BuildDeps {
     region_paths: SharedRegionPaths,
     health: SharedHealth,
     fd_board: SharedFdBoardState,
+    connect_web: SharedConnectWebState,
     /// The pounce detector's receiver — the one thing here that cannot be cloned. Shared as a
     /// take-once cell; see where it is claimed in the setup hook.
     pounce_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<pouncer::SpotHint>>>>,
@@ -19403,6 +19519,105 @@ pub fn run() {
     let proton_cache: ProtonCache = Arc::new(Mutex::new(None));
     let scales_cache: ScalesCache = Arc::new(Mutex::new(None));
 
+    // Connect on the shack TV: the same manager-thread shape as the spectator
+    // scoreboard — poll settings 1 s, hot-apply, retry a failed bind quietly on a
+    // timer. While `connect_web` is on, `tempo_app::connect_web` serves through the
+    // scoreboard's GET/HEAD-only server on 0.0.0.0:connect_web_port, and the toggle
+    // IS the LAN opt-in.
+    //
+    // ⚠️ Its threat model is NOT the scoreboard's — see the module header. The
+    // provider below is the ONLY thing the serve thread can reach, and it hands over
+    // the propagation picture plus callsign and grid: no dial frequency, no log, no
+    // needs board. A payload-shape test in `connect_web` fails if that widens.
+    let connect_web_state: SharedConnectWebState = Arc::new(Mutex::new(ConnectWebState::default()));
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mgr_engine = engine.clone();
+        let mgr_state = connect_web_state.clone();
+        let mgr_prop = prop_cache.clone();
+        let mgr_kp = kp_forecast_cache.clone();
+        std::thread::spawn(move || {
+            let mut running: Option<(u16, Arc<AtomicBool>)> = None;
+            let mut bind_failed: Option<(u16, std::time::Instant)> = None;
+            loop {
+                let want = {
+                    let e = engine_lock(&mgr_engine);
+                    let s = e.settings();
+                    s.connect_web.then_some(s.connect_web_port)
+                };
+                if want != running.as_ref().map(|(p, _)| *p) {
+                    if let Some((_, shutdown)) = running.take() {
+                        shutdown.store(true, Ordering::Relaxed);
+                        let mut st = mgr_state.lock().unwrap_or_else(|e| e.into_inner());
+                        st.running = false;
+                        st.error = None;
+                        drop(st);
+                        conn_log("Connect web", "info", "Connect web page stopped");
+                    }
+                    let now = std::time::Instant::now();
+                    let may_try = |p: u16| {
+                        bind_failed
+                            .map(|(fp, at)| fp != p || now.duration_since(at).as_secs() >= 10)
+                            .unwrap_or(true)
+                    };
+                    if let Some(port) = want.filter(|p| may_try(*p)) {
+                        match std::net::TcpListener::bind(("0.0.0.0", port)) {
+                            Ok(listener) => {
+                                let shutdown = Arc::new(AtomicBool::new(false));
+                                let eng = mgr_engine.clone();
+                                let prop = mgr_prop.clone();
+                                let kp = mgr_kp.clone();
+                                let source: Arc<dyn tempo_app::fd_scoreboard::BoardSource> =
+                                    Arc::new(tempo_app::connect_web::CachedConnect::new(
+                                        move || build_connect_board(&eng, &prop, &kp),
+                                    ));
+                                let sd = shutdown.clone();
+                                std::thread::spawn(move || {
+                                    tempo_app::fd_scoreboard::serve_until(listener, source, sd)
+                                });
+                                running = Some((port, shutdown));
+                                bind_failed = None;
+                                {
+                                    let mut st =
+                                        mgr_state.lock().unwrap_or_else(|e| e.into_inner());
+                                    st.running = true;
+                                    st.port = port;
+                                    st.error = None;
+                                }
+                                conn_log(
+                                    "Connect web",
+                                    "info",
+                                    format!(
+                                        "Connect is on the LAN, port {port} — open this \
+                                         computer's IP :{port} on the TV"
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                let msg = format!(
+                                    "couldn't serve Connect on port {port}: {e} — change the \
+                                     port in Settings ▸ Appearance or stop the program using \
+                                     it. Retrying quietly."
+                                );
+                                {
+                                    let mut st =
+                                        mgr_state.lock().unwrap_or_else(|e| e.into_inner());
+                                    st.running = false;
+                                    st.error = Some(msg.clone());
+                                }
+                                if bind_failed.map(|(p, _)| p != port).unwrap_or(true) {
+                                    conn_log("Connect web", "error", msg);
+                                }
+                                bind_failed = Some((port, now));
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+            }
+        });
+    }
+
     // NOT registered as managed state, deliberately. `Chains` would have to be keyed by
     // `RadioProfile::id`, and the only id available here is a BOOT SNAPSHOT of
     // `settings.active_radio`. Switching radios in Settings does not rebuild the engine —
@@ -19443,6 +19658,7 @@ pub fn run() {
         region_paths,
         health,
         fd_board: fd_board_state,
+        connect_web: connect_web_state,
         // The pounce receiver is the one non-clonable thing the chain takes. Shared as a
         // take-once cell so both attempts can hold the bundle: whichever setup runs first
         // gets the receiver, and a retry whose predecessor already consumed it skips the
@@ -19512,6 +19728,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(d.region_paths)
         .manage(d.health)
         .manage(d.fd_board)
+        .manage(d.connect_web)
         .manage(SharedOpeningTracker::default())
         .manage(SharedWxHistory::default())
         .manage(SharedQrzSession::default())
@@ -19785,6 +20002,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             get_ota_spots,
             get_ota_map_spots,
             get_kp_forecast,
+            connect_web_status,
             search_parks,
             parks_count,
             hunted_parks_count,

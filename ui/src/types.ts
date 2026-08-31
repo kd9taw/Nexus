@@ -2912,6 +2912,9 @@ export interface Settings {
   fdScoreboard?: boolean
   /** Spectator scoreboard TCP port (default 7373 — "73 73"). */
   fdScoreboardPort?: number
+  /** Serve Connect as a read-only page on the LAN. The toggle IS the opt-in. */
+  connectWeb?: boolean
+  connectWebPort?: number
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number

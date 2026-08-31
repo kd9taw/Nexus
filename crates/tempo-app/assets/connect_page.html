@@ -1,0 +1,270 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nexus Connect</title>
+<!--
+  The shack-TV view of Connect. Read across a room, not at a keyboard, so: large
+  type, high contrast, no interaction, and everything sized in vw/vh so one page
+  fits a 1080p TV, a 4K set and a phone without a breakpoint per device.
+
+  ⚠️ WHOLLY SELF-CONTAINED, AND A TEST ENFORCES IT. No stylesheet, script, font or
+  image is loaded from anywhere. A shack TV or a streaming stick is often on a
+  network with no route to the internet, which is exactly where this is meant to
+  work — a CDN reference would render it bare in the one place it has to be right.
+-->
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #131c2e;
+    --line: #24314b;
+    --text: #e7edf7;
+    --dim: #93a3bd;
+    --good: #35c08a;
+    --warn: #f0b429;
+    --bad: #f2545b;
+    --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    /* Room-distance base size; every other size is relative to it. */
+    font-size: clamp(15px, 1.35vw, 30px);
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8em;
+    padding: 0.7em 1em;
+    border-bottom: 1px solid var(--line);
+  }
+  .call { font-size: 1.7em; font-weight: 700; letter-spacing: 0.02em; }
+  .grid { color: var(--dim); font-size: 1.1em; }
+  .spacer { flex: 1; }
+  .clock { font-size: 1.5em; font-variant-numeric: tabular-nums; }
+  /* Provenance is never hidden: a wall display that cannot say its data is stale is
+     worse than a blank one. */
+  .src { font-size: 0.85em; padding: 0.2em 0.6em; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .src.live { color: var(--good); border-color: var(--good); }
+  .src.cached, .src.partial { color: var(--warn); border-color: var(--warn); }
+  .src.offline { color: var(--bad); border-color: var(--bad); }
+
+  .headline { padding: 0.6em 1em; font-size: 1.5em; line-height: 1.25; }
+  .banners { display: flex; flex-wrap: wrap; gap: 0.5em; padding: 0 1em 0.6em; }
+  .banner { background: var(--panel); border-left: 4px solid var(--warn); padding: 0.35em 0.7em; font-size: 0.95em; }
+
+  main {
+    display: grid;
+    grid-template-columns: 1.25fr 1fr;
+    gap: 0.8em;
+    padding: 0 1em 1em;
+    align-items: start;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 0.5em; padding: 0.7em 0.9em; }
+  h2 { margin: 0 0 0.5em; font-size: 0.95em; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--dim); }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-size: 0.8em; color: var(--dim); font-weight: 600; padding-bottom: 0.3em; }
+  td { padding: 0.28em 0; border-top: 1px solid var(--line); font-size: 1.15em; }
+  td.band { font-weight: 700; width: 4.5em; }
+  td.num { text-align: right; width: 4em; color: var(--dim); }
+  .tier { font-size: 0.9em; padding: 0.1em 0.5em; border-radius: 0.3em; }
+  .t-hot, .t-active { background: rgba(53,192,138,0.16); color: var(--good); }
+  .t-moderate { background: rgba(240,180,41,0.16); color: var(--warn); }
+  .t-quiet { color: var(--dim); }
+  .reason { color: var(--dim); font-size: 0.9em; }
+
+  .wx { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5em; text-align: center; }
+  .wx div { background: rgba(255,255,255,0.03); border-radius: 0.4em; padding: 0.5em 0.2em; }
+  .wx .k { display: block; font-size: 0.78em; color: var(--dim); letter-spacing: 0.06em; }
+  .wx .v { display: block; font-size: 1.9em; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  ul { margin: 0; padding-left: 1.1em; }
+  li { margin: 0.25em 0; font-size: 1.05em; line-height: 1.3; }
+  .new { color: var(--accent); font-weight: 700; }
+  .empty { color: var(--dim); font-style: italic; }
+  footer { color: var(--dim); font-size: 0.8em; padding: 0 1em 1em; }
+</style>
+
+<header>
+  <span class="call" id="call">—</span>
+  <span class="grid" id="grid"></span>
+  <span class="spacer"></span>
+  <span class="src" id="src">…</span>
+  <span class="clock" id="clock">--:--</span>
+</header>
+
+<div class="headline" id="headline"></div>
+<div class="banners" id="banners"></div>
+
+<main>
+  <section>
+    <h2>Bands</h2>
+    <table>
+      <thead><tr><th>Band</th><th>Heard</th><th>Model</th><th class="num">Stns</th></tr></thead>
+      <tbody id="bands"></tbody>
+    </table>
+  </section>
+
+  <div style="display:grid;gap:0.8em">
+    <section>
+      <h2>Space weather</h2>
+      <div class="wx">
+        <div><span class="k">SFI</span><span class="v" id="sfi">–</span></div>
+        <div><span class="k">Kp</span><span class="v" id="kp">–</span></div>
+        <div><span class="k">A</span><span class="v" id="a">–</span></div>
+        <div><span class="k">X-RAY</span><span class="v" id="xray">–</span></div>
+      </div>
+      <div id="kpahead" class="reason" style="margin-top:0.5em"></div>
+    </section>
+
+    <section>
+      <h2>Openings</h2>
+      <ul id="openings"></ul>
+    </section>
+
+    <section>
+      <h2>What's happening</h2>
+      <ul id="insights"></ul>
+    </section>
+  </div>
+</main>
+
+<footer id="foot"></footer>
+
+<script>
+  // Text only — never innerHTML with feed-derived strings. Callsigns, reasons and
+  // insight lines all originate outside this page, and a wall display is not worth
+  // an injection hole.
+  const put = (id, s) => { document.getElementById(id).textContent = s; };
+
+  const two = (n) => String(n).padStart(2, '0');
+  function tickClock() {
+    const d = new Date();
+    put('clock', two(d.getUTCHours()) + ':' + two(d.getUTCMinutes()) + 'z');
+  }
+
+  function agoText(unix) {
+    if (!unix) return '';
+    const secs = Math.max(0, Math.floor(Date.now() / 1000) - unix);
+    if (secs < 90) return secs + 's ago';
+    const mins = Math.round(secs / 60);
+    return mins < 90 ? mins + ' min ago' : Math.round(mins / 60) + ' h ago';
+  }
+
+  function slot(unix) {
+    const d = new Date(unix * 1000);
+    const day = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getUTCDay()];
+    return day + ' ' + two(d.getUTCHours()) + 'z';
+  }
+
+  function row(b) {
+    const tr = document.createElement('tr');
+    const band = document.createElement('td');
+    band.className = 'band';
+    band.textContent = b.band;
+    const tier = document.createElement('td');
+    const chip = document.createElement('span');
+    chip.className = 'tier t-' + String(b.tier || '').toLowerCase();
+    chip.textContent = b.tier || '–';
+    tier.appendChild(chip);
+    const model = document.createElement('td');
+    model.className = 'reason';
+    model.textContent = b.modeled || '–';
+    const n = document.createElement('td');
+    n.className = 'num';
+    n.textContent = b.stations ?? 0;
+    tr.append(band, tier, model, n);
+    return tr;
+  }
+
+  function list(id, items, render) {
+    const el = document.getElementById(id);
+    el.replaceChildren();
+    if (!items || items.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'empty';
+      li.textContent = 'nothing right now';
+      el.appendChild(li);
+      return;
+    }
+    for (const it of items) el.appendChild(render(it));
+  }
+
+  function draw(payload) {
+    if (!payload || payload.active === false) {
+      put('headline', payload && payload.note ? payload.note : 'Waiting for Nexus…');
+      put('src', 'starting');
+      document.getElementById('src').className = 'src';
+      return;
+    }
+    const b = payload.board;
+    put('call', b.call || '—');
+    put('grid', b.grid || '');
+    put('headline', b.headline || '');
+    put('sfi', Math.round(b.sfi));
+    put('kp', (b.kp ?? 0).toFixed(1));
+    put('a', Math.round(b.aIndex));
+    put('xray', b.xrayClass || '–');
+
+    const src = document.getElementById('src');
+    src.textContent = b.source || '?';
+    src.className = 'src ' + (b.source || '');
+
+    // The forecast line is explicitly a forecast, and absent when NOAA has published
+    // nothing forward — never rendered as a quiet sky.
+    put('kpahead', b.kpPeakAhead != null && b.kpPeakUnix
+      ? 'Forecast peak Kp ' + b.kpPeakAhead.toFixed(1) + ' at ' + slot(b.kpPeakUnix)
+      : '');
+
+    const banners = document.getElementById('banners');
+    banners.replaceChildren();
+    for (const text of b.banners || []) {
+      const d = document.createElement('div');
+      d.className = 'banner';
+      d.textContent = text;
+      banners.appendChild(d);
+    }
+
+    const tb = document.getElementById('bands');
+    tb.replaceChildren();
+    for (const band of b.bands || []) tb.appendChild(row(band));
+
+    list('openings', b.openings, (o) => {
+      const li = document.createElement('li');
+      if (o.isNew) li.className = 'new';
+      li.textContent = o.band + ' ' + o.mode + ' → ' + o.octant +
+        ' · ' + o.stations + ' stn' + (o.stations === 1 ? '' : 's') +
+        ' · ' + o.confidence + (o.isNew ? ' · JUST OPENED' : '');
+      return li;
+    });
+
+    list('insights', b.insights, (text) => {
+      const li = document.createElement('li');
+      li.textContent = text;
+      return li;
+    });
+
+    put('foot', 'Nexus Connect · data ' + agoText(b.asOfUnix) + ' · read-only');
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch('/connect/data.json', { cache: 'no-store' });
+      draw(await r.json());
+    } catch (e) {
+      // A dropped host must SAY so rather than freeze on a stale screen.
+      put('src', 'no link');
+      document.getElementById('src').className = 'src offline';
+    }
+  }
+
+  tickClock();
+  setInterval(tickClock, 10000);
+  poll();
+  setInterval(poll, 15000);
+</script>

@@ -1219,6 +1219,13 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 (The theme picker — dark / light / amber night-vision — lives in the app chrome,
 not this tab.)
 
+### Connect on a TV
+
+<!-- TODO(settings-reference): "Connect on a TV" (registry id `connect-web`) has no prose yet.
+     Write it here; scripts/gen-settings-reference.mjs carries it across from now on. -->
+
+_Undocumented so far._
+
 ### Features
 
 Turn sections on and off, and pick a goal profile.

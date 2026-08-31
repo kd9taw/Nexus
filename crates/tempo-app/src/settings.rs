@@ -734,6 +734,23 @@ pub struct Settings {
     /// memorable for hams).
     #[serde(default = "default_fd_scoreboard_port")]
     pub fd_scoreboard_port: u16,
+    /// Serve Connect as a read-only web page for a shack TV or a browser on the
+    /// house network. **This toggle IS the LAN opt-in**: while on,
+    /// `tempo_app::connect_web` serves through the same GET/HEAD-only server on
+    /// `0.0.0.0:connect_web_port`.
+    ///
+    /// ⚠️ Its threat model is NOT the spectator scoreboard's. That one is defensible
+    /// partly because a contest log is already broadcast in clear on the air; this
+    /// page is the station's own conditions picture. It carries the callsign, the
+    /// grid and the propagation nowcast, and deliberately NOT the dial frequency,
+    /// the log or the needs board — a payload-shape test in `connect_web` pins that.
+    /// Default OFF, and the Settings copy must say what it exposes and to whom.
+    #[serde(default)]
+    pub connect_web: bool,
+    /// TCP port the Connect web page serves on. Distinct from the scoreboard's so a
+    /// Field Day host can serve both at once.
+    #[serde(default = "default_connect_web_port")]
+    pub connect_web_port: u16,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -2140,6 +2157,11 @@ fn default_fd_scoreboard_port() -> u16 {
     7373
 }
 
+/// One past the scoreboard, so a Field Day host can serve both boards at once.
+fn default_connect_web_port() -> u16 {
+    7374
+}
+
 fn default_fd_power() -> u32 {
     2
 }
@@ -3075,6 +3097,8 @@ impl Default for Settings {
             fd_position_id: String::new(), // generated (8-hex) at startup, then persisted
             fd_scoreboard: false,          // serving a LAN page is an operator-only opt-in
             fd_scoreboard_port: default_fd_scoreboard_port(),
+            connect_web: false, // same rule: exposing the station on the LAN is opt-in
+            connect_web_port: default_connect_web_port(),
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),

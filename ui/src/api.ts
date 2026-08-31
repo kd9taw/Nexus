@@ -616,6 +616,19 @@ export async function fdScoreboardStatus(): Promise<FdScoreboardStatus> {
   return invoke<FdScoreboardStatus>('fd_scoreboard_status', {})
 }
 
+/** The Connect LAN page's bound state, for its Settings row. */
+export interface ConnectWebStatus {
+  running: boolean
+  port: number
+  /** The address to type into the TV; empty while it is not serving. */
+  url: string
+  error: string | null
+}
+
+export async function connectWebStatus(): Promise<ConnectWebStatus> {
+  return invoke<ConnectWebStatus>('connect_web_status', {})
+}
+
 /** Test the N3FJP TCP API ("N3FJP's Field Day Contest Log v6.6") — run at the
  * club site before the event. */
 export async function n3fjpTestConnection(): Promise<string> {

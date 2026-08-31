@@ -2721,6 +2721,23 @@ export const EN = {
   'settings.fdClub.discover.empty': 'Nothing heard in 2 s — same network? Some Wi-Fi blocks discovery; type the host address instead.',
   'settings.fdClub.discover.pick.label': '{{event}} — {{host}}',
   'settings.fdClub.discover.pick.title': 'Use {{host}} as the join address',
+  // ---- Connect on the TV (the read-only LAN page). The toggle IS the LAN opt-in,
+  // so the copy has to name what it exposes and to whom — its threat model is not the
+  // Field Day scoreboard's, which is defensible partly because a contest log is
+  // already broadcast in clear on the air.
+  'settings.connectWeb.legend': 'Connect on a TV',
+  'settings.connectWeb.label': 'Serve Connect on this network',
+  'settings.connectWeb.hint':
+    'Opens a read-only page any browser on your network can view — a shack TV, a tablet, a phone. Nothing can be changed from it.',
+  'settings.connectWeb.exposes':
+    'While this is on, anyone on your network can see your callsign, grid square and band conditions. Your log, your needs board and the frequency you are on are never sent.',
+  'settings.connectWeb.aria.enable': 'Serve Connect on the local network',
+  'settings.connectWeb.aria.disable': 'Stop serving Connect on the local network',
+  'settings.connectWeb.port.label': 'Port',
+  'settings.connectWeb.port.hint': 'Separate from the Field Day scoreboard, so both can run at once.',
+  'settings.connectWeb.url.label': 'Open this on the TV',
+  'settings.connectWeb.url.copy': 'Copy',
+  'settings.connectWeb.url.pending': 'Starting…',
   'settings.fdBoard.label': 'Spectator scoreboard',
   'settings.fdBoard.hint': 'Serves a read-only scoreboard page for a TV or projector on this network — nothing to install on the TV, and viewers can only look. The first enable may pop a Windows Firewall prompt; allow it or viewers see nothing.',
   'settings.fdBoard.aria.enable': 'Enable the spectator scoreboard',

@@ -7,7 +7,9 @@ import {
   exportSettingsBundle,
   fdDiscoverEvents,
   fdScoreboardStatus,
+  connectWebStatus,
   type FdScoreboardStatus,
+  type ConnectWebStatus,
   resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
@@ -1225,6 +1227,29 @@ export function SettingsPanel({
       window.clearInterval(timer)
     }
   }, [tab, form?.fdScoreboard])
+  // Same shape for the Connect LAN page's status row: only while its own tab is open
+  // and the toggle is on, so a closed panel polls nothing.
+  const [connectWeb, setConnectWeb] = useState<ConnectWebStatus | null>(null)
+  useEffect(() => {
+    if (tab !== 'appearance' || !form?.connectWeb) {
+      setConnectWeb(null)
+      return
+    }
+    let live = true
+    const read = () => {
+      connectWebStatus()
+        .then((s) => {
+          if (live) setConnectWeb(s)
+        })
+        .catch(() => {})
+    }
+    read()
+    const timer = window.setInterval(read, 3000)
+    return () => {
+      live = false
+      window.clearInterval(timer)
+    }
+  }, [tab, form?.connectWeb])
   // The section a deep link is pointing at, published to collapsed `SettingsGroup`s so one
   // containing the target opens itself — a target the operator still cannot see is not found.
   const [openTarget, setOpenTarget] = useState<string | null>(resolvedTarget?.section ?? null)
@@ -3077,6 +3102,80 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.workspace.panes.hint')}</span>
               </div>
             </div>
+          </fieldset>
+          )}
+
+          {/* ---- Connect on the TV: the read-only LAN page ----
+              The toggle IS the LAN opt-in, so the copy has to say plainly what it
+              exposes and to whom. Its threat model is NOT the Field Day
+              scoreboard's: that one is defensible partly because a contest log is
+              already broadcast in clear on the air, and this is the station's own
+              conditions picture. It carries the callsign, the grid and the
+              propagation nowcast — never the dial, the log or the needs board. */}
+          {tab === 'appearance' && (
+          <fieldset className="settings-section" id="settings-connect-web">
+            <legend>{t('settings.connectWeb.legend')}</legend>
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.connectWeb.label')}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.connectWeb}
+                className={`toggle${form.connectWeb ? ' on' : ''}`}
+                onClick={() => updateBool('connectWeb', !form.connectWeb)}
+                aria-label={
+                  form.connectWeb
+                    ? t('settings.connectWeb.aria.disable')
+                    : t('settings.connectWeb.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.connectWeb.hint')}</span>
+            </label>
+            <span className="settings-hint">{t('settings.connectWeb.exposes')}</span>
+            {form.connectWeb && (
+              <div className="settings-grid">
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.connectWeb.port.label')}</span>
+                  <input
+                    className="settings-input mono"
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={form.connectWebPort ?? 7374}
+                    onChange={(e) => {
+                      markDirty()
+                      setForm((prev) =>
+                        prev ? { ...prev, connectWebPort: Number(e.target.value) || 7374 } : prev,
+                      )
+                    }}
+                  />
+                  <span className="settings-hint">{t('settings.connectWeb.port.hint')}</span>
+                </div>
+                <div className="settings-field">
+                  <span className="settings-label">{t('settings.connectWeb.url.label')}</span>
+                  {connectWeb?.running && connectWeb.url ? (
+                    <>
+                      <code className="rig-share-addr mono">{connectWeb.url}</code>
+                      <button
+                        type="button"
+                        className="settings-linkbtn"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(connectWeb.url ?? '').catch(() => {})
+                        }}
+                      >
+                        {t('settings.connectWeb.url.copy')}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="settings-hint">
+                      {connectWeb?.error ?? t('settings.connectWeb.url.pending')}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </fieldset>
           )}
 

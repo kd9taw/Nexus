@@ -14,6 +14,7 @@
 
 pub mod alltxt;
 pub mod bandplan;
+pub mod connect_web;
 pub mod dto;
 pub mod engine;
 pub mod fd_scoreboard;

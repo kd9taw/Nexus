@@ -131,9 +131,15 @@ pub trait BoardSource: Send + Sync {
     fn data(&self) -> String;
     /// Full body for `GET /scoreboard/meta.json`.
     fn meta(&self) -> String;
-    /// The page for `GET /` and `GET /scoreboard`.
+    /// The page for `GET /` and `GET /<base>`.
     fn page(&self) -> &'static str {
         SCOREBOARD_PAGE
+    }
+    /// First path segment this source answers on, so a SECOND read-only board can
+    /// reuse this server without its URLs claiming to be a scoreboard. `/` always
+    /// serves the page whatever this is — a TV browser gets the bare host:port.
+    fn base(&self) -> &'static str {
+        "scoreboard"
     }
 }
 
@@ -718,12 +724,13 @@ fn route(method: &str, path: &str, source: &dyn BoardSource) -> Response {
         };
     }
     let path = path.split('?').next().unwrap_or(path);
-    let (content_type, body) = match path {
-        "/" | "/scoreboard" | "/scoreboard/" => {
-            ("text/html; charset=utf-8", source.page().to_string())
-        }
-        "/scoreboard/data.json" => ("application/json", source.data()),
-        "/scoreboard/meta.json" => ("application/json", source.meta()),
+    let base = source.base();
+    let (content_type, body) = match path.trim_end_matches('/') {
+        // `/` normalizes to "" here, which is the bare host:port a TV browser gets.
+        "" => ("text/html; charset=utf-8", source.page().to_string()),
+        p if p == format!("/{base}") => ("text/html; charset=utf-8", source.page().to_string()),
+        p if p == format!("/{base}/data.json") => ("application/json", source.data()),
+        p if p == format!("/{base}/meta.json") => ("application/json", source.meta()),
         _ => {
             return Response {
                 status: 404,

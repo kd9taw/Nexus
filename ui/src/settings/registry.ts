@@ -469,6 +469,17 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'density', 'compact', 'pane', 'layout'],
   },
   {
+    // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at
+    // Connect, not a station or contest setting — and the keywords carry the words an
+    // operator would actually search for ("tv", "chromecast", "cast", "browser").
+    id: 'connect-web',
+    label: 'Connect on a TV',
+    tab: 'appearance',
+    keywords: ['tv', 'television', 'big screen', 'wall display', 'browser', 'lan',
+      'network', 'web page', 'cast', 'chromecast', 'firestick', 'fire stick', 'tablet',
+      'phone', 'remote view', 'read only', 'shack tv'],
+  },
+  {
     id: 'features',
     label: 'Features',
     tab: 'appearance',
