@@ -43,6 +43,12 @@ absorption; a storm is days of degraded HF, and it is the one that decides wheth
 sitting down for. Storms now speak up the same way, quietly at G1 and loudly from G2, and they do
 not repeat themselves while the index wobbles. Nexus tells you; it never touches your radio.
 
+**You can listen anywhere; only transmitting is licensed.** The band dropdowns hid any band
+your licence class cannot transmit on, so a US General could not select 4 m at all — not
+"listen but not key it", simply gone. Nothing restricts receiving, and your radio tunes there
+regardless. Every band your radios can reach is now listed, with the ones you cannot key marked
+"receive only". Transmitting on them is refused exactly as before. Reported by akhepcat.
+
 **Parks on the air, on the map.** POTA activators now show on the Connect map, at the park rather
 than roughly in the right square — the spot feed carries each park's own position and Nexus had
 been throwing it away. Filled markers are parks you have never logged, hollow ones you already
