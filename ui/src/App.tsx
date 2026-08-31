@@ -148,7 +148,6 @@ import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
 import { LogConfirm } from './components/LogConfirm'
 import { FieldDayView } from './components/FieldDayView'
-import { FdCockpit } from './components/FdCockpit'
 import { OperateDecodes } from './components/OperateDecodes'
 import { Logbook } from './components/Logbook'
 import { RoamPanel } from './components/RoamPanel'
@@ -420,20 +419,6 @@ export default function App() {
   const handleOperateLayout = useCallback((m: 'classic' | 'roster') => {
     setOperateLayout(m)
     surfaceSet('nexus.operateLayout', m)
-  }, [])
-  // Field Day layout: the operating Cockpit (one screen, entry-first) vs the Dashboard
-  // (setup, exports, bonuses, the club board). The `nexus.operateLayout` precedent above,
-  // key for key — PER-SURFACE, because which Field Day face a window wears is that window's
-  // layout, exactly as Classic/Roster is.
-  // `null` = the operator has not chosen; the event clock decides (see `fdShowCockpit`), so
-  // a first-time station lands on setup before the event and on the logging surface during it.
-  const [fdLayout, setFdLayout] = useState<'cockpit' | 'dashboard' | null>(() => {
-    const v = surfaceGet('nexus.fdLayout')
-    return v === 'cockpit' || v === 'dashboard' ? v : null
-  })
-  const handleFdLayout = useCallback((m: 'cockpit' | 'dashboard') => {
-    setFdLayout(m)
-    surfaceSet('nexus.fdLayout', m)
   }, [])
   // Which Operate panels the operator keeps (⊞ Panels). Owned HERE, beside the
   // `.operate-host` keep-alive below — never inside the cockpit, which remounts and
@@ -2357,65 +2342,38 @@ export default function App() {
     </main>
   )
 
-  // WHICH FIELD DAY FACE THIS WINDOW WEARS. The operator's persisted `nexus.fdLayout` pick
-  // wins; until there is one, the EVENT CLOCK decides — the dashboard is a setup screen and
-  // the cockpit is a logging screen, so the useful default flips at 1800Z on its own and the
-  // operator makes no decision at all.
-  //
-  // ⚠️ NOT `fieldDay.running`, which the design named: that flag is the RUN / S&P role (the
-  // header's own toggle sends `fieldday-run` / `fieldday-sp` into it), and `handleView` sets
-  // `fieldday-sp` on the way in — so keying the default off it would mean "Dashboard, always".
-  // The event window is `eventStartUnix`/`eventEndUnix`, computed in Rust from the rules data
-  // (FdRuleset::next_or_running) and read here exactly as the cockpit's own end-of-event chip
-  // reads it. Absent (an older backend) ⇒ not running ⇒ Dashboard, the pre-cockpit behaviour.
-  const fdNowUnix = Math.floor(Date.now() / 1000)
-  const fdEventOpen =
-    !!snap.fieldDay?.eventStartUnix &&
-    !!snap.fieldDay?.eventEndUnix &&
-    fdNowUnix >= snap.fieldDay.eventStartUnix &&
-    fdNowUnix < snap.fieldDay.eventEndUnix
-  const fdShowCockpit = (fdLayout ?? (fdEventOpen ? 'cockpit' : 'dashboard')) === 'cockpit'
-
   let workspace: JSX.Element | null
   switch (effectiveView) {
     case 'fieldDay':
-      // ONE nav slot, two faces (no second View, no registry entry, no ModeNav row): the
-      // operating cockpit or the dashboard, swapped by the toggle each one carries for the
-      // other. NEITHER goes through `threePane`, and the reason is the same for both: that
-      // helper is not a layout, it is the digital OPERATING workspace, and it hardcodes its
-      // furniture. The cockpit is a shell of its own (`main.layout.single.fd-cockpit`); the
-      // dashboard is a `.panel`, so it wears the plain `.layout.single` panel shell that
-      // Logbook, Settings, Program and POTA wear. See the dashboard branch below.
-      workspace = fdShowCockpit ? (
-        <FdCockpit
-          onOpenLogbook={openLogbookFor}
-          snap={snap}
-          onSnap={setSnap}
-          fieldDay={snap.fieldDay}
-          onSetMode={handleSetMode}
-          fdRuleset={fdRuleset}
-          tier={tier}
-          onOpenDashboard={() => handleFdLayout('dashboard')}
-          onOpenOperate={() => handleView('operate')}
-        />
-      ) : (
-        // THE DASHBOARD IS A SETUP / SCORE / LOG SCREEN, and until 2026-08-30 it was drawn
-        // inside the digital operating workspace — stations/chat rail on the left, waterfall
-        // + band activity + the mesh link pill on the right. It reads and writes none of
-        // that. Operator, mid-event: "what screen is this supposed to represent? Why are
-        // theyere waterfalls in here when its not the primary working area?" The rails also
-        // cost it the width its header strip needs (class/section, RUN vs S&P, the cockpit
-        // toggle and four exports), which is the second half of the same report.
-        //
-        // Nothing is lost by leaving: the waterfall, band activity and the link pill all
-        // belong to the FT surface and are on screen in Operate and in the FD cockpit, which
-        // are the two faces that actually operate; the stations rail is the Tempo mesh
-        // roster and conversation picker, which the FD dashboard never consulted.
-        //
-        // No bespoke shell class, deliberately — unlike the cockpit this view's root IS a
-        // `.panel`, so `.layout.single > .panel` already gives it the definite height, the
-        // deficit valve and the measure it needs (styles.css; computed in
-        // layout-single-deficit.test.tsx and fdDashboardShell.test.tsx).
+      // THE FIELD DAY SECTION IS SETUP, SCORE, SECTIONS, BONUSES, LOG AND THE CLUB BOARD.
+      // It is NOT an operating surface, and there is deliberately no second one: Field Day is
+      // a MODE the whole app enters (`Mode::FieldDay`), so the contacts are made in the
+      // primary sections — CW, Phone, RTTY, PSK and the digital Conversation view all take
+      // `fieldDay` and turn their log strips into FD entries with class/section and shared
+      // dupe checking. A parallel Field-Day-only cockpit shipped beside them for one build and
+      // was withdrawn: it was a weaker copy of surfaces that already exist (its digital pane
+      // was a read-only monitor), and it took the operator away from the mode's own features
+      // to get the exchange boxes those sections already draw.
+      //
+      // It does NOT go through `threePane`, and that helper is the reason: it is not a layout,
+      // it is the digital OPERATING workspace, and it hardcodes its furniture. Until
+      // 2026-08-30 this view was drawn inside it — stations/chat rail on the left, waterfall +
+      // band activity + the mesh link pill on the right. It reads and writes none of that.
+      // Operator, mid-event: "what screen is this supposed to represent? Why are theyere
+      // waterfalls in here when its not the primary working area?" The rails also cost it the
+      // width its header strip needs (class/section, RUN vs S&P and four exports), which is
+      // the second half of the same report.
+      //
+      // Nothing is lost by leaving: the waterfall, band activity and the link pill all belong
+      // to the FT surface and are on screen in Operate, which is where digital Field Day
+      // contacts are actually made; the stations rail is the Tempo mesh roster and
+      // conversation picker, which this view never consulted.
+      //
+      // No bespoke shell class, deliberately — this view's root IS a `.panel`, so
+      // `.layout.single > .panel` already gives it the definite height, the deficit valve and
+      // the measure it needs (styles.css; computed in layout-single-deficit.test.tsx and
+      // fdDashboardShell.test.tsx).
+      workspace = (
         <main className="layout single">
           <FieldDayView
             fieldDay={snap.fieldDay}
@@ -2423,7 +2381,6 @@ export default function App() {
             fdActive={settings?.fdActive ?? false}
             fdRuleset={fdRuleset}
             tier={tier}
-            onOpenCockpit={() => handleFdLayout('cockpit')}
           />
         </main>
       )
@@ -2852,15 +2809,12 @@ export default function App() {
           effectiveView === 'sats'
         }
         hideDigitalChrome={
-          // ⚠️ 'fieldDay' IS DELIBERATELY NOT ON THIS LIST, and it is the only cockpit that is
-          // not. Every other cockpit shell is a bounded flex column that cannot scroll, so its
-          // header — with Stop TX on it — is always on screen and the top bar's TX cluster is
-          // pure duplication. The Field Day cockpit is a DEFICIT-VALVE shell
-          // (`.layout.single.fd-cockpit { overflow-y: auto }`): at a small window, or a pinned
-          // zoom, its header CAN scroll off the top, and then the top bar's Stop TX is the only
-          // stop left on screen. The cost is honest and small — a second Tune and a second Stop
-          // TX above the cockpit's own, the top bar's gated on the tier and the header's on
-          // `txAllowed` — and it is paid on purpose rather than by omission.
+          // ⚠️ 'fieldDay' IS DELIBERATELY NOT ON THIS LIST. It is not a cockpit at all — it is
+          // the setup / score / log screen, and it draws no header of its own with a Stop TX on
+          // it. Field Day contacts are made in the cockpits below, which are on the list because
+          // each one's own header carries the stop line. Hiding the top bar's TX cluster here
+          // would take the only stop on the screen away from an operator who is parked on the
+          // scoreboard while the rig is keyed from somewhere else.
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
           // RTTY/PSK/SSTV/APRS are free-running modes with their OWN band selectors — the
@@ -2939,6 +2893,12 @@ export default function App() {
           onSelect={handleView}
           tier={tier}
           onDigitalMode={handleDigitalMode}
+          // The club band board is a WINDOW, not a section: the rail button opens the
+          // `fdclub` pop-out straight onto a second monitor. It rides the Field Day
+          // master switch (navEnabled.fieldDay = fdActive) and NOT club sync — the
+          // board used to be reachable only from inside FieldDayView once sync was
+          // already on, which is exactly why nobody found it.
+          onClubBoard={() => void openPanelWindow('fdclub')}
         />
         {/* CRASH CONTAINMENT — inside `.shell` and AFTER the rail, deliberately.
             A render throw in a view used to unmount the ENTIRE root (0.24.6 field

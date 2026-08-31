@@ -559,7 +559,7 @@ export async function notifyErase(window: 0 | 1 | 2): Promise<void> {
   await invoke('notify_erase', { window })
 }
 
-/** Log a Field Day contact by hand (the CW/Phone cockpits, and the Field Day cockpit).
+/** Log a Field Day contact by hand (the CW, Phone, RTTY and PSK cockpits' log strips).
  * Rejects with a message on a band+mode dupe.
  *
  * ⚠️ `mode` IS THE SCORING CLASS, and all THREE belong here. The engine's `log_mode_at`

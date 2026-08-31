@@ -109,11 +109,15 @@ export const PANEL_NATURAL = new Map<string, Natural>([
   ['pota', { w: 620, h: 540 }],
   // Club band board: the fixed chrome is the header (label + sync chip + host
   // line + club counters) and the six column heads; the position rows below it
-  // are the elastic part, so height is small. 640 is what keeps the six
-  // columns — position, band, mode, operator, QSOs, rate — readable without
-  // the position and operator cells collapsing, and it is the widest a window
-  // at the generic 420×360 minimum can still show whole at the 65% floor.
-  ['fdclub', { w: 640, h: 380 }],
+  // scroll, so height is elastic. The numbers grew with the type: the torn-off
+  // copy is set at the glance size (FdClubSection's `detached`), because this
+  // window is watched from the operating position rather than read at the
+  // keyboard, and a natural still declaring the DOCKED footprint would have had
+  // auto-fit shrink the bigger type straight back out. 820 is what keeps the six
+  // columns — position, band, mode, operator, QSOs, rate — readable at that size
+  // without the position and operator cells collapsing; `panel_min_inner` gained
+  // an `fdclub` arm (560×400) to keep it under the 65%-floor ceiling.
+  ['fdclub', { w: 820, h: 420 }],
 ])
 
 /** This surface's natural footprint. No panel (the main window) → the cockpit box. */

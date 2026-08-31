@@ -8,11 +8,13 @@
 // stays consistent across every window.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is a router: the
-// panels it mounts own their own prose. What is here is the three states the router itself
-// can be in — connecting, Field Day off, and a panel name it does not know — plus the
+// panels it mounts own their own prose. What is here is the states the router itself can be
+// in — connecting, Field Day off, club sync off, and a panel name it does not know — plus the
 // conversation-delete guard, which it deliberately raises in the SAME words as the main
-// window (the two mirrors drifting apart is what put the guard here).
-import { useEffect, useMemo, useState } from 'react'
+// window (the two mirrors drifting apart is what put the guard here). The club-sync-off copy
+// is the router's because it is about a panel that ISN'T mounted: it names the Settings route
+// that would fill the board, and the board component never renders in that state.
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { t } from './i18n'
 import { confirmDialog, ConfirmHost } from './confirm'
 import type {
@@ -90,6 +92,46 @@ import { useMotion } from './useMotion'
 
 type SpotTarget = { call: string; band: string; mode: string | null; freqMhz: number | null }
 type OperateLayout = 'classic' | 'roster'
+
+// The club board's SYNC-OFF panel. Inline off the shared tokens (the FieldDayView
+// idiom) rather than a styles.css section: four elements in one branch. Set larger
+// than body copy for the same reason the board itself is — this window is read from
+// the operating position, and the route is something the operator retypes elsewhere.
+const FDCLUB_OFF_WRAP: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  margin: 'auto',
+  maxWidth: 620,
+  padding: '0 32px',
+}
+const FDCLUB_OFF_HEAD: CSSProperties = {
+  margin: 0,
+  fontSize: 22,
+  fontWeight: 700,
+  color: 'var(--text)',
+}
+const FDCLUB_OFF_BODY: CSSProperties = {
+  margin: 0,
+  fontSize: 16,
+  lineHeight: 1.5,
+  color: 'var(--text-dim)',
+}
+const FDCLUB_OFF_ROUTE: CSSProperties = {
+  margin: 0,
+  padding: '12px 14px',
+  borderRadius: 'var(--radius)',
+  border: '1px solid var(--border)',
+  background: 'var(--bg-elev-2)',
+  fontSize: 16,
+  lineHeight: 1.5,
+  color: 'var(--text)',
+}
+const FDCLUB_OFF_WAIT: CSSProperties = {
+  margin: 0,
+  fontSize: 14,
+  color: 'var(--text-faint)',
+}
 
 // PER-SURFACE, like App's 'nexus.operateLayout'. NB these are two differently-spelled keys
 // for one concept and already disagreed before this change — deliberately left as-is here,
@@ -567,14 +609,54 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // surface). Read-only: no export buttons, because their success toast has
     // no host in a detached window, and no operator box — this board is about
     // the other tents, not this one.
-    const club = snap?.fieldDay?.club ?? null
+    //
+    // THREE states, not two, and the split is the findability fix. The rail
+    // opens this window whenever Field Day is on, so most operators arrive here
+    // BEFORE club sync exists; an empty board would be the same dead end that
+    // hid the feature. Waiting for the first snapshot is its own state because
+    // it is true for the first 300 ms of every launch, and "no snapshot yet" is
+    // not the claim "sync is off".
+    if (!snap) {
+      return (
+        <div className="app detached">
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        </div>
+      )
+    }
+    const club = snap.fieldDay?.club ?? null
+    // ⚠️ "NO CLUB DATA" IS NOT "SYNC IS OFF", and conflating them made this window lie to
+    // the one operator it exists for. The whole `fieldDay` block is built only inside the
+    // engine's Field Day mode, so it is absent the moment the operator steps into any other
+    // section — one click on the rail does it — regardless of hosting. The host would open
+    // the board on a second monitor, click away to check something, and watch a live board
+    // become the words "Club sync is off" plus instructions to switch on the hosting that
+    // was never switched off. Ask the SETTINGS whether sync is configured, which is true
+    // wherever the operator happens to be standing.
+    const syncConfigured =
+      settings?.fdHostEnable === true || (settings?.fdJoinAddr ?? '').trim() !== ''
     return (
       <div className="app detached">
         {club ? (
           <FdClubSection club={club} detached />
+        ) : syncConfigured ? (
+          // Configured, but this window cannot see the club right now — the operator is
+          // simply somewhere else in the app. Say that, and say nothing about settings.
+          <div style={FDCLUB_OFF_WRAP}>
+            <h2 style={FDCLUB_OFF_HEAD}>{t('detached.fdClub.away.head')}</h2>
+            <p style={FDCLUB_OFF_BODY}>{t('detached.fdClub.away.body')}</p>
+          </div>
         ) : (
-          <div className="app loading">
-            <span>{t('detached.fdClub.inactive')}</span>
+          // Named in the words printed on the Settings tab, because this window
+          // cannot deep-link into the main window's panel — a detached window is a
+          // separate JS realm with no route into it, so the route has to be
+          // readable and followed by hand.
+          <div style={FDCLUB_OFF_WRAP}>
+            <h2 style={FDCLUB_OFF_HEAD}>{t('detached.fdClub.off.head')}</h2>
+            <p style={FDCLUB_OFF_BODY}>{t('detached.fdClub.off.body')}</p>
+            <p style={FDCLUB_OFF_ROUTE}>{t('detached.fdClub.off.route')}</p>
+            <p style={FDCLUB_OFF_WAIT}>{t('detached.fdClub.off.wait')}</p>
           </div>
         )}
       </div>

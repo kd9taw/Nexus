@@ -2536,7 +2536,7 @@ export const EN = {
   'fieldDay.club.popOut.title': 'Pop the club band board out to its own window (second monitor) — who is on what band, across every position',
   'fieldDay.club.skew': 'This PC\'s clock differs from the host\'s by {{secs}} s — check this PC\'s clock',
   'fieldDay.club.error': 'Host: {{msg}}',
-  'fieldDay.club.board.empty': 'No positions heard yet',
+  'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.board.column.band': 'Band',
   'fieldDay.club.board.column.mode': 'Mode',
@@ -2546,59 +2546,6 @@ export const EN = {
   'fieldDay.club.board.stale': 'Last heard {{secs}} s ago',
   'fieldDay.club.board.unnamed': 'Unnamed position',
   'fieldDay.club.board.rate': '{{rate}}/hr',
-  // ── The Field Day operating cockpit (phase 3) ───────────────────────────────────────
-  // The dedicated logging surface: the band × mode board, the two header chips and the
-  // cockpit's own framing of the shipped sections board.
-  // ⚠️ INVARIANT AND THEREFORE ABSENT, on top of everything the block above lists: the ◀
-  // here-marker and the em dash for an empty cell (glyphs, not words), and every count,
-  // rate, goal and score, which are interpolated as invariant numbers.
-  'fieldDay.cockpit.grid.aria': 'Contacts by band and mode',
-  'fieldDay.cockpit.grid.empty': 'No contacts yet — the first one fills this in.',
-  'fieldDay.cockpit.grid.cell': '{{band}} {{mode}} — {{own}} from this position',
-  'fieldDay.cockpit.grid.cell.club': '{{band}} {{mode}} — {{own}} from this position, {{total}} across the club',
-  'fieldDay.cockpit.grid.dupe.own': '{{call}} is already in this log on {{band}} {{mode}} — no points here',
-  'fieldDay.cockpit.grid.dupe.club': '{{call}} was worked on {{band}} {{mode}} by another club position — you may log it, but it adds no points',
-  'fieldDay.cockpit.grid.legend.here': 'you are here',
-  'fieldDay.cockpit.grid.legend.club': 'small number = the whole club',
-  'fieldDay.cockpit.grid.legend.own': 'already worked',
-  'fieldDay.cockpit.grid.legend.clubDupe': 'worked by the club',
-  'fieldDay.cockpit.rate.label': 'Rate',
-  'fieldDay.cockpit.rate.title': 'Contacts in the last 60 minutes: {{rate}}',
-  'fieldDay.cockpit.rate.title.goal': 'Contacts in the last 60 minutes: {{rate}} — goal {{goal}}',
-  'fieldDay.cockpit.rate.goal.aria': 'Contacts-per-hour goal',
-  'fieldDay.cockpit.rate.goal.placeholder': 'goal',
-  'fieldDay.cockpit.rate.goal.set': 'set goal',
-  'fieldDay.cockpit.score': '{{qsos}}Q · {{sections}}S · {{points}} pts',
-  'fieldDay.cockpit.score.wfd': '{{qsos}}Q · {{sections}}S · {{points}} QSO pts',
-  'fieldDay.cockpit.score.title': 'Claimed score — contacts, sections and points. The full scoreboard is one click away in the dashboard.',
-  'fieldDay.cockpit.score.title.wfd': 'QSO points only — WFD objective multipliers apply at submission (not tracked here). The full scoreboard is one click away in the dashboard.',
-  'fieldDay.cockpit.sections.scope': 'this position',
-  'fieldDay.cockpit.sections.scope.title': 'Sections this position has worked. Other club positions are on the dashboard.',
-  'fieldDay.cockpit.sections.worked': '{{section}} worked',
-  'fieldDay.cockpit.sections.newMult': '{{section}} — NEW MULT',
-  // ── The Field Day cockpit SHELL (phase 3, landing 3) ───────────────────────────────
-  // The header's mode-class chip and event clock, the pane titles, the digital note and the
-  // Cockpit/Dashboard toggle. ⚠️ ABSENT because invariant: the mode-class codes CW/PH/DIG
-  // (the codes an entry is submitted with), the band and section codes, the exchange, and the
-  // event's UTC clock time, which is formatted in the component like every other measurement.
-  // The PUSH-TO-TALK row is not here either, and for a different reason: it is a transmit
-  // control whose labels are what the stop-line sweeps match by accessible name, so it stays
-  // written in `components/FdPttRow.tsx` until the transmit-path batch moves it with Phone's.
-  'fieldDay.cockpit.modeClass.aria': 'Position mode class',
-  'fieldDay.cockpit.modeClass.auto': 'Auto ({{mode}})',
-  'fieldDay.cockpit.modeClass.title': 'What this position logs contacts under, read from the radio. Override it when the radio is not in the mode you are actually working.',
-  'fieldDay.cockpit.event.ends': 'ends {{time}} UTC',
-  'fieldDay.cockpit.pane.grid': 'Bands worked',
-  'fieldDay.cockpit.pane.sections': 'Sections — {{count}} worked',
-  'fieldDay.cockpit.pane.decodes': 'Digital monitor',
-  'fieldDay.cockpit.entry.aria': 'Field Day contact entry',
-  'fieldDay.cockpit.dig.note': 'Digital contacts are made in FT Operate — they land in this log automatically.',
-  'fieldDay.cockpit.dig.open': 'Open Operate',
-  'fieldDay.cockpit.dig.prefill.title': 'Double-click a decode to put that callsign in the entry field. Nothing is transmitted from here.',
-  'fieldDay.cockpit.dashboard': 'Dashboard',
-  'fieldDay.cockpit.dashboard.title': 'Setup, exports, bonus points and the club board.',
-  'fieldDay.cockpit.enter': 'Cockpit',
-  'fieldDay.cockpit.enter.title': 'The one-screen logging cockpit — entry, dupe warnings, bands and sections.',
 
   // ── The contest calendar (upcoming contests, from the WA7BNM calendar) ──────────────
   // ⚠️ Contest NAMES arrive from the feed and are never translated; the date + UTC time
@@ -7590,7 +7537,13 @@ export const EN = {
   // ── A torn-off panel window ─────────────────────────────────────────────────────────
   'detached.connecting': 'Connecting to the radio…',
   'detached.fieldDay.inactive': 'Field Day isn’t active.',
-  'detached.fdClub.inactive': 'No club event — this station isn’t hosting one or joined to one.',
+  'detached.fdClub.away.head': 'Club board',
+  'detached.fdClub.away.body':
+    "The club board shows here while Field Day is the section you are working in. Step back into Field Day and it comes straight back — nothing has stopped, and the host is still collecting contacts.",
+  'detached.fdClub.off.head': 'Club sync is off',
+  'detached.fdClub.off.body': 'This station is not hosting a club event and has not joined one, so there are no other positions to show.',
+  'detached.fdClub.off.route': 'Turn it on in Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event — or paste the host station’s address into Join event at to join one someone else is running.',
+  'detached.fdClub.off.wait': 'Leave this window open. The board fills in by itself the moment sync starts.',
   'detached.unavailable': 'Panel “{{panel}}” isn’t available as a standalone window yet.',
 
   // ── The navigation rail ─────────────────────────────────────────────────────────────
@@ -7633,6 +7586,8 @@ export const EN = {
   'nav.stats.title':
     'Statistics — your logbook sliced: QSOs by band/mode/year/hour, top DXCC entities, states, confirmations',
   'nav.fieldDay.title': 'Field Day — contest rate workspace',
+  'nav.fdClub.label': 'Club Board',
+  'nav.fdClub.title': 'Club band board — who is on what band at every position on site, in its own window for a second monitor',
   'nav.pota.title': "POTA / SOTA — parks & summits: who's on now (hunt) + tag your activation",
   'nav.memories.label': 'Memories',
   'nav.memories.title':

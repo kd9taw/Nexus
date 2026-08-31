@@ -64,9 +64,6 @@ interface Props {
   /** The active digital tier (App's snap.link.tier) — the banned-mode chip
    *  checks it against the ruleset's bannedModes. */
   tier?: string
-  /** Switch this window to the Field Day operating cockpit. App owns the persisted choice
-   *  (`nexus.fdLayout`); omitted ⇒ no button, so every existing consumer is unchanged. */
-  onOpenCockpit?: () => void
 }
 
 interface LogRowMeta {
@@ -514,6 +511,10 @@ const CLUB_COL_HEAD: CSSProperties = {
   textTransform: 'uppercase',
   color: 'var(--text-faint)',
 }
+/** Column heads, at the docked size or the torn-off window's glance size. */
+function colHead(big: boolean): CSSProperties {
+  return big ? { ...CLUB_COL_HEAD, fontSize: 13 } : CLUB_COL_HEAD
+}
 const CLUB_WARN: CSSProperties = {
   fontSize: 12,
   color: 'var(--status-new-entity)',
@@ -536,11 +537,21 @@ function clubChipText(club: FdClubStatus): string {
  * The club band board — who is on what band, across every position on site.
  *
  * Exported because it is also the whole content of the `fdclub` pop-out
- * (DetachedPanel): a multi-station club watches this continuously and asked
- * for it on a second monitor, and the `fieldday` pop-out is already taken by
- * the scoreboard. `detached` is the torn-off copy, which drops the pop-out
- * button; `onExport` is absent there, because the export buttons report where
- * the file landed through a toast and a detached window hosts none.
+ * (DetachedPanel), which the rail opens directly: a multi-station club watches
+ * this continuously — "to see where people are so they can move to the right
+ * bands when multiple stations are operating" — and the `fieldday` pop-out is
+ * already taken by the scoreboard. `onExport` is absent in the torn-off copy,
+ * because the export buttons report where the file landed through a toast and a
+ * detached window hosts none.
+ *
+ * `detached` is therefore TWO things: it drops the pop-out button and the export
+ * pair, and it sets the whole board in bigger type. The size is the point of the
+ * window — this board is watched from the operating position across the tent, not
+ * read at the keyboard — so it is a design choice here, NOT the hand-compensation
+ * the torn-off Needed window used to carry for the 65% zoom floor (see the
+ * `.np-grid` note in styles.css). It is honest because `PANEL_NATURAL.fdclub`
+ * declares the larger box, so auto-fit opens the window big enough for it instead
+ * of shrinking the type straight back.
  */
 export function FdClubSection({
   club,
@@ -553,22 +564,37 @@ export function FdClubSection({
   busy?: boolean
   detached?: boolean
 }) {
+  // The glance scale. One flag, applied at the handful of places that carry a
+  // px size, so the docked board is byte-for-byte what it was.
+  const big = detached
   return (
-    <div style={CLUB_WRAP} aria-label={t('fieldDay.club.aria')}>
-      <div style={CLUB_HEADER}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)' }}>
+    <div
+      style={
+        big
+          ? // Torn off, the board IS the window: it takes the height and scrolls, rather
+            // than sitting flex:0 above five sibling blocks that are not here.
+            { ...CLUB_WRAP, flex: '1 1 auto', minHeight: 0, overflowY: 'auto', gap: 12, padding: '16px 22px 18px', borderBottom: 'none' }
+          : CLUB_WRAP
+      }
+      aria-label={t('fieldDay.club.aria')}
+    >
+      <div style={big ? { ...CLUB_HEADER, gap: 14 } : CLUB_HEADER}>
+        <span style={{ fontSize: big ? 17 : 13, fontWeight: 700, color: 'var(--text)' }}>
           {t('fieldDay.club.head')}
         </span>
-        <span style={clubChipStyle(club.syncState)} title={t('fieldDay.club.state.title')}>
+        <span
+          style={big ? { ...clubChipStyle(club.syncState), fontSize: 14, padding: '4px 12px' } : clubChipStyle(club.syncState)}
+          title={t('fieldDay.club.state.title')}
+        >
           {clubChipText(club)}
         </span>
         {(club.event || club.hostCall) && (
-          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+          <span style={{ fontSize: big ? 15 : 12, color: 'var(--text-dim)' }}>
             {t('fieldDay.club.hostLine', { event: club.event || '—', call: club.hostCall || '—' })}
           </span>
         )}
         <span style={{ flex: '1 1 auto' }} />
-        <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+        <span style={{ fontSize: big ? 16 : 13, color: 'var(--text-dim)' }}>
           {t('fieldDay.club.counters', {
             score: club.score,
             qsos: club.qsos,
@@ -619,17 +645,23 @@ export function FdClubSection({
         </div>
       )}
       {club.board.length === 0 ? (
-        <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+        // Sync IS on here (the block only rides the snapshot when it is), so this
+        // says what it is waiting for and never sends anyone to Settings — the
+        // torn-off window's own copy covers the sync-off case.
+        <span style={{ fontSize: big ? 16 : 12, color: 'var(--text-faint)' }}>
           {t('fieldDay.club.board.empty')}
         </span>
       ) : (
-        <div style={CLUB_BOARD_GRID}>
-          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.position')}</span>
-          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.band')}</span>
-          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.mode')}</span>
-          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.operator')}</span>
-          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.qsos')}</span>
-          <span style={CLUB_COL_HEAD}>{t('fieldDay.club.board.column.rate')}</span>
+        <div
+          data-club-board=""
+          style={big ? { ...CLUB_BOARD_GRID, fontSize: 20, columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID}
+        >
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.mode')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.operator')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.qsos')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.rate')}</span>
           {club.board.map((row) => {
             // Stale-mark past 15 s (the DEAD_SECS threshold): readings stay on
             // screen but never silently stale.
@@ -845,7 +877,7 @@ export function FieldDayScoreboard({
   )
 }
 
-export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier, onOpenCockpit }: Props) {
+export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier }: Props) {
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
   // contacts up) the moment the next contact landed. Pinned follows the run;
@@ -1030,18 +1062,6 @@ export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset 
             {t('fieldDay.role.sp')}
           </button>
         </div>
-        {/* The other face of this nav slot. Same pair as the cockpit's own Dashboard
-            button — one toggle, drawn on both sides, so neither screen is a dead end. */}
-        {onOpenCockpit && (
-          <button
-            type="button"
-            className="export-btn"
-            onClick={onOpenCockpit}
-            title={t('fieldDay.cockpit.enter.title')}
-          >
-            {t('fieldDay.cockpit.enter')}
-          </button>
-        )}
         {/* Export buttons */}
         <div className="fd-export">
           {exportError && (

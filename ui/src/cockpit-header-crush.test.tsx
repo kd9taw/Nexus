@@ -281,15 +281,6 @@ const HOSTS: Array<{ file: string; what: string; chain: Array<Set<string>> }> = 
     chain: shellChain('operate-cockpit'),
   },
   {
-    // The Field Day cockpit (2026-08-30), the eighth host. Same `overflow-y: auto` shell as
-    // Phone and CW, so a crushed header wraps rather than clips — but its actions cluster
-    // carries the same Tune / Stop TX / CAT group, and this cockpit is the one worked in the
-    // dark at 2 AM. Registered with the shell so its cascade is computed with the others.
-    file: 'components/FdCockpit.tsx',
-    what: 'Field Day',
-    chain: shellChain('fd-cockpit'),
-  },
-  {
     // Tempo: the header is a GRID item (`.layout[data-three-pane].has-tempo-header`
     // → `grid-template-rows: auto minmax(0,1fr)`), inside `.grid-header` which is a row
     // flex. flex-shrink could never have protected it; the automatic minimum size does,

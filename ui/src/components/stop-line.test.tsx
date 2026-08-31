@@ -84,25 +84,17 @@
 // What IS computed is that every vocabulary in the app has a sweep at all — the last test
 // in the file, driven off ALL_PANEL_VOCABULARIES, so a sixth cockpit cannot ship without one.
 //
-// THE FIELD DAY COCKPIT IS SWEPT AT THE BOTTOM OF THIS FILE, IN A BLOCK OF ITS OWN, because it
-// has NO ⊞ vocabulary at all — the `CASES` machinery above is driven by panel ids and there are
-// none to drive it with, and ALL_PANEL_VOCABULARIES cannot notice a cockpit that never enters it.
-// Its analogue of "hide every id" is "reach every state the cockpit reaches on its own": the
-// position's MODE CLASS, which swaps the whole dock strip (the PH class's PTT row is a stop
-// control that simply is not drawn on a CW or digital position). That block also computes the
-// thing this file's header calls a human step — that the fixture passes THE PROPS APP PASSES —
-// by reading `<FdCockpit …/>` out of App.tsx and comparing the names. The omitted-prop blinding
-// that cost RTTY and SSTV their latch is the one failure a stop-line sweep cannot survive.
+// FIELD DAY HAS NO SWEEP OF ITS OWN, AND THAT IS NOT AN OMISSION. Field Day is a MODE the app
+// enters, not a screen: the contacts are made in the five cockpits swept below, whose stop
+// lines are the same on the event weekend as off it. The Field Day section itself draws no
+// transmit control at all — it is setup, score, sections, bonuses, the log and the club board.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { RttyCockpit } from './RttyCockpit'
 import { PskCockpit } from './PskCockpit'
 import { SstvView } from './SstvView'
-import { FdCockpit } from './FdCockpit'
 import {
   ALL_PANEL_VOCABULARIES,
   PHONE_PANEL_IDS,
@@ -357,6 +349,20 @@ const radio = {
   phoneSegHi: null,
 }
 const snap = { mycall: 'KD9TAW', radio } as unknown as AppSnapshot
+
+/** Field Day switched ON, as App hands it to the cockpits during an event — the state that
+ *  swaps their log strip for the FD one. See the Phone case's own note on why it is swept. */
+const fdStatus = {
+  myClass: '3A',
+  mySection: 'WI',
+  running: true,
+  state: 'running',
+  qsoCount: 12,
+  sections: 4,
+  points: 24,
+  workedSections: ['WI', 'EMA'],
+  log: [{ call: 'W1AW', band: '20m', mode: 'PH', class: '3A', section: 'EMA', whenUnix: 100 }],
+} as unknown as FieldDayStatus
 
 /**
  * One cockpit's stop-line case. `stopControls` are accessible-name matchers for the controls
@@ -613,181 +619,5 @@ describe('the stop line, computed against the real cockpits', () => {
       expect(vocab, `no vocabulary named "${c.view}"`).toBeDefined()
       expect([...c.ids], `${c.cockpit} sweeps a stale id list`).toEqual([...vocab!.panelIds])
     }
-  })
-})
-
-// ── THE FIELD DAY COCKPIT — the same rule, computed without a vocabulary ─────────────────
-//
-// FdCockpit has no ⊞ menu, no `usePanelLayout` and no panel ids, so the sweep above cannot
-// reach it: `panelsWith([...ids])` has nothing to hide and ALL_PANEL_VOCABULARIES never names
-// it. The guarantee is identical all the same — THE OPERATOR MUST NEVER BE UNABLE TO STOP A
-// TRANSMISSION — so it is computed here against the two axes this cockpit really has:
-//
-//   · THE MODE CLASS. It is derived from the rig (`fdModeClassFromRig`) and it swaps the whole
-//     dock strip. On a PH position the strip is the PTT row; on CW it is the macro buttons and
-//     on DIG a note. So the PH class has one more stop control than the other two, and each
-//     class is swept for its OWN list rather than for a union that would be wrong twice.
-//   · THE PROPS APP PASSES. Read out of App.tsx below, not retyped — see `appProps`.
-//
-// NOT LISTED, and for the reasons the cases above give: Esc (window keydown → the same
-// `abort()` Stop TX calls) and the Space-bar PTT release are KEYBOARD-ONLY, so they have no
-// accessible name and no element for this file to find; `FdCockpit.structure.test.tsx` drives
-// Esc directly, including from inside the callsign field. Nothing in this cockpit lives inside
-// a removable pane, because nothing in it is removable.
-const fdRadio = {
-  dialMhz: 14.25,
-  band: '20m',
-  catOk: true,
-  sideband: 'USB',
-  sidebandOverride: null,
-  rigMode: 'USB',
-  operatingMode: 'phone',
-  transmitting: false,
-  tuning: false,
-  txEnabled: true,
-  txAllowed: true,
-  slot: 0,
-  rxOffsetHz: 1500,
-  cwWpm: 22,
-  rfPower: null,
-  micGain: null,
-  smeterDb: null,
-  splitTxMhz: null,
-}
-
-function fdSnap(rigMode: string): AppSnapshot {
-  return {
-    mycall: 'KD9TAW',
-    mygrid: 'EN52',
-    harqRescues: 0,
-    recentDecodes: [],
-    radio: { ...fdRadio, rigMode },
-  } as unknown as AppSnapshot
-}
-
-const fdStatus = {
-  myClass: '3A',
-  mySection: 'WI',
-  running: true,
-  state: 'running',
-  qsoCount: 12,
-  sections: 4,
-  points: 24,
-  workedSections: ['WI', 'EMA'],
-  log: [{ call: 'W1AW', band: '20m', mode: 'PH', class: '3A', section: 'EMA', whenUnix: 100 }],
-} as unknown as FieldDayStatus
-
-/**
- * EXACTLY THE PROPS App's `case 'fieldDay'` passes, and the test below proves it by reading
- * that JSX rather than by anyone remembering. This is the file's own named blindness — RTTY
- * and SSTV were swept for a year with `onSetTxEnabled` omitted, so the TX-enable latch was
- * never in the document and gating it on a panel id was green — turned into a computation.
- */
-const appProps = {
-  snap: fdSnap('USB'),
-  onSnap: () => {},
-  fieldDay: fdStatus,
-  onSetMode: () => {},
-  fdRuleset: null,
-  tier: 'FT8' as const,
-  onOpenDashboard: () => {},
-  onOpenOperate: () => {},
-  // #192: hands a callsign to the Logbook from the log strip's recall card. Swept because the
-  // guard below demands set equality with App's real mount — every prop App passes has to be
-  // present here or the sweep is asserting against a cockpit App never renders.
-  onOpenLogbook: () => {},
-}
-
-/** Vite rewrites a LITERAL `new URL('…', import.meta.url)` into a served asset URL, and
- *  `fileURLToPath` then throws. A named const is read at runtime instead. */
-const APP_SRC = '../App.tsx'
-
-/** Per mode class: the stop controls that must be on screen, by accessible name. */
-const FD_STOP: Record<string, Array<[label: string, name: RegExp]>> = {
-  // The rig is on USB, so the position is PH and the dock draws the PTT row. Its full label
-  // set, lifted from Phone's case above because the row itself was lifted from Phone.
-  USB: [
-    ['Stop TX', /^stop tx$/i],
-    ['Tune', /^tune$|^tuning…$/i],
-    ['PTT', /push to talk|on air — release to stop|tx locked|tx off — click to enable/i],
-  ],
-  // CW and a data sub-mode: no PTT row exists to find, and claiming one would fail the
-  // baseline rather than prove anything.
-  CW: [
-    ['Stop TX', /^stop tx$/i],
-    ['Tune', /^tune$|^tuning…$/i],
-  ],
-  PKTUSB: [
-    ['Stop TX', /^stop tx$/i],
-    ['Tune', /^tune$|^tuning…$/i],
-  ],
-}
-
-describe('the stop line in the Field Day cockpit, which has no ⊞ vocabulary to sweep', () => {
-  it.each(Object.keys(FD_STOP))(
-    'rigMode %s: every stop control is on screen, enabled, and outside every pane',
-    async (rigMode) => {
-      render(<FdCockpit {...appProps} snap={fdSnap(rigMode)} />)
-      await settle()
-      const region = document.querySelector('.cockpit-panes')
-      expect(region, 'the cockpit did not render its pane region').not.toBeNull()
-      for (const [label, name] of FD_STOP[rigMode]) {
-        const els = screen.queryAllByRole('button', { name }) as HTMLButtonElement[]
-        expect(
-          els.length,
-          `Field Day (${rigMode}): "${label}" is not on screen — the operator has no way to ` +
-            'stop a transmission from this position',
-        ).toBeGreaterThan(0)
-        expect(
-          els.some((e) => !e.disabled),
-          `Field Day (${rigMode}): "${label}" is on screen but DISABLED — mounted and ` +
-            'unusable is the same loss as gone',
-        ).toBe(true)
-        for (const el of els) {
-          expect(
-            el.closest('.pane-frame'),
-            `Field Day (${rigMode}): "${label}" renders INSIDE a pane frame — the one place ` +
-              'a stop control may not live',
-          ).toBeNull()
-          expect(
-            region!.contains(el),
-            `Field Day (${rigMode}): "${label}" renders inside the pane region`,
-          ).toBe(false)
-        }
-      }
-      cleanup()
-    },
-  )
-
-  it('Field Day OFF the event: the stop line holds with no status block at all', () => {
-    // `snap.fieldDay` is `Some` only inside `Mode::FieldDay`, and the cockpit is reachable
-    // while it is `None` (the operator picked the cockpit face, the engine has not answered
-    // yet, or the master switch just went off). The name guard above compares prop NAMES; this
-    // is the one VALUE axis that changes what renders — no exchange, no boards data, no rate.
-    render(<FdCockpit {...appProps} fieldDay={null} />)
-    for (const [label, name] of FD_STOP.USB) {
-      const els = screen.queryAllByRole('button', { name }) as HTMLButtonElement[]
-      expect(els.length, `Field Day (no status): "${label}" is not on screen`).toBeGreaterThan(0)
-      expect(
-        els.some((e) => !e.disabled),
-        `Field Day (no status): "${label}" is on screen but DISABLED`,
-      ).toBe(true)
-    }
-    cleanup()
-  })
-
-  it('is rendered with the props App really passes — read out of App.tsx, not retyped', () => {
-    // THE HUMAN STEP, COMPUTED. A prop App passes and this fixture omits can silently take a
-    // control off the screen, and the sweep above would then pass while asserting nothing —
-    // which is exactly what happened to RTTY and SSTV. Set equality, so it fails in both
-    // directions: a prop added to App is unswept until it is added here, and a prop dropped
-    // from App leaves a stale entry that fails too.
-    const src = readFileSync(fileURLToPath(new URL(APP_SRC, import.meta.url)), 'utf8')
-    const open = src.indexOf('<FdCockpit')
-    expect(open, 'App.tsx no longer renders <FdCockpit — this guard is reading nothing').toBeGreaterThan(-1)
-    const jsx = src.slice(open, src.indexOf('/>', open))
-    const inApp = [...jsx.matchAll(/^\s+([a-zA-Z][\w]*)=/gm)].map((m) => m[1]).sort()
-    expect(inApp.length, 'no props parsed out of App.tsx — the extractor is broken').toBeGreaterThan(0)
-    expect(inApp).toEqual(Object.keys(appProps).sort())
   })
 })

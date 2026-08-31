@@ -350,19 +350,14 @@ describe('the .panel-rooted views of .layout.single, as a class', () => {
 
 // ── the same defect class, one level down inside the Field Day column ────────────────────
 //
-// Field Day has TWO faces, and this file is about the DASHBOARD one. It is now a plain
-// `.layout.single > .panel` view — `<main class="layout single">` → `<section class=
-// "conversation panel fieldday">` — and is in the PANEL_VIEWS census above accordingly.
-// (It used to mount in the three-pane operating workspace, `.layout[data-three-pane]` →
-// `.grid-center`; the operator asked on 2026-08-30 why a scoreboard was wearing a waterfall,
-// and App.tsx moved it. The shell swap is guarded in fdDashboardShell.test.tsx; what is
-// guarded HERE is that the column's own deficit story survived it, which is why this block
-// re-mounts the view in the new chain rather than trusting that it did.)
-//
-// (The other face, the operating COCKPIT, is `main.layout.single.fd-cockpit`. It is out of
-// scope here for a structural reason rather than by omission: it is not `.layout.single >
-// .panel`, so the census correctly excludes it, and its own valve is computed in
-// `cockpit-shells.test.ts` SHELLS.)
+// The Field Day view is a plain `.layout.single > .panel` view — `<main class="layout single">`
+// → `<section class="conversation panel fieldday">` — and is in the PANEL_VIEWS census above
+// accordingly. (It used to mount in the three-pane operating workspace,
+// `.layout[data-three-pane]` → `.grid-center`; the operator asked on 2026-08-30 why a
+// scoreboard was wearing a waterfall, and App.tsx moved it. The shell swap is guarded in
+// fdDashboardShell.test.tsx; what is guarded HERE is that the column's own deficit story
+// survived it, which is why this block re-mounts the view in the new chain rather than
+// trusting that it did.)
 //
 // THE DEFECT (2026-08-04). The Field Day column is: banner, header, operator row, score
 // tiles, sections board, the Bonuses disclosure, the log. Every one of them is

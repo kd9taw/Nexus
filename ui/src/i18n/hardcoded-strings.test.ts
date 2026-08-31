@@ -404,23 +404,6 @@ const MIGRATED = [
   // reading) plus the ◀/▶ glyphs, which are direction and not prose: both carry a translated
   // aria-label, because an arrow names nothing to a screen reader and this one moves a kilowatt.
   'components/AmpStrip.tsx',
-  // The Field Day cockpit's boards and chips (2026-08-30) — born migrated. The band × mode
-  // board, the rate/score chips and the cockpit's framing of the shipped sections board. Their
-  // invariants are the ones the FieldDayView block already names — band names, the FD mode
-  // codes in `FD_MODE_CLASSES`, ARRL section codes, and every count, rate, goal and score —
-  // plus two glyphs that are direction and absence rather than prose: the ◀ here-marker and
-  // the em dash in an empty cell, both behind an aria-label that says it in words.
-  'components/FdBandModeGrid.tsx',
-  'components/FdChips.tsx',
-  'components/FdSectionsPanel.tsx',
-  // The Field Day cockpit SHELL (2026-08-30) — born migrated, and it is the first cockpit
-  // shell to graduate straight to this list. It could, for CW's batch-20 reason turned inside
-  // out: its stop-line census is Stop TX (header), Esc (a window keydown with no element),
-  // Tune (header) and — on a phone position — PTT. Three of the four have no string in this
-  // file, and the fourth was given a file of its own (`FdPttRow.tsx`, on PARTIAL below) rather
-  // than being allowed to hold a whole new surface off the guard. Its invariants are the
-  // mode-class codes CW/PH/DIG, the band, the exchange and the event's UTC clock time.
-  'components/FdCockpit.tsx',
 ]
 
 /**
@@ -586,24 +569,6 @@ const PARTIAL = [
   // `phone.split.*` entry reads as an orphan, because the strings moved and the scanner did not.
   'components/SplitControl.tsx',
   'components/VoiceKeyer.tsx',
-  // FdPttRow.tsx (2026-08-30) — here on the NARROW ruling, for one control: the Field Day
-  // cockpit's push-to-talk row, lifted verbatim from PhoneCockpit so the two cannot come to
-  // read as different controls. Its four labels are the accessible name a stop-line sweep
-  // matches, its tooltip names the switch that is down and the mic the operator talks on, and
-  // the Lock toggle beside it decides whether the window's Space keyup is a PTT release at
-  // all. It moves in the transmit-path batch, WITH Phone's copy, with the sweeps re-run.
-  //
-  // ⚠️ SAY IT PLAINLY, because the list above is for PARTIAL migrations and this one is ZERO:
-  // not one string in this file is catalogued, so an operator reading German, Spanish, French
-  // or Japanese gets the Field Day phone strip in English. That is the cost of the ruling, and
-  // it is the same cost the rest of that strip already pays — the ⊞-less header above it draws
-  // Stop TX, Tune and the TX latch out of `CockpitHeader.tsx` (deferred, three entries up) and
-  // the pane beside it is `VoiceKeyer.tsx` (deferred, one entry up). Migrating this row alone
-  // would not make the Field Day transmit surface translated; it would make it half-translated,
-  // and split one control across two languages between two cockpits. The whole surface moves in
-  // one batch or the ruling is not worth having. Nothing else in the Field Day cockpit is
-  // deferred: the shell, the boards and the chips are on MIGRATED above.
-  'components/FdPttRow.tsx',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */

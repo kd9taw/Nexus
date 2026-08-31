@@ -15,7 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
 import { DetachedPanel } from '../DetachedPanel'
 import { FdClubSection } from './FieldDayView'
-import { openPanelWindow, subscribeSnapshot } from '../api'
+import { openPanelWindow, subscribeSnapshot, getSettings } from '../api'
 import type { AppSnapshot, FdClubStatus } from '../types'
 
 vi.mock('../api', () => ({
@@ -139,7 +139,10 @@ describe('the club band board pops out', () => {
     expect(screen.getByText('Club Cabrillo')).toBeTruthy()
   })
 
-  it('says so when there is no club event, instead of an empty board', async () => {
+  it('with sync off it names the exact route to turn it on, instead of an empty box', async () => {
+    // THE FINDABILITY DEFECT. The rail button opens this window whenever Field Day
+    // is on, so most operators will meet it BEFORE club sync exists — an empty
+    // board there is the same dead end that hid the feature in the first place.
     mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
       cb(snapWithClub(null))
       return () => {}
@@ -149,6 +152,89 @@ describe('the club band board pops out', () => {
     expect(screen.queryByLabelText('Club sync')).toBeNull()
     // Its OWN message, not the router's "panel isn't available" fallback —
     // which happens to contain the slug and would pass a loose match.
-    expect(screen.getByText(/no club event/i)).toBeTruthy()
+    expect(screen.getByText(/club sync is off/i)).toBeTruthy()
+    // The route, in the words the operator will read off the Settings tabs.
+    expect(screen.getByText(/Settings ▸ Contesting ▸ Field Day Club Sync/i)).toBeTruthy()
+    expect(screen.getByText(/Host a club event/i)).toBeTruthy()
+  })
+
+  it('with sync on but nobody else on the air, it says it is waiting — not that sync is off', async () => {
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb(snapWithClub({ ...CLUB, board: [] } as FdClubStatus))
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    await settle()
+    expect(screen.getByLabelText('Club sync')).toBeTruthy()
+    expect(screen.getByText(/no positions heard yet/i)).toBeTruthy()
+    // Sending an operator to Settings when the setting is already right is the
+    // worse of the two wrong messages: it reads as "this is broken".
+    expect(screen.queryByText(/Settings ▸ Contesting/i)).toBeNull()
+  })
+
+  it('before the first snapshot it says connecting — never that sync is off', async () => {
+    // No snapshot yet is not the same claim as no club event, and the window
+    // opens before the first 300 ms tick every single time.
+    mockedSubscribe.mockImplementation(() => () => {})
+    render(<DetachedPanel panel="fdclub" />)
+    await settle()
+    expect(screen.getByText(/connecting/i)).toBeTruthy()
+    expect(screen.queryByText(/club sync is off/i)).toBeNull()
+  })
+
+  it('the torn-off board is set in bigger type than the docked one — it is watched, not read', async () => {
+    // The one surface where bigger is correct: a band board across the room is
+    // glanced at from the operating position, and this window exists to be
+    // parked on a second monitor and left alone.
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb(snapWithClub(CLUB))
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    await settle()
+    const torn = Number(
+      /(\d+)/.exec(
+        (screen.getByLabelText('Club sync').querySelector('[data-club-board]') as HTMLElement).style
+          .fontSize,
+      )![1],
+    )
+    cleanup()
+    render(<FdClubSection club={CLUB} onExport={() => {}} busy={false} />)
+    const docked = Number(
+      /(\d+)/.exec(
+        (screen.getByLabelText('Club sync').querySelector('[data-club-board]') as HTMLElement).style
+          .fontSize,
+      )![1],
+    )
+    expect(torn).toBeGreaterThan(docked)
+  })
+
+  it('⭐ does not claim sync is off when the host merely stepped out of Field Day', async () => {
+    // The window exists for one job: a host watches it on a second monitor to see which
+    // bands are busy. The whole `fieldDay` block is built only inside the engine's Field Day
+    // mode, so it vanishes the moment the operator clicks into any other section — one click
+    // on the rail. Reading that absence as "sync is off" turned a live board into the words
+    // "Club sync is off" plus instructions to switch on hosting that was already on, while
+    // the host was still collecting contacts.
+    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: true } as never)
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb({ ...snapWithClub(null), fieldDay: null })
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    await settle()
+    expect(screen.queryByText(/Club sync is off/i)).toBeNull()
+    expect(screen.getByText(/nothing has stopped/i)).toBeTruthy()
+  })
+
+  it('POSITIVE CONTROL: a station that really has not configured sync is still told how', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ fdHostEnable: false, fdJoinAddr: '' } as never)
+    mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
+      cb({ ...snapWithClub(null), fieldDay: null })
+      return () => {}
+    })
+    render(<DetachedPanel panel="fdclub" />)
+    await settle()
+    expect(screen.getByText(/Club sync is off/i)).toBeTruthy()
   })
 })

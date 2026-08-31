@@ -9,20 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A Field Day operating cockpit — the whole contest on one screen, built for 2 AM.** A new
-  layout for Field Day that puts logging first: the callsign field is always the target, so any
-  key you press lands in it — a call you typed can't vanish because focus wandered to a board.
-  Enter logs the contact and the field is ready for the next one. The dupe verdict sits in a
-  slot that is always there, so the row never jumps under your fingers as it appears, and while
-  you type, the band-by-mode grid paints itself: red where you already worked him, amber where
-  another position in the club did, so you can see at a glance which band to move him to. The
-  sections checklist lights up when the section you just typed is a new one. The pane beside it
-  follows the radio — decodes on digital, your keyer macros on CW, push-to-talk on phone — and
-  Stop TX lives in the header, where no pane can cover it. Switch between the cockpit and the
-  full Field Day dashboard with one button; during a running event Nexus opens on the cockpit,
-  and outside one it opens on the dashboard, so there is nothing to set up. The sections board
-  here counts this position's own log (the club's totals are on the dashboard and the TV board).
-
 - **Field Day club sync — every position's contacts in one club log, live over the site
   LAN, no third-party logger.** One PC at the club site turns on **Settings ▸ Contesting ▸
   Field Day Club Sync ▸ Host a club event** (the one time Nexus listens beyond the local
@@ -40,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chip on the Field Day view always tells the truth — Synced, Behind (with the count), or
   Offline — and positions with clocks off by more than 30 seconds are told to fix them.
   The N3FJP/N1MM interop pushes are untouched and keep running alongside.
+
+- **The club band board is its own window, one click from anywhere.** A **Club Board**
+  button sits in the left rail under Field Day and opens the board — position, band, mode,
+  operator, QSOs, rate — as a standalone window for a second monitor, in larger type than
+  the dashboard copy because it is watched from the operating position rather than read at
+  the keyboard. This is the display a multi-station club keeps up all event to see where
+  everyone is before moving to another band. The button is there whenever Field Day is on,
+  *before* club sync is switched on: opened with sync off, the window says so and names the
+  route that starts it (Settings ▸ Contesting ▸ Field Day Club Sync ▸ Host a club event)
+  instead of showing an empty board; with sync on and nobody else logging yet, it says it is
+  waiting. Previously the board existed only as a block inside the Field Day dashboard that
+  appeared once sync was already running, so an operator who had not found the setting had
+  no way to learn the board was there.
 
 - **Field Day spectator scoreboard — the club's score on the TV, from a web page the host
   serves itself.** Turn on **Settings ▸ Contesting ▸ Field Day Club Sync ▸ Spectator
@@ -138,8 +137,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   score, log and setup screen has anything to do with, and all of which squeezed it into a
   narrow middle column that left its top row of buttons crowded. It now gets the window to
   itself: one column, no rails, and up to 1600 px of width instead of about 1180. The waterfall
-  and band activity have not gone anywhere — they are where they belong, in Operate and in the
-  Field Day cockpit, which are the screens that operate.
+  and band activity have not gone anywhere — they are where they belong, in Operate, which is
+  where digital Field Day contacts are made.
 
 - **The operator button is there before anyone has been named.** The OP button in the top bar
   swaps who is at the key from any mode, but it only appeared once an operator had already been

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// THE FIELD DAY DASHBOARD WEARS ITS OWN SHELL — not the digital OPERATING one.
+// THE FIELD DAY VIEW WEARS ITS OWN SHELL — not the digital OPERATING one.
 //
 // THE REPORT (operator, 2026-08-30, looking at the dashboard during a club Field Day):
 // "what screen is this supposed to represent? Why are theyere waterfalls in here when its
@@ -16,9 +16,7 @@
 // export buttons) was crushed.
 //
 // WHAT REPLACES IT. The same `.layout.single > .panel` shell Logbook, Settings, Program and
-// POTA already wear — the dashboard's root IS a `.panel`, so it needs no bespoke shell class
-// (the FD *cockpit* does: `main.layout.single.fd-cockpit` is a flex chain of cockpit panes,
-// not a panel, and its own valve is computed in cockpit-shells.test.ts SHELLS).
+// POTA already wear — the dashboard's root IS a `.panel`, so it needs no bespoke shell class.
 //
 // WHAT THIS FILE COMPUTES, and why the two halves are both here. (1) That App really has
 // stopped mounting the dashboard in the operating workspace — read off the real source,

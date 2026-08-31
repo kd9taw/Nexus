@@ -30,41 +30,6 @@ In [Settings ▸ Contesting ▸ Field Day Setup](settings-reference.md#field-day
 3. **Power multiplier** — ×5 (QRP/battery ≤ 5 W), ×2 (≤ 100 W), or ×1 (> 100 W).
    It multiplies your QSO points; the engine clamps it to the legal values.
 
-### The Field Day cockpit
-
-During a running event, Field Day opens on the **cockpit** — one screen built for
-logging and nothing else. The **Cockpit / Dashboard** button in the header swaps
-between it and the full Field Day page (setup, bonuses, exports, the club board);
-outside an event Nexus opens on the dashboard instead, so there is nothing to
-configure either way.
-
-The callsign box owns the keyboard. Type anywhere on the screen and the
-characters land in it, so a call you started typing cannot disappear because you
-clicked a board a moment earlier. **Enter** logs the contact and leaves you ready
-for the next one.
-
-The dupe verdict has a slot that is always there, whether or not it has anything
-to say — the entry row cannot jump under your fingers at the moment a warning
-appears. Your own log's dupes refuse; another position's are a warning, the way
-N3FJP treats them.
-
-The band-and-mode grid answers the question you are actually asking. As you type
-a call, it paints: **red** on the cells where you have already worked him,
-**amber** where another position in the club has. So "he's a dupe" becomes "he's
-a dupe *here* — work him on 15 phone." The sections checklist beside it lights up
-when the section you just typed is one nobody has yet. **That checklist counts
-this position's own log** — the club's combined sections are on the dashboard and
-on the spectator board.
-
-The pane on the left follows the radio: decodes on digital, your keyer macros on
-CW, push-to-talk on phone. The mode chip in the header shows what Nexus thinks
-the rig is doing and **you can override it** — a misread mode would otherwise
-label every dupe check and every logged contact wrong.
-
-**Stop TX sits in the header**, outside the panes, and the cockpit has no panes
-you can hide. There is nothing to fumble away at 2 AM and no menu to find it in
-again.
-
 ### Operate the event
 
 Field Day is **all-mode**: once you initiate a contact, the digital sequencer
@@ -127,11 +92,15 @@ types the host's address) and joins. From then on:
   It's a warning, not a lock (N3FJP semantics); your own log's dupes still
   refuse.
 - A live **band board** shows where every position is (band, mode, operator,
-  rate), stale-marked the moment one goes quiet. **Pop out board** puts it in
-  its own window, for a second monitor or a corner of the big one — the same
-  board the club watches all event, without the rest of the dashboard around
-  it. The web scoreboard below carries the same band and mode per position, so
-  the screen facing the room answers "who's on 20?" too.
+  rate), stale-marked the moment one goes quiet. It has its own **Club Board**
+  button in the left rail under Field Day, and its own window — one click, on a
+  second monitor or a corner of the big one, in bigger type than the dashboard
+  copy because it is watched from across the tent. **Pop out board** in the club
+  header opens the same window. The rail button is there whenever Field Day is
+  on, before you have switched sync on: with sync off the window names the route
+  that starts it rather than showing an empty board. The web scoreboard below
+  carries the same band and mode per position, so the screen facing the room
+  answers "who's on 20?" too.
 - The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
   contacts logged offline are journaled and re-sent automatically on
   reconnect. If the host PC dies, enable hosting on any other position;

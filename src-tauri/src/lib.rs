@@ -12095,6 +12095,9 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
         "operate" => (1140.0, 760.0),
         "bandmapPhone" | "bandmapCw" => (420.0, 780.0),
         "fieldday" => (560.0, 760.0), // the scoreboard: operator + tiles + sections board
+        // The club band board is set in glance type (it is watched across the tent, not
+        // read at the keyboard), so it opens wider and shorter than the generic default.
+        "fdclub" => (860.0, 620.0),
         "waterfall" => (900.0, 300.0), // a wide, short monitoring strip
         _ => (760.0, 660.0),
     }
@@ -12106,6 +12109,10 @@ fn panel_default_inner(slug: &str) -> (f64, f64) {
 fn panel_min_inner(slug: &str) -> (f64, f64) {
     match slug {
         "waterfall" => (380.0, 180.0),
+        // Its six columns in glance type do not survive the generic 420 wide: at the 65%
+        // zoom floor that window could only ever show a 646 px box, and the board's
+        // natural is 820. 560 raises the ceiling above it.
+        "fdclub" => (560.0, 400.0),
         _ => (420.0, 360.0),
     }
 }
