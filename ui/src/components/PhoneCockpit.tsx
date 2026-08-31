@@ -440,6 +440,13 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
     void setScopeRef(tenths)
   }
   const [keyed, setKeyed] = useState(false)
+  /** Mirrors `keyed` for the window key handlers, which capture their closure once per
+   *  effect run — the release must act on what is TRUE when it fires, not on what was true
+   *  when it was bound. See the space-release comment below. */
+  const keyedRef = useRef(false)
+  useEffect(() => {
+    keyedRef.current = keyed
+  }, [keyed])
   // Bandscope span (audio-window zoom within the captured passband — this is
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
@@ -663,8 +670,16 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
         key(true)
       }
     }
+    // ⚠️ THE RELEASE ASKS ONLY WHETHER WE ARE KEYED. It used to carry the same
+    // `!isField` guard as the press, on the reasoning that nothing here moves focus by
+    // itself — but the OPERATOR does: hold the space bar to talk, click into the log strip
+    // while still holding, release, and the keyup now targets an INPUT. The old guard
+    // returned, `key(false)` never fired, and the rig stayed keyed with the button still
+    // reading "release to stop", which is exactly what had just been done. An unkey a guard
+    // can swallow is a stuck transmitter. The PRESS keeps its guard — a space typed into a
+    // field must never start a transmission — and the asymmetry is the whole point.
     const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !isField(e.target) && !lock) {
+      if (e.code === 'Space' && keyedRef.current && !lock) {
         e.preventDefault()
         key(false)
       }
