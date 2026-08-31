@@ -9775,8 +9775,41 @@ fn fallback_sideband(md: &str) -> Option<&'static str> {
         // SSTV image on plain FM keeps the EMISSION right (an FM channel stays FM) and costs
         // only the codec routing; landing it on a sideband would put SSB on an FM repeater.
         "PKTFM" | "FM-D" | "PKT-FM" => Some("FM"),
+        // FSK RTTY → THE DATA SIDEBAND (ve3wej, #195). The rung the CW case above was missing
+        // its twin of, on the same four models and for the same reason: they list
+        // `AM CW USB LSB FM PKTLSB PKTUSB` and no RTTY at all. Picking the FSK keying backend
+        // makes `Settings::rig_mode_on_sideband` command the literal `RTTY`, the rig refuses it
+        // for the whole retry budget, and this arm falling through to `None` left the ladder
+        // giving up with NOTHING set — the rig still in whatever the last section commanded,
+        // which out of FT8 is DIGU 3000. That is the report.
+        //
+        // NOT the plain sideband, unlike every rung above, and the exception is the honest one
+        // rather than an oversight: a rig with no RTTY mode has no FSK path at ALL, so AFSK is
+        // the only way it can ever work RTTY — and the AFSK arm of `rig_mode_on_sideband`
+        // commands exactly `PKTLSB`. Landing there is the mode the operator's one remaining
+        // move needs, on the right sideband with the USB codec routed to the modulator; plain
+        // LSB would take TX audio from the mic jack and radiate zero RF. `mode_giveup_note`
+        // says to switch the keying over, because that — not a rig button — is the way out.
+        //
+        // LSB-side is the RTTY convention (mark = lower audio = higher RF), and `rtty_reverse`
+        // flips the TONES, not the sideband, so it must not move this. The only reverse that is
+        // meaningful here is the one carried in the MODE WORD: Hamlib's `RTTYR` is USB-side by
+        // definition, so it maps to the other data sideband. Spellings match `civ::commands`.
+        "RTTY" | "FSK" => Some("PKTLSB"),
+        "RTTYR" | "RTTY-R" | "FSKR" => Some("PKTUSB"),
         _ => None,
     }
+}
+
+/// Is `md` the rig's OWN FSK RTTY mode, either sideband? Deliberately not folded into
+/// [`mode_is_data`]: `RTTY` is a mode in its own right, not a DATA submode of SSB, and the two
+/// earn different give-up advice — a refused `PKTUSB` means "press the rig's DATA key", a
+/// refused `RTTY` means "this rig cannot do FSK, key it with AFSK instead".
+fn mode_is_rtty(md: &str) -> bool {
+    matches!(
+        md.trim().to_ascii_uppercase().as_str(),
+        "RTTY" | "FSK" | "RTTYR" | "RTTY-R" | "FSKR"
+    )
 }
 
 /// The plain mode to fall back to after the ladder has given up on `md` — [`fallback_sideband`]
@@ -9814,6 +9847,14 @@ fn mode_giveup_note(md: &str, saw_reject: bool, fallback: Option<&str>) -> Strin
         );
     }
     match fallback {
+        // RTTY has no DATA key to press — the rig has no FSK mode at all (the Flex family), so
+        // pointing at the front panel sends the operator looking for a control that is not
+        // there. The way out is a Nexus setting: AFSK keys RTTY through the soundcard in
+        // exactly the DATA submode the rung above has just set, so this note names it.
+        Some(base) if mode_is_rtty(md) => format!(
+            "rig refused {md} — it has no FSK RTTY mode; set {base} instead — switch RTTY keying \
+             to AFSK (Settings ▸ RTTY) to work RTTY on this radio"
+        ),
         Some(base) => format!(
             "rig refused {md} — set {base} instead; press the rig's DATA key ({base}-D) to work digital"
         ),
@@ -11312,6 +11353,49 @@ mod tests {
         // the rig's modes, so a silent link still gives up in place (same rule as DATA).
         assert_eq!(giveup_fallback("CWR", true), Some("CW"));
         assert_eq!(giveup_fallback("CWR", false), None);
+    }
+
+    /// RTTY-FSK ON A RIG WITH NO RTTY MODE LEFT IT IN THE FT8 DATA MODE (ve3wej, #195).
+    ///
+    /// The missing rung of the same ladder the CW case above fixed, and the same four catalog
+    /// models — `rigctl --dump-caps` on 2036 FlexRadio SmartSDR CAT (and 23005 / 2048 / 2054)
+    /// reports `Mode list: AM CW USB LSB FM PKTLSB PKTUSB`. No RTTY. Picking the FSK keying
+    /// backend makes `Settings::rig_mode_on_sideband` command the literal `RTTY`; the Flex
+    /// refuses it for the whole `MODE_SET_MAX_TRIES` budget and `fallback_sideband` fell
+    /// through to `_ => None`, so the ladder gave up having set NOTHING and the rig stayed in
+    /// whatever the last section commanded — DIGU 3000 straight out of FT8. That is the
+    /// operator's report verbatim.
+    ///
+    /// The fallback is the DATA SIDEBAND, not plain LSB. A rig with no RTTY mode has no FSK
+    /// path at all, so AFSK is the only way it can work RTTY — and the AFSK arm of
+    /// `rig_mode_on_sideband` commands exactly `PKTLSB`. Landing there puts the rig where the
+    /// operator's one remaining move needs it; plain LSB would take TX audio from the mic jack
+    /// and radiate zero RF. LSB-side is the RTTY convention (mark = lower audio = higher RF);
+    /// `rtty_reverse` flips the TONES, not the sideband, so only Hamlib's own reverse spelling
+    /// — `RTTYR`, USB-side by definition — maps to the other side.
+    #[test]
+    fn a_rig_that_refuses_fsk_rtty_lands_on_the_data_sideband() {
+        // Every spelling `civ::commands` can round-trip for the rig's own RTTY mode.
+        assert_eq!(fallback_sideband("RTTY"), Some("PKTLSB"));
+        assert_eq!(fallback_sideband(" rtty "), Some("PKTLSB"));
+        assert_eq!(fallback_sideband("FSK"), Some("PKTLSB"));
+        assert_eq!(fallback_sideband("RTTYR"), Some("PKTUSB"));
+        assert_eq!(fallback_sideband("RTTY-R"), Some("PKTUSB"));
+        assert_eq!(fallback_sideband("FSKR"), Some("PKTUSB"));
+        // PKTLSB is already the floor — falling it back to itself would loop the ladder.
+        assert_eq!(fallback_sideband("PKTLSB"), Some("LSB"));
+        // Same rejection gate as every non-FM rung: a mute link proves nothing about the
+        // rig's modes, so it still gives up in place rather than adding traffic.
+        assert_eq!(giveup_fallback("RTTY", true), Some("PKTLSB"));
+        assert_eq!(giveup_fallback("RTTY", false), None);
+        // And the note has to say something the operator can DO. "Press the rig's DATA key"
+        // is nonsense here — the rig has no FSK mode to reach, and the fix is a Nexus setting.
+        let note = mode_giveup_note("RTTY", true, Some("PKTLSB"));
+        assert!(note.contains("AFSK"), "the note names the way out: {note}");
+        assert!(
+            !note.contains("DATA key"),
+            "a rig with no RTTY mode has no DATA key to press: {note}"
+        );
     }
 
     /// THE TIMEWAVE NAVIGATOR REPORT (N0UMF, IC-7410). `mode_set_note` opened with a raw
