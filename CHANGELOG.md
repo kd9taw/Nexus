@@ -269,6 +269,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "3 QSO importé3 QSO importés". Shipped that way since 1.9.0. Every one is repaired, and a
   guard now fails the build if the shape ever comes back.
 
+- **Parks on the air now show on the Connect map.** POTA activators appear where they
+  actually are — the feed sends each park's own coordinates, which Nexus had been
+  fetching and discarding in favour of the grid square, so a park that was placed to
+  about 4 km is now placed to the park. They draw as a triangle rather than another
+  dot, because an activator is somewhere you go and work, not one more spot in the
+  firehose: filled for a park you have never logged, hollow for one already in your
+  log. Hover names the activator, the reference, the frequency and the mode. The layer
+  is off until you turn it on, and only then does it fetch anything. Turning on the
+  POTA/SOTA view switches it on for you — that view has promised "park/summit
+  activators" since it shipped and until now enabled nothing of the kind.
+  ⚠️ POTA only. A SOTA spot carries no position at all, and their spot feed is being
+  retired — see below.
+
+- **A three-day space-weather outlook: when do the bands settle down?** Everything in
+  Connect described conditions as they are now; nothing said what was coming. The new
+  **Kp outlook** pane shows NOAA's planetary-K forecast — the worst period still
+  ahead, when a storm is expected to start, and when it drops back. Measured hours are
+  drawn as solid bars and the forecast as hollow ones, so a prediction can never be
+  misread as a reading. If NOAA has published nothing, it says so instead of drawing a
+  quiet sky.
+
+- **A geomagnetic storm now finds you.** A solar flare already raised an alert
+  anywhere in the app, and so did a band coming alive — but a geomagnetic storm only
+  ever appeared in the Space Weather pane, so you saw it only if you were looking
+  straight at it. That is backwards: a flare is minutes of absorption, a storm is
+  hours or days of degraded HF. Storms now raise the same kind of heads-up, quiet at
+  G1 and prominent with a beep from G2, and they never repeat themselves while the
+  index wobbles around a threshold. With the outlook in hand there is a second,
+  separate note when NOAA *expects* a storm that has not started yet. Nexus tells you;
+  it never touches the radio.
+
+- **Connect on the shack TV.** Turn on **Settings ▸ Appearance ▸ Connect on a TV** and
+  Nexus serves your conditions picture as a plain web page to any browser on your
+  network — a TV across the room, a tablet on the bench, a phone. Large type, no
+  controls, refreshes itself: band conditions, space weather, live openings, the
+  plain-language notes and the forecast peak. It is read-only in the strict sense —
+  there is no way to change anything from it, and the page loads nothing from the
+  internet, so it works at a site with no connection. It is off until you turn it on,
+  and the setting says plainly what anyone on your network would see: your callsign,
+  your grid and band conditions. Your log, your needs board and the frequency you are
+  on are never sent.
+
 - **Memories offered every mode and let you pick only one.** Adding a channel by hand showed a
   mode list with eight entries in it, of which exactly one could be chosen — whichever mode the
   radio happened to be on, so for most stations "USB is the only mode I can add". The list was
