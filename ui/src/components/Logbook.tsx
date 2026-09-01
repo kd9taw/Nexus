@@ -37,7 +37,7 @@ import {
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { qrzPushQso, clublogPushQso, hrdlogPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
+import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
@@ -112,6 +112,8 @@ const QRZ_LABEL = 'QRZ'
 const EQSL_LABEL = 'eQSL'
 const CLUBLOG_LABEL = 'CL'
 const HRDLOG_LABEL = 'HL'
+// Technical product token, not prose — same ruling as the labels above.
+const WRL_LABEL = 'WRL'
 const QSL_MENU_LABEL = 'QSL▸'
 
 /** Parse a `datetime-local` value as UTC seconds. The browser's own Date parsing treats a
@@ -554,6 +556,30 @@ export function Logbook({
       }
     } catch (e) {
       pushToast(t('logbook.push.hrdlog.failed', { detail: String(e) }), 'error', 6000)
+    }
+  }
+
+  // Manual (re-)push of one logged QSO to World Radio League — same role as the
+  // HRDLog button. A live-logging service, not an ARRL confirmation source.
+  const onPushWrl = async (q: LoggedQso) => {
+    try {
+      const r = await wrlPushQso(q)
+      if (r.result === 'accepted') {
+        pushToast(t('logbook.push.wrl.ok', { call: q.call }), 'success', 4000)
+      } else if (r.result === 'duplicate') {
+        pushToast(t('logbook.push.wrl.duplicate', { call: q.call }), 'success', 5000)
+      } else if (r.result === 'pending') {
+        // Transient by contract (rate limit / server trouble) — the QSO is fine.
+        pushToast(t('logbook.push.wrl.unavailable', { call: q.call }), 'info', 6000)
+      } else {
+        pushToast(
+          t('logbook.push.wrl.rejected', { call: q.call, reason: r.message ?? r.result }),
+          'error',
+          6000,
+        )
+      }
+    } catch (e) {
+      pushToast(t('logbook.push.wrl.failed', { detail: String(e) }), 'error', 6000)
     }
   }
 
@@ -1421,6 +1447,15 @@ export function Logbook({
                     aria-label={t('logbook.row.pushHrdlog.aria', { call: q.call })}
                   >
                     {HRDLOG_LABEL}
+                  </button>
+                  <button
+                    type="button"
+                    className="log-rowbtn"
+                    onClick={() => void onPushWrl(q)}
+                    title={t('logbook.row.pushWrl.title', { call: q.call })}
+                    aria-label={t('logbook.row.pushWrl.aria', { call: q.call })}
+                  >
+                    {WRL_LABEL}
                   </button>
                   {/* QSL handling for the row: mark a request SENT (once), and record the
                       paper card that came BACK. Operator-declared, not a confirmation.

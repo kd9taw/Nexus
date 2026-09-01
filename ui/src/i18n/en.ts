@@ -724,6 +724,14 @@ export const EN = {
   'logbook.row.pushClublog.title':
     'Push {{call}} to ClubLog (re-push is safe — duplicates are detected)',
   'logbook.row.pushClublog.aria': 'Push {{call}} to ClubLog',
+  // World Radio League per-row push (the manual verification / bounce-recovery path).
+  'logbook.row.pushWrl.title': 'Send this QSO with {{call}} to World Radio League',
+  'logbook.row.pushWrl.aria': 'Push the QSO with {{call}} to World Radio League',
+  'logbook.push.wrl.ok': '{{call}} sent to World Radio League',
+  'logbook.push.wrl.duplicate': 'World Radio League already has {{call}}',
+  'logbook.push.wrl.unavailable': 'World Radio League is busy — {{call}} will go on the next try',
+  'logbook.push.wrl.rejected': 'World Radio League refused {{call}}: {{reason}}',
+  'logbook.push.wrl.failed': 'World Radio League push failed: {{detail}}',
   'logbook.row.pushHrdlog.title':
     'Push {{call}} to HRDLog.net (live-logging/awards site — not an ARRL confirmation source; re-push is safe)',
   'logbook.row.pushHrdlog.aria': 'Push {{call}} to HRDLog.net',
