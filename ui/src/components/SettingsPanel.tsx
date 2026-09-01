@@ -54,6 +54,7 @@ import {
   setHrdlogCode,
   setWrlKey,
   clearWrlKey,
+  exportGeneralLog,
   setLotwPassword,
   setQrzLogbookKey,
   setQrzPassword,
@@ -2550,6 +2551,17 @@ export function SettingsPanel({
       updateBool('wrlUpload', false)
       pushToast(t('settings.confirmations.wrl.key.cleared'), 'info')
     }, t('settings.confirmations.wrl.key.clearFailed'))
+  }
+  // First-time WRL users arrive with an existing log (the operator: 11k QSOs). WRL's
+  // API takes ONE contact per call and caps writes at 5,000/day — their own docs say
+  // bulk history belongs in their ADIF import, so the affordance here is the file,
+  // not a three-day API drip.
+  const onExportForWrl = async () => {
+    await withErrorToast(async () => {
+      const text = await exportGeneralLog('adif')
+      const path = await saveTextToDownloads('nexus-log-for-wrl.adi', text)
+      pushToast(t('settings.confirmations.wrl.export.done', { path }), 'success', 8000)
+    }, t('settings.confirmations.wrl.export.failed'))
   }
 
   const onSaveRbToken = async () => {
@@ -9597,6 +9609,16 @@ export function SettingsPanel({
                     </button>
                   </label>
                   <span className="settings-hint">{t('settings.confirmations.wrl.upload.hint')}</span>
+                </div>
+
+                <div className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.wrl.export.label')}
+                  </span>
+                  <button type="button" className="settings-refresh" onClick={onExportForWrl}>
+                    {t('settings.confirmations.wrl.export.action')}
+                  </button>
+                  <span className="settings-hint">{t('settings.confirmations.wrl.export.hint')}</span>
                 </div>
               </div>
             </div>

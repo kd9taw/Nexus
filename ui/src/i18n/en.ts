@@ -5710,6 +5710,12 @@ export const EN = {
     'Unavailable while “Sign from ADIF location” is on: an unattended batch would sign older contacts with wherever you are NOW.',
   'settings.confirmations.lotw.autoUpload.lastRun': 'Last run: {{when}}.',
 
+  'settings.confirmations.wrl.export.label': 'Already have a log?',
+  'settings.confirmations.wrl.export.action': 'Export ADIF for WRL',
+  'settings.confirmations.wrl.export.hint':
+    'Auto-upload sends contacts as you log them. For your existing history, export it here and use the ADIF import on worldradioleague.com — their API caps uploads at 5,000 a day, so the file is the fast path for a big log.',
+  'settings.confirmations.wrl.export.done': 'Log exported to {{path}} — import that file on worldradioleague.com.',
+  'settings.confirmations.wrl.export.failed': 'Couldn\u2019t export the log',
   'settings.confirmations.eqsl.username.label': 'eQSL username',
   'settings.confirmations.eqsl.username.placeholder': 'your eQSL.cc account login',
   'settings.confirmations.eqsl.username.hint':
