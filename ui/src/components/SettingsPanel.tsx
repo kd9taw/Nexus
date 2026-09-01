@@ -9053,6 +9053,24 @@ export function SettingsPanel({
 
                 <label className="settings-field">
                   <span className="settings-label">
+                    {t('settings.confirmations.eqsl.qthNickname.label')}
+                  </span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.eqslQthNickname ?? ''}
+                    placeholder={t('settings.confirmations.eqsl.qthNickname.placeholder')}
+                    onChange={(e) => update('eqslQthNickname', e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">
+                    {t('settings.confirmations.eqsl.qthNickname.hint')}
+                  </span>
+                </label>
+
+                <label className="settings-field">
+                  <span className="settings-label">
                     {t('settings.confirmations.eqsl.password.label')}
                   </span>
                   <div className="settings-input-row">

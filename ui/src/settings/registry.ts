@@ -416,7 +416,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['lotw', 'eqsl', 'qrz', 'clublog', 'club log', 'hrdlog', 'cloudlog', 'wavelog',
       'hamqth', 'qsl', 'upload', 'auto-upload', 'password', 'api key', 'credential', 'login',
       'callbook', 'repeaterbook', 'tqsl', 'station location',
-      'wrl', 'world radio league'],
+      'wrl', 'world radio league', 'qth nickname', 'nickname'],
   },
 
   // ---- Contesting --------------------------------------------------------------

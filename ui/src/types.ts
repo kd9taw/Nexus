@@ -3061,6 +3061,9 @@ export interface Settings {
   /** eQSL account username (callsign or login). Password is in the OS keychain
    *  (set via setEqslPassword). */
   eqslUsername: string
+  /** The eQSL QTH Nickname — required by eQSL when one callsign has several QTH
+   *  profiles; such accounts cannot authenticate without it. Empty for most. */
+  eqslQthNickname?: string
   /** eQSL incremental-sync cursor (YYYYMMDDHHMM). Managed by the app; not
    *  user-edited. Empty = next sync is a full pull. */
   eqslLastSync: string

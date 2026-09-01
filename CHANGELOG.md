@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Linux field report; the reduction in "buffer underrun or overrun" messages is the thing
   to watch for.
 
+- **eQSL works for accounts with more than one QTH profile.** eQSL requires a QTH
+  Nickname to tell those profiles apart, and Nexus never sent one — so such an account
+  could not authenticate at all: the inbox sync failed and uploads bounced. There is now
+  a QTH Nickname field beside your eQSL username in Settings; it rides the inbox request
+  and each uploaded record exactly as eQSL's own specs spell it. Single-profile accounts
+  need nothing and see no change. From a field report.
+
 - **The phantom "is calling you" is gone.** Finishing an FT8 contact could pop
   "so-and-so is calling you" seconds later — about the station you had just worked, whose
   RR73 was the tail of your own QSO — and switching bands could do the same before a

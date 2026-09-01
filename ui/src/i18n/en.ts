@@ -5706,6 +5706,10 @@ export const EN = {
   'settings.confirmations.eqsl.username.placeholder': 'your eQSL.cc account login',
   'settings.confirmations.eqsl.username.hint':
     'Your eQSL.cc login (often your callsign). Save settings to apply.',
+  'settings.confirmations.eqsl.qthNickname.label': 'QTH Nickname',
+  'settings.confirmations.eqsl.qthNickname.placeholder': 'e.g. Home',
+  'settings.confirmations.eqsl.qthNickname.hint':
+    'Only needed when your callsign has more than one QTH profile at eQSL — those accounts can\u2019t sign in without it. Leave empty otherwise.',
   'settings.confirmations.eqsl.password.label': 'eQSL password',
   'settings.confirmations.eqsl.password.placeholder': 'eQSL.cc account password',
   'settings.confirmations.eqsl.password.hint':

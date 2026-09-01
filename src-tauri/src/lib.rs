@@ -14623,11 +14623,12 @@ async fn download_eqsl_report(state: State<'_, SharedEngine>) -> Result<LotwSync
 }
 
 fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, String> {
-    let (username, since) = {
+    let (username, qth_nickname, since) = {
         let eng = engine_lock(state);
         let s = eng.settings();
         (
             s.eqsl_username.trim().to_string(),
+            s.eqsl_qth_nickname.trim().to_string(),
             s.eqsl_last_sync.trim().to_string(),
         )
     };
@@ -14650,6 +14651,9 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             username,
             password,
             rcvd_since: Some(since).filter(|s| !s.is_empty()),
+            // Required by eQSL for a multi-QTH callsign; empty = omitted, and a
+            // single-profile account's URL is byte-identical to before.
+            qth_nickname: Some(qth_nickname).filter(|n| !n.is_empty()),
         };
         let url = tempo_core::eqsl::build_inbox_url(&query);
         propagation::live::eqsl::fetch_inbox(&url)?
@@ -15643,9 +15647,13 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
                 .to_string(),
         );
     }
-    let user = {
+    let (user, qth_nickname) = {
         let eng = engine_lock(&engine);
-        eng.settings().eqsl_username.trim().to_string()
+        let s = eng.settings();
+        (
+            s.eqsl_username.trim().to_string(),
+            s.eqsl_qth_nickname.trim().to_string(),
+        )
     };
     if user.is_empty() {
         return Err("Set your eQSL username in Settings first.".to_string());
@@ -15658,7 +15666,12 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
 
     // Build + POST without the lock; the body carries the password — never logged.
     let resp = {
-        let body = tempo_core::eqsl::build_upload_body(&user, &password, &adif);
+        let body = tempo_core::eqsl::build_upload_body(
+            &user,
+            &password,
+            &adif,
+            (!qth_nickname.is_empty()).then_some(qth_nickname.as_str()),
+        );
         propagation::live::eqsl::post_form(tempo_core::eqsl::EQSL_IMPORT_URL, body)?
     }; // `body` (holds the password) dropped here
 
