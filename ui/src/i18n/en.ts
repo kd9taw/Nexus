@@ -2296,6 +2296,9 @@ export const EN = {
   'settings.alerts.legend': 'Alerts',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
+  'settings.alerts.confirmTier.label': 'Confirmation opportunities',
+  'settings.alerts.confirmTier.hint':
+    'Show worked-but-unconfirmed award slots — LoTW confirmation chances — on the Needed board and as chips on decodes. Turn off to chase only new contacts.',
   'settings.alerts.cq.label': 'CQ calls',
   'settings.alerts.cq.hint': 'Alert on any decoded CQ. Off by default — CQs are constant.',
   // One band-scope vocabulary, read by all three selects — the same four choices mean the
@@ -4917,6 +4920,11 @@ export const EN = {
   'settings.digital.promptToLog.label': 'Prompt before logging',
   'settings.digital.promptToLog.hint':
     'Show a confirm-and-edit popup when a QSO completes instead of logging silently (WSJT-X “Prompt me to log QSO”). No effect unless Auto-log is on.',
+  // WSJT-X's "dB reports to comments" (Settings ▸ Reporting there), quoted so an operator
+  // migrating recognises it; the format is WSJT-X's own, byte for byte.
+  'settings.digital.reportsToComments.label': 'dB reports to comments',
+  'settings.digital.reportsToComments.hint':
+    'Write the exchanged reports into the logged QSO\u2019s comment, e.g. \u201cFT8  Sent: -07  Rcvd: -12\u201d — the same format WSJT-X uses.',
   'settings.digital.preferRrr.label': 'Roger with RRR (not RR73)',
   'settings.digital.preferRrr.hint':
     'Acknowledge the final report with a bare RRR (partner still owes a 73) instead of the combined RR73. Off = RR73 (modern FT8 practice).',

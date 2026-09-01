@@ -230,7 +230,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'depth', 'deep', 'auto cq', 'cq', 'hound', 'fox', 'dxpedition', 'auto log', 'blocked',
       'ap decode', 'f low', 'f high', 'tune', 'tune timeout', 'tune carrier', 'key down',
       'tx period', 't/r period', 'disable tx after 73', 'tune power', 'low power tune',
-      'atu power', 'loop antenna'],
+      'atu power', 'loop antenna', 'db reports', 'comments', 'reports to comments'],
   },
   {
     id: 'jt65',
@@ -336,7 +336,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Alerts',
     tab: 'spots',
     keywords: ['alert', 'notify', 'my call', 'cq', 'new dxcc', 'new grid', 'rare', 'watch list',
-      'wanted', 'sound'],
+      'wanted', 'sound', 'lotw', 'confirm', 'confirmation', 'confirm tier'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------

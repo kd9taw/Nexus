@@ -1744,6 +1744,20 @@ pub struct Settings {
     pub alert_cq: bool,
     /// Alert when a new (not previously heard) station is decoded.
     pub alert_new: bool,
+    /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
+    /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
+    /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
+    /// absent, and this matches it byte for byte). Opt-in, exactly as WSJT-X ships it.
+    #[serde(default)]
+    pub log_reports_to_comments: bool,
+    /// Show the "Confirm" tier — worked-but-unconfirmed award slots (LoTW confirmation
+    /// opportunities) — on the Needed board and as decode/roster chips. Default ON:
+    /// the tier ships lit and this is the opt-OUT for operators who chase contacts,
+    /// not confirmations (operator ask, 2026-09-01). `default = "default_on"`, not a
+    /// bare default: a settings.json from an older build must read TRUE, or the
+    /// upgrade would silently turn the tier off for everyone.
+    #[serde(default = "default_on")]
+    pub alert_confirm_tier: bool,
     /// Band scope for new-DXCC alerts: "off" | "hf" | "vhf" | "all". `alert_new`
     /// stays the master gate (backward compat); these scopes refine it per type.
     #[serde(default = "default_alert_scope_all")]
@@ -3311,6 +3325,8 @@ impl Default for Settings {
             psk_rx_auto_arm: true,
             rtty_rx_auto_arm: true,
             alert_my_call: true,
+            alert_confirm_tier: true, // the tier ships lit; the setting is the opt-out
+            log_reports_to_comments: false, // WSJT-X parity: dBtoComments defaults false
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
             blocked_calls: Vec::new(),

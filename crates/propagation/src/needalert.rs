@@ -91,6 +91,22 @@ impl NeedTag {
     }
 }
 
+/// Strip the Confirm tier from a ranked alert list — the "show LoTW confirmation
+/// opportunities" setting's OFF path (`settings.alert_confirm_tier`, default on).
+///
+/// Tag-level, not row-level, on purpose: a station that is BOTH a new band and a
+/// confirmation opportunity keeps its row (the new band is still news) and only loses
+/// the Confirm chip; a station that was ONLY a confirmation opportunity loses its row
+/// entirely. Runs on the ranked list BEFORE the command layer appends the
+/// Dxped/POTA/SOTA chips, which ride award rows and must not keep a row alive that
+/// the operator asked not to see.
+pub fn strip_confirm_tier(alerts: &mut Vec<NeedAlert>) {
+    for a in alerts.iter_mut() {
+        a.tags.retain(|t| *t != NeedTag::Confirm);
+    }
+    alerts.retain(|a| !a.tags.is_empty());
+}
+
 /// A heard station to score — a callsign plus the band/mode it's heard on, and the
 /// exact spot frequency when known (cluster/RBN spots carry one; band-level reception
 /// geometry does not).
@@ -2953,5 +2969,47 @@ mod tests {
         assert_eq!(near_me_radius_km(Band::B6), 250.0);
         assert_eq!(near_me_radius_km(Band::B4), 250.0);
         assert_eq!(near_me_radius_km(Band::B20), 1500.0);
+    }
+
+    /// The "show LoTW confirmation opportunities" opt-out: tag-level, so a station that
+    /// is news for another reason keeps its row and only loses the Confirm chip, while a
+    /// confirmation-only row disappears. The distinction is the whole setting — dropping
+    /// mixed rows would hide genuinely new bands, keeping confirm-only rows would ignore
+    /// the operator's choice.
+    #[test]
+    fn stripping_confirm_removes_chips_but_only_confirm_only_rows() {
+        fn a(call: &str, tags: Vec<NeedTag>) -> NeedAlert {
+            NeedAlert {
+                call: call.into(),
+                entity: "Test".into(),
+                band: "20m".into(),
+                zone: 5,
+                priority: tags.first().map(|t| t.tier()).unwrap_or(0),
+                headline: String::new(),
+                mode: "Digital".into(),
+                tags,
+                freq_mhz: None,
+                admitted_at: None,
+                evidence: None,
+                grid_rarity: None,
+            }
+        }
+        let mut alerts = vec![
+            a("K1NEW", vec![NeedTag::NewBand, NeedTag::Confirm]),
+            a("K2CFM", vec![NeedTag::Confirm]),
+            a("K3ENT", vec![NeedTag::NewEntity]),
+        ];
+        strip_confirm_tier(&mut alerts);
+        let calls: Vec<&str> = alerts.iter().map(|x| x.call.as_str()).collect();
+        assert_eq!(
+            calls,
+            vec!["K1NEW", "K3ENT"],
+            "the confirm-only row must go; the mixed and unrelated rows must stay"
+        );
+        assert!(
+            alerts.iter().all(|x| !x.tags.contains(&NeedTag::Confirm)),
+            "a Confirm chip survived the strip"
+        );
+        assert_eq!(alerts[0].tags, vec![NeedTag::NewBand]);
     }
 }

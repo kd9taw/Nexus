@@ -13206,6 +13206,7 @@ async fn get_need_alerts(
     let snap = eng.snapshot();
     // Operator "wanted" watch list (W1.5) — captured before the lock drops.
     let wanted_calls = eng.settings().wanted_calls.clone();
+    let confirm_tier = eng.settings().alert_confirm_tier;
     // License class for the privilege gate below — a station on a frequency the operator may not
     // transmit to is not a "need". Open (non-US) short-circuits tx_allowed to true, so no gate.
     let license_class = eng.settings().license_class;
@@ -13314,6 +13315,13 @@ async fn get_need_alerts(
         }
     }
     let mut alerts = propagation::rank_needs(&heard, &needs, &needs.slots());
+    // The Confirm (worked-but-unconfirmed / LoTW opportunity) tier is opt-out. This is
+    // the ONE seam both surfaces share — the Needed board and the decode/roster chips
+    // are all views over this list — and it runs BEFORE the DXped/POTA/SOTA appends so
+    // an appended chip cannot keep alive a row the operator asked not to see.
+    if !confirm_tier {
+        propagation::strip_confirm_tier(&mut alerts);
+    }
     // Never alert on the operator's own call (their PSKR "heard me" echoes can
     // otherwise surface it as a phantom row).
     let me_up = snap.mycall.to_uppercase();

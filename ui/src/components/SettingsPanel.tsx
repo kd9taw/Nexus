@@ -5945,6 +5945,24 @@ export function SettingsPanel({
 
                 <div className="settings-field">
                   <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.digital.reportsToComments.label')}
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.logReportsToComments}
+                      className={`toggle${form.logReportsToComments ? ' on' : ''}`}
+                      onClick={() => updateBool('logReportsToComments', !form.logReportsToComments)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">{t('settings.digital.reportsToComments.hint')}</span>
+                </div>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
                     <span className="settings-label">{t('settings.digital.preferRrr.label')}</span>
                     <button
                       type="button"
@@ -7694,6 +7712,22 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.alerts.myCall.hint')}</span>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.alerts.confirmTier.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.alertConfirmTier !== false}
+                    className={`toggle${form.alertConfirmTier !== false ? ' on' : ''}`}
+                    onClick={() => updateBool('alertConfirmTier', form.alertConfirmTier === false)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.confirmTier.hint')}</span>
               </div>
 
               <div className="settings-field">

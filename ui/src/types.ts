@@ -2995,6 +2995,12 @@ export interface Settings {
   alertCq: boolean
   /** Alert when a station not heard before this session appears. */
   alertNew: boolean
+  /** Show the worked-but-unconfirmed "Confirm" tier (LoTW confirmation opportunities)
+   *  on the Needed board and the decode/roster chips. Ships ON; this is the opt-out. */
+  alertConfirmTier?: boolean
+  /** WSJT-X's "dB reports to comments": the logged QSO's COMMENT carries
+   *  "<mode>  Sent: <rpt>  Rcvd: <rpt>". Opt-in, exactly as WSJT-X ships it. */
+  logReportsToComments?: boolean
   /** Band scope for new-DXCC alerts: 'off' | 'hf' | 'vhf' | 'all' (alertNew stays the master). */
   alertDxccBands: string
   /** Band scope for plain new-grid alerts. Default 'vhf' — grid chasing is VHF-centric. */
