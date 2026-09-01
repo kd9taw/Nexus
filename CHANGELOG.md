@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **macOS: CAT works again on a Mac without Homebrew.** 1.10.0 fixed the app not finding
+  the Hamlib it ships (#190) — and the copy it then found was broken on exactly the Macs
+  the bundling exists for: the bundled Hamlib library still looked for Homebrew's libusb
+  at its absolute Homebrew path, so on a Mac without it the rig tools died on launch and
+  Test CAT reported the rig never answered at any speed. 1.9.2 had worked on the same
+  machines only because it never found the bundled tools and quietly used a Hamlib already
+  installed there. Three fixes: the shipped library now points at the libusb shipped
+  beside it; the release check now sweeps every shipped binary for paths that would not
+  exist on an operator's Mac (it had checked only the one binary that was already
+  correct); and a bundled tool that cannot start no longer stops Nexus from falling back
+  to a Hamlib already on the machine. From two macOS field reports, an IC-756PROIII and
+  an IC-7300 — both radios are fine; neither was ever asked anything.
+
 - **Linux: the GStreamer warning at startup is gone, and RX capture gets more slack.**
   The AppImage now bundles GStreamer's plugin-loader helper and points the app at it, so
   the "External plugin loader failed" warning no longer appears (the alert tones already

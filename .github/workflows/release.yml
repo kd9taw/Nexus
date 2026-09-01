@@ -526,6 +526,23 @@ jobs:
           # It also has to RUN from where it lands — a wrong install-name or a missing dylib
           # looks identical to a working build until a user double-clicks.
           "$hl/rigctld" --version || { echo "bundled rigctld will not run"; exit 1; }
+          # …AND RUNNING HERE PROVES LESS THAN IT LOOKS: this runner has Homebrew, so an
+          # absolute /opt/homebrew/... path baked into any shipped Mach-O resolves perfectly
+          # in CI and dies on an operator's Mac. That is how the 1.10.0 CAT regression
+          # shipped — the four tools were repointed to @rpath but libhamlib.4.dylib still
+          # named Homebrew's libusb, and dyld killed every bundled tool before main on any
+          # Mac without it. Sweep EVERY Mach-O in the shipped .app: only @rpath/@loader_path
+          # or genuine system libraries. Per-file positive control: a real Mach-O always
+          # links libSystem, so a scan that cannot see it is reading nothing.
+          for f in "$hl"/rigctld "$hl"/rigctl "$hl"/rotctld "$hl"/rotctl "$hl"/*.dylib; do
+            [ -f "$f" ] || continue
+            deps=$(otool -L "$f")
+            printf '%s\n' "$deps" | grep -q '/usr/lib/libSystem.B.dylib' \
+              || { echo "otool read no dependencies from $f"; exit 1; }
+            bad=$(printf '%s\n' "$deps" | tail -n +2 | awk '{print $1}' \
+                  | grep -vE '^@rpath/|^@loader_path/|^/usr/lib/|^/System/' || true)
+            [ -z "$bad" ] || { echo "$f links outside the bundle — dead on a Mac without those paths:"; echo "$bad"; exit 1; }
+          done
           mkdir -p out
           ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           cp "$dmg" "out/Nexus_${ver}_aarch64.dmg"

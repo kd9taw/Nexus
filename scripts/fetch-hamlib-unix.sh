@@ -178,7 +178,11 @@ if [ "$HOST" = linux ]; then
   hostlib=$(ldd "$DEST/rigctld" 2>/dev/null | awk -v d="$dep" '$1==d {print $3}' || true)
 else
   dep=libusb-1.0.0.dylib
-  hostlib=$(otool -L "$DEST/rigctld" 2>/dev/null | awk '/libusb/ {print $1; exit}' || true)
+  # Probe the TOOLS AND THE LIBRARY: otool -L lists direct dependencies only (unlike ldd,
+  # which is transitive), and whether libusb is linked by the tools or only by libhamlib
+  # itself varies by Hamlib version — 4.7.1's tools carry it, the Linux build's don't.
+  hostlib=$({ otool -L "$DEST/rigctld"; otool -L "$DEST/$soname"; } 2>/dev/null \
+            | awk '$1 !~ /^@/ && $1 ~ /libusb/ {print $1; exit}' || true)
 fi
 if [ -n "${hostlib:-}" ] && [ -f "$hostlib" ]; then
   cp -L "$hostlib" "$DEST/$dep"
@@ -189,8 +193,17 @@ if [ -n "${hostlib:-}" ] && [ -f "$hostlib" ]; then
   # USB-attached rig fails on exactly the machines that never had brew — i.e. the ones this
   # whole change exists to serve.
   if [ "$HOST" = macos ]; then
-    for f in "${BINS[@]}"; do
-      install_name_tool -change "$hostlib" "@rpath/$dep" "$DEST/$f" 2>/dev/null || true
+    # ⚠️ "${BINS[@]}" AND "$soname" — THE LIBRARY CARRIES THE REFERENCE TOO, and it is the
+    # one that shipped broken: 1.10.0 repointed the four tools and left libhamlib.4.dylib
+    # still naming /opt/homebrew/opt/libusb/... — resolvable on every CI runner (brew is
+    # right there, so the release gate's `rigctld --version` stayed green) and absent on an
+    # operator's Mac without Homebrew's libusb, where dyld killed rigctld AND every one-shot
+    # rigctl baud-ladder rung before main. That is the mac 1.10.0 "rig never answered at any
+    # speed" CAT regression. The recorded path is read per file: it is a per-file load
+    # command, not a global.
+    for f in "${BINS[@]}" "$soname"; do
+      old=$(otool -L "$DEST/$f" 2>/dev/null | awk '$1 !~ /^@/ && $1 ~ /libusb/ {print $1; exit}' || true)
+      [ -n "${old:-}" ] && install_name_tool -change "$old" "@rpath/$dep" "$DEST/$f" 2>/dev/null || true
     done
     install_name_tool -id "@rpath/$dep" "$DEST/$dep" 2>/dev/null || true
   fi
@@ -253,17 +266,31 @@ else
   # The macOS equivalent, and it catches a class `--version` never can. On the RUNNER a
   # Homebrew path baked into the binary resolves perfectly — brew is right there. On the
   # operator's Mac it does not exist, which is the entire population this change is for. So
-  # assert every dependency is either OURS (@rpath) or a genuine system library.
-  bad=$(otool -L "$DEST/rigctld" | tail -n +2 | awk '{print $1}' \
-        | grep -vE '^@rpath/|^/usr/lib/|^/System/' || true)
-  if [ -n "$bad" ]; then
-    {
-      echo "Staged rigctld depends on paths that will not exist on an operator's Mac:"
-      echo "$bad" | sed 's/^/  /'
-      echo "Every dependency must be @rpath/… (bundled beside it) or a system library."
-    } >&2
-    exit 1
-  fi
+  # assert every dependency is either OURS (@rpath) or a genuine system library —
+  #
+  # — FOR EVERY STAGED MACH-O, NOT JUST rigctld. The first version of this check read
+  # rigctld alone and passed while libhamlib.4.dylib — the library rigctld loads — still
+  # named /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib: it verified the already-repointed
+  # half against itself, and 1.10.0 shipped mac CAT that dyld killed before main on any Mac
+  # without Homebrew's libusb (a bad path ANYWHERE in the load chain kills the tool). Each
+  # file also carries a positive control: a real Mach-O always links libSystem, so a scan
+  # that cannot see it is reading nothing and its clean verdict would be the broken-check lie.
+  for f in "${BINS[@]/#/$DEST/}" "$DEST/$soname" "$DEST"/libusb-*.dylib; do
+    [ -f "$f" ] || continue
+    deps=$(otool -L "$f" 2>/dev/null || true)
+    printf '%s\n' "$deps" | grep -q '/usr/lib/libSystem.B.dylib' || {
+      echo "otool read no dependencies from $f — cannot verify the bundle" >&2; exit 1; }
+    bad=$(printf '%s\n' "$deps" | tail -n +2 | awk '{print $1}' \
+          | grep -vE '^@rpath/|^@loader_path/|^/usr/lib/|^/System/' || true)
+    if [ -n "$bad" ]; then
+      {
+        echo "Staged $(basename "$f") depends on paths that will not exist on an operator's Mac:"
+        echo "$bad" | sed 's/^/  /'
+        echo "Every dependency must be @rpath/… (bundled beside it) or a system library."
+      } >&2
+      exit 1
+    fi
+  done
 fi
 if ! "$DEST/rigctld" --version >/dev/null 2>&1; then
   {

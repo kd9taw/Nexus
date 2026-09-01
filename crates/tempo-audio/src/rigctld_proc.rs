@@ -1479,6 +1479,38 @@ fn find_bundled(tool: &str) -> Option<std::ffi::OsString> {
     find_bundled_in(dir, &name, tool)
 }
 
+/// Admit a bundled candidate only if it can actually RUN — existence is not resolution.
+///
+/// ⚠️ WHY — the mac 1.10.0 CAT regression. "Found the bundled copy" SUPPRESSES the
+/// PATH/[`HAMLIB_SEARCH_DIRS`] fallback, so a bundled binary that dies before `main` costs
+/// more than nothing: it silently discards the operator's own working Hamlib. Concretely:
+/// fetch-hamlib-unix.sh repointed the libusb reference in the four TOOLS but not in
+/// libhamlib.4.dylib itself, so the shipped library still named
+/// /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib — present on every CI runner (the #190
+/// release gate ran `rigctld --version` there and stayed green) and absent on a Mac that
+/// never installed Homebrew's libusb, where dyld killed rigctld AND every one-shot rigctl
+/// ladder rung with SIGABRT before `main`. 1.9.2 had worked on the same machine because the
+/// pre-#190 resolver never FOUND the bundled tools and fell through to the operator's
+/// brew/MacPorts copy; #190 made it find them, and existence-only resolution turned a
+/// packaging defect into "the rig never answered at any speed". PATH and search-dir
+/// candidates have cleared [`runs_ok`] since 2026-08-13 for exactly this reason; this closes
+/// the same hole for the bundled branch. (Unix-only by construction, like `runs_ok`: the
+/// failure class — an absolute install-name into a package manager's prefix — does not exist
+/// in PE loading, and Windows keeps its existence-only resolution untouched.)
+#[cfg(unix)]
+fn bundled_if_runnable(tool: &str, p: std::ffi::OsString) -> Option<std::ffi::OsString> {
+    if runs_ok(&p) {
+        return Some(p);
+    }
+    crate::civ::diag::note(&format!(
+        "{tool}: the bundled copy at {} cannot run (killed by a signal — typically a library \
+         it needs is missing or unloadable); trying PATH and the package-manager directories \
+         instead",
+        p.to_string_lossy()
+    ));
+    None
+}
+
 /// Locate the `rigctld` binary. Prefers one **bundled next to the app** — the
 /// Windows installer ships Hamlib under the install dir (with its DLLs), so CAT
 /// works with no separate Hamlib install — then whatever `rigctld` the process's own `PATH`
@@ -1487,15 +1519,18 @@ fn find_bundled(tool: &str) -> Option<std::ffi::OsString> {
 /// `Command` the bare name. Launching the bundled exe by full path lets Windows resolve its
 /// co-located DLLs (libhamlib-4.dll etc.) from the exe's own directory.
 fn resolve_rigctld() -> std::ffi::OsString {
-    if let Some(p) = find_bundled("rigctld") {
-        return p;
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rigctld").and_then(|p| bundled_if_runnable("rigctld", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rigctld")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rigctld") {
+            return p;
+        }
         std::ffi::OsString::from("rigctld")
     }
 }
@@ -1579,15 +1614,18 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
 /// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), then the same
 /// [`HAMLIB_SEARCH_DIRS`] fallback, then PATH — same resolution as [`resolve_rigctld`].
 fn resolve_rotctld() -> std::ffi::OsString {
-    if let Some(p) = find_bundled("rotctld") {
-        return p;
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rotctld").and_then(|p| bundled_if_runnable("rotctld", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rotctld")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rotctld") {
+            return p;
+        }
         std::ffi::OsString::from("rotctld")
     }
 }
@@ -1790,15 +1828,18 @@ pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
 /// headless `cargo clippy --workspace --all-targets -- -D warnings` CI job fails it as dead code.
 #[cfg(feature = "serial")]
 pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
-    if let Some(p) = find_bundled("rigctl") {
-        return p;
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rigctl").and_then(|p| bundled_if_runnable("rigctl", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rigctl")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rigctl") {
+            return p;
+        }
         std::ffi::OsString::from("rigctl")
     }
 }
@@ -2158,6 +2199,41 @@ mod tests {
             "a path that cannot be spawned is not usable"
         );
 
+        for p in [picky, aborts] {
+            if let Some(d) = p.parent() {
+                let _ = std::fs::remove_dir_all(d);
+            }
+        }
+    }
+
+    /// Repro for the mac 1.10.0 CAT regression: a BUNDLED tool that dies by signal — how
+    /// `dyld` reports an unloadable library, and exactly how the shipped 1.10.0 tools died on
+    /// a Mac without Homebrew's libusb (libhamlib.4.dylib still named
+    /// /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib) — must NOT win the resolution, because
+    /// "found the bundled copy" suppresses the PATH/package-dir fallback that would have found
+    /// the operator's own working Hamlib, the one 1.9.2 was happily using. And the other
+    /// verdict matters as much: a candidate that merely exits non-zero for `--version` still
+    /// RUNS (the 2026-08-13 PATH-branch regression class) and must be kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_bundled_tool_that_dies_by_signal_is_skipped_not_resolved() {
+        let aborts = stub_script("bundled-aborts", "#!/bin/sh\nkill -ABRT $$\n");
+        assert_eq!(
+            bundled_if_runnable("rigctld", aborts.clone().into_os_string()),
+            None,
+            "signal death is the unloadable-library signature; admitting this candidate \
+             suppresses the fallback that finds a working Hamlib on the same machine"
+        );
+        let picky = stub_script(
+            "bundled-picky",
+            "#!/bin/sh\n[ \"$1\" = \"-vvv\" ] || exit 9\n",
+        );
+        assert_eq!(
+            bundled_if_runnable("rigctld", picky.clone().into_os_string()).as_deref(),
+            Some(picky.as_os_str()),
+            "a nonzero exit for --version still runs; rejecting it would discard a \
+             perfectly good bundled copy"
+        );
         for p in [picky, aborts] {
             if let Some(d) = p.parent() {
                 let _ = std::fs::remove_dir_all(d);
