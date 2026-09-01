@@ -22761,3 +22761,14 @@ tr.sel .aprs-sym {
   place-items: center;
   color: var(--text-faint);
 }
+/* Wall-display geometry: slightly narrower rails give the center cell the width the
+   room is actually looking at. */
+.tv-app {
+  --cn-rail: 264px;
+}
+/* The roster hint invites an action this page cannot take — the read-only view never
+   has decoded stations, by design (the module threat model), so "decoded stations
+   appear here" is a promise the TV cannot keep. Spots still draw; only the hint goes. */
+.tv-app .map-empty-hint {
+  display: none;
+}
