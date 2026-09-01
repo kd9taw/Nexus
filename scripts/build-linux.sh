@@ -221,6 +221,49 @@ else
   fi
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# GST-PLUGIN-SCANNER — the plugins' out-of-process loader, and the second half of the fix
+# above. GStreamer prefers to introspect plugins in a helper CHILD process (a bad plugin
+# then crashes the helper, not WebKit); the bundled relocatable libgstreamer derives the
+# helper's path relative to itself, inside the AppImage, where nothing ever put it. Field
+# report (the same Linux operator who confirmed the file-chooser fix):
+#     GStreamer-WARNING: External plugin loader failed ... You might need to set the
+#     GST_PLUGIN_SCANNER environment variable ...
+# GStreamer falls back to loading plugins IN-PROCESS — which is why the tones work anyway —
+# but the fallback trades away the crash isolation and scares every operator who reads the
+# log. Bundle the helper from the same machine that supplied the plugins, and point
+# GST_PLUGIN_SCANNER at it from the hook AppRun already sources.
+scanner_dst="$work/squashfs-root/usr/libexec/gstreamer-1.0"
+if [ -f "$scanner_dst/gst-plugin-scanner" ]; then
+  ok "the AppImage already carries gst-plugin-scanner — leaving it alone"
+else
+  scanner_src=""
+  for c in /usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner            /usr/libexec/gstreamer-1.0/gst-plugin-scanner            /usr/lib64/gstreamer-1.0/gst-plugin-scanner            /usr/lib/gstreamer-1.0/gst-plugin-scanner; do
+    [ -f "$c" ] && { scanner_src="$c"; break; }
+  done
+  if [ -z "$scanner_src" ]; then
+    warn "gst-plugin-scanner not found on this machine — the AppImage will keep GStreamer's"
+    warn "in-process fallback (works, but warns in the log and loses crash isolation)."
+  else
+    mkdir -p "$scanner_dst"
+    cp "$scanner_src" "$scanner_dst/" && chmod +x "$scanner_dst/gst-plugin-scanner"
+    [ -x "$scanner_dst/gst-plugin-scanner" ]       || die "gst-plugin-scanner did not land executable — refusing to repack"
+    # The env var, in the hook AppRun sources (falling back to AppRun itself — it is a
+    # shell script). Idempotent: skip if some earlier run already added it.
+    hook="$work/squashfs-root/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+    [ -f "$hook" ] || hook="$work/squashfs-root/AppRun"
+    if grep -q "GST_PLUGIN_SCANNER" "$hook"; then
+      ok "GST_PLUGIN_SCANNER already exported in $(basename "$hook")"
+    else
+      printf '\nexport GST_PLUGIN_SCANNER="$APPDIR/usr/libexec/gstreamer-1.0/gst-plugin-scanner" # bundled helper — see build-linux.sh\n' >> "$hook"
+      # Positive control: the export must actually be in the file we ship.
+      grep -q 'GST_PLUGIN_SCANNER="\$APPDIR' "$hook"         || die "the GST_PLUGIN_SCANNER export did not reach $(basename "$hook") — refusing to repack"
+    fi
+    ok "bundled gst-plugin-scanner + exported GST_PLUGIN_SCANNER — the loader warning goes away"
+    repack_needed=1
+  fi
+fi
+
 if [ -e "$work/squashfs-root/usr/lib/libwayland-client.so.0" ]; then
   bold "Dropping the host-owned libwayland-client"
   rm -f "$work/squashfs-root/usr/lib/libwayland-client.so.0"

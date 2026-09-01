@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux: the GStreamer warning at startup is gone, and RX capture gets more slack.**
+  The AppImage now bundles GStreamer's plugin-loader helper and points the app at it, so
+  the "External plugin loader failed" warning no longer appears (the alert tones already
+  worked — the fallback it warned about was doing the job, minus its crash isolation).
+  Separately, the sound-card capture buffer on Linux now asks for about 100 ms of slack
+  instead of the driver's default few milliseconds: a busy desktop scheduling Nexus late
+  was overrunning the capture, and every overrun drops audio — which on FT8 is a torn
+  symbol and a lost decode, not just a log line. Windows and macOS are untouched. From a
+  Linux field report; the reduction in "buffer underrun or overrun" messages is the thing
+  to watch for.
+
 - **The phantom "is calling you" is gone.** Finishing an FT8 contact could pop
   "so-and-so is calling you" seconds later — about the station you had just worked, whose
   RR73 was the tail of your own QSO — and switching bands could do the same before a
