@@ -2728,9 +2728,9 @@ export const EN = {
   'settings.connectWeb.legend': 'Connect on a TV',
   'settings.connectWeb.label': 'Serve Connect on this network',
   'settings.connectWeb.hint':
-    'Opens a read-only page any browser on your network can view — a shack TV, a tablet, a phone. Nothing can be changed from it.',
+    'Serves the full Connect view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it.',
   'settings.connectWeb.exposes':
-    'While this is on, anyone on your network can see your callsign, grid square and band conditions. Your log, your needs board and the frequency you are on are never sent.',
+    'While this is on, anyone on your network can see your callsign, grid square and the propagation picture — including the callsigns of stations heard and spotted. Your log, your needs board and the frequency you are on are never sent.',
   'settings.connectWeb.aria.enable': 'Serve Connect on the local network',
   'settings.connectWeb.aria.disable': 'Stop serving Connect on the local network',
   'settings.connectWeb.port.label': 'Port',
@@ -3800,6 +3800,11 @@ export const EN = {
   'freq.channel.presets': '— Presets —',
   // A band this licence class cannot transmit on is still LISTED and still tunable — no
   // licence restricts receiving. The suffix says what you will and will not be able to do.
+  // ---- The TV page's chrome (src/tv/ConnectTv.tsx — the LAN-served full Connect view).
+  'tv.readonly': 'read-only',
+  'tv.noLink': 'no link to Nexus',
+  'tv.stale': 'data {{min}} min old',
+  'tv.waiting': 'Waiting for the first propagation picture from Nexus…',
   'freq.channel.rxOnly': 'receive only',
   'freq.channel.rxOnly.title':
     'Your licence class has no transmit privileges on this band. You can tune here and listen; transmitting will be refused.',

@@ -109,6 +109,7 @@ const MIGRATED = [
   'propViz.ts',
   'openingAlert.ts',
   'stormAlert.ts',
+  'tv/ConnectTv.tsx',
   'components/DxpeditionsView.tsx',
   'features/dxpedChase.ts',
   'features/dxpedAlarm.ts',

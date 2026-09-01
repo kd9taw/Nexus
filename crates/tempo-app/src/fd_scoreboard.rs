@@ -141,6 +141,14 @@ pub trait BoardSource: Send + Sync {
     fn base(&self) -> &'static str {
         "scoreboard"
     }
+    /// Extra GET/HEAD routes beyond page/data/meta — the full Connect page's bundled
+    /// assets and its read-only RPC. Consulted AFTER the method gate (a POST is 405
+    /// before this is ever asked, so an implementation cannot accidentally accept a
+    /// write) and BEFORE the standard match, with the RAW path — query string intact,
+    /// because an RPC's arguments ride in it. `None` falls through to page/data/meta.
+    fn extra(&self, _raw_path: &str) -> Option<Response> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -701,13 +709,17 @@ pub fn build_meta(d: &FdBoardData, now_unix: u64) -> String {
 // HTTP: parse → route → respond (GET/HEAD only)
 // ---------------------------------------------------------------------------
 
-struct Response {
-    status: u16,
-    reason: &'static str,
-    content_type: &'static str,
-    body: String,
+pub struct Response {
+    pub status: u16,
+    pub reason: &'static str,
+    /// Runtime string, not `&'static`: the embedded-asset resolver reports each file's
+    /// own mime type, which only exists at runtime.
+    pub content_type: String,
+    /// Bytes, not `String` — the full Connect page serves the app's own bundled assets,
+    /// and an image or font is not UTF-8.
+    pub body: Vec<u8>,
     /// `Allow` header for 405s.
-    allow: Option<&'static str>,
+    pub allow: Option<&'static str>,
 }
 
 /// Route one parsed request. Pure — the whole routing table is unit-testable
@@ -718,10 +730,14 @@ fn route(method: &str, path: &str, source: &dyn BoardSource) -> Response {
         return Response {
             status: 405,
             reason: "Method Not Allowed",
-            content_type: "text/plain; charset=utf-8",
-            body: "GET and HEAD only\n".to_string(),
+            content_type: "text/plain; charset=utf-8".into(),
+            body: b"GET and HEAD only\n".to_vec(),
             allow: Some("GET, HEAD"),
         };
+    }
+    // The hook sees the RAW path (query intact); the standard match below strips it.
+    if let Some(resp) = source.extra(path) {
+        return resp;
     }
     let path = path.split('?').next().unwrap_or(path);
     let base = source.base();
@@ -735,8 +751,8 @@ fn route(method: &str, path: &str, source: &dyn BoardSource) -> Response {
             return Response {
                 status: 404,
                 reason: "Not Found",
-                content_type: "text/plain; charset=utf-8",
-                body: "not found\n".to_string(),
+                content_type: "text/plain; charset=utf-8".into(),
+                body: b"not found\n".to_vec(),
                 allow: None,
             }
         }
@@ -744,8 +760,8 @@ fn route(method: &str, path: &str, source: &dyn BoardSource) -> Response {
     Response {
         status: 200,
         reason: "OK",
-        content_type,
-        body,
+        content_type: content_type.into(),
+        body: body.into_bytes(),
         allow: None,
     }
 }
@@ -754,8 +770,8 @@ fn bad_request() -> Response {
     Response {
         status: 400,
         reason: "Bad Request",
-        content_type: "text/plain; charset=utf-8",
-        body: "bad request\n".to_string(),
+        content_type: "text/plain; charset=utf-8".into(),
+        body: b"bad request\n".to_vec(),
         allow: None,
     }
 }
@@ -820,17 +836,18 @@ fn write_response(stream: &mut TcpStream, resp: &Response, head_only: bool) {
         resp.reason,
         resp.content_type,
         resp.body.len()
-    );
+    )
+    .into_bytes();
     if let Some(allow) = resp.allow {
-        out.push_str("Allow: ");
-        out.push_str(allow);
-        out.push_str("\r\n");
+        out.extend_from_slice(b"Allow: ");
+        out.extend_from_slice(allow.as_bytes());
+        out.extend_from_slice(b"\r\n");
     }
-    out.push_str("\r\n");
+    out.extend_from_slice(b"\r\n");
     if !head_only {
-        out.push_str(&resp.body);
+        out.extend_from_slice(&resp.body);
     }
-    let _ = stream.write_all(out.as_bytes());
+    let _ = stream.write_all(&out);
     let _ = stream.flush();
 }
 
@@ -1349,13 +1366,19 @@ mod tests {
             let r = route("GET", path, &s);
             assert_eq!(r.status, 200, "{path}");
             assert!(r.content_type.starts_with("text/html"));
-            assert_eq!(r.body, SCOREBOARD_PAGE);
+            assert_eq!(r.body, SCOREBOARD_PAGE.as_bytes());
         }
         let r = route("GET", "/scoreboard/data.json", &s);
-        assert_eq!((r.status, r.body.as_str()), (200, r#"{"rev":1}"#));
+        assert_eq!(
+            (r.status, String::from_utf8_lossy(&r.body).as_ref()),
+            (200, r#"{"rev":1}"#)
+        );
         assert_eq!(r.content_type, "application/json");
         let r = route("GET", "/scoreboard/meta.json?ts=123", &s);
-        assert_eq!((r.status, r.body.as_str()), (200, r#"{"sections":[]}"#));
+        assert_eq!(
+            (r.status, String::from_utf8_lossy(&r.body).as_ref()),
+            (200, r#"{"sections":[]}"#)
+        );
         for path in ["/nope", "/scoreboard/other.json", "/../etc/passwd"] {
             assert_eq!(route("GET", path, &s).status, 404, "{path}");
         }

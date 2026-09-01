@@ -69,5 +69,14 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      // Two entries: the desktop app, and the TV page the LAN server hands to a
+      // browser (connect_web.rs serves `connect-tv.html` at `/`). Same components,
+      // same chunks — a Connect improvement reaches the TV in the same build.
+      input: {
+        main: 'index.html',
+        tv: 'connect-tv.html',
+      },
+    },
   },
 })

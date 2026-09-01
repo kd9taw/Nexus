@@ -57,7 +57,12 @@ function InsightRow({
   ins: Insight
   onBandClick?: (band: string) => void
 }) {
-  const Icon = KIND_ICON[ins.kind]
+  // ?? Activity, not a bare lookup: `kind` arrives from the backend, and an unknown
+  // one (version skew — a TV page polling a newer or older Nexus is exactly where it
+  // happens) made `Icon` undefined, which crashed the WHOLE view with React #130.
+  // Found by pointing a browser at the TV page with a mismatched payload: one bad row
+  // black-screened everything. A generic icon is honest; a dead screen is not.
+  const Icon = KIND_ICON[ins.kind] ?? Activity
   const clickable = !!ins.band && !!onBandClick
   return (
     <div

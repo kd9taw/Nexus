@@ -6,10 +6,14 @@
 //! the same [`BoardSource`] trait, on its own base path and its own port. Nothing new
 //! is added to the dependency tree and nothing here can reach an engine.
 //!
-//! **Read-only by construction.** The serve thread is handed a snapshot provider and
-//! nothing else — there is no path from an inbound request to a setter, to CAT, or to
-//! the transmit path. The page has no form, no script that posts, and no endpoint that
-//! accepts anything but GET and HEAD.
+//! **Read-only by construction.** The transport accepts nothing but GET and HEAD, and
+//! what those can reach is the summary snapshot, the app's own bundled UI files, and
+//! the RPC gated by [`RPC_ALLOWLIST`] — a hand-written list of read-only
+//! public-weather commands, enforced here (tested with a dispatcher that panics if a
+//! non-allowlisted name reaches it) and re-checked in src-tauri's dispatcher, whose
+//! arms are each hand-written: there is no generic invoke bridge for the list to
+//! accidentally widen into. No path from an inbound request reaches a setter, CAT, or
+//! the transmit path.
 //!
 //! ⚠️ **THIS EXPOSES THE STATION ON THE LAN AND THE SETTING MUST SAY SO.** The Field
 //! Day scoreboard is justified partly because a contest log is already broadcast in
@@ -175,6 +179,218 @@ impl<F: Fn() -> Option<ConnectBoardData> + Send + Sync> BoardSource for CachedCo
     }
 }
 
+// ---------------------------------------------------------------------------
+// The FULL Connect page — the app's own UI served to a browser
+// ---------------------------------------------------------------------------
+
+/// Commands a LAN browser may invoke. **THIS LIST IS THE SECURITY BOUNDARY** for the
+/// full page, and it is enforced in [`FullConnect::extra`] — in this crate, where a
+/// unit test can drive the route with a fake dispatcher and prove a name outside the
+/// list never reaches it. The dispatcher in src-tauri re-checks as defence in depth.
+///
+/// ⚠️ RULES FOR ADDING A NAME, all three, no exceptions:
+///   1. Read-only: the command must not mutate engine state, settings, or credentials,
+///      must not touch CAT, and must have no path to the transmit gate.
+///   2. No operating state: nothing that carries the log, the needs board, the dial
+///      frequency, transmit state, or any credential — the module header's threat
+///      model, and `no_sensitive_command_is_allowlisted` pins the known names.
+///   3. Public-weather data only: propagation, space weather, satellites, parks,
+///      contests — the picture of the IONOSPHERE, not of the STATION.
+pub const RPC_ALLOWLIST: &[&str] = &[
+    "get_propagation",     // the nowcast: advisory, openings, spots, space wx, insights
+    "get_kc2g_muf",        // ionosonde MUF stations (map overlay)
+    "get_space_wx_scales", // NOAA R/S/G scales + alerts
+    "get_xray_now",        // the 60 s flare fast lane (map D-RAP layer)
+    "get_aurora",          // OVATION oval (map layer)
+    "get_pca",             // polar-cap absorption (map layer)
+    "get_satellites",      // satellite positions (map layer)
+    "get_ota_map_spots",   // POTA activators (map layer)
+    "get_kp_forecast",     // the three-day outlook pane
+    "get_band_outlook",    // per-band outlook pane
+    "get_path_outlook",    // outlook for a clicked spot
+    "get_getting_out",     // the getting-out pane
+    "get_dxped_windows",   // DXpedition windows pane
+    "get_openings_log",    // the openings history pane
+    "get_declination",     // magnetic declination for map bearings
+    "tv_station",          // callsign + grid ONLY (src-tauri builds it by hand)
+];
+
+/// What the src-tauri dispatcher returns for one RPC. `NotAllowed` exists so the
+/// defence-in-depth check over there is distinguishable from a command that ran and
+/// failed — the route turns both into errors, but differently (404 vs 500).
+pub enum RpcOutcome {
+    Ok(String),
+    NotAllowed,
+    Err(String),
+}
+
+/// Serves the app's own bundled UI plus the read-only RPC, wrapping a
+/// [`CachedConnect`] so `/connect/data.json` keeps answering (the simple summary
+/// page's feed, and the payload-shape test that guards it).
+///
+/// Both capabilities arrive as closures so this crate never depends on tauri: the
+/// asset closure wraps the embedded-asset resolver over in src-tauri, and the RPC
+/// closure wraps the hand-written command dispatcher there. **The allowlist check
+/// happens HERE, before the dispatcher is ever called** — a browser asking for a
+/// name outside [`RPC_ALLOWLIST`] gets a 404 from a route that provably (by test)
+/// never invoked anything.
+/// `path` (no leading slash) → (bytes, mime). `None` = no such asset.
+pub type AssetFn = std::sync::Arc<dyn Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sync>;
+/// `(command, args-json)` → outcome. Only ever called with allowlisted names.
+pub type RpcFn = std::sync::Arc<dyn Fn(&str, &str) -> RpcOutcome + Send + Sync>;
+
+pub struct FullConnect<F: Fn() -> Option<ConnectBoardData> + Send + Sync> {
+    inner: CachedConnect<F>,
+    assets: AssetFn,
+    rpc: RpcFn,
+}
+
+impl<F: Fn() -> Option<ConnectBoardData> + Send + Sync> FullConnect<F> {
+    pub fn new(provider: F, assets: AssetFn, rpc: RpcFn) -> Self {
+        Self {
+            inner: CachedConnect::new(provider),
+            assets,
+            rpc,
+        }
+    }
+}
+
+/// Minimal percent-decoding for the `args` query value. Only what an encoded JSON
+/// object needs; a malformed escape decays to the raw text, which then fails JSON
+/// parsing in the dispatcher loudly rather than half-decoding silently.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => {
+                let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(v) => {
+                        out.push(v);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+use crate::fd_scoreboard::Response;
+
+fn json_response(status: u16, reason: &'static str, body: String) -> Response {
+    Response {
+        status,
+        reason,
+        content_type: "application/json".into(),
+        body: body.into_bytes(),
+        allow: None,
+    }
+}
+
+impl<F: Fn() -> Option<ConnectBoardData> + Send + Sync> BoardSource for FullConnect<F> {
+    fn data(&self) -> String {
+        self.inner.data()
+    }
+    fn meta(&self) -> String {
+        self.inner.meta()
+    }
+    fn page(&self) -> &'static str {
+        // Fallback only: when the asset closure cannot produce the TV entry (a unit
+        // test, or a build with no embedded frontend) the simple summary still serves,
+        // so the URL never goes dark.
+        CONNECT_PAGE
+    }
+    fn base(&self) -> &'static str {
+        "connect"
+    }
+
+    /// The full page's routes. Reached only for GET/HEAD — the transport 405s
+    /// everything else before consulting this — with the RAW path (query intact).
+    fn extra(&self, raw_path: &str) -> Option<Response> {
+        let (path, query) = match raw_path.split_once('?') {
+            Some((p, q)) => (p, q),
+            None => (raw_path, ""),
+        };
+
+        // --- the read-only RPC ---
+        if let Some(cmd) = path.strip_prefix("/connect/rpc/") {
+            // ⚠️ THE GATE. A name outside the allowlist 404s here, and the test drives
+            // this route with a dispatcher that panics if called — so "never invoked"
+            // is proven, not asserted.
+            if !RPC_ALLOWLIST.contains(&cmd) {
+                return Some(json_response(
+                    404,
+                    "Not Found",
+                    format!("{{\"error\":\"'{}' is not served to the network\"}}", cmd),
+                ));
+            }
+            let args = query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("args="))
+                .map(percent_decode)
+                .unwrap_or_else(|| "null".to_string());
+            return Some(match (self.rpc)(cmd, &args) {
+                RpcOutcome::Ok(body) => json_response(200, "OK", body),
+                RpcOutcome::NotAllowed => json_response(
+                    404,
+                    "Not Found",
+                    "{\"error\":\"refused by the dispatcher\"}".into(),
+                ),
+                RpcOutcome::Err(e) => json_response(
+                    500,
+                    "Internal Server Error",
+                    serde_json::json!({ "error": e }).to_string(),
+                ),
+            });
+        }
+
+        // --- the TV entry and the bundled assets ---
+        let trimmed = path.trim_end_matches('/');
+        if trimmed.is_empty() || trimmed == "/connect" {
+            // The full page when the build carries it; None falls through to the
+            // simple summary via the standard route.
+            return (self.assets)("connect-tv.html").map(|(bytes, mime)| Response {
+                status: 200,
+                reason: "OK",
+                content_type: mime,
+                body: bytes,
+                allow: None,
+            });
+        }
+        // Keep the summary feed's paths on the standard route.
+        if trimmed == "/connect/data.json" || trimmed == "/connect/meta.json" {
+            return None;
+        }
+        // A browser that loaded the page at `/connect/` (trailing slash) resolves the
+        // page's relative asset URLs under `/connect/…` — same files, one directory
+        // deeper. Serve both spellings rather than telling that browser 404.
+        let rel = trimmed.trim_start_matches('/');
+        let rel = rel.strip_prefix("connect/").unwrap_or(rel);
+        (self.assets)(rel).map(|(bytes, mime)| Response {
+            status: 200,
+            reason: "OK",
+            content_type: mime,
+            body: bytes,
+            allow: None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,11 +503,200 @@ mod tests {
         }
     }
 
+    // ---- the full page ----
+
+    use std::sync::Arc;
+
+    fn full(
+        assets: impl Fn(&str) -> Option<(Vec<u8>, String)> + Send + Sync + 'static,
+        rpc: impl Fn(&str, &str) -> RpcOutcome + Send + Sync + 'static,
+    ) -> FullConnect<impl Fn() -> Option<ConnectBoardData> + Send + Sync> {
+        FullConnect::new(|| Some(data()), Arc::new(assets), Arc::new(rpc))
+    }
+
+    /// ⚠️ THE ALLOWLIST IS THE SECURITY BOUNDARY, so this drives the route with a
+    /// dispatcher that PANICS if invoked: "a non-allowlisted name never reaches the
+    /// dispatcher" is proven by execution, not asserted by reading the code.
+    #[test]
+    fn a_command_outside_the_allowlist_never_reaches_the_dispatcher() {
+        let s = full(
+            |_| None,
+            |cmd, _| panic!("dispatcher invoked for non-allowlisted '{cmd}'"),
+        );
+        for probe in [
+            "/connect/rpc/get_snapshot",
+            "/connect/rpc/get_settings",
+            "/connect/rpc/set_frequency",
+            "/connect/rpc/get_log",
+            "/connect/rpc/halt_tx",
+            "/connect/rpc/",
+        ] {
+            let r = s.extra(probe).expect("the rpc route must answer");
+            assert_eq!(r.status, 404, "{probe} did not 404");
+        }
+    }
+
+    /// The positive control for the test above: an allowlisted name DOES reach the
+    /// dispatcher, with its query args decoded.
+    #[test]
+    fn an_allowlisted_command_reaches_the_dispatcher_with_its_args() {
+        let s = full(
+            |_| None,
+            |cmd, args| {
+                assert_eq!(cmd, "get_path_outlook");
+                assert_eq!(args, r#"{"call":"KD9TAW"}"#);
+                RpcOutcome::Ok(r#"{"ok":true}"#.into())
+            },
+        );
+        let r = s
+            .extra("/connect/rpc/get_path_outlook?args=%7B%22call%22%3A%22KD9TAW%22%7D")
+            .expect("route must answer");
+        assert_eq!(r.status, 200);
+        assert_eq!(String::from_utf8_lossy(&r.body), r#"{"ok":true}"#);
+    }
+
+    /// ⚠️ THE NAMES THAT MUST NEVER APPEAR. Every command that carries the log, the
+    /// needs board, settings, credentials, the dial, or any write. If one of these is
+    /// ever added to RPC_ALLOWLIST this fails before the change ships.
+    #[test]
+    fn no_sensitive_command_is_allowlisted() {
+        const FORBIDDEN: &[&str] = &[
+            "get_snapshot",    // dial frequency, transmit state, the roster
+            "get_settings",    // ports, hosts, every knob
+            "get_log",         // the log
+            "get_log_stats",   // the log, aggregated
+            "get_need_alerts", // the needs board
+            "get_credentials_status",
+            "set_frequency",
+            "set_tx_enabled",
+            "halt_tx",
+        ];
+        for f in FORBIDDEN {
+            assert!(
+                !RPC_ALLOWLIST.contains(f),
+                "'{f}' is on the LAN allowlist — that is operating state or a write"
+            );
+        }
+        // Controls: the list is real and carries what the page needs.
+        assert!(RPC_ALLOWLIST.contains(&"get_propagation"));
+        assert!(RPC_ALLOWLIST.len() >= 10);
+        // And every name is read-shaped: no set_/clear_/start_/stop_ verbs.
+        for name in RPC_ALLOWLIST {
+            assert!(
+                !name.starts_with("set_")
+                    && !name.starts_with("clear_")
+                    && !name.starts_with("start_")
+                    && !name.starts_with("stop_"),
+                "'{name}' is verb-shaped like a write"
+            );
+        }
+    }
+
+    /// The TV entry serves at `/` when the build carries it, and the simple summary
+    /// keeps serving when it does not — the URL never goes dark.
+    #[test]
+    fn the_tv_entry_serves_at_root_with_a_summary_fallback() {
+        let with = full(
+            |p| {
+                (p == "connect-tv.html")
+                    .then(|| (b"<title>tv</title>".to_vec(), "text/html".to_string()))
+            },
+            |_, _| RpcOutcome::Err("unused".into()),
+        );
+        let r = with.extra("/").expect("root must serve the TV entry");
+        assert_eq!(r.status, 200);
+        assert_eq!(String::from_utf8_lossy(&r.body), "<title>tv</title>");
+
+        let without = full(|_| None, |_, _| RpcOutcome::Err("unused".into()));
+        assert!(
+            without.extra("/").is_none(),
+            "with no asset the hook must fall through to the summary page"
+        );
+        // …and the standard route serves the summary there (proven in the socket test).
+    }
+
+    /// The summary feed's own paths stay on the standard route even when an asset
+    /// closure exists — data.json is pinned by the payload-shape test and must not be
+    /// shadowed by a bundled file.
+    #[test]
+    fn the_summary_feed_is_never_shadowed() {
+        let s = full(
+            |_| Some((b"shadow".to_vec(), "text/plain".to_string())),
+            |_, _| RpcOutcome::Err("unused".into()),
+        );
+        assert!(s.extra("/connect/data.json").is_none());
+        assert!(s.extra("/connect/meta.json").is_none());
+    }
+
     /// It answers on its own base path, so its URLs do not claim to be a scoreboard.
     #[test]
     fn answers_on_the_connect_base() {
         let s = CachedConnect::new(|| Some(data()));
         assert_eq!(s.base(), "connect");
+    }
+
+    /// THE FULL PAGE, END TO END OVER A REAL SOCKET: the TV entry at `/`, its assets
+    /// at both path spellings, the RPC answering an allowlisted read, refusing an
+    /// operating-state command, and still refusing every write by method.
+    #[test]
+    fn the_full_page_serves_and_stays_read_only_over_a_real_socket() {
+        use std::io::{Read, Write};
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let source: Arc<dyn BoardSource> = Arc::new(FullConnect::new(
+            || Some(data()),
+            Arc::new(|p: &str| match p {
+                "connect-tv.html" => {
+                    Some((b"<title>Nexus Connect</title>".to_vec(), "text/html".into()))
+                }
+                "assets/tv-abc.js" => Some((b"console.log(1)".to_vec(), "text/javascript".into())),
+                _ => None,
+            }),
+            Arc::new(|cmd: &str, _args: &str| match cmd {
+                "get_kp_forecast" => RpcOutcome::Ok(r#"{"points":[]}"#.into()),
+                other => panic!("dispatcher reached with '{other}'"),
+            }),
+        ));
+        let sd = shutdown.clone();
+        let server =
+            std::thread::spawn(move || crate::fd_scoreboard::serve_until(listener, source, sd));
+
+        let talk = |req: &str| -> String {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(req.as_bytes()).unwrap();
+            let mut out = String::new();
+            let _ = s.read_to_string(&mut out);
+            out
+        };
+
+        // The TV entry at the bare host:port — what someone types into a browser.
+        let root = talk("GET / HTTP/1.1\r\nHost: tv\r\n\r\n");
+        assert!(root.starts_with("HTTP/1.1 200"), "root: {root:.60}");
+        assert!(root.contains("Nexus Connect"));
+
+        // Assets, at both spellings a browser can produce.
+        assert!(talk("GET /assets/tv-abc.js HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 200"));
+        assert!(talk("GET /connect/assets/tv-abc.js HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 200"));
+
+        // The RPC: an allowlisted read answers; operating state 404s; a write 405s.
+        let rpc = talk("GET /connect/rpc/get_kp_forecast HTTP/1.1\r\n\r\n");
+        assert!(rpc.starts_with("HTTP/1.1 200"), "rpc: {rpc:.60}");
+        assert!(rpc.contains(r#"{"points":[]}"#));
+        assert!(talk("GET /connect/rpc/get_snapshot HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 404"));
+        assert!(
+            talk("POST /connect/rpc/get_kp_forecast HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 405")
+        );
+
+        // The summary feed still answers beside the full page.
+        assert!(talk("GET /connect/data.json HTTP/1.1\r\n\r\n").contains("KD9TAW"));
+
+        shutdown.store(true, Ordering::Relaxed);
+        let _ = server.join();
     }
 
     /// END TO END OVER A REAL SOCKET. The unit tests above prove the payload; this

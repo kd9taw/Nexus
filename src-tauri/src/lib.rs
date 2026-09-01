@@ -16051,6 +16051,97 @@ fn build_connect_board(
     })
 }
 
+/// The app handle the TV page's closures read at call time. Set once in `.setup()`;
+/// before that, assets resolve to `None` (→ the summary page) and RPCs error.
+static TV_APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// One bundled frontend file, from the SAME embedded assets the desktop webview
+/// loads — nothing is read from disk and nothing can differ from the shipped UI.
+fn tv_asset(path: &str) -> Option<(Vec<u8>, String)> {
+    let app = TV_APP.get()?;
+    let resolver = app.asset_resolver();
+    let asset = resolver
+        .get(format!("/{path}"))
+        .or_else(|| resolver.get(path.to_string()))?;
+    Some((asset.bytes, asset.mime_type))
+}
+
+/// The read-only RPC dispatcher behind the TV page.
+///
+/// ⚠️ EVERY ARM IS HAND-WRITTEN — there is deliberately no generic "invoke any
+/// command" bridge, so what the LAN can reach is this list and nothing else, even if
+/// the allowlist check upstream were wrong. The allowlist in
+/// `tempo_app::connect_web::RPC_ALLOWLIST` gates first (and its tests prove a name
+/// off the list never reaches here); this match is defence in depth, and its
+/// `_` arm refuses.
+fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
+    use tempo_app::connect_web::RpcOutcome as O;
+    let Some(app) = TV_APP.get() else {
+        return O::Err("still starting up".into());
+    };
+    if !tempo_app::connect_web::RPC_ALLOWLIST.contains(&cmd) {
+        return O::NotAllowed;
+    }
+    let v: serde_json::Value = serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
+    fn ok<T: serde::Serialize>(r: Result<T, String>) -> O {
+        match r {
+            Ok(t) => match serde_json::to_string(&t) {
+                Ok(body) => O::Ok(body),
+                Err(e) => O::Err(e.to_string()),
+            },
+            Err(e) => O::Err(e),
+        }
+    }
+    tauri::async_runtime::block_on(async {
+        match cmd {
+            "get_propagation" => ok(get_propagation(
+                app.state(),
+                app.state(),
+                app.state(),
+                app.state(),
+                app.state(),
+                app.state(),
+                app.state(),
+            )
+            .await),
+            "get_kc2g_muf" => ok(get_kc2g_muf(app.state()).await),
+            "get_space_wx_scales" => ok(get_space_wx_scales(app.state()).await),
+            "get_xray_now" => ok(get_xray_now().await),
+            "get_aurora" => ok(get_aurora(app.state()).await),
+            "get_pca" => ok(get_pca(app.state(), app.state()).await),
+            "get_satellites" => ok(get_satellites(app.state()).await),
+            "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state())),
+            "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
+            "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
+            "get_path_outlook" => {
+                let grid = v.get("grid").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                ok(get_path_outlook(grid, app.state(), app.state()).await)
+            }
+            "get_getting_out" => ok(get_getting_out(app.state(), app.state()).await),
+            "get_dxped_windows" => {
+                let days = v.get("days").and_then(|x| x.as_u64()).map(|d| d as u32);
+                ok(get_dxped_windows(app.state(), app.state(), days).await)
+            }
+            "get_openings_log" => ok(Ok::<_, String>(get_openings_log())),
+            "get_declination" => ok(get_declination(app.state())),
+            // Callsign + grid ONLY — built by hand so the TV page never needs
+            // get_settings, which carries every knob the station has.
+            "tv_station" => {
+                let st = app.state::<SharedEngine>();
+                let eng = engine_lock(&st);
+                let s = eng.settings();
+                ok(Ok::<_, String>(serde_json::json!({
+                    "call": s.mycall,
+                    "grid": s.mygrid,
+                })))
+            }
+            // Allowlisted upstream but unhandled here = a wiring bug, not a browser
+            // asking for too much. Refuse rather than guess.
+            _ => O::Err(format!("'{cmd}' is allowlisted but has no dispatch arm")),
+        }
+    })
+}
+
 /// What the Settings row shows for the Connect web page: running?, the port, the URL
 /// to type into the TV, and the last bind error if it is not running.
 #[derive(Clone, serde::Serialize)]
@@ -19595,9 +19686,16 @@ pub fn run() {
                                 let eng = mgr_engine.clone();
                                 let prop = mgr_prop.clone();
                                 let kp = mgr_kp.clone();
+                                // The FULL page: the app's own bundled UI plus the
+                                // read-only RPC. Both closures read TV_APP at call
+                                // time, so a request in the first milliseconds before
+                                // setup() runs degrades to the summary page instead of
+                                // racing the handle.
                                 let source: Arc<dyn tempo_app::fd_scoreboard::BoardSource> =
-                                    Arc::new(tempo_app::connect_web::CachedConnect::new(
+                                    Arc::new(tempo_app::connect_web::FullConnect::new(
                                         move || build_connect_board(&eng, &prop, &kp),
+                                        Arc::new(tv_asset),
+                                        Arc::new(tv_rpc),
                                     ));
                                 let sd = shutdown.clone();
                                 std::thread::spawn(move || {
@@ -20097,6 +20195,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             if let Ok(res) = app.path().resource_dir() {
                 let _ = RESOURCE_DIR.set(res);
             }
+            // The TV page's asset + RPC closures read this at call time (see TV_APP).
+            let _ = TV_APP.set(app.handle().clone());
             // Probe the display's physical density HERE, on the main thread, where GDK is safe
             // to call. The frontend reads the cached answer through `display_metrics` and uses
             // it to seed the UI scale cap on a first launch only. No-op off Linux.

@@ -119,9 +119,35 @@ function mutatesCredentials(cmd: string): boolean {
   return /^set_[a-z0-9_]+_(password|key|token|code)$/.test(cmd) || /^clear_[a-z0-9_]+$/.test(cmd)
 }
 
-/** Invoke a backend command. Throws if the IPC bridge is unavailable. */
+/** The TV entry sets this to its RPC base ('/connect/rpc') before anything invokes.
+ *  ⚠️ Deliberately NOT consulted by `bridge()`/`isTauri()`: isTauri() answers "is the
+ *  desktop shell here", and desktop-only behaviour (DPI seeding, the external-link
+ *  interceptor) must stay off in a browser even when the RPC is reachable. */
+declare global {
+  interface Window {
+    __NEXUS_TV_RPC__?: string
+  }
+}
+
+/** Invoke over HTTP against the read-only LAN RPC — the TV page's transport. Same
+ *  command names and args as the desktop bridge; the server answers only the
+ *  allowlisted read-only set and 404s the rest, which surfaces here as a rejection
+ *  the callers' existing catch paths treat as "feed unavailable" — the same honest
+ *  degradation they already do offline. GET only: the server accepts nothing else. */
+async function httpInvoke<T>(base: string, cmd: string, args?: Record<string, unknown>): Promise<T> {
+  const qs = args === undefined ? '' : `?args=${encodeURIComponent(JSON.stringify(args))}`
+  const r = await fetch(`${base}/${cmd}${qs}`, { cache: 'no-store' })
+  if (!r.ok) throw new Error(`${cmd}: ${r.status} ${await r.text().catch(() => '')}`)
+  return (await r.json()) as T
+}
+
+/** Invoke a backend command. The desktop IPC bridge when present; the TV page's LAN
+ *  RPC when its entry declared one; otherwise a hard error — never fabricated data. */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const out = (await bridge()(cmd, args)) as T
+  const tv = typeof window !== 'undefined' ? window.__NEXUS_TV_RPC__ : undefined
+  const out = isTauri() ? ((await bridge()(cmd, args)) as T)
+    : tv ? await httpInvoke<T>(tv, cmd, args)
+    : ((await bridge()(cmd, args)) as T) // throws with the bridge's own message
   if (mutatesCredentials(cmd) && typeof window !== 'undefined') {
     window.dispatchEvent(new Event(CREDENTIALS_CHANGED))
   }
@@ -614,6 +640,13 @@ export interface FdScoreboardStatus {
 
 export async function fdScoreboardStatus(): Promise<FdScoreboardStatus> {
   return invoke<FdScoreboardStatus>('fd_scoreboard_status', {})
+}
+
+/** Callsign + grid only — the TV page's one station fact. Served ONLY by the LAN
+ *  RPC (the desktop never needs it); built by hand server-side so the TV page never
+ *  touches get_settings. */
+export async function getTvStation(): Promise<{ call: string; grid: string }> {
+  return invoke('tv_station')
 }
 
 /** The Connect LAN page's bound state, for its Settings row. */

@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      immutable history: folding new entries into it claims unshipped work as shipped,
      which has had to be repaired on main once already. -->
 
+### Changed
+
+- **The TV page is now the real Connect view, not a summary.** 1.10.0's "Connect on a
+  TV" served a plain digest — a band table and some numbers. It now serves Connect
+  itself: the same map with every layer (grayline, spots, MUF, aurora, satellites,
+  parks on the air), the same panes, live in any browser on your network — a shack TV,
+  a Fire Stick's browser, a tablet — as a HamClock-style wall display. Still read-only
+  in the strict sense: the server accepts nothing but reads, a short fixed list of
+  propagation and space-weather feeds is all a browser can ask for, and everything
+  else is refused. Your log, your needs board and the frequency you are on are still
+  never sent; the setting's own text now also says that the picture includes the
+  callsigns of stations heard and spotted, because it does. The simple summary still
+  answers at /connect/data.json for anything scripted against it.
+
 ## [1.10.0] — 2026-08-31
 
 ### Added

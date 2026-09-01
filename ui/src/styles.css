@@ -4464,7 +4464,7 @@ select optgroup {
   font-weight: 800;
   font-size: 13px;
   letter-spacing: 0.06em;
-  padding: 6px var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   min-width: 46px;
   text-align: center;
@@ -22695,4 +22695,69 @@ tr.sel .aprs-sym {
 }
 .kp-line.good {
   color: var(--state-good, #30a46c);
+}
+
+/* ---- the TV page's chrome (src/tv/ConnectTv.tsx) ----
+   A thin bar over the full ConnectView; everything below it is the app's own view
+   and styles itself. The bar is fixed-height flex so ConnectView's pane grid gets an
+   honest remaining height. */
+.tv-app {
+  display: flex;
+  flex-direction: column;
+  /* --vh-eff, not raw vh: the TV entry runs useViewport() like the app, and the
+     zoom-blind-vh rule is a contract (responsive-vocab.test.ts computes it). */
+  height: var(--vh-eff, 100dvh);
+  background: var(--bg);
+}
+.tv-app > .connect-view,
+.tv-app > *:last-child {
+  flex: 1;
+  min-height: 0;
+}
+.tv-bar {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 6px var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.tv-call {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+}
+.tv-grid {
+  color: var(--text-faint);
+}
+.tv-spacer {
+  flex: 1;
+}
+.tv-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+}
+.tv-chip {
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: calc(var(--space-1) / 2) var(--space-2);
+}
+.tv-chip.tv-warn {
+  color: var(--state-warn, #f5a524);
+  border-color: currentColor;
+}
+.tv-chip.tv-bad {
+  color: var(--state-bad, #e5484d);
+  border-color: currentColor;
+}
+.tv-wait {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
 }
