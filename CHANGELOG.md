@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that just arrived. A station genuinely calling you — including the one answering your
   CQ — alerts exactly as before.
 
+### Added
+
+- **Confirmation opportunities can be switched off.** The Needed board and the decode
+  chips include a "Confirm" tier — stations you have worked but not confirmed, your LoTW
+  confirmation chances. It stays on by default; operators who chase contacts rather than
+  confirmations can now turn it off under Settings ▸ Spots & Alerts ▸ Alerts, and both
+  the board rows and the chips follow. A station that is also a new band keeps its row
+  and only loses the Confirm chip. Asked for by KD9TAW.
+
+- **dB reports to comments, like WSJT-X.** Turn on Settings ▸ Digital ▸ Logging
+  Behavior ▸ "dB reports to comments" and every FT-mode contact logs its exchanged
+  reports into the QSO's comment — "FT8  Sent: -07  Rcvd: -12", the same format WSJT-X
+  writes, byte for byte, so the two programs' logs read alike. Off by default, exactly
+  as WSJT-X ships it. Asked for by KD9TAW.
+
 ### Changed
 
 - **The TV page is now the real Connect view, not a summary.** 1.10.0's "Connect on a

@@ -3809,6 +3809,26 @@ struct TxGateStamp {
     generation: u64,
 }
 
+/// WSJT-X's "dB reports to comments" line, byte-for-byte (logqso.cpp:143-145):
+/// `"<mode>  Sent: <rpt>  Rcvd: <rpt>"` — TWO spaces before each part, either part
+/// omitted when its report is absent, and just the mode when both are. Returns `None`
+/// only for the nothing-at-all case so an empty comment is never written.
+fn reports_comment(mode: &str, sent: Option<&str>, rcvd: Option<&str>) -> Option<String> {
+    let mut t = mode.to_string();
+    if let Some(r) = sent.filter(|r| !r.is_empty()) {
+        t.push_str("  Sent: ");
+        t.push_str(r);
+    }
+    if let Some(r) = rcvd.filter(|r| !r.is_empty()) {
+        t.push_str("  Rcvd: ");
+        t.push_str(r);
+    }
+    if sent.is_none() && rcvd.is_none() {
+        return Some(t); // mode alone — exactly what WSJT-X writes then
+    }
+    Some(t)
+}
+
 impl Engine {
     /// Construct from explicit identity (back-compat; uses default settings).
     pub fn new(mycall: &str, mygrid: &str, tx_parity: u64) -> Self {
@@ -17700,6 +17720,18 @@ impl Engine {
         // contact — see `log_frequencies`, which owns the rule and the satellite exclusion.
         let (freq_mhz, freq_rx_mhz) = self.log_frequencies();
         let grid = self.dx_grid_resolved(&dxcall, dxgrid);
+        // Built BEFORE the struct literal moves `mode` into the record.
+        let reports_note = if self.settings.log_reports_to_comments {
+            reports_comment(
+                &mode,
+                self.qso_report_sent
+                    .map(tempo_core::message::fmt_report)
+                    .as_deref(),
+                rx_report.map(tempo_core::message::fmt_report).as_deref(),
+            )
+        } else {
+            None
+        };
         QsoRecord {
             call: dxcall,
             grid,
@@ -17721,7 +17753,11 @@ impl Engine {
             rst_rcvd: rx_report.map(tempo_core::message::fmt_report),
             name: None,
             qth: None,
-            comment: None,
+            // WSJT-X's "dB reports to comments" (opt-in): the COMMENT carries
+            // "<mode>  Sent: <rpt>  Rcvd: <rpt>" in WSJT-X's own byte format, built
+            // from the SAME formatted reports logged above, so the comment can never
+            // disagree with the record.
+            comment: reports_note,
             notes: None,
             tx_power: None,
             // TIME_ON = when the exchange began (set on answer / first CQ reply);
@@ -38496,6 +38532,36 @@ mod amp_tests {
         assert!(
             e.snapshot().radio.amp.is_none(),
             "the other radio's amplifier is not this radio's"
+        );
+    }
+
+    /// WSJT-X byte-format parity for "dB reports to comments" — logqso.cpp:143-145
+    /// builds `mode + "  Sent: " + rpt + "  Rcvd: " + rpt` with TWO spaces and drops
+    /// absent parts. An operator running both programs will diff the two logs, so the
+    /// spelling is the contract, not just the idea.
+    #[test]
+    fn reports_comment_matches_wsjtx_byte_for_byte() {
+        assert_eq!(
+            super::reports_comment("FT8", Some("-07"), Some("-12")).as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -12")
+        );
+        assert_eq!(
+            super::reports_comment("FT4", Some("+03"), None).as_deref(),
+            Some("FT4  Sent: +03")
+        );
+        assert_eq!(
+            super::reports_comment("FT8", None, Some("-19")).as_deref(),
+            Some("FT8  Rcvd: -19")
+        );
+        // Both absent: WSJT-X writes just the mode — so do we.
+        assert_eq!(
+            super::reports_comment("FT8", None, None).as_deref(),
+            Some("FT8")
+        );
+        // An empty-string report is absent, not "Sent: ".
+        assert_eq!(
+            super::reports_comment("FT8", Some(""), Some("-01")).as_deref(),
+            Some("FT8  Rcvd: -01")
         );
     }
 }
