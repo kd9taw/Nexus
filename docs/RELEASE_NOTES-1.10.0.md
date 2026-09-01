@@ -55,7 +55,8 @@ been throwing it away. Filled markers are parks you have never logged, hollow on
 have, and hovering names the activator, the reference and the frequency. Choosing the POTA/SOTA
 view switches the layer on, which is what that view had been promising and not doing.
 
-**Your country file can be updated at last.** Settings ▸ Station ▸ Update country file now works.
+**Your country file can be updated at last.** Settings ▸ Logging & Connectors ▸ Country file
+(DXCC) ▸ Update country file now works.
 The copy built into Nexus was from January 2025; the one it fetches is current, and it tells you
 how old yours is. It applies at the next start.
 

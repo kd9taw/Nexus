@@ -5,6 +5,12 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+<!-- Post-release work lands HERE, above the released section. A released section is
+     immutable history: folding new entries into it claims unshipped work as shipped,
+     which has had to be repaired on main once already. -->
+
 ## [1.10.0] — 2026-08-31
 
 ### Added
