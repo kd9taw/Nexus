@@ -967,6 +967,34 @@ pub const AMP_REASONS: [&str; 4] = ["portBusy", "noAnswer", "wrongModel", "malfo
 /// the invariant those enums exist to hold: the failure direction of a status decoder in front
 /// of a kilowatt has to be toward reporting a fault, not toward silence. So each flattens to a
 /// camelCase String tag plus a bool precomputed from `is_raised()`, the way
+/// One World Radio League push, flattened for the UI (same shape as the HRDLog DTO).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WrlPushResultDto {
+    /// "accepted" | "duplicate" | "rejected" | "authFail" | "pending".
+    pub result: String,
+    /// Human detail when the service said something worth relaying.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl From<tempo_core::logbook::UploadOutcome> for WrlPushResultDto {
+    fn from(o: tempo_core::logbook::UploadOutcome) -> Self {
+        use tempo_core::logbook::UploadOutcome as O;
+        let result = match o {
+            O::Accepted => "accepted",
+            O::Duplicate => "duplicate",
+            O::Rejected => "rejected",
+            O::AuthFail => "authFail",
+            O::Pending => "pending",
+        };
+        Self {
+            result: result.into(),
+            message: None,
+        }
+    }
+}
+
 /// `ClubLogPushResultDto`/`HrdLogPushResultDto` already flatten their result enums.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

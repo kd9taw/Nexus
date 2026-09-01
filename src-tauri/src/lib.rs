@@ -13531,6 +13531,7 @@ const QRZ_LOGBOOK_KEYCHAIN_USER: &str = "qrz-logbook-key";
 const HAMQTH_KEYCHAIN_USER: &str = "hamqth-password";
 const CLUBLOG_KEYCHAIN_USER: &str = "clublog-password";
 const HRDLOG_KEYCHAIN_USER: &str = "hrdlog-code";
+const WRL_KEYCHAIN_USER: &str = "wrl-key";
 const CLOUDLOG_KEYCHAIN_USER: &str = "cloudlog-key";
 
 /// Client name Nexus sends to HRDLog.net's `NewEntry.aspx` as `App` (aids their
@@ -13781,12 +13782,14 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
                 st.clublog_upload,
                 st.eqsl_upload,
                 st.hrdlog_upload,
+                st.wrl_upload,
                 st.cloudlog_upload && !st.cloudlog_url.trim().is_empty(),
             ),
         )
     };
-    let (qrz_book_on, clublog_on, eqsl_on, hrdlog_on, cloudlog_on) = toggles;
+    let (qrz_book_on, clublog_on, eqsl_on, hrdlog_on, wrl_on, cloudlog_on) = toggles;
     let (hrdlog_ok, hrdlog_fail, hrdlog_detail) = conn_health_of("hrdlog");
+    let (wrl_ok, wrl_fail, wrl_detail) = conn_health_of("wrl");
     let (cloudlog_ok, cloudlog_fail, cloudlog_detail) = conn_health_of("cloudlog");
     let has = |entry: Result<keyring::Entry, String>| {
         entry
@@ -13886,6 +13889,22 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             paused: false,
         },
         CredStatus {
+            id: "wrl".into(),
+            connector: "World Radio League".into(),
+            stored: has(wrl_keychain()),
+            // The key covers the whole WRL account; nothing account-identifying is
+            // stored client-side, so no identity string to show.
+            identity: String::new(),
+            uploads: true,
+            enabled: wrl_on,
+            // Session-only, same honesty rule as HRDLog: no per-QSO stamp survives a
+            // restart, so this reads "not verified yet" until the next QSO.
+            last_success_unix: wrl_ok,
+            last_failure_unix: wrl_fail,
+            last_failure_detail: wrl_detail,
+            paused: false,
+        },
+        CredStatus {
             id: "cloudlog".into(),
             connector: "Cloudlog".into(),
             stored: has(cloudlog_keychain()),
@@ -13968,6 +13987,11 @@ fn cloudlog_keychain() -> Result<keyring::Entry, String> {
 fn hrdlog_keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, HRDLOG_KEYCHAIN_USER)
         .map_err(|e| format!("couldn't open the system keychain: {e}"))
+}
+
+fn wrl_keychain() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, WRL_KEYCHAIN_USER)
+        .map_err(|e| format!("keychain unavailable: {e}"))
 }
 
 /// Delete a keychain entry idempotently — a missing entry counts as success
@@ -14139,6 +14163,7 @@ enum UploadToggle {
     Clublog,
     Eqsl,
     Hrdlog,
+    Wrl,
 }
 
 /// Flip a connector's auto-upload toggle (persisted) when its credential
@@ -14159,6 +14184,7 @@ fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: b
                 UploadToggle::Clublog => ("ClubLog", s.clublog_upload),
                 UploadToggle::Eqsl => ("eQSL", s.eqsl_upload),
                 UploadToggle::Hrdlog => ("HRDLog.net", s.hrdlog_upload),
+                UploadToggle::Wrl => ("World Radio League", s.wrl_upload),
             }
         };
         if already == on {
@@ -14169,6 +14195,7 @@ fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: b
             UploadToggle::Clublog => eng.set_upload_toggles(None, Some(on), None),
             UploadToggle::Eqsl => eng.set_upload_toggles(None, None, Some(on)),
             UploadToggle::Hrdlog => eng.set_hrdlog_upload(on),
+            UploadToggle::Wrl => eng.set_wrl_upload(on),
         };
         if let Err(e) = updated.save(&settings_path()) {
             eprintln!("tempo: couldn't persist settings: {e}");
@@ -15282,6 +15309,153 @@ fn clear_hrdlog_code(state: State<'_, SharedEngine>) -> Result<(), String> {
     r
 }
 
+/// Save the World Radio League API key (write-only, OS keychain) and resolve the
+/// destination logbook ONCE, so pushing stays configuration-free afterwards.
+///
+/// Validation happens at save — WRL gives us `GET /v1/me` for exactly this, so a
+/// mistyped key fails HERE with a clear message instead of on the first QSO. The
+/// logbook resolution follows the API's own guidance: the account default when one
+/// exists; else the account's single logbook; several with no default is a real
+/// ambiguity the operator resolves on the WRL site (we say so and refuse to guess).
+#[tauri::command]
+async fn set_wrl_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+    let entry = wrl_keychain()?;
+    if key.is_empty() {
+        clear_keychain_entry(&entry)?;
+        conn_log("World Radio League", "info", "API key cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Wrl, false);
+        return Ok(());
+    }
+    // Validate + resolve BEFORE saving, off the async executor (blocking HTTP).
+    let probe_key = key.clone();
+    let resolved = tauri::async_runtime::spawn_blocking(move || wrl_resolve_logbook(&probe_key))
+        .await
+        .map_err(|e| format!("validation task failed: {e}"))??;
+    entry
+        .set_password(&key)
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    {
+        let mut eng = engine_lock(&state);
+        let updated = eng.set_wrl_logbook_id(resolved.as_deref().unwrap_or(""));
+        if let Err(e) = updated.save(&settings_path()) {
+            eprintln!("tempo: couldn't persist settings: {e}");
+        }
+    }
+    conn_log("World Radio League", "ok", "API key verified and saved to the OS keychain");
+    set_upload_toggle(&state, UploadToggle::Wrl, true);
+    Ok(())
+}
+
+/// `GET /v1/me` (key check) then, when the account has no default logbook, resolve a
+/// destination: the account's SINGLE logbook, or a clear error when there are several.
+/// Returns `Ok(None)` when the default logbook applies (omit `logbookId` per QSO).
+fn wrl_resolve_logbook(key: &str) -> Result<Option<String>, String> {
+    let (status, body) = propagation::live::wrl::get_json(tempo_core::wrl::WRL_ME_URL, key)?;
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|_| "World Radio League answered with something unreadable".to_string())?;
+    if status != 200 {
+        let code = v
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        return Err(match code {
+            "INVALID_KEY" | "MISSING_CREDENTIALS" => {
+                "That key was refused — check it against Integrations ▸ Developer API on \
+                 worldradioleague.com."
+                    .to_string()
+            }
+            "KEY_REVOKED" => "That key has been revoked — generate a new one on worldradioleague.com.".to_string(),
+            other => format!("World Radio League refused the key ({other})"),
+        });
+    }
+    let has_default = v
+        .get("data")
+        .and_then(|d| d.get("defaultLogbook"))
+        .and_then(|l| l.get("logbookId"))
+        .map(|id| !id.is_null())
+        .unwrap_or(false);
+    if has_default {
+        return Ok(None);
+    }
+    // No default: a single logbook is unambiguous; several is the operator's call.
+    let (status, body) =
+        propagation::live::wrl::get_json(tempo_core::wrl::WRL_LOGBOOKS_URL, key)?;
+    if status != 200 {
+        return Err("Couldn't list your World Radio League logbooks — try again.".to_string());
+    }
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|_| "World Radio League answered with something unreadable".to_string())?;
+    let books = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+    match books.len() {
+        1 => Ok(books[0].get("id").and_then(|i| i.as_str()).map(str::to_string)),
+        0 => Err("Your World Radio League account has no logbook yet — create one there first.".to_string()),
+        _ => Err(
+            "Your World Radio League account has several logbooks and no default — set a \
+             default logbook on worldradioleague.com, then save the key again."
+                .to_string(),
+        ),
+    }
+}
+
+/// Remove the stored World Radio League API key (idempotent); also turns WRL
+/// auto-upload off (no credential to push with).
+#[tauri::command(async)]
+fn clear_wrl_key(state: State<'_, SharedEngine>) -> Result<(), String> {
+    let r = clear_keychain_entry(&wrl_keychain()?);
+    if r.is_ok() {
+        conn_log("World Radio League", "info", "API key cleared from the OS keychain");
+        set_upload_toggle(&state, UploadToggle::Wrl, false);
+    }
+    r
+}
+
+/// Push one logged QSO to World Radio League (`POST /v1/contacts`).
+#[tauri::command]
+async fn wrl_push_qso(
+    record: LoggedQso,
+    state: State<'_, SharedEngine>,
+) -> Result<tempo_app::dto::WrlPushResultDto, String> {
+    let who = record.call.clone();
+    let engine = state.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || wrl_push_qso_impl(record, &engine))
+        .await
+        .map_err(|e| format!("upload task failed: {e}"))?;
+    conn_logged(
+        "World Radio League",
+        |r| format!("pushed {} — {}", who, r.result),
+        res,
+    )
+}
+
+fn wrl_push_qso_impl(
+    record: LoggedQso,
+    engine: &SharedEngine,
+) -> Result<tempo_app::dto::WrlPushResultDto, String> {
+    let (callsign, logbook_id) = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (s.mycall.trim().to_string(), s.wrl_logbook_id.clone())
+    };
+    if callsign.is_empty() {
+        return Err("Set your station callsign in Settings first.".to_string());
+    }
+    let key = wrl_keychain()?
+        .get_password()
+        .map_err(|_| "No World Radio League API key stored — set it in Settings.".to_string())?;
+    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let body = tempo_core::wrl::build_contact_json(
+        &rec,
+        &callsign,
+        (!logbook_id.is_empty()).then_some(logbook_id.as_str()),
+    );
+    // POST without the lock; the key rides the header — never logged.
+    let (status, resp) =
+        propagation::live::wrl::post_contact(tempo_core::wrl::WRL_CONTACTS_URL, &key, body)?;
+    let outcome = tempo_core::wrl::classify_response(status, &resp);
+    Ok(outcome.into())
+}
+
 /// Push one logged QSO to HRDLog.net (`NewEntry.aspx`). Resolves the station
 /// callsign (`mycall`) + the keychain upload code, uploads one ADIF record, and
 /// classifies the XML response. HRDLog.net is a live-logging/awards site — NOT an
@@ -15672,6 +15846,7 @@ fn auto_push_one(
     clublog_on: bool,
     eqsl_on: bool,
     hrdlog_on: bool,
+    wrl_on: bool,
     n3fjp_on: bool,
     cloudlog_on: bool,
     owed: u8,
@@ -15825,6 +16000,42 @@ fn auto_push_one(
         all_ok &= ok;
         if transient {
             failed |= legs::EQSL;
+        }
+    }
+    if wrl_on && owed & legs::WRL != 0 {
+        let (part, ok, transient) = match wrl_push_qso_impl(dto.clone(), engine) {
+            Ok(r) => {
+                let ok = matches!(r.result.as_str(), "accepted" | "duplicate");
+                conn_log(
+                    "World Radio League",
+                    if ok { "ok" } else { "error" },
+                    format!("auto-push QSO with {call} — {}", r.result),
+                );
+                let part = match r.result.as_str() {
+                    "accepted" => "WRL ✓".to_string(),
+                    "duplicate" => "WRL dup".to_string(),
+                    "authFail" => "WRL ✗ key invalid — check Settings".to_string(),
+                    // "pending" = rate limit / server trouble → the record is fine,
+                    // the moment was not; retry.
+                    "pending" => "WRL ✗ busy".to_string(),
+                    _ => "WRL ✗ rejected".to_string(),
+                };
+                (part, ok, r.result.as_str() == "pending")
+            }
+            Err(e) => {
+                conn_log(
+                    "World Radio League",
+                    "error",
+                    format!("auto-push QSO with {call} — {e}"),
+                );
+                (format!("WRL ✗ {e}"), false, true)
+            }
+        };
+        note_conn_health("wrl", ok, part.clone());
+        parts.push(part);
+        all_ok &= ok;
+        if transient {
+            failed |= legs::WRL;
         }
     }
     if n3fjp_on && owed & legs::N3FJP != 0 {
@@ -19017,6 +19228,7 @@ pub fn run() {
                 clublog_on,
                 eqsl_on,
                 hrdlog_on,
+                wrl_on,
                 n3fjp_on,
                 cloudlog_on,
                 dxk,
@@ -19026,13 +19238,14 @@ pub fn run() {
                 // Recover a poisoned lock (conn_log pattern) — a panicked command
                 // holding the engine must not silently kill auto-upload forever.
                 let mut eng = push_engine.lock().unwrap_or_else(|e| e.into_inner());
-                let (q, c, e, h, hrd, n, cl, dxk, cl_email, cl_key) = {
+                let (q, c, e, h, w, hrd, n, cl, dxk, cl_email, cl_key) = {
                     let s = eng.settings();
                     (
                         s.qrz_logbook_upload,
                         s.clublog_upload,
                         s.eqsl_upload,
                         s.hrdlog_upload,
+                        s.wrl_upload,
                         // HRD Logbook (QSO Forwarding, UDP 2333) — a DIFFERENT feature from
                         // hrdlog_upload (HRDLog.net) above, and the distinction is issue #87.
                         s.hrd_logging,
@@ -19064,7 +19277,9 @@ pub fn run() {
                 // correctly showed not one datagram on udp/2333. The comment above records the
                 // IDENTICAL bug being fixed for DXKeeper; the lesson generalises: every
                 // connector whose drain lives below must appear in this gate.
-                if !(q || c || e || h || hrd || n || cl || dxk.is_some()) {
+                // ⚠️ w (WRL) IS IN THIS GATE — the comment above records two connectors
+                // shipping without it, each silently draining nothing.
+                if !(q || c || e || h || w || hrd || n || cl || dxk.is_some()) {
                     // Nothing enabled: LEAVE the queue intact (bounded at 256) so
                     // flipping a toggle on later still uploads this session's
                     // recent QSOs — log-first-configure-later must not lose them.
@@ -19076,6 +19291,7 @@ pub fn run() {
                     c,
                     e,
                     h,
+                    w,
                     n,
                     cl,
                     dxk,
@@ -19196,6 +19412,7 @@ pub fn run() {
                     clublog_live,
                     eqsl_on,
                     hrdlog_on,
+                    wrl_on,
                     n3fjp_on,
                     cloudlog_on,
                     p.legs,
@@ -20132,6 +20349,9 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             eqsl_push_qso,
             set_hrdlog_code,
             clear_hrdlog_code,
+            set_wrl_key,
+            clear_wrl_key,
+            wrl_push_qso,
             hrdlog_push_qso,
             get_ota_spots,
             get_ota_map_spots,

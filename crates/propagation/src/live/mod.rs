@@ -30,6 +30,7 @@ pub mod solar_wind;
 pub mod swpc;
 pub mod swpc_scales;
 pub mod tle;
+pub mod wrl;
 pub mod wspr;
 
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -5780,6 +5780,21 @@ export const EN = {
   'settings.confirmations.clublog.upload.hint':
     'Push each logged QSO to ClubLog in real time (needs the email + app-password above; official builds bundle the API key).',
 
+  // World Radio League — a live logging service; the key comes from their
+  // Integrations ▸ Developer API page and is validated at save (GET /v1/me), so a
+  // typo fails HERE with a plain message, not on the first QSO.
+  'settings.confirmations.wrl.key.label': 'API key',
+  'settings.confirmations.wrl.key.placeholder': 'wrl_live_…',
+  'settings.confirmations.wrl.key.hint':
+    'From worldradioleague.com ▸ Integrations ▸ Developer API. Checked against the service when you save; stored write-only in the OS keychain.',
+  'settings.confirmations.wrl.key.saved': 'World Radio League key verified and saved — auto-upload is on.',
+  'settings.confirmations.wrl.key.saveFailed': 'Couldn\u2019t save the World Radio League key',
+  'settings.confirmations.wrl.key.cleared': 'World Radio League key cleared — auto-upload is off.',
+  'settings.confirmations.wrl.key.clearFailed': 'Couldn\u2019t clear the World Radio League key',
+  'settings.confirmations.wrl.key.forget.title': 'Remove the stored key from the OS keychain',
+  'settings.confirmations.wrl.upload.label': 'Auto-upload each QSO',
+  'settings.confirmations.wrl.upload.hint':
+    'Push every logged contact to your World Radio League logbook as it lands. A live-logging service — not an ARRL confirmation source.',
   'settings.confirmations.hrdlog.code.label': 'HRDLog.net upload code',
   'settings.confirmations.hrdlog.code.placeholder': 'your hrdlog.net upload code',
   'settings.confirmations.hrdlog.code.forget.title':

@@ -52,6 +52,8 @@ import {
   setEqslPassword,
   setHamqthPassword,
   setHrdlogCode,
+  setWrlKey,
+  clearWrlKey,
   setLotwPassword,
   setQrzLogbookKey,
   setQrzPassword,
@@ -1200,6 +1202,7 @@ export function SettingsPanel({
   const [hamqthPw, setHamqthPw] = useState('')
   const [clublogPw, setClublogPw] = useState('')
   const [hrdlogCode, setHrdlogCodeField] = useState('')
+  const [wrlKey, setWrlKeyField] = useState('')
   const [rbToken, setRbTokenField] = useState('')
   const [cloudlogKey, setCloudlogKeyField] = useState('')
   // Where a deep link asked us to land. Resolved once per `target` change so a caller can pass
@@ -2527,6 +2530,26 @@ export function SettingsPanel({
       updateBool('hrdlogUpload', false)
       pushToast(t('settings.connections.hrdlog.code.cleared'), 'success')
     }
+  }
+
+  const onSaveWrlKey = async () => {
+    if (!wrlKey) return
+    // set_wrl_key VALIDATES against the live service and resolves the destination
+    // logbook before saving — a bad key fails here with a real message, not on the
+    // first QSO.
+    await withErrorToast(async () => {
+      await setWrlKey(wrlKey)
+      setWrlKeyField('')
+      updateBool('wrlUpload', true)
+      pushToast(t('settings.confirmations.wrl.key.saved'), 'success')
+    }, t('settings.confirmations.wrl.key.saveFailed'))
+  }
+  const onForgetWrlKey = async () => {
+    await withErrorToast(async () => {
+      await clearWrlKey()
+      updateBool('wrlUpload', false)
+      pushToast(t('settings.confirmations.wrl.key.cleared'), 'info')
+    }, t('settings.confirmations.wrl.key.clearFailed'))
   }
 
   const onSaveRbToken = async () => {
@@ -9500,6 +9523,62 @@ export function SettingsPanel({
                   <span className="settings-hint">
                     <T k="settings.confirmations.hrdlog.upload.hint" tags={{ b: <strong /> }} />
                   </span>
+                </div>
+              </div>
+            </div>
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">World Radio League</span>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  <span className="settings-label">
+                    {t('settings.confirmations.wrl.key.label')}
+                  </span>
+                  <div className="settings-input-row">
+                    <input
+                      className="settings-input"
+                      type="password"
+                      value={wrlKey}
+                      placeholder={t('settings.confirmations.wrl.key.placeholder')}
+                      onChange={(e) => setWrlKeyField(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onSaveWrlKey}
+                      disabled={!wrlKey}
+                    >
+                      {t('settings.confirmations.credential.set.action')}
+                    </button>
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      onClick={onForgetWrlKey}
+                      title={t('settings.confirmations.wrl.key.forget.title')}
+                    >
+                      {t('settings.confirmations.credential.forget.action')}
+                    </button>
+                  </div>
+                  <span className="settings-hint">{t('settings.confirmations.wrl.key.hint')}</span>
+                </label>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.confirmations.wrl.upload.label')}
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!!form.wrlUpload}
+                      className={`toggle${form.wrlUpload ? ' on' : ''}`}
+                      onClick={() => updateBool('wrlUpload', !form.wrlUpload)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  <span className="settings-hint">{t('settings.confirmations.wrl.upload.hint')}</span>
                 </div>
               </div>
             </div>

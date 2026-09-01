@@ -1360,7 +1360,8 @@ pub mod upload_legs {
     pub const HRDLOG: u8 = 1 << 3;
     pub const N3FJP: u8 = 1 << 4;
     pub const CLOUDLOG: u8 = 1 << 5;
-    pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG;
+    pub const WRL: u8 = 1 << 6;
+    pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG | WRL;
 }
 
 /// Where a queued upload CAME FROM — the fact the transport could not previously
@@ -4690,6 +4691,19 @@ impl Engine {
     /// reset the operating mode or drop queued TX (never `apply_settings`).
     pub fn set_hrdlog_upload(&mut self, on: bool) -> Settings {
         self.settings.hrdlog_upload = on;
+        self.settings.clone()
+    }
+
+    pub fn set_wrl_upload(&mut self, on: bool) -> Settings {
+        self.settings.wrl_upload = on;
+        self.settings.clone()
+    }
+
+    /// Store the resolved WRL logbook id — the `set_lotw_cursor` pattern: a
+    /// lightweight setter, because `apply_settings` is heavyweight (resets the mode
+    /// and clears the TX queue) and key-save-time resolution must not do that.
+    pub fn set_wrl_logbook_id(&mut self, id: &str) -> Settings {
+        self.settings.wrl_logbook_id = id.to_string();
         self.settings.clone()
     }
 

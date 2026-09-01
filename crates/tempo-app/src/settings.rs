@@ -1941,6 +1941,17 @@ pub struct Settings {
     /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
     /// confirmation source — an upload here never earns DXCC/WAS credit.
     pub hrdlog_upload: bool,
+    /// Auto-push each logged QSO to World Radio League (`POST /v1/contacts`).
+    /// Flipped on by saving a WRL API key, off by clearing it — the credential IS
+    /// the opt-in, like every other connector.
+    #[serde(default)]
+    pub wrl_upload: bool,
+    /// The WRL logbook contacts go to. Resolved ONCE at key-save time (`GET /v1/me`,
+    /// falling back to the account's single logbook) and stored here — an id, not a
+    /// secret, so Settings not the keychain. Empty = omit `logbookId` and let the
+    /// account's default take it.
+    #[serde(default)]
+    pub wrl_logbook_id: String,
 
     /// Auto-forward EVERY logged QSO (not just Field Day) to N3FJP over the same
     /// `n3fjp_host`/`n3fjp_port` — N3FJP ACLog / everyday general logging. ADDDIRECT with
@@ -3366,6 +3377,8 @@ impl Default for Settings {
             clublog_upload: false,
             eqsl_upload: false,
             hrdlog_upload: false,
+            wrl_upload: false, // the credential is the opt-in
+            wrl_logbook_id: String::new(),
             n3fjp_upload: false,
             cloudlog_url: String::new(),
             cloudlog_station_id: String::new(),

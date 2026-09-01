@@ -2074,7 +2074,7 @@ export interface AssistanceEvent {
  *  These Options carry no `skip_serializing_if` on the Rust side, so serde emits explicit
  *  `null` — declared `| null`, not `?:`. */
 export interface CredStatus {
-  /** Stable slug: 'lotw' | 'qrz-xml' | 'qrz-logbook' | 'eqsl' | 'clublog' | 'hrdlog' |
+  /** Stable slug: 'lotw' | 'qrz-xml' | 'qrz-logbook' | 'eqsl' | 'clublog' | 'hrdlog' | 'wrl' |
    *  'cloudlog' | 'repeaterbook'. Branch on THIS, never on `connector` (a display label). */
   id: string
   /** Display label. */
@@ -3096,6 +3096,10 @@ export interface Settings {
    *  NOT the HRD Logbook UDP push). Station callsign is `mycall`; the upload code
    *  is in the keychain. Not an ARRL confirmation source. */
   hrdlogUpload: boolean
+  /** Auto-push each logged QSO to World Radio League. Flipped by saving/clearing the key. */
+  wrlUpload?: boolean
+  /** Resolved WRL destination logbook id (empty = the account default). Set at key save. */
+  wrlLogbookId?: string
   /** Watch near-region spots (not just your own paths) so opening detection can
    *  flag "a band is open around you" before you've worked anyone. */
   openingRegional: boolean

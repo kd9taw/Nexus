@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the board rows and the chips follow. A station that is also a new band keeps its row
   and only loses the Confirm chip. Asked for by KD9TAW.
 
+- **World Radio League joins the connectors.** Paste your WRL API key (their
+  Integrations ▸ Developer API page) into Settings ▸ Logging & Connectors and every
+  logged contact streams to your World Radio League logbook as it lands, alongside the
+  existing QRZ/ClubLog/eQSL/HRDLog pushes. The key is checked against the service the
+  moment you save it — a typo fails right there with a plain message, not on your first
+  QSO — and your destination logbook is worked out at the same time, so there is nothing
+  else to set up. Stored write-only in the OS keychain, like every other credential.
+  Failed uploads retry with backoff; a revoked key tells you to fix it in Settings.
+
 - **dB reports to comments, like WSJT-X.** Turn on Settings ▸ Digital ▸ Logging
   Behavior ▸ "dB reports to comments" and every FT-mode contact logs its exchanged
   reports into the QSO's comment — "FT8  Sent: -07  Rcvd: -12", the same format WSJT-X

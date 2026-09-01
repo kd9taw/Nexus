@@ -971,6 +971,22 @@ export async function setHrdlogCode(code: string): Promise<void> {
   await invoke<void>('set_hrdlog_code', { code })
 }
 
+/** Save the World Radio League API key. Validates against the live service and
+ *  resolves the destination logbook BEFORE saving — rejects with a plain message on
+ *  a bad key. Write-only: the key is never read back. */
+export async function setWrlKey(key: string): Promise<void> {
+  await invoke<void>('set_wrl_key', { key })
+}
+
+export async function clearWrlKey(): Promise<void> {
+  await invoke<void>('clear_wrl_key')
+}
+
+/** Push one logged QSO to World Radio League. */
+export async function wrlPushQso(q: LoggedQso): Promise<{ result: string; message?: string }> {
+  return invoke('wrl_push_qso', { record: q })
+}
+
 /** Remove the stored HRDLog.net upload code from the OS keychain (idempotent). */
 export async function clearHrdlogCode(): Promise<void> {
   await invoke<void>('clear_hrdlog_code')
