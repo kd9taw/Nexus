@@ -365,3 +365,71 @@ describe('alerts do not repeat every cycle', () => {
     expect(toasts).not.toHaveBeenCalled()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE PHANTOM "IS CALLING YOU" (operator report, seen on 1.9.2 + 1.10.0, with a
+// screenshot catching it live: KF0WWR's RR73 at 04:23:12, own 73 at :14, QSO
+// Done — and at :29 the toast announces "KF0WWR is calling you").
+//
+// The mechanism is a STALE DECODE RE-QUALIFYING when the QSO state moves on.
+// processDecodes runs on every snapshot over the ROLLING decode window, so a row
+// is re-evaluated many times. Mid-QSO, the partner's RR73 (directed to me) is
+// suppressed — deliberately without consuming a dedup key. The moment the state
+// leaves the QSO (Done, or Listening after a band switch), the SAME old row
+// re-evaluates with engaged=false, qualifies as "calling me", finds its key
+// unconsumed, and toasts about an exchange that is already over. Same defect
+// class as the stale-boundary TX incident: a decode outliving its moment
+// replaying a decision.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('a stale decode must not become a phantom "calling you"', () => {
+  it('does not announce the RR73 tail of the QSO you just finished (the screenshot)', () => {
+    const rr73 = decode({ from: 'KF0WWR', directedToMe: true, message: 'N5TAN KF0WWR RR73' })
+    // Mid-QSO: the RR73 arrives while engaged → correctly silent.
+    processDecodes([rr73], settings, undefined, { state: 'Report', dxcall: 'KF0WWR' })
+    expect(toasts).not.toHaveBeenCalled()
+    // The sequencer sends 73; the state machine reaches Done. The SAME row is
+    // still in the window on the next snapshot.
+    processDecodes([rr73], settings, undefined, { state: 'Done', dxcall: 'KF0WWR' })
+    expect(
+      toasts,
+      'the finished QSO\'s own RR73 re-qualified as "calling you" after Done',
+    ).not.toHaveBeenCalled()
+  })
+
+  it('does not replay an old caller after a band switch resets the state machine', () => {
+    const old = decode({ from: 'W9STALE', directedToMe: true, message: 'N5TAN W9STALE EN52' })
+    // A third station called while a QSO with someone else was running → silent by design.
+    processDecodes([old], settings, undefined, { state: 'AwaitReport', dxcall: 'K1ABC' })
+    expect(toasts).not.toHaveBeenCalled()
+    // Band switch: state resets to Listening, no new decode yet — the stale row rides along.
+    processDecodes([old], settings, undefined, { state: 'Listening', dxcall: null })
+    expect(
+      toasts,
+      'a decode from before the band switch replayed as a fresh call',
+    ).not.toHaveBeenCalled()
+  })
+
+  // The two behaviours the fix must NOT break:
+
+  it('still alerts for the fresh decode that answers your CQ (#167)', () => {
+    // The answering decode arrives on a snapshot where dxcall is ALREADY set to
+    // the caller (the sequencer set it in the same ingest) — the #167 shape.
+    processDecodes(
+      [decode({ from: 'N0CALL', directedToMe: true, message: 'N5TAN N0CALL EN34' })],
+      settings,
+      undefined,
+      { state: 'CallingCq', dxcall: 'N0CALL' },
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+  })
+
+  it('still alerts for a genuinely new caller arriving after the QSO is done', () => {
+    processDecodes(
+      [decode({ from: 'K5NEXT', directedToMe: true, message: 'N5TAN K5NEXT EM12' })],
+      settings,
+      undefined,
+      { state: 'Done', dxcall: 'KF0WWR' },
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+  })
+})

@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
      immutable history: folding new entries into it claims unshipped work as shipped,
      which has had to be repaired on main once already. -->
 
+### Fixed
+
+- **The phantom "is calling you" is gone.** Finishing an FT8 contact could pop
+  "so-and-so is calling you" seconds later — about the station you had just worked, whose
+  RR73 was the tail of your own QSO — and switching bands could do the same before a
+  single new decode, replaying an old caller from the previous band. Reported on 1.9.2
+  and 1.10.0 with a screenshot that caught it live; the alert was re-judging old decodes
+  every cycle as the QSO state moved on around them. It now only ever speaks for a decode
+  that just arrived. A station genuinely calling you — including the one answering your
+  CQ — alerts exactly as before.
+
 ### Changed
 
 - **The TV page is now the real Connect view, not a summary.** 1.10.0's "Connect on a

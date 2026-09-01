@@ -243,11 +243,14 @@ export function processDecodes(
   // unbounded (a reset only risks one duplicate tick).
   if (seenDecodes.size > 5000) seenDecodes.clear()
   const fresh: DecodeRow[] = []
+  // Keys first seen in THIS batch — the "calling you" gate below rides on it.
+  const freshKeys = new Set<string>()
   for (const d of decodes) {
     if (d.mine) continue
     const k = decodeKey(d)
     if (!seenDecodes.has(k)) {
       seenDecodes.add(k)
+      freshKeys.add(k)
       fresh.push(d)
     }
   }
@@ -286,7 +289,26 @@ export function processDecodes(
     // exclusion for the station being worked (widgets/displaytext.cpp:490); dxCall drives a
     // separate highlight. The anti-chatter job the skip was doing is the `engaged` gate's and
     // the per-decode dedup's, not this line's: mid-exchange states never reach `callingMe`.
-    const callingMe = !!(settings.alertMyCall && d.directedToMe && !engaged)
+    //
+    // ⭐ AND IT IS GATED ON FRESHNESS — first seen in THIS batch — because this function
+    // re-evaluates the whole rolling decode window on every snapshot, and a row's verdict
+    // must not change as the QSO state moves on around it. Without the gate, the phantom
+    // "XXX is calling you" (operator screenshot, 1.10.0): the partner's RR73 arrives mid-QSO
+    // and is rightly silent; your 73 goes out; the state reaches Done — which `engaged`
+    // rightly excludes, so a NEW caller can alert — and on the next snapshot the SAME stale
+    // RR73 re-qualifies and toasts about a QSO that is already over. The band-switch variant
+    // is the same replay: state resets to Listening while old to-you rows ride along in the
+    // window, so it fired before a single new decode. A decode suppressed in its own moment
+    // stays suppressed; only a decode ARRIVING now may claim "is calling you". #167 is
+    // unharmed — the CQ answer is fresh in exactly the batch it alerts from. Same defect
+    // class as the stale-boundary TX incident: a decode outliving its moment must not
+    // replay a decision.
+    const callingMe = !!(
+      settings.alertMyCall &&
+      d.directedToMe &&
+      !engaged &&
+      freshKeys.has(decodeKey(d))
+    )
 
     // Already working this station → nothing else about them is news (skipped WITHOUT
     // consuming the dedup key, so a later fresh event can still alert). A partner row that
