@@ -87,6 +87,22 @@ describe('Band Activity chip initializes from storage', () => {
 })
 
 describe('the −B4 modifier (field ask: "CQ only, but exclude B4")', () => {
+  it('hides the station you just FINISHED with — only the partner still mid-QSO is exempt (1.10.1 report)', () => {
+    // The exemption keyed on the SELECTED call, and the selection lingers after the QSO:
+    // the operator worked 9A60CBM, −B4 was on, and its CQ rows stayed until a click moved
+    // the selection elsewhere. The exemption now keys on the station the sequencer is
+    // actively working — a finished QSO's partner is just a worked station.
+    const rows = [decode({ from: '9A60CBM', message: 'CQ 9A60CBM JN75', freqHz: 1002, worked: true })]
+    localStorage.setItem('nexus.decodes.hideB4', '1')
+    // Still engaged with them: stays visible.
+    const { unmount } = mount({ decodes: rows, selectedCall: '9A60CBM', partnerCall: '9A60CBM' })
+    expect(screen.queryByText(/9A60CBM/)).not.toBeNull()
+    unmount()
+    // QSO done (no active partner), selection still on them: hidden like any worked station.
+    mount({ decodes: rows, selectedCall: '9A60CBM', partnerCall: null })
+    expect(screen.queryByText(/9A60CBM/)).toBeNull()
+  })
+
   const rows = [
     decode({ from: 'W1AW', message: 'CQ W1AW FN31', worked: false }),
     decode({ from: 'PD2BS', message: 'CQ PD2BS JO21', freqHz: 900, worked: true }),
@@ -131,7 +147,7 @@ describe('the wildcard call-hide (VP8* etc.)', () => {
 
   it('never hides the station being worked', () => {
     localStorage.setItem('nexus.decodes.hideCalls', 'VP8*')
-    mount({ decodes: rows, selectedCall: 'VP8PJ' })
+    mount({ decodes: rows, partnerCall: 'VP8PJ' })
     expect(screen.queryByText(/VP8PJ/)).not.toBeNull()
     localStorage.clear()
   })
@@ -152,7 +168,7 @@ describe('the −Conf modifier (hide confirmed on this band)', () => {
   })
 
   it('never hides the working partner', () => {
-    mount({ decodes: rows, selectedCall: 'DL1ABC' })
+    mount({ decodes: rows, partnerCall: 'DL1ABC' })
     fireEvent.click(chip('−Conf'))
     expect(screen.queryByText(/DL1ABC/)).not.toBeNull()
   })
@@ -173,7 +189,7 @@ describe('the −Blk modifier (blocklist display half)', () => {
   })
 
   it('never hides the station mid-QSO, blocked or not', () => {
-    mount({ decodes: rows, ignoredCalls: new Set(['PD2BS']), selectedCall: 'PD2BS' })
+    mount({ decodes: rows, ignoredCalls: new Set(['PD2BS']), partnerCall: 'PD2BS' })
     fireEvent.click(chip('−Blk'))
     expect(screen.queryByText(/PD2BS/)).not.toBeNull()
   })

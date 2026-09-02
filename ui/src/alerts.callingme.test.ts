@@ -16,7 +16,7 @@
 // really belonged: the per-decode dedup plus the `engaged` gate. Both are pinned below — a fix
 // that reopened the chatter would be a regression, not a fix.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { processDecodes } from './alerts'
+import { __resetAlertsForTest, processDecodes } from './alerts'
 import { pushToast } from './toast'
 import type { DecodeRow, Settings } from './types'
 
@@ -43,7 +43,10 @@ function decode(over: Partial<DecodeRow>): DecodeRow {
   } as unknown as DecodeRow
 }
 
-beforeEach(() => toasts.mockClear())
+beforeEach(() => {
+  toasts.mockClear()
+  __resetAlertsForTest()
+})
 
 describe('a station answering your CQ alerts on the decode that answers it (#167)', () => {
   it('fires even though the sequencer already made that station the partner', () => {
@@ -80,16 +83,32 @@ describe('a station answering your CQ alerts on the decode that answers it (#167
     expect(toasts).toHaveBeenCalledTimes(1)
   })
 
-  it('goes quiet for the rest of the exchange, exactly as before', () => {
-    // Every over of a QSO is "directed to me". Once the sequencer is past CallingCq the
-    // `engaged` gate suppresses them — the partner skip was never what did this.
-    for (const state of ['AwaitReport', 'AwaitRoger', 'Confirming', 'AwaitExchange', 'AwaitConfirm']) {
+  it('goes quiet for the rest of the exchange — on either path', () => {
+    // ⚠️ REWRITTEN 2026-09-02 for the per-station contract. This used to walk one station
+    // through BOTH vocabularies and expect silence throughout — which encoded the 1.10.1
+    // defect: with Auto on, the answer lands on an AwaitRoger snapshot and was never
+    // announced. A real QSO is on ONE path. Initiator path (they answered our CQ): the
+    // first fresh partner decode announces, everything after is the same station.
+    processDecodes([decode({ from: 'G4ZZZ', directedToMe: true })], settings, undefined, {
+      state: 'AwaitRoger',
+      dxcall: 'G4ZZZ',
+    })
+    expect(toasts).toHaveBeenCalledTimes(1)
+    for (const state of ['Confirming', 'Done']) {
       processDecodes([decode({ from: 'G4ZZZ', directedToMe: true })], settings, undefined, {
         state,
         dxcall: 'G4ZZZ',
       })
     }
-    expect(toasts).not.toHaveBeenCalled()
+    expect(toasts).toHaveBeenCalledTimes(1)
+    // Responder path (we called them): nothing they send back is a call.
+    for (const state of ['AwaitReport', 'AwaitRr73', 'Confirming', 'AwaitExchange', 'AwaitConfirm']) {
+      processDecodes([decode({ from: 'F6ZZZ', directedToMe: true })], settings, undefined, {
+        state,
+        dxcall: 'F6ZZZ',
+      })
+    }
+    expect(toasts).toHaveBeenCalledTimes(1)
   })
 
   it('still pops nothing ELSE about the station being worked — a partner row can only say "calling you"', () => {
@@ -101,7 +120,11 @@ describe('a station answering your CQ alerts on the decode that answers it (#167
       undefined,
       { state: 'AwaitRoger', dxcall: 'zl9dx' }, // case-insensitive, as before
     )
-    expect(toasts).not.toHaveBeenCalled()
+    // The one thing a partner row may say is "calling you" (they answered our CQ);
+    // the new-DXCC tier never fires for the station being worked.
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('calling you')
+    expect(toasts.mock.calls[0][0]).not.toContain('NEW DXCC')
   })
 
   it('does not let a watch-list entry fire for the station already being worked', () => {

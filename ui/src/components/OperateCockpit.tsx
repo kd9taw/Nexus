@@ -11,6 +11,7 @@
 // binding below, which is a keyboard handler with no string of its own.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
+import { engagedInQso } from '../alerts'
 import type {
   AppSnapshot,
   BandChannel,
@@ -822,6 +823,14 @@ export function OperateCockpit({
   // Same field the roster highlights as `workingCall`, so the two can never disagree
   // about who is being worked.
   const recallCall = selectedCall || snap.qso?.dxcall || null
+  // The decode panes' hide-filter exemption: the station the sequencer is actively working,
+  // and nobody after Done — the same "engaged" line the alerts draw.
+  const partnerCall = engagedInQso({
+    state: snap.fieldDay?.state ?? snap.qso?.state ?? null,
+    dxcall: snap.qso?.dxcall ?? null,
+  })
+    ? (snap.qso?.dxcall ?? null)
+    : null
   const recallCard = recallCall ? (
     <OperateRecall snap={snap} call={recallCall} mode={tier} onOpenLog={onOpenLogbook} />
   ) : null
@@ -1296,6 +1305,7 @@ export function OperateCockpit({
                         needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
+                    partnerCall={partnerCall}
                         onErase={() => notifyErase(0)}
                         title={t('operate.decodes.title')}
                       />
@@ -1325,6 +1335,7 @@ export function OperateCockpit({
                         needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
+                    partnerCall={partnerCall}
                         onErase={() => notifyErase(1)}
                         lockedFilter="rx"
                         // This pane is situational awareness, not a chase list: a station
@@ -1366,6 +1377,7 @@ export function OperateCockpit({
                     needScopes={needScopes}
                     myGrid={snap.mygrid}
                     {...decodeClickProps}
+                    partnerCall={partnerCall}
                     onErase={() => notifyErase(0)}
                   />
                 </div>
@@ -1390,6 +1402,7 @@ export function OperateCockpit({
                         needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
+                    partnerCall={partnerCall}
                         onErase={() => notifyErase(1)}
                         lockedFilter="rx"
                         // This pane is situational awareness, not a chase list: a station

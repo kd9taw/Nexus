@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { processDecodes } from './alerts'
+import { __resetAlertsForTest, processDecodes } from './alerts'
 import { pushToast } from './toast'
 import type { DecodeRow, Settings } from './types'
 
@@ -27,7 +27,10 @@ function decode(over: Partial<DecodeRow>): DecodeRow {
   } as unknown as DecodeRow
 }
 
-beforeEach(() => toasts.mockClear())
+beforeEach(() => {
+  toasts.mockClear()
+  __resetAlertsForTest()
+})
 
 describe('processDecodes QSO-aware quieting', () => {
   it('alerts "calling you" while idle/monitoring', () => {
@@ -61,16 +64,22 @@ describe('processDecodes QSO-aware quieting', () => {
     expect(toasts).toHaveBeenCalledTimes(1)
   })
 
-  it('and STILL suppresses it once the exchange is under way', () => {
-    // The chatty-popup fix, unchanged and still load-bearing: mycall dedups per DECODE, so
-    // without this every message of a QSO would beep. Both state vocabularies.
+  it('a DIFFERENT station calling while the exchange is under way announces — once', () => {
+    // ⚠️ REVERSED 2026-09-02. This used to assert silence for ANY to-me decode in a mid-QSO
+    // state, and the operator's own field test on 1.10.1 named the cost: "when I'm actively
+    // working a station and another station calls, I get no notification" — and while
+    // calling CQ with Auto on, the only toast ever heard was the partner's 73 AFTER the QSO.
+    // GridTracker2 notifies on every new call to your callsign; so does this now. What keeps
+    // it from being chatty is per-STATION memory, not the sequencer state: the same station
+    // repeating across the exchange's states is one event.
     for (const state of ['AwaitReport', 'AwaitRoger', 'Confirming', 'AwaitExchange', 'AwaitConfirm']) {
       processDecodes([decode({ from: 'K1ABC', directedToMe: true })], settings, undefined, {
         state,
-        dxcall: null,
+        dxcall: 'F5XYZ',
       })
     }
-    expect(toasts).not.toHaveBeenCalled()
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('calling you')
   })
 
   it('goes quiet as soon as the answer moves the sequencer on', () => {
@@ -91,14 +100,75 @@ describe('processDecodes QSO-aware quieting', () => {
     expect(toasts).toHaveBeenCalledTimes(1)
   })
 
-  it('never pops anything about the station currently being worked', () => {
+  it('a station YOU called (S&P) is never "calling you" — its replies are the QSO', () => {
+    // AwaitReport / AwaitRr73 are the responder states: we sent our grid, they reply. Their
+    // report is not a call, and a new-DXCC badge on the partner is not news either.
+    for (const state of ['AwaitReport', 'AwaitRr73']) {
+      processDecodes(
+        [decode({ from: 'F5XYZ', directedToMe: true, newDxcc: true })],
+        settings,
+        undefined,
+        { state, dxcall: 'f5xyz' }, // case-insensitive match
+      )
+    }
+    expect(toasts).not.toHaveBeenCalled()
+  })
+
+  it('the station answering YOUR CQ announces once even when Auto engaged it in the same ingest', () => {
+    // The 1.10.1 field report: with Auto on, the answer's decode arrives on a snapshot whose
+    // state has ALREADY moved CallingCq → AwaitRoger (the sequencer answered in the same
+    // ingest). The old `!engaged` gate saw AwaitRoger and said nothing — so a CQ run with
+    // Auto never toasted at all. AwaitRoger is the INITIATOR state: they called us.
     processDecodes(
-      [decode({ from: 'F5XYZ', directedToMe: true, newDxcc: true })],
+      [decode({ from: 'F5XYZ', directedToMe: true, message: 'KD9TAW F5XYZ JN25' })],
       settings,
       undefined,
-      { state: 'AwaitRoger', dxcall: 'f5xyz' }, // case-insensitive match
+      { state: 'AwaitRoger', dxcall: 'F5XYZ' },
     )
-    expect(toasts).not.toHaveBeenCalled()
+    expect(toasts).toHaveBeenCalledTimes(1)
+    expect(toasts.mock.calls[0][0]).toContain('calling you')
+    // …and their R-report, RR73 and 73 that follow are the same station: silent.
+    processDecodes(
+      [decode({ from: 'F5XYZ', directedToMe: true, message: 'KD9TAW F5XYZ R-10' })],
+      settings, undefined, { state: 'Confirming', dxcall: 'F5XYZ' },
+    )
+    processDecodes(
+      [decode({ from: 'F5XYZ', directedToMe: true, message: 'KD9TAW F5XYZ 73', signoff: true })],
+      settings, undefined, { state: 'Done', dxcall: 'F5XYZ' },
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+  })
+
+  it('a second station calling during the Auto CQ run announces too', () => {
+    processDecodes(
+      [
+        decode({ from: 'F5XYZ', directedToMe: true, message: 'KD9TAW F5XYZ JN25' }),
+        decode({ from: 'SP1TJ', directedToMe: true, message: 'KD9TAW SP1TJ JO74' }),
+      ],
+      settings, undefined, { state: 'AwaitRoger', dxcall: 'F5XYZ' },
+    )
+    expect(toasts).toHaveBeenCalledTimes(2)
+  })
+
+  it('a station is announced once per episode, and again after the window', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-09-02T00:00:00Z'))
+      processDecodes([decode({ from: 'K1ABC', directedToMe: true })], settings, undefined, {
+        state: 'Listening', dxcall: null,
+      })
+      processDecodes([decode({ from: 'K1ABC', directedToMe: true })], settings, undefined, {
+        state: 'Listening', dxcall: null,
+      })
+      expect(toasts).toHaveBeenCalledTimes(1)
+      vi.setSystemTime(new Date('2026-09-02T00:11:00Z'))
+      processDecodes([decode({ from: 'K1ABC', directedToMe: true })], settings, undefined, {
+        state: 'Listening', dxcall: null,
+      })
+      expect(toasts).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('still fires the loud new-DXCC alert for OTHER stations while engaged', () => {
@@ -396,17 +466,39 @@ describe('a stale decode must not become a phantom "calling you"', () => {
     ).not.toHaveBeenCalled()
   })
 
+  it('a FRESH 73 after Done is not a call either (the 1.10.1 screenshots)', () => {
+    // 1.10.1's freshness gate stopped REPLAYS; this is the other half. The partner's final
+    // "KR4FQG DD6WF 73" arrives genuinely fresh in the period after we logged, state Done,
+    // and it toasted "DD6WF is calling you". Nobody initiates with a sign-off: the engine's
+    // signoff classification excludes it, and the partner was announced already anyway.
+    processDecodes(
+      [decode({ from: 'DD6WF', directedToMe: true, message: 'KR4FQG DD6WF JO62' })],
+      settings, undefined, { state: 'AwaitRoger', dxcall: 'DD6WF' },
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+    processDecodes(
+      [decode({ from: 'DD6WF', directedToMe: true, message: 'KR4FQG DD6WF 73', signoff: true })],
+      settings, undefined, { state: 'Done', dxcall: 'DD6WF' },
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+    // And a sign-off from a station we never saw call (a missed grid decode) is still not a call.
+    processDecodes(
+      [decode({ from: 'PA0KGB', directedToMe: true, message: 'KR4FQG PA0KGB RR73', signoff: true })],
+      settings, undefined, { state: 'Done', dxcall: 'DD6WF' },
+    )
+    expect(toasts).toHaveBeenCalledTimes(1)
+  })
+
   it('does not replay an old caller after a band switch resets the state machine', () => {
     const old = decode({ from: 'W9STALE', directedToMe: true, message: 'N5TAN W9STALE EN52' })
-    // A third station called while a QSO with someone else was running → silent by design.
+    // A third station called while a QSO with someone else was running → announced ONCE
+    // (that is news; see the reversal above).
     processDecodes([old], settings, undefined, { state: 'AwaitReport', dxcall: 'K1ABC' })
-    expect(toasts).not.toHaveBeenCalled()
-    // Band switch: state resets to Listening, no new decode yet — the stale row rides along.
+    expect(toasts).toHaveBeenCalledTimes(1)
+    // Band switch: state resets to Listening, no new decode yet — the stale row rides along
+    // and must NOT be announced a second time.
     processDecodes([old], settings, undefined, { state: 'Listening', dxcall: null })
-    expect(
-      toasts,
-      'a decode from before the band switch replayed as a fresh call',
-    ).not.toHaveBeenCalled()
+    expect(toasts, 'a decode from before the band switch replayed as a fresh call').toHaveBeenCalledTimes(1)
   })
 
   // The two behaviours the fix must NOT break:

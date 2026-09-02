@@ -5,6 +5,29 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **"Is calling you" now tells you about every station that calls — and never about the
+  one you just finished with.** Two things were backwards. With Auto on, a station
+  answering your CQ raised no alert at all (the sequencer had already engaged them by the
+  time the alert looked), a second or third station calling during a QSO was silent, and
+  the only toast you ever saw was the partner's "73" after the contact was over. The alert
+  is now per station: every new station that calls you is announced once, whatever you are
+  doing — answering your CQ, calling in while you work someone else — and a sign-off
+  (RR73/73) is never a call. A station you called yourself (search-and-pounce) never
+  "calls you"; its replies are the QSO. A station that keeps calling is one alert, not one
+  per period, and becomes news again after ten quiet minutes. From the operator's own
+  field test of 1.10.1, with GridTracker2's behaviour as the yardstick.
+
+- **−B4 now hides the station you just worked.** The hide-B4 (and hide-blocked,
+  hide-confirmed, hidden-call) filters kept the *selected* station on screen so your
+  current partner could never vanish mid-QSO — but the selection lingers after a contact
+  ends, so a just-worked station stayed in Band Activity with its B4 badge until you clicked
+  elsewhere. The exemption now follows the station the sequencer is actively working, and
+  nobody after the QSO is done. From the operator's 1.10.1 field test.
+
 ## [1.10.1] — 2026-09-01
 
 <!-- Post-release work lands HERE, above the released section. A released section is

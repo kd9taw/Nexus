@@ -100,6 +100,11 @@ interface Props {
   onSetRx?: (freqHz: number) => void
   /** The Tx panel's current DX call — its rows get the selected highlight. */
   selectedCall?: string | null
+  /** The station the sequencer is ACTIVELY working (mid-QSO), or null. The hide filters
+   *  (−B4, hide-blocked, hide-confirmed, wildcard call-hide) exempt this station and no
+   *  other — NOT the selection, which lingers after a QSO ends and kept a just-worked B4
+   *  station on screen under −B4 until the operator clicked elsewhere (1.10.1 report). */
+  partnerCall?: string | null
   /** Session-only ignore set (Alt-double-click) — ignored calls render dimmed. */
   ignoredCalls?: ReadonlySet<string>
   /** Toggle a call in/out of the session ignore set (Alt-double-click). */
@@ -212,6 +217,7 @@ export function OperateDecodes({
   onSelectDecode,
   onSetRx,
   selectedCall,
+  partnerCall = null,
   ignoredCalls,
   onToggleIgnore,
   lockedFilter,
@@ -326,7 +332,9 @@ export function OperateDecodes({
       .filter((d) => passesFilter(d, filter, rxOffsetHz))
       // "Hide B4" ANDs with the chip (never with the B4 chip itself). Own rows and the
       // station mid-QSO stay — hiding your own echo or your current partner as "worked"
-      // would be the same class of self-own the country exclude guards against.
+      // would be the same class of self-own the country exclude guards against. "Mid-QSO"
+      // is `partnerCall` (the sequencer's live partner), NOT the selection: the selection
+      // lingers after Done, and a finished QSO's partner is just a worked station.
       .filter(
         (d) =>
           !(
@@ -334,7 +342,7 @@ export function OperateDecodes({
             filter !== 'b4' &&
             d.worked &&
             !d.mine &&
-            (selectedCall == null || d.from !== selectedCall)
+            (partnerCall == null || d.from !== partnerCall)
           ),
       )
       // "Hide blocked" ANDs the same way; own rows and the station mid-QSO always stay.
@@ -344,7 +352,7 @@ export function OperateDecodes({
             hideBlocked &&
             isIgnored(ignores, d.from) &&
             !d.mine &&
-            (selectedCall == null || d.from !== selectedCall)
+            (partnerCall == null || d.from !== partnerCall)
           ),
       )
       // "Hide confirmed on this band" — own rows and the working partner always stay.
@@ -354,7 +362,7 @@ export function OperateDecodes({
             hideConfirmed &&
             d.confirmedBand &&
             !d.mine &&
-            (selectedCall == null || d.from !== selectedCall)
+            (partnerCall == null || d.from !== partnerCall)
           ),
       )
       // Wildcard call-hide (VP8* etc.) — display-only; own rows and the QSO partner stay.
@@ -363,7 +371,7 @@ export function OperateDecodes({
           !(
             isCallHidden(d.from, hideCalls.entries) &&
             !d.mine &&
-            (selectedCall == null || d.from !== selectedCall)
+            (partnerCall == null || d.from !== partnerCall)
           ),
       )
       // The country exclusion is ANDed with the chip, and it is the last word on what the

@@ -26,9 +26,24 @@ import { matchWatchlist, watchLabel, type WatchFilter } from './watchlist'
 // watch-list hit) must NEVER be evicted by churn from the repeating kinds — that
 // is precisely how an ATNO started re-alerting every cycle. See `alertedRepeat`.
 const alertedOnce = new Set<string>()
+/** Per-STATION "calling you" memory (call → last alert, ms). A station calling you is one
+ *  event per episode, however many decodes it spans and whatever the sequencer is doing —
+ *  the answer to your CQ, its R-report, its RR73 are one station, not three alerts. The
+ *  window lets the same station be news again later in the session. */
+const mycallAlertedAt = new Map<string, number>()
+const MYCALL_REPEAT_MS = 10 * 60_000
+
+/** Test seam: forget every dedup memory so a case starts from nothing. */
 // The kinds that legitimately repeat as an exchange advances (mycall / cq). Bounded,
 // because a busy band produces these continuously.
 const alertedRepeat = new Set<string>()
+
+export function __resetAlertsForTest(): void {
+  alertedOnce.clear()
+  alertedRepeat.clear()
+  seenDecodes.clear()
+  mycallAlertedAt.clear()
+}
 // Every decode key ever seen (not just alert-worthy) — drives the batch
 // freshness check for the decode tick + screen-reader batch summaries.
 const seenDecodes = new Set<string>()
@@ -177,7 +192,7 @@ export interface QsoContext {
  * The engine draws the same line: `qso.rs` scores `State::Listening | State::CallingCq => 0`
  * exchanges completed, grouping the two precisely as here.
  */
-function engagedInQso(ctx?: QsoContext): boolean {
+export function engagedInQso(ctx?: QsoContext): boolean {
   return (
     !!ctx?.state &&
     ctx.state !== 'Listening' &&
@@ -233,7 +248,6 @@ export function processDecodes(
   // Current dial (MHz) for the per-alert band scopes; absent = band unknown (permissive).
   dialMhz?: number,
 ): void {
-  const engaged = engagedInQso(qso)
   const partner = qso?.dxcall?.toUpperCase() ?? null
 
   // ── Batch freshness (eyes-free channel): which rows have never been seen at
@@ -303,18 +317,50 @@ export function processDecodes(
     // unharmed — the CQ answer is fresh in exactly the batch it alerts from. Same defect
     // class as the stale-boundary TX incident: a decode outliving its moment must not
     // replay a decision.
+    //
+    // ⭐ AND THE RULE IS PER STATION, NOT PER SEQUENCER STATE (reversed 2026-09-02, the
+    // operator's own 1.10.1 field test). The `!engaged` gate that lived here suppressed the
+    // alerts a CQ run exists for and passed the one nobody wanted: with Auto on, the answer's
+    // decode lands on a snapshot whose state has ALREADY moved to AwaitRoger (the sequencer
+    // answered in the same ingest), so `engaged` silenced it; every further caller during the
+    // exchange was silenced the same way; and the partner's fresh "73" after Done — the one
+    // non-engaged moment — toasted "is calling you" about a QSO that was over. GridTracker2's
+    // contract, and now this one: every NEW station that calls you is announced, once,
+    // whatever you are doing. Three things decide it —
+    //   • not a sign-off: nobody initiates with RR73/73 (`d.signoff`, the engine's parse);
+    //   • not the station you are working — UNLESS you are the initiator (CallingCq /
+    //     AwaitRoger: they answered YOUR CQ, which is the #167 answer arriving on a snapshot
+    //     where it is already the partner). A station YOU called (AwaitReport / AwaitRr73,
+    //     the responder states) is never "calling you": its replies are the QSO;
+    //   • not announced within the last MYCALL_REPEAT_MS — the per-station memory that
+    //     replaces the sequencer gate as the anti-chatter, so the answer, its R-report and
+    //     its 73 are one event, not three.
+    const isPartner = !!partner && call?.toUpperCase() === partner
+    // "They are calling ME" holds for the partner while nothing is in progress (idle,
+    // Listening — a station the operator merely selected can still call first) and on the
+    // initiator path (CallingCq / AwaitRoger — they answered OUR CQ). On the responder path
+    // (AwaitReport / AwaitRr73 — we called THEM) and from Confirming on, the partner's
+    // messages are the exchange, never a call.
+    const st = qso?.state ?? null
+    const iAmInitiator =
+      st === null || st === 'Listening' || st === 'CallingCq' || st === 'AwaitRoger'
+    const stationKey = call?.toUpperCase() ?? ''
+    const recentlyAnnounced =
+      (mycallAlertedAt.get(stationKey) ?? Number.NEGATIVE_INFINITY) > Date.now() - MYCALL_REPEAT_MS
     const callingMe = !!(
       settings.alertMyCall &&
       d.directedToMe &&
-      !engaged &&
-      freshKeys.has(decodeKey(d))
+      !d.signoff &&
+      freshKeys.has(decodeKey(d)) &&
+      !recentlyAnnounced &&
+      (!isPartner || iAmInitiator)
     )
+    if (callingMe) mycallAlertedAt.set(stationKey, Date.now())
 
     // Already working this station → nothing else about them is news (skipped WITHOUT
     // consuming the dedup key, so a later fresh event can still alert). A partner row that
     // IS someone calling us falls through to the kind ladder below, where `mycall` wins
     // first — so a partner can still only ever produce that one alert.
-    const isPartner = !!partner && call?.toUpperCase() === partner
     if (isPartner && !callingMe) continue
 
     // User watch list FIRST: an explicitly-watched call/prefix/entity/grid is the loudest tier
