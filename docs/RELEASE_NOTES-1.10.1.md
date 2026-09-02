@@ -1,5 +1,18 @@
 *Released 1 September 2026 — everything new since 1.10.0*
 
+**Nexus now logs to World Radio League.** WRL is the live logging and leaderboard platform a
+lot of operators run alongside their traditional logbook — and Nexus now feeds it like it
+feeds LoTW, eQSL, QRZ and ClubLog. Paste your WRL API key once in Settings ▸ Logging &
+Connectors and you're done: the key is verified against your WRL account the moment you save
+it, your logbook is found automatically, and from then on every contact you log flows to WRL
+as you work it — no browser tab, no end-of-session upload, your standings moving while
+you're still on the air. Each Logbook row gets a WRL push button too, for anything logged
+before you connected. Bringing years of history? The Export for WRL button writes an ADIF
+shaped for WRL's own bulk importer, which is the right road for a big one-time backfill —
+eleven thousand contacts go in through their side in one shot rather than trickling through
+an API. Your key lives in the operating system's keychain with the rest of your credentials,
+never in a file.
+
 **If you're on a Mac, this release gets your radio back.** 1.10.0 could not talk to a rig at
 all on a Mac without Homebrew — Test CAT tried every speed and heard nothing, whatever the
 radio. The rig-control tools Nexus ships were looking for a helper file at a Homebrew path
@@ -17,12 +30,6 @@ transmitter keyed at launch and nothing would release it. Nexus now runs the por
 hardware flow control whenever RTS is your key line: it starts low and follows PTT. If your
 radio's own CAT menu has RTS flow control switched on, turn it off to match. Reported by
 vk6mo.
-
-**World Radio League joins the connectors.** Paste your WRL API key in Settings ▸ Logging &
-Connectors and every logged contact flows to your WRL logbook as you work it — same as LoTW,
-eQSL, QRZ and the rest, with a per-contact push button in the Logbook for anything older.
-Bringing an existing log? The Export for WRL button writes an ADIF shaped for their bulk
-importer, which is the right road for thousands of contacts.
 
 **Voice memories from a script.** The rig-sharing port now answers `\send_voice_mem` and
 `\stop_voice_mem` — the same spellings Hamlib's own tools use — so an external script can
