@@ -927,6 +927,14 @@ const CAT_DEAD_PROBES_BEFORE_REBUILD: u32 = 3;
 const CAT_REBUILD_BACKOFF_MS: f64 = 60_000.0;
 /// How often the configured serial port is checked for presence while CAT is down.
 const CAT_PORT_CHECK_MS: f64 = 10_000.0;
+/// A reopen that FAILED while the port was present (or its presence unknowable) is retried on
+/// this backoff, doubling to [`CAT_REOPEN_MAX_MS`] and reset by the port re-appearing. This is
+/// the arm the first overnight bench found missing: on Windows the COM port re-appears a second
+/// or two before the driver will open it, the port-returned edge fired ONCE, that open failed,
+/// and nothing ever tried again — the Yaesu stayed CAT ✗ all morning while the Icom (native
+/// CI-V, which respawns its engine every tick) came straight back.
+const CAT_REOPEN_RETRY_MS: f64 = 10_000.0;
+const CAT_REOPEN_MAX_MS: f64 = 300_000.0;
 /// Hamlib func tokens for the Expert DSP toggles, in the engine's
 /// `[nb, nr, notch, comp, vox, manual_notch]` order.
 ///
@@ -2804,6 +2812,9 @@ struct RadioLoop {
     cat_down_link_fault: bool,
     /// Earliest tick a suspect rebuild may run (backoff between rebuilds).
     cat_rebuild_at: f64,
+    /// Earliest tick a FAILED reopen (no daemon, no control) is retried, and its backoff.
+    cat_reopen_at: f64,
+    cat_reopen_backoff_ms: f64,
     /// Next tick the serial port's presence is checked while CAT is down.
     cat_port_check_at: f64,
     /// Last presence verdict of the configured serial port while CAT was down; `None` = not
@@ -3054,6 +3065,8 @@ impl RadioLoop {
             cat_dead_probes: 0,
             cat_down_link_fault: false,
             cat_rebuild_at: 0.0,
+            cat_reopen_at: 0.0,
+            cat_reopen_backoff_ms: CAT_REOPEN_RETRY_MS,
             cat_port_check_at: 0.0,
             cat_port_present: None,
             cat_port_identity: None,
@@ -3124,6 +3137,8 @@ impl RadioLoop {
         self.dial_fail_count = 0;
         self.cat_dead_probes = 0;
         self.cat_port_present = None;
+        self.cat_reopen_backoff_ms = CAT_REOPEN_RETRY_MS;
+        self.cat_reopen_at = 0.0;
         self.remember_port_identity();
     }
 
@@ -3157,7 +3172,7 @@ impl RadioLoop {
     /// [`CAT_DEAD_PROBES_BEFORE_REBUILD`] failed re-probes (or no daemon at all to probe with),
     /// rate-limited by [`CAT_REBUILD_BACKOFF_MS`]. Never while the port is known absent —
     /// there is nothing to open yet.
-    fn cat_rebuild_due(&mut self, want: &Transport, now: f64) -> bool {
+    fn cat_rebuild_due(&mut self, want: &Transport, now: f64, rig_has_control: bool) -> bool {
         if self.cat_ok != Some(false) || self.operator_keyed() || self.cat_hold_active {
             return false;
         }
@@ -3170,7 +3185,20 @@ impl RadioLoop {
         } else {
             false
         };
-        port_returned || self.silence_rebuild_due(now)
+        if port_returned {
+            return true;
+        }
+        if self.cat_port_present == Some(false) {
+            return false; // nothing to open yet
+        }
+        // No daemon AND no way to talk to a rig: the last open FAILED (or never happened) while
+        // the port is present or unknowable. Retry it on the reopen backoff. A coexisting or
+        // external rigctld has no handle here either but DOES give the rig control, so it
+        // takes the silence path below instead.
+        if !rig_has_control && self.rigctld_proc.is_none() {
+            return now >= self.cat_reopen_at;
+        }
+        self.silence_rebuild_due(now)
     }
 
     /// The sustained-silence half of [`Self::cat_rebuild_due`], pure on the loop's fields:
@@ -3178,9 +3206,6 @@ impl RadioLoop {
     /// "there is no daemon handle" arm on purpose: a coexisting or external rigctld has no
     /// handle here either, and the tests' rigs run without one.)
     fn silence_rebuild_due(&self, now: f64) -> bool {
-        if self.cat_port_present == Some(false) {
-            return false;
-        }
         self.cat_dead_probes >= CAT_DEAD_PROBES_BEFORE_REBUILD && now >= self.cat_rebuild_at
     }
 
@@ -3202,6 +3227,11 @@ impl RadioLoop {
         if present {
             // The configured name is live again: any alias is stale.
             self.cat_port_alias = None;
+        }
+        if returned {
+            // Fresh evidence: the failed-reopen backoff starts over.
+            self.cat_reopen_backoff_ms = CAT_REOPEN_RETRY_MS;
+            self.cat_reopen_at = 0.0;
         }
         self.cat_port_present = Some(present);
         returned
@@ -4265,7 +4295,7 @@ impl RadioLoop {
             // a rig that is merely off, and the breaker's re-probe asks that same daemon forever.
             // Two independent triggers reopen the port: the configured port coming BACK, and
             // sustained silence past a few failed re-probes (with backoff between rebuilds).
-            let suspect_rebuild = self.cat_rebuild_due(&want, now);
+            let suspect_rebuild = self.cat_rebuild_due(&want, now, rig.has_control());
             if daemon_died {
                 crate::civ::diag::note("rigctld died: respawning the active radio's CAT daemon");
                 let mut eng = engine_lock(engine);
@@ -4405,6 +4435,10 @@ impl RadioLoop {
                 self.cat_dead_probes = 0;
                 self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
                 self.cat_port_present = None;
+                // If THIS open failed too, the next try waits out the reopen backoff.
+                self.cat_reopen_at = now + self.cat_reopen_backoff_ms;
+                self.cat_reopen_backoff_ms =
+                    (self.cat_reopen_backoff_ms * 2.0).min(CAT_REOPEN_MAX_MS);
                 self.cat_ok = ok;
                 {
                     let mut eng = engine_lock(engine);
@@ -5169,7 +5203,12 @@ impl RadioLoop {
                 // initial probe). Otherwise the dial read-back stays disabled even though
                 // mode-switching works, and the VFO knob never mirrors into the UI. Also
                 // clear the matching "no rig control" UI warning, once, on the flip.
-                if self.cat_ok != Some(true) {
+                // ⚠️ ONLY A RIG WITH A CAT CHANNEL CAN CONFIRM ONE. A `Rig::vox()` — what a failed
+                // open hands back — answers Ok to every set without sending anything, and this
+                // branch used to read that as "the rig accepted a command": the pill went green
+                // over a radio that was off (the overnight-radio bench, 2026-09-02) and the
+                // failed-reopen retry, gated on CAT being down, switched itself off.
+                if rig.has_control() && self.cat_ok != Some(true) {
                     self.cat_ok = Some(true);
                     self.cat_retry_ms = CAT_RETRY_BASE_MS;
                     self.cat_retry_at = 0.0;
@@ -22859,6 +22898,65 @@ mod tests {
         );
     }
 
+    /// The first overnight bench (2026-09-02): the port came back, the ONE reopen the edge
+    /// earned failed (Windows lists a COM port before its driver will open it), and the loop
+    /// sat with no daemon, no control and no probes to count — CAT ✗ all morning. A failed
+    /// reopen must be retried while the port is present, on a backoff, never just once.
+    #[test]
+    fn a_failed_reopen_with_the_port_present_is_retried_on_a_backoff() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox(); // what a failed open hands back: no control at all
+        let mut state = loop_state();
+        state.cat_ok = Some(false);
+        state.cat_port_present = Some(true); // the port is back — that edge already fired
+        let reopens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reopens.clone();
+        let mut reopen = move |_t: &Transport, _c: bool| -> RigOpen {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (
+                Rig::vox(),
+                None,
+                CatProbe::status(Some(false), "driver not ready"),
+            )
+        };
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let n =
+            |r: &Arc<std::sync::atomic::AtomicUsize>| r.load(std::sync::atomic::Ordering::SeqCst);
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, ticks: usize, tick: &mut f64| {
+            for _ in 0..ticks {
+                *tick += 500.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut reopen,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        run(&mut state, &mut rig, 2, &mut tick);
+        assert_eq!(n(&reopens), 1, "a failed open is retried at once");
+        run(&mut state, &mut rig, 18, &mut tick); // +9 s: inside the first backoff
+        assert_eq!(n(&reopens), 1, "…but not on every tick");
+        run(&mut state, &mut rig, 4, &mut tick); // past 10 s
+        assert_eq!(n(&reopens), 2, "retried after the backoff");
+        run(&mut state, &mut rig, 42, &mut tick); // +21 s: past the doubled 20 s backoff
+        assert_eq!(n(&reopens), 3, "and again, doubling");
+        // A port that is known ABSENT is never opened at.
+        state.cat_port_present = Some(false);
+        state.cat_reopen_at = 0.0;
+        run(&mut state, &mut rig, 4, &mut tick);
+        assert_eq!(n(&reopens), 3, "nothing to open at while the port is gone");
+    }
+
     /// The serial-port watch, pure: an absent → present edge is the immediate rebuild trigger,
     /// a known-absent port suppresses the silence rebuild (nothing to open yet), and an EMPTY
     /// enumeration says nothing at all — it must never read as "absent".
@@ -22870,14 +22968,19 @@ mod tests {
         state.cat_rebuild_at = 0.0;
         assert!(!state.port_watch("COM5", &[]), "empty enumeration: unknown");
         assert_eq!(state.cat_port_present, None);
+        let no_port = {
+            let mut t = Transport::from_cfg(&RadioConfig::default());
+            t.serial_port.clear(); // no port to watch: the decision rests on the fields alone
+            t
+        };
         assert!(
-            state.silence_rebuild_due(1.0),
+            state.cat_rebuild_due(&no_port, 1.0, true),
             "unknown presence does not block the silence rebuild"
         );
         assert!(!state.port_watch("COM5", &["COM1".to_string()]));
         assert_eq!(state.cat_port_present, Some(false));
         assert!(
-            !state.silence_rebuild_due(1.0),
+            !state.cat_rebuild_due(&no_port, 1.0, true),
             "a port known absent: nothing to open yet"
         );
         assert!(

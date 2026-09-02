@@ -33,7 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given up on is forgiven the moment the link returns. Green means a real answer: a mode
   change whose read-back failed no longer paints the indicator, and on the native CI-V
   path a cached dial is served for only a few seconds after the last real reading, so a
-  mute radio can no longer look connected. From the operator's own overnight test.
+  mute radio can no longer look connected. And two things the first overnight bench
+  then caught: a reopen that fails while the port is present (Windows lists a COM port a
+  second or two before its driver will open it) is now retried on a backoff instead of
+  once, and a radio Nexus could not open at all — which answers "yes" to every command
+  without sending anything — can no longer paint the indicator green by "accepting" a
+  band change. From the operator's own overnight tests.
 
 - **A working connector no longer reads "stored — not verified yet" after every restart.**
   The connection health shown in Settings ▸ Logging & Connectors lived only in memory, so
