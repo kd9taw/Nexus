@@ -31,6 +31,34 @@ beforeEach(() => {
 })
 afterEach(() => __resetDurableForTest())
 
+describe('a write that lands before the load (#205)', () => {
+  it('survives the load instead of being shadowed by the stale file copy', async () => {
+    // The waterfall pop-out bug, distilled: boot hygiene re-docked the stale popped-out
+    // pane BEFORE ui-state.json was read, the corrective write reached localStorage only
+    // (the cache was still null), and the loaded file's stale 'popped' then shadowed it
+    // for the whole session — served by durableGet and re-flushed forever, so the pane
+    // came up popped-out with no window on every launch.
+    const key = 'nexus.panels.ft8.main'
+    mockLoad.mockResolvedValue({ [key]: 'popped', 'nexus.watchlist': '["G0ABC"]' })
+    durableSet(key, 'docked') // before loadDurable — the #205 ordering
+    await loadDurable()
+    expect(durableGet(key)).toBe('docked')
+    // …and the correction is what flushes, not the stale value resurrected.
+    await flushDurable()
+    expect(mockSave.mock.calls.at(-1)![0][key]).toBe('docked')
+    // Positive control: a key with no pre-load write still comes from the file, so this
+    // cannot pass by the load being ignored wholesale.
+    expect(durableGet('nexus.watchlist')).toBe('["G0ABC"]')
+  })
+
+  it('a pre-load remove sticks too', async () => {
+    mockLoad.mockResolvedValue({ 'nexus.watchlist': '["G0ABC"]' })
+    durableRemove('nexus.watchlist')
+    await loadDurable()
+    expect(durableGet('nexus.watchlist')).toBeNull()
+  })
+})
+
 describe('migration off localStorage', () => {
   it('adopts a key that exists only in localStorage', async () => {
     window.localStorage.setItem('nexus.watchlist', '["G0ABC"]')

@@ -87,6 +87,15 @@ const durable = new Set(DURABLE_KEYS)
 /** In-memory mirror of `ui-state.json`. `null` until `loadDurable()` has run — distinct from an
  *  empty map, which is a real and normal first-run answer. */
 let cache: Record<string, string> | null = null
+/** Writes and removes that arrived BEFORE `loadDurable` filled the cache (`null` = remove).
+ *  Without this buffer such a write reached `localStorage` only — the cache was `null` — and
+ *  the loaded file then SHADOWED it for the whole session, because `durableGet` prefers the
+ *  cache: the stale file value was served, and every flush re-persisted it. That is #205 to
+ *  the letter: boot hygiene re-docks a stale popped-out pane before the store loads, and the
+ *  waterfall came up "popped out" with no window on every launch, forever. The load applies
+ *  these LAST, so a this-session write beats the file copy — the same
+ *  whichever-copy-is-newer-wins contract every post-load write already has. */
+let preLoad: Map<string, string | null> | null = null
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let flushing = false
 
@@ -107,8 +116,13 @@ export async function loadDurable(): Promise<void> {
   try {
     loaded = (await uiStateLoad()) ?? {}
   } catch {
-    // No bridge, or the store could not be read. Fall back to localStorage entirely.
+    // No bridge, or the store could not be read. Fall back to localStorage entirely — but
+    // this-session pre-load writes still land in the cache, so reads keep seeing them.
     cache = {}
+    if (preLoad) {
+      for (const [k, v] of preLoad) if (v !== null) cache[k] = v
+      preLoad = null
+    }
     return
   }
   // Migration: adopt what is only in localStorage. Absent-from-store is the test, NOT
@@ -135,6 +149,17 @@ export async function loadDurable(): Promise<void> {
       loaded[key] = local
       migrated = true
     }
+  }
+  // This-session writes that arrived before the load beat the file copy (see `preLoad`) —
+  // applied AFTER the migration walk, so a pre-load remove also wins over a localStorage
+  // copy the migration would otherwise adopt.
+  if (preLoad) {
+    for (const [k, v] of preLoad) {
+      if (v === null) delete loaded[k]
+      else loaded[k] = v
+    }
+    preLoad = null
+    migrated = true
   }
   cache = loaded
   if (migrated) scheduleFlush()
@@ -173,6 +198,8 @@ export function durableSet(key: string, value: string): void {
   if (cache) {
     cache[key] = value
     scheduleFlush()
+  } else {
+    ;(preLoad ??= new Map()).set(key, value)
   }
 }
 
@@ -183,9 +210,13 @@ export function durableRemove(key: string): void {
   } catch {
     /* see durableSet */
   }
-  if (cache && key in cache) {
-    delete cache[key]
-    scheduleFlush()
+  if (cache) {
+    if (key in cache) {
+      delete cache[key]
+      scheduleFlush()
+    }
+  } else if (isDurable(key)) {
+    ;(preLoad ??= new Map()).set(key, null)
   }
 }
 
@@ -225,6 +256,7 @@ function safeLocalGet(key: string): string | null {
 /** Test seam: forget everything loaded, so a case can start from a known state. */
 export function __resetDurableForTest(): void {
   cache = null
+  preLoad = null
   if (flushTimer) clearTimeout(flushTimer)
   flushTimer = null
   flushing = false
