@@ -88,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scripts can play the rig's voice memories through Nexus.** The rig-sharing port
+  (NET rigctl, :4532) now answers `\send_voice_mem <n>` and `\stop_voice_mem` — the
+  same spellings Hamlib's own tools use — so an external script can trigger DVS
+  playback on a rig that supports it (Yaesu's PB command, among others) while Nexus
+  stays connected. The radio itself keys for the playback, exactly as if you had
+  pressed the memory button on the front panel, and a rig that doesn't support voice
+  memories over CAT says so in the CAT diagnostics. Raw CAT passthrough remains
+  deliberately unsupported: a scoped verb is a promise Nexus can keep; an open pipe to
+  the transmitter is not. From an FT-991A field request.
+
 - **Confirmation opportunities can be switched off.** The Needed board and the decode
   chips include a "Confirm" tier — stations you have worked but not confirmed, your LoTW
   confirmation chances. It stays on by default; operators who chase contacts rather than

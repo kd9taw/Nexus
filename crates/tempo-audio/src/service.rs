@@ -5670,6 +5670,27 @@ impl RadioLoop {
                 // meter the heavy poll has proven; `smeter_misses` stays heavy-poll-owned.
             }
 
+            // Voice-memory relay (the broker's `\send_voice_mem` / `\stop_voice_mem`,
+            // the FT-991A DVS ask). NOT retune-gated: the rig keys ITSELF for playback and
+            // arbitrates against its own state, exactly as a front-panel PB press — Nexus
+            // commands no PTT and holds no watchdog for it (the ordinary PTT poll shows the
+            // TX). The broker already answered RPRT 0 at the accepted-by-Nexus seam (its
+            // whole write surface does), so a rig refusal is surfaced to the OPERATOR, the
+            // send_morse precedent.
+            if let Some(cmd) = { engine_lock(engine).take_voice_mem() } {
+                let r = match cmd {
+                    tempo_app::engine::VoiceMemCmd::Play(ch) => rig.send_voice_mem(ch),
+                    tempo_app::engine::VoiceMemCmd::Stop => rig.stop_voice_mem(),
+                };
+                if r.is_err() {
+                    crate::civ::diag::note(
+                        "the rig rejected the voice-memory command (Hamlib \
+                         send_voice_mem/stop_voice_mem) — this radio's backend may not \
+                         support voice memories over CAT",
+                    );
+                }
+            }
+
             // Apply a pending SPLIT request (after the dial/mode retune so the TX
             // VFO programs against the fresh dial). Pile-up spots ("UP 2") set it;
             // any plain QSY clears it back to simplex.

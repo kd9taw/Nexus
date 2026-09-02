@@ -1658,6 +1658,15 @@ struct StalledQso {
     start_unix: Option<u64>,
 }
 
+/// A queued voice-memory relay for the radio loop (see `Engine::pending_voice_mem`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceMemCmd {
+    /// Play memory `ch` (`\send_voice_mem ch` → Yaesu `PB0<ch>;`).
+    Play(u32),
+    /// Abort a playback in progress (`\stop_voice_mem`).
+    Stop,
+}
+
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
@@ -2077,6 +2086,14 @@ pub struct Engine {
     split_tx_mhz: Option<f64>,
     /// One-shot "apply the split state now" flag for the radio loop.
     split_dirty: bool,
+    /// One-shot voice-memory relay from the CAT broker (`\send_voice_mem` /
+    /// `\stop_voice_mem`), consumed by the radio loop's next tick — `take_split_request`'s
+    /// one-shot shape. ⚠️ PLAYBACK TRANSMITS, and the RIG keys itself (a front-panel PB
+    /// press over the wire): Nexus commands no PTT, sets no watchdog of its own, and sees
+    /// the transmission through the ordinary PTT poll exactly as it sees a mic key. A new
+    /// request simply replaces an unconsumed one — the newest ask wins, as everywhere else
+    /// in the one-shot family.
+    pending_voice_mem: Option<VoiceMemCmd>,
     /// The TX frequency Nexus COMMANDED and the rig ACKNOWLEDGED — the ONLY transmit frequency
     /// the privilege gate is allowed to judge.
     ///
@@ -4009,6 +4026,7 @@ impl Engine {
             tx_split_confirmed_hz: None,
             observed_split: None,
             split_dirty: false,
+            pending_voice_mem: None,
             rit_hz: 0,
             xit_hz: 0,
             active_vfo_b: false,
@@ -6309,6 +6327,21 @@ impl Engine {
     /// The desired split TX dial (MHz), `None` = simplex — the UI's SPLIT badge.
     pub fn split_tx_mhz(&self) -> Option<f64> {
         self.split_tx_mhz
+    }
+
+    /// Queue a voice-memory playback (`\send_voice_mem ch`, the FT-991A DVS ask).
+    pub fn request_voice_mem(&mut self, ch: u32) {
+        self.pending_voice_mem = Some(VoiceMemCmd::Play(ch));
+    }
+
+    /// Queue a voice-memory abort (`\stop_voice_mem`).
+    pub fn request_voice_mem_stop(&mut self) {
+        self.pending_voice_mem = Some(VoiceMemCmd::Stop);
+    }
+
+    /// One-shot consume for the radio loop — `take_split_request`'s shape.
+    pub fn take_voice_mem(&mut self) -> Option<VoiceMemCmd> {
+        self.pending_voice_mem.take()
     }
 
     /// The rig REJECTED the split command at `tx_mhz` — drop the desired state

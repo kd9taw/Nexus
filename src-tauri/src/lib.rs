@@ -17508,6 +17508,19 @@ impl EngineRig {
 
 #[cfg(feature = "radio")]
 impl tempo_audio::rigctld_server::RigBackend for EngineRig {
+    fn send_voice_mem(&self, ch: u32) -> Option<bool> {
+        // Queue for the radio loop; RPRT 0 = accepted by Nexus, the broker's whole
+        // write-surface contract. The RIG transmits the message itself (a front-panel PB
+        // press over the wire) and a backend refusal is surfaced on the CAT diagnostics,
+        // exactly like a rejected send_morse.
+        engine_lock(&self.engine).request_voice_mem(ch);
+        Some(true)
+    }
+    fn stop_voice_mem(&self) -> Option<bool> {
+        engine_lock(&self.engine).request_voice_mem_stop();
+        Some(true)
+    }
+
     fn freq_hz(&self) -> u64 {
         (engine_lock(&self.engine).settings().dial_mhz * 1_000_000.0).round() as u64
     }

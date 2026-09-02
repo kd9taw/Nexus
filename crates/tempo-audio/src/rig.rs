@@ -1056,6 +1056,16 @@ impl Rig {
     pub fn stop_morse(&mut self) -> std::io::Result<()> {
         self.cat("\\stop_morse\n")
     }
+    /// Play the rig's voice memory `ch` — Hamlib's `\send_voice_mem`, the exact spelling
+    /// its own NET client uses (on a Yaesu it becomes `PB0<ch>;`). ⚠️ The RIG transmits the
+    /// message itself; this only relays the ask.
+    pub fn send_voice_mem(&mut self, ch: u32) -> std::io::Result<()> {
+        self.cat(&format!("\\send_voice_mem {ch}\n"))
+    }
+    /// Abort a voice-memory playback in progress.
+    pub fn stop_voice_mem(&mut self) -> std::io::Result<()> {
+        self.cat("\\stop_voice_mem\n")
+    }
 
     /// Send a rigctld command, succeeding on `RPRT 0` (or an empty reply); no-op when
     /// no CAT control channel is configured. Shared by the all-mode control verbs above.
