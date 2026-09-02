@@ -165,8 +165,9 @@ All connector credentials live exclusively in the OS keychain (Windows Credentia
 | **QRZ Logbook** | Per-QSO push on log; callbook autofill on call-field blur | Off (`qrz_logbook_upload: false`) | XML session key + Logbook API key | See [Logbook and Awards](Logbook-and-Awards.md) |
 | **ClubLog** | Realtime per-QSO push; auto-suspends on 403 to avoid IP-ban | Off (`clublog_upload: false`) | Application Password (not main password) | See [Logbook and Awards](Logbook-and-Awards.md) |
 | **eQSL** | Outbound push per-QSO; InBox download for confirmation sync | Off (`eqsl_upload: false`) | eQSL username + password | See [Logbook and Awards](Logbook-and-Awards.md) |
+| **World Radio League** | Per-QSO push on log; per-row push from the Logbook; Export for WRL for bulk backfill | Off (`wrl_upload: false`) | WRL API key (verified against your account at save; logbook resolved automatically) | See [Logbook and Awards](Logbook-and-Awards.md) |
 
-Auto-push on log (QRZ / ClubLog / eQSL) is controlled by three boolean settings flags. All three default off — you opt in per-service. LoTW upload is always manual (TQSL must be invoked by the operator or via the Upload button in the Awards view).
+Auto-push on log (QRZ / ClubLog / eQSL / WRL) is controlled by per-service boolean settings flags. All three default off — you opt in per-service. LoTW upload is always manual (TQSL must be invoked by the operator or via the Upload button in the Awards view).
 
 An important confirmation-source distinction: eQSL confirmations set `confirmed = true` but `award_confirmed = false`. Only LoTW and paper QSL confirmations set `award_confirmed = true`. All award counting — DXCC, WAZ, WAS, Honor Roll — uses `award_confirmed` exclusively, so eQSL-only contacts are never over-counted toward official credit. See [Logbook and Awards](Logbook-and-Awards.md) for the full awards and connector reference.
 

@@ -1,6 +1,6 @@
 # Logbook and Awards
 
-Nexus keeps a persistent ADIF logbook that drives offline award tracking, per-source confirmation accounting, five outbound upload connectors, two inbound confirmation syncs, and a shipped gamification layer called Journey — all from a single QSO record that survives restarts and round-trips cleanly through standard ADIF.
+Nexus keeps a persistent ADIF logbook that drives offline award tracking, per-source confirmation accounting, six outbound upload connectors, two inbound confirmation syncs, and a shipped gamification layer called Journey — all from a single QSO record that survives restarts and round-trips cleanly through standard ADIF.
 
 ---
 
@@ -165,11 +165,27 @@ Responses are classified into the same Accepted / Duplicate / AuthFail / Rejecte
 
 Auto-push to HRDLog on log is controlled by `hrdlog_upload` (default: **off**).
 
+## World Radio League Integration
+
+World Radio League push sends one QSO to WRL's contacts API after each log entry. Authentication
+uses a per-account WRL API key, stored in the OS keychain; the key is verified against your WRL
+account the moment you save it, and your destination logbook is resolved automatically at the
+same time (an account with several logbooks and no default is told so rather than guessed at).
+
+Responses are classified into the same Accepted / Duplicate / AuthFail / Rejected outcomes and
+written to the shared connection event log. Each Logbook row also carries a WRL push button for
+contacts logged before the key was set. For a large historical backfill, use **Export for WRL**
+(beside the key field): it writes an ADIF shaped for WRL's own bulk importer, which is the right
+road for thousands of contacts — the API accepts one contact at a time and is rate-limited.
+Like HRDLog, WRL does not stamp a per-QSO ADIF upload-state field.
+
+Auto-push to WRL on log is controlled by `wrl_upload` (default: **off**).
+
 ---
 
 ## Keychain Credential Policy
 
-All connector credentials — LoTW, eQSL, QRZ XML password, QRZ Logbook API key, ClubLog Application Password, and the HRDLog upload code — are stored in the OS keychain:
+All connector credentials — LoTW, eQSL, QRZ XML password, QRZ Logbook API key, ClubLog Application Password, the HRDLog upload code, and the World Radio League API key — are stored in the OS keychain:
 
 | Platform | Keychain |
 |---|---|
