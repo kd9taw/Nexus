@@ -767,6 +767,13 @@ const AUDIO_REBUILD_DEBOUNCE_MS: f64 = 5_000.0;
 /// more than one blocking CAT read lands per loop tick. RX health polling is suspended while
 /// keyed, so this reuses that bus headroom.
 const TX_METER_POLL_MS: f64 = 150.0;
+/// The tune-time meter read's deadline. A tune carrier is fed one chunk per tick from a lead of
+/// [`TUNE_LEAD_MS`]; a meter read blocks the loop, so it may take at most this long before the
+/// ring would run dry. Past it the read is abandoned, never waited for.
+const TUNE_METER_DEADLINE_MS: u64 = 120;
+/// …and it is only ISSUED while the carrier's remaining lead can absorb that deadline with
+/// margin; a thinner lead waits a tick rather than risk a gap.
+const TUNE_METER_MIN_LEAD_MS: f32 = 150.0;
 /// How long an over must have been running before a ZERO forward-power reading is believed.
 ///
 /// Po refreshes every ~600 ms (one meter per 150 ms cycle, round-robin over four), so 2 s puts
@@ -7705,18 +7712,18 @@ impl RadioLoop {
         {
             let keyed_now =
                 self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied;
-            // ⚠️ …BUT THE METERS STAND DOWN FOR A TUNE-UP, and that is a starvation fix rather
-            // than a display choice. The note above says one blocking read per throttled cycle is
-            // safe because four back-to-back reads are what would stall a chunked carrier. That
-            // was measured against an over; against a TUNE it is wrong, because a tune carrier is
-            // generated one chunk per tick and ONE slow read is enough — 150 ms of meter poll on
-            // a rig that answers slowly outlasts the lead, the ring runs dry, and the card emits
-            // zeros with PTT still asserted (see [`TUNE_LEAD_MS`]). The lead is now 250 ms, which
-            // absorbs a healthy read; standing the poll down as well is what makes the carrier
-            // gapless on a slow link too, and it costs nothing — these are bars nobody watches
-            // during a tune-up, and the tune-up is excluded from the Po watch by contract anyway.
-            // Real overs and live mic PTT keep the poll.
-            let meters_now = keyed_now && !self.tuning_keyed;
+            // ⚠️ THE METERS RUN DURING A TUNE-UP TOO — BOUNDED, NOT STOOD DOWN. From 2026-08-28
+            // to 1.10.1 the poll stood down for a tune as a starvation fix: a tune carrier is fed
+            // one chunk per tick from a lead of [`TUNE_LEAD_MS`], and ONE slow blocking read (a
+            // 150 ms meter poll on a rig that answers slowly) outlasted the lead, the ring ran dry
+            // and the card emitted zeros with PTT still asserted. The note that justified it —
+            // "bars nobody watches during a tune-up" — was wrong: the operator watches SWR during
+            // Tune to see the antenna tuner take, and remotely it is the ONLY way to see it. So
+            // the read is kept and made safe instead: issued only while the carrier's remaining
+            // lead exceeds [`TUNE_METER_MIN_LEAD_MS`], and with [`TUNE_METER_DEADLINE_MS`] as its
+            // deadline, so a slow rig costs a meter reading, never a gap in the carrier. The
+            // tune-up stays excluded from the Po watch by contract.
+            let meters_now = keyed_now;
             // ⚠️ PROOF OF TRANSMISSION (2026-08-17 Flex audit, completeness-critic gap #14 —
             // "'keyed but no RF' is never detected"). The Po meter read below is already the
             // evidence; nothing ever asked it whether any RF actually came out. Arm the watch
@@ -7785,15 +7792,34 @@ impl RadioLoop {
                 engine_lock(engine).observe_rig_ptt(false);
             }
             if (meters_now || self.rig_keyed) && self.cat_ok != Some(false) {
-                if now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
+                // A thin tune lead waits a tick rather than risk the gap (see `meters_now`). The
+                // lead RIGHT NOW: what was queued at the last chunk, less what has played since.
+                let lead_now_ms = self.tune_queued_ms
+                    - self
+                        .tune_last_chunk_ms
+                        .map_or(0.0, |last| (now - last) as f32);
+                let lead_ok = !self.tuning_keyed || lead_now_ms >= TUNE_METER_MIN_LEAD_MS;
+                if lead_ok && now - self.last_tx_meter_poll >= TX_METER_POLL_MS {
                     // RFPOWER_METER_WATTS (not RFPOWER_METER): Hamlib's plain RFPOWER_METER is a
                     // normalized 0..1, only the _WATTS variant is true watts — and the native
                     // daemon answers both with calibrated watts. So `tx_po_w` is watts on both.
+                    // Tune-time reads are deadline-bounded (see `meters_now`); an over's are not.
+                    let deadline = self.tuning_keyed.then_some(TUNE_METER_DEADLINE_MS);
                     let (swr, alc, po, comp) = match self.tx_meter_idx % 4 {
-                        0 => (rig.read_meter_f32("SWR"), None, None, None),
-                        1 => (None, rig.read_meter_f32("ALC"), None, None),
-                        2 => (None, None, rig.read_meter_f32("RFPOWER_METER_WATTS"), None),
-                        _ => (None, None, None, rig.read_meter_f32("COMP_METER")),
+                        0 => (rig.read_meter_f32_within("SWR", deadline), None, None, None),
+                        1 => (None, rig.read_meter_f32_within("ALC", deadline), None, None),
+                        2 => (
+                            None,
+                            None,
+                            rig.read_meter_f32_within("RFPOWER_METER_WATTS", deadline),
+                            None,
+                        ),
+                        _ => (
+                            None,
+                            None,
+                            None,
+                            rig.read_meter_f32_within("COMP_METER", deadline),
+                        ),
                     };
                     self.tx_meter_idx = self.tx_meter_idx.wrapping_add(1);
                     self.last_tx_meter_poll = now;
@@ -18179,8 +18205,13 @@ mod tests {
     /// loop that is enabled *because* we are keyed, and every other one already stands down for
     /// a tune. Measured as the rigctld command log, because what was wrong is WHAT THE RADIO WAS
     /// ASKED while the carrier needed the thread back.
+    /// Tune-time meters are READ, bounded — not stood down (the 2026-09-02 field report: the
+    /// operator watches SWR during Tune to see the antenna tuner take, and remotely it is the
+    /// only way to see it). The starvation the old stand-down guarded against is guarded here
+    /// instead: a read is issued only while the carrier's remaining lead can absorb its
+    /// deadline, and a thin lead waits a tick.
     #[test]
-    fn a_tune_carrier_stands_the_transmit_meters_down() {
+    fn a_tune_carrier_keeps_the_transmit_meters_while_the_lead_is_healthy() {
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         let (addr, log) = mock_rigctld_on(14_074_000, false);
         let mut rig = Rig::rigctld(&addr);
@@ -18212,44 +18243,52 @@ mod tests {
                 .cloned()
                 .collect()
         };
-
-        // ⚠️ POSITIVE CONTROL FIRST: a live mic over MUST read the meters, or "no meter reads
-        // during a tune" is a claim about a loop that never polls meters at all.
         {
             let mut e = engine.lock().unwrap();
             e.set_tx_enabled(true);
-            e.set_ptt(true);
-        }
-        let mark = log.lock().unwrap().len();
-        for i in 0..8 {
-            run(&mut state, &mut rig, f64::from(i) * 200.0);
-        }
-        assert!(
-            !meter_reads(&log, mark).is_empty(),
-            "control: a manual-PTT over reads the transmit meters — {:?}",
-            log.lock().unwrap()
-        );
-
-        // THE TUNE. Same loop, same rig, same cadence.
-        {
-            let mut e = engine.lock().unwrap();
-            e.set_ptt(false);
             e.set_tune(true);
         }
-        run(&mut state, &mut rig, 2_000.0); // consume the unkey, then mark
-        let mark = log.lock().unwrap().len();
-        for i in 0..8 {
-            run(&mut state, &mut rig, 2_200.0 + f64::from(i) * 200.0);
+        // Real ticks are tens of ms apart: the lead (250 ms) stays comfortably above the
+        // tune-time minimum, so the round-robin reads run at their normal cadence.
+        let mut t = 0.0;
+        for _ in 0..3 {
+            t += 50.0;
+            run(&mut state, &mut rig, t);
         }
         assert!(
             state.tuning_keyed,
-            "control: the tune must actually be keyed, or nothing below is tested"
+            "control: the tune must actually be keyed"
         );
+        let mark = log.lock().unwrap().len();
+        for _ in 0..20 {
+            t += 50.0;
+            run(&mut state, &mut rig, t);
+        }
+        let reads = meter_reads(&log, mark);
+        assert!(
+            reads.iter().any(|r| r == "l SWR"),
+            "SWR must be read during a tune-up — that is how the operator sees the ATU take: {:?}",
+            log.lock().unwrap()
+        );
+        // A THIN lead — one long tick has played most of the carrier out — waits: no read on
+        // that tick, so the read can never be the thing that empties the ring.
+        let mark = log.lock().unwrap().len();
+        t += 220.0;
+        run(&mut state, &mut rig, t);
         assert_eq!(
             meter_reads(&log, mark),
             Vec::<String>::new(),
-            "a blocking meter read against a chunked tune carrier is what empties the output \
-             ring — and these bars are not on screen during a tune-up anyway"
+            "with ~30 ms of carrier left, a 120 ms read would gap it — the poll waits a tick"
+        );
+        // …and resumes once the lead is topped back up.
+        let mark = log.lock().unwrap().len();
+        for _ in 0..8 {
+            t += 50.0;
+            run(&mut state, &mut rig, t);
+        }
+        assert!(
+            !meter_reads(&log, mark).is_empty(),
+            "the poll resumes with a healthy lead"
         );
     }
 

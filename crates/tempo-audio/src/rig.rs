@@ -863,8 +863,18 @@ impl Rig {
     /// CAT-only; `None` on VOX/serial or no finite numeric reply (e.g. the rig ignores the
     /// read while receiving). Used for SWR/ALC/RFPOWER_METER/COMP_METER.
     pub fn read_meter_f32(&mut self, name: &str) -> Option<f32> {
+        self.read_meter_f32_within(name, None)
+    }
+
+    /// [`read_meter_f32`] with a caller-chosen deadline (ms). The tune-time meter poll uses a
+    /// short one: a read that outlasts the tune carrier's audio lead would gap the carrier, so
+    /// it is abandoned (the stream drops and reconnects on the next command) rather than
+    /// waited for. `None` = the transport's normal deadline.
+    pub fn read_meter_f32_within(&mut self, name: &str, deadline_ms: Option<u64>) -> Option<f32> {
         self.control.as_ref()?;
-        let reply = self.command(&format!("l {name}\n")).ok()?;
+        let reply = self
+            .command_with_deadline(&format!("l {name}\n"), deadline_ms)
+            .ok()?;
         reply
             .lines()
             .find_map(|l| l.trim().parse::<f32>().ok())

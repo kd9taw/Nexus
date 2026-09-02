@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The TX meters read during Tune again.** Since late August the SWR/ALC/power bars stood
+  still while Tune was keyed — a deliberate change that kept a slow meter read from
+  gapping the tune carrier on a slow radio, made on the assumption that nobody watches
+  the meters during a tune-up. You do: it is how you see the antenna tuner take, and
+  remotely it is the only way. The meters now run during Tune with the same protection
+  built in differently — a read is issued only while the carrier has enough audio queued
+  to cover it, and it gives up quickly rather than wait — so a slow radio costs you a
+  reading, never a gap in the carrier. From the operator's field test of 1.10.1.
+
 - **Radio off overnight, on in the morning — CAT now comes back on its own.** Leaving Nexus
   running while the radio was switched off, then switching it on, could leave rig control
   dead until you restarted the app: the rig-control helper stayed alive holding a serial
