@@ -45,7 +45,7 @@ describe('a write that lands before the load (#205)', () => {
     expect(durableGet(key)).toBe('docked')
     // …and the correction is what flushes, not the stale value resurrected.
     await flushDurable()
-    expect(mockSave.mock.calls.at(-1)![0][key]).toBe('docked')
+    expect(mockSave.mock.calls[mockSave.mock.calls.length - 1][0][key]).toBe('docked')
     // Positive control: a key with no pre-load write still comes from the file, so this
     // cannot pass by the load being ignored wholesale.
     expect(durableGet('nexus.watchlist')).toBe('["G0ABC"]')

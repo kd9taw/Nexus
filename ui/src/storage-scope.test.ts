@@ -29,6 +29,7 @@ export const PER_SURFACE = [
   'nexus.connect.config',
   'nexus.connect.insights.collapsed',
   'nexus.connect.intent',
+  'nexus.connect.layers',
   'nexus.connect.map3d',
   'nexus.connect.projection',
   'nexus.decodes.filter',
