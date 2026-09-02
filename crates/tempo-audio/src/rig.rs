@@ -187,6 +187,39 @@ pub fn reply_ok(reply: &str) -> bool {
     reply.lines().any(|l| l.trim() == "RPRT 0")
 }
 
+/// The Hamlib result code a rigctld reply carries (`RPRT -5` → `Some(-5)`), if any.
+pub fn rprt_code(reply: &str) -> Option<i32> {
+    reply
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("RPRT ")?.trim().parse::<i32>().ok())
+}
+
+/// Is this Hamlib code a LINK fault — the rig did not answer — rather than a refusal?
+///
+/// ⚠️ THIS DISTINCTION IS LOAD-BEARING (the overnight-radio review, 2026-09-02). Every
+/// non-`RPRT 0` reply used to become `ErrorKind::Other`, which the radio loop reads as "the
+/// rig refused it": a radio that was merely SWITCHED OFF answered `RPRT -5` (Hamlib's
+/// ETIMEOUT), was reported as "does not cover that frequency", and had its band given up
+/// on — a give-up that no recovery cleared. Hamlib's own codes, from `rig.h`:
+/// -5 ETIMEOUT, -6 EIO, -13 BUSERROR, -14 BUSBUSY are the link not answering;
+/// -1 EINVAL, -9 ERJCTED, -15 EARG, -17 EDOM (and the rest) are the rig, or Hamlib, saying no.
+pub fn rprt_is_link_fault(code: i32) -> bool {
+    matches!(code, -5 | -6 | -13 | -14)
+}
+
+/// Turn a non-OK rigctld reply into the error the radio loop can act on: a link fault is
+/// `TimedOut` (so the loop's "no reply from the rig" wording and its circuit breaker apply);
+/// anything else stays `Other` — a genuine refusal.
+fn rprt_error(what: &str, reply: &str) -> std::io::Error {
+    match rprt_code(reply) {
+        Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!("rigctld {what}: the rig did not answer (Hamlib RPRT {code})"),
+        ),
+        _ => std::io::Error::other(format!("rigctld {what} error: {reply:?}")),
+    }
+}
+
 /// Parse the RECEIVE frequency ranges (Hz, inclusive) out of a rigctld `\dump_state` reply.
 ///
 /// The format is Hamlib's own machine-readable capability dump — the one its NETRIGCTL backend
@@ -692,9 +725,7 @@ impl Rig {
         if reply_ok(&reply) || reply.is_empty() {
             Ok(())
         } else {
-            Err(std::io::Error::other(format!(
-                "rigctld freq error: {reply:?}"
-            )))
+            Err(rprt_error("freq", &reply))
         }
     }
 
@@ -750,9 +781,7 @@ impl Rig {
         if reply_ok(&reply) || reply.is_empty() {
             Ok(())
         } else {
-            Err(std::io::Error::other(format!(
-                "rigctld mode error: {reply:?}"
-            )))
+            Err(rprt_error("mode", &reply))
         }
     }
 
@@ -887,11 +916,15 @@ impl Rig {
             .lines()
             .find_map(|l| l.trim().parse::<u64>().ok())
             .filter(|hz| *hz > 0)
-            .ok_or_else(|| {
-                std::io::Error::other(format!(
+            .ok_or_else(|| match rprt_code(&reply) {
+                Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("the rig did not answer the frequency read (Hamlib RPRT {code})"),
+                ),
+                _ => std::io::Error::other(format!(
                     "rig did not return a frequency (reply {reply:?}) — check the serial port, \
                      baud rate, and that CAT/CI-V is enabled on the rig"
-                ))
+                )),
             })
     }
 
@@ -1122,6 +1155,34 @@ impl Drop for Rig {
 
 #[cfg(test)]
 mod tests {
+    /// A powered-off rig answers `RPRT -5`; the radio loop must see a LINK fault, not a
+    /// refusal — that misread is what latched the band give-up on a radio that was only off.
+    #[test]
+    fn a_hamlib_timeout_is_a_link_fault_and_a_refusal_stays_a_refusal() {
+        assert_eq!(super::rprt_code("RPRT -5\n"), Some(-5));
+        assert_eq!(super::rprt_code("14074000\n"), None);
+        assert_eq!(super::rprt_code("garbage\nRPRT -1\n"), Some(-1));
+        for code in [-5, -6, -13, -14] {
+            assert!(super::rprt_is_link_fault(code), "RPRT {code} is the link");
+        }
+        for code in [-1, -9, -15, -17, -4] {
+            assert!(!super::rprt_is_link_fault(code), "RPRT {code} is a refusal");
+        }
+        assert_eq!(
+            super::rprt_error("freq", "RPRT -5\n").kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert_eq!(
+            super::rprt_error("freq", "RPRT -1\n").kind(),
+            std::io::ErrorKind::Other
+        );
+        assert_eq!(
+            super::rprt_error("freq", "nonsense\n").kind(),
+            std::io::ErrorKind::Other,
+            "an unparseable reply is still a refusal-class error, never a silent success"
+        );
+    }
+
     use super::*;
 
     #[test]

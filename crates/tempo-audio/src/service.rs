@@ -910,6 +910,16 @@ const CAT_RETRY_MAX_MS: f64 = 30_000.0;
 /// whereas a rejected FREQUENCY is nearly always a hard fact about the radio's range — and each
 /// retry costs a full CAT round-trip on a link that is already unhappy.
 const DIAL_SET_MAX_TRIES: u32 = 3;
+
+/// Failed breaker re-probes before the DAEMON is suspected and rebuilt (the overnight-radio
+/// review, 2026-09-02): 2 s + 4 s + 8 s of a rigctld that answers its socket and never the
+/// rig. A rigctld sitting on a serial handle whose device went away at power-off is ALIVE
+/// (`is_alive` is `try_wait`) and answers `RPRT -5` forever; only reopening the port helps.
+const CAT_DEAD_PROBES_BEFORE_REBUILD: u32 = 3;
+/// Between suspect rebuilds while the link stays dead — a rebuild is a process respawn.
+const CAT_REBUILD_BACKOFF_MS: f64 = 60_000.0;
+/// How often the configured serial port is checked for presence while CAT is down.
+const CAT_PORT_CHECK_MS: f64 = 10_000.0;
 /// Hamlib func tokens for the Expert DSP toggles, in the engine's
 /// `[nb, nr, notch, comp, vox, manual_notch]` order.
 ///
@@ -2777,6 +2787,26 @@ struct RadioLoop {
     /// [`CAT_RETRY_MAX_MS`]. A genuinely dead link settles at one cheap timeout per ~30 s
     /// instead of one per tick; a link that recovers is picked up within seconds.
     cat_retry_ms: f64,
+    /// Failed breaker re-probes since the breaker tripped — the sustained-silence count that
+    /// earns a daemon rebuild (see [`CAT_DEAD_PROBES_BEFORE_REBUILD`]).
+    cat_dead_probes: u32,
+    /// Why the breaker is open: true when the rig did not ANSWER (a link fault — off, unplugged,
+    /// dead handle), false when it answered wrongly. Only the former holds the steady-path
+    /// pushes back: a dead link would eat the tick's whole budget on every set, and the reads
+    /// are the honest way back; a link that merely mis-answers a read may still take writes.
+    cat_down_link_fault: bool,
+    /// Earliest tick a suspect rebuild may run (backoff between rebuilds).
+    cat_rebuild_at: f64,
+    /// Next tick the serial port's presence is checked while CAT is down.
+    cat_port_check_at: f64,
+    /// Last presence verdict of the configured serial port while CAT was down; `None` = not
+    /// checked (or unknowable — an empty enumeration is never read as "absent").
+    cat_port_present: Option<bool>,
+    /// USB identity (vid, pid, product) of the configured serial port, captured while CAT
+    /// was healthy, so a rig that comes back under a NEW port name can be followed.
+    cat_port_identity: Option<(u16, u16, String)>,
+    /// (configured port, port actually in use) when the rig came back under a new name.
+    cat_port_alias: Option<(String, String)>,
     /// A dial frequency the rig REFUSED (`RPRT <negative>`) — do not keep re-sending it. Mirrors
     /// `mode_giveup`: the operator's HF-only radio cannot be talked into covering 2 m by asking
     /// 8 times a second. Cleared by an explicit operator retune (the force branch) or any
@@ -3014,6 +3044,13 @@ impl RadioLoop {
             cat_ok: None,
             cat_retry_at: 0.0,
             cat_retry_ms: CAT_RETRY_BASE_MS,
+            cat_dead_probes: 0,
+            cat_down_link_fault: false,
+            cat_rebuild_at: 0.0,
+            cat_port_check_at: 0.0,
+            cat_port_present: None,
+            cat_port_identity: None,
+            cat_port_alias: None,
             dial_giveup: None,
             dial_fail_count: 0,
             rx_ranges: None,
@@ -3060,6 +3097,146 @@ impl RadioLoop {
     /// for the two.
     fn operator_keyed(&self) -> bool {
         self.rig_keyed || self.sat_inferred_keyed
+    }
+
+    /// The link is answering again: nothing learned during the outage may outlive it. The
+    /// band and mode give-ups in particular — a refusal that was really the dead link must
+    /// not blacklist a band for the rest of the session (2026-09-02 overnight-radio review).
+    fn on_cat_recovered(&mut self) {
+        self.mode_giveup = None;
+        self.mode_fail_count = 0;
+        self.mode_saw_reject = false;
+        self.on_cat_link_back();
+    }
+
+    /// The lighter half, for the path where a SET just succeeded: the dial give-up and the
+    /// watch reset, but NOT the mode ladder — a dial that lands while the mode is still
+    /// walking its rungs must not restart that walk (the ladder clears itself on success).
+    fn on_cat_link_back(&mut self) {
+        self.dial_giveup = None;
+        self.dial_fail_count = 0;
+        self.cat_dead_probes = 0;
+        self.cat_port_present = None;
+        self.remember_port_identity();
+    }
+
+    /// Capture the USB identity of the configured serial port while it is present, so a rig
+    /// that later comes back under a new port name can be recognised. Once per port.
+    fn remember_port_identity(&mut self) {
+        if self.cat_port_identity.is_some() || self.applied.is_network() {
+            return;
+        }
+        let name = self.effective_port_name();
+        if name.is_empty() {
+            return;
+        }
+        self.cat_port_identity = crate::ports::available_usb_ports()
+            .into_iter()
+            .find(|u| u.port_name == name)
+            .map(|u| (u.vid, u.pid, u.product));
+    }
+
+    /// The serial port actually in use — the alias when the rig moved, else the configured one.
+    fn effective_port_name(&self) -> String {
+        match &self.cat_port_alias {
+            Some((cfg, actual)) if *cfg == self.applied.serial_port => actual.clone(),
+            _ => self.applied.serial_port.clone(),
+        }
+    }
+
+    /// Should the CAT daemon be torn down and reopened this tick? Only while the breaker is
+    /// tripped and nothing is keyed. Two triggers: the configured serial port coming BACK
+    /// after being absent (the overnight case — rebuild at once), or sustained silence past
+    /// [`CAT_DEAD_PROBES_BEFORE_REBUILD`] failed re-probes (or no daemon at all to probe with),
+    /// rate-limited by [`CAT_REBUILD_BACKOFF_MS`]. Never while the port is known absent —
+    /// there is nothing to open yet.
+    fn cat_rebuild_due(&mut self, want: &Transport, now: f64) -> bool {
+        if self.cat_ok != Some(false) || self.operator_keyed() || self.cat_hold_active {
+            return false;
+        }
+        let port_returned = if !want.is_network()
+            && !want.serial_port.is_empty()
+            && now >= self.cat_port_check_at
+        {
+            self.cat_port_check_at = now + CAT_PORT_CHECK_MS;
+            self.port_watch(&want.serial_port, &crate::ports::available_ports())
+        } else {
+            false
+        };
+        port_returned || self.silence_rebuild_due(now)
+    }
+
+    /// The sustained-silence half of [`Self::cat_rebuild_due`], pure on the loop's fields:
+    /// enough failed re-probes, the backoff elapsed, and the port not known to be absent. (No
+    /// "there is no daemon handle" arm on purpose: a coexisting or external rigctld has no
+    /// handle here either, and the tests' rigs run without one.)
+    fn silence_rebuild_due(&self, now: f64) -> bool {
+        if self.cat_port_present == Some(false) {
+            return false;
+        }
+        self.cat_dead_probes >= CAT_DEAD_PROBES_BEFORE_REBUILD && now >= self.cat_rebuild_at
+    }
+
+    /// One presence check of `port` against an enumeration. Returns true on the ABSENT →
+    /// PRESENT edge. An empty enumeration says nothing (no `serial` feature, or the platform
+    /// walk failed) and leaves the verdict untouched — it must never read as "absent".
+    fn port_watch(&mut self, port: &str, ports: &[String]) -> bool {
+        if ports.is_empty() {
+            return false;
+        }
+        let present = ports.iter().any(|p| p == port);
+        let returned = self.cat_port_present == Some(false) && present;
+        if self.cat_port_present != Some(present) {
+            crate::civ::diag::note(&format!(
+                "CAT port {port:?} is {} (rig off, unplugged, or renamed?)",
+                if present { "back" } else { "absent" }
+            ));
+        }
+        if present {
+            // The configured name is live again: any alias is stale.
+            self.cat_port_alias = None;
+        }
+        self.cat_port_present = Some(present);
+        returned
+    }
+
+    /// Substitute the alias into a freshly built `want` so `rig_differs` compares like with
+    /// like across ticks (the settings still name the port the operator chose).
+    fn apply_port_alias(&self, want: &mut Transport) {
+        if let Some((cfg, actual)) = &self.cat_port_alias {
+            if want.serial_port == *cfg {
+                if want.ptt_serial_port == want.serial_port {
+                    want.ptt_serial_port = actual.clone();
+                }
+                want.serial_port = actual.clone();
+            }
+        }
+    }
+
+    /// Before a rebuild: if the configured port is gone but exactly ONE port carries the
+    /// identity we remembered, follow the rig there. Anything ambiguous is left alone.
+    fn resolve_port_alias(&mut self, want: &Transport) -> Transport {
+        let mut want = want.clone();
+        if want.is_network() || want.serial_port.is_empty() {
+            return want;
+        }
+        let Some(identity) = self.cat_port_identity.clone() else {
+            return want;
+        };
+        let present = crate::ports::available_ports();
+        let usb = crate::ports::available_usb_ports();
+        if let Some(actual) = alias_for(&want.serial_port, &identity, &usb, &present) {
+            crate::civ::diag::note(&format!(
+                "CAT port {:?} is gone; the same USB device is at {actual:?} — following it",
+                want.serial_port
+            ));
+            self.cat_port_alias = Some((want.serial_port.clone(), actual.clone()));
+            if want.ptt_serial_port == want.serial_port {
+                want.ptt_serial_port = actual.clone();
+            }
+            want.serial_port = actual;
+        }
+        want
     }
 
     /// Is this tick an over the "keyed but no RF" watch may judge? (2026-08-17 Flex audit,
@@ -3679,8 +3856,21 @@ impl RadioLoop {
                 None
             }
             Err(e) => {
-                self.dial_fail_count += 1;
                 let mhz = dial as f64 / 1_000_000.0;
+                // A LINK fault — the rig did not answer — is not a refusal and must not count
+                // toward the band give-up: it feeds the circuit breaker instead (the next heavy
+                // poll trips it with a real read), and the give-up stays clear so the band is
+                // not blacklisted for the rest of the session over a radio that was off.
+                if is_link_fault(&e) {
+                    if rig.has_control() {
+                        self.freq_misses = self.freq_misses.saturating_add(1);
+                    }
+                    return Some(format!(
+                        "{mhz:.4} MHz not sent — {}",
+                        dial_failure_brief(&e)
+                    ));
+                }
+                self.dial_fail_count += 1;
                 if self.dial_fail_count < DIAL_SET_MAX_TRIES {
                     return Some(format!(
                         "{mhz:.4} MHz {} ({}/{DIAL_SET_MAX_TRIES})",
@@ -3971,7 +4161,8 @@ impl RadioLoop {
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
                 // simplex here (see `fm_repeater_config`) so a beacon never keys through a shift.
                 let fm = eng.fm_repeater_config();
-                let want = Transport::from_settings(eng.settings());
+                let mut want = Transport::from_settings(eng.settings());
+                self.apply_port_alias(&mut want);
                 let cat_hold = eng.cat_port_hold();
                 // The satellite mirrors, refreshed here because this is the one
                 // engine lock every tick takes unconditionally — and taken HERE,
@@ -4020,7 +4211,14 @@ impl RadioLoop {
                     eng.settings().operating_mode == tempo_app::settings::OperatingMode::Cw,
                 )
             };
-            let can_push_dial = can_retune && !self.operator_keyed() && !self.manual_ptt_applied;
+            // …and not while the CAT link is DOWN: pushing a dial at a dead link is the retry
+            // storm the give-ups were invented to stop, and it fed a give-up that outlived the
+            // outage. The breaker owns recovery — its re-probe reads the rig, and the loop then
+            // follows the dial the radio woke up on. (2026-09-02 overnight-radio review.)
+            let can_push_dial = can_retune
+                && !self.operator_keyed()
+                && !self.manual_ptt_applied
+                && (self.cat_ok != Some(false) || !self.cat_down_link_fault);
             // Stash for the key-site latch (ensure_commanded) — the bindings above live in
             // this block's scope; the key-ups happen in narrower ones.
             self.cur_dial = dial;
@@ -4055,6 +4253,12 @@ impl RadioLoop {
                     .rigctld_proc
                     .as_mut()
                     .is_some_and(|d| !CatDaemon::is_alive(d));
+            // The overnight-radio watch (2026-09-02). A rigctld that is ALIVE but holds a dead
+            // serial handle — the rig's own USB port went away at power-off — looks exactly like
+            // a rig that is merely off, and the breaker's re-probe asks that same daemon forever.
+            // Two independent triggers reopen the port: the configured port coming BACK, and
+            // sustained silence past a few failed re-probes (with backoff between rebuilds).
+            let suspect_rebuild = self.cat_rebuild_due(&want, now);
             if daemon_died {
                 crate::civ::diag::note("rigctld died: respawning the active radio's CAT daemon");
                 let mut eng = engine_lock(engine);
@@ -4106,7 +4310,11 @@ impl RadioLoop {
                     let mut eng = engine_lock(engine);
                     eng.ack_cat_port_released();
                 }
-            } else if want.rig_differs(&self.applied) || resume_after_hold || daemon_died {
+            } else if want.rig_differs(&self.applied)
+                || resume_after_hold
+                || daemon_died
+                || suspect_rebuild
+            {
                 self.cat_hold_active = false;
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down. Dropping rigctld_proc and swapping *rig first would strand
@@ -4145,8 +4353,17 @@ impl RadioLoop {
                     want.rigctld_port,
                 );
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
-                let (new_rig, proc, probe) = reopen_rig(&want, allow_coexist);
+                                          // A rig that came back under a NEW port name is followed by USB identity.
+                let open_want = self.resolve_port_alias(&want);
+                let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
                 let (ok, detail) = (probe.ok, probe.detail);
+                let detail = if suspect_rebuild && !daemon_died {
+                    format!("the CAT link stayed silent — the port was reopened. {detail}")
+                        .trim_end()
+                        .to_string()
+                } else {
+                    detail
+                };
                 // A daemon death must SURVIVE in the message the rebuild publishes, not just
                 // flash before it: the probe detail lands on the same status line a moment
                 // later, so a pre-rebuild note alone would be gone before anyone read it.
@@ -4176,6 +4393,11 @@ impl RadioLoop {
                 self.mode_fail_count = 0; // fresh rig — the retune retry budget resets
                 self.mode_giveup = None; // and a fresh rig may well accept what the old rejected
                 self.mode_saw_reject = false;
+                self.dial_giveup = None; // same for the dial: the refusal may have been the link
+                self.dial_fail_count = 0;
+                self.cat_dead_probes = 0;
+                self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
+                self.cat_port_present = None;
                 self.cat_ok = ok;
                 {
                     let mut eng = engine_lock(engine);
@@ -4559,7 +4781,13 @@ impl RadioLoop {
                 // NEVER on a deferred tick: `rig` is still the OLD radio's connection, and
                 // claiming the NEW transport here poisons `rig_differs` — the handoff's
                 // fallback branch relies on it to open the new radio fresh.
-                self.applied = want;
+                // Record the transport as it is ACTUALLY open — with any port alias applied —
+                // so the next tick's aliased `want` compares equal and does not rebuild again.
+                self.applied = {
+                    let mut w = want;
+                    self.apply_port_alias(&mut w);
+                    w
+                };
             }
             // Reconcile the native RF panadapter (Flex VITA / Icom CI-V) to the ACTIVE radio's
             // capability — cheap (a key compare) unless it just gained/lost/changed a native scope.
@@ -4813,6 +5041,9 @@ impl RadioLoop {
                                 // retrying THIS mode so we don't spam the CAT link every loop. A
                                 // later section change to a different mode still tries (md flips),
                                 // and once any mode sticks the give-up is cleared.
+                                if is_link_fault(&e) && rig.has_control() {
+                                    self.freq_misses = self.freq_misses.saturating_add(1);
+                                }
                                 self.mode_fail_count += 1;
                                 self.mode_saw_reject |= e.kind() == std::io::ErrorKind::Other;
                                 retune_note = Some(format!(
@@ -4955,6 +5186,7 @@ impl RadioLoop {
                     self.nr_level_giveup = None;
                     self.comp_level_giveup = None;
                     self.notch_freq_giveup = None;
+                    self.on_cat_link_back();
                     {
                         let mut eng = engine_lock(engine);
                         eng.set_cat_status(
@@ -5060,6 +5292,7 @@ impl RadioLoop {
                             self.mic_gain_giveup = None;
                             self.nr_level_giveup = None;
                             self.rx_ranges_probed = false;
+                            self.on_cat_recovered();
                             {
                                 let mut eng = engine_lock(engine);
                                 eng.set_cat_status(
@@ -5541,12 +5774,19 @@ impl RadioLoop {
                         }
                         if rig.has_control() && self.freq_misses >= FREQ_MISS_LIMIT {
                             self.cat_ok = Some(false);
+                            self.cat_down_link_fault = is_link_fault(&e);
                             // Arm the re-probe. Without this the breaker is a one-way door: it
                             // gates both read-back paths, and the only other clearer is a
                             // successful set_freq/set_mode, which the retune block does not send
                             // while the commanded dial/mode already match `last_dial`/`last_mode`.
                             if !breaker_probe {
                                 self.cat_retry_ms = CAT_RETRY_BASE_MS;
+                                // A fresh trip: the sustained-silence watch starts here.
+                                self.cat_dead_probes = 0;
+                                self.cat_rebuild_at = now;
+                                self.cat_port_check_at = now;
+                            } else {
+                                self.cat_dead_probes = self.cat_dead_probes.saturating_add(1);
                             }
                             self.cat_retry_at = now + self.cat_retry_ms;
                             // Re-probe funcs on recovery; don't leave stale toggle states shown.
@@ -5909,11 +6149,11 @@ impl RadioLoop {
             // the rig was commanded into (and any rejection) — emitted only on a real change
             // or failure, so it never spams. A success implies CAT is alive (Some(true)).
             if let Some(note) = dial_note.or(retune_note) {
-                let ok = if note.starts_with("rig set to") {
-                    Some(true)
-                } else {
-                    self.cat_ok
-                };
+                // The note rides along; the VERDICT is the breaker's. This used to promote any
+                // note starting "rig set to" to `Some(true)` — including "rig set to … (mode
+                // read-back unavailable)", the wording for a read-back that FAILED — which is
+                // one of the ways the pill stayed green over a radio that was off.
+                let ok = self.cat_ok;
                 {
                     let mut eng = engine_lock(engine);
                     eng.set_cat_status(ok, note);
@@ -9945,6 +10185,39 @@ fn mode_command_failed(md: &str, e: &std::io::Error) -> String {
 /// One short clause naming WHY a dial set failed, for the retry notes. Distinguishes the rig
 /// actively refusing (`ErrorKind::Other` — a `RPRT <negative>` reply) from the link not answering,
 /// because the two have completely different fixes: a different radio vs a cable/daemon.
+/// A CAT error that means "the rig did not answer" (as opposed to "the rig said no").
+/// `TimedOut` now includes Hamlib's own `RPRT -5/-6/-13/-14` (see `rig::rprt_is_link_fault`).
+fn is_link_fault(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(
+        e.kind(),
+        TimedOut | UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected
+    )
+}
+
+/// The port to follow a rig to when `configured` is absent: exactly one present USB port
+/// carrying the remembered (vid, pid, product). Pure, for the test.
+fn alias_for(
+    configured: &str,
+    identity: &(u16, u16, String),
+    usb: &[crate::ports::UsbPort],
+    present: &[String],
+) -> Option<String> {
+    if present.is_empty() || present.iter().any(|p| p == configured) {
+        return None;
+    }
+    let mut hits = usb
+        .iter()
+        .filter(|u| u.vid == identity.0 && u.pid == identity.1 && u.product == identity.2)
+        .filter(|u| present.contains(&u.port_name))
+        .map(|u| u.port_name.clone());
+    let first = hits.next()?;
+    if hits.next().is_some() {
+        return None; // two identical devices: not ours to guess
+    }
+    Some(first)
+}
+
 fn dial_failure_brief(e: &std::io::Error) -> &'static str {
     use std::io::ErrorKind::*;
     match e.kind() {
@@ -22335,6 +22608,307 @@ mod tests {
     /// answers `RPRT -1` to anything outside, WITHOUT moving — exactly what Hamlib's newcat
     /// backend does when asked for 2 m on a rig whose range list stops at 54 MHz. `f` always
     /// reports where the rig really is, so a refused set is observable as "the dial never moved".
+    /// A rigctld whose RIG can be switched off: while `on` is false every command — reads
+    /// and sets alike — answers Hamlib's `RPRT -5` (ETIMEOUT), exactly what a real rigctld
+    /// says for a radio that is powered down or unplugged behind a still-open port.
+    fn switchable_rigctld(
+        on: Arc<std::sync::atomic::AtomicBool>,
+        start: u64,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = seen.clone();
+        std::thread::spawn(move || {
+            let mut cur = start;
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut out = match stream.try_clone() {
+                    Ok(o) => o,
+                    Err(_) => return,
+                };
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    rec.lock().unwrap().push(line.clone());
+                    let reply = if !on.load(std::sync::atomic::Ordering::SeqCst) {
+                        "RPRT -5\n".to_string()
+                    } else if let Some(hz) = line.strip_prefix("F ") {
+                        cur = hz.trim().parse::<u64>().unwrap_or(cur);
+                        "RPRT 0\n".to_string()
+                    } else if line.trim() == "f" {
+                        format!("{cur}\n")
+                    } else if line.trim() == "m" {
+                        "USB\n2400\n".to_string()
+                    } else {
+                        "RPRT 0\n".to_string()
+                    };
+                    if out.write_all(reply.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        (addr, seen)
+    }
+
+    /// The overnight-radio review (2026-09-02), first half: a rig that is OFF answers every
+    /// command with `RPRT -5`. That must trip the circuit breaker — the pill goes red — and
+    /// must NOT be read as "the rig refused this band": the band give-up stays clear, so the
+    /// band is not blacklisted for the session over a radio that was merely off. Then the rig
+    /// comes on, and the breaker's re-probe brings CAT back with nothing latched.
+    #[test]
+    fn a_powered_off_rig_trips_the_breaker_and_never_blacklists_the_band() {
+        let on = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, _log) = switchable_rigctld(on.clone(), 14_250_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        // The loop stamps its poll clocks with the wall clock at construction; the test's
+        // ticks start at zero, so re-arm them the way a radio handoff does.
+        state.last_rig_poll = 0.0;
+        state.last_freq_poll = 0.0;
+        state.last_smeter_poll = 0.0;
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        for _ in 0..12 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            state.cat_ok,
+            Some(false),
+            "a mute rig is a DOWN link, and the operator is told"
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.cat_ok,
+            Some(false),
+            "the pill must be red — not green off a set that returned nothing"
+        );
+        assert_eq!(
+            state.dial_giveup, None,
+            "RPRT -5 is the link not answering, never a refusal: the band is not given up on"
+        );
+
+        // Morning: the radio comes on. The breaker's re-probe (≤ 30 s backoff) reads it.
+        on.store(true, std::sync::atomic::Ordering::SeqCst);
+        for _ in 0..90 {
+            tick += 400.0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    tick,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        }
+        assert_eq!(state.cat_ok, Some(true), "the link recovered on its own");
+        assert_eq!(state.dial_giveup, None);
+        assert_eq!(state.mode_giveup, None);
+    }
+
+    /// The overnight-radio review, second half — the case nothing used to recover from: a
+    /// rigctld that is ALIVE (its process runs) but never answers the rig. After three failed
+    /// re-probes the loop must tear it down and reopen the port, and then keep trying on a
+    /// backoff — a dead serial handle is only ever fixed by a fresh open.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_daemon_that_never_answers_is_reopened_and_then_retried_on_backoff() {
+        let on = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, _log) = switchable_rigctld(on.clone(), 14_250_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        // The loop stamps its poll clocks with the wall clock at construction; the test's
+        // ticks start at zero, so re-arm them the way a radio handoff does.
+        state.last_rig_poll = 0.0;
+        state.last_freq_poll = 0.0;
+        state.last_smeter_poll = 0.0;
+        // An ALIVE child stands in for the daemon: `is_alive` (try_wait) says healthy.
+        let alive = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .unwrap();
+        state.rigctld_proc = Some(CatDaemon::Spawned(
+            crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+        ));
+        let reopens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reopens.clone();
+        let addr2 = addr.clone();
+        let mut reopen = move |_t: &Transport, _coexist: bool| -> RigOpen {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (
+                Rig::rigctld(&addr2),
+                None,
+                CatProbe::status(Some(false), "still mute"),
+            )
+        };
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, ticks: usize, tick: &mut f64| {
+            for _ in 0..ticks {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut reopen,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        let n =
+            |r: &Arc<std::sync::atomic::AtomicUsize>| r.load(std::sync::atomic::Ordering::SeqCst);
+        // Trip (~2 s) + three failed re-probes (2 + 4 + 8 s) → the first reopen inside 30 s.
+        run(&mut state, &mut rig, 75, &mut tick);
+        assert_eq!(
+            n(&reopens),
+            1,
+            "three silent re-probes must earn a daemon rebuild"
+        );
+        assert!(
+            state.rigctld_proc.is_none(),
+            "the suspect daemon was torn down"
+        );
+        // Still mute: no storm — the next rebuild waits out the backoff.
+        run(&mut state, &mut rig, 75, &mut tick); // +30 s
+        assert_eq!(
+            n(&reopens),
+            1,
+            "a rebuild every tick would be the storm this guards against"
+        );
+        run(&mut state, &mut rig, 100, &mut tick); // +40 s → past the 60 s backoff
+        assert_eq!(
+            n(&reopens),
+            2,
+            "and it keeps trying on the backoff, forever"
+        );
+    }
+
+    /// The serial-port watch, pure: an absent → present edge is the immediate rebuild trigger,
+    /// a known-absent port suppresses the silence rebuild (nothing to open yet), and an EMPTY
+    /// enumeration says nothing at all — it must never read as "absent".
+    #[test]
+    fn the_port_watch_fires_on_return_and_an_empty_enumeration_says_nothing() {
+        let mut state = loop_state();
+        state.cat_ok = Some(false);
+        state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+        state.cat_rebuild_at = 0.0;
+        assert!(!state.port_watch("COM5", &[]), "empty enumeration: unknown");
+        assert_eq!(state.cat_port_present, None);
+        assert!(
+            state.silence_rebuild_due(1.0),
+            "unknown presence does not block the silence rebuild"
+        );
+        assert!(!state.port_watch("COM5", &["COM1".to_string()]));
+        assert_eq!(state.cat_port_present, Some(false));
+        assert!(
+            !state.silence_rebuild_due(1.0),
+            "a port known absent: nothing to open yet"
+        );
+        assert!(
+            !state.port_watch("COM5", &[]),
+            "…and an empty walk does not change that verdict"
+        );
+        assert_eq!(state.cat_port_present, Some(false));
+        state.cat_port_alias = Some(("COM5".to_string(), "COM7".to_string()));
+        assert!(
+            state.port_watch("COM5", &["COM1".to_string(), "COM5".to_string()]),
+            "absent → present is THE overnight trigger"
+        );
+        assert_eq!(state.cat_port_present, Some(true));
+        assert_eq!(
+            state.cat_port_alias, None,
+            "the configured name is live again; the alias is stale"
+        );
+        assert!(
+            !state.port_watch("COM5", &["COM5".to_string()]),
+            "present → present is not an edge"
+        );
+    }
+
+    /// Following a rig to a NEW port name: exactly one present port with the remembered USB
+    /// identity, and nothing else — two identical devices are not ours to guess between.
+    #[test]
+    fn alias_for_follows_exactly_one_matching_device() {
+        let usb = |name: &str, vid: u16, pid: u16, product: &str| crate::ports::UsbPort {
+            port_name: name.to_string(),
+            vid,
+            pid,
+            product: product.to_string(),
+            manufacturer: "Icom".to_string(),
+        };
+        let id = (0x10c4, 0xea60, "IC-7300".to_string());
+        let ports = [
+            usb("COM7", 0x10c4, 0xea60, "IC-7300"),
+            usb("COM3", 0x0403, 0x6001, "Digirig"),
+        ];
+        let present = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            alias_for("COM5", &id, &ports, &present(&["COM3", "COM7"])),
+            Some("COM7".to_string())
+        );
+        assert_eq!(
+            alias_for("COM5", &id, &ports, &present(&["COM3", "COM5", "COM7"])),
+            None,
+            "configured port present: no alias"
+        );
+        assert_eq!(
+            alias_for("COM5", &id, &ports, &present(&["COM3"])),
+            None,
+            "the device is not there"
+        );
+        assert_eq!(
+            alias_for("COM5", &id, &ports, &[]),
+            None,
+            "an empty walk says nothing"
+        );
+        let twins = [
+            usb("COM7", 0x10c4, 0xea60, "IC-7300"),
+            usb("COM8", 0x10c4, 0xea60, "IC-7300"),
+        ];
+        assert_eq!(
+            alias_for("COM5", &id, &twins, &present(&["COM7", "COM8"])),
+            None,
+            "two identical rigs: not ours to guess"
+        );
+    }
+
     fn range_limited_rigctld(lo: u64, hi: u64, start: u64) -> (String, Arc<Mutex<Vec<String>>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -22562,7 +23136,18 @@ mod tests {
         drop(listener); // nothing listening: every command errors instantly
         let mut rig = Rig::rigctld(&format!("127.0.0.1:{dead_port}"));
         let mut state = loop_state();
-        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        // After three silent re-probes the loop now REBUILDS the daemon (the overnight-radio
+        // fix); the rebuilt rig lands on the same dead port, still down, and the backoff must
+        // carry straight across that rebuild.
+        let dead_addr = format!("127.0.0.1:{dead_port}");
+        let mut rr = move |_t: &Transport, _c: bool| -> RigOpen {
+            (
+                Rig::rigctld(&dead_addr),
+                None,
+                CatProbe::status(Some(false), "still dead"),
+            )
+        };
+        let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
         let mut station = StationSinks::new();
         let mut tick = 0.0f64;
         // Trip it the honest way: consecutive heavy-poll read failures.

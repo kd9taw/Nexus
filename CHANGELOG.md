@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Radio off overnight, on in the morning — CAT now comes back on its own.** Leaving Nexus
+  running while the radio was switched off, then switching it on, could leave rig control
+  dead until you restarted the app: the rig-control helper stayed alive holding a serial
+  port that had gone away with the radio's USB, and nothing ever reopened it. Worse, the
+  CAT indicator could stay green over a radio that was off, and a band change made while
+  it was off was recorded as "the radio refused that frequency" and never sent again.
+  Now: a link that goes silent trips the CAT indicator red within a few seconds; after
+  three silent re-checks the helper is torn down and the port reopened, and that keeps
+  retrying on a one-minute backoff; the serial port itself is watched while CAT is down,
+  so the moment it reappears the port is reopened at once — and if the radio comes back
+  under a new COM port name, Nexus follows it by USB identity. A radio that merely didn't
+  answer is reported as exactly that, never as a refusal, and every band or mode Nexus had
+  given up on is forgiven the moment the link returns. Green means a real answer: a mode
+  change whose read-back failed no longer paints the indicator, and on the native CI-V
+  path a cached dial is served for only a few seconds after the last real reading, so a
+  mute radio can no longer look connected. From the operator's own overnight test.
+
 - **A working connector no longer reads "stored — not verified yet" after every restart.**
   The connection health shown in Settings ▸ Logging & Connectors lived only in memory, so
   each launch reset every connector to "not verified" until that session's first push —
