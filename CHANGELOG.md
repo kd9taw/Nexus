@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A working connector no longer reads "stored — not verified yet" after every restart.**
+  The connection health shown in Settings ▸ Logging & Connectors lived only in memory, so
+  each launch reset every connector to "not verified" until that session's first push —
+  and for HRDLog.net, World Radio League and Cloudlog, which record no per-contact upload
+  state, that line was the only evidence the code worked. It is now kept beside your
+  settings and survives a restart. A manual push from a Logbook row now counts as evidence
+  too, so pressing HRDLog or WRL on one contact updates the row immediately with HRDLog's
+  or WRL's actual answer. From an HRDLog field report (LZ2AOV).
+
 - **"Is calling you" now tells you about every station that calls — and never about the
   one you just finished with.** Two things were backwards. With Auto on, a station
   answering your CQ raised no alert at all (the sequencer had already engaged them by the

@@ -13644,9 +13644,92 @@ const CONN_LOG_CAP: usize = 200;
 /// lie in a new costume.
 ///
 /// `Vec::new()` is const (a `HashMap` would not be), and n ≤ 2, so a linear scan is right.
-#[allow(clippy::type_complexity)]
-static CONN_HEALTH: Mutex<Vec<(&'static str, Option<i64>, Option<(i64, String)>)>> =
-    Mutex::new(Vec::new());
+type ConnHealthRows = Vec<(&'static str, Option<i64>, Option<(i64, String)>)>;
+static CONN_HEALTH: Mutex<ConnHealthRows> = Mutex::new(Vec::new());
+/// Whether `conn-health.json` has been read into [`CONN_HEALTH`] this process. Lazy, on the
+/// first lock, rather than a `run()` step: the three launch paths (main window, profile
+/// picker, panel) would each need the wiring, and the first reader is the right moment.
+static CONN_HEALTH_LOADED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The connector ids the health rows may carry — the `CredStatus` slug set. Ids are
+/// `&'static str` in memory, so a row read back from disk has to resolve to one of these
+/// or be dropped (a slug from a build that no longer has that connector says nothing).
+const CONN_HEALTH_IDS: &[&str] = &[
+    "cloudlog",
+    "clublog",
+    "eqsl",
+    "hrdlog",
+    "lotw",
+    "qrz-logbook",
+    "qrz-xml",
+    "repeaterbook",
+    "wrl",
+];
+
+/// On-disk shape of one connector's health row. Lives in `conn-health.json` beside
+/// settings.json — per profile, backed up with everything else, tiny.
+///
+/// ⚠️ WHY THIS FILE EXISTS (2026-09-02, an HRDLog field report). Health used to be
+/// process memory only, so every launch reset every connector to "stored — not verified
+/// yet" until that session's first push — and for HRDLog, WRL and Cloudlog, which stamp no
+/// per-QSO upload state, that line was the ONLY evidence the code worked. An operator whose
+/// uploads were fine read "not verified" at every start and reported a bug in the uploads.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ConnHealthRow {
+    id: String,
+    last_ok_unix: Option<i64>,
+    last_fail_unix: Option<i64>,
+    last_fail_detail: Option<String>,
+}
+
+fn conn_health_path() -> PathBuf {
+    config_dir().join("conn-health.json")
+}
+
+/// Parse `conn-health.json`. Malformed = nothing (never a startup failure over a status
+/// file); an unknown id is dropped, a failure row without a detail keeps its time.
+fn conn_health_from_json(text: &str) -> ConnHealthRows {
+    let rows: Vec<ConnHealthRow> = serde_json::from_str(text).unwrap_or_default();
+    rows.into_iter()
+        .filter_map(|r| {
+            let id = CONN_HEALTH_IDS.iter().copied().find(|k| *k == r.id)?;
+            let fail = r
+                .last_fail_unix
+                .map(|w| (w, r.last_fail_detail.clone().unwrap_or_default()));
+            Some((id, r.last_ok_unix, fail))
+        })
+        .collect()
+}
+
+fn conn_health_to_json(m: &ConnHealthRows) -> String {
+    let rows: Vec<ConnHealthRow> = m
+        .iter()
+        .map(|(id, ok, fail)| ConnHealthRow {
+            id: (*id).to_string(),
+            last_ok_unix: *ok,
+            last_fail_unix: fail.as_ref().map(|(w, _)| *w),
+            last_fail_detail: fail.as_ref().map(|(_, d)| d.clone()),
+        })
+        .collect();
+    serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// The health rows, loaded from disk on first use. A row noted before the load (a push
+/// that beat the first read) is kept; the file fills in only what memory lacks.
+fn conn_health_lock() -> std::sync::MutexGuard<'static, ConnHealthRows> {
+    let mut m = CONN_HEALTH.lock().unwrap_or_else(|e| e.into_inner());
+    if !CONN_HEALTH_LOADED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if let Ok(text) = std::fs::read_to_string(conn_health_path()) {
+            for row in conn_health_from_json(&text) {
+                if !m.iter().any(|(k, _, _)| *k == row.0) {
+                    m.push(row);
+                }
+            }
+        }
+    }
+    m
+}
 
 /// Record a real round trip for a session-only connector. `ok` picks the half; the other
 /// half is left exactly as it was.
@@ -13654,7 +13737,7 @@ fn note_conn_health(id: &'static str, ok: bool, detail: String) {
     let now = now_unix();
     // Poisoned-lock recovery, the conn_log pattern: a panicked command holding this must
     // not silently freeze the health panel for the rest of the session.
-    let mut m = CONN_HEALTH.lock().unwrap_or_else(|e| e.into_inner());
+    let mut m = conn_health_lock();
     let slot = match m.iter_mut().find(|(k, _, _)| *k == id) {
         Some(s) => s,
         None => {
@@ -13667,12 +13750,17 @@ fn note_conn_health(id: &'static str, ok: bool, detail: String) {
     } else {
         slot.2 = Some((now, detail));
     }
+    let text = conn_health_to_json(&m);
+    drop(m);
+    // Persist every change: a push is rare enough that the write is free, and surviving
+    // the next launch is the row's whole value.
+    write_json_atomic(&conn_health_path(), &text);
 }
 
 /// Read one connector's session health back as `(last_success, last_failure_when,
 /// last_failure_detail)`.
 fn conn_health_of(id: &str) -> (Option<i64>, Option<i64>, Option<String>) {
-    let m = CONN_HEALTH.lock().unwrap_or_else(|e| e.into_inner());
+    let m = conn_health_lock();
     match m.iter().find(|(k, _, _)| *k == id) {
         Some((_, ok, fail)) => (
             *ok,
@@ -15456,11 +15544,19 @@ async fn wrl_push_qso(
     let res = tauri::async_runtime::spawn_blocking(move || wrl_push_qso_impl(record, &engine))
         .await
         .map_err(|e| format!("upload task failed: {e}"))?;
-    conn_logged(
+    let res = conn_logged(
         "World Radio League",
         |r| format!("pushed {} — {}", who, r.result),
         res,
-    )
+    );
+    if let Ok(r) = &res {
+        note_conn_health(
+            "wrl",
+            matches!(r.result.as_str(), "accepted" | "duplicate"),
+            r.result.clone(),
+        );
+    }
+    res
 }
 
 fn wrl_push_qso_impl(
@@ -15506,11 +15602,21 @@ async fn hrdlog_push_qso(
     let res = tauri::async_runtime::spawn_blocking(move || hrdlog_push_qso_impl(record, &engine))
         .await
         .map_err(|e| format!("upload task failed: {e}"))?;
-    conn_logged(
+    let res = conn_logged(
         "HRDLog.net",
         |r| format!("pushed {} — {}", who, r.result),
         res,
-    )
+    );
+    // A manual push is exactly as much evidence as an automatic one — and for HRDLog it is
+    // the evidence an operator reaches for when the row says "not verified yet".
+    if let Ok(r) = &res {
+        note_conn_health(
+            "hrdlog",
+            matches!(r.result.as_str(), "ok" | "duplicate"),
+            r.message.clone().unwrap_or_else(|| r.result.clone()),
+        );
+    }
+    res
 }
 
 fn hrdlog_push_qso_impl(
@@ -20663,6 +20769,26 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
 
 #[cfg(test)]
 mod tests {
+    /// `conn-health.json` round-trips, drops ids this build does not know, and treats a
+    /// malformed file as nothing — a status file must never be able to fail a launch.
+    #[test]
+    fn conn_health_json_round_trips_and_drops_the_unknown() {
+        let rows: super::ConnHealthRows = vec![
+            ("hrdlog", Some(1_700_000_000), None),
+            ("wrl", None, Some((1_700_000_500, "AuthFail".to_string()))),
+        ];
+        let text = super::conn_health_to_json(&rows);
+        assert_eq!(super::conn_health_from_json(&text), rows);
+        // An id from a build that no longer ships that connector is dropped, the rest kept.
+        let foreign = text.replace("\"hrdlog\"", "\"gone-connector\"");
+        let back = super::conn_health_from_json(&foreign);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].0, "wrl");
+        // Malformed → empty, never a panic.
+        assert!(super::conn_health_from_json("not json").is_empty());
+        assert!(super::conn_health_from_json("").is_empty());
+    }
+
     /// The Spots-heading grid off the RBN skimmer wire (the ~309° report): the strict RBN
     /// spelling matches, and the shapes a HUMAN comment is full of do not — that asymmetry
     /// is the whole safety argument for mining the token at all.
