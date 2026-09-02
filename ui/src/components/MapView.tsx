@@ -225,6 +225,42 @@ function loadProjection(): Projection | null {
   return v === 'globe' || v === 'aeqd' || v === 'world' ? v : null
 }
 
+// The operator's layer picks (#199) — same per-surface scoping and carry-over as the
+// projection above, and for the same reason: which layers you run is a deliberate setup,
+// and it reset to defaults-plus-preset on every launch while the control beside it
+// persisted. The embedded sat/APRS maps never touch this key (they force their own sets,
+// exactly as the detail globe force-locks its projection).
+const LAYERS_KEY = 'nexus.connect.layers'
+
+/** Stored blob → a full layer table, or `null` for anything unusable. Everything accepted
+ *  is CLAMPED against the current table: unknown keys dropped, missing keys defaulted,
+ *  opacity bounded to [0,1] — a persisted blob from an older or newer build is exactly the
+ *  input this will meet. Pure and exported for `MapView.layers.test.ts`. */
+export function layersFromStored(v: string | null): Record<LayerKey, Layer> | null {
+  if (!v) return null
+  let raw: unknown
+  try {
+    raw = JSON.parse(v)
+  } catch {
+    return null
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const blob = raw as Record<string, { visible?: unknown; opacity?: unknown }>
+  const out = { ...DEFAULT_LAYERS }
+  for (const k of Object.keys(DEFAULT_LAYERS) as LayerKey[]) {
+    const r = blob[k]
+    if (typeof r !== 'object' || r === null) continue
+    out[k] = {
+      visible: typeof r.visible === 'boolean' ? r.visible : DEFAULT_LAYERS[k].visible,
+      opacity:
+        typeof r.opacity === 'number' && r.opacity >= 0 && r.opacity <= 1
+          ? r.opacity
+          : DEFAULT_LAYERS[k].opacity,
+    }
+  }
+  return out
+}
+
 /** Grid-rarity → the dashed halo color (matches the .rarity-gem palette), or
  * null for tiers too common to decorate. */
 function rarityRing(r: import('../types').GridRarity | null | undefined): string | null {
@@ -309,7 +345,7 @@ const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
   ota: { labelKey: 'map.layer.ota.label' },
 }
 const layerLabel = (k: LayerKey): string => t(LAYER_LABEL[k].labelKey)
-const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
+export const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { visible: true, opacity: 1 },
   relief: { visible: true, opacity: 1 },
   muf: { visible: true, opacity: 0.9 },
@@ -493,8 +529,15 @@ export function MapView({
   const [colorBy, setColorBy] = useState<'need' | 'snr'>('need')
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
   const [layers, setLayers] = useState(() =>
-    embedded ? (embedded.aprs ? APRS_EMBED_LAYERS : EMBED_LAYERS) : DEFAULT_LAYERS,
+    embedded
+      ? embedded.aprs
+        ? APRS_EMBED_LAYERS
+        : EMBED_LAYERS
+      : (layersFromStored(surfaceGet(LAYERS_KEY)) ?? DEFAULT_LAYERS),
   )
+  // Whether a persisted layer pick seeded the state above — the intent preset yields to it
+  // on first mount, exactly as it yields to the persisted projection.
+  const hadStoredLayers = useRef(!embedded && surfaceGet(LAYERS_KEY) != null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string; info?: boolean } | null>(null)
   // The hovered feature's call — drives the on-canvas hover ring (changes only
@@ -695,8 +738,12 @@ export function MapView({
     // projection when the operator actively SWITCHES intent afterward. colorBy/layers always
     // follow the intent — they're derived identically in every window, so they carry over.
     if (!intentFirstRun.current) setKind(p.kind)
+    // Same first-mount rule for the layers (#199): a persisted pick seeded the state, and
+    // the preset only re-applies when the operator actively SWITCHES intent afterward.
+    const skipLayers = intentFirstRun.current && hadStoredLayers.current
     intentFirstRun.current = false
     setColorBy(p.colorBy)
+    if (skipLayers) return
     setLayers((L) => {
       const next = { ...L }
       for (const k of Object.keys(p.layers) as LayerKey[]) {
@@ -713,6 +760,13 @@ export function MapView({
     if (embedded) return
     surfaceSet(PROJECTION_KEY, kind)
   }, [kind, embedded])
+
+  // Persist the layer picks the same way (#199) — every toggle, opacity nudge, preset
+  // application and Reset writes through, so the next launch opens the map you left.
+  useEffect(() => {
+    if (embedded) return
+    surfaceSet(LAYERS_KEY, JSON.stringify(layers))
+  }, [layers, embedded])
 
   // The operator's real QTH — drives the "you are here" marker, and normally the
   // projection centre too.

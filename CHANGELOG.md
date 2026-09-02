@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A popped-out waterfall no longer strands itself across a restart.** If Nexus closed
+  while the waterfall (or any pane) was popped out to its own window, the next launch
+  could show the pane as still popped out — with no window anywhere and the docked copy
+  gone — and it stayed that way every launch. The boot-time tidy-up that re-docks stale
+  pop-outs ran before the saved UI state finished loading, so its correction was
+  overwritten by the very staleness it had just fixed. Writes that land during that
+  window now survive the load. Reported on a FlexRadio 6400M; nothing rig-specific.
+
+- **The Connect map remembers your layers.** Which layers you had on — parks, MUF,
+  aurora, spots, all of them, and their opacities — reset to defaults on every launch,
+  while the projection pick right beside them was remembered. The layer set now persists
+  the same way: the map opens as you left it, and choosing a view preset afterwards
+  still applies that preset's layers. Asked for from the field (#199).
+
 - **A rig keyed the moment Nexus started, when PTT was set to RTS.** On radios whose
   Hamlib backend declares hardware flow control — the TS-2000 it was reported on, and
   most Kenwoods and several Yaesus — choosing RTS as the PTT method on the CAT port let
