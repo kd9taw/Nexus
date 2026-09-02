@@ -418,7 +418,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                 <span className="np-entity">
                   <span className="np-name">{s.entity || '—'}</span>
                   {(() => {
-                    const az = azimuthTo(myGrid, null, s.entity, centroids)
+                    const az = azimuthTo(myGrid, s.grid, s.entity, centroids)
                     return az ? (
                       <span className="np-az" title={azimuthTitle(az, s.entity)}>
                         {azimuthLabel(az)}

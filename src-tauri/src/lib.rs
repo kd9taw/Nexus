@@ -3842,6 +3842,27 @@ fn fcc_state_for_call(call: &str) -> Option<&'static str> {
     FCC_STATES.read().ok()?.as_ref()?.state_for_call(call)
 }
 
+/// The DX station's own Maidenhead grid off an RBN SKIMMER comment ("FT8 -15 dB DM03 CQ"),
+/// or `None`. Trusted ONLY on the machine-generated skimmer wire — the caller gates on
+/// `ClusterSpot::rbn`, the same doctrine that keeps human free-text mode tokens untrusted
+/// (`is_rbn_rtty`). The shape is strict RBN spelling: 4 or 6 chars, uppercase field pair
+/// A–R, digit pair, optional lowercase subsquare pair a–x — no case folding, because a
+/// human comment's stray word is far likelier to match a folded pattern than the skimmer
+/// is to change its spelling.
+///
+/// This exists for the Spots panel's heading column: without it every US station read as
+/// the bearing to cty.dat's Kansas reference point (`~309°` from Alabama, the 2026-09-01
+/// report) while the row's own comment was carrying the station's real square.
+fn rbn_comment_grid(comment: &str) -> Option<&str> {
+    comment.split_ascii_whitespace().find(|t| {
+        let b = t.as_bytes();
+        (b.len() == 4 || b.len() == 6)
+            && b[..2].iter().all(|c| (b'A'..=b'R').contains(c))
+            && b[2..4].iter().all(u8::is_ascii_digit)
+            && b[4..].iter().all(|c| (b'a'..=b'x').contains(c))
+    })
+}
+
 /// Best US-state hint for the WAS "New State" cue. The FCC callsign→state index is authoritative:
 /// it gives the licensed state precisely, needs no grid at all (so it covers the whole cluster /
 /// CW / SSB firehose), and carries no border ambiguity. A heard grid only FILLS IN when FCC has no
@@ -12833,6 +12854,10 @@ struct SpotRow {
     /// (own decodes / PSK Reporter). `None` for a cluster/RBN spot of a station not yet heard with
     /// a grid, or a non-US station — cluster spots carry no grid of their own.
     state: Option<String>,
+    /// The station's OWN grid, when one is known: the roster's cached decode grid first, else
+    /// the grid token off the RBN skimmer comment ([`rbn_comment_grid`] — machine wire only).
+    /// Drives the panel's exact heading; `None` leaves the ~entity-centroid fallback.
+    grid: Option<String>,
     /// Band label ("20m"), "" if off the band plan.
     band: String,
     freq_mhz: f64,
@@ -12956,6 +12981,11 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
             // decode grid for rovers. See us_state_hint.
             let roster_grid = roster_grids.get(&cs.dx_call).map(String::as_str);
             let state = us_state_hint(&cs.dx_call, roster_grid);
+            // Heading source, most-trusted first: our own decode cache, else the skimmer
+            // wire's grid token (rbn-gated). Never human free-text.
+            let grid = roster_grid
+                .or_else(|| cs.rbn.then(|| rbn_comment_grid(&cs.comment)).flatten())
+                .map(str::to_string);
             let age_secs = if cs.received_unix > 0 {
                 (now - cs.received_unix as i64).max(0)
             } else {
@@ -12976,6 +13006,7 @@ fn get_all_spots(spots: State<'_, SharedSpots>, state: State<'_, SharedEngine>) 
                 entity,
                 zone,
                 state,
+                grid,
                 band,
                 freq_mhz: freq,
                 mode: mode_label.to_string(),
@@ -20619,6 +20650,23 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
 
 #[cfg(test)]
 mod tests {
+    /// The Spots-heading grid off the RBN skimmer wire (the ~309° report): the strict RBN
+    /// spelling matches, and the shapes a HUMAN comment is full of do not — that asymmetry
+    /// is the whole safety argument for mining the token at all.
+    #[test]
+    fn rbn_comment_grid_takes_the_skimmer_token_and_nothing_looser() {
+        // The wire shapes seen in the field report, 4- and 6-char.
+        assert_eq!(super::rbn_comment_grid("FT8 -15 dB DM03 CQ"), Some("DM03"));
+        assert_eq!(super::rbn_comment_grid("FT8 5 dB EN52wc CQ"), Some("EN52wc"));
+        // Nothing grid-shaped: the usual RBN CW comment.
+        assert_eq!(super::rbn_comment_grid("CW 21 dB 25 WPM CQ"), None);
+        // Human spellings that a folded or loose pattern would swallow: lowercase field,
+        // uppercase subsquare, wrong lengths, out-of-range field letter.
+        for c in ["worked dm03 earlier", "EN52WC", "DM0", "DM034", "SM03", "TU 599 73"] {
+            assert_eq!(super::rbn_comment_grid(c), None, "{c:?} must not match");
+        }
+    }
+
     /// #171: the country resolver and the state resolver never spoke to each other. Country
     /// comes from cty.dat prefix arithmetic; state comes from the FCC ULS index, which holds
     /// the licensee's MAILING address. WL7E was reported as country "Alaska", state "CA" —

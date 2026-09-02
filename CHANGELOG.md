@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A rig keyed the moment Nexus started, when PTT was set to RTS.** On radios whose
+  Hamlib backend declares hardware flow control — the TS-2000 it was reported on, and
+  most Kenwoods and several Yaesus — choosing RTS as the PTT method on the CAT port let
+  the Windows serial driver take the RTS line as flow control and hold it up for the
+  whole session. On a Digirig-style interface that line is the key, so the transmitter
+  keyed at launch and nothing could release it until the app closed. RTS cannot be flow
+  control and the key at the same time, so when you declare RTS keying on such a radio
+  Nexus now tells the rig-control daemon to run without hardware flow control, and the
+  key line starts low and follows PTT. Other PTT methods and declared handshake settings
+  are untouched. From a field report (vk6mo); needs an on-air bench pass, and if your
+  radio's CAT menu has RTS flow control switched on it may need switching off to match.
+
+- **US stations no longer all show the same heading in Spots.** Every United States row
+  read "~309°" (or whatever one number your QTH gives) — the bearing to the country's
+  reference point in Kansas — while the spot itself was carrying the station's own grid.
+  A spot that carries a grid, from your own decodes or off the skimmer wire, now shows
+  the real heading to that station, unmarked; only a truly grid-less spot keeps the
+  approximate "~" country heading. Reported from the field the day it was asked about.
+
 - **macOS: CAT works again on a Mac without Homebrew.** 1.10.0 fixed the app not finding
   the Hamlib it ships (#190) — and the copy it then found was broken on exactly the Macs
   the bundling exists for: the bundled Hamlib library still looked for Homebrew's libusb
