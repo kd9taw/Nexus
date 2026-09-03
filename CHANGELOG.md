@@ -5,6 +5,18 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **SSTV no longer loads some images upside down on macOS.** An image with a 180° EXIF
+  orientation tag came into the SSTV transmit stage upside down on the Mac (and would have
+  transmitted that way). The app rotates images upright itself, and its safeguard against
+  rotating one that the system already rotated only recognised the 90° cases — a 180° flip
+  changes no dimensions, so it slipped through, and macOS's image decoder rotates on its own
+  where Windows does not. Nexus now probes, once, whether the decoder applies orientation and
+  acts on the answer, so a picture lands upright on every platform. From a field report.
+
 ## [1.10.2] — 2026-09-03
 
 ### Fixed
