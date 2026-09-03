@@ -1,30 +1,36 @@
 #!/usr/bin/env python3
-"""build-manual-epub.py — the Nexus manual as one reflowable EPUB.
+"""build-manual-epub.py — the Nexus manual as one reflowable, valid EPUB 3.
 
 The companion to build-manual-pdf.py: the SAME source (docs/quick-start.md + the guide
-pages, in the order docs/guide/index.md lists them), the SAME narrative order, emitted as
-EPUB 3 instead of PDF. EPUB is the format that reflows on a phone and that a Kindle accepts
-directly through Send to Kindle — Amazon retired MOBI, so EPUB + the PDF cover desktop,
-mobile and Kindle between them with no third format.
+pages, in the order docs/guide/index.md lists them), emitted as EPUB 3 instead of PDF. EPUB
+is the format that reflows on a phone and that a Kindle accepts through Send to Kindle
+(Amazon retired MOBI), so EPUB + the PDF cover desktop, mobile and Kindle with no third
+format.
 
-WHY PANDOC AND NOT THE PDF's PRINT HTML. The PDF concatenates everything into one print-CSS
-document and renders it through Chrome — right for a fixed A4 page, wrong for a reflowable
-reader, which wants real chapter navigation (each section a nav entry the reader can jump
-to) and no page furniture. Pandoc builds that navigation natively from the top-level
-headings, so this goes markdown → EPUB directly rather than reusing the PDF's HTML.
-
-INTER-PAGE LINKS. The guide cross-links pages as `](settings-reference.md#features)`. Merged
-into one EPUB those file targets do not exist, so they are rewritten to in-document anchors:
-`](page.md#anchor)` → `](#anchor)`, and a bare `](page.md)` → the id pandoc gives that page's
-first heading. Pandoc derives heading ids the GitHub way (lowercase, spaces→hyphens), so the
-anchors line up.
+VALIDATED WITH epubcheck. The first cut failed the official validator three ways, each a
+real defect an e-reader can trip on, all fixed here:
+  • images — the guide's screenshots are .webp referenced relatively; fed to pandoc raw they
+    became <img> links pointing OUTSIDE the book (RSC + a Kindle that would not open it).
+    Each is resolved against its page dir, converted to PNG (Kindle-safe) with Pillow, and
+    embedded; a missing/unconvertible source drops to its alt text, never a broken link.
+  • cross-references — `](settings-reference.md#features)`-style links across pages. Merged
+    into one book those file targets vanish, and pandoc's own auto-ids collide ("Features"
+    on three pages), so bare `#features` was undefined (RSC-012 ×87). Every heading is given
+    a unique id namespaced by its page (`stem__slug`) via header_attributes, and every link
+    is resolved against a map of those ids — a target that does not exist drops to plain
+    text rather than a dangling anchor.
+  • any remaining link that is not an in-book `#anchor`, an `http(s)://` URL or a `mailto:`
+    points outside the book (the old desktop `manual/` tree, `guide/`, `install.md`); those
+    drop to their text too.
+  • dc:date is a real ISO date, not the version string (RSC-005 / OPF-053).
 
   ./scripts/build-manual-epub.py --version 1.10.2 --out docs/Nexus-Manual.epub
-  PANDOC=/path/to/pandoc ./scripts/build-manual-epub.py …   # override the binary
+  PANDOC=/path/to/pandoc ./scripts/build-manual-epub.py …
 """
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import pathlib
 import re
@@ -35,76 +41,96 @@ import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 GUIDE = REPO / "docs/guide"
+HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*$", re.M)
+LINK = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)]+)\)")  # (?<!!) so it never matches an ![image]
+IMG = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+
+def slugify(text: str) -> str:
+    """GitHub's heading slug: strip inline markdown, lowercase, drop punctuation, spaces→-."""
+    t = re.sub(r"`([^`]*)`", r"\1", text)          # code spans → their content
+    t = re.sub(r"[*_]", "", t)                     # emphasis marks
+    t = t.strip().lower()
+    t = re.sub(r"[^\w\s-]", "", t)
+    return re.sub(r"\s+", "-", t).strip("-")
 
 
 def guide_order() -> list[pathlib.Path]:
-    """The page order, read from index.md's link list — identical to build-manual-pdf.py so
-    the two documents can never fall out of step."""
+    """Page order from index.md's links — identical to build-manual-pdf.py."""
     index = (GUIDE / "index.md").read_text(encoding="utf-8")
     out: list[pathlib.Path] = []
     seen: set[str] = set()
     for m in re.finditer(r"\]\(([a-z0-9-]+)\.md\)", index):
         name = m.group(1)
-        if name in seen:
-            continue
-        seen.add(name)
-        p = GUIDE / f"{name}.md"
-        if p.exists():
-            out.append(p)
-    # Anything shipped but not linked from the index still belongs in the book.
+        if name not in seen and (GUIDE / f"{name}.md").exists():
+            seen.add(name)
+            out.append(GUIDE / f"{name}.md")
     for p in sorted(GUIDE.glob("*.md")):
         if p.name != "index.md" and p not in out:
-            print(f"  note: {p.name} is not linked from index.md — appended", file=sys.stderr)
+            print(f"  note: {p.name} unlinked from index.md — appended", file=sys.stderr)
             out.append(p)
     return out
 
 
-def heading_id(text: str) -> str:
-    """Pandoc's gfm auto-identifier: lowercase, drop punctuation, spaces → hyphens."""
-    t = text.strip().lower()
-    t = re.sub(r"[^\w\s-]", "", t)
-    t = re.sub(r"\s+", "-", t)
-    return t.strip("-")
+def assign_heading_ids(md: str, stem: str) -> tuple[str, dict[str, str], str | None]:
+    """Give every heading an explicit id `stem__slug` (deduped within the page), returning the
+    rewritten markdown, a {base-slug: first-id} map for link resolution, and the first id."""
+    counts: dict[str, int] = {}
+    slug_to_id: dict[str, str] = {}
+    first: str | None = None
+
+    def repl(m: re.Match) -> str:
+        nonlocal first
+        hashes, text = m.group(1), m.group(2)
+        base = slugify(text)
+        n = counts.get(base, 0)
+        counts[base] = n + 1
+        hid = f"{stem}__{base}" if n == 0 else f"{stem}__{base}-{n}"
+        if base not in slug_to_id:
+            slug_to_id[base] = hid   # a link to this slug lands on the first occurrence (gh rule)
+        if first is None:
+            first = hid
+        return f"{hashes} {text} {{#{hid}}}"
+
+    return HEADING.sub(repl, md), slug_to_id, first
 
 
-def first_heading_id(md: str) -> str | None:
-    for line in md.split("\n"):
-        if line.startswith("# "):
-            return heading_id(line[2:])
-    return None
+def resolve_links(md: str, stem: str, ids: dict, first: dict) -> str:
+    """Rewrite links to in-book anchors where they resolve, and strip the rest to plain text.
+    `ids[stem][slug]` is the id for that page's heading; `first[stem]` its first id."""
+    def repl(m: re.Match) -> str:
+        label, target = m.group(1), m.group(2).split()[0].strip("<>")
+        # in-page anchor: `#frag`
+        if target.startswith("#"):
+            frag = target[1:]
+            dest = ids.get(stem, {}).get(frag)
+            return f"[{label}](#{dest})" if dest else (label or "")
+        # cross-page: `other.md#frag` / `other.md`
+        mm = re.match(r"([a-z0-9-]+)\.md(?:#([\w-]+))?$", target)
+        if mm:
+            other, frag = mm.group(1), mm.group(2)
+            if frag:
+                dest = ids.get(other, {}).get(frag)
+            else:
+                dest = first.get(other)
+            return f"[{label}](#{dest})" if dest else (label or "")
+        # external links stay; anything else points outside the book → plain text.
+        if re.match(r"(https?:|mailto:)", target):
+            return m.group(0)
+        return label or ""
 
-
-def preprocess(md: str, page_ids: dict[str, str]) -> str:
-    # Drop HTML comments (the TODO screenshot markers) — they render as raw text otherwise.
-    md = re.sub(r"<!--.*?-->", "", md, flags=re.DOTALL)
-    # `](page.md#anchor)` → `](#anchor)`
-    md = re.sub(r"\]\(([a-z0-9-]+)\.md#([\w-]+)\)", r"](#\2)", md)
-    # `](page.md)` → the id of that page's first heading (else drop to a top anchor)
-    def bare(m: re.Match) -> str:
-        pid = page_ids.get(m.group(1))
-        return f"](#{pid})" if pid else "](#)"
-    md = re.sub(r"\]\(([a-z0-9-]+)\.md\)", bare, md)
-    # ANY remaining `.md` link points OUTSIDE this book — the old desktop `manual/` tree,
-    # which the guide-based EPUB does not include (these are quick-start's "further reading"
-    # pointers, redundant here since every chapter is already present). Drop the link, keep
-    # the text: `[label](whatever.md#x)` → `label`.
-    md = re.sub(r"\[([^\]]+)\]\([^)]*\.md[^)]*\)", r"\1", md)
-    return md
+    return LINK.sub(repl, md)
 
 
 def embed_images(md: str, base: pathlib.Path, media: pathlib.Path) -> str:
-    """Resolve every `![alt](rel)` against `base`, convert the file into `media` as a format
-    Kindle accepts (WebP → PNG; JPEG/PNG/GIF copied as-is), and rewrite the link to that
-    absolute path so pandoc embeds it in the EPUB. WHY THIS EXISTS: the guide screenshots are
-    `.webp` under docs/img/manual, referenced relatively. Fed to pandoc without resolution they
-    became broken links pointing OUTSIDE the book, and a strict reader — Kindle's converter
-    among them — rejects such an EPUB outright, which is why 1.10.2's first EPUB would not open.
-    A missing or unconvertible source drops to its alt text (a full description already), never a
-    broken link."""
+    """Resolve `![alt](rel)` against `base`, convert to PNG in `media`, rewrite to that path so
+    pandoc embeds it. Missing/unconvertible → alt text, never a broken link."""
     from PIL import Image
 
     def one(m: re.Match) -> str:
-        alt, rel = m.group(1), m.group(2).split()[0].strip('<>')
+        alt, rel = m.group(1), m.group(2).split()[0].strip("<>")
+        if re.match(r"https?:", rel):
+            return m.group(0)
         src = (base / rel).resolve()
         if not src.exists():
             print(f"    image missing, kept as text: {rel}", file=sys.stderr)
@@ -113,12 +139,12 @@ def embed_images(md: str, base: pathlib.Path, media: pathlib.Path) -> str:
         try:
             if not dst.exists():
                 Image.open(src).convert("RGB").save(dst, "PNG", optimize=True)
-        except Exception as e:  # noqa: BLE001 — any decode failure → drop to alt text, never break
-            print(f"    image {rel} could not convert ({e}); kept as text", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001
+            print(f"    image {rel} unconvertible ({e}); kept as text", file=sys.stderr)
             return f"*{alt}*" if alt else ""
         return f"![{alt}]({dst})"
 
-    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", one, md)
+    return IMG.sub(one, md)
 
 
 def find_pandoc() -> str:
@@ -138,28 +164,35 @@ def main() -> int:
     pandoc = find_pandoc()
     pages = [REPO / "docs/quick-start.md"] + guide_order()
 
-    # Map each stem to its first-heading id, so a bare `page.md` link lands on that chapter.
-    page_ids: dict[str, str] = {}
+    # Pass A — assign every heading a namespaced id and build the resolution maps.
+    annotated: list[tuple[pathlib.Path, str]] = []
+    ids: dict[str, dict[str, str]] = {}
+    first: dict[str, str] = {}
     for p in pages:
-        hid = first_heading_id(p.read_text(encoding="utf-8"))
-        if hid:
-            page_ids[p.stem] = hid
+        stem = p.stem
+        md, slug_map, first_id = assign_heading_ids(p.read_text(encoding="utf-8"), stem)
+        annotated.append((p, md))
+        ids[stem] = slug_map
+        if first_id:
+            first[stem] = first_id
 
+    # Pass B — comments out, images embedded, links resolved against the maps.
     media = pathlib.Path(tempfile.mkdtemp(prefix="nexus-manual-img-"))
     parts = []
-    for i, p in enumerate(pages, 1):
-        body = preprocess(p.read_text(encoding="utf-8"), page_ids)
-        body = embed_images(body, p.parent, media)  # per PAGE dir — image paths are relative to it
-        parts.append(body.strip())
+    for i, (p, md) in enumerate(annotated, 1):
+        md = re.sub(r"<!--.*?-->", "", md, flags=re.DOTALL)
+        md = embed_images(md, p.parent, media)
+        md = resolve_links(md, p.stem, ids, first)
+        parts.append(md.strip())
         print(f"  {i:02d}  {p.relative_to(REPO)}")
     merged = "\n\n".join(parts) + "\n"
 
-    # A metadata block pandoc turns into the EPUB title page + package metadata.
     meta = (
         "---\n"
         'title: "Nexus — Quick Start & Reference Manual"\n'
+        f'subtitle: "Version {args.version}"\n'
         'author: "KD9TAW"\n'
-        f'date: "Version {args.version}"\n'
+        f'date: "{datetime.date.today().isoformat()}"\n'
         'lang: en-US\n'
         'rights: "Free software · GPL-3.0-only"\n'
         "---\n\n"
@@ -168,15 +201,14 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         pandoc,
-        "--from=gfm",
+        "--from=commonmark_x",  # CommonMark+extensions: honours our explicit {#id} on headings, GFM-compatible
         "--to=epub3",
-        "--toc",
-        "--toc-depth=1",       # one nav entry per section (each page's H1)
-        "--split-level=1",     # each H1 opens a new EPUB chapter file
-        "--metadata", "title=Nexus — Quick Start & Reference Manual",
+        "--toc", "--toc-depth=1",
+        "--split-level=1",
         "-o", str(args.out),
     ]
     subprocess.run(cmd, input=meta + merged, text=True, check=True)
+    shutil.rmtree(media, ignore_errors=True)
 
     if not args.out.exists() or args.out.stat().st_size == 0:
         sys.exit("EPUB was not produced")
