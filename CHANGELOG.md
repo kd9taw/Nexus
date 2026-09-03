@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.10.2] — 2026-09-03
 
 ### Fixed
 
@@ -18,27 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to cover it, and it gives up quickly rather than wait — so a slow radio costs you a
   reading, never a gap in the carrier. From the operator's field test of 1.10.1.
 
-- **Radio off overnight, on in the morning — CAT now comes back on its own.** Leaving Nexus
-  running while the radio was switched off, then switching it on, could leave rig control
-  dead until you restarted the app: the rig-control helper stayed alive holding a serial
-  port that had gone away with the radio's USB, and nothing ever reopened it. Worse, the
-  CAT indicator could stay green over a radio that was off, and a band change made while
-  it was off was recorded as "the radio refused that frequency" and never sent again.
-  Now: a link that goes silent trips the CAT indicator red within a few seconds; after
-  three silent re-checks the helper is torn down and the port reopened, and that keeps
-  retrying on a one-minute backoff; the serial port itself is watched while CAT is down,
-  so the moment it reappears the port is reopened at once — and if the radio comes back
-  under a new COM port name, Nexus follows it by USB identity. A radio that merely didn't
-  answer is reported as exactly that, never as a refusal, and every band or mode Nexus had
-  given up on is forgiven the moment the link returns. Green means a real answer: a mode
-  change whose read-back failed no longer paints the indicator, and on the native CI-V
-  path a cached dial is served for only a few seconds after the last real reading, so a
-  mute radio can no longer look connected. And two things the first overnight bench
-  then caught: a reopen that fails while the port is present (Windows lists a COM port a
-  second or two before its driver will open it) is now retried on a backoff instead of
-  once, and a radio Nexus could not open at all — which answers "yes" to every command
-  without sending anything — can no longer paint the indicator green by "accepting" a
-  band change. From the operator's own overnight tests.
+- **CAT is more honest, and recovers on its own where it can.** Leaving Nexus running while
+  the radio was switched off could leave rig control in a bad state: the CAT indicator
+  might stay green over a radio that was off, and a band change made while it was off was
+  recorded as "the radio refused that frequency" and never sent again. Both are fixed. A
+  link that goes silent now trips the CAT indicator red within a few seconds; a radio that
+  simply did not answer is reported as exactly that, never as a refusal, so no band gets
+  blacklisted for the session; and every band or mode Nexus had given up on is forgiven
+  the moment the link comes back. Green now means a real answer — a mode change whose
+  read-back failed, or a radio Nexus could not open at all, can no longer paint the
+  indicator green, and on the native CI-V path a cached dial is trusted for only a few
+  seconds so a switched-off radio cannot look connected. And where the radio's USB port
+  itself comes and goes, Nexus watches for it and reopens the port when it returns — even
+  under a new COM number, following it by USB identity — retrying on a backoff rather than
+  giving up after one try. Some radios (notably the Yaesu FTDX10 and its family, whose
+  Hamlib backend shuts down entirely when the rig is off) may still need a restart to pick
+  the radio back up; that case is still being run down. From the operator's field tests.
 
 - **A working connector no longer reads "stored — not verified yet" after every restart.**
   The connection health shown in Settings ▸ Logging & Connectors lived only in memory, so
