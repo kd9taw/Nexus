@@ -229,6 +229,35 @@ jobs:
       - name: docs/shipped.json is generated from the app's own lists
         run: node scripts/gen-shipped.mjs --check
 
+  # The downloadable manual's EPUB must stay valid — a doc change that breaks it should go
+  # red here, on the push, not be discovered on a Kindle after release. Builds the EPUB only
+  # (no Chrome/PDF) and runs the official W3C epubcheck, which exits non-zero on any error.
+  # Its own first ship failed epubcheck with 89 errors (broken cross-links, missing images),
+  # so this gate is not hypothetical.
+  manual-epub:
+    name: Manual EPUB validates (epubcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tools (pandoc + pillow; Java is preinstalled)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pandoc
+          python3 -m pip install --quiet pillow
+      - name: Build the EPUB
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          python3 scripts/build-manual-epub.py --version "$ver" --out /tmp/Nexus-Manual.epub
+      - name: Validate with W3C epubcheck
+        run: |
+          set -euo pipefail
+          EC=5.3.0
+          curl -fsSL "https://github.com/w3c/epubcheck/releases/download/v${EC}/epubcheck-${EC}.zip" -o /tmp/ec.zip
+          python3 -c "import zipfile; zipfile.ZipFile('/tmp/ec.zip').extractall('/tmp')"
+          java -jar "/tmp/epubcheck-${EC}/epubcheck.jar" /tmp/Nexus-Manual.epub
+
   # Job 3 — MSRV: the workspace must compile on the pinned minimum toolchain
   # (Cargo.toml [workspace.package] rust-version = "1.91"). Build-only check,
   # incl. the propagation `live` feature (the heaviest dep set).
