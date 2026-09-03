@@ -794,7 +794,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends pandoc
-          python3 -m pip install --quiet websockets
+          python3 -m pip install --quiet websockets pillow  # websockets: CDP for the PDF; pillow: WebP→PNG for the EPUB
       - name: Build the manual
         run: |
           set -euo pipefail

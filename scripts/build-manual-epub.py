@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 GUIDE = REPO / "docs/guide"
@@ -91,6 +92,35 @@ def preprocess(md: str, page_ids: dict[str, str]) -> str:
     return md
 
 
+def embed_images(md: str, base: pathlib.Path, media: pathlib.Path) -> str:
+    """Resolve every `![alt](rel)` against `base`, convert the file into `media` as a format
+    Kindle accepts (WebP → PNG; JPEG/PNG/GIF copied as-is), and rewrite the link to that
+    absolute path so pandoc embeds it in the EPUB. WHY THIS EXISTS: the guide screenshots are
+    `.webp` under docs/img/manual, referenced relatively. Fed to pandoc without resolution they
+    became broken links pointing OUTSIDE the book, and a strict reader — Kindle's converter
+    among them — rejects such an EPUB outright, which is why 1.10.2's first EPUB would not open.
+    A missing or unconvertible source drops to its alt text (a full description already), never a
+    broken link."""
+    from PIL import Image
+
+    def one(m: re.Match) -> str:
+        alt, rel = m.group(1), m.group(2).split()[0].strip('<>')
+        src = (base / rel).resolve()
+        if not src.exists():
+            print(f"    image missing, kept as text: {rel}", file=sys.stderr)
+            return f"*{alt}*" if alt else ""
+        dst = media / (src.stem + ".png")
+        try:
+            if not dst.exists():
+                Image.open(src).convert("RGB").save(dst, "PNG", optimize=True)
+        except Exception as e:  # noqa: BLE001 — any decode failure → drop to alt text, never break
+            print(f"    image {rel} could not convert ({e}); kept as text", file=sys.stderr)
+            return f"*{alt}*" if alt else ""
+        return f"![{alt}]({dst})"
+
+    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", one, md)
+
+
 def find_pandoc() -> str:
     for c in (os.environ.get("PANDOC"), shutil.which("pandoc")):
         if c and pathlib.Path(c).exists():
@@ -115,9 +145,11 @@ def main() -> int:
         if hid:
             page_ids[p.stem] = hid
 
+    media = pathlib.Path(tempfile.mkdtemp(prefix="nexus-manual-img-"))
     parts = []
     for i, p in enumerate(pages, 1):
         body = preprocess(p.read_text(encoding="utf-8"), page_ids)
+        body = embed_images(body, p.parent, media)  # per PAGE dir — image paths are relative to it
         parts.append(body.strip())
         print(f"  {i:02d}  {p.relative_to(REPO)}")
     merged = "\n\n".join(parts) + "\n"
