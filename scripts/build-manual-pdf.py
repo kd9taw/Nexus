@@ -94,6 +94,9 @@ body { font: 10.5pt/1.55 "Inter", "Segoe UI", Roboto, -apple-system, sans-serif;
 .toc li { margin: 0 0 3.4mm; break-inside: avoid; font-size: 10.5pt; }
 .toc .n { font: 600 8.5pt "JetBrains Mono", ui-monospace, monospace; color: #3ddc8c;
           margin-right: 3mm; }
+/* The row is a link now (clickable in the PDF) but reads as the printed contents line —
+   no browser-blue, no underline. */
+.toc a { color: #14203a; text-decoration: none; }
 
 /* ---------- chapter openers ---------- */
 .chapter { page-break-before: always; break-before: page; }
@@ -313,6 +316,9 @@ def render_pdf(browser: str, src: pathlib.Path, out: pathlib.Path, footer: str) 
                 time.sleep(6)  # images + fonts; the doc is local so this is generous
                 res = call("Page.printToPDF", {
                     "printBackground": True, "preferCSSPageSize": True,
+                    # The reader's clickable bookmark sidebar, built from the h1..h6 tree —
+                    # so every section AND its sub-headings are one click away. Chrome ≥126.
+                    "generateDocumentOutline": True,
                     "displayHeaderFooter": True,
                     "headerTemplate": "<span></span>", "footerTemplate": footer,
                     "marginTop": 0.79, "marginBottom": 0.71,
@@ -382,8 +388,11 @@ def main() -> int:
         <span>Free software · GPLv3</span></div>
     </div>"""
 
+    # Clickable TOC: each row jumps to its section anchor (`#sec-N`), and Chrome preserves
+    # the in-document link in the PDF. The PDF outline/bookmark sidebar comes separately, from
+    # `generateDocumentOutline` on the print call — this is the on-page contents list.
     toc = ('<div class="toc"><h2>Contents</h2><ol>'
-           + "".join(f'<li><span class="n">{i:02d}</span>{html.escape(t)}</li>'
+           + "".join(f'<li><a href="#sec-{i}"><span class="n">{i:02d}</span>{html.escape(t)}</a></li>'
                      for i, t in enumerate(titles, 1))
            + "</ol></div>")
 
@@ -391,7 +400,7 @@ def main() -> int:
     for i, (p, t) in enumerate(zip(pages, titles), 1):
         h = md_to_html(p.read_text(encoding="utf-8"), p.parent)
         # Tag the H1 so the chapter opener can number it.
-        h = re.sub(r"<h1>", f'<h1 data-n="Section {i:02d}">', h, count=1)
+        h = re.sub(r"<h1>", f'<h1 id="sec-{i}" data-n="Section {i:02d}">', h, count=1)
         body.append(f'<div class="chapter">{h}</div>')
         print(f"  {i:02d}  {p.relative_to(REPO)}")
 
