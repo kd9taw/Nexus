@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The WSJT-X UDP feed can target several destinations at once.** Settings ▸ Logging &
+  Connectors ▸ WSJT-X UDP API now accepts a comma-separated list of addresses, not just one,
+  so a single Nexus can feed a local tool (GridTracker, JTAlert) and a remote service (an
+  FT8 contest scorer such as FT8 Battle Royale) at the same time — something WSJT-X's own
+  single-sink UDP cannot do. A single address still works exactly as before, and a bad entry
+  in the list is skipped rather than taking the whole feed down.
+
 ### Fixed
 
 - **SSTV no longer loads some images upside down on macOS.** An image with a 180° EXIF

@@ -5445,7 +5445,8 @@ export const EN = {
   // real nodes.
   'settings.integrations.legend': 'Integrations & Feeds',
   'settings.integrations.local.title': 'Local APIs & Loggers',
-  'settings.integrations.wsjtxUdp.hint': 'for JTAlert / GridTracker / loggers',
+  'settings.integrations.wsjtxUdp.hint':
+    'for JTAlert / GridTracker / loggers — and FT8 contest scorers. Several at once: separate addresses with a comma.',
   'settings.integrations.udpAddr.label': 'UDP Address',
   'settings.integrations.udpAddr.hint': 'host:port for the UDP feed',
   'settings.integrations.hrdLogging.label': 'Ham Radio Deluxe logging',

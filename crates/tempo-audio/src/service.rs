@@ -1179,34 +1179,51 @@ pub static SHUTDOWN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// On success sends the opening Heartbeat so a listener (GridTracker, JTAlert)
 /// registers the client immediately — the same Heartbeat is what makes a live
 /// rebind (toggle flipped after launch) connect without an app restart.
+/// Parse the WSJT-X UDP forward address setting into targets. ONE OR MANY, separated by a
+/// comma (or whitespace/semicolon): `127.0.0.1:2237, 129.212.188.3:2237` feeds a local tool
+/// AND a remote contest scorer at once — the thing WSJT-X's single sink cannot do. An entry
+/// that does not parse is dropped with a note rather than failing the rest, so one typo in a
+/// list does not take the whole forward down.
+fn parse_wsjtx_targets(addr: &str) -> Vec<std::net::SocketAddr> {
+    addr.split([',', ';', ' ', '\t', '\n'])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| match s.parse::<std::net::SocketAddr>() {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("tempo: skipping invalid wsjtxAddr entry {s:?}: {e}");
+                None
+            }
+        })
+        .collect()
+}
+
 fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
     if !enabled {
         return None;
     }
-    match addr.parse::<std::net::SocketAddr>() {
-        Ok(target) => {
-            let bind = if target.ip().is_loopback() {
-                "127.0.0.1:0"
-            } else {
-                "0.0.0.0:0"
-            };
-            match WsjtxServer::new(bind.parse().unwrap(), target) {
-                Ok(s) => {
-                    // ⚠️ `CARGO_PKG_VERSION` here is TEMPO-AUDIO's version (0.2.0), not the
-                    // app's — so this heartbeat announces a version that was never released.
-                    // Left as-is rather than fixed blind: the app version is not reachable from
-                    // this crate, and threading it is its own change.
-                    let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
-                    Some(s)
-                }
-                Err(e) => {
-                    eprintln!("tempo: WSJT-X UDP disabled: {e}");
-                    None
-                }
-            }
+    let targets = parse_wsjtx_targets(addr);
+    if targets.is_empty() {
+        eprintln!("tempo: WSJT-X UDP disabled: no valid target in {addr:?}");
+        return None;
+    }
+    // A remote target needs a wildcard bind; all-loopback stays on loopback.
+    let bind = if targets.iter().all(|t| t.ip().is_loopback()) {
+        "127.0.0.1:0"
+    } else {
+        "0.0.0.0:0"
+    };
+    match WsjtxServer::new_multi(bind.parse().unwrap(), targets) {
+        Ok(s) => {
+            // ⚠️ `CARGO_PKG_VERSION` here is TEMPO-AUDIO's version (0.2.0), not the
+            // app's — so this heartbeat announces a version that was never released.
+            // Left as-is rather than fixed blind: the app version is not reachable from
+            // this crate, and threading it is its own change.
+            let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
+            Some(s)
         }
         Err(e) => {
-            eprintln!("tempo: invalid wsjtxAddr {:?}: {e}", addr);
+            eprintln!("tempo: WSJT-X UDP disabled: {e}");
             None
         }
     }
@@ -10856,6 +10873,37 @@ mod tests {
     /// This pins the missing link itself: the transport the daemon is built from must carry the
     /// operator's number. Downstream of here it cannot be dropped — `CivDaemon::start` and
     /// `CivBackend::new` take it as a REQUIRED argument rather than a setter someone remembers.
+    /// The WSJT-X forward accepts ONE OR MANY targets (the FT8-contest ask): a
+    /// comma/space/semicolon list, invalid entries dropped, so a local tool and a remote
+    /// scorer can be fed at once and one typo does not take the whole forward down.
+    #[test]
+    fn parse_wsjtx_targets_takes_a_list_and_drops_the_junk() {
+        use std::net::SocketAddr;
+        let p = |s: &str| super::parse_wsjtx_targets(s);
+        assert_eq!(
+            p("127.0.0.1:2237"),
+            vec!["127.0.0.1:2237".parse::<SocketAddr>().unwrap()]
+        );
+        assert_eq!(
+            p("127.0.0.1:2237, 129.212.188.3:2237"),
+            vec![
+                "127.0.0.1:2237".parse::<SocketAddr>().unwrap(),
+                "129.212.188.3:2237".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+        // whitespace/semicolon separators, and a bad entry skipped rather than failing the rest
+        assert_eq!(
+            p("127.0.0.1:2237 ; nonsense ; 10.0.0.5:2333"),
+            vec![
+                "127.0.0.1:2237".parse::<SocketAddr>().unwrap(),
+                "10.0.0.5:2333".parse::<SocketAddr>().unwrap(),
+            ]
+        );
+        assert!(p("").is_empty());
+        assert!(p("   , ,  ").is_empty());
+        assert!(p("not-an-address").is_empty());
+    }
+
     #[test]
     fn the_transport_carries_the_operators_icom_data_mode() {
         let s = Settings {

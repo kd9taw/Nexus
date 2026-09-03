@@ -17,7 +17,12 @@ pub const APP_ID: &str = "Tempo";
 /// A bound UDP socket that speaks the WSJT-X protocol to a target address.
 pub struct WsjtxServer {
     socket: UdpSocket,
-    target: SocketAddr,
+    /// Every address each datagram is sent to. One socket, many targets — so a single Nexus
+    /// can feed a LOCAL tool (GridTracker / JTAlert) AND a REMOTE service (an FT8 contest
+    /// scorer at a public IP) at once, which WSJT-X's single-sink UDP cannot. Always
+    /// non-empty. Inbound control (Reply / FreeText) still arrives on the one bound socket,
+    /// so [`WsjtxServer::poll`] is unaffected by the target count.
+    targets: Vec<SocketAddr>,
     id: String,
 }
 
@@ -32,21 +37,35 @@ impl WsjtxServer {
     /// The socket is set non-blocking so [`WsjtxServer::poll`] never stalls the
     /// caller's loop.
     pub fn new(bind: SocketAddr, target: SocketAddr) -> io::Result<Self> {
+        Self::new_multi(bind, vec![target])
+    }
+
+    /// Bind once and send every datagram to EACH of `targets`. Empty is rejected (there would
+    /// be nowhere to send). Any multicast target arms multicast send on the socket.
+    pub fn new_multi(bind: SocketAddr, targets: Vec<SocketAddr>) -> io::Result<Self> {
+        if targets.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "WsjtxServer needs at least one target",
+            ));
+        }
         let socket = UdpSocket::bind(bind)?;
         socket.set_nonblocking(true)?;
-        if target.ip().is_multicast() {
-            // Permit sending to a multicast group (and loop it back locally so a
-            // consumer on the same host still hears us).
-            socket.set_multicast_loop_v4(true).ok();
-            if let SocketAddr::V4(v4) = target {
-                socket
-                    .join_multicast_v4(v4.ip(), &std::net::Ipv4Addr::UNSPECIFIED)
-                    .ok();
+        for t in &targets {
+            if t.ip().is_multicast() {
+                // Permit sending to a multicast group (and loop it back locally so a
+                // consumer on the same host still hears us).
+                socket.set_multicast_loop_v4(true).ok();
+                if let SocketAddr::V4(v4) = t {
+                    socket
+                        .join_multicast_v4(v4.ip(), &std::net::Ipv4Addr::UNSPECIFIED)
+                        .ok();
+                }
             }
         }
         Ok(Self {
             socket,
-            target,
+            targets,
             id: APP_ID.to_string(),
         })
     }
@@ -57,13 +76,33 @@ impl WsjtxServer {
         self.socket.local_addr()
     }
 
-    /// The configured target address.
+    /// The first configured target address (compatibility for single-target callers/tests).
     pub fn target(&self) -> SocketAddr {
-        self.target
+        self.targets[0]
     }
 
+    /// Every configured target address.
+    pub fn targets(&self) -> &[SocketAddr] {
+        &self.targets
+    }
+
+    /// Send to EVERY target. One dead target (a service that is down) must not stop the
+    /// others, so a per-target failure is remembered but the loop continues; the call fails
+    /// only if not one target accepted the datagram.
     fn send(&self, bytes: &[u8]) -> io::Result<()> {
-        self.socket.send_to(bytes, self.target).map(|_| ())
+        let mut any_ok = false;
+        let mut last_err = None;
+        for t in &self.targets {
+            match self.socket.send_to(bytes, t) {
+                Ok(_) => any_ok = true,
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if any_ok {
+            Ok(())
+        } else {
+            Err(last_err.unwrap_or_else(|| io::Error::other("no WSJT-X targets")))
+        }
     }
 
     /// Send a Heartbeat. `version`/`revision` describe this Tempo build.
@@ -122,9 +161,14 @@ impl WsjtxServer {
                 // from members' unicast interface IPs (never the group address),
                 // so peer-equality can't apply — group membership IS the opt-in,
                 // so accept. Loopback/unicast targets keep the strict filter.
+                // With several targets, a trusted source is ANY of them (or loopback, or
+                // any target being a multicast group the operator joined) — the same
+                // per-target trust model, applied across the list.
                 let allowed = from.ip().is_loopback()
-                    || self.target.ip().is_multicast()
-                    || from.ip() == self.target.ip();
+                    || self
+                        .targets
+                        .iter()
+                        .any(|t| t.ip().is_multicast() || from.ip() == t.ip());
                 if allowed {
                     Ok(wsjtx::parse_inbound(&buf[..n]))
                 } else {
@@ -213,6 +257,62 @@ mod tests {
     ///
     /// This proves the delivery end: it really leaves the socket and really parses back as a
     /// QsoLogged carrying the call we sent — not merely that the encoder was called.
+    /// The FT8-Battle-Royale ask (2026-09-03): one Nexus feeding a LOCAL tool AND a remote
+    /// service at once. `new_multi` must deliver each datagram to EVERY target — and only to
+    /// the targets, never to an uninvolved socket.
+    #[test]
+    fn qso_logged_reaches_every_target_and_no_bystander() {
+        let a = UdpSocket::bind(loopback(0)).unwrap();
+        let b = UdpSocket::bind(loopback(0)).unwrap();
+        let bystander = UdpSocket::bind(loopback(0)).unwrap();
+        for l in [&a, &b, &bystander] {
+            l.set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                .unwrap();
+        }
+        let ta = a.local_addr().unwrap();
+        let tb = b.local_addr().unwrap();
+        let server = WsjtxServer::new_multi(loopback(0), vec![ta, tb]).unwrap();
+        let qso = QsoLogged {
+            time_off: 1_700_000_100,
+            dx_call: "W1AW",
+            dx_grid: "FN31",
+            tx_freq: 14_074_000,
+            mode: "FT8",
+            report_sent: "-12",
+            report_recvd: "-08",
+            tx_power: "",
+            comments: "",
+            name: "",
+            time_on: 1_700_000_000,
+            op_call: "KD9TAW",
+            my_call: "KD9TAW",
+            my_grid: "EN52",
+            exchange_sent: "",
+            exchange_recvd: "",
+            adif_propmode: "",
+        };
+        server.send_qso_logged(&qso).unwrap();
+
+        // BOTH targets receive the same contact.
+        for (l, who) in [(&a, "target A"), (&b, "target B")] {
+            let mut buf = [0u8; 4096];
+            let (n, _) = l
+                .recv_from(&mut buf)
+                .unwrap_or_else(|e| panic!("{who} heard nothing: {e}"));
+            match wsjtx::parse_inbound(&buf[..n]).unwrap() {
+                Inbound::QsoLogged { qso, .. } => assert_eq!(qso.dx_call, "W1AW", "{who}"),
+                other => panic!("{who} got {other:?}"),
+            }
+        }
+        // ⭐ CONTROL: a socket that is NOT a target hears nothing — the send is targeted,
+        // not a broadcast to everything on the host.
+        let mut buf = [0u8; 4096];
+        assert!(
+            bystander.recv_from(&mut buf).is_err(),
+            "a non-target socket received the datagram — the send is not confined to its targets"
+        );
+    }
+
     #[test]
     fn qso_logged_roundtrips_over_loopback() {
         let listener = UdpSocket::bind(loopback(0)).unwrap();

@@ -1212,7 +1212,9 @@ pub struct Settings {
     // --- network (WSJT-X parity) ---
     /// Emit the WSJT-X-compatible UDP protocol (for JTAlert/GridTracker/loggers).
     pub wsjtx_udp: bool,
-    /// UDP address to send WSJT-X messages to (WSJT-X default is 127.0.0.1:2237).
+    /// UDP address(es) to send WSJT-X messages to (WSJT-X default is 127.0.0.1:2237). ONE
+    /// OR MANY, comma-separated — `127.0.0.1:2237, 129.212.188.3:2237` feeds a local tool and
+    /// a remote contest scorer at once, which WSJT-X's single sink cannot.
     pub wsjtx_udp_addr: String,
     /// Append every decode to a WSJT-X-format `ALL.TXT` decode log in the app data dir —
     /// the running record loggers/GridTracker tail. Off by default.
