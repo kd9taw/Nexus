@@ -778,12 +778,46 @@ jobs:
           Write-Host "alive after 45 s (pid $($p.Id)) — startup smoke passed"
           Stop-Process -Id $p.Id -Force
 
+  # The offline manual (PDF + EPUB), built from the same docs/guide pages the website
+  # syncs, so the downloadable manual can never drift from the shipped one. GitHub's ubuntu
+  # runner already carries google-chrome (the PDF renders through it via CDP for real page
+  # numbers); pandoc and the websockets client are the only adds. Uploaded as an artifact the
+  # publish job attaches to the Release, where the site's download buttons point
+  # (releases/latest/download/Nexus-Manual.pdf / .epub — stable names, version on the cover).
+  manual:
+    name: Manual (PDF + EPUB)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tools (pandoc + the CDP websockets client; Chrome is preinstalled)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pandoc
+          python3 -m pip install --quiet websockets
+      - name: Build the manual
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          mkdir -p manualdist
+          python3 scripts/build-manual-pdf.py  --version "$ver" --out manualdist/Nexus-Manual.pdf
+          python3 scripts/build-manual-epub.py --version "$ver" --out manualdist/Nexus-Manual.epub
+          ls -l manualdist
+          # A real PDF and a real EPUB, or fail the job — never ship an empty download.
+          [ -s manualdist/Nexus-Manual.pdf ] && head -c4 manualdist/Nexus-Manual.pdf | grep -q '%PDF'
+          [ -s manualdist/Nexus-Manual.epub ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-manual
+          path: manualdist/*
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub Release
     # Windows + Linux gate the release (operator's release order); the Pi .debs attach
     # in publish-pi as they finish and can never hold the primary artifacts hostage.
     # smoke-windows gates too: an installer that dies at launch must never publish.
-    needs: [linux-x86, windows, smoke-windows, macos, smoke-macos]
+    needs: [linux-x86, windows, smoke-windows, macos, smoke-macos, manual]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # `actions: write` is for the downstream hand-off at the end of this job. Job-level
@@ -893,6 +927,12 @@ jobs:
           python3 -c "import json;json.load(open('dist/latest.json'));print('latest.json valid')"
           cat dist/latest.json
 
+      - name: Bring in the manual (PDF + EPUB)
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-manual
+          path: dist
+
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -901,7 +941,7 @@ jobs:
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "Nexus ${{ steps.ver.outputs.ver }}" \
             --notes-file dist/NOTES.md \
-            dist/Nexus_* dist/SHA256SUMS.txt \
+            dist/Nexus_* dist/Nexus-Manual.pdf dist/Nexus-Manual.epub dist/SHA256SUMS.txt \
             $( [ -f dist/latest.json ] && echo dist/latest.json )
 
   # Second wave (operator's release order: Windows + Linux first, then Pi): attach the

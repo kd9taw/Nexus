@@ -266,7 +266,12 @@ def render_pdf(browser: str, src: pathlib.Path, out: pathlib.Path, footer: str) 
 
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
-    with tempfile.TemporaryDirectory() as td:
+    # mkdtemp + rmtree(ignore_errors) rather than the context manager: headless Chrome can
+    # still hold a lock file in its user-data-dir the instant after we terminate it, and the
+    # manager's cleanup then raises "Directory not empty" AFTER the PDF is already written —
+    # a spurious non-zero exit that would fail the release job over a temp file.
+    td = tempfile.mkdtemp()
+    try:
         env = dict(os.environ)
         runtime = pathlib.Path(td) / "xdg"; runtime.mkdir(mode=0o700)
         env["XDG_RUNTIME_DIR"] = str(runtime)
@@ -318,6 +323,8 @@ def render_pdf(browser: str, src: pathlib.Path, out: pathlib.Path, footer: str) 
             proc.terminate()
             try: proc.wait(timeout=10)
             except subprocess.TimeoutExpired: proc.kill()
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
 
 
 def main() -> int:
