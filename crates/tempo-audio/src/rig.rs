@@ -524,7 +524,15 @@ impl Rig {
                 }
                 Ok(n) => {
                     out.extend_from_slice(&buf[..n]);
-                    if out.ends_with(b"\n") {
+                    // TWO TERMINATORS, and only one of them is a newline. rigctld's own answers end
+                    // in `\n` (`f` → "14074000\n"), but `w` (send_cmd) hands back the RIG's string
+                    // terminated by a NUL and no newline at all — measured against Hamlib 4.7.0 on
+                    // an FT-710: `w MD0;` → "MD02;\0", `w SS05;` → "SS0570000;\0". Waiting for a
+                    // newline there burns the whole deadline, errors, and DROPS THE CONNECTION, so
+                    // every raw-CAT read failed silently and forced a reconnect. Accepting either
+                    // terminator is version-agnostic: a daemon that does append a newline still
+                    // matches the first arm, and no ordinary reply contains a NUL.
+                    if out.ends_with(b"\n") || out.ends_with(b"\0") {
                         return Ok(String::from_utf8_lossy(&out).to_string());
                     }
                 }
@@ -970,10 +978,43 @@ impl Rig {
     /// `read_mode` (the `m` command) can return the mode Hamlib *thinks* it set even when the
     /// rig never moved, whereas e.g. raw Yaesu `MD0;` returns the rig's TRUE current mode code
     /// off the wire. Diagnostic-only; `None` if not a CAT rig or no reply.
+    /// Send a raw CAT string that the rig does NOT answer — a SET.
+    ///
+    /// Measured against Hamlib 4.7.0 on an FT-710: a read (`w SS05;`) comes back as
+    /// `SS0570000;\0`, but a set (`w SS0570000;`) returns NOTHING AT ALL — not even an `RPRT`.
+    /// Putting a set through `send_raw` therefore burns the whole reply deadline, returns
+    /// TimedOut, and drops the CAT connection, which is a heavy price for a command that worked.
+    /// So this writes and does not wait. Any late bytes are harmless: `command_inner` drains
+    /// stale bytes before every command precisely so a straggler cannot be read as the next
+    /// command's answer.
+    ///
+    /// Returns whether the bytes went out — NOT whether the radio honoured them, which nothing
+    /// on this path can know. The caller confirms by reading the value back.
+    pub fn send_raw_set(&mut self, raw: &str) -> bool {
+        if self.control.is_none() {
+            return false;
+        }
+        let line = format!("w {raw}\n");
+        let Ok(stream) = self.ensure_connected() else {
+            return false;
+        };
+        use std::io::Write as _;
+        match stream.write_all(line.as_bytes()) {
+            Ok(()) => true,
+            Err(_) => {
+                self.stream = None; // force a clean reconnect, same as `command_with_deadline`
+                false
+            }
+        }
+    }
+
     pub fn send_raw(&mut self, raw: &str) -> Option<String> {
         self.control.as_ref()?;
         let reply = self.command(&format!("w {raw}\n")).ok()?;
-        let trimmed = reply.trim();
+        // `str::trim` does NOT remove a NUL — it is not whitespace — so trim it explicitly or every
+        // caller gets "MD02;\0" and has to know that. The rig's own terminator (`;`) is left alone:
+        // callers parse the rig's string, not a cleaned-up version of it.
+        let trimmed = reply.trim_matches(|c: char| c == '\0' || c.is_whitespace());
         if trimmed.is_empty() {
             None
         } else {
@@ -1479,6 +1520,66 @@ mod tests {
         let mut rig = Rig::rigctld(&addr.to_string());
         rig.set_slow_transport(true); // network chain → long deadline
         assert_eq!(rig.read_freq().expect("whole reply assembled"), 14_074_000);
+    }
+
+    #[test]
+    fn a_nul_terminated_raw_cat_reply_is_read_instead_of_timing_out() {
+        // THE BUG THIS PINS, and it was silent in three places at once. rigctld's `w` (send_cmd)
+        // returns the RIG's own reply, terminated by a NUL and no newline — measured against
+        // Hamlib 4.7.0 driving an FT-710: `w MD0;` → "MD02;\0". `command_inner` returned only on
+        // `\n`, so a raw read burned its whole deadline, errored, and dropped the connection.
+        //
+        // Consequences, all invisible: `raw_mode_query` (13 Yaesu models — the mode ground truth
+        // that Hamlib's cached `m` cannot give) never once succeeded, and the FT-710 RF scope could
+        // never learn its span or sweep mode, so it published nothing and reported "the radio is
+        // not sending a spectrum" while the radio was sending one (station, 2026-08-19).
+        //
+        // The fake daemon here answers EXACTLY as the real one does — no newline anywhere — so the
+        // test fails on the old code by timing out rather than by comparing strings.
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 64];
+            let _ = sock.read(&mut buf); // consume "w MD0;\n"
+            let _ = sock.write_all(b"MD02;\0"); // NUL-terminated, NO newline — the real shape
+        });
+        let mut rig = Rig::rigctld(&addr.to_string());
+        let started = std::time::Instant::now();
+        let reply = rig.send_raw("MD0;");
+        // The NUL must be stripped, and the rig's own `;` must NOT be — callers parse the rig's
+        // string. `MD02;` is USB on a Yaesu.
+        assert_eq!(reply.as_deref(), Some("MD02;"));
+        // And it must return promptly rather than after the deadline: the old code "worked" only in
+        // the sense that it eventually gave up, and each give-up dropped the CAT connection. 700 ms
+        // is the serial deadline; anything near it means we are still waiting for a newline.
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(400),
+            "returned after {:?} — that is a timeout, not a read",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_newline_terminated_reply_still_works_and_keeps_its_own_shape() {
+        // The other half of the guard: accepting NUL must not have broken the ordinary path, and a
+        // reply containing NO nul must still be read on its newline. Without this, the fix above
+        // could have been written as "return on NUL" and passed its own test.
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 64];
+            let _ = sock.read(&mut buf);
+            let _ = sock.write_all(b"14074000\n");
+        });
+        let mut rig = Rig::rigctld(&addr.to_string());
+        assert_eq!(
+            rig.read_freq().expect("newline reply still read"),
+            14_074_000
+        );
     }
 
     #[test]

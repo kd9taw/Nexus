@@ -119,6 +119,10 @@ tempo-audio = { path = "../crates/tempo-audio", optional = true }
 gdk = "0.18"
 
 [features]
+# FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge. OFF by default: it links
+# FTDI's closed-source LibFT4222/D2XX, which macOS does not ship and which a GPL-3.0-only
+# application cannot redistribute. An operator who wants the scope installs FTDI's library.
+yaesu-wf = ["tempo-audio/yaesu-wf"]
 # This feature is used by the desktop binary. It allows configuring whether the
 # app uses the custom protocol assets or the dev server (handled by Tauri).
 custom-protocol = ["tauri/custom-protocol"]

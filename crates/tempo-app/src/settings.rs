@@ -901,6 +901,16 @@ pub struct Settings {
     /// from its FRONT PANEL, as opposed to one set over CAT?
     #[serde(default)]
     pub split_detect_enabled: bool,
+    /// FT-710 RF scope for the active radio (flat mirror of the profile field — see
+    /// [`RadioProfile::yaesu_rf_scope`]). Default off.
+    ///
+    /// ⚠️ THE MIRROR IS LOAD-BEARING, not decoration. Saving the radio you are currently
+    /// USING goes through the flat form, so a per-profile field with no flat twin is dropped
+    /// in silence: the operator ticks the box, saves, reopens Settings and finds it off, with
+    /// nothing reporting a failure. That made the whole scope feature unreachable in the
+    /// normal case — it persisted only while editing a NON-active radio.
+    #[serde(default)]
+    pub yaesu_rf_scope: bool,
     /// Which Icom DATA mode the active radio uses (flat mirror — see
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
@@ -2581,6 +2591,37 @@ pub struct RadioProfile {
     /// the same reason as `flex_radio_ip` — one Flex may run it while another rig does not.
     #[serde(default)]
     pub flex_native_pan: bool,
+    /// Opt-in to the FT-710's own RF spectrum over its internal FT4222 USB→SPI bridge (FORK-LOCAL;
+    /// only has an effect in a build with the `yaesu-wf` feature). OFF by default.
+    ///
+    /// ⚠️ THE RADIO MUST BE TOLD TO EXPOSE IT, AND NEXUS CANNOT DO THAT. The FT4222 only appears on
+    /// USB once **SCU-LAN10** is enabled in the radio's EX menu, and frames only flow once the
+    /// **external display** output is on too. Both are EX-menu items this app cannot set over CAT,
+    /// so a silent scope with this switched on is an instruction to the operator rather than a fault
+    /// to retry — which is what `RadioStatus::scope_error` says, naming whichever of the two it is.
+    #[serde(default)]
+    pub yaesu_rf_scope: bool,
+    /// Where the rig's FIX sweep starts, per BAND, in MHz — `{"20m": 14.15}`.
+    ///
+    /// The radio reports this nowhere: it is set by a long press on FIX, a front-panel-only action,
+    /// and the whole `EX` menu was searched without finding it. So the operator states it once and
+    /// Nexus keeps it. PER BAND because the radio keeps one per band — a 20 m start drawn on 40 m
+    /// would be a window somewhere else entirely, and unlike most errors here it would persist,
+    /// since a FIX window has no reason to change.
+    ///
+    /// ⚠️ NOTHING WRITES THIS YET, so in a shipped build it is always empty and the FIX start comes
+    /// from `yaesu_wf::auto_fix_start` — the band edge, measured on the radio. `Engine::set_yaesu_fix_start`
+    /// is the intended writer and currently has no caller: there is no Tauri command for it, and the
+    /// chip-row input that would have driven one was deliberately removed once the derivation proved
+    /// right on the air, because inviting a value the app can derive is a worse default than deriving it.
+    ///
+    /// It is kept — rather than deleted as dead — because the derivation CAN be wrong and nothing can
+    /// detect that: the operator may long-press FIX and move the window, and the radio will report
+    /// neither the change nor the new start. This map is the only escape hatch that exists for that,
+    /// and the loop already reads it in preference to the derived value. Wiring a writer is a
+    /// follow-up, not dead code to remove.
+    #[serde(default)]
+    pub yaesu_fix_starts: std::collections::BTreeMap<String, f64>,
     /// Opt-in to THIS radio's native FlexRadio DAX audio (BOTH directions — see
     /// [`Settings::flex_native_audio`]). Per-radio, as above.
     #[serde(default)]
@@ -2639,9 +2680,35 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::flex_native_pan`.
     #[serde(default)]
     pub flex_native_pan: bool,
+    /// See `RadioProfile::yaesu_rf_scope`. `Option`, and NOT a bare `bool` like its neighbours —
+    /// this one has no UI control, so an omitted field is the NORMAL case rather than an old
+    /// payload, and `#[serde(default)]` on a `bool` would read that omission as `false`.
+    ///
+    /// It cost the operator a working RF scope on 2026-08-20: saving anything on the radio form
+    /// sent a patch without this field, the scope switched itself off, and the waterfall silently
+    /// fell back to sound-card audio with nothing to explain it. `flex_native_pan` gets away with a
+    /// bare `bool` only because it HAS a toggle, so the form always states its value. `None` here
+    /// means "leave whatever is stored alone"; a caller that wants it off says so.
+    #[serde(default)]
+    pub yaesu_rf_scope: Option<bool>,
+    /// See `RadioProfile::yaesu_fix_starts`. `Option` for the same reason as the field above: a form
+    /// that does not know about it must not erase it.
+    #[serde(default)]
+    pub yaesu_fix_starts: Option<std::collections::BTreeMap<String, f64>>,
     /// See `RadioProfile::flex_native_audio`.
     #[serde(default)]
     pub flex_native_audio: bool,
+}
+
+impl Settings {
+    /// Test-only mirror of `Engine::set_yaesu_fix_start` — the same write, without an Engine.
+    #[cfg(test)]
+    fn set_yaesu_fix_start_for_test(&mut self, band: &str, mhz: f64) {
+        let id = self.active_radio;
+        if let Some(p) = self.radios.iter_mut().find(|p| p.id == id) {
+            p.yaesu_fix_starts.insert(band.to_string(), mhz);
+        }
+    }
 }
 
 impl RadioProfilePatch {
@@ -2681,6 +2748,12 @@ impl RadioProfilePatch {
         p.native_scope = self.native_scope;
         p.flex_radio_ip = self.flex_radio_ip;
         p.flex_native_pan = self.flex_native_pan;
+        if let Some(v) = self.yaesu_rf_scope {
+            p.yaesu_rf_scope = v;
+        }
+        if let Some(v) = &self.yaesu_fix_starts {
+            p.yaesu_fix_starts = v.clone();
+        }
         p.flex_native_audio = self.flex_native_audio;
     }
 }
@@ -2776,6 +2849,8 @@ impl Default for RadioProfile {
             native_scope: "auto".to_string(),
             flex_radio_ip: String::new(),
             flex_native_pan: false,
+            yaesu_rf_scope: false,
+            yaesu_fix_starts: Default::default(),
             flex_native_audio: false,
         }
     }
@@ -3161,6 +3236,7 @@ impl Default for Settings {
             omnirig_slot: 1,
             icom_native_cat: false,
             split_detect_enabled: false,
+            yaesu_rf_scope: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
@@ -3492,6 +3568,11 @@ impl Settings {
             // that already HAS profiles).
             flex_radio_ip: self.flex_radio_ip.clone(),
             flex_native_pan: self.flex_native_pan,
+            // No flat counterpart by design: this opt-in is per-radio only. A station with two
+            // rigs has at most one FT-710, and a global mirror would recreate exactly the
+            // dual-representation problem the flat fields already are.
+            yaesu_rf_scope: false,
+            yaesu_fix_starts: Default::default(),
             flex_native_audio: self.flex_native_audio,
         }
     }
@@ -3830,6 +3911,7 @@ impl Settings {
         self.omnirig_slot = p.omnirig_slot;
         self.rigctld_port = p.rigctld_port;
         self.icom_native_cat = p.icom_native_cat;
+        self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
@@ -3868,6 +3950,7 @@ impl Settings {
             omnirig_slot,
             rigctld_port,
             icom_native_cat,
+            yaesu_rf_scope,
             data_modes_plain_ssb,
             audio_in,
             audio_out,
@@ -3894,6 +3977,7 @@ impl Settings {
             self.omnirig_slot,
             self.rigctld_port,
             self.icom_native_cat,
+            self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
             self.audio_in.clone(),
             self.audio_out.clone(),
@@ -3921,6 +4005,7 @@ impl Settings {
             p.omnirig_slot = omnirig_slot;
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
+            p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
@@ -4457,6 +4542,16 @@ mod tests {
             native_scope: "civ".into(),
             flex_radio_ip: "192.0.2.50".into(),
             flex_native_pan: true,
+            yaesu_rf_scope: Some(false),
+            // A REAL value, like every other field here. `None` was the original seeding and it
+            // made this guard cry wolf: the patch serialises `null`, the profile serialises `{}`,
+            // the comparison calls that a dropped field, and the failure names `apply_to` — which
+            // copies it correctly. A guard whose fixture leaves a field unset is testing its own
+            // serialisation, not the assignment it exists to check.
+            yaesu_fix_starts: Some(std::collections::BTreeMap::from([(
+                "20m".to_string(),
+                14.150_f64,
+            )])),
             flex_native_audio: true,
         };
 
@@ -4586,6 +4681,8 @@ mod tests {
             native_scope: String::new(),
             flex_radio_ip: String::new(),
             flex_native_pan: false,
+            yaesu_rf_scope: Some(false),
+            yaesu_fix_starts: None,
             flex_native_audio: false,
         })
         .expect("patch serializes");
@@ -4733,6 +4830,11 @@ mod tests {
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
+            // Added by this branch. `yaesu_rf_scope` has a UI counterpart (`yaesuRfScope?`);
+            // `yaesu_fix_starts` deliberately does NOT — its own doc says nothing writes it yet
+            // and calls wiring a writer a follow-up. This guard exists to force exactly that look.
+            yaesu_rf_scope: None,
+            yaesu_fix_starts: Default::default(),
         })
         .expect("patch serializes");
         let rust_keys: Vec<&str> = rust
@@ -4763,6 +4865,66 @@ mod tests {
             "The UI sends RadioProfilePatch field(s) {missing_in_rust:?} that Rust does not \
              declare — serde will reject the whole payload as an unknown field, or drop it."
         );
+    }
+
+    /// A patch that does not MENTION the RF scope must leave it alone.
+    ///
+    /// Station report, 2026-08-20: the FT-710 waterfall was working, then it was showing sound-card
+    /// audio again and `yaesuRfScope` had gone to `false` on its own. Cause: this field has no UI
+    /// control, so the radio form builds a patch WITHOUT it, `#[serde(default)]` on a bare `bool`
+    /// read the omission as `false`, and `apply_to` assigned it unconditionally. Saving anything at
+    /// all on the radio form switched the scope off, and nothing said so — the waterfall just fell
+    /// back to audio.
+    ///
+    /// `flex_native_pan` next door is a bare `bool` and is fine, because it HAS a toggle: its form
+    /// always states a value. That is the difference this test exists to hold.
+    #[test]
+    fn a_patch_that_omits_the_rf_scope_leaves_it_enabled() {
+        let mut p = RadioProfile {
+            yaesu_rf_scope: true,
+            ..RadioProfile::default()
+        };
+        // Exactly what the radio form sends: every field it knows, and no mention of this one.
+        let json = r#"{
+            "pttMethod": "cat", "rigModel": 1049, "rigModelName": "Yaesu FT-710",
+            "serialPort": "/dev/cu.usbserial-01AF7FED0", "pttSerialPort": "", "baud": 38400,
+            "rigConn": "serial", "rigAddr": "", "omnirigSlot": 0, "rigctldPort": 4533,
+            "icomNativeCat": false, "dataModesPlainSsb": false,
+            "audioIn": "USB Audio Device", "audioOut": "USB Audio Device",
+            "txLevel": 0.9, "rxGain": 1.0,
+            "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
+            "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
+            "flexNativePan": false, "flexNativeAudio": false,
+            "ampModel": "", "ampPort": ""
+        }"#;
+        let patch: RadioProfilePatch =
+            serde_json::from_str(json).expect("the form's payload parses");
+        assert_eq!(
+            patch.yaesu_rf_scope, None,
+            "an absent field is UNKNOWN, not false"
+        );
+        patch.apply_to(&mut p);
+        assert!(
+            p.yaesu_rf_scope,
+            "saving the radio form must not switch the RF scope off behind the operator"
+        );
+    }
+
+    /// And the other direction, so the field is not merely unreachable: a caller that SAYS false
+    /// still turns it off. Without this, "leave it alone" could be implemented as "never assign".
+    #[test]
+    fn a_patch_that_says_false_still_turns_the_rf_scope_off() {
+        let mut p = RadioProfile {
+            yaesu_rf_scope: true,
+            ..RadioProfile::default()
+        };
+        RadioProfilePatch {
+            yaesu_rf_scope: Some(false),
+            yaesu_fix_starts: None,
+            ..patch_of(&p)
+        }
+        .apply_to(&mut p);
+        assert!(!p.yaesu_rf_scope);
     }
 
     /// THE FIELD-SPECIFIC HALF for OmniRig, written because yesterday's bug was exactly this
@@ -4914,6 +5076,8 @@ mod tests {
             native_scope: p.native_scope.clone(),
             flex_radio_ip: p.flex_radio_ip.clone(),
             flex_native_pan: p.flex_native_pan,
+            yaesu_rf_scope: Some(p.yaesu_rf_scope),
+            yaesu_fix_starts: Some(p.yaesu_fix_starts.clone()),
             flex_native_audio: p.flex_native_audio,
         }
     }
@@ -7903,6 +8067,80 @@ mod tests {
             s.ai_cw_active(),
             "a fresh install keeps its shipped AI CW decoder"
         );
+    }
+
+    /// The FIX start is kept PER BAND, and survives a save.
+    ///
+    /// The radio keeps one per band; carrying a 20 m start onto 40 m would draw a window somewhere
+    /// else entirely, and unlike most errors here it would persist, because a FIX window has no
+    /// reason to change. Operator asked for persistence (2026-08-20) after paying the click on every
+    /// band change.
+    /// The FT-710 scope opt-in must survive a save of the ACTIVE radio.
+    ///
+    /// REPRO for the defect that made the whole feature unreachable. The toggle lives on
+    /// `RadioProfile`, but saving the radio you are currently USING goes through the flat form
+    /// (`set_settings`), not `update_radio_profile` — and a per-profile field with no flat mirror
+    /// is silently dropped by that path: serde never sees it, `sync_active_from_flat` has nothing
+    /// to copy, and the profile keeps its old value. The operator ticks the box, saves, reopens
+    /// Settings and finds it off again, with nothing reporting a failure.
+    ///
+    /// It only ever worked while editing a NON-active radio, which is the rarer case — so the
+    /// feature looked implemented and was not.
+    #[test]
+    fn the_yaesu_scope_optin_survives_a_flat_save_of_the_active_radio() {
+        let mut s = Settings::default();
+        s.radios = vec![RadioProfile {
+            id: 0,
+            rig_model: 1049,
+            ..RadioProfile::default()
+        }];
+        s.active_radio = 0;
+        s.sync_flat_from_active();
+
+        // The operator ticks the box on the ACTIVE radio: the UI writes the FLAT field.
+        s.yaesu_rf_scope = true;
+        // Which is what `set_settings` folds into the profile.
+        s.sync_active_from_flat();
+        assert!(
+            s.radios[0].yaesu_rf_scope,
+            "the flat opt-in must reach the active radio's profile"
+        );
+
+        // And a reload (profile -> flat) must show it still on, or the panel reopens unticked.
+        let json = serde_json::to_string(&s).expect("settings serialize");
+        let mut back: Settings = serde_json::from_str(&json).expect("settings parse");
+        back.sync_flat_from_active();
+        assert!(
+            back.yaesu_rf_scope,
+            "and survive a round trip through settings.json"
+        );
+    }
+
+    #[test]
+    fn a_fix_start_is_kept_per_band_and_survives_a_round_trip() {
+        let mut s = Settings::default();
+        s.radios = vec![RadioProfile {
+            id: 0,
+            ..RadioProfile::default()
+        }];
+        s.active_radio = 0;
+        s.set_yaesu_fix_start_for_test("20m", 14.150);
+        s.set_yaesu_fix_start_for_test("40m", 7.050);
+        let json = serde_json::to_string(&s).expect("settings serialize");
+        let back: Settings = serde_json::from_str(&json).expect("settings parse");
+        let starts = &back.radios[0].yaesu_fix_starts;
+        assert_eq!(starts.get("20m"), Some(&14.150));
+        assert_eq!(starts.get("40m"), Some(&7.050), "each band keeps its own");
+        assert_eq!(starts.get("15m"), None, "a band never stated has none");
+    }
+
+    /// A settings file written before this existed still loads, with no starts.
+    #[test]
+    fn an_older_settings_file_loads_with_no_fix_starts() {
+        let profile: RadioProfile =
+            serde_json::from_str(r#"{"id":0,"name":"FT-710","rigModel":1049}"#)
+                .expect("an older per-radio block still parses");
+        assert!(profile.yaesu_fix_starts.is_empty());
     }
 }
 

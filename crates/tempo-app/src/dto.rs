@@ -798,6 +798,32 @@ pub struct RadioStatus {
     /// why the waterfall is blank instead of failing silently.
     #[serde(default)]
     pub audio_error: Option<String>,
+    /// A problem with the RF SCOPE source, separate from `audio_error` on purpose: they have
+    /// different cures and can be true at once. `None` = nothing to say.
+    ///
+    /// The FT-710 case this exists for: the radio only exposes its spectrum once SCU-LAN10 (and the
+    /// external display) are enabled in its EX menu, and Nexus CANNOT set those over CAT — so a
+    /// silent scope is an instruction to the operator, not a fault to retry.
+    pub scope_error: Option<String>,
+    /// Where the rig's own scope currently sits — the `SS` P3 MODE code as the ASCII byte the radio
+    /// sent, widened for JSON. `None` until one has been read.
+    ///
+    /// The UI needs it for two things: to show which of CENTER/CURSOR/FIX is live, and — because
+    /// the FT-710 carries all three positions inside each of three display families — so a request
+    /// to change position can keep the operator in the family they are already using.
+    pub scope_mode_code: Option<u32>,
+    /// The FIX start in force for this band, in MHz.
+    ///
+    /// `None` today in every shipped path: the only writer is `RadioProfile::yaesu_fix_starts`,
+    /// which has no writer of its own yet (see that field), so the loop falls back to
+    /// `yaesu_wf::auto_fix_start` — the measured band edge — and this stays empty. Kept because
+    /// the override is the only escape hatch if the operator moves the window from the front
+    /// panel, which the radio reports nowhere.
+    ///
+    /// Surfaced because the operator cannot otherwise tell a click that landed from one that did
+    /// not: stating a start and seeing the waterfall stay on sound-card audio has two very
+    /// different causes, and the control should say which side of it we are on.
+    pub scope_fix_start_mhz: Option<f64>,
     /// Set when two enabled radios are configured on the SAME serial COM port — the
     /// monitor radio's CAT can't open the busy port and shows a confusing red pill.
     /// A config warning (self-clears once the ports differ); surfaced in the status lane.

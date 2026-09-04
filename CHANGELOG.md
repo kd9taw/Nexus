@@ -975,6 +975,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside the *other* radio. Both warnings are advisory and never block a save: an
   unusual-but-correct station is still yours to configure. The port list itself is unchanged —
   every port you could pick before, you can still pick.
+
+- **The FT-710 can draw its own band scope.** The radio has a real spectrum display inside it and
+  an internal USB bridge that will hand it over; until now Nexus could only show the sound card's
+  4 kHz slice. Turn it on per radio in Settings ▸ Radio (it appears only for an FT-710), and the
+  Phone and CW cockpits gain span and position controls that drive the radio itself rather than
+  cropping its picture.
+
+  Two things it needs, and it tells you which one is missing instead of showing an empty panel:
+  **SCU-LAN10 enabled in the radio's EX menu**, and **FTDI's LibFT4222**, which is not bundled —
+  it is closed source and Nexus is GPL-3.0-only, so the app names it and links the download rather
+  than shipping it. Everything else works without it; this affects the RF panadapter only.
+
+  One caveat worth knowing: in FIX position the radio does not report where its own window starts,
+  so Nexus derives it from the band edge. That is measured, not assumed — but check it against the
+  rig's own scale, and the tooltip says so.
 ## [1.9.1] — 2026-08-26
 
 ### Added

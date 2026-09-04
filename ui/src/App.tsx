@@ -509,6 +509,20 @@ export default function App() {
     }
   }, [snap?.radio.audioError])
 
+  // Surface an RF-scope source that is not delivering. WARNING, not critical, and the wording says
+  // what to DO: on an FT-710 the spectrum only exists once SCU-LAN10 and the external display are
+  // enabled in the radio's EX menu, and Nexus cannot set either over CAT — so a blank pane with no
+  // explanation would send the operator hunting through Nexus for a setting that is on the rig.
+  // The waterfall keeps running on sound-card audio throughout, which is why this never blocks.
+  useEffect(() => {
+    const err = snap?.radio.scopeError
+    if (err) {
+      setStatus('scope', { tier: 'warning', message: 'NO RF SCOPE', detail: err })
+    } else {
+      setStatus('scope', null)
+    }
+  }, [snap?.radio.scopeError])
+
   // Surface a serial COM-port collision (two radios on one port) in the status
   // lane — otherwise it only shows as an unexplained red radio pill.
   useEffect(() => {

@@ -96,6 +96,8 @@ pub mod usbrig;
 pub mod usbtopo;
 pub mod voice;
 pub mod winkeyer;
+/// FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge.
+pub mod yaesu_wf;
 
 #[cfg(all(feature = "device", feature = "ai-cw"))]
 pub mod aicw;
