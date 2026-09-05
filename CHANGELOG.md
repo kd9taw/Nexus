@@ -5,6 +5,33 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A POTA activity map in FT mode.** A new *Map* button beside Classic/Roster in the FT header
+  opens the map in its own window — put it on a second monitor next to the roster, the way
+  GridTracker is used for park hunting. It plots every spotted POTA activator from the live
+  feed (the same source GridTracker reads, with no mode or age filter), coloured by
+  new-vs-worked, with the park, activator, band, mode and spot age on hover. Double-click a
+  park to QSY, set the mode and tag it as your hunt target — it never keys the transmitter.
+  The window remembers its own layers and projection, separate from the Connect map.
+- **An audible alert for new POTA activations.** Settings ▸ Spots & Alerts has a new
+  *New POTA activation* switch (off by default). With it on, Nexus beeps once when a park
+  that was not on the air at the last check appears on the feed — from now on, never for the
+  backlog that was already active when you turned it on. It works whether or not the map
+  window is open.
+
+### Fixed
+
+- **CW and SSB park activations were missing from the roster for digital-only stations.** If
+  the CW or Phone features were off (the wizard's FT-only choice), a POTA or SOTA activator
+  running CW or SSB was dropped as if it were a CW/Phone *need* — so the Nexus roster showed
+  fewer parks than GridTracker's. A park activation is someone to hunt, not a mode you have to
+  operate: it now stays visible regardless of which mode features are on. Genuine CW/Phone
+  needs are still hidden exactly as before, and a park activator who also happens to be a new
+  entity shows as a park, not as a CW award row at the top of a digital-only board.
+
 ## [1.10.3] — 2026-09-04
 
 ### Added
