@@ -500,8 +500,14 @@ export function PhoneCockpit({ snap, theme, pendingWork, onConsumeWork, onSnap, 
   // falls back to sound-card audio the axis really is audio.
   //
   // Gating the controls on the feed made them vanish exactly when they were needed: in FIX with no
-  // start stated, no rows flow, so the panadapter block unmounted — taking the "FIX starts here"
-  // button with it, and leaving no way to state the start that would bring the rows back.
+  // start stated no rows flow, so the panadapter block unmounted — and the position select went
+  // with it, leaving no way to get back to Center and no way to see why the panel had emptied.
+  //
+  // The original wording here justified that by a "FIX starts here" button being taken away with
+  // the block. There is no such button: the chip-row input that would have driven one was removed
+  // once the band-edge derivation proved right on the air (see `RadioProfile::yaesu_fix_starts`),
+  // and `Engine::set_yaesu_fix_start` still has no caller. The reason to keep the controls mounted
+  // survives that — it is the position select, not a start button, that must not disappear.
   const yaesuScope = snap.radio.scopeModeCode != null
   const yaesuRf = scopeFeed?.source === 'yaesu'
   // What the radio reports, so the two selects show the rig's state rather than a local guess.

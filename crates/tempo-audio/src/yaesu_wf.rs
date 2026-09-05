@@ -397,8 +397,15 @@ pub fn position_of(code: u8) -> Option<ScopePosition> {
     })
 }
 
-/// The raw CAT string that SETS the scope mode — same shape, `P2=6`. `4` is W/F CENTER (NORMAL),
-/// the only family whose sweep edges this module can place on the band.
+/// The raw CAT string that SETS the scope mode — same shape, `P2=6`.
+///
+/// Takes whatever code the caller decided; [`mode_code_for`] is what picks one, and it KEEPS the
+/// rig's display family on purpose. This doc used to say "`4` is W/F CENTER (NORMAL), the only
+/// family whose sweep edges this module can place", which the module's own code contradicts twice
+/// over: [`mode_is_centered`] places `0`, `3` AND `4` — the CENTER code of all three families —
+/// and `mode_code_for` exists precisely so a 3DSS operator is not dragged into W/F NORMAL for
+/// asking to centre the sweep. What is actually placeable is a question for those two, not a
+/// property of one byte.
 pub fn set_mode_command(code: u8) -> String {
     format!("SS06{}0000;", code as char)
 }
@@ -428,9 +435,17 @@ pub fn sweep_edges(dial_hz: f64, span_code: u8, mode_code: u8) -> Option<(f64, f
 /// placeable: the window is static and the dial moves across it. Two things are still refused, and
 /// both would otherwise draw an authoritative wrong answer:
 ///
-/// * FIX, always. Its window jumps to a per-band preset when entered ("switching in and out of fix,
-///   they do [move]"), and no `SS` sub-command reports it — so an anchor observed at a CENTER→FIX
-///   transition would be the wrong window from the first frame.
+/// * FIX WITHOUT A STATED START. Its window jumps to a per-band preset when entered ("switching in
+///   and out of fix, they do [move]"), and no `SS` sub-command reports it — so an anchor observed
+///   at a CENTER→FIX transition would be the wrong window from the first frame. `anchor_hz` is
+///   therefore never used for FIX; only `fix_start_hz` is, and the branch below places the window
+///   from that start alone, with no dial in the arithmetic.
+///
+///   This bullet read "FIX, always" until 2026-09-06, which the FIX branch twelve lines below has
+///   contradicted since the band-edge derivation was MEASURED on the radio (see [`auto_fix_start`],
+///   and 2026-08-17/18 on the FT-710). The measurement is what made FIX placeable; the refusal
+///   survived it. A doc that refuses what the code does is worse than no doc — the next reader
+///   trusts it and deletes the branch.
 /// * A CURSOR sweep whose dial has left the window. The radio does something at that edge and we
 ///   cannot see what; the honest answer is that we no longer know where the window is.
 pub fn sweep_edges_anchored(
@@ -763,8 +778,15 @@ impl Drop for YaesuWaterfall {
 /// The FT4222 transport — the ONE part that needs FTDI's closed-source library.
 ///
 /// ⚠️ **FORK-LOCAL, AND OFF BY DEFAULT.** `LibFT4222`/`D2XX` are closed-source binaries and Nexus
-/// is GPL-3.0-only; that question is open (FORK.md), so nothing is vendored here and the feature
-/// is not enabled in any build. Everything above this module is licence-clean and tested.
+/// is GPL-3.0-only, so bundling them is REFUSED — settled, not pending (maintainer ruling,
+/// kd9taw/Nexus#142; the module header above says the same at length). Nothing is vendored here
+/// and the feature is not enabled in any build. Everything above this module is licence-clean and
+/// tested.
+///
+/// This line said "that question is open (FORK.md)" until 2026-09-06, 730 lines below a header
+/// that already recorded the ruling — the two disagreed in the same file. A settled licence
+/// decision that still reads as open anywhere is how it gets reopened by someone being helpful,
+/// which is the one outcome the ruling was meant to prevent.
 ///
 /// The SPI configuration is not written from memory: the constants below were READ OUT of the
 /// `ft4222` Python wrapper that was proven against the radio on 2026-08-17, because a wrong CPOL
