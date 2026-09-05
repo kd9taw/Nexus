@@ -240,6 +240,14 @@ export function needScopeOk(
  * must operate that mode, so a CW park activation stays visible to a digital-only op exactly
  * as it would in GridTracker.
  *
+ * Need-tags and activity-tags are NOT mutually exclusive — the backend's `activation_alert`
+ * scores the slot (NewEntity/NewGrid/...) FIRST and APPENDS the program tag onto that same
+ * alert, so a CW park activator who is also a new DXCC arrives as `['NewEntity','Pota']`.
+ * A mode-gated row therefore survives only AS THE ACTIVITY: its co-occurring need tags are
+ * exactly what the operator turned that mode off to stop seeing, so they're stripped here
+ * (same "filter TAGS, not alerts" idiom the band scope already uses below) rather than let
+ * a CW award chip ride through on the activity tag's exemption.
+ *
  * The band scope filters TAGS, not alerts: one station can be a new BAND (unscoped) and a
  * new GRID (scoped out on HF) at once, and dropping the whole alert would take its band
  * icon and its roster row with it. An alert left with no tag at all carries no reason to
@@ -255,15 +263,18 @@ export function visibleNeeds(
     // no way to close it without that mode. An ACTIVITY tag isn't a need at all, so it's
     // exempt: a POTA/SOTA/DXpedition activator is an activity to hunt, not a need to close.
     const isActivity = a.tags.some(isActivityTag)
-    if (a.mode === 'CW' && !enabled.cw && !isActivity) continue
-    if (a.mode === 'Phone' && !enabled.phone && !isActivity) continue // Digital/unknown always visible
+    const modeGated = (a.mode === 'CW' && !enabled.cw) || (a.mode === 'Phone' && !enabled.phone)
+    if (modeGated && !isActivity) continue // Digital/unknown always visible
+    // A row that only survived on its activity exemption keeps ONLY the activity tag(s) —
+    // its need tags describe exactly the mode the operator disabled.
+    const baseTags = modeGated ? a.tags.filter(isActivityTag) : a.tags
     if (!scopes) {
-      out.push(a)
+      out.push(modeGated ? retag(a, baseTags) : a)
       continue
     }
     const mhz = needScopeMhz(a.band, a.freqMhz)
     const rare = isRareGrid(a.gridRarity)
-    const tags = a.tags.filter((t) => {
+    const tags = baseTags.filter((t) => {
       if (t === 'NewEntity') return needScopeOk('dxcc', mhz, scopes)
       if (t === 'NewGrid') return needScopeOk(rare ? 'rareGrid' : 'grid', mhz, scopes)
       return true

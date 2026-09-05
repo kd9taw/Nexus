@@ -84,6 +84,38 @@ describe('visibleNeeds keeps a POTA/SOTA activity row through the mode gate', ()
   })
 })
 
+// Need-tags and activity-tags are NOT mutually exclusive: the backend's `activation_alert`
+// (needalert.rs:582-607) scores the slot FIRST, then APPENDS the program tag onto the SAME
+// alert — a CW park activator who is also a new DXCC arrives as tags:['NewEntity','Pota'].
+// Letting the whole alert through on the activity exemption would smuggle a high-priority CW
+// award chip past an operator who turned CW off. Only the activity tag may survive.
+describe('visibleNeeds narrows a mode-gated activity row to just its activity tag', () => {
+  const DEFAULTS = { dxcc: 'all', grid: 'vhf', rareGrid: 'vhf' }
+  const mixed = (mode: string): NeedAlert => ({
+    ...alert('K1PARK', mode, '20m'),
+    tags: ['NewEntity', 'Pota'],
+    priority: NEED_TIER.NewEntity,
+  })
+
+  it('mode-gated (with scopes): survives as JUST the activity tag, priority re-stated at Pota’s tier', () => {
+    const out = visibleNeeds([mixed('CW')], { cw: false, phone: false }, DEFAULTS)
+    expect(out).toHaveLength(1)
+    expect(out[0].tags).toEqual(['Pota'])
+    expect(out[0].priority).toBe(NEED_TIER.Pota)
+  })
+
+  it('control — mode NOT gated keeps BOTH tags (the narrowing is conditional, not a blanket strip)', () => {
+    const out = visibleNeeds([mixed('CW')], { cw: true, phone: false }, DEFAULTS)
+    expect(out[0].tags).toEqual(['NewEntity', 'Pota'])
+  })
+
+  it('the no-scopes early-return path narrows too — it must not push the alert UNCHANGED', () => {
+    const out = visibleNeeds([mixed('Phone')], { cw: false, phone: false })
+    expect(out).toHaveLength(1)
+    expect(out[0].tags).toEqual(['Pota'])
+  })
+})
+
 // ── The band scopes govern the ICONS, not only the sound/toast (operator, twice:
 // "I selected grids, vhf/uhf 6m and up in the settings and its still showing the grid
 // icons in ft8 in both roster and classic mode when on hf bands").
