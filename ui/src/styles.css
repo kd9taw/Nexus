@@ -13820,6 +13820,28 @@ button.cq-skiptx1.on {
   background: var(--accent);
   color: var(--accent-ink);
 }
+/* The Map button: a sibling control next to the Classic/Roster pill, not a member of it
+ * (it opens the POTA map pop-out, it does not switch layoutMode) — so it carries its own
+ * border+radius rather than a bare `.clt-opt` fragment, which relies on
+ * `.cockpit-layout-toggle` for the border/radius/overflow that make the pill read as one
+ * piece. Same type metrics and hover treatment as `.clt-opt` so it still reads as one
+ * family in the header, just its own pill beside the first.
+ */
+.cockpit-map-btn {
+  padding: 5px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cockpit-map-btn:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
 .cockpit-roster > * {
   flex: 1;
   min-width: 0;

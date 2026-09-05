@@ -140,6 +140,12 @@ describe('the Map button in the FT header', () => {
     const { onLayoutMode } = renderCockpit()
     const btn = screen.getByTitle(t('operate.header.map.title'))
     expect(btn.textContent).toBe(t('operate.header.map.label'))
+    // A sibling control of the Classic/Roster pill, not a member of it: it must NOT carry
+    // `clt-opt`, which relies on the `.cockpit-layout-toggle` parent for its border/radius
+    // (a bare `.clt-opt` outside that group rendered as a square, borderless slab — code
+    // review finding, fix round 1). It gets its own self-contained class instead.
+    expect(btn.className).toBe('cockpit-map-btn')
+    expect(btn.className).not.toMatch(/\bclt-opt\b/)
     fireEvent.click(btn)
     expect(openPanelWindow).toHaveBeenCalledWith('operatemap')
     expect(onLayoutMode).not.toHaveBeenCalled()

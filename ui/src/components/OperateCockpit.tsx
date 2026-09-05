@@ -1088,7 +1088,7 @@ export function OperateCockpit({
           </div>
           <button
             type="button"
-            className="clt-opt"
+            className="cockpit-map-btn"
             onClick={() => void openPanelWindow('operatemap')}
             title={t('operate.header.map.title')}
           >
