@@ -2736,6 +2736,13 @@ export const EN = {
   // so the copy has to name what it exposes and to whom — its threat model is not the
   // Field Day scoreboard's, which is defensible partly because a contest log is
   // already broadcast in clear on the air.
+  // ---- App updates: the beta (pre-release) channel opt-in ----
+  'settings.betaUpdates.legend': 'App updates',
+  'settings.betaUpdates.label': 'Receive beta (pre-release) updates',
+  'settings.betaUpdates.hint':
+    'When on, the updater offers pre-release builds — newer features, but less tested. Off keeps you on stable releases only.',
+  'settings.betaUpdates.aria.enable': 'Turn on beta updates',
+  'settings.betaUpdates.aria.disable': 'Turn off beta updates',
   'settings.connectWeb.legend': 'Connect on a TV',
   'settings.connectWeb.label': 'Serve Connect on this network',
   'settings.connectWeb.hint':

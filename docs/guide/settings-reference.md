@@ -1246,6 +1246,10 @@ Turn sections on and off, and pick a goal profile.
   setting as [Contesting ▸ Field Day Setup](#field-day-setup)). Turning it on
   with no Class or Section set jumps you to the Contesting tab to fill them in.
 
+### App updates
+
+Turn on **Receive beta (pre-release) updates** to have the updater offer pre-release builds — newer features sooner, but less tested; leave it off to stay on stable releases only.
+
 ### Accessibility & eyes-free
 
 Speech and sound cues for operating by ear. The keyboard and screen-reader labels

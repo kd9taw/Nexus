@@ -11,7 +11,7 @@ import { t } from '../i18n'
 import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
-import { isValidLoggedGrid } from '../grid'
+import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
 import { pushToast, withErrorToast } from '../toast'
 
@@ -641,7 +641,13 @@ export function LogEntry({
     // tokens (keyed to the call so a stale lookup can't key the wrong name).
     void setCwPeerInfo(call, preferredName ?? '', r.state ?? '')
     if (!silent) {
-      const detail = [r.name, r.grid && t('callbook.detail.grid', { grid: r.grid }), r.state]
+      const detail = [
+        r.name,
+        r.grid && t('callbook.detail.grid', { grid: r.grid }),
+        r.state,
+        // Short-path bearing from the operator's grid, exactly as the StationCard shows it.
+        azimuthLabel(azimuthTo(snap.mygrid, r.grid, r.country)),
+      ]
         .filter(Boolean)
         .join(' · ')
       const vals = { call: r.call, detail: detail || r.country || t('callbook.detail.found') }

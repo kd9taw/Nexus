@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Opt-in beta updates.** Settings ▸ Appearance ▸ App updates has a new *Receive beta
+  (pre-release) updates* switch. Turn it on and Nexus follows the beta channel — it offers
+  pre-release builds as they land (newer features, less tested); leave it off and you stay on
+  stable releases only, exactly as before. Beta builds carry a `-beta.N` version, are published
+  as GitHub pre-releases, and never reach anyone who hasn't opted in. When a stable release
+  supersedes the betas, opted-in stations roll onto it automatically.
 - **The WSJT-X UDP feed can target several destinations at once.** Settings ▸ Logging &
   Connectors ▸ WSJT-X UDP API now accepts a comma-separated list of addresses, not just one,
   so a single Nexus can feed a local tool (GridTracker, JTAlert) and a remote service (an
@@ -18,6 +24,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A rig could get stuck transmitting after a CAT dropout (Yaesu, Enhanced USB port).** On some
+  Windows setups — reported on a Yaesu's Enhanced CAT port — a CAT interface hiccup while the radio
+  was keyed (an over or a tune) could leave the radio transmitting until it was powered off. The
+  1.10.2 automatic CAT-reconnect rebuilt the link but forgot the radio was keyed and, on the
+  external-Hamlib control path, never sent the key-up over the reopened channel — so the safety
+  retry that recovers a stuck key (present in 1.10.1) was switched off exactly when it was needed.
+  Nexus now always sends an unkey through a freshly reopened channel and keeps that recovery armed
+  across a reconnect, so a transient CAT dropout no longer strands the transmitter. NEEDS-BENCH on
+  a real Enhanced-port rig. If the USB device itself disappears entirely, no software can unkey it —
+  a hardware PTT that fails safe, or the rig's Standard port, is the sure guard there.
+- **FT8 no longer sends 73 without receiving RR73.** In an ordinary FT8 QSO, a DXpedition Fox's
+  multiplexed confirmation addressed to you — from a Fox you'd been chasing on the same band — could
+  be misread as your current partner's roger, and Nexus would send its closing 73 to a station that
+  never rogered. The code that stitches a Fox's split confirmation back together was running on every
+  QSO, not only in Hound mode; it now only does so when you're actually working a Fox, so an ordinary
+  contact is never closed by a bystander's signal. (#236)
+- **Frequency presets no longer collapse to a single band.** After 1.10.2 the frequency/band
+  dropdown could shrink to one band — an IC-7300 on 14.074 reading "custom", or only 40 m
+  showing — for stations that had set per-radio band coverage. The band selector was trimming
+  its list (and with it the frequency presets, which are the same list) by each radio's
+  band-coverage setting, but that setting is a dual-radio *routing* choice, not a limit on what
+  a rig can tune, so a radio with a partial coverage list wrongly hid every other band's
+  presets. The presets now always show, independent of coverage. (#231, #232)
+- **The generated-message pane now clears after an auto-logged contact.** With "Clear DX call
+  after logging" on, the DX Call/Grid fields cleared after a manual log but not when the FT8/RTTY
+  sequencer logged a contact on its own — the app only noticed its own log actions, not the
+  engine's. It now clears on every logged contact. (#210)
+- **FTDX-101D power no longer dips on transmit.** Nexus could send a power-level command to the
+  radio mid-transmission, which WSJT-X never does; on the FTDX-101D that showed as a power
+  foldback during the over. Nexus now sets power only before keying, never during a
+  transmission. NEEDS-BENCH on a real FTDX-101D. (#126)
+- **The 3-D globe now remembers its map layers.** The 2-D map remembered which layers you had on,
+  but the 3-D globe reset to defaults every time you opened it, so layer choices made on the globe
+  didn't stick. The globe now saves them the same way the flat map does. (#211)
+- **The 60 m FT calling frequency is now a preset.** Added 5.357 MHz for FT8 and FT4 on 60 m to
+  the digital band presets. (#175)
+- **The callsign lookup shows the beam heading.** A QRZ/callbook lookup in the log entry now
+  appends the short-path bearing from your grid, the way the station cards already do. (#222)
+- **The log editor's time field no longer clips on macOS.** The minutes part of the date/time
+  field in the log editor could be cut off on the Mac; the field is now wide enough for it.
+  NEEDS-BENCH on macOS. (#233)
+- **The radio engine no longer dies at launch on some Linux systems.** On certain Linux audio
+  devices — reported inside Debian 13 (trixie) containers, before any radio was configured — the
+  capture stream was killed at startup with "RADIO ENGINE STOPPED — Buffer size 4800 is not in
+  the supported range 10..=3840", leaving TX and RX dead until a restart. The 1.10.1 change that
+  gave the capture buffer more scheduling slack sized it against the range the device *declared*
+  it supported, and on these devices that declared range is looser than what ALSA actually
+  enforces when the stream is opened, so the request was refused. Nexus now falls back to the
+  system's default buffer whenever a device refuses the sized one, so the engine always starts.
+  From a field report.
 - **SSTV no longer loads some images upside down on macOS.** An image with a 180° EXIF
   orientation tag came into the SSTV transmit stage upside down on the Mac (and would have
   transmitted that way). The app rotates images upright itself, and its safeguard against

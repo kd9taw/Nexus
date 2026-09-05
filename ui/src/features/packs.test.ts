@@ -66,6 +66,21 @@ describe('starter packs', () => {
     expect(shared?.groups).toContain(potaGid)
   })
 
+  it('every pack has unique memory names (names are the preset keys)', () => {
+    for (const pack of STARTER_PACKS) {
+      const names = pack.memories.map((m) => m.name)
+      expect(new Set(names).size, `${pack.name} has a duplicate preset name`).toBe(names.length)
+    }
+  })
+
+  it('the digital pack carries both 60 m FT8 channels and a 60 m FT4', () => {
+    const digital = STARTER_PACKS.find((p) => p.id === 'na-digital')!
+    const sixty = digital.memories.filter((m) => m.name.startsWith('FT8 60 m') || m.name === 'FT4 60 m')
+    expect(sixty.some((m) => m.mode === 'FT8' && m.rxMhz === 5.3715)).toBe(true)
+    expect(sixty.some((m) => m.mode === 'FT8' && m.rxMhz === 5.357)).toBe(true)
+    expect(sixty.some((m) => m.mode === 'FT4' && m.rxMhz === 5.357)).toBe(true)
+  })
+
   it('installs a scheduled net with its reminder default off', () => {
     // The bundled packs ship no net schedules today (net times are volatile), so this
     // exercises the machinery with the fixture — an installed net keeps its schedule and

@@ -11,7 +11,7 @@
 // it at press time rather than caching means the answer cannot be stale.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { prepareUpdateInstall, restartApp, updateInstallBlock } from './api'
+import { checkBetaUpdate, installBetaUpdate, prepareUpdateInstall, restartApp, updateInstallBlock } from './api'
 
 type Phase = 'idle' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
 
@@ -46,13 +46,18 @@ function updaterApi(): { check: () => Promise<UpdaterHandle | null> } | null {
   return u?.check ? { check: u.check } : null
 }
 
-export function useSelfUpdate(): SelfUpdate {
+export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
   const [phase, setPhase] = useState<Phase>('idle')
   const [version, setVersion] = useState<string | null>(null)
   const [blockReason, setBlockReason] = useState<string | null>(null)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const handle = useRef<UpdaterHandle | null>(null)
+  // Which channel produced the pending update — so `install` uses the matching install path. The
+  // beta path (Rust `check_beta_update`/`install_beta_update`) points the updater at a
+  // pre-release manifest; the stable path (the plugin's own JS `handle`) is left exactly as it
+  // was, byte-for-byte, so every non-beta user's proven flow is unchanged.
+  const isBeta = useRef(false)
   /// The version the operator dismissed. Written by `dismiss`, and READ by the hourly re-check
   /// — it was a plain boolean that nothing read, so "Not now" lasted until the next hourly
   /// tick re-ran the whole flow, re-downloaded, and put the banner straight back. Dismissal is
@@ -67,6 +72,27 @@ export function useSelfUpdate(): SelfUpdate {
     if (!api) return // no updater (dev view, or a .deb build that cannot self-update)
 
     const run = async () => {
+      // BETA channel: resolve the newest pre-release via the backend and stash it for install.
+      // No silent pre-download (that's the stable path's luxury) — the beta build downloads when
+      // the operator presses Install, shown as an indeterminate 'installing' state.
+      if (betaEnabled) {
+        try {
+          const info = await checkBetaUpdate()
+          if (!alive || !info) return
+          if (dismissed.current != null && info.version === dismissed.current) return
+          isBeta.current = true
+          setVersion(info.version)
+          setPhase('ready')
+        } catch (e) {
+          // SILENT, exactly like the stable check below: a background beta check failing (no
+          // pre-release manifest yet, GitHub unreachable, a blocked network) is not news.
+          if (!alive) return
+          // eslint-disable-next-line no-console
+          console.warn('nexus: beta update check failed (silent):', e)
+        }
+        return
+      }
+      isBeta.current = false
       try {
         const up = await api.check()
         if (!alive || !up?.available) return
@@ -114,7 +140,8 @@ export function useSelfUpdate(): SelfUpdate {
       alive = false
       window.clearInterval(id)
     }
-  }, [])
+    // Re-run when the channel changes: flipping the beta toggle switches which feed is checked.
+  }, [betaEnabled])
 
   // Keep the refusal reason current while an update is waiting, so the button explains itself
   // the moment the radio goes idle rather than after the next click.
@@ -156,7 +183,15 @@ export function useSelfUpdate(): SelfUpdate {
           // that could not complete must not be what stops the update. Every write behind it
           // is best-effort on the Rust side too.
           await prepareUpdateInstall().catch(() => {})
-          await handle.current?.install?.()
+          // Same choreography for both channels — only the install call differs. The beta path
+          // downloads THEN installs here (no pre-download), so this press covers both; on Windows
+          // it execs the installer and exits the process, on macOS/Linux it returns and the
+          // restartApp() below takes over — identical to the stable path.
+          if (isBeta.current) {
+            await installBetaUpdate()
+          } else {
+            await handle.current?.install?.()
+          }
           // The plugin does NOT restart the app on macOS or the Linux AppImage — install()
           // swaps the bundle on disk and resolves with the OLD build still running, so
           // without this call the banner sat at "Nexus will restart…" forever (mac QA

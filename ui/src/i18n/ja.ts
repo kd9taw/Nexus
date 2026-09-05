@@ -1666,6 +1666,12 @@ export const JA: PartialCatalog = {
   "settings.fdClub.discover.empty": "2秒間何も受信できません — 同じネットワークですか？一部のWi-Fiは検出をブロックします。ホストのアドレスを直接入力してください。",
   "settings.fdClub.discover.pick.label": "{{event}} — {{host}}",
   "settings.fdClub.discover.pick.title": "{{host}} を参加アドレスとして使用",
+  "settings.betaUpdates.legend": "アプリの更新",
+  "settings.betaUpdates.label": "ベータ版（プレリリース）の更新を受け取る",
+  "settings.betaUpdates.hint":
+    "オンにすると、アップデーターがプレリリース版を提供します。新しい機能が使えますが、テストは十分ではありません。オフにすると安定版のみになります。",
+  "settings.betaUpdates.aria.enable": "ベータ更新を有効にする",
+  "settings.betaUpdates.aria.disable": "ベータ更新を無効にする",
   "settings.connectWeb.legend": "テレビでConnect",
   "settings.connectWeb.label": "このネットワークでConnectを配信",
   "settings.connectWeb.hint": "Connectの完全なビュー（全レイヤーの地図、各パネル、リアルタイムのバンドオープン）を読み取り専用で配信します。シャックのテレビ、タブレット、スマホなど、ネットワーク上のどのブラウザでも表示できます。ページから変更はできません。",

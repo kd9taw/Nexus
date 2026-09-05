@@ -1975,6 +1975,12 @@ pub struct Engine {
     /// the matching pane(s). Visual-only: the engine's decode context (answer
     /// parity, history) is NOT a window and stays intact.
     clear_tick: u32,
+    /// Bumped every time a contact reaches the log — through ANY path, so a
+    /// backend auto-log (the FT8/RTTY sequencer completing a QSO on its own)
+    /// increments it just like a manual log does. The UI watches it to fire the
+    /// "clear DX call after logging" wipe on the auto-log path, which used to be
+    /// invisible to the frontend because it intercepted only its own log actions.
+    logged_tick: u32,
     /// One-shot: the operator hit Erase — the radio loop tells cooperating
     /// apps via an outbound Clear (window byte; 0 = Band, 1 = Rx, 2 = both).
     pending_udp_clear: Option<u8>,
@@ -4005,6 +4011,7 @@ impl Engine {
             highlights: std::collections::HashMap::new(),
             highlight_seq: 0,
             clear_tick: 0,
+            logged_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
             hrd_pending: std::collections::VecDeque::new(),
@@ -8536,6 +8543,9 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // Every log path funnels through here, so this is the one place that can tell the UI a
+        // contact was written — including a backend auto-log the frontend never initiated.
+        self.logged_tick = self.logged_tick.wrapping_add(1);
         // Any contact reaching the log ends the #153 rescue window. The stash is a lifeline for
         // the contact the operator just watched fail, and once ANY contact is written they have
         // moved on — keeping it past that point risks the Log button reaching back to an old
@@ -15705,6 +15715,7 @@ impl Engine {
             })
             .collect();
         s.clear_tick = self.clear_tick;
+        s.logged_tick = self.logged_tick;
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
         s.work_call = self.work_call.clone();
@@ -17080,7 +17091,23 @@ impl Engine {
         // A Fox confirm half is the SENDER-LESS 2-token "K1ABC RR73" — re-add
         // the Fox's call so it parses as a standard Rr73 and passes the
         // sequencer's sender lock. Only exact 2-token <call> RR73/RRR/73 forms.
+        //
+        // ⚠️ #236: NEVER fabricate a partner-as-sender outside a genuine Hound/SuperHound QSO. This
+        // reattach is legitimate ONLY when our partner IS the Fox we are hounding. De-gated to every
+        // FT8 QSO by 06ec4ab2 ("a Fox is readable without Hound"), it stamped our CURRENT ordinary
+        // partner onto a bystander Fox's confirm addressed to us — forging an RR73 the partner never
+        // sent and keying a premature 73 (a WSJT-X-cadence violation: no Tx5 without a real roger).
+        // The DISPLAY split below still runs so a Fox stays readable; only the sequencer-feeding
+        // fabrication is gated. A sender-LESS 2-token half cannot parse as a terminal (Rr73/Rrr/Bye73
+        // all need 3 tokens), so un-reattached it never advances the sequencer.
+        let hound_active = matches!(
+            self.settings.special_op,
+            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+        );
         let reattach = |m: String| -> String {
+            if !hound_active {
+                return m;
+            }
             let t: Vec<&str> = m.split_whitespace().collect();
             if let (Some(f), [to, fin]) = (&fox, t.as_slice()) {
                 if matches!(*fin, "RR73" | "RRR" | "73") && tempo_core::message::is_callsign(to) {
@@ -25672,6 +25699,35 @@ mod tests {
         assert!(!e.get_log().is_empty(), "the Fox's multiplexed RR73 logs");
     }
 
+    /// #236 REGRESSION GUARD (on-air, WSJT-X cadence). On an ORDINARY (non-Hound) FT8 QSO, a
+    /// bystander DXpedition Fox's multiplexed confirm addressed to us — "W9XYZ RR73; H2 <FOX> -08"
+    /// — must NEVER be stamped with our current partner's call and read as a roger FROM the
+    /// partner. Before the fix, `reattach` (de-gated to every QSO by 06ec4ab2) forged our partner
+    /// as the sender, defeating the sequencer's sender-lock and keying a premature 73 to a station
+    /// that never rogered. The display split may still happen; the SEQUENCER must not advance.
+    #[test]
+    fn an_ordinary_qso_never_sends_73_from_a_bystander_fox_multiplex() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        assert_eq!(
+            e.settings.special_op,
+            crate::settings::SpecialOp::None,
+            "control: this is an ORDINARY QSO, Hound OFF — the fabrication's only legitimate home is a Hound QSO"
+        );
+        // Ordinary QSO with PJ4DX, advanced to where a roger would CLOSE it: we answered their CQ,
+        // then they sent us a report, so we have sent R+report and await their RR73.
+        e.ingest_decodes_for_test(&[dec_at("CQ PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ PJ4DX -08", -10, 400.0)], 3);
+        // A DIFFERENT Fox (we hounded earlier) sends its confirm addressed to us, multiplexed. Its
+        // sender-less first half "W9XYZ RR73" must NOT become "W9XYZ PJ4DX RR73" and close the QSO.
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; NEXTHOUND N0CALL -08", -10, 320.0)], 5);
+        assert!(
+            e.get_log().is_empty(),
+            "the ordinary QSO must NOT complete or key a 73 from a bystander Fox's confirm (#236)"
+        );
+    }
+
     #[test]
     fn fox_split_needs_an_active_qso_not_the_hound_setting() {
         // Not working anybody: never split on ';' — free text may legitimately carry one, and
@@ -26617,6 +26673,31 @@ mod tests {
                 "tick {tick}: a re-queued record keeps the slot it already had"
             );
         }
+    }
+
+    /// #210: the frontend's "clear DX call after logging" wipe rides `logged_tick`, and the
+    /// whole point is that it advances on EVERY log — including a backend auto-log the UI never
+    /// initiated. `log_qso` is the single funnel, so one bump here proves every path is covered.
+    #[test]
+    fn logged_tick_advances_on_every_logged_contact() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let before = e.snapshot().logged_tick;
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        assert_eq!(
+            e.snapshot().logged_tick,
+            before.wrapping_add(1),
+            "a logged QSO must advance logged_tick so the UI can clear the DX call"
+        );
+
+        let rec2 = e.qso_record("K7ABC".into(), None, None);
+        e.log_qso(rec2);
+        assert_eq!(
+            e.snapshot().logged_tick,
+            before.wrapping_add(2),
+            "each contact advances it — a second log is a second clear signal"
+        );
     }
 
     #[test]

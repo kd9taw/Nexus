@@ -44,6 +44,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::Manager;
 use tauri::State;
+use tauri_plugin_updater::UpdaterExt;
 use tempo_app::dto::{
     AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, MeterReadout,
     SourceKind, Spectrum, Tier, UploadReportDto,
@@ -11155,29 +11156,14 @@ fn amp_command(_which: String) -> bool {
     }
 }
 
-/// Drop channels no configured radio can reach (#184).
-///
-/// The band dropdowns were filtered by LICENCE only, so an operator running an HF rig plus a
-/// 2 m/70 cm handheld was still offered 23 cm — a band nothing in the shack could tune. This
-/// intersects the plan with the union of the enabled radios' band coverage.
-///
-/// Coverage semantics come from [`Settings::any_radio_covers`] and are deliberately generous:
-/// an empty band list is a catch-all, and NO configured radios means no opinion. So the filter
-/// subtracts only when every enabled rig has named its bands and none named this one, which
-/// leaves the single-radio majority — and the first-run wizard — seeing exactly what they see
-/// today. Channel ids may carry a suffix ("2m-call"), so the canonicaliser decides the band,
-/// the same way the privilege filter above does.
-///
-/// DISPLAY ONLY. Privileges decide what may be transmitted; this decides what is worth
-/// offering, and the picker still shows a manually tuned band that is not in the list.
-fn radio_reachable(
-    settings: &tempo_app::settings::Settings,
-    plan: Vec<tempo_app::bandplan::BandChannel>,
-) -> Vec<tempo_app::bandplan::BandChannel> {
-    plan.into_iter()
-        .filter(|c| settings.any_radio_covers(&tempo_app::bandplan::canonical_band(&c.band)))
-        .collect()
-}
+// The band-plan channel list drives BOTH the band selector AND the frequency-preset dropdown —
+// they are one list. #184 once trimmed it to the enabled radios' band COVERAGE, but that
+// coverage list is a dual-radio ROUTING signal ("which rig owns this band"), not a capability
+// limit: a rig with a partial coverage list still physically tunes every other band. Trimming
+// the preset list by it made standard calling frequencies vanish and read "custom" (#231/#232,
+// a 1.10.2 regression), so the trim is gone. If the selector should again hide bands no radio
+// can reach, that belongs on a real per-radio CAPABILITY signal, not the routing coverage —
+// `Settings::any_radio_covers` stays (with its tests) for whoever builds that.
 
 /// Tempo's proposed calling-frequency band plan (HF + VHF/UHF), for the band
 /// selector. Each entry is General-legal + clear of the existing watering holes.
@@ -11190,7 +11176,7 @@ fn get_band_plan(
     // — the band picker must show the dials the engine will actually QSY to.
     let eng = engine_lock(&state);
     let plan = eng.band_plan();
-    Ok(radio_reachable(eng.settings(), plan))
+    Ok(plan)
 }
 
 /// Set the operator's amateur license class (Technician/General/Extra/Open) — drives the
@@ -11338,7 +11324,6 @@ fn get_licensed_band_plan(
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
-        let plan = radio_reachable(eng.settings(), plan);
         return Ok(plan
             .into_iter()
             .map(|mut c| {
@@ -11359,7 +11344,7 @@ fn get_licensed_band_plan(
         "cw" => OperatingMode::Cw,
         _ => OperatingMode::Digital,
     };
-    Ok(radio_reachable(eng.settings(), licensed_bands(class, mode)))
+    Ok(licensed_bands(class, mode))
 }
 
 /// Change band / dial frequency / mode live (does not reset the operating mode).
@@ -17900,6 +17885,100 @@ fn restart_app(app: tauri::AppHandle) {
     app.request_restart();
 }
 
+// ─── Opt-in BETA update channel ────────────────────────────────────────────────────────────
+//
+// The STABLE self-updater (useSelfUpdate.ts → the plugin's own JS commands) is UNTOUCHED: every
+// non-beta user keeps that proven path byte-for-byte. This is a SEPARATE path only a user who
+// turned on `beta_updates` ever reaches. GitHub's `/releases/latest` redirect excludes
+// pre-releases, so the stable feed can never see a beta; the beta path lists releases via the
+// GitHub API, picks the newest build (pre-releases included, see
+// `tempo_app::update::newest_release_manifest`), and points the updater at THAT release's
+// manifest. ONLY the endpoint differs — the signing key, download, signature verification and the
+// flush/restart choreography are the plugin's own, shared with the stable path
+// (`prepare_update_install` / `restart_app`).
+
+/// The GitHub releases API — lists pre-releases too (unlike the `/releases/latest` redirect the
+/// stable feed uses). 20 is far more than the few betas a cycle ever has in flight.
+const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/kd9taw/Nexus/releases?per_page=20";
+
+/// Holds the pending beta `Update` between the check that found it and the install the operator
+/// presses — the JS side cannot carry a Rust `Update` handle, so it lives here. `None` until a
+/// check finds a newer beta; taken (not cloned) at install time so a double-press can't double-run.
+#[derive(Default)]
+struct BetaUpdateState(std::sync::Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BetaUpdateInfo {
+    /// The target build's version, from the resolved release's manifest.
+    version: String,
+    /// The release notes the manifest carries, if any.
+    notes: Option<String>,
+}
+
+/// Check the BETA channel for a newer build. Resolves the newest release (pre-releases included)
+/// from the GitHub API, points the updater at its manifest, and — if it is newer than the running
+/// build — stashes the `Update` for [`install_beta_update`] and returns its version. `Ok(None)` =
+/// up to date or nothing installable; `Err` = a fetch/parse failure (the frontend treats it
+/// silently, exactly as the stable check does). Called only while `beta_updates` is on.
+#[tauri::command]
+async fn check_beta_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BetaUpdateState>,
+) -> Result<Option<BetaUpdateInfo>, String> {
+    let body = tauri::async_runtime::spawn_blocking(|| fetch_text(GITHUB_RELEASES_URL))
+        .await
+        .map_err(|e| e.to_string())??;
+    let clear = || *state.0.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    let Some((_ver, manifest_url)) = tempo_app::update::newest_release_manifest(&body) else {
+        clear();
+        return Ok(None);
+    };
+    let url = tauri::Url::parse(&manifest_url).map_err(|e| e.to_string())?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => {
+            let info = BetaUpdateInfo {
+                version: update.version.clone(),
+                notes: update.body.clone(),
+            };
+            *state.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(update);
+            Ok(Some(info))
+        }
+        None => {
+            clear();
+            Ok(None)
+        }
+    }
+}
+
+/// Download and install the beta `Update` the last check stashed. Mirrors the stable path's
+/// choreography, reusing its pieces: the frontend calls `update_install_block` (refuse while the
+/// radio is busy) and `prepare_update_install` (flush before Windows' in-`install()` `exit(0)`)
+/// FIRST, then this; on macOS/Linux it returns and the frontend calls `restart_app`, on Windows
+/// the plugin's `install()` execs the installer and exits the process here. The `Update` was taken
+/// out of state above, so a second press finds nothing to install. Progress is deliberately not
+/// streamed — the beta banner shows an indeterminate "installing" state, which keeps this opt-in
+/// path free of the Tauri `Channel` plumbing the codebase has no other use of.
+#[tauri::command]
+async fn install_beta_update(state: tauri::State<'_, BetaUpdateState>) -> Result<(), String> {
+    let update = state
+        .0
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take()
+        .ok_or("no beta update is ready to install")?;
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Our own update endpoint (schema 1): a `version.json` with a direct `"latest"` field. Primary,
 /// GitHub-first, and under our control — so update accuracy no longer depends on SourceForge's
 /// per-release "Default Download" flip.
@@ -20247,11 +20326,14 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedWxHistory::default())
         .manage(SharedQrzSession::default())
         .manage(SharedHamQthSession::default())
+        .manage(BetaUpdateState::default())
         .invoke_handler(tauri::generate_handler![
             display_metrics,
             update_install_block,
             prepare_update_install,
             restart_app,
+            check_beta_update,
+            install_beta_update,
             log_operators,
             export_settings_bundle,
             import_settings_bundle,

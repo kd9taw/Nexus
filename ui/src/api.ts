@@ -1102,6 +1102,29 @@ export async function restartApp(): Promise<void> {
   return invoke<void>('restart_app')
 }
 
+/** A newer BETA build the opt-in channel found, or null when up to date / offline. */
+export interface BetaUpdateInfo {
+  version: string
+  notes: string | null
+}
+
+/** Check the opt-in BETA channel for a newer build. Resolves the newest release (pre-releases
+ * included) from the GitHub API, points the updater at its manifest, and stashes it for
+ * `installBetaUpdate()` if it's newer than the running build. Returns null when up to date, and
+ * throws on a fetch error (the caller treats that silently, like the stable check). Call only when
+ * the operator has turned beta updates on. */
+export async function checkBetaUpdate(): Promise<BetaUpdateInfo | null> {
+  return invoke<BetaUpdateInfo | null>('check_beta_update')
+}
+
+/** Download and install the beta build the last `checkBetaUpdate()` stashed. Call the SAME guards
+ * the stable install uses first — `updateInstallBlock()` then `prepareUpdateInstall()` — and, on
+ * macOS/Linux, `restartApp()` after it resolves (on Windows the installer exits the process here).
+ * No progress is reported; the banner shows an indeterminate installing state. */
+export async function installBetaUpdate(): Promise<void> {
+  return invoke<void>('install_beta_update')
+}
+
 /** One selectable radio in the launch picker. */
 export interface RadioLaunchOption {
   id: number

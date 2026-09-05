@@ -61,6 +61,7 @@ const DIGITAL: Pack = {
   memories: [
     { name: 'FT8 80 m', rxMhz: 3.573, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default USB dial.' },
     { name: 'FT8 60 m', rxMhz: 5.3715, mode: 'FT8', kind: 'digital', notes: '60 m is channelized in the US (100 W ERP) and the channels differ by country — check your own band plan. WSJT-X ships no 60 m default, so this is our choice: the dial for the 5373.0 kHz channel.' },
+    { name: 'FT8 60 m (5357)', rxMhz: 5.357, mode: 'FT8', kind: 'digital', notes: '60 m is channelized in the US (100 W ERP) and the channels differ by country — check your own band plan. WSJT-X ships no 60 m default; this dials the 5358.5 kHz channel (the 5357.0 kHz USB channel).' },
     { name: 'FT8 40 m', rxMhz: 7.074, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default. Busiest evening/NVIS FT8 band.' },
     { name: 'FT8 30 m', rxMhz: 10.136, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default; reliable low-noise WARC band.' },
     { name: 'FT8 20 m', rxMhz: 14.074, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default. The #1 HF/POTA digital hunting freq.' },
@@ -70,6 +71,7 @@ const DIGITAL: Pack = {
     { name: 'FT8 10 m', rxMhz: 28.074, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default; Es/solar-max.' },
     { name: 'FT8 6 m', rxMhz: 50.313, mode: 'FT8', kind: 'digital', notes: 'WSJT-X default \'magic band\' — the most-watched channel during Es/F2. EU adds 50.323 as an overflow dial.' },
     { name: 'FT4 80 m', rxMhz: 3.575, mode: 'FT4', kind: 'digital', notes: 'WSJT-X default (distinct from FT8 3.573).' },
+    { name: 'FT4 60 m', rxMhz: 5.357, mode: 'FT4', kind: 'digital', notes: '60 m is channelized in the US (100 W ERP) — check your own band plan. WSJT-X ships no 60 m FT4 default; this dials the 5358.5 kHz channel.' },
     { name: 'FT4 40 m', rxMhz: 7.0475, mode: 'FT4', kind: 'digital', notes: 'WSJT-X default (R2). R1/R3 differ.' },
     { name: 'FT4 30 m', rxMhz: 10.14, mode: 'FT4', kind: 'digital', notes: 'WSJT-X default.' },
     { name: 'FT4 20 m', rxMhz: 14.08, mode: 'FT4', kind: 'digital', notes: 'WSJT-X default. Overlaps JS8/RTTY real estate — watch passband.' },

@@ -2187,6 +2187,11 @@ pub struct AppSnapshot {
     /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
     #[serde(default)]
     pub clear_tick: u32,
+    /// Bumped every time a QSO is logged, by ANY path — the UI fires the
+    /// "clear DX call after logging" wipe on change, so a backend auto-log
+    /// clears the cockpit's DX fields just like a manual log does.
+    #[serde(default)]
+    pub logged_tick: u32,
     /// Pending one-click POTA/SOTA hunt (the next QSO with this call auto-tags
     /// the park). None = not hunting.
     #[serde(default)]

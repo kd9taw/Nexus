@@ -16,6 +16,7 @@
 // and this globe are deliberately identical there.
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { heatPulse, sectorPulse } from '../features/pulse'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
 import {
   filterSatsToChased,
   isSatChased,
@@ -384,6 +385,74 @@ function webglOk(): boolean {
   }
 }
 
+/** The 3-D globe's toggleable layers. Persisted per-surface (#211) — the 2-D map already
+ * remembered its layer picks (#199) but the globe reset to defaults on every mount, so a Connect
+ * operator working on the 3-D map lost their choices each time. Same `surfaceGet/surfaceSet`
+ * store the 2-D map uses, so a pop-out keeps its own picks. */
+type GlobeLayers = {
+  spots: boolean
+  arcs: boolean
+  states: boolean
+  lights: boolean
+  flare: boolean
+  aurora: boolean
+  muf: boolean
+  pca: boolean
+  heat: boolean
+  openings: boolean
+  grid: boolean
+  sats: boolean
+  pass: boolean
+  rings: boolean
+  cqzones: boolean
+  coverage: boolean
+  decodes: boolean
+  dxped: boolean
+  greyline: boolean
+}
+
+const GLOBE_LAYERS_KEY = 'nexus.connect.globe3d.layers'
+
+const defaultGlobeLayers = (showStates: boolean): GlobeLayers => ({
+  spots: true,
+  arcs: true,
+  states: showStates,
+  lights: true,
+  flare: true,
+  aurora: false,
+  muf: true,
+  pca: true,
+  heat: true,
+  openings: true,
+  grid: false,
+  sats: false,
+  pass: true, // the tracked-pass scene; nothing is drawn unless a pass is live
+  rings: true,
+  cqzones: false,
+  coverage: false,
+  decodes: true,
+  dxped: false,
+  greyline: true,
+})
+
+/** Parse a persisted layer object, keeping only the known boolean toggles — an unknown or
+ * malformed store never poisons the defaults it is merged onto. Exported for the round-trip test. */
+export function globeLayersFromStored(v: string | null): Partial<GlobeLayers> {
+  if (!v) return {}
+  try {
+    const raw: unknown = JSON.parse(v)
+    if (!raw || typeof raw !== 'object') return {}
+    const rec = raw as Record<string, unknown>
+    const out: Partial<GlobeLayers> = {}
+    for (const k of Object.keys(defaultGlobeLayers(true)) as (keyof GlobeLayers)[]) {
+      if (typeof rec[k] === 'boolean') out[k] = rec[k] as boolean
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
 export default function Globe3D({
   myGrid,
   prop,
@@ -437,28 +506,17 @@ export default function Globe3D({
   }, [])
   const [cqzones, setCqzones] = useState<[number, number][][]>([]) // each zone → boundary lines
   const [workedGrids, setWorkedGrids] = useState<{ lat: number; lon: number }[]>([])
-  // Toggleable 3-D layers. Default-on mirrors the 2-D map (aurora off by default).
-  const [show, setShow] = useState({
-    spots: true,
-    arcs: true,
-    states: showStates,
-    lights: true,
-    flare: true,
-    aurora: false,
-    muf: true,
-    pca: true,
-    heat: true,
-    openings: true,
-    grid: false,
-    sats: false,
-    pass: true, // the tracked-pass scene; nothing is drawn unless a pass is live
-    rings: true,
-    cqzones: false,
-    coverage: false,
-    decodes: true,
-    dxped: false,
-    greyline: true,
-  })
+  // Toggleable 3-D layers. Default-on mirrors the 2-D map (aurora off by default), and the
+  // operator's picks are restored from the per-surface store on mount (#211).
+  const [show, setShow] = useState<GlobeLayers>(() => ({
+    ...defaultGlobeLayers(showStates),
+    ...globeLayersFromStored(surfaceGet(GLOBE_LAYERS_KEY)),
+  }))
+  // Persist every toggle so the next launch opens the globe you left — the 2-D map's #199
+  // behaviour, which the globe was missing.
+  useEffect(() => {
+    surfaceSet(GLOBE_LAYERS_KEY, JSON.stringify(show))
+  }, [show])
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
   // (react-globe.gl's default when width/height are undefined) — that was painting over

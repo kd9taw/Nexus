@@ -3787,6 +3787,12 @@ export const ES: PartialCatalog = {
   "settings.fdClub.discover.empty": "Nada oído en 2 s — ¿misma red? Algunas Wi-Fi bloquean el descubrimiento; escribe la dirección del anfitrión.",
   "settings.fdClub.discover.pick.label": "{{event}} — {{host}}",
   "settings.fdClub.discover.pick.title": "Usar {{host}} como dirección de unión",
+  "settings.betaUpdates.legend": "Actualizaciones de la app",
+  "settings.betaUpdates.label": "Recibir actualizaciones beta (versiones preliminares)",
+  "settings.betaUpdates.hint":
+    "Cuando está activado, el actualizador ofrece versiones preliminares: funciones más nuevas, pero menos probadas. Desactivado, solo recibes versiones estables.",
+  "settings.betaUpdates.aria.enable": "Activar las actualizaciones beta",
+  "settings.betaUpdates.aria.disable": "Desactivar las actualizaciones beta",
   "settings.connectWeb.legend": "Connect en un televisor",
   "settings.connectWeb.label": "Servir Connect en esta red",
   "settings.connectWeb.hint": "Sirve la vista Connect completa — el mapa con todas las capas, los paneles, las aperturas en vivo — de solo lectura, a cualquier navegador de tu red: un televisor, una tableta, un móvil. No se puede cambiar nada desde ella.",

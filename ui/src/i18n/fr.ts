@@ -3787,6 +3787,12 @@ export const FR: PartialCatalog = {
   "settings.fdClub.discover.empty": "Rien entendu en 2 s — même réseau ? Certains Wi-Fi bloquent la découverte ; saisissez l'adresse de l'hôte.",
   "settings.fdClub.discover.pick.label": "{{event}} — {{host}}",
   "settings.fdClub.discover.pick.title": "Utiliser {{host}} comme adresse de connexion",
+  "settings.betaUpdates.legend": "Mises à jour de l'application",
+  "settings.betaUpdates.label": "Recevoir les mises à jour bêta (préversions)",
+  "settings.betaUpdates.hint":
+    "Activé, le programme de mise à jour propose des préversions : des fonctions plus récentes, mais moins testées. Désactivé, vous ne recevez que les versions stables.",
+  "settings.betaUpdates.aria.enable": "Activer les mises à jour bêta",
+  "settings.betaUpdates.aria.disable": "Désactiver les mises à jour bêta",
   "settings.connectWeb.legend": "Connect sur un téléviseur",
   "settings.connectWeb.label": "Diffuser Connect sur ce réseau",
   "settings.connectWeb.hint": "Diffuse la vue Connect complète — la carte avec toutes les couches, les panneaux, les ouvertures en direct — en lecture seule, vers tout navigateur du réseau : téléviseur du shack, tablette, téléphone. Rien ne peut y être modifié.",

@@ -1021,6 +1021,21 @@ fn note_ext_read(supported: &mut Option<bool>, misses: &mut u8, ok: bool) {
 ///
 /// SUPERFAST folds to "fast" rather than "mid" — it is a faster constant than FAST, so "mid" was
 /// never the nearest answer. USER (4) has no fixed meaning to fold honestly, so it stays "mid".
+/// Whether the radio loop should issue an `L RFPOWER` this tick. Pure, so the load-bearing
+/// rule — never command power mid-tune or mid-over (#126, WSJT-X parity; the FTDX-101D foldback
+/// the operator sees is a mid-over write WSJT-X never sends) — is pinned without a rig on the
+/// bench. `changed_or_forced` folds the change gate and the cap re-assert; `giveup_blocked` is a
+/// value the rig already refused this session. The cap is not lost while transmitting: `force`
+/// survives the over and re-fires on the first idle tick after unkey.
+fn should_command_rf_power(
+    tuning_keyed: bool,
+    transmitting: bool,
+    changed_or_forced: bool,
+    giveup_blocked: bool,
+) -> bool {
+    !tuning_keyed && !transmitting && changed_or_forced && !giveup_blocked
+}
+
 fn agc_to_hamlib(speed: &str) -> u8 {
     match speed {
         "off" => 0,
@@ -4370,6 +4385,12 @@ impl RadioLoop {
                 || suspect_rebuild
             {
                 self.cat_hold_active = false;
+                // The keyed belief at teardown entry, carried onto the fresh rig below. A rebuild
+                // must NEVER make the loop forget a physically-keyed transmitter: the fresh rig
+                // starts keyed=false, which would disarm the idle self-heal that is the only thing
+                // that unkeys a wedged rig on the external-Hamlib path (it has no daemon fail-safe,
+                // unlike CI-V). #stuck-tx-1.10.2: the teardown discarded this and stranded TX.
+                let was_keyed = rig.keyed;
                 // Unkey through the STILL-ALIVE old rig/daemon before tearing it
                 // down. Dropping rigctld_proc and swapping *rig first would strand
                 // a keyed transmitter (or a tune carrier): the un-key command
@@ -4430,20 +4451,25 @@ impl RadioLoop {
                 };
                 self.rig_asserted = false; // fresh rig: unclaimed caches make the retune re-assert this tick
                 *rig = new_rig;
+                // Carry the keyed belief onto the fresh rig so the idle self-heal stays armed if the
+                // unkey below cannot land (reopened link still dead). The unconditional unkey clears
+                // it when it succeeds; when it fails, the self-heal keeps retrying — restoring the
+                // 1.10.1 self-recovery a 1.10.2 rebuild destroyed. #stuck-tx-1.10.2.
+                rig.keyed = was_keyed;
                 self.rigctld_proc = proc;
                 // Do NOT claim last_dial/last_mode here: open_cat's set_freq/set_mode are best-effort
                 // (`let _ =`), so a failed open-time tune must be retried. Leaving these at the OLD
                 // radio's values makes the retune block below (same tick) see `dial != last_dial` and
                 // re-apply until it sticks, instead of silently stranding the new rig off-frequency.
-                // ⚠️ AND UNKEY THROUGH THE NEW CHANNEL AFTER A DAEMON DEATH. The unkey above is
-                // "the last chance through a LIVE channel", which is exactly what a crashed
-                // daemon does not give us — that command went to a dead socket. A rig latched on
-                // by the dying daemon's last `T 1` has to be told again, over the channel that
-                // now exists. Unconditional and idempotent: an unkey is never gated, and on an
-                // idle rig it is a no-op (2026-08-17 Flex audit, wave-1 #44).
-                if daemon_died {
-                    let _ = rig.ptt(false);
-                }
+                // ⚠️ AND UNKEY THROUGH THE NEW CHANNEL AFTER ANY REBUILD. The unkey above is
+                // "the last chance through a LIVE channel" — which a crashed daemon (dead socket)
+                // AND a suspect_rebuild (the serial link stayed silent) both fail to give us. A rig
+                // latched on by the dying daemon's last `T 1`, or by an over/tune whose release
+                // unkey never reached a wedged link, has to be told again over the channel that now
+                // exists. UNCONDITIONAL and idempotent: an unkey is never gated, and on an idle rig
+                // it is a no-op. #stuck-tx-1.10.2: gating this on `daemon_died` was exactly the hole
+                // that stranded a keyed Yaesu on the Enhanced port when the port reopened working.
+                let _ = rig.ptt(false);
                 self.mode_fail_count = 0; // fresh rig — the retune retry budget resets
                 self.mode_giveup = None; // and a fresh rig may well accept what the old rejected
                 self.mode_saw_reject = false;
@@ -7563,10 +7589,26 @@ impl RadioLoop {
                 //
                 // Nothing is lost by standing down: the ceiling was already applied before the
                 // tune keyed, and only the heavy poll — also suppressed — could learn otherwise.
-                if !self.tuning_keyed
-                    && (force || Some(p) != self.last_rf_power)
-                    && self.rf_power_giveup != Some(p)
-                {
+                // ⚠️ AND NOT MID-OVER (#126, KD9WES FTDX-101D). WSJT-X sets power BEFORE it keys
+                // and never touches it during a transmission; Nexus was issuing `L RFPOWER` on a
+                // change or cap re-assert even with the carrier already up, and on the FTDX-101D
+                // that mid-over write shows as a power dip/foldback the operator sees but WSJT-X
+                // never produces. The ceiling is already applied before the over keys, and `force`
+                // (recomputed each tick from the last-observed rig power vs the mode ceiling)
+                // survives the over because the heavy poll that would clear it is itself suppressed
+                // during TX — so standing the write down here defers the cap to the first tick
+                // after unkey, it never drops it. Keying/unkeying is untouched (the PTT block
+                // above), so no transmit-path invariant is weakened. NEEDS-BENCH: validated on a
+                // real FTDX-101D via the beta channel.
+                let transmitting = self.tx_until_ms.is_some() || self.manual_ptt_applied;
+                let changed_or_forced = force || Some(p) != self.last_rf_power;
+                let giveup_blocked = self.rf_power_giveup == Some(p);
+                if should_command_rf_power(
+                    self.tuning_keyed,
+                    transmitting,
+                    changed_or_forced,
+                    giveup_blocked,
+                ) {
                     // ⚠️ THE ONE TRACE THAT WOULD HAVE ANSWERED THE FIELD REPORT. An operator
                     // reporting the rig's power moving under them (KD9WES, FTDX-101D) sent two
                     // machines' worth of symptoms and there was nothing on either to look at:
@@ -10863,6 +10905,32 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    use super::should_command_rf_power;
+
+    /// #126 (KD9WES, FTDX-101D). The load-bearing rule: the loop must NEVER command RF power
+    /// while a transmission is up — WSJT-X sets power before it keys and never touches it during
+    /// an over, and a mid-over `L RFPOWER` is exactly the foldback/dip the operator reported.
+    /// Also never mid-tune, as before. Everything else is unchanged: a real change or a cap
+    /// re-assert while idle still writes, a give-up value still blocks.
+    #[test]
+    fn rf_power_is_never_commanded_mid_over_or_mid_tune() {
+        // The regression case: a change/force is pending but we are TRANSMITTING → no write.
+        assert!(
+            !should_command_rf_power(false, true, true, false),
+            "power must not be written mid-over (#126) — that is the FTDX-101D foldback"
+        );
+        // Mid-tune stays suppressed too (pre-existing invariant).
+        assert!(!should_command_rf_power(true, false, true, false));
+        // Idle + a real change or cap re-assert → this is the write that must still happen.
+        assert!(
+            should_command_rf_power(false, false, true, false),
+            "an idle change/cap re-assert must still reach the rig"
+        );
+        // Idle but nothing changed and no force → nothing to do.
+        assert!(!should_command_rf_power(false, false, false, false));
+        // A value the rig already refused this session stays blocked even when idle+changed.
+        assert!(!should_command_rf_power(false, false, true, true));
+    }
 
     /// THE LINK THAT DID NOT EXIST. The D1/D2/D3 picker shipped inert: the setting saved, the
     /// UI wrote it, `set_data_mode_n` built the right CI-V frame — and nothing carried the
@@ -14641,6 +14709,69 @@ mod tests {
         assert!(
             engine.lock().unwrap().take_cat_reprobe(),
             "the rebuild tick swallowed the pending Test CAT request instead of leaving it queued"
+        );
+    }
+
+    /// #stuck-tx-1.10.2 REGRESSION GUARD (Part-97). A rebuild while the rig is KEYED must unkey it
+    /// through the freshly-reopened channel — for EVERY rebuild reason, not only a crashed daemon.
+    /// The 1.10.2 teardown gated the post-reopen unkey on `daemon_died`, so a suspect/transport
+    /// rebuild that reopened a WORKING port left a keyed Yaesu (Enhanced USB) transmitting until the
+    /// operator power-cycled the radio. The reopened channel here answers `RPRT 0`, so a `T 0` MUST
+    /// reach it and the loop MUST believe the rig is idle again. Also pins the carried keyed belief:
+    /// the fresh rig must not silently forget it was keyed (that is what disarmed the idle self-heal).
+    #[test]
+    fn a_rebuild_while_keyed_unkeys_through_the_reopened_channel() {
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.ptt_method = "cat".to_string();
+            s.rig_model = 2014; // any CAT rig differing from the loop's applied → rig_differs this tick
+            s.serial_port = "/dev/tempo-test-qdx".to_string();
+            e.apply_settings(s);
+        }
+        let mut state = loop_state(); // applied = defaults → this tick sees rig_differs, NOT daemon_died
+        let mut backend = MockBackend::new();
+
+        // The rig is physically KEYED going into the teardown (a failed release unkey on a wedged link).
+        let mut rig = Rig::vox();
+        rig.keyed = true;
+
+        // The reopened channel logs every command and answers RPRT 0 — a WORKING port.
+        let (new_addr, new_log) = mock_pkt_rejecting_rigctld();
+        let na = new_addr.clone();
+        let mut rr = move |_t: &Transport, _c: bool| {
+            (
+                Rig::rigctld(&na),
+                None,
+                CatProbe::status(Some(true), "reopened"),
+            )
+        };
+        let mut ra = mock_reopen_audio();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                0.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+
+        assert!(
+            new_log.lock().unwrap().iter().any(|l| l.trim() == "T 0"),
+            "a rebuild while keyed must send T 0 to the reopened channel — saw {:?}",
+            new_log.lock().unwrap()
+        );
+        assert!(
+            !rig.keyed,
+            "the reopened channel accepted the unkey, so the loop must believe the rig is idle again"
         );
     }
 

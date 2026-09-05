@@ -11936,6 +11936,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .logbook-field-wide {
   grid-column: 1 / -1;
 }
+/* macOS WKWebView renders the native <input type="datetime-local"> control wider than
+   Chromium does and clips the minutes segment inside a ~140px grid cell (#233, NEEDS-BENCH
+   mac). Give this one input a floor wide enough for the mac control; Chromium's control fits
+   comfortably within it, so the desktop layout is unchanged. Scoped to this input only — never
+   the shared .settings-input. */
+.logbook-field .logbook-when {
+  min-width: 190px;
+}
 .logbook-notes {
   resize: vertical;
   min-height: 58px;

@@ -27,6 +27,7 @@ export const PER_SURFACE = [
   'nexus-ui-scale-mode',
   'nexus.awardsTab',
   'nexus.connect.config',
+  'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
   'nexus.connect.intent',
   'nexus.connect.layers',

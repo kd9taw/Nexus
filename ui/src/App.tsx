@@ -1129,7 +1129,7 @@ export default function App() {
   const { alert: pounceAlert, dismiss: dismissPounce } = usePounce()
   // Signed self-update: downloads quietly, installs only on an explicit press that the engine
   // refuses while the radio is busy (see useSelfUpdate / update_install_block).
-  const selfUpdate = useSelfUpdate()
+  const selfUpdate = useSelfUpdate(!!settings?.betaUpdates)
   const handlePounceWork = useCallback(
     (a: PounceAlert) => {
       // Route through the SAME path the needed board uses, so QSY, rig mode and pileup-split
@@ -1236,24 +1236,36 @@ export default function App() {
 
   // Bumps when a QSO is logged AND "Clear DX call after logging" is on — the
   // cockpit watches it and wipes its DX Call/Grid fields (stock WSJT-X option).
+  // Driven off the engine's loggedTick so EVERY log path fires it, including a
+  // backend auto-log the frontend never initiated (#210) — the old approach
+  // intercepted only the frontend's own log actions and so missed the auto-log.
   const [dxClearTick, setDxClearTick] = useState(0)
-  const noteLoggedForDxClear = useCallback(() => {
-    if (settings?.clearDxAfterLog) setDxClearTick((t) => t + 1)
-  }, [settings?.clearDxAfterLog])
+  const prevLoggedTick = useRef<number | null>(null)
+  useEffect(() => {
+    const tick = snap?.loggedTick
+    if (tick == null) return
+    if (prevLoggedTick.current == null) {
+      prevLoggedTick.current = tick // adopt the first value — a fresh mount is not a log event
+      return
+    }
+    if (tick !== prevLoggedTick.current) {
+      prevLoggedTick.current = tick
+      if (settings?.clearDxAfterLog) setDxClearTick((t) => t + 1)
+    }
+  }, [snap?.loggedTick, settings?.clearDxAfterLog])
 
   const handleConfirmLog = useCallback(
     (record: LoggedQso) => {
       void withErrorToast(() => apiConfirmPendingLog(record), t('shell.log.failed')).then((s) => {
         if (s) {
           setSnap(s)
-          noteLoggedForDxClear()
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
         }
       })
     },
-    [noteLoggedForDxClear, refreshNeeds],
+    [refreshNeeds],
   )
 
   const handleDiscardLog = useCallback(() => {
@@ -1925,7 +1937,6 @@ export default function App() {
         // and a green "Logged QSO" over one claimed a write that never happened.
         if (r.logged) {
           pushToast(t('shell.toast.logged'), 'success', 2500)
-          noteLoggedForDxClear()
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
@@ -1934,7 +1945,7 @@ export default function App() {
         }
       }
     })
-  }, [noteLoggedForDxClear, refreshNeeds])
+  }, [refreshNeeds])
 
   // Selecting a view from the nav. QSO / Field Day also request the backend mode
   // (defaulting to the "run" / "chat" role); Settings are pure UI

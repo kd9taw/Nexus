@@ -103,6 +103,59 @@ pub fn version_is_newer(latest: &str, current: &str) -> bool {
     }
 }
 
+/// Resolve the BETA channel's update target from a GitHub `/releases` API response.
+///
+/// The beta channel is "the newest build, pre-releases included" — and GitHub offers no
+/// "latest pre-release" download redirect, so an opted-in app lists releases and picks the
+/// target itself. That pick is made HERE, purely, so it is unit-tested without a network.
+///
+/// Returns `(version, manifest_url)` of the highest-versioned NON-DRAFT release that carries a
+/// `latest.json` updater manifest asset: `version` from its `tag_name` (leading `v` trimmed),
+/// `manifest_url` the asset's `browser_download_url`, which the caller hands to the Tauri
+/// updater's `endpoints()`. Chosen by highest VERSION (not newest-published) for two reasons —
+/// a re-cut of an older tag can never shove a lower build at a tester, and the eventual stable
+/// release, which outranks every `-beta.N` of the same number, supersedes the betas on its own.
+/// A draft, a release without a manifest asset, or unparseable JSON never wins; `None` means
+/// "nothing to offer", never a downgrade. Pre-releases are deliberately NOT filtered out — being
+/// on the leading edge is the whole point of the channel.
+pub fn newest_release_manifest(releases_json: &str) -> Option<(String, String)> {
+    let value = serde_json::from_str::<serde_json::Value>(releases_json).ok()?;
+    let arr = value.as_array()?;
+    let mut best: Option<(String, String)> = None; // (version, manifest_url)
+    for rel in arr {
+        if rel["draft"].as_bool().unwrap_or(false) {
+            continue; // a draft is not published — never a channel target
+        }
+        let tag = rel["tag_name"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches('v');
+        if parse_version(tag).is_none() {
+            continue; // not a version we recognize
+        }
+        let manifest = rel["assets"].as_array().and_then(|assets| {
+            assets.iter().find_map(|a| {
+                if a["name"].as_str() == Some("latest.json") {
+                    a["browser_download_url"].as_str()
+                } else {
+                    None
+                }
+            })
+        });
+        let Some(url) = manifest else {
+            continue; // no updater manifest ⇒ not installable via the updater; skip it
+        };
+        // Keep the highest VERSION seen — comparison reuses the tested prerelease-aware ordering.
+        let wins = best
+            .as_ref()
+            .is_none_or(|(bv, _)| version_is_newer(tag, bv));
+        if wins {
+            best = Some((tag.to_string(), url.to_string()));
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +282,117 @@ mod tests {
         assert!(!version_is_newer("0.2.9", "0.3.0"));
         assert!(!version_is_newer("garbage", "0.3.0")); // never nag on an unparseable version
         assert!(!version_is_newer("0.4.0", "junk"));
+    }
+
+    // A GitHub /releases response: newest-published first (as the API returns it), but the
+    // resolver picks by VERSION, not array order. Mixes drafts, a manifest-less release, and a
+    // prerelease so one fixture exercises every skip rule.
+    fn release(tag: &str, draft: bool, prerelease: bool, manifest: Option<&str>) -> String {
+        let assets = match manifest {
+            Some(u) => format!(
+                r#"[{{"name":"latest.json","browser_download_url":"{u}"}},
+                                   {{"name":"Nexus_x64-setup.exe","browser_download_url":"x"}}]"#
+            ),
+            None => r#"[{"name":"Nexus_amd64.deb","browser_download_url":"x"}]"#.to_string(),
+        };
+        format!(
+            r#"{{"tag_name":"{tag}","draft":{draft},"prerelease":{prerelease},"assets":{assets}}}"#
+        )
+    }
+
+    #[test]
+    fn beta_channel_picks_the_highest_versioned_release_with_a_manifest() {
+        // Newest published (array-first) is a DRAFT beta.3 — must be ignored; the highest
+        // PUBLISHED build is beta.2, and its manifest URL is the one returned.
+        let body = format!(
+            "[{},{},{}]",
+            release(
+                "v1.10.3-beta.3",
+                true,
+                true,
+                Some("https://x/beta3/latest.json")
+            ),
+            release(
+                "v1.10.3-beta.2",
+                false,
+                true,
+                Some("https://x/beta2/latest.json")
+            ),
+            release(
+                "v1.10.2",
+                false,
+                false,
+                Some("https://x/stable/latest.json")
+            ),
+        );
+        assert_eq!(
+            newest_release_manifest(&body),
+            Some((
+                "1.10.3-beta.2".to_string(),
+                "https://x/beta2/latest.json".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn beta_channel_lets_a_stable_release_supersede_the_betas() {
+        // Once the final 1.10.3 ships, it outranks every 1.10.3-beta.N and becomes the target.
+        let body = format!(
+            "[{},{}]",
+            release("v1.10.3", false, false, Some("https://x/final/latest.json")),
+            release(
+                "v1.10.3-beta.9",
+                false,
+                true,
+                Some("https://x/beta9/latest.json")
+            ),
+        );
+        assert_eq!(
+            newest_release_manifest(&body),
+            Some((
+                "1.10.3".to_string(),
+                "https://x/final/latest.json".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn beta_channel_skips_a_higher_release_that_carries_no_manifest() {
+        // A .deb-only (or manual) release with no latest.json is not installable via the
+        // updater — the resolver falls back to the highest build that IS installable, never
+        // stalling the channel on an un-updatable top release.
+        let body = format!(
+            "[{},{}]",
+            release("v1.10.4-beta.1", false, true, None),
+            release(
+                "v1.10.3-beta.2",
+                false,
+                true,
+                Some("https://x/beta2/latest.json")
+            ),
+        );
+        assert_eq!(
+            newest_release_manifest(&body),
+            Some((
+                "1.10.3-beta.2".to_string(),
+                "https://x/beta2/latest.json".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn beta_channel_none_on_empty_or_garbage() {
+        assert_eq!(newest_release_manifest("[]"), None);
+        assert_eq!(newest_release_manifest("not json"), None);
+        assert_eq!(newest_release_manifest(r#"{"not":"an array"}"#), None);
+        // A lone draft: nothing published ⇒ nothing to offer.
+        let only_draft = format!(
+            "[{}]",
+            release("v9.9.9-beta.1", true, true, Some("https://x/latest.json"))
+        );
+        assert_eq!(newest_release_manifest(&only_draft), None);
+        // Published but manifest-less ⇒ nothing installable.
+        let no_manifest = format!("[{}]", release("v1.2.3", false, false, None));
+        assert_eq!(newest_release_manifest(&no_manifest), None);
     }
 }

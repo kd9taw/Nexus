@@ -3343,6 +3343,31 @@ export function SettingsPanel({
           </fieldset>
           )}
 
+          {/* ---- App updates: the beta (pre-release) channel opt-in ---- */}
+          {tab === 'appearance' && (
+          <fieldset className="settings-section" id="settings-app-updates">
+            <legend>{t('settings.betaUpdates.legend')}</legend>
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.betaUpdates.label')}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!form.betaUpdates}
+                className={`toggle${form.betaUpdates ? ' on' : ''}`}
+                onClick={() => updateBool('betaUpdates', !form.betaUpdates)}
+                aria-label={
+                  form.betaUpdates
+                    ? t('settings.betaUpdates.aria.disable')
+                    : t('settings.betaUpdates.aria.enable')
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+              <span className="settings-hint">{t('settings.betaUpdates.hint')}</span>
+            </label>
+          </fieldset>
+          )}
+
           {/* ---- Operator & radio ---- */}
           {tab === 'station' && (
           <SettingsStation

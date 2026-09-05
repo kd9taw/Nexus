@@ -751,6 +751,9 @@ pub struct Settings {
     /// Field Day host can serve both at once.
     #[serde(default = "default_connect_web_port")]
     pub connect_web_port: u16,
+    /// Opt in to auto-update through beta (pre-release) builds; off = stable channel only.
+    #[serde(default)]
+    pub beta_updates: bool,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -3133,6 +3136,7 @@ impl Default for Settings {
             fd_scoreboard_port: default_fd_scoreboard_port(),
             connect_web: false, // same rule: exposing the station on the LAN is opt-in
             connect_web_port: default_connect_web_port(),
+            beta_updates: false, // stable channel by default; MUST match the serde default (false)
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),

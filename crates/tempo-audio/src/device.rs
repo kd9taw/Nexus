@@ -1139,6 +1139,10 @@ pub(crate) struct CaptureStream {
 ///
 /// A struct rather than seven parameters because [`dispatch_format!`] hands the same arguments to
 /// every arm, and because these travel together by nature: they are the taps on one capture stream.
+///
+/// `Clone` is cheap (every field is an `Arc`) and load-bearing: [`open_capture_with_fallback`] may
+/// build the capture stream twice, and each attempt needs its own callback with its own taps.
+#[derive(Clone)]
 struct RxTaps {
     /// The decoder's ring, drained by the radio loop.
     in_ring: Arc<SpscRing>,
@@ -1193,6 +1197,52 @@ fn sized_capture_buffer(supported: &cpal::SupportedBufferSize, rate_hz: u32) -> 
     }
 }
 
+/// Open a capture stream from `sized`, retrying once with [`cpal::BufferSize::Default`] if the
+/// device refuses the sized buffer.
+///
+/// [`sized_capture_buffer`] clamps into the range the device *declares* it supports — and that
+/// range is not always the truth. On some Linux capture devices (reported on Debian-13 trixie
+/// containers, 1.10.1) the declared max is looser than what ALSA enforces when the stream is
+/// actually built, so the clamped-but-still-too-large `Fixed` request is refused at build time.
+/// A refused capture stream takes the whole radio engine down before the operator has even
+/// configured a radio ("RADIO ENGINE STOPPED — Buffer size 4800 is not in the supported range
+/// 10..=3840"). `Default` is always accepted, so the degrade is a possible overrun — a log line,
+/// the very thing the sized buffer set out to reduce — never a dead engine.
+///
+/// `build` opens a stream at the given config with FRESH callbacks: it is called at most twice,
+/// and the retry must not reuse the first attempt's moved callbacks. The retry fires only when a
+/// `Fixed` buffer was requested (Linux); every other platform asks for `Default` already, so its
+/// shipped single-attempt behaviour is byte-identical.
+fn open_capture_with_fallback<S, E: std::fmt::Display>(
+    sized: cpal::StreamConfig,
+    mut build: impl FnMut(cpal::StreamConfig) -> Result<S, E>,
+) -> Result<S, String> {
+    let first = match build(sized) {
+        Ok(s) => return Ok(s),
+        Err(e) => e,
+    };
+    if !matches!(sized.buffer_size, cpal::BufferSize::Fixed(_)) {
+        // We asked ALSA to pick (or the first attempt failed for a reason a smaller buffer
+        // cannot fix) — nothing to relax, so surface the original failure unchanged.
+        return Err(first.to_string());
+    }
+    let mut relaxed = sized;
+    relaxed.buffer_size = cpal::BufferSize::Default;
+    match build(relaxed) {
+        Ok(s) => {
+            tempo_core::applog::warn(
+                "audio",
+                &format!(
+                    "capture: device refused the sized buffer ({first}); fell back to the ALSA \
+                     default buffer so the radio engine can run"
+                ),
+            );
+            Ok(s)
+        }
+        Err(second) => Err(second.to_string()),
+    }
+}
+
 /// The decode path's capture callback, once, for every sample format.
 ///
 /// ⚠️ REALTIME. No lock, no allocation, no logging — see the module header for the #172 inversion
@@ -1202,48 +1252,51 @@ fn build_rx_stream<T: DeviceSample + Send + 'static>(
     cfg: &cpal::SupportedStreamConfig,
     ch: usize,
     taps: RxTaps,
-    err: impl FnMut(cpal::Error) + Send + 'static,
+    err: impl FnMut(cpal::Error) + Clone + Send + 'static,
 ) -> Result<Stream, String> {
-    dev.build_input_stream(
-        capture_config(cfg),
-        move |data: &[T], _: &cpal::InputCallbackInfo| {
-            let mut dropped = 0u64;
-            // Read the monitor gate ONCE per callback (not per sample). When on, push each mono
-            // sample into the wait-free monitor ring — it never blocks or allocates and drops on
-            // overflow, so the decode path (this same callback) is never stalled by monitoring.
-            let monitoring = taps.mon_enabled.load(Ordering::Relaxed)
-                && !taps.mon_tx_mute.load(Ordering::Relaxed);
-            let g = f32::from_bits(taps.rx_gain.load(Ordering::Relaxed));
-            let mut sum_sq = 0.0f32;
-            let mut n = 0usize;
-            for frame in data.chunks(ch) {
-                // Fold to mono by AVERAGING the channels (× RX gain). Averaging keeps the signal
-                // phase-coherent across the whole FT8 window no matter how the rig's codec lays
-                // mono onto a stereo stream. Per-block "loudest lane" picking (0.8.9) thrashed L↔R
-                // on a hiss channel and shredded decodes on stereo interfaces (Flex DAX, Xiegu
-                // DE-19) — a quiet rig is handled by RX Gain, not by discarding a channel.
-                let m = frame.iter().map(|&s| s.to_unit()).sum::<f32>() / ch as f32 * g;
-                sum_sq += m * m;
-                n += 1;
-                if !taps.in_ring.push(m) {
-                    dropped += 1;
+    open_capture_with_fallback(capture_config(cfg), |cfg_out| {
+        let taps = taps.clone();
+        let err = err.clone();
+        dev.build_input_stream(
+            cfg_out,
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                let mut dropped = 0u64;
+                // Read the monitor gate ONCE per callback (not per sample). When on, push each mono
+                // sample into the wait-free monitor ring — it never blocks or allocates and drops on
+                // overflow, so the decode path (this same callback) is never stalled by monitoring.
+                let monitoring = taps.mon_enabled.load(Ordering::Relaxed)
+                    && !taps.mon_tx_mute.load(Ordering::Relaxed);
+                let g = f32::from_bits(taps.rx_gain.load(Ordering::Relaxed));
+                let mut sum_sq = 0.0f32;
+                let mut n = 0usize;
+                for frame in data.chunks(ch) {
+                    // Fold to mono by AVERAGING the channels (× RX gain). Averaging keeps the signal
+                    // phase-coherent across the whole FT8 window no matter how the rig's codec lays
+                    // mono onto a stereo stream. Per-block "loudest lane" picking (0.8.9) thrashed L↔R
+                    // on a hiss channel and shredded decodes on stereo interfaces (Flex DAX, Xiegu
+                    // DE-19) — a quiet rig is handled by RX Gain, not by discarding a channel.
+                    let m = frame.iter().map(|&s| s.to_unit()).sum::<f32>() / ch as f32 * g;
+                    sum_sq += m * m;
+                    n += 1;
+                    if !taps.in_ring.push(m) {
+                        dropped += 1;
+                    }
+                    // Tee to the waterfall producer (see rxtap.rs). Wait-free: atomics only, never
+                    // blocks, never allocates, drops on overflow — the same discipline the monitor ring
+                    // uses. UNGATED, unlike the monitor: the waterfall is always live, and an undrained
+                    // ring simply fills and drops.
+                    taps.tap_ring.push(m);
+                    if monitoring {
+                        taps.mon_ring.push(m);
+                    }
                 }
-                // Tee to the waterfall producer (see rxtap.rs). Wait-free: atomics only, never
-                // blocks, never allocates, drops on overflow — the same discipline the monitor ring
-                // uses. UNGATED, unlike the monitor: the waterfall is always live, and an undrained
-                // ring simply fills and drops.
-                taps.tap_ring.push(m);
-                if monitoring {
-                    taps.mon_ring.push(m);
-                }
-            }
-            update_rx_meter(&taps.rx_level, sum_sq, n);
-            record_rx_drops(dropped);
-        },
-        err,
-        None,
-    )
-    .map_err(|e| e.to_string())
+                update_rx_meter(&taps.rx_level, sum_sq, n);
+                record_rx_drops(dropped);
+            },
+            err,
+            None,
+        )
+    })
 }
 
 /// The voice mic's mono capture callback, once, for every format.
@@ -1258,19 +1311,20 @@ fn build_voice_stream<T: DeviceSample + Send + 'static>(
     ch: usize,
     ring: &Arc<Mutex<VecDeque<f32>>>,
 ) -> Result<Stream, String> {
-    let ring_cb = ring.clone();
-    dev.build_input_stream(
-        capture_config(cfg),
-        move |data: &[T], _: &cpal::InputCallbackInfo| {
-            let mut r = ring_cb.lock().unwrap_or_else(|e| e.into_inner());
-            for frame in data.chunks(ch) {
-                r.push_back(frame.iter().map(|&s| s.to_unit()).sum::<f32>() / ch as f32);
-            }
-        },
-        err_fn,
-        None,
-    )
-    .map_err(|e| e.to_string())
+    open_capture_with_fallback(capture_config(cfg), |cfg_out| {
+        let ring_cb = ring.clone();
+        dev.build_input_stream(
+            cfg_out,
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                let mut r = ring_cb.lock().unwrap_or_else(|e| e.into_inner());
+                for frame in data.chunks(ch) {
+                    r.push_back(frame.iter().map(|&s| s.to_unit()).sum::<f32>() / ch as f32);
+                }
+            },
+            err_fn,
+            None,
+        )
+    })
 }
 
 impl CaptureStream {
@@ -3191,5 +3245,86 @@ mod resolve_diagnostics {
             super::sized_capture_buffer(&SupportedBufferSize::Unknown, 48_000),
             BufferSize::Default
         );
+    }
+
+    fn fixed_4800() -> cpal::StreamConfig {
+        cpal::StreamConfig {
+            channels: 1,
+            sample_rate: 48_000,
+            buffer_size: cpal::BufferSize::Fixed(4_800),
+        }
+    }
+
+    /// THE 1.10.1 CONTAINER BUG. cpal's declared buffer max can be looser than what ALSA
+    /// enforces at build time, so the clamped `Fixed(4800)` is refused even though it was
+    /// inside the declared range — and a refused capture stream kills the radio engine before
+    /// a radio is even configured. The retry must degrade to `Default` (always accepted).
+    /// Hardware-free: the build step is faked to lie exactly the way the container did.
+    #[test]
+    fn capture_fallback_retries_default_when_the_sized_buffer_is_refused() {
+        use cpal::BufferSize;
+        use std::cell::RefCell;
+        let seen: RefCell<Vec<BufferSize>> = RefCell::new(Vec::new());
+        let got = super::open_capture_with_fallback(fixed_4800(), |cfg| {
+            seen.borrow_mut().push(cfg.buffer_size);
+            match cfg.buffer_size {
+                BufferSize::Fixed(_) => {
+                    Err("Buffer size 4800 is not in the supported range 10..=3840")
+                }
+                BufferSize::Default => Ok("stream"),
+            }
+        });
+        assert_eq!(got, Ok("stream"));
+        // Built twice, sized first then the Default fallback — in that order.
+        assert_eq!(
+            *seen.borrow(),
+            vec![BufferSize::Fixed(4_800), BufferSize::Default]
+        );
+    }
+
+    /// POSITIVE CONTROL: if the fallback ALSO fails, the helper must surface the failure, not
+    /// hide it behind a phantom stream — a helper that always returned `Ok` would pass the
+    /// test above and fail this one.
+    #[test]
+    fn capture_fallback_surfaces_the_failure_when_even_default_is_refused() {
+        let got: Result<&str, String> =
+            super::open_capture_with_fallback(fixed_4800(), |_cfg| Err("device is gone"));
+        assert_eq!(got, Err("device is gone".to_string()));
+    }
+
+    /// The sized stream builds on the first try (the normal case) → keep it, one attempt only,
+    /// buffer untouched. No wasteful second open, no Default downgrade for a device that was fine.
+    #[test]
+    fn capture_fallback_keeps_the_sized_stream_when_it_builds() {
+        use cpal::BufferSize;
+        use std::cell::Cell;
+        let calls = Cell::new(0u32);
+        let got = super::open_capture_with_fallback(fixed_4800(), |cfg| {
+            calls.set(calls.get() + 1);
+            assert_eq!(cfg.buffer_size, BufferSize::Fixed(4_800));
+            Ok::<_, &str>("stream")
+        });
+        assert_eq!(got, Ok("stream"));
+        assert_eq!(calls.get(), 1);
+    }
+
+    /// When the request was already `Default` (non-Linux, or a device that declared no range),
+    /// there is nothing to relax: a failure surfaces on the first attempt with no pointless retry.
+    #[test]
+    fn capture_fallback_does_not_retry_a_request_that_was_already_default() {
+        use cpal::{BufferSize, StreamConfig};
+        use std::cell::Cell;
+        let cfg_default = StreamConfig {
+            channels: 1,
+            sample_rate: 48_000,
+            buffer_size: BufferSize::Default,
+        };
+        let calls = Cell::new(0u32);
+        let got: Result<&str, String> = super::open_capture_with_fallback(cfg_default, |_cfg| {
+            calls.set(calls.get() + 1);
+            Err("still broken")
+        });
+        assert_eq!(got, Err("still broken".to_string()));
+        assert_eq!(calls.get(), 1);
     }
 }

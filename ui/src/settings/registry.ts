@@ -488,6 +488,13 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'pota', 'setup wizard', 'field day mode'],
   },
   {
+    id: 'app-updates',
+    label: 'App updates',
+    tab: 'appearance',
+    keywords: ['beta', 'update', 'pre-release', 'prerelease', 'channel', 'stable',
+      'auto update', 'early access'],
+  },
+  {
     id: 'accessibility',
     label: 'Accessibility & eyes-free',
     tab: 'appearance',

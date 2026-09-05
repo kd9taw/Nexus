@@ -1124,7 +1124,7 @@ export function Logbook({
             <label className="logbook-field">
               <span>{t('logbook.field.when.label')}</span>
               <input
-                className="settings-input"
+                className="settings-input logbook-when"
                 type="datetime-local"
                 value={draft.whenUtc}
                 onChange={(e) => setField('whenUtc', e.target.value)}

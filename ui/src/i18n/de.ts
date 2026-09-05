@@ -113,6 +113,12 @@ export const DE: PartialCatalog = {
   "settings.fdClub.discover.empty": "In 2 s nichts gehört — gleiches Netz? Manche WLANs blockieren die Suche; Host-Adresse stattdessen eintippen.",
   "settings.fdClub.discover.pick.label": "{{event}} — {{host}}",
   "settings.fdClub.discover.pick.title": "{{host}} als Beitrittsadresse übernehmen",
+  "settings.betaUpdates.legend": "App-Updates",
+  "settings.betaUpdates.label": "Beta-Updates (Vorabversionen) erhalten",
+  "settings.betaUpdates.hint":
+    "Wenn aktiviert, bietet der Updater Vorabversionen an — neuere Funktionen, aber weniger getestet. Deaktiviert bleiben nur stabile Versionen.",
+  "settings.betaUpdates.aria.enable": "Beta-Updates aktivieren",
+  "settings.betaUpdates.aria.disable": "Beta-Updates deaktivieren",
   "settings.connectWeb.legend": "Connect auf dem Fernseher",
   "settings.connectWeb.label": "Connect in diesem Netzwerk bereitstellen",
   "settings.connectWeb.hint": "Stellt die vollständige Connect-Ansicht bereit — Karte mit allen Ebenen, Panels, Bandöffnungen — nur lesend, für jeden Browser im Netzwerk: Shack-TV, Tablet, Handy. Nichts lässt sich darüber ändern.",

@@ -860,21 +860,25 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           ver="${tag#v}"
+          # A prerelease tag (v1.10.3-beta.1) heads to the same BASE version the artifacts and
+          # tauri.conf.json carry (1.10.3); strip the -suffix for those cross-checks. ver/tag keep
+          # the suffix for the release title and the latest.json version.
+          base_ver="${ver%%-*}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
           # The tag must match the version in tauri.conf.json — the single source of truth
           # every artifact is stamped from. A mismatch means someone forgot to bump.
           conf=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
-          [ "$conf" = "$ver" ] || { echo "tag $tag ($ver) != tauri.conf.json ($conf)"; exit 1; }
+          [ "$conf" = "$base_ver" ] || { echo "tag $tag (base $base_ver) != tauri.conf.json ($conf)"; exit 1; }
           # And every artifact filename must carry that exact version — catches a stale
           # artifact from a cached/retried job sneaking into the release.
           for f in dist/*; do
             case "$(basename "$f")" in
-              *"$ver"*) : ;;
-              *) echo "artifact does not carry version $ver: $f"; exit 1 ;;
+              *"$base_ver"*) : ;;
+              *) echo "artifact does not carry version $base_ver: $f"; exit 1 ;;
             esac
           done
-          echo "All artifacts stamped $ver:"; ls -la dist/
+          echo "All artifacts stamped $base_ver:"; ls -la dist/
 
       - name: Assemble release notes
         run: |
@@ -945,9 +949,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # A SemVer prerelease tag (any hyphen, e.g. -beta.N) publishes as a GitHub pre-release so
+          # it never becomes "Latest" and downstream leaves the stable feeds alone; a plain X.Y.Z is
+          # explicitly marked --latest.
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "Nexus ${{ steps.ver.outputs.ver }}" \
             --notes-file dist/NOTES.md \
+            $( case "${{ steps.ver.outputs.tag }}" in *-*) echo --prerelease ;; *) echo --latest ;; esac ) \
             dist/Nexus_* dist/Nexus-Manual.pdf dist/Nexus-Manual.epub dist/SHA256SUMS.txt \
             $( [ -f dist/latest.json ] && echo dist/latest.json )
 

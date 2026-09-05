@@ -2924,6 +2924,8 @@ export interface Settings {
   /** Serve Connect as a read-only page on the LAN. The toggle IS the opt-in. */
   connectWeb?: boolean
   connectWebPort?: number
+  /** Opt in to auto-update through beta (pre-release) builds; off = stable channel only. */
+  betaUpdates?: boolean
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number
@@ -3287,6 +3289,9 @@ export interface AppSnapshot {
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
   /** Bumped by an inbound UDP Clear — panes erase on change. */
   clearTick?: number
+  /** Bumped every time a QSO is logged, by any path (backend auto-log included).
+   * App fires the "clear DX call after logging" wipe on change. */
+  loggedTick?: number
   /** Bumped each time a spot is worked — App navigates to `workView`'s cockpit
    * on change (lets a pop-out window's click land the main window there). */
   workTick?: number
