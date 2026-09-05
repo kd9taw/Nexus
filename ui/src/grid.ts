@@ -9,6 +9,7 @@ export interface LatLon {
 }
 
 export function gridToLatLon(grid: string): LatLon | null {
+  if (!grid) return null // defensive: an absent grid is "no location", never a crash
   const g = grid.trim().toUpperCase()
   if (g.length < 4) return null
   const A = 'A'.charCodeAt(0)
@@ -171,12 +172,12 @@ export interface Azimuth {
  * lives inside the P.533 engine and is not a display helper.
  */
 export function azimuthTo(
-  myGrid: string,
+  myGrid: string | null | undefined,
   peerGrid: string | null | undefined,
   entity: string | null | undefined,
   centroids?: ReadonlyMap<string, LatLon> | null,
 ): Azimuth | null {
-  const me = gridToLatLon(myGrid)
+  const me = myGrid ? gridToLatLon(myGrid) : null
   if (!me) return null // no origin ⇒ no bearing, on every surface at once
   const them = peerGrid ? gridToLatLon(peerGrid) : null
   if (them) return { deg: bearingDeg(me, them), approx: false }

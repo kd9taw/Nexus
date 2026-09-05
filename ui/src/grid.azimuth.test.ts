@@ -123,4 +123,16 @@ describe('backendAzimuth admits a bearing the backend already measured', () => {
     expect(backendAzimuth(Number.NaN, 100)).toBeNull()
     expect(backendAzimuth(90, Number.NaN)).toBeNull()
   })
+
+  // An absent ORIGIN grid must return null, never throw. `snap.mygrid` is undefined until
+  // the operator sets their grid, and the callbook lookup runs async — an unguarded
+  // `gridToLatLon(undefined).trim()` there is an UNHANDLED REJECTION that reds the whole
+  // suite while every assertion still "passes" (1.10.3 shipped with exactly that).
+  it('returns null for an absent origin grid, and never throws', () => {
+    expect(azimuthTo(undefined, 'FN31', 'United States')).toBeNull()
+    expect(azimuthTo(null, 'FN31', 'United States')).toBeNull()
+    expect(azimuthTo('', 'FN31', 'United States')).toBeNull()
+    // and a valid origin with an absent peer/entity still yields null, not a throw
+    expect(azimuthTo('EN52', undefined, undefined)).toBeNull()
+  })
 })
