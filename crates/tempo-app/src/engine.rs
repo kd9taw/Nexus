@@ -4386,6 +4386,17 @@ impl Engine {
     }
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
+        // THE FT-710 SCOPE OPT-IN GOING OFF is the second moment the held scope state stops
+        // describing anything — the first is a radio switch (`set_active_radio`). Read BEFORE the
+        // new settings land, because after the assignment the old answer is gone and the edge is
+        // unrecoverable. Only a true→false transition clears: turning it ON must not wipe a mode
+        // the loop has already reported, and an unrelated save must not either.
+        // Read the FLAT mirror, not the profile. Saving the radio you are currently USING goes
+        // through the flat form (`Settings::yaesu_rf_scope`, and its doc says why the mirror is
+        // load-bearing), and `apply_settings` deliberately keeps the engine's own roster — so the
+        // incoming `radios` do NOT carry the operator's change for the active rig. Reading the
+        // profile here made the clear never fire, which is what its test caught.
+        let scope_was_on = self.settings.yaesu_rf_scope;
         // A settings save can rewrite anything the TX gate reads (dial, mode,
         // offsets, license class) — an over planned before it must not key
         // (commit_tx checks the generation).
@@ -4677,6 +4688,14 @@ impl Engine {
         } else if !self.settings.qsy_enabled && self.qsy.enabled {
             let _ = self.qsy.disable();
         }
+        // The opt-in edge, using the value read at the top of this function. Mirrors the clear on
+        // `set_active_radio`: after the switch-off, `scope_mode_code` and the derived FIX start
+        // describe a source that is no longer feeding, and the position select renders a stale
+        // code as a confident "Fix" on a radio whose scope is now off.
+        let scope_now = self.settings.yaesu_rf_scope;
+        if scope_was_on && !scope_now {
+            self.clear_scope_state();
+        }
     }
 
     /// Re-enter Field Day if the persisted master switch (`fd_active`) left it
@@ -4867,6 +4886,13 @@ impl Engine {
         // active — a fail-CLOSED bug, and the inverse of what the gate is for.
         self.rig_rx_ranges = None;
         self.rig_refused_dial_mhz = None;
+        // The FT-710 scope state belongs to the RADIO too, and for a sharper reason than the
+        // ranges above: only one radio in a roster is an FT-710, so carrying it across a switch
+        // shows the outgoing rig's sweep mode and derived FIX start under a rig that has neither.
+        // The position select reads `scope_mode_code` directly, so a stale code renders as a
+        // confident "Fix" on a radio with no scope at all. Cleared, not recomputed: the loop
+        // restates it within a tick when the new radio actually has one.
+        self.clear_scope_state();
         // Fold the OUTGOING radio's live flat CAT/audio edits into its own profile BEFORE we mirror
         // the new radio in — otherwise an unsaved flat change made while this radio was active (e.g. a
         // live Pwr/tx_level tweak) is discarded by `sync_flat_from_active` below. `active_radio` still
@@ -14707,6 +14733,18 @@ impl Engine {
     pub fn set_scope_fix_start(&mut self, mhz: Option<f64>) {
         self.scope_fix_start_mhz = mhz;
     }
+    /// Drop everything the FT-710 scope reported. Called when the radio changes and when the
+    /// per-radio opt-in goes off — the two moments after which the held values describe a source
+    /// that is no longer feeding.
+    ///
+    /// One place, so the two callers cannot drift: a switch that cleared the mode but kept the FIX
+    /// start would leave the derived-start caveat attached to nothing.
+    pub fn clear_scope_state(&mut self) {
+        self.scope_mode_code = None;
+        self.scope_fix_start_mhz = None;
+        self.scope_error = None;
+    }
+
     pub fn set_scope_error(&mut self, err: Option<String>) {
         self.scope_error = err;
     }
@@ -21586,6 +21624,98 @@ mod tests {
         e.set_operating_mode("cw", false);
         e.set_frequency(7.030, "40m", "USB");
         assert!(e.tx_allowed(), "Technician CW on 40 m is allowed");
+    }
+
+    /// The FT-710 scope state must not survive a RADIO SWITCH.
+    ///
+    /// Only one rig in a roster is an FT-710, so a mode code carried across the switch is read by
+    /// the position select as the NEW radio's — and it renders as a confident "Fix" on a rig with
+    /// no scope at all. Maintainer review, kd9taw/Nexus#147.
+    #[test]
+    fn switching_radio_drops_the_scope_state_of_the_one_left_behind() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut st = Settings::default();
+        st.radios = vec![
+            crate::settings::RadioProfile {
+                id: 0,
+                yaesu_rf_scope: true,
+                ..Default::default()
+            },
+            crate::settings::RadioProfile {
+                id: 1,
+                ..Default::default()
+            },
+        ];
+        st.active_radio = 0;
+        e.apply_restored_settings(st);
+        e.set_scope_mode_code(Some(0x32)); // FIX
+        e.set_scope_fix_start(Some(14.0));
+        e.set_scope_error(Some("needs LibFT4222".into()));
+        assert_eq!(
+            e.snapshot().radio.scope_mode_code,
+            Some(0x32),
+            "fixture never had scope state — the rest proves nothing"
+        );
+
+        e.set_active_radio(1);
+
+        let r = e.snapshot().radio;
+        assert_eq!(
+            r.scope_mode_code, None,
+            "the mode code followed the operator to the other rig"
+        );
+        assert_eq!(
+            r.scope_fix_start_mhz, None,
+            "the derived FIX start outlived its radio"
+        );
+        assert_eq!(
+            r.scope_error, None,
+            "the other radio inherited a scope error it cannot cause"
+        );
+    }
+
+    /// ...nor an OPT-IN switched off, the other moment the held values stop describing a live
+    /// source. Turning it ON must not clear, and neither must an unrelated save.
+    #[test]
+    fn turning_the_scope_opt_in_off_drops_the_state_it_reported() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Drives the FLAT mirror as well as the profile: a save of the ACTIVE radio arrives
+        // through the flat form, and `apply_settings` keeps the engine's roster, so a fixture that
+        // sets only the profile changes nothing the engine will read.
+        let profile = |scope: bool| {
+            let mut st = Settings::default();
+            st.yaesu_rf_scope = scope;
+            st.radios = vec![crate::settings::RadioProfile {
+                id: 0,
+                yaesu_rf_scope: scope,
+                ..Default::default()
+            }];
+            st.active_radio = 0;
+            st
+        };
+        e.apply_restored_settings(profile(true));
+        e.set_scope_mode_code(Some(0x32));
+        e.set_scope_fix_start(Some(14.0));
+
+        // CONTROL: a save that leaves the opt-in ON must keep the state. Without this the test
+        // passes on an implementation that clears on every save.
+        e.apply_settings(profile(true));
+        assert_eq!(
+            e.snapshot().radio.scope_mode_code,
+            Some(0x32),
+            "a save that did not touch the opt-in wiped the scope state"
+        );
+
+        e.apply_settings(profile(false)); // the operator unticks it
+        let r = e.snapshot().radio;
+        assert_eq!(
+            r.scope_mode_code, None,
+            "the mode code survived the opt-in going off"
+        );
+        assert_eq!(
+            r.scope_fix_start_mhz, None,
+            "the FIX start survived the opt-in going off"
+        );
     }
 
     #[test]

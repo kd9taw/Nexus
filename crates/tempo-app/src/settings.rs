@@ -4903,7 +4903,7 @@ mod tests {
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
             "rotctldPort": 4533, "nativeScope": "auto", "flexRadioIp": "",
             "flexNativePan": false, "flexNativeAudio": false,
-            "ampModel": "", "ampPort": ""
+            "ampModel": "", "ampPort": "", "ampFollowBand": false
         }"#;
         let patch: RadioProfilePatch =
             serde_json::from_str(json).expect("the form's payload parses");
