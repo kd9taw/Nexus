@@ -3876,6 +3876,8 @@ export const JA: PartialCatalog = {
   "operate.header.layout.classic.title": "クラシック — WSJT-X 型レイアウト（バンドアクティビティ＋受信周波数のペア、ロスターは脇）",
   "operate.header.layout.roster.label": "ロスター",
   "operate.header.layout.roster.title": "ロスター — GridTracker 型レイアウト（コールロスター中心）",
+  "operate.header.map.label": "マップ",
+  "operate.header.map.title": "POTA アクティビティマップを別ウィンドウで開きます",
   "operate.header.spot.aria": "コールサインを DXクラスターにスポット",
   "operate.header.spot.title": "コールサインを DXクラスターにスポットします（ポップアップが開きます — コール・周波数・コメント）",
   "operate.header.popOut.aria": "Operate を別ウィンドウで開く",

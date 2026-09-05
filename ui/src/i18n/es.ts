@@ -2007,6 +2007,8 @@ export const ES: PartialCatalog = {
   "operate.header.layout.classic.title": "Clásica — disposición de WSJT-X (pareja Actividad de banda + Frecuencia Rx, Estaciones al lado)",
   "operate.header.layout.roster.label": "Estaciones",
   "operate.header.layout.roster.title": "Estaciones — disposición de GridTracker (la lista de estaciones manda)",
+  "operate.header.map.label": "Mapa",
+  "operate.header.map.title": "Abrir el mapa de actividad POTA en su propia ventana",
   "operate.header.modes.aria": "Modo de operación",
   "operate.header.msk144Period.aria": "Periodo T/R de MSK144 (segundos)",
   "operate.header.msk144Period.title": "Periodo T/R — 15 s es el caballo de batalla en 6 m; 30 s facilita la búsqueda profunda en 2 m",

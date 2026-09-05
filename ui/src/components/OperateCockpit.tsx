@@ -1086,6 +1086,14 @@ export function OperateCockpit({
               {t('operate.header.layout.roster.label')}
             </button>
           </div>
+          <button
+            type="button"
+            className="clt-opt"
+            onClick={() => void openPanelWindow('operatemap')}
+            title={t('operate.header.map.title')}
+          >
+            {t('operate.header.map.label')}
+          </button>
           {/* No MemoryStrip here, deliberately (operator ruling, 2026-08-16). Memories are
               repeaters, nets and calling frequencies — Phone/CW things. In this header a
               favorite chip was worse than clutter: one click retuned the rig off the FT8

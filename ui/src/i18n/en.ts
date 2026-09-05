@@ -6539,6 +6539,9 @@ export const EN = {
   'operate.header.layout.roster.label': 'Roster',
   'operate.header.layout.roster.title': 'Roster — GridTracker layout (Call Roster dominant)',
 
+  'operate.header.map.label': 'Map',
+  'operate.header.map.title': 'Open the POTA activity map in its own window',
+
   'operate.header.spot.aria': 'Spot a callsign to the DX cluster',
   'operate.header.spot.title':
     'Spot a callsign to the DX cluster (opens a popup — call, frequency, comment)',

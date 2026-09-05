@@ -3559,6 +3559,8 @@ export const DE: PartialCatalog = {
   "operate.header.layout.classic.title": "Klassisch — Layout wie WSJT-X (Paar aus Bandaktivität + RX-Frequenz, Liste daneben)",
   "operate.header.layout.roster.label": "Roster",
   "operate.header.layout.roster.title": "Roster — Layout wie GridTracker (Call Roster dominiert)",
+  "operate.header.map.label": "Karte",
+  "operate.header.map.title": "Die POTA-Aktivitätskarte in einem eigenen Fenster öffnen",
   "operate.header.spot.aria": "Ein Rufzeichen im DX-Cluster spotten",
   "operate.header.spot.title": "Ein Rufzeichen im DX-Cluster spotten (öffnet ein Fenster — Rufzeichen, Frequenz, Kommentar)",
   "operate.header.popOut.aria": "Operate in einem eigenen Fenster öffnen",
