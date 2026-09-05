@@ -115,6 +115,7 @@ import {
   testCat,
   setOperatingMode,
   workSpot,
+  setHuntTarget,
   setLicenseClass,
   stopQsoRecording,
   pointRotatorAtCall,
@@ -1791,7 +1792,11 @@ export default function App() {
   // board (workSpot → rig jumps band+mode+freq, cockpit opens). The source-reported
   // mode routes the cockpit: CW→CW, SSB/FM→Phone, FT8/unknown→Digital.
   const handleWorkMapSpot = useCallback(
-    (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => {
+    (t: { call: string; band: string; mode: string | null; freqMhz: number | null; program?: string; reference?: string }) => {
+      // Tag the hunt target BEFORE the QSY — same order as the POTA/SOTA board's own
+      // setHuntTarget-then-QSY split (handleHuntSpot below) — so a park worked from the
+      // map credits the activator too, not just the QSY.
+      if (t.program && t.reference) void setHuntTarget(t.call, t.program, t.reference).catch(() => {})
       handleWorkNeeded({
         call: t.call,
         entity: '',

@@ -117,8 +117,17 @@ interface Props {
   /** Connect intent preset — applied (soft) on change. Omitted = no preset. */
   intent?: MapIntent
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
-   * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off. */
-  onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void
+   * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off.
+   * `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one, so the
+   * handler can also tag the hunt target — omitted for a plain spot with no park. */
+  onWorkSpot?: (t: {
+    call: string
+    band: string
+    mode: string | null
+    freqMhz: number | null
+    program?: string
+    reference?: string
+  }) => void
   /** Click a satellite icon → open it in the Satellites section (passes, polar
    * plot, frequencies). Omitted = sat icons are hover-only. */
   onSelectSat?: (name: string) => void

@@ -40,6 +40,7 @@ import {
   archiveConversation,
   setFrequency,
   workSpot,
+  setHuntTarget,
   subscribeSnapshot,
   callStation,
   setTier,
@@ -90,7 +91,17 @@ import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
 import { useMotion } from './useMotion'
 
-type SpotTarget = { call: string; band: string; mode: string | null; freqMhz: number | null }
+// `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one — see
+// `onWorkSpot` below, which is the PRIMARY surface for tagging the hunt target from a
+// torn-off window (the 'connect' branch wires this straight into MapView).
+type SpotTarget = {
+  call: string
+  band: string
+  mode: string | null
+  freqMhz: number | null
+  program?: string
+  reference?: string
+}
 type OperateLayout = 'classic' | 'roster'
 
 // The club board's SYNC-OFF panel. Inline off the shared tokens (the FieldDayView
@@ -317,6 +328,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     apply(archiveConversation(peer))
   }
   const onWorkSpot = (t: SpotTarget) => {
+    // Tag the hunt target BEFORE the QSY — same order as PotaSotaView's own
+    // setHuntTarget-then-QSY split (handleHunt) — so a POTA map pop-out (a later task)
+    // credits the activator too, not just the QSY.
+    if (t.program && t.reference) void setHuntTarget(t.call, t.program, t.reference).catch(() => {})
     const mode = modeClassOf(t.mode).toLowerCase() as 'cw' | 'phone' | 'digital'
     if (t.freqMhz != null) apply(workSpot(mode, t.freqMhz, t.band, t.call))
     else qsyBand(t.band)
