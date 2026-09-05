@@ -12174,6 +12174,9 @@ fn set_blocked_calls(
 fn panel_default_inner(slug: &str) -> (f64, f64) {
     match slug {
         "operate" => (1140.0, 760.0),
+        // The POTA map pop-out: a bare MapView needs the same room the Operate cockpit
+        // does, not the generic 760×660 — a cramped globe is the whole feature undersold.
+        "operatemap" => (1140.0, 760.0),
         "bandmapPhone" | "bandmapCw" => (420.0, 780.0),
         "fieldday" => (560.0, 760.0), // the scoreboard: operator + tiles + sections board
         // The club band board is set in glance type (it is watched across the tent, not
@@ -12245,6 +12248,7 @@ async fn open_panel_window(
         "fieldday" => "Nexus — Field Day".to_string(),
         "fdclub" => "Nexus — Club band board".to_string(),
         "pota" => "Nexus — POTA / SOTA".to_string(),
+        "operatemap" => "Nexus — Map".to_string(),
         "waterfall" => "Nexus — Waterfall".to_string(),
         "bandmapPhone" => "Nexus — Band map (Phone)".to_string(),
         "bandmapCw" => "Nexus — Band map (CW)".to_string(),

@@ -1531,6 +1531,11 @@ button.nb-chip:hover {
 .connect-map > .map-view {
   flex: 1;
 }
+/* The operatemap pop-out mounts a bare MapView with no .connect-map wrapper — same
+   flex-fill rule, direct child of the detached window's own flex column instead. */
+.app.detached > .map-view {
+  flex: 1;
+}
 .connect-strip {
   grid-area: strip;
   display: grid;

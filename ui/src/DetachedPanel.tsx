@@ -72,6 +72,7 @@ import { NeededPanel } from './components/NeededPanel'
 import { PotaSotaView } from './components/PotaSotaView'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
+import { MapView } from './components/MapView'
 import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
 import { Toasts } from './components/Toasts'
@@ -777,6 +778,40 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onLayoutMode={changeLayout}
           panels={operatePanels}
           active
+        />
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'operatemap') {
+    // The POTA map pop-out — a bare MapView, no Connect chrome, with POTA hunting on by
+    // default: `intent="pota"` is what turns the Parks (activator) layer on (see
+    // MapView's INTENT_PRESETS), the same mechanism the Connect map's intent picker uses.
+    // Gated on the first snapshot like the 'pota' arm above — MapView needs snap.mygrid/
+    // snap.stations to place anything. `onWorkSpot` is the same tune-and-tag path the
+    // 'connect' arm wires in: it tags the hunt target (program+reference present) before
+    // the atomic QSY, so double-clicking a park here credits the activator too.
+    if (!snap) {
+      return (
+        <DetachedShell>
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        </DetachedShell>
+      )
+    }
+    return (
+      <DetachedShell>
+        <MapView
+          myGrid={snap.mygrid ?? ''}
+          theme={theme}
+          stations={snap.stations ?? []}
+          prop={prop}
+          selectedCall={selected}
+          onSelectCall={onSelect}
+          needByCall={needByCall}
+          onWorkSpot={onWorkSpot}
+          intent="pota"
         />
       </DetachedShell>
     )
