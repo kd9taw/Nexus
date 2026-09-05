@@ -276,6 +276,10 @@ auto-track.
   rotator attached; **Other Hamlib model #…** takes any model number `rotctl -l`
   knows. Entries say **(az)** or **(az/el)** where the backend declares it, so
   you can tell an azimuth-only model from a full az/el one before you buy into it.
+  One board worth naming: **DF9GR's Easy-Rotor-Control V4** speaks three protocols,
+  chosen in its own Service Tool. Configured the way its manual recommends
+  (GS-232B, 9600) it belongs on **Yaesu GS-232B**; only in DCU-1 mode does it
+  belong on the **DF9GR ERC** entry, which runs at 4800.
 - **Rotator port & baud** — the serial port the controller is on, and its line
   rate. **The baud is per MODEL**, and picking your model fills in the right one:
   SPID Rot2Prog runs at 600, Rot1Prog at 1200, and the Idiom Press Rotor-EZ,
@@ -329,14 +333,26 @@ because the exciter keeps keying and the drive passes straight through.
   it is spoken to, and the KPA remembers its own rate, so Nexus finds it by asking
   at each of the four rates Elecraft documents.
 
+- **Follow the radio's band** — step the amplifier to whatever band you tune to,
+  without being asked. **Off unless you turn it on**, and appears only once a model
+  and port are set. It never moves the amplifier while you are transmitting, and it
+  steps one band at a time, reading where the amplifier actually is after each step
+  rather than assuming it arrived — so a step the amplifier ignored, or one you undid
+  at its front panel, is simply seen and re-issued. On a band your amplifier does not
+  have it does nothing at all rather than picking the nearest.
+  ⚠️ **If your amplifier already follows the radio through its own band-data cable —
+  which is how most SPE installations are wired — leave this off.** The hardware is
+  doing the same job, and two things steering one band is worse than either alone.
+
 Per radio, like the rotator: an SO2R station with an amplifier on each radio
 configures each one on its own radio, and the pane follows the radio you are on.
 
-> ⚠️ **Not confirmed on real hardware yet.** Both protocols are written from the
-> manufacturers' published specifications and no reading has been checked against
-> an amplifier on a bench. Two things are deliberately left off the screen rather
-> than guessed: the band, because the SPE band numbering is an inference from two
-> published endpoints and your rig already shows you the band; and any °C/°F letter
+> ⚠️ **The SPE side is confirmed on hardware; the Elecraft side is not.** An
+> EXPERT 1.5K-FA was linked on 2026-08-29 — it identifies itself as `15K`, and its
+> readings and controls were checked against the amplifier's own front panel. The
+> KPA500/KPA1500 path is written from Elecraft's published references and has never
+> had an amplifier on the other end of the port, reading half included. One thing is
+> still deliberately left off the screen rather than guessed: any °C/°F letter
 > on an SPE temperature, because the SPE protocol does not say which scale the
 > number is in — the amplifier reports whatever its own display is set to, so the
 > pane shows `41°` with no letter. The Elecraft temperature *is* documented as
@@ -974,6 +990,16 @@ master computer and point Nexus at its IP and port.
   first launch, then auto-refreshes weekly from hamradiotools.io; a live decode
   grid refines it for rovers.
 
+### Country file (DXCC)
+
+- **Update country file** — "The AD1C cty.dat country file maps callsigns to
+  DXCC entities — the country on decode rows, the Needed board and the log."
+  A copy ships built in, so entity resolution always works offline; Nexus
+  checks weekly for a newer AD1C release and downloads it automatically. The
+  resolver is fixed for a running session, so a downloaded update **applies at
+  the next launch** — the status line shows the active release date and notes
+  when a newer download is waiting.
+
 ### Confirmations
 
 **LoTW**
@@ -1131,6 +1157,46 @@ Class and Section **start empty on purpose** and the station won't enter Field
 Day until both are set — a banner says so while the mode is on and they're blank.
 See [Contesting & POTA/SOTA](contesting-pota.md).
 
+### Who's who at this event
+
+A club site answers "who are you?" three different ways, and they are not the
+same answer. This section puts all three in one place, in the order broad to
+narrow.
+
+- **Callsign on the air** — the call that goes out and onto every contact you
+  log. At a club event that's the *club's* call, the same one at every position
+  on site. It is the same setting as **Callsign** on the Station tab.
+- **Position name** ("CW tent") — which tent, trailer or table this station is.
+  It names you on the club band board so everyone can see which position is on
+  which band, and it never goes on the air. Nexus refuses a save that turns on
+  hosting or sets a join address while this is blank, and falls back to your
+  callsign rather than an internal id if it somehow reaches the board empty.
+- **Operator at the key** — whoever is running this position right now. Change
+  it every time someone takes the seat; their contacts are stamped with it
+  (ADIF `OPERATOR`) so the club can split the log by operator afterwards. Blank
+  means the callsign above. It is the same setting as **Operator at the key** on
+  the Station tab and the OPERATOR box on the Field Day dashboard.
+
+Nothing here is a second copy: change one of them anywhere and it changes
+everywhere.
+
+### Field Day Club Sync
+
+Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
+port on the site LAN — the only time Nexus listens beyond the local computer,
+and only while the toggle is on); every other position joins it with **Find
+club events** or by typing the host's `host:port` into **Join event at**. Each
+position's contacts stream to the host as they're logged, and the host pushes
+back the club score, a live band board, and the club-wide dupe list that
+powers the while-typing dupe warning. **Event name** is what joining positions
+see; the name this station shows under on the band board is **Position name**,
+one section up. Contacts logged while the network is down are re-sent
+automatically on reconnect, and if the host PC dies you can enable hosting on
+any other position — everyone re-joins and nothing is lost. The host's Field
+Day view gains **Club Cabrillo / Club ADIF** exports of the merged,
+deduplicated log.
+Full walkthrough: [Contesting & POTA/SOTA](contesting-pota.md).
+
 ---
 
 ## Appearance
@@ -1153,6 +1219,13 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 (The theme picker — dark / light / amber night-vision — lives in the app chrome,
 not this tab.)
 
+### Connect on a TV
+
+<!-- TODO(settings-reference): "Connect on a TV" (registry id `connect-web`) has no prose yet.
+     Write it here; scripts/gen-settings-reference.mjs carries it across from now on. -->
+
+_Undocumented so far._
+
 ### Features
 
 Turn sections on and off, and pick a goal profile.
@@ -1172,6 +1245,10 @@ Turn sections on and off, and pick a goal profile.
 - The **Contesting** group hosts the **Field Day mode** master switch (the same
   setting as [Contesting ▸ Field Day Setup](#field-day-setup)). Turning it on
   with no Class or Section set jumps you to the Contesting tab to fill them in.
+
+### App updates
+
+Turn on **Receive beta (pre-release) updates** to have the updater offer pre-release builds — newer features sooner, but less tested; leave it off to stay on stable releases only.
 
 ### Accessibility & eyes-free
 

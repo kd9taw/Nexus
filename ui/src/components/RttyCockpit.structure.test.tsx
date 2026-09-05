@@ -66,6 +66,11 @@ vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),
 }))
+// The log strip is stubbed for the same reason PSK's, Phone's and CW's are in their own
+// structure suites: this file is a SHELL census, and the real LogEntry reaches the logbook,
+// the park directory and the callbook on mount. That the strip is actually WIRED — the right
+// ADIF mode, the Field Day class/section route — is RttyCockpit.log.test.tsx.
+vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
 vi.mock('./Waterfall', () => ({
   // Capture the cadence prop: the liveliness pin below asserts RTTY runs the waterfall at the
@@ -118,8 +123,16 @@ afterEach(cleanup)
 describe('RttyCockpit pane shell', () => {
   it('the shell holds no child kinds beyond the contract (design3 §5 rule 1)', async () => {
     // RTTY's sanctioned kinds: header chrome, the waterfall, the keyer-error banner,
-    // the ONE shell-owned content frame, and the TX dock. Anything else is a new
+    // the shell-owned content frames, and the TX dock. Anything else is a new
     // shell-level sibling and must update this census deliberately.
+    //
+    // ⚠️ TWO CONTENT FRAMES SINCE THE FIELD DAY LOGGING FIX, and this is that deliberate
+    // update — PSK's, word for word (its own census note carries the same paragraph). The
+    // second is the LOG strip: this cockpit rendered no LogEntry at all, so a station worked
+    // by hand had nowhere to go, and on Field Day — which is all-mode, RTTY included — there
+    // was no way to enter the class/section exchange that scores. It stays out of the ⊞
+    // vocabulary (RTTY's is {stream}, so the frame gets no ✕) and it hosts no stop control;
+    // the dock assertions below are what hold that half.
     state.current = { ...state.current, keyerError: 'no FSK port' }
     await renderCockpit()
     const shell = document.querySelector('main.layout.single.rtty-cockpit')!
@@ -131,7 +144,9 @@ describe('RttyCockpit pane shell', () => {
       ).toBe(true)
     }
     expect(document.querySelector('.cw-keyer-warn'), 'warn banner did not render — census untested').not.toBeNull()
-    expect(shell.querySelectorAll(':scope > .pane-frame').length).toBe(1)
+    // Named, not just counted: a count alone goes green on the stream frame rendering twice.
+    const frames = Array.from(shell.querySelectorAll(':scope > .pane-frame'))
+    expect(frames.map((f) => f.getAttribute('data-pane'))).toEqual(['stream', 'log'])
     expect(shell.querySelectorAll(':scope > .cockpit-txdock').length).toBe(1)
   })
 

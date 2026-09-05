@@ -4988,7 +4988,7 @@ dependencies = [
 
 [[package]]
 name = "tempo"
-version = "1.9.1"
+version = "1.10.3"
 dependencies = [
  "gdk",
  "keyring",
@@ -5047,6 +5047,8 @@ version = "0.2.0"
 dependencies = [
  "microfft",
  "modes",
+ "serde",
+ "serde_json",
  "tempo-fast",
  "wspr",
 ]
@@ -5066,6 +5068,8 @@ version = "0.2.0"
 name = "tempo-net"
 version = "0.2.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "socket2",
 ]
 

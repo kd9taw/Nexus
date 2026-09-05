@@ -37,13 +37,20 @@ import {
   uploadLotwReport,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
-import { qrzPushQso, clublogPushQso, hrdlogPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
+import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, openQrzPage, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 
 interface Props {
   /** Default band / freq / mode for new manual entries (from the radio). */
   defaultBand: string
   defaultFreqMhz: number
   defaultMode: string
+  /** Cross-view handoff from a cockpit's recall card (#192): open with this callsign already
+   *  in the search box. `ts` is a nonce, not data — it is what makes a re-click of the SAME
+   *  call refire after the operator has typed over the box (the `pendingWork` idiom). */
+  focusCall?: { call: string; ts: number } | null
+  /** Called once the handoff has been applied, so the parent can clear it — otherwise a later
+   *  trip to the Logbook through the nav would re-apply a filter nobody asked for. */
+  onConsumeFocusCall?: () => void
 }
 
 interface DraftQso {
@@ -105,6 +112,8 @@ const QRZ_LABEL = 'QRZ'
 const EQSL_LABEL = 'eQSL'
 const CLUBLOG_LABEL = 'CL'
 const HRDLOG_LABEL = 'HL'
+// Technical product token, not prose — same ruling as the labels above.
+const WRL_LABEL = 'WRL'
 const QSL_MENU_LABEL = 'QSL▸'
 
 /** Parse a `datetime-local` value as UTC seconds. The browser's own Date parsing treats a
@@ -207,6 +216,8 @@ export function Logbook({
   defaultBand,
   defaultFreqMhz,
   defaultMode,
+  focusCall,
+  onConsumeFocusCall,
 }: Props) {
   const [log, setLog] = useState<LoggedQso[]>([])
   const [showForm, setShowForm] = useState(false)
@@ -256,6 +267,17 @@ export function Logbook({
   // Filtering runs against a DEFERRED copy of the search so typing stays responsive on a 10k log —
   // the input updates instantly; the (memoized) filter/sort catches up a frame later.
   const deferredSearch = useDeferredValue(search)
+  // A previous-contact row in a cockpit's recall card hands the callsign over here (#192,
+  // kr4fqg). Seeding the SEARCH box, not a row selection: a `LoggedQso` has no stable id and
+  // the edit/delete API addresses rows by index, so an index carried across a view switch is
+  // stale by construction. The matcher below already covers `call`, so this needs no new
+  // filtering path — and because it lands in the visible box, the operator can see what is
+  // being filtered and clear it with the ✕ that is already there.
+  useEffect(() => {
+    if (!focusCall) return
+    setSearch(focusCall.call)
+    onConsumeFocusCall?.()
+  }, [focusCall, onConsumeFocusCall])
   // Filter to contacts still lacking an award-eligible confirmation (the DX
   // chaser's "who do I still need a card/LoTW from" view).
   const [needsConfirmOnly, setNeedsConfirmOnly] = useState(false)
@@ -537,6 +559,30 @@ export function Logbook({
     }
   }
 
+  // Manual (re-)push of one logged QSO to World Radio League — same role as the
+  // HRDLog button. A live-logging service, not an ARRL confirmation source.
+  const onPushWrl = async (q: LoggedQso) => {
+    try {
+      const r = await wrlPushQso(q)
+      if (r.result === 'accepted') {
+        pushToast(t('logbook.push.wrl.ok', { call: q.call }), 'success', 4000)
+      } else if (r.result === 'duplicate') {
+        pushToast(t('logbook.push.wrl.duplicate', { call: q.call }), 'success', 5000)
+      } else if (r.result === 'pending') {
+        // Transient by contract (rate limit / server trouble) — the QSO is fine.
+        pushToast(t('logbook.push.wrl.unavailable', { call: q.call }), 'info', 6000)
+      } else {
+        pushToast(
+          t('logbook.push.wrl.rejected', { call: q.call, reason: r.message ?? r.result }),
+          'error',
+          6000,
+        )
+      }
+    } catch (e) {
+      pushToast(t('logbook.push.wrl.failed', { detail: String(e) }), 'error', 6000)
+    }
+  }
+
   // Record an operator-declared QSL request on a contact (a card/request WAS sent,
   // via bureau/direct/electronic). This is NOT a confirmation — it stays in the
   // needs-confirmation filter until the partner actually confirms.
@@ -792,7 +838,7 @@ export function Logbook({
           <input
             ref={fileRef}
             type="file"
-            accept=".adi,.adif,text/plain"
+            accept=".adi,.adif,.txt"
             style={{ display: 'none' }}
             onChange={onImportFile}
           />
@@ -802,7 +848,7 @@ export function Logbook({
           <input
             ref={syncRef}
             type="file"
-            accept=".adi,.adif,text/plain"
+            accept=".adi,.adif,.txt"
             style={{ display: 'none' }}
             onChange={onSyncFile}
           />
@@ -1078,7 +1124,7 @@ export function Logbook({
             <label className="logbook-field">
               <span>{t('logbook.field.when.label')}</span>
               <input
-                className="settings-input"
+                className="settings-input logbook-when"
                 type="datetime-local"
                 value={draft.whenUtc}
                 onChange={(e) => setField('whenUtc', e.target.value)}
@@ -1401,6 +1447,15 @@ export function Logbook({
                     aria-label={t('logbook.row.pushHrdlog.aria', { call: q.call })}
                   >
                     {HRDLOG_LABEL}
+                  </button>
+                  <button
+                    type="button"
+                    className="log-rowbtn"
+                    onClick={() => void onPushWrl(q)}
+                    title={t('logbook.row.pushWrl.title', { call: q.call })}
+                    aria-label={t('logbook.row.pushWrl.aria', { call: q.call })}
+                  >
+                    {WRL_LABEL}
                   </button>
                   {/* QSL handling for the row: mark a request SENT (once), and record the
                       paper card that came BACK. Operator-declared, not a confirmation.

@@ -631,6 +631,14 @@ pub struct Settings {
     /// table). Stored as ids so the table can evolve.
     #[serde(default)]
     pub fd_bonuses: Vec<String>,
+    /// PLANNED bonus ids — what the club set out to earn, not what it earned.
+    /// A sibling list rather than a second meaning for [`Self::fd_bonuses`],
+    /// which stays exactly the EARNED set the score is made of: no scoring
+    /// path, export or club report may ever read this one. `#[serde(default)]`
+    /// so an older settings file loads with nothing planned and scores the
+    /// same points it always did.
+    #[serde(default)]
+    pub fd_bonuses_planned: Vec<String>,
     /// N3FJP real-time push: each FD QSO lands in the club's N3FJP master log
     /// over its TCP API. Empty host = off.
     #[serde(default)]
@@ -685,6 +693,67 @@ pub struct Settings {
     /// the QSO's operator; empty = fall back to `mycall`.
     #[serde(default)]
     pub fd_operator: String,
+    /// Host a Nexus↔Nexus club event on this box. **This toggle IS the LAN
+    /// opt-in**: while on, the fdsync listener binds 0.0.0.0 (the app's one
+    /// deliberate non-loopback inbound socket — data-plane only, see
+    /// `tempo_net::fdsync`) and a discovery beacon broadcasts once a second.
+    /// Default OFF; everything else keeps the loopback discipline.
+    #[serde(default)]
+    pub fd_host_enable: bool,
+    /// TCP port the club-sync host listens on (and the beacon advertises).
+    #[serde(default = "default_fd_host_port")]
+    pub fd_host_port: u16,
+    /// Operator-facing club event name ("W9ABC Field Day") — the beacon and
+    /// the welcome carry it; also names the host's event journal.
+    #[serde(default)]
+    pub fd_event_name: String,
+    /// Join a club event at `host:port` (manual entry, or filled by the
+    /// "Find club events" discovery). Empty = not joining. Ignored while
+    /// [`Self::fd_host_enable`] is on — the host joins itself over loopback.
+    #[serde(default)]
+    pub fd_join_addr: String,
+    /// Friendly position label for the club band board ("CW tent").
+    #[serde(default)]
+    pub fd_position_name: String,
+    /// This machine's club-sync position identity: 8 hex chars, generated
+    /// once at startup when empty and persisted. Non-edited (no UI control):
+    /// QSO ids are `(this, seq)`, so changing it would re-push every contact
+    /// as new. Also suffixes the FD ADIF journal, which is what stops two
+    /// instances sharing a settings dir from clobbering each other's backup.
+    #[serde(default)]
+    pub fd_position_id: String,
+    /// Serve the read-only spectator scoreboard — a self-contained web page of
+    /// the club score for a TV/projector on the site LAN. **This toggle IS the
+    /// LAN opt-in**: while on, `tempo_app::fd_scoreboard`'s GET/HEAD-only
+    /// server binds `0.0.0.0:fd_scoreboard_port` (threat model in that
+    /// module's header — the data is what the event broadcasts on the air).
+    /// Default OFF; shows real data only in the host role.
+    #[serde(default)]
+    pub fd_scoreboard: bool,
+    /// TCP port the spectator scoreboard serves on ("73 73" — unassigned,
+    /// memorable for hams).
+    #[serde(default = "default_fd_scoreboard_port")]
+    pub fd_scoreboard_port: u16,
+    /// Serve Connect as a read-only web page for a shack TV or a browser on the
+    /// house network. **This toggle IS the LAN opt-in**: while on,
+    /// `tempo_app::connect_web` serves through the same GET/HEAD-only server on
+    /// `0.0.0.0:connect_web_port`.
+    ///
+    /// ⚠️ Its threat model is NOT the spectator scoreboard's. That one is defensible
+    /// partly because a contest log is already broadcast in clear on the air; this
+    /// page is the station's own conditions picture. It carries the callsign, the
+    /// grid and the propagation nowcast, and deliberately NOT the dial frequency,
+    /// the log or the needs board — a payload-shape test in `connect_web` pins that.
+    /// Default OFF, and the Settings copy must say what it exposes and to whom.
+    #[serde(default)]
+    pub connect_web: bool,
+    /// TCP port the Connect web page serves on. Distinct from the scoreboard's so a
+    /// Field Day host can serve both at once.
+    #[serde(default = "default_connect_web_port")]
+    pub connect_web_port: u16,
+    /// Opt in to auto-update through beta (pre-release) builds; off = stable channel only.
+    #[serde(default)]
+    pub beta_updates: bool,
     /// Periodically transmit a presence beacon ("CQ <call> <grid>") in Chat
     /// mode. **Off by default** — the app starts passive (hunt-and-pounce):
     /// it listens and only transmits when the operator acts (sends a message,
@@ -969,6 +1038,33 @@ pub struct Settings {
     /// unconfigured shows nothing, configured-and-silent shows "—").
     #[serde(default)]
     pub amp_port: String,
+    /// Step the amplifier to the band the radio is on, without being asked. **Off by default.**
+    ///
+    /// ⚠️ OFF IS DELIBERATE, AND NOT JUST CAUTION. The standing rule in this app is that Nexus
+    /// notifies and never moves the station unattended; an amplifier is a slaved accessory
+    /// rather than the thing making the QSO, which is why this is offered at all. But it is
+    /// still Nexus putting a command on a kilowatt's wire with nobody's hand on it, so the
+    /// operator turns it on rather than discovering it.
+    ///
+    /// ⭐ AND THE TWO FAMILIES DO NOT CARRY THE SAME RISK. Elecraft sets a band ABSOLUTELY
+    /// (`^BNbb;`) against a table Elecraft publishes in full, so following is one command whose
+    /// result is read back on the next poll. SPE can only STEP (`BAND-`/`BAND+`), and the middle
+    /// of its ladder is derived from two published endpoints plus one measured point rather than
+    /// published — so following there is several commands walking a table that has never been
+    /// confirmed end to end on hardware. Both honour this switch; only one of them is proven.
+    ///
+    /// ⚠️ AND ON MOST SPE STATIONS THIS SHOULD STAY OFF FOR A REASON THAT IS NOT ABOUT RISK.
+    /// An SPE is normally wired to follow the radio through its own band-data cable, in
+    /// hardware. Where that cable is fitted, this setting is a SECOND thing steering one band —
+    /// redundant at best, and at worst two controllers disagreeing about where the amplifier
+    /// should be. Reported by the operator on 2026-08-29, whose own 1.5K-FA is wired exactly
+    /// that way; it is also why the SPE ladder's middle is still unmeasured here, since testing
+    /// the step would have meant unplugging a cable that is doing the job correctly.
+    ///
+    /// The setting's own hint says this, in all four catalogs. It is the difference between a
+    /// switch an operator can judge and one they have to guess at.
+    #[serde(default)]
+    pub amp_follow_band: bool,
     /// ADVANCED override: an external `rotctld` daemon address `host:port`
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
@@ -1129,7 +1225,9 @@ pub struct Settings {
     // --- network (WSJT-X parity) ---
     /// Emit the WSJT-X-compatible UDP protocol (for JTAlert/GridTracker/loggers).
     pub wsjtx_udp: bool,
-    /// UDP address to send WSJT-X messages to (WSJT-X default is 127.0.0.1:2237).
+    /// UDP address(es) to send WSJT-X messages to (WSJT-X default is 127.0.0.1:2237). ONE
+    /// OR MANY, comma-separated — `127.0.0.1:2237, 129.212.188.3:2237` feeds a local tool and
+    /// a remote contest scorer at once, which WSJT-X's single sink cannot.
     pub wsjtx_udp_addr: String,
     /// Append every decode to a WSJT-X-format `ALL.TXT` decode log in the app data dir —
     /// the running record loggers/GridTracker tail. Off by default.
@@ -1661,6 +1759,23 @@ pub struct Settings {
     pub alert_cq: bool,
     /// Alert when a new (not previously heard) station is decoded.
     pub alert_new: bool,
+    /// Beep when a park is freshly spotted on the air — App's own poll of
+    /// `get_ota_map_spots`, gated on this setting (no poll at all while off).
+    pub pota_new_activation_alert: bool,
+    /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
+    /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
+    /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
+    /// absent, and this matches it byte for byte). Opt-in, exactly as WSJT-X ships it.
+    #[serde(default)]
+    pub log_reports_to_comments: bool,
+    /// Show the "Confirm" tier — worked-but-unconfirmed award slots (LoTW confirmation
+    /// opportunities) — on the Needed board and as decode/roster chips. Default ON:
+    /// the tier ships lit and this is the opt-OUT for operators who chase contacts,
+    /// not confirmations (operator ask, 2026-09-01). `default = "default_on"`, not a
+    /// bare default: a settings.json from an older build must read TRUE, or the
+    /// upgrade would silently turn the tier off for everyone.
+    #[serde(default = "default_on")]
+    pub alert_confirm_tier: bool,
     /// Band scope for new-DXCC alerts: "off" | "hf" | "vhf" | "all". `alert_new`
     /// stays the master gate (backward compat); these scopes refine it per type.
     #[serde(default = "default_alert_scope_all")]
@@ -1843,7 +1958,25 @@ pub struct Settings {
     /// NOT the HRD Logbook UDP push above). Off by default. The station callsign is
     /// `mycall`; the upload code lives in the OS keychain. HRDLog.net is not an ARRL
     /// confirmation source — an upload here never earns DXCC/WAS credit.
+    /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
+    /// several QTH profiles ("if not logged in, if multiple accounts with same
+    /// callsign" — their spec); such an account cannot authenticate at all without
+    /// it (field report, 2026-09-01). Empty for the single-profile majority, whose
+    /// requests are byte-identical to before.
+    #[serde(default)]
+    pub eqsl_qth_nickname: String,
     pub hrdlog_upload: bool,
+    /// Auto-push each logged QSO to World Radio League (`POST /v1/contacts`).
+    /// Flipped on by saving a WRL API key, off by clearing it — the credential IS
+    /// the opt-in, like every other connector.
+    #[serde(default)]
+    pub wrl_upload: bool,
+    /// The WRL logbook contacts go to. Resolved ONCE at key-save time (`GET /v1/me`,
+    /// falling back to the account's single logbook) and stored here — an id, not a
+    /// secret, so Settings not the keychain. Empty = omit `logbookId` and let the
+    /// account's default take it.
+    #[serde(default)]
+    pub wrl_logbook_id: String,
 
     /// Auto-forward EVERY logged QSO (not just Field Day) to N3FJP over the same
     /// `n3fjp_host`/`n3fjp_port` — N3FJP ACLog / everyday general logging. ADDDIRECT with
@@ -2064,6 +2197,19 @@ fn default_qrz_sync_hours() -> u32 {
 
 fn default_lotw_auto_upload_hours() -> u32 {
     6
+}
+
+fn default_fd_host_port() -> u16 {
+    tempo_net::fdsync::DEFAULT_TCP_PORT
+}
+
+fn default_fd_scoreboard_port() -> u16 {
+    7373
+}
+
+/// One past the scoreboard, so a Field Day host can serve both boards at once.
+fn default_connect_web_port() -> u16 {
+    7374
 }
 
 fn default_fd_power() -> u32 {
@@ -2421,6 +2567,7 @@ pub struct RadioProfile {
     pub rotator_baud: u32,
     pub amp_model: String,
     pub amp_port: String,
+    pub amp_follow_band: bool,
     pub rotator_host: String,
     /// UNIQUE across enabled profiles (validated) — each radio's own rotctld TCP port.
     pub rotctld_port: u16,
@@ -2528,6 +2675,7 @@ pub struct RadioProfilePatch {
     pub rotator_baud: u32,
     pub amp_model: String,
     pub amp_port: String,
+    pub amp_follow_band: bool,
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
@@ -2599,6 +2747,7 @@ impl RadioProfilePatch {
         p.rotator_port = self.rotator_port;
         p.amp_model = self.amp_model;
         p.amp_port = self.amp_port;
+        p.amp_follow_band = self.amp_follow_band;
         p.rotator_baud = self.rotator_baud;
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
@@ -2696,6 +2845,7 @@ impl Default for RadioProfile {
             rotator_baud: default_rotator_baud(),
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             rotctld_port: 4533,
             bands: Vec::new(),
@@ -3041,6 +3191,7 @@ impl Default for Settings {
             fd_event: String::new(), // "" = arrlfd
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
+            fd_bonuses_planned: Vec::new(),
             n3fjp_host: String::new(),
             n3fjp_port: 1100,
             n3fjp_use_enter: true,
@@ -3053,6 +3204,17 @@ impl Default for Settings {
             // every operator outside Wisconsin).
             fd_section: String::new(),
             fd_operator: String::new(),
+            fd_host_enable: false, // hosting exposes a LAN port — operator-only opt-in
+            fd_host_port: default_fd_host_port(),
+            fd_event_name: String::new(),
+            fd_join_addr: String::new(),
+            fd_position_name: String::new(),
+            fd_position_id: String::new(), // generated (8-hex) at startup, then persisted
+            fd_scoreboard: false,          // serving a LAN page is an operator-only opt-in
+            fd_scoreboard_port: default_fd_scoreboard_port(),
+            connect_web: false, // same rule: exposing the station on the LAN is opt-in
+            connect_web_port: default_connect_web_port(),
+            beta_updates: false, // stable channel by default; MUST match the serde default (false)
             beacon: false,
             harq_enabled: true,
             ptt_method: "vox".to_string(),
@@ -3110,6 +3272,7 @@ impl Default for Settings {
             rotator_baud: default_rotator_baud(),
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             // Satellite Doppler is OFF and unmapped by default: a station
             // with no satellite interest must never have its dial moved.
@@ -3265,6 +3428,8 @@ impl Default for Settings {
             psk_rx_auto_arm: true,
             rtty_rx_auto_arm: true,
             alert_my_call: true,
+            alert_confirm_tier: true, // the tier ships lit; the setting is the opt-out
+            log_reports_to_comments: false, // WSJT-X parity: dBtoComments defaults false
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
             blocked_calls: Vec::new(),
@@ -3274,6 +3439,7 @@ impl Default for Settings {
             // New-DXCC / new-grid alerts: ON by default — these are the "new ones"
             // worth chasing (not per-decode spam, which we never alert on).
             alert_new: true,
+            pota_new_activation_alert: false,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             b4_match_mode: false,
@@ -3303,7 +3469,10 @@ impl Default for Settings {
             clublog_api_key: String::new(),
             clublog_upload: false,
             eqsl_upload: false,
+            eqsl_qth_nickname: String::new(),
             hrdlog_upload: false,
+            wrl_upload: false, // the credential is the opt-in
+            wrl_logbook_id: String::new(),
             n3fjp_upload: false,
             cloudlog_url: String::new(),
             cloudlog_station_id: String::new(),
@@ -3395,6 +3564,7 @@ impl Settings {
             // operator had already configured before profiles existed.
             amp_model: self.amp_model.clone(),
             amp_port: self.amp_port.clone(),
+            amp_follow_band: self.amp_follow_band,
             rotctld_port: 4533,
             bands: Vec::new(),
             last_dial_mhz: self.dial_mhz,
@@ -3444,6 +3614,29 @@ impl Settings {
             .iter()
             .filter(|p| p.enabled && p.bands.iter().any(|b| b.eq_ignore_ascii_case(band)))
             .count() as u32
+    }
+
+    /// Does any ENABLED radio cover `band`? Drives the band dropdowns (#184).
+    ///
+    /// Same coverage semantics as [`Self::radio_for_band`]: an empty `bands` list is a
+    /// catch-all ("this rig covers everything"), a non-empty one is an explicit claim.
+    ///
+    /// ⚠️ TRUE WHEN NOTHING IS CONFIGURED, and that is the whole safety of this filter. A
+    /// station with no radios yet — the first-run wizard, or an operator who has not added one
+    /// — must see the full band list, not an empty dropdown. Likewise any catch-all rig makes
+    /// every band covered, so the single-radio majority is unaffected: the filter can only
+    /// remove a band when EVERY enabled radio has named its bands and none of them named this
+    /// one. It is a DISPLAY filter and must never be consulted by the transmit gate; privileges
+    /// decide what may be keyed, this decides only what is worth offering.
+    pub fn any_radio_covers(&self, band: &str) -> bool {
+        let mut any_enabled = false;
+        for p in self.radios.iter().filter(|p| p.enabled) {
+            any_enabled = true;
+            if p.bands.is_empty() || p.bands.iter().any(|b| b.eq_ignore_ascii_case(band)) {
+                return true;
+            }
+        }
+        !any_enabled
     }
 
     /// Which radio should own `band` (Dual-Radio P4 auto band-routing). Returns `Some(id)` only when a
@@ -4351,6 +4544,7 @@ mod tests {
             rotator_baud: 19_200,
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
@@ -4489,6 +4683,7 @@ mod tests {
             rotator_baud: 0,
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -4519,6 +4714,38 @@ mod tests {
              patch is silently dropped on Save. Add it to the patch + apply_to, or list it in \
              NOT_EDITABLE with a reason."
         );
+    }
+
+    /// The advisory UI matches assistance sources BY THEIR DISPLAY LABELS
+    /// (`FieldDayStatus.assistance_on` carries `assistance_sources()`'s labels;
+    /// `FdAdvisories.tsx` string-matches the spotting/cluster ones). A rename on
+    /// either side would silently kill the match — same drift class as the
+    /// sections mirror, same include_str! cure.
+    #[test]
+    fn the_advisory_ui_matches_real_assistance_source_labels() {
+        let ts = include_str!("../../../ui/src/components/FdAdvisories.tsx");
+        let labels: Vec<&str> = Settings::default()
+            .assistance_sources()
+            .iter()
+            .map(|&(label, _)| label)
+            .collect();
+        // Control: the Rust list is the full known set, so a miss below is a
+        // rename, not a parser hole.
+        assert_eq!(
+            labels.len(),
+            3,
+            "assistance_sources changed shape: {labels:?}"
+        );
+        for needed in ["DX cluster / RBN", "PSK Reporter needs"] {
+            assert!(
+                labels.contains(&needed),
+                "{needed:?} left assistance_sources() — update FdAdvisories.tsx's match list too"
+            );
+            assert!(
+                ts.contains(&format!("'{needed}'")),
+                "FdAdvisories.tsx no longer matches {needed:?} — it would miss a live source"
+            );
+        }
     }
 
     /// ⭐ THE OTHER SIDE OF THE SAME DRIFT — and the half that was missing while the guard
@@ -4604,6 +4831,7 @@ mod tests {
             rotator_baud: 0,
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -4850,6 +5078,7 @@ mod tests {
             rotator_baud: p.rotator_baud,
             amp_model: String::new(),
             amp_port: String::new(),
+            amp_follow_band: false,
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
@@ -5617,6 +5846,67 @@ mod tests {
     }
 
     #[test]
+    fn band_coverage_hides_a_band_only_when_every_rig_named_its_bands() {
+        // #184: akhepcat runs an FTdx10 (HF..4m) and an FT-817 (2m/70cm) and expected the band
+        // dropdown to stop offering 23 cm, which neither rig can reach. The filter may only
+        // subtract when EVERY enabled rig has named its bands — anything else and an operator
+        // ends up staring at an empty dropdown.
+        let mut s = three_radio_shack();
+        let ids: Vec<u32> = s.radios.iter().map(|p| p.id).collect();
+        for (i, id) in ids.iter().enumerate() {
+            let p = s.radios.iter_mut().find(|p| p.id == *id).unwrap();
+            p.enabled = true;
+            p.bands = if i == 0 {
+                vec!["20m".into(), "4m".into()]
+            } else {
+                vec!["2m".into(), "70cm".into()]
+            };
+        }
+        assert!(
+            s.any_radio_covers("20m"),
+            "an explicitly claimed band is offered"
+        );
+        assert!(s.any_radio_covers("4m"), "…on either rig");
+        assert!(s.any_radio_covers("2m"));
+        assert!(
+            !s.any_radio_covers("23cm"),
+            "no rig reaches 23 cm, so it is not worth offering"
+        );
+        // Case matters to nobody.
+        assert!(s.any_radio_covers("70CM"));
+
+        // ONE catch-all rig restores everything — the single-radio majority is untouched.
+        let first = ids[0];
+        s.radios.iter_mut().find(|p| p.id == first).unwrap().bands = Vec::new();
+        assert!(
+            s.any_radio_covers("23cm"),
+            "a rig that claims nothing claims everything"
+        );
+
+        // A disabled rig is not coverage…
+        s.radios.iter_mut().find(|p| p.id == first).unwrap().enabled = false;
+        assert!(
+            !s.any_radio_covers("23cm"),
+            "a disabled catch-all does not count"
+        );
+
+        // …and with NOTHING enabled the filter must open all the way up rather than
+        // leaving a fresh install with an empty band list.
+        for id in &ids {
+            s.radios.iter_mut().find(|p| p.id == *id).unwrap().enabled = false;
+        }
+        assert!(
+            s.any_radio_covers("23cm"),
+            "no radios configured = no opinion, show every band"
+        );
+        s.radios.clear();
+        assert!(
+            s.any_radio_covers("23cm"),
+            "…and likewise with an empty roster"
+        );
+    }
+
+    #[test]
     fn radios_covering_counts_only_explicit_claims() {
         let mut s = three_radio_shack();
         // FTdx10 (id 0) is a catch-all; the 9700 and 991A both claim 2 m explicitly.
@@ -5826,6 +6116,47 @@ mod tests {
         assert!(json.contains("\"dataModesPlainSsb\":true"), "{json}");
         let back: Settings = serde_json::from_str(&json).unwrap();
         assert!(back.data_modes_plain_ssb);
+    }
+
+    /// THE UPGRADE PATH for the Field Day bonus PLAN. `fd_bonuses` has always meant
+    /// EARNED — the score reads it — and the planned list is a new sibling rather than a
+    /// reinterpretation of it, precisely so an existing settings.json keeps scoring the
+    /// same points it scored yesterday. Proven by deserializing a blob that predates the
+    /// key, not by trusting the `#[serde(default)]`.
+    #[test]
+    fn an_older_settings_file_loads_with_its_earned_bonuses_and_no_plan() {
+        let before: Settings = serde_json::from_str(
+            r#"{"mycall":"KD9TAW","fdClass":"3A","fdPowerMult":5,
+                "fdBonuses":["w1aw-bulletin","web-submission"]}"#,
+        )
+        .expect("an older settings file must still load");
+        assert_eq!(
+            before.fd_bonuses,
+            vec!["w1aw-bulletin".to_string(), "web-submission".to_string()],
+            "the EARNED list is untouched — this is what the score is made of"
+        );
+        assert!(
+            before.fd_bonuses_planned.is_empty(),
+            "a file written before planning existed has planned nothing; inheriting the \
+             earned list as a plan would be a lie about what the club intends"
+        );
+        assert!(Settings::default().fd_bonuses_planned.is_empty());
+
+        // And it round-trips once set — a field that serialises but never deserialises
+        // would lose the club's Friday plan at the first restart.
+        let mut planned = Settings::default();
+        planned.fd_bonuses_planned = vec!["youth".into(), "safety-officer".into()];
+        let json = serde_json::to_string(&planned).unwrap();
+        assert!(
+            json.contains("\"fdBonusesPlanned\":[\"youth\",\"safety-officer\"]"),
+            "{json}"
+        );
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.fd_bonuses_planned, planned.fd_bonuses_planned);
+        assert!(
+            back.fd_bonuses.is_empty(),
+            "planning never fills the earned list"
+        );
     }
 
     /// The setting lives on the RADIO, so switching rigs must switch the behaviour with it —
@@ -6319,6 +6650,64 @@ mod tests {
         assert_eq!(s.ptt_method, "vox"); // default
         assert_eq!(s.rigctld_port, 4534); // default — broker owns 4532, rotctld 4533 (#53)
         assert_eq!(s.wsjtx_udp_addr, "127.0.0.1:2237"); // default
+    }
+
+    #[test]
+    fn fd_sync_settings_round_trip_and_default_safe() {
+        // A pre-sync settings file: hosting OFF (the LAN bind is opt-in and
+        // an upgrade must never open a port), the default port, no identity.
+        let partial = r#"{"mycall":"W9XYZ","mygrid":"EN37"}"#;
+        let s: Settings = serde_json::from_str(partial).unwrap();
+        assert!(!s.fd_host_enable, "an upgrade never turns hosting on");
+        assert_eq!(s.fd_host_port, 42073);
+        assert_eq!(s.fd_join_addr, "");
+        assert_eq!(s.fd_position_id, "");
+
+        let path = std::env::temp_dir()
+            .join("tempo_settings_fdsync")
+            .join("settings.json");
+        let s = Settings {
+            fd_host_enable: true,
+            fd_host_port: 42111,
+            fd_event_name: "W9ABC Field Day".into(),
+            fd_join_addr: "192.168.1.10:42073".into(),
+            fd_position_name: "CW tent".into(),
+            fd_position_id: "a1b2c3d4".into(),
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert!(back.fd_host_enable);
+        assert_eq!(back.fd_host_port, 42111);
+        assert_eq!(back.fd_event_name, "W9ABC Field Day");
+        assert_eq!(back.fd_join_addr, "192.168.1.10:42073");
+        assert_eq!(back.fd_position_name, "CW tent");
+        assert_eq!(back.fd_position_id, "a1b2c3d4");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn fd_scoreboard_settings_default_off_and_round_trip() {
+        // A pre-scoreboard settings file: the board OFF (serving a LAN page is
+        // opt-in and an upgrade must never open a port), the default port.
+        let partial = r#"{"mycall":"W9XYZ","mygrid":"EN37"}"#;
+        let s: Settings = serde_json::from_str(partial).unwrap();
+        assert!(!s.fd_scoreboard, "an upgrade never turns the board on");
+        assert_eq!(s.fd_scoreboard_port, 7373);
+
+        let path = std::env::temp_dir()
+            .join("tempo_settings_fdboard")
+            .join("settings.json");
+        let s = Settings {
+            fd_scoreboard: true,
+            fd_scoreboard_port: 7474,
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert!(back.fd_scoreboard);
+        assert_eq!(back.fd_scoreboard_port, 7474);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

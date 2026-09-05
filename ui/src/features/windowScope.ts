@@ -168,6 +168,22 @@ export function surfaceGet(base: string): string | null {
   }
 }
 
+/**
+ * Whether THIS surface has written its OWN value for `base` — with NO inheritance fallback,
+ * unlike [`surfaceGet`]. The two are indistinguishable through `surfaceGet`, which by design
+ * returns the primary surface's value while this one is empty; a surface DEDICATED to a single
+ * purpose needs to tell "the operator set this here" apart from "another surface set it for
+ * something else", and only its own key answers that. Storage-safe: a blocked/unavailable store
+ * reads as "nothing of its own", never a throw.
+ */
+export function surfaceHasOwn(base: string): boolean {
+  try {
+    return window.localStorage.getItem(surfaceKey(base)) != null
+  } catch {
+    return false
+  }
+}
+
 /** Write a per-surface value. Never touches another surface's key. */
 export function surfaceSet(base: string, value: string): void {
   try {

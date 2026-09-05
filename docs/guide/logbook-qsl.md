@@ -77,14 +77,26 @@ nothing moves at any window size where the form already fits.
    hold; its toast reports the two separately, so "0 imported, 24,163 existing QSOs
    updated" is the normal and correct result for a confirmation download.
 
-### Push a single QSO to QRZ / ClubLog / HRDLog
+### Push a single QSO to QRZ / ClubLog / HRDLog / WRL
 
 Auto-upload (configured per service in
 [Settings ▸ Logging & Connectors](settings-reference.md#confirmations)) pushes
 each QSO as you log it. When one fails — a service was down, a key was
 wrong — the logbook gives you a **per-row re-push** for **QRZ**, **ClubLog**,
-and **HRDLog.net** so you can retry that one contact after fixing the cause. A
-"duplicate" result is the benign "already there" answer, not an error.
+**HRDLog.net**, and **World Radio League** so you can retry that one contact
+after fixing the cause. A "duplicate" result is the benign "already there"
+answer, not an error.
+
+### World Radio League
+
+Paste your WRL API key in Settings ▸ Logging & Connectors and it is verified
+against your WRL account the moment you save it — your destination logbook is
+found automatically. From then on every contact flows to WRL as you log it (the
+auto-push switch is beside the key), and each logbook row carries a WRL button
+for anything logged earlier. Bringing an existing log across? **Export for WRL**
+writes an ADIF shaped for WRL's own bulk importer — the right road for thousands
+of historical contacts, which would otherwise trickle through a rate-limited
+API one at a time.
 
 ### Mark a QSL sent
 
@@ -113,8 +125,8 @@ back presence ("credential stored"), never the secret itself.
 
 - **eQSL never counts toward LoTW-grade awards** — it's a separate confirmation
   tier, enforced everywhere credit is computed.
-- **HRDLog.net is a logging/awards site, not an ARRL confirmation source** — an
-  upload there never earns DXCC/WAS credit.
+- **HRDLog.net and World Radio League are logging/awards sites, not ARRL
+  confirmation sources** — an upload there never earns DXCC/WAS credit.
 - **Nexus doesn't store your TQSL certificate or LoTW signing password** — LoTW
   signing is delegated to your installed TQSL.
 

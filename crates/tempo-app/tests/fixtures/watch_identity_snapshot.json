@@ -24,6 +24,7 @@
     "state": "rx",
     "tier": "FT4"
   },
+  "loggedTick": null,
   "mode": "chat",
   "mycall": "W9XYZ",
   "mygrid": "EN37",

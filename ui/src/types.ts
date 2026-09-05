@@ -819,6 +819,11 @@ export interface BandChannel {
   mode: RadioMode
   label: string
   note: string
+  /** May this licence class transmit here? FALSE means RECEIVE-ONLY, not hidden — no
+   *  licence restricts listening, and the radio tunes there regardless. Display only: the
+   *  transmit gate is in Rust and refuses the over on its own. Optional so an older
+   *  backend (or a stored plan) reads as transmit-capable, which is what it used to mean. */
+  tx?: boolean
 }
 
 /**
@@ -862,10 +867,52 @@ export interface OtaSpot {
   mode: string
   spotter: string | null
   comment: string | null
-  grid: string | null  /** This park/summit has never been logged (hunter side) — a NEW PARK. */
+  grid: string | null
+  /** Exact park position when the feed carries one. POTA sends it on every row;
+   *  SOTA sends no position at all, so a summit is null here AND in `grid`. */
+  lat?: number | null
+  lon?: number | null
+  /** This park/summit has never been logged (hunter side) — a NEW PARK. */
   newPark?: boolean
   /** Your own signal is being received on this band right now (live PSKR). */
   bandOpen?: boolean
+}
+
+/** One activator placed for the Connect map's parks layer (`get_ota_map_spots`).
+ *  POTA only — a SOTA spot carries no position to plot. */
+export interface OtaMapSpot {
+  program: string
+  reference: string
+  name: string
+  activator: string
+  freqMhz: number
+  mode: string
+  lat: number
+  lon: number
+  /** Placed by grid square (~4 km) rather than the feed's own coordinates. */
+  approx: boolean
+  ageSecs: number
+  /** Never logged before — a new park for the hunter. */
+  newRef: boolean
+}
+
+/** How a Kp sample was arrived at — SWPC's own word, not our inference.
+ *  Only `observed` is measured; `estimated` is SWPC's fill for a period whose
+ *  observations are not final, so it belongs with the modelled half. */
+export type KpKind = 'observed' | 'estimated' | 'predicted'
+
+/** One 3-hourly planetary-K sample. */
+export interface KpPoint {
+  timeUnix: number
+  kp: number
+  kind: KpKind
+  /** NOAA G-scale for the period ("G1".."G5"), null on a quiet sky. */
+  noaaScale: string | null
+}
+
+/** The NOAA planetary-K outlook: about a week back and three days forward. */
+export interface KpForecast {
+  points: KpPoint[]
 }
 
 /** The operator's current activation state (POTA/SOTA). */
@@ -1055,6 +1102,11 @@ export interface AmpStatus {
   /** The amplifier sees the exciter keyed. SPE only. */
   transmitting?: boolean | null
   outputWatts?: number | null
+  /** The band the AMPLIFIER says it is on, named ("80m"). Null when it reports an index outside
+   *  the ladder, or on a KPA, which reports no band on any polled verb. Never derived from the
+   *  radio — this field means "what the amplifier said", and filling it from elsewhere would
+   *  make an operator read our inference as their amplifier's own state. */
+  bandLabel?: string | null
   /** SWR at the antenna. Absent when not transmitting — a zero is 'no reading', never 0:1. */
   swr?: number | null
   /** SWR measured BEFORE the ATU. SPE only. */
@@ -1907,6 +1959,10 @@ export interface SpotRow {
   /** US state (WAS code), best-effort from the roster's cached grid for a station heard before;
    * null for a cluster/RBN spot of an unheard station or a non-US station. */
   state?: string | null
+  /** The station's own Maidenhead grid, when one is known: the roster's cached decode grid,
+   * else the grid token off the RBN skimmer comment (machine wire only — human free-text is
+   * never mined). Drives the row's exact heading; null falls back to the ~entity centroid. */
+  grid?: string | null
   /** Band label ('20m'), '' if off the band plan. */
   band: string
   freqMhz: number
@@ -2036,7 +2092,7 @@ export interface AssistanceEvent {
  *  These Options carry no `skip_serializing_if` on the Rust side, so serde emits explicit
  *  `null` — declared `| null`, not `?:`. */
 export interface CredStatus {
-  /** Stable slug: 'lotw' | 'qrz-xml' | 'qrz-logbook' | 'eqsl' | 'clublog' | 'hrdlog' |
+  /** Stable slug: 'lotw' | 'qrz-xml' | 'qrz-logbook' | 'eqsl' | 'clublog' | 'hrdlog' | 'wrl' |
    *  'cloudlog' | 'repeaterbook'. Branch on THIS, never on `connector` (a display label). */
   id: string
   /** Display label. */
@@ -2333,6 +2389,9 @@ export interface FieldDayQso {
   section: string
   band: string  /** Scoring class: 'DIG' | 'CW' | 'PH'. */
   mode?: string
+  /** The ACTUAL on-air mode behind a 'DIG' row (RTTY, FT4, SSTV…). Empty/absent for CW/PH —
+   *  their class IS the mode — and for rows logged before submode was recorded. */
+  submode?: string
   whenUnix?: number
 }
 
@@ -2357,6 +2416,75 @@ export interface FieldDayStatus {
   bonusPoints?: number
   /** poweredPoints + bonusPoints. */
   totalScore?: number
+  /** The active-or-next occurrence of this event's window (Unix UTC), computed in Rust
+   *  from the ruleset data — the single source the banner/countdown reads (the old TS
+   *  date math hardcoded 24 h and dropped WFD's final six hours). */
+  eventStartUnix?: number
+  eventEndUnix?: number
+  /** The active ruleset's rules year + the rules data's `generated` stamp. */
+  rulesYear?: number
+  rulesGenerated?: string
+  /** The assistance sources EFFECTIVELY ON right now — display labels from the
+   *  backend's `Settings::assistance_sources()`. The warn-only assistance
+   *  advisory reads this list; the UI never re-derives what counts as
+   *  assistance from raw toggles. */
+  assistanceOn?: string[]
+  /** Club-sync state (the Nexus↔Nexus event sync). Absent while neither
+   *  hosting nor joined — a solo Field Day pays nothing for the feature. */
+  club?: FdClubStatus | null
+}
+
+/** One club band-board row (host-computed, pushed to every position). */
+export interface FdClubBoardRow {
+  /** Stable identity — the row key, never shown to an operator. */
+  posid: string
+  /** Friendly label ("CW tent"). EMPTY when the position has not been named. */
+  posName: string
+  band: string
+  mode: string
+  operator: string
+  /** Merged rows from this position (raw). */
+  qsos: number
+  /** Merged rows in the trailing 60 min. */
+  rate: number
+  /** Seconds since the host last heard from it — stale-mark past 15 s
+   *  (readings are never silently stale). */
+  lastSeenSecs: number
+}
+
+/** The club block on FieldDayStatus: sync honesty + the down-flowed club state. */
+export interface FdClubStatus {
+  /** 'disabled' | 'offline' | 'behind' | 'synced' — derived from (link, queue),
+   *  so the chip can never disagree with the queue. */
+  syncState: string
+  /** Own contacts the host has not acked yet. */
+  queued: number
+  /** Unix seconds the link went down (0 unless offline). */
+  offlineSinceUnix: number
+  /** True when this instance is the host. */
+  hosting: boolean
+  event: string
+  hostCall: string
+  /** Club counters: claimed score, raw merged QSOs, distinct sections. */
+  score: number
+  qsos: number
+  sections: number
+  /** Local minus host clock (secs) — warn past ±30 s, never adjusted. */
+  skewSecs: number
+  /** The last host error line, verbatim (version refusal etc.). */
+  lastError?: string | null
+  /** Club dupe keys [call, band, modeClass] NOT already in the own log —
+   *  the entry-field warning checks own ∪ these. */
+  dupes: [string, string, string][]
+  board: FdClubBoardRow[]
+}
+
+/** One club event heard on the LAN (the "Find club events" scan). */
+export interface FdEventBeacon {
+  event: string
+  call: string
+  /** ip:port, ready for the join-address field. */
+  host: string
 }
 
 /** Result of the release-feed update check (Phase 1: notify + open the download page). */
@@ -2577,6 +2705,7 @@ export interface Settings {
    * 'kpa' = Elecraft KPA500/KPA1500. The flat mirror of the ACTIVE radio's profile. */
   ampModel?: string
   ampPort?: string
+  ampFollowBand?: boolean
   /** ADVANCED: external rotctld host:port override (wins over the integrated
    * spawn). Empty + model 0 = no rotator. */
   rotatorHost: string
@@ -2785,6 +2914,34 @@ export interface Settings {
   fdPowerMult?: number
   /** Claimed FD bonus ids (the checklist). */
   fdBonuses?: string[]
+  /** PLANNED FD bonus ids — the club's intent, never the score. `fdBonuses` above stays
+   *  the EARNED set scoring reads; nothing on any scoring path reads this one. */
+  fdBonusesPlanned?: string[]
+  /** Host a Nexus↔Nexus club event: while on, the sync listener binds the LAN
+   * (this toggle IS the opt-in — data-plane only) + a discovery beacon runs. */
+  fdHostEnable?: boolean
+  /** Club-sync host TCP port (default 42073). */
+  fdHostPort?: number
+  /** Operator-facing club event name ("W9ABC Field Day") — beacon + welcome. */
+  fdEventName?: string
+  /** Join a club event at host:port ('' = not joining; ignored while hosting —
+   * the host joins itself over loopback). */
+  fdJoinAddr?: string
+  /** Friendly position label for the club band board ("CW tent"). */
+  fdPositionName?: string
+  /** Persistent 8-hex club-sync position id (generated at startup; no UI edit —
+   * QSO ids are (posid, seq), so a changed id re-pushes everything as new). */
+  fdPositionId?: string
+  /** Serve the read-only spectator scoreboard page on the LAN (this toggle IS
+   * the opt-in; real data only in the host role). Default off. */
+  fdScoreboard?: boolean
+  /** Spectator scoreboard TCP port (default 7373 — "73 73"). */
+  fdScoreboardPort?: number
+  /** Serve Connect as a read-only page on the LAN. The toggle IS the opt-in. */
+  connectWeb?: boolean
+  connectWebPort?: number
+  /** Opt in to auto-update through beta (pre-release) builds; off = stable channel only. */
+  betaUpdates?: boolean
   /** N3FJP real-time push (club master log). Empty host = off. */
   n3fjpHost?: string
   n3fjpPort?: number
@@ -2860,6 +3017,15 @@ export interface Settings {
   alertCq: boolean
   /** Alert when a station not heard before this session appears. */
   alertNew: boolean
+  /** Show the worked-but-unconfirmed "Confirm" tier (LoTW confirmation opportunities)
+   *  on the Needed board and the decode/roster chips. Ships ON; this is the opt-out. */
+  alertConfirmTier?: boolean
+  /** WSJT-X's "dB reports to comments": the logged QSO's COMMENT carries
+   *  "<mode>  Sent: <rpt>  Rcvd: <rpt>". Opt-in, exactly as WSJT-X ships it. */
+  logReportsToComments?: boolean
+  /** Beep when a park is freshly spotted on the air (App's own poll of
+   *  get_ota_map_spots, gated on this — see potaAlert.ts). Off by default. */
+  potaNewActivationAlert?: boolean
   /** Band scope for new-DXCC alerts: 'off' | 'hf' | 'vhf' | 'all' (alertNew stays the master). */
   alertDxccBands: string
   /** Band scope for plain new-grid alerts. Default 'vhf' — grid chasing is VHF-centric. */
@@ -2920,6 +3086,9 @@ export interface Settings {
   /** eQSL account username (callsign or login). Password is in the OS keychain
    *  (set via setEqslPassword). */
   eqslUsername: string
+  /** The eQSL QTH Nickname — required by eQSL when one callsign has several QTH
+   *  profiles; such accounts cannot authenticate without it. Empty for most. */
+  eqslQthNickname?: string
   /** eQSL incremental-sync cursor (YYYYMMDDHHMM). Managed by the app; not
    *  user-edited. Empty = next sync is a full pull. */
   eqslLastSync: string
@@ -2955,6 +3124,10 @@ export interface Settings {
    *  NOT the HRD Logbook UDP push). Station callsign is `mycall`; the upload code
    *  is in the keychain. Not an ARRL confirmation source. */
   hrdlogUpload: boolean
+  /** Auto-push each logged QSO to World Radio League. Flipped by saving/clearing the key. */
+  wrlUpload?: boolean
+  /** Resolved WRL destination logbook id (empty = the account default). Set at key save. */
+  wrlLogbookId?: string
   /** Watch near-region spots (not just your own paths) so opening detection can
    *  flag "a band is open around you" before you've worked anyone. */
   openingRegional: boolean
@@ -3069,6 +3242,7 @@ export interface RadioProfile {
    * an SO2R station has an amplifier per radio. */
   ampModel: string
   ampPort: string
+  ampFollowBand: boolean
   rotatorHost: string
   rotctldPort: number
   /** Bands this radio covers (empty = all) — for auto band-routing (P4). */
@@ -3137,6 +3311,9 @@ export interface AppSnapshot {
   highlights?: { call: string; bg?: string | null; fg?: string | null }[]
   /** Bumped by an inbound UDP Clear — panes erase on change. */
   clearTick?: number
+  /** Bumped every time a QSO is logged, by any path (backend auto-log included).
+   * App fires the "clear DX call after logging" wipe on change. */
+  loggedTick?: number
   /** Bumped each time a spot is worked — App navigates to `workView`'s cockpit
    * on change (lets a pop-out window's click land the main window there). */
   workTick?: number

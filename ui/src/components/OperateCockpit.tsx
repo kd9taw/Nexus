@@ -11,6 +11,7 @@
 // binding below, which is a keyboard handler with no string of its own.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { t } from '../i18n'
+import { engagedInQso } from '../alerts'
 import type {
   AppSnapshot,
   BandChannel,
@@ -35,7 +36,8 @@ import {
   stdMessageList,
   toggleIgnored,
 } from '../txMessages'
-import { atuTune, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period } from '../api'
+import { atuTune, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
+import { FdAdvisories } from './FdAdvisories'
 import { pointRotatorAtCall, redecode, startCq, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
@@ -68,11 +70,19 @@ interface Props {
   /** Configured companion UDP listen address (Settings) — shown instead of a
    * hardcoded :2237 so a moved WSJT-X port reads truthfully. */
   companionAddr?: string
+  /** Field Day master switch + the active event's ruleset facts — the warn-only
+   * banned-mode chip in the header (a passive status div, outside every
+   * ⊞-removable pane; nothing is ever removed or disabled by rule). */
+  fdActive?: boolean
+  fdRuleset?: FdRulesetDto | null
   snap: AppSnapshot
   theme: string
   /** Active mode/tier (authoritative from the snapshot's link). */
   tier: Tier
   onTierChange: (t: Tier) => void
+  /** Open the Logbook filtered to a callsign (#192) — handed to the recall card in the side
+   *  rail, whose previous-contact rows become clickable when it is present. Omitted ⇒ inert. */
+  onOpenLogbook?: (call: string) => void
   /** Switch the RX signal source (native engine vs WSJT-X companion over UDP). */
   onSourceChange: (k: SourceKind) => void
   /** Click-to-tune on the waterfall: left=TX, right=RX, both buttons=TX+RX. */
@@ -301,6 +311,7 @@ export function OperateCockpit({
   theme,
   tier,
   onTierChange,
+  onOpenLogbook,
   bandPlan,
   onSetFrequency,
   onSourceChange,
@@ -336,6 +347,8 @@ export function OperateCockpit({
   panels,
   active = true,
   companionAddr,
+  fdActive = false,
+  fdRuleset = null,
   onOpenSettings,
   wheelSensitivity,
 }: Props) {
@@ -810,8 +823,16 @@ export function OperateCockpit({
   // Same field the roster highlights as `workingCall`, so the two can never disagree
   // about who is being worked.
   const recallCall = selectedCall || snap.qso?.dxcall || null
+  // The decode panes' hide-filter exemption: the station the sequencer is actively working,
+  // and nobody after Done — the same "engaged" line the alerts draw.
+  const partnerCall = engagedInQso({
+    state: snap.fieldDay?.state ?? snap.qso?.state ?? null,
+    dxcall: snap.qso?.dxcall ?? null,
+  })
+    ? (snap.qso?.dxcall ?? null)
+    : null
   const recallCard = recallCall ? (
-    <OperateRecall snap={snap} call={recallCall} mode={tier} />
+    <OperateRecall snap={snap} call={recallCall} mode={tier} onOpenLog={onOpenLogbook} />
   ) : null
 
   return (
@@ -945,6 +966,12 @@ export function OperateCockpit({
           </select>
         </div>
 
+        {/* Warn-only Field Day banned-mode chip (e.g. FT8 at WFD — this cockpit is
+            where a banned mode would actually be keyed). A PASSIVE status div in
+            the header, outside every ⊞-removable pane: it is a status line, not a
+            control, so it carries no panel-vocabulary id and no stop-line role. */}
+        <FdAdvisories fdActive={fdActive} ruleset={fdRuleset} activeMode={tier} />
+
         <div className="cockpit-meta">
           <div
             className="cockpit-source"
@@ -1059,6 +1086,14 @@ export function OperateCockpit({
               {t('operate.header.layout.roster.label')}
             </button>
           </div>
+          <button
+            type="button"
+            className="cockpit-map-btn"
+            onClick={() => void openPanelWindow('operatemap')}
+            title={t('operate.header.map.title')}
+          >
+            {t('operate.header.map.label')}
+          </button>
           {/* No MemoryStrip here, deliberately (operator ruling, 2026-08-16). Memories are
               repeaters, nets and calling frequencies — Phone/CW things. In this header a
               favorite chip was worse than clutter: one click retuned the rig off the FT8
@@ -1278,6 +1313,7 @@ export function OperateCockpit({
                         needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
+                    partnerCall={partnerCall}
                         onErase={() => notifyErase(0)}
                         title={t('operate.decodes.title')}
                       />
@@ -1307,6 +1343,7 @@ export function OperateCockpit({
                         needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
+                    partnerCall={partnerCall}
                         onErase={() => notifyErase(1)}
                         lockedFilter="rx"
                         // This pane is situational awareness, not a chase list: a station
@@ -1348,6 +1385,7 @@ export function OperateCockpit({
                     needScopes={needScopes}
                     myGrid={snap.mygrid}
                     {...decodeClickProps}
+                    partnerCall={partnerCall}
                     onErase={() => notifyErase(0)}
                   />
                 </div>
@@ -1372,6 +1410,7 @@ export function OperateCockpit({
                         needScopes={needScopes}
                         myGrid={snap.mygrid}
                         {...decodeClickProps}
+                    partnerCall={partnerCall}
                         onErase={() => notifyErase(1)}
                         lockedFilter="rx"
                         // This pane is situational awareness, not a chase list: a station
@@ -1476,7 +1515,17 @@ export function OperateCockpit({
  *     screen for a roster click. The card degrades to identity + history + badges, exactly
  *     as the CW cockpit's does today.
  */
-function OperateRecall({ snap, call, mode }: { snap: AppSnapshot; call: string; mode: string }) {
+function OperateRecall({
+  snap,
+  call,
+  mode,
+  onOpenLog,
+}: {
+  snap: AppSnapshot
+  call: string
+  mode: string
+  onOpenLog?: (call: string) => void
+}) {
   const cu = call.trim().toUpperCase()
   const [log, setLog] = useState<LoggedQso[]>([])
   const [book, setBook] = useState<QrzLookup | null>(null)
@@ -1571,6 +1620,7 @@ function OperateRecall({ snap, call, mode }: { snap: AppSnapshot; call: string; 
       // The rail is SHARED with the Stations roster; unbounded this card took it down to
       // ~2 rows at 1024x768 and off-screen at 175 % zoom. See `.cockpit-recall`.
       bounded
+      onOpenLog={onOpenLog}
     />
   )
 }

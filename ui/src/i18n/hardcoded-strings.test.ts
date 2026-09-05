@@ -108,6 +108,8 @@ const MIGRATED = [
   'components/QsoGlobe.tsx',
   'propViz.ts',
   'openingAlert.ts',
+  'stormAlert.ts',
+  'tv/ConnectTv.tsx',
   'components/DxpeditionsView.tsx',
   'features/dxpedChase.ts',
   'features/dxpedAlarm.ts',
@@ -120,6 +122,7 @@ const MIGRATED = [
   'components/prop/BestBandTable.tsx',
   'components/prop/ChaseFeedPane.tsx',
   'components/prop/ChasePane.tsx',
+  'components/prop/KpOutlookPane.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
   'components/prop/DxpedMonth.tsx',
@@ -166,6 +169,10 @@ const MIGRATED = [
   // fixed-width document rather than interface prose.
   'components/PotaSotaView.tsx',
   'components/FieldDayView.tsx',
+  // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
+  // chips are catalog keys from birth; the mode names, event names and assistance-source
+  // labels it interpolates are invariant tokens.
+  'components/FdAdvisories.tsx',
   'components/ContestCalendarPane.tsx',
   'fdEvent.ts',
   // Batch 7 (2026-08-18) — the Satellites section, the Connect Passes pane and the nine
@@ -395,6 +402,11 @@ const MIGRATED = [
   'components/RotorStrip.tsx',
   'components/prop/RotorPane.tsx',
   'components/prop/AmpPane.tsx',
+  // The amplifier's cockpit strip — fully catalogued from the start. Its only bare literals are
+  // the same invariant tokens AmpPane carries (the unit symbol W, the em dash for an absent
+  // reading) plus the ◀/▶ glyphs, which are direction and not prose: both carry a translated
+  // aria-label, because an arrow names nothing to a screen reader and this one moves a kilowatt.
+  'components/AmpStrip.tsx',
 ]
 
 /**

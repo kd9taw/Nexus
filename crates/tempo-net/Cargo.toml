@@ -15,3 +15,10 @@ workspace = true
 # SO_REUSEADDR); std exposes no socket options, socket2 is already in the tree
 # via tokio.
 socket2 = "0.6"
+# fdsync (Field Day club sync) is the ONE protocol in this crate where Nexus
+# owns BOTH ends of the wire, so its NDJSON codec is serde-derived instead of
+# hand-rolled like the external-protocol codecs above. First serde use in this
+# crate; both crates are already workspace-wide (tempo-core, tempo-app), so no
+# new external code enters the tree.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

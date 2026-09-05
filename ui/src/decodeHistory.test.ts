@@ -275,3 +275,45 @@ describe('history depth — a filtered pane can still look back', () => {
     expect(rendered[0].slot).toBeGreaterThan(all[0].slot)
   })
 })
+
+describe('erase and the engine own-TX ring', () => {
+  // #178 (reopened) / #189: Erase wiped the pane and the next poll painted the same overs
+  // straight back, so an operator's own transmissions could not be cleared at all short of
+  // restarting Nexus. The engine keeps a 30-deep DISPLAY ring of overs already sent and
+  // appends ALL of it to every snapshot — deliberately, so a band QSY performed under the
+  // operator cannot lose their record of what they transmitted. Received decodes do not come
+  // back because the engine's list is current-period; own-TX rows persist for 30 overs.
+  //
+  // So the pane has to remember that it was erased: an over already sent when Erase was
+  // pressed stays gone, and the next one transmitted still appears.
+  const mine = (txAt: number, message: string): DecodeRow =>
+    row({ message, freqHz: 1500, from: 'KD9TAW', mine: true, txAt })
+
+  it('an own-TX row already sent when Erase was pressed does not come back', () => {
+    const h = new DecodeHistory()
+    h.ingest([mine(1000, 'CQ KD9TAW EN61')], 0)
+    expect(h.entries()).toHaveLength(1)
+
+    h.erase(1000)
+    // The very next poll re-serves the same ring — this is what shipped as un-erasable.
+    h.ingest([mine(1000, 'CQ KD9TAW EN61')], 1)
+    expect(h.entries()).toHaveLength(0)
+  })
+
+  it('an over transmitted AFTER the erase still appears', () => {
+    const h = new DecodeHistory()
+    h.ingest([mine(1000, 'CQ KD9TAW EN61')], 0)
+    h.erase(1000)
+    // The ring still carries the old over; a new one joins it.
+    h.ingest([mine(1000, 'CQ KD9TAW EN61'), mine(1015, 'P29YY KD9TAW EN61')], 1)
+    const msgs = h.entries().map((e) => e.message)
+    expect(msgs).toEqual(['P29YY KD9TAW EN61'])
+  })
+
+  it('erasing does not deafen the pane to received decodes', () => {
+    const h = new DecodeHistory()
+    h.erase(1000)
+    h.ingest([row({ message: 'CQ W9XYZ EN52', freqHz: 1200 })], 1)
+    expect(h.entries()).toHaveLength(1)
+  })
+})

@@ -34,7 +34,19 @@ own explanation, so you can read the others before you switch:
   command. This is the workaround, not the clean path: it works **only** if
   Nexus's audio output is routed to the rig (as for FT8) *and* PTT works, and you
   must keep drive below ALC — otherwise it looks like it's sending and nothing
-  reaches the air. The rig goes to USB/LSB for this path.
+  reaches the air. **This path takes the radio out of CW**, into a data mode
+  (DATA-U/DATA-L) — the same mode FT8 uses, and for the same reason: on the common
+  Icom and default-Yaesu wiring, plain SSB takes its transmit audio from the MIC
+  socket, so the rig would key and radiate nothing. CW mode comes back when you
+  pick another keyer. If your interface feeds the rig's **mic jack** instead of its
+  data input, tick **plain SSB for data modes** on that radio in
+  [Settings ▸ Radio](settings-reference.md#radio) and this path uses plain SSB for
+  you, exactly as it does for FT8.
+
+  On a Yaesu FTX-1, CAT keying is flagged as **unproven** where you pick it: its
+  Hamlib backend sends a different keying command from the one other radios use and
+  reports success either way, so if nothing goes out Nexus cannot tell you. It is a
+  notice, not a block.
 
 **The CW decoder.** The **AI** decoder is the default: a neural net (the DeepCW
 model by e04) reads the whole 400–1200 Hz window rather than one pitch, which is
@@ -52,6 +64,22 @@ click one to make that station your worked peer.
 
 **The AF scope** is a narrow 300–1100 Hz display with a hairline drawn at your
 sidetone pitch, so you can zero-beat a station by ear and eye.
+
+**The zero-beat light** goes further: Nexus measures the tone actually coming in
+and tells you where it sits against your pitch. A light comes on when you are on
+pitch, and beside it a needle and a signed offset in Hz say which way and how far
+off you are — being 80 Hz out no longer looks the same as being 400 Hz out. How
+close counts as on pitch follows your rig's CW filter: 25 Hz behind the usual
+500 Hz one, tighter behind a narrow filter. With several signals in the passband it
+follows the one nearest your marker rather than the loudest, so it does not jump to
+a strong station 300 Hz away while you are closing in.
+
+On a dead band it goes quiet and stays quiet. A reading only appears once a tone has
+held the same frequency long enough to be a signal you are tuning rather than the
+loudest thing the receiver happened to hear — otherwise the needle would twitch at
+band noise between overs. That costs about a fifth of a second before a new signal
+shows, and the wait is paid when a station starts sending, never between their
+letters. It is a display only: it never touches your dial.
 
 **⊞ Panels** in the header shows and hides the panes under the scope, and an
 entry with nothing on screen behind it right now says why in a line under it —

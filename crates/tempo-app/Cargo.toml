@@ -19,3 +19,9 @@ modes = { path = "../modes" }
 tempo-net = { path = "../tempo-net" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+# tests/fieldday_loopback.rs restarts its host on the SAME port while accepted
+# sockets may sit in TIME_WAIT — the rebind needs SO_REUSEADDR, which std does
+# not expose. Test-only; socket2 is already in the tree via tempo-net.
+socket2 = "0.6"

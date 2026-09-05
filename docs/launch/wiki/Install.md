@@ -143,6 +143,45 @@ that nothing answered. Check **System Settings ▸ Privacy & Security ▸ Local
 Network**, enable **Nexus** if it is listed, and relaunch. A rig on `127.0.0.1`
 is unaffected.
 
+### Chromebook (ChromeOS Linux)
+
+Nexus runs on a Chromebook inside the ChromeOS Linux container, using the AppImage.
+Nothing about this is officially supported — the notes below come from Pete-the-Geek,
+who worked the whole procedure out and posted it in the discussions. Three things trip
+people up, and none of them are Nexus itself:
+
+**The container ships an old Debian.** ChromeOS Linux still installs Bookworm, which is
+older than Nexus needs. Upgrade the container to Trixie first (`sudo apt dist-upgrade`
+after switching your apt sources), then install the pieces the AppImage expects:
+
+```
+sudo apt install -y gnome-keyring dbus-x11 pavucontrol alsa-utils
+```
+
+**Saved passwords need a keyring that is actually running.** The container starts
+without a session bus or an unlocked keyring, so Nexus has nowhere to put your logbook
+and cluster credentials and secure storage fails. Start both in your `~/.bashrc`:
+
+```
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    eval $(dbus-launch --sh-syntax)
+fi
+eval $(echo -n "" | gnome-keyring-daemon --start --components=secrets 2>/dev/null)
+export DBUS_SESSION_BUS_ADDRESS
+```
+
+Then launch with `--no-sandbox`, which the container requires.
+
+**Your radio has to be handed to the container.** Share the rig's USB device with Linux
+from ChromeOS settings, and add yourself to `dialout` (`sudo adduser $USER dialout`) so
+the serial port is readable — log out and back in for that to take.
+
+Audio is the fiddly part. If the rig's USB CODEC does not reach the container, clearing
+`~/.config/pulse` and using `pavucontrol` to pick the right capture device usually sorts
+it. On some Chromebooks the opposite works better: leave the CODEC with ChromeOS, make it
+the default device there, and turn system sounds off so nothing else transmits into your
+radio.
+
 ---
 
 ## Upgrading

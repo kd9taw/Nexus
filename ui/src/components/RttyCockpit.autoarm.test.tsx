@@ -43,6 +43,10 @@ vi.mock('../api', () => ({
   setTune: vi.fn(),
   haltTx: vi.fn(),
 }))
+// The log strip is stubbed: this suite is about the TX/keying wiring, and the real LogEntry
+// reaches the logbook, the park directory and the callbook on mount. RttyCockpit.log.test.tsx
+// renders it for real.
+vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('../toast', () => ({
   pushToast: vi.fn(),
   withErrorToast: vi.fn(async (action: () => Promise<unknown>) => action()),

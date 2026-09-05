@@ -67,4 +67,5 @@ export const LOCALE_NATIVE_NAME: Record<string, string> = {
   de: 'Deutsch',
   es: 'Español',
   fr: 'Français',
+  ja: '日本語',
 }

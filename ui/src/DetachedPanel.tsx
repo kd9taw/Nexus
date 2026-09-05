@@ -8,11 +8,13 @@
 // stays consistent across every window.
 //
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is a router: the
-// panels it mounts own their own prose. What is here is the three states the router itself
-// can be in — connecting, Field Day off, and a panel name it does not know — plus the
+// panels it mounts own their own prose. What is here is the states the router itself can be
+// in — connecting, Field Day off, club sync off, and a panel name it does not know — plus the
 // conversation-delete guard, which it deliberately raises in the SAME words as the main
-// window (the two mirrors drifting apart is what put the guard here).
-import { useEffect, useMemo, useState } from 'react'
+// window (the two mirrors drifting apart is what put the guard here). The club-sync-off copy
+// is the router's because it is about a panel that ISN'T mounted: it names the Settings route
+// that would fill the board, and the board component never renders in that state.
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
 import { confirmDialog, ConfirmHost } from './confirm'
 import type {
@@ -38,6 +40,7 @@ import {
   archiveConversation,
   setFrequency,
   workSpot,
+  setHuntTarget,
   subscribeSnapshot,
   callStation,
   setTier,
@@ -66,13 +69,15 @@ import { markRecalled, memoriesStore, planRecall, type Memory } from './features
 import { bandLabelForMhz } from './band'
 import { MemoriesView } from './components/MemoriesView'
 import { NeededPanel } from './components/NeededPanel'
+import { PotaSotaView } from './components/PotaSotaView'
 import { BandMap } from './components/BandMap'
 import { ConnectView } from './components/ConnectView'
+import { MapView } from './components/MapView'
 import { DxpeditionsView } from './components/DxpeditionsView'
 import { SatellitesView } from './components/SatellitesView'
 import { Toasts } from './components/Toasts'
 import { OperateCockpit } from './components/OperateCockpit'
-import { FieldDayScoreboard } from './components/FieldDayView'
+import { FdClubSection, FieldDayScoreboard, FdBandOccupancy } from './components/FieldDayView'
 import { Waterfall } from './components/Waterfall'
 import { FT_PALETTE_SCOPE } from './waterfallPalette'
 import { StationList } from './components/StationList'
@@ -87,8 +92,58 @@ import { useViewport } from './useViewport'
 import { useDensity } from './useDensity'
 import { useMotion } from './useMotion'
 
-type SpotTarget = { call: string; band: string; mode: string | null; freqMhz: number | null }
+// `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one — see
+// `onWorkSpot` below, which is the PRIMARY surface for tagging the hunt target from a
+// torn-off window (the 'connect' branch wires this straight into MapView).
+type SpotTarget = {
+  call: string
+  band: string
+  mode: string | null
+  freqMhz: number | null
+  program?: string
+  reference?: string
+}
 type OperateLayout = 'classic' | 'roster'
+
+// The club board's SYNC-OFF panel. Inline off the shared tokens (the FieldDayView
+// idiom) rather than a styles.css section: four elements in one branch. Set larger
+// than body copy for the same reason the board itself is — this window is read from
+// the operating position, and the route is something the operator retypes elsewhere.
+const FDCLUB_OFF_WRAP: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  margin: 'auto',
+  maxWidth: 620,
+  padding: '0 32px',
+}
+const FDCLUB_OFF_HEAD: CSSProperties = {
+  margin: 0,
+  fontSize: 22,
+  fontWeight: 700,
+  color: 'var(--text)',
+}
+const FDCLUB_OFF_BODY: CSSProperties = {
+  margin: 0,
+  fontSize: 16,
+  lineHeight: 1.5,
+  color: 'var(--text-dim)',
+}
+const FDCLUB_OFF_ROUTE: CSSProperties = {
+  margin: 0,
+  padding: '12px 14px',
+  borderRadius: 'var(--radius)',
+  border: '1px solid var(--border)',
+  background: 'var(--bg-elev-2)',
+  fontSize: 16,
+  lineHeight: 1.5,
+  color: 'var(--text)',
+}
+const FDCLUB_OFF_WAIT: CSSProperties = {
+  margin: 0,
+  fontSize: 14,
+  color: 'var(--text-faint)',
+}
 
 // PER-SURFACE, like App's 'nexus.operateLayout'. NB these are two differently-spelled keys
 // for one concept and already disagreed before this change — deliberately left as-is here,
@@ -104,17 +159,41 @@ function loadOperateLayout(): OperateLayout {
  *  action fails closed — it logs and answers "no" — which is how the ✕ on a conversation in this
  *  panel did nothing at all.
  *
- *  Mounted ONCE around the whole panel rather than beside each `<Toasts/>`, because the body
- *  below returns from nine separate branches and only two of them mount toasts. Per-branch would
- *  reproduce the very bug this fixes: a host present in one tree and absent in another, failing
- *  silently in whichever branch someone forgets. The dialog portals (`RD.Portal`), so where this
- *  sits in the tree has no bearing on layout — only on whether it exists at all. */
+ *  Mounted ONCE around the whole panel rather than beside each branch, because the body below
+ *  returns from fifteen of them. Per-branch would reproduce the very bug this fixes: a host
+ *  present in one tree and absent in another, failing silently in whichever branch someone
+ *  forgets. The dialog portals (`RD.Portal`), so where this sits in the tree has no bearing on
+ *  layout — only on whether it exists at all.
+ *
+ *  ⚠️ `<Toasts/>` CANNOT BE HOISTED TO SIT BESIDE IT, AND THAT IS NOT AN OVERSIGHT. `zoom` lives
+ *  on `.app` (styles.css) and the toast viewport sizes itself against `--vh-eff`, so a host
+ *  outside the branch's `.app` renders at the wrong scale in a window the operator has zoomed.
+ *  It has to be INSIDE that tree — which is why no branch writes its own
+ *  `<div className="app detached">` any more and every one returns [`DetachedShell`], which
+ *  carries the host. A new branch then gets one by construction and cannot omit it.
+ *
+ *  It WAS per-branch, and the Memories pop-out — one of the seven that never mounted one —
+ *  turned that into data loss: its bulk delete asks "Delete 40 memories?", promises in the
+ *  confirm body that "the toast that follows can undo it", deletes, and then the Undo it just
+ *  promised does not exist, because `pushToast` resolves through a module-level bus and that
+ *  document rendered nothing to receive it. */
 export function DetachedPanel({ panel }: { panel: string }) {
   return (
     <>
       <DetachedPanelBody panel={panel} />
       <ConfirmHost />
     </>
+  )
+}
+
+/** The root of every pop-out branch: the zoomed `.app` tree plus this window's toast host.
+ *  Use this, never a bare `<div className="app detached">` — see the warning above. */
+function DetachedShell({ className, children }: { className?: string; children?: ReactNode }) {
+  return (
+    <div className={className ? `app detached ${className}` : 'app detached'}>
+      {children}
+      <Toasts />
+    </div>
   )
 }
 
@@ -250,6 +329,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     apply(archiveConversation(peer))
   }
   const onWorkSpot = (t: SpotTarget) => {
+    // Tag the hunt target BEFORE the QSY — same order as PotaSotaView's own
+    // setHuntTarget-then-QSY split (handleHunt) — so a POTA map pop-out (a later task)
+    // credits the activator too, not just the QSY.
+    if (t.program && t.reference) void setHuntTarget(t.call, t.program, t.reference).catch(() => {})
     const mode = modeClassOf(t.mode).toLowerCase() as 'cw' | 'phone' | 'digital'
     if (t.freqMhz != null) apply(workSpot(mode, t.freqMhz, t.band, t.call))
     else qsyBand(t.band)
@@ -298,10 +381,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   const needAlertsByCall = grouped
 
   if (isBandMap) {
-    if (!snap) return <div className="app detached" />
+    if (!snap) return <DetachedShell />
     const spotMode: 'CW' | 'Phone' = panel === 'bandmapCw' ? 'CW' : 'Phone'
     return (
-      <div className="app detached">
+      <DetachedShell>
         <BandMap
           band={snap.radio.band}
           dialMhz={snap.radio.dialMhz}
@@ -325,7 +408,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             onWorkSpot({ call: s.call, band: s.band, mode: s.mode, freqMhz: s.freqMhz })
           }
         />
-      </div>
+      </DetachedShell>
     )
   }
 
@@ -336,7 +419,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // missing it — the window ignored the operator's UI scale while its Toasts measured
     // a --vh-eff computed for a zoom that never applied.
     return (
-      <div className="app detached detached-waterfall">
+      <DetachedShell className="detached-waterfall">
         <Waterfall
           transmitting={snap?.radio.transmitting ?? false}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
@@ -350,14 +433,13 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           paletteScope={FT_PALETTE_SCOPE}
           txBlanks // the torn-off FT waterfall — same surface, same 13 s over.
         />
-        <Toasts />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'needed') {
     return (
-      <div className="app detached">
+      <DetachedShell>
         <NeededPanel
           // Full un-gated list — the board's own mode toggles decide what shows.
           alerts={needAlerts}
@@ -395,7 +477,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             apply(workSpot(opMode, t.freqMhz, t.band, t.call, spotTier))
           }}
         />
-      </div>
+      </DetachedShell>
     )
   }
 
@@ -434,20 +516,20 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       })()
     }
     return (
-      <div className="app detached">
+      <DetachedShell>
         <MemoriesView
           dialMhz={snap?.radio.dialMhz ?? 0}
           dialMode={snap?.radio.rigMode || snap?.radio.sideband || 'USB'}
           myGrid={snap?.mygrid ?? ''}
           onRecall={recall}
         />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'connect') {
     return (
-      <div className="app detached">
+      <DetachedShell>
         <ConnectView
           myGrid={snap?.mygrid ?? ''}
           theme={theme}
@@ -467,33 +549,72 @@ function DetachedPanelBody({ panel }: { panel: string }) {
               : undefined
           }
         />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'dxped') {
     return (
-      <div className="app detached">
+      <DetachedShell>
         <DxpeditionsView snap={prop} onWorkSpot={onWorkSpot} onShowOnMap={onSelect} />
-      </div>
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'pota') {
+    // The POTA/SOTA hunter, torn off — the pop-out its PER-SURFACE filter records
+    // were built for: a POTA board beside a SOTA board, each window keeping its own
+    // program/filter/sort. The board needs snap.hunt for its banner, so wait for the
+    // first snapshot like the Operate arm. Its own toasts (hunt set/cleared, refresh
+    // errors) are silent here — fire-and-forget with no toast host is the detached
+    // pattern (see the Connect arm's onPoint).
+    if (!snap) {
+      return (
+        <DetachedShell>
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        </DetachedShell>
+      )
+    }
+    return (
+      <DetachedShell>
+        <PotaSotaView
+          snap={snap}
+          onSnap={setSnap}
+          detached
+          // The board has already called setHuntTarget itself (and handed us the
+          // fresh snapshot via onSnap); this half is the QSY + rig-mode switch —
+          // the same atomic workSpot the Needed arm uses, with its same guard: a
+          // spot whose cockpit is a DISABLED feature only QSYs, because the main
+          // window's nav-hint effect would refuse to follow a hidden mode.
+          onHunt={(a) => {
+            const modes = readEnabledModes()
+            const view = a.modeClass === 'CW' ? 'cw' : a.modeClass === 'Phone' ? 'phone' : 'operate'
+            if ((view === 'cw' && !modes.cw) || (view === 'phone' && !modes.phone)) {
+              qsyBand(a.band, a.freqMhz)
+              return
+            }
+            const opMode = view === 'operate' ? 'digital' : view
+            apply(workSpot(opMode, a.freqMhz, a.band, a.call))
+          }}
+        />
+      </DetachedShell>
     )
   }
 
   if (panel === 'sats') {
     return (
-      <div className="app detached">
+      <DetachedShell>
         <SatellitesView snap={snap} />
-        {/* This panel's Track/alarm actions report via toasts — unlike the older
-            detached panels (silent by design), it needs a host in this window. */}
-        <Toasts />
-      </div>
+      </DetachedShell>
     )
   }
 
   if (panel === 'fieldday') {
     const fd = snap?.fieldDay ?? null
     return (
-      <div className="app detached">
+      <DetachedShell>
         {fd ? (
           <FieldDayScoreboard
             fieldDay={fd}
@@ -513,18 +634,84 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             <span>{t('detached.fieldDay.inactive')}</span>
           </div>
         )}
-      </div>
+        {/* WHO IS ON WHICH BAND, in the window the operator already tears off beside the
+            operator box — the place they asked for it. One row per band, so an empty row
+            is the answer to "where can I move?". Only while a club event is running; a
+            single-station Field Day has no bands to compete for. */}
+        {fd?.club ? <FdBandOccupancy club={fd.club} big /> : null}
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'fdclub') {
+    // The CLUB BAND BOARD, torn off — who is on what band across every
+    // position on site, parked on a second monitor so the crew can keep up
+    // (the `fieldday` pop-out beside it is the scoreboard, a different
+    // surface). Read-only: no export buttons, because their success toast has
+    // no host in a detached window, and no operator box — this board is about
+    // the other tents, not this one.
+    //
+    // THREE states, not two, and the split is the findability fix. The rail
+    // opens this window whenever Field Day is on, so most operators arrive here
+    // BEFORE club sync exists; an empty board would be the same dead end that
+    // hid the feature. Waiting for the first snapshot is its own state because
+    // it is true for the first 300 ms of every launch, and "no snapshot yet" is
+    // not the claim "sync is off".
+    if (!snap) {
+      return (
+        <DetachedShell>
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        </DetachedShell>
+      )
+    }
+    const club = snap.fieldDay?.club ?? null
+    // ⚠️ "NO CLUB DATA" IS NOT "SYNC IS OFF", and conflating them made this window lie to
+    // the one operator it exists for. The whole `fieldDay` block is built only inside the
+    // engine's Field Day mode, so it is absent the moment the operator steps into any other
+    // section — one click on the rail does it — regardless of hosting. The host would open
+    // the board on a second monitor, click away to check something, and watch a live board
+    // become the words "Club sync is off" plus instructions to switch on the hosting that
+    // was never switched off. Ask the SETTINGS whether sync is configured, which is true
+    // wherever the operator happens to be standing.
+    const syncConfigured =
+      settings?.fdHostEnable === true || (settings?.fdJoinAddr ?? '').trim() !== ''
+    return (
+      <DetachedShell>
+        {club ? (
+          <FdClubSection club={club} detached />
+        ) : syncConfigured ? (
+          // Configured, but this window cannot see the club right now — the operator is
+          // simply somewhere else in the app. Say that, and say nothing about settings.
+          <div style={FDCLUB_OFF_WRAP}>
+            <h2 style={FDCLUB_OFF_HEAD}>{t('detached.fdClub.away.head')}</h2>
+            <p style={FDCLUB_OFF_BODY}>{t('detached.fdClub.away.body')}</p>
+          </div>
+        ) : (
+          // Named in the words printed on the Settings tab, because this window
+          // cannot deep-link into the main window's panel — a detached window is a
+          // separate JS realm with no route into it, so the route has to be
+          // readable and followed by hand.
+          <div style={FDCLUB_OFF_WRAP}>
+            <h2 style={FDCLUB_OFF_HEAD}>{t('detached.fdClub.off.head')}</h2>
+            <p style={FDCLUB_OFF_BODY}>{t('detached.fdClub.off.body')}</p>
+            <p style={FDCLUB_OFF_ROUTE}>{t('detached.fdClub.off.route')}</p>
+            <p style={FDCLUB_OFF_WAIT}>{t('detached.fdClub.off.wait')}</p>
+          </div>
+        )}
+      </DetachedShell>
     )
   }
 
   if (panel === 'operate') {
     if (!snap) {
       return (
-        <div className="app detached">
+        <DetachedShell>
           <div className="app loading">
             <span>{t('detached.connecting')}</span>
           </div>
-        </div>
+        </DetachedShell>
       )
     }
     // The cockpit's Call Roster — a wired StationList. Chat-overlay props (unread, archive)
@@ -551,7 +738,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       />
     )
     return (
-      <div className="app detached operate-detached">
+      <DetachedShell className="operate-detached">
         <OperateCockpit
           snap={snap}
           theme={theme}
@@ -592,15 +779,53 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           panels={operatePanels}
           active
         />
-      </div>
+      </DetachedShell>
+    )
+  }
+
+  if (panel === 'operatemap') {
+    // The POTA map pop-out — a bare MapView, no Connect chrome, with POTA hunting on by
+    // default: `intent="pota"` is what turns the Parks (activator) layer on (see
+    // MapView's INTENT_PRESETS), the same mechanism the Connect map's intent picker uses.
+    // Gated on the first snapshot like the 'pota' arm above — MapView needs snap.mygrid/
+    // snap.stations to place anything. `onWorkSpot` is the same tune-and-tag path the
+    // 'connect' arm wires in: it tags the hunt target (program+reference present) before
+    // the atomic QSY, so double-clicking a park here credits the activator too.
+    if (!snap) {
+      return (
+        <DetachedShell>
+          <div className="app loading">
+            <span>{t('detached.connecting')}</span>
+          </div>
+        </DetachedShell>
+      )
+    }
+    return (
+      <DetachedShell>
+        <MapView
+          myGrid={snap.mygrid ?? ''}
+          theme={theme}
+          stations={snap.stations ?? []}
+          prop={prop}
+          selectedCall={selected}
+          onSelectCall={onSelect}
+          needByCall={needByCall}
+          onWorkSpot={onWorkSpot}
+          intent="pota"
+          // This is a surface DEDICATED to POTA hunting, not a torn-off Connect map: it must
+          // open on its own intent preset (Parks on), never inherit the Connect map's layer
+          // picks off the shared primary key. See MapView's `dedicatedIntent`.
+          dedicatedIntent
+        />
+      </DetachedShell>
     )
   }
 
   return (
-    <div className="app detached">
+    <DetachedShell>
       <div className="app loading">
         <span>{t('detached.unavailable', { panel })}</span>
       </div>
-    </div>
+    </DetachedShell>
   )
 }

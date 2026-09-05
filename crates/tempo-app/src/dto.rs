@@ -973,9 +973,13 @@ pub const AMP_REASONS: [&str; 4] = ["portBusy", "noAnswer", "wrongModel", "malfo
 /// ⚠️ NEEDS-BENCH. Both codecs behind this are written from vendor specs. Two values are
 /// deliberately NOT here, and both absences are the honest reading:
 ///
-/// - **No band index.** The SPE ladder is an inference from two published endpoints
-///   (`tempo_audio::amplifier`, `SpeStatus::band_index`), and a raw index tells an operator
-///   nothing their own rig does not already show.
+/// - **The band is carried as a NAME, never a raw index.** The ladder was an inference from two
+///   published endpoints when this struct was written, which is why the index used to be
+///   withheld. It is now anchored at three: §5's `00` = 160m and `11` = 4m, plus a measured
+///   `01` = 80m from a real 1.5K-FA, and 60m is forced into the middle because without it 4m
+///   cannot land on 11. `band_label` is `None` for an index outside that ladder — a band an
+///   amplifier reports and we cannot name is a newer model, not a bad frame, and a wrong name
+///   in front of a kilowatt is worse than no name.
 /// - **No temperature unit, unless the protocol states one.** SPE's §5 says "Temp in °C or F" —
 ///   the amplifier reports whatever its own front panel is set to and the wire does not say
 ///   which. `temp_celsius` is therefore per-family and is the ONLY thing that licenses a scale
@@ -989,6 +993,34 @@ pub const AMP_REASONS: [&str; 4] = ["portBusy", "noAnswer", "wrongModel", "malfo
 /// the invariant those enums exist to hold: the failure direction of a status decoder in front
 /// of a kilowatt has to be toward reporting a fault, not toward silence. So each flattens to a
 /// camelCase String tag plus a bool precomputed from `is_raised()`, the way
+/// One World Radio League push, flattened for the UI (same shape as the HRDLog DTO).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WrlPushResultDto {
+    /// "accepted" | "duplicate" | "rejected" | "authFail" | "pending".
+    pub result: String,
+    /// Human detail when the service said something worth relaying.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl From<tempo_core::logbook::UploadOutcome> for WrlPushResultDto {
+    fn from(o: tempo_core::logbook::UploadOutcome) -> Self {
+        use tempo_core::logbook::UploadOutcome as O;
+        let result = match o {
+            O::Accepted => "accepted",
+            O::Duplicate => "duplicate",
+            O::Rejected => "rejected",
+            O::AuthFail => "authFail",
+            O::Pending => "pending",
+        };
+        Self {
+            result: result.into(),
+            message: None,
+        }
+    }
+}
+
 /// `ClubLogPushResultDto`/`HrdLogPushResultDto` already flatten their result enums.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1012,6 +1044,11 @@ pub struct AmpStatusDto {
     pub transmitting: Option<bool>,
     /// Measured output power, watts.
     pub output_watts: Option<u16>,
+    /// The band the amplifier says it is on, named (`"80m"`). `None` when it reports an index
+    /// outside the known ladder — unnamed rather than guessed. The raw index is deliberately
+    /// not on the wire: it means nothing to an operator and invites arithmetic on a value whose
+    /// middle is derived rather than published.
+    pub band_label: Option<String>,
     /// VSWR at the antenna. `None` when not transmitting — the KPA reads `000` off air, which
     /// is "no reading", not a 0:1 match no antenna could produce.
     pub swr: Option<f32>,
@@ -1134,6 +1171,12 @@ pub struct FieldDayQso {
     /// Scoring class: "DIG" | "CW" | "PH".
     #[serde(default)]
     pub mode: String,
+    /// The ACTUAL on-air mode behind a "DIG" class (ADIF-style, uppercase:
+    /// "FT8", "RTTY"…). Empty = not recorded (legacy rows, and CW/PH where the
+    /// class IS the mode). The interop push reads this so a WFD RTTY contact
+    /// is never pushed to N3FJP/N1MM as "FT8" — a banned mode there.
+    #[serde(default)]
+    pub submode: String,
     /// Unix seconds when logged (drives interop-push timestamps).
     #[serde(default)]
     pub when_unix: u64,
@@ -1171,7 +1214,90 @@ pub struct FieldDayStatus {
     /// powered_points + bonus_points — the claimed total.
     #[serde(default)]
     pub total_score: u32,
+    /// The active-or-next occurrence of this event's window (Unix UTC),
+    /// computed in Rust from the ruleset data — the single source the
+    /// banner/countdown reads. (The TS date math this replaces hardcoded a
+    /// 24 h duration, which dropped SFD's final 3 and WFD's final 6 hours.)
+    #[serde(default)]
+    pub event_start_unix: u64,
+    #[serde(default)]
+    pub event_end_unix: u64,
+    /// The active ruleset's rules year + the rules data's `generated` stamp —
+    /// which parameters are scoring this log (the banner shows both).
+    #[serde(default)]
+    pub rules_year: u16,
+    #[serde(default)]
+    pub rules_generated: String,
+    /// The assistance sources EFFECTIVELY ON right now — the display labels from
+    /// `Settings::assistance_sources()` whose flag is true. The single list the
+    /// warn-only assistance advisory reads: the UI never re-derives what counts
+    /// as assistance from raw toggles (it would get cluster/AI-CW gating wrong).
+    #[serde(default)]
+    pub assistance_on: Vec<String>,
     pub log: Vec<FieldDayQso>,
+    /// Club-sync state (the Nexus↔Nexus event sync) — `None` while neither
+    /// hosting nor joined, so a solo Field Day pays nothing for the feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub club: Option<FdClubDto>,
+}
+
+/// One club band-board row — where a position is and how it is doing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubBoardRow {
+    /// This position's identity — stable, unique, and NOT for display. It is the
+    /// row's key; the raw id used to double as the label, which put "9a85f060"
+    /// on the club board where a tent name belongs.
+    pub posid: String,
+    /// Friendly label ("CW tent"). EMPTY when the position has not been named —
+    /// what an unnamed position reads as is prose, so the UI decides it.
+    pub pos_name: String,
+    pub band: String,
+    pub mode: String,
+    pub operator: String,
+    /// Merged rows from this position (raw).
+    pub qsos: u64,
+    /// Merged rows in the trailing 60 min.
+    pub rate: u64,
+    /// Seconds since the host last heard from it — the UI stale-marks
+    /// rows past 15 s (readings are never silently stale).
+    pub last_seen_secs: u64,
+}
+
+/// The club block on [`FieldDayStatus`]: sync honesty + the down-flowed club
+/// state every position holds (host included — it mirrors itself over
+/// loopback, so this block is uniform across roles).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubDto {
+    /// "disabled" | "offline" | "behind" | "synced" — DERIVED from (link
+    /// liveness, queued), so the chip can never disagree with the queue.
+    pub sync_state: String,
+    /// Own rows the host has not acked yet.
+    pub queued: u64,
+    /// Unix seconds the link went down (0 unless offline).
+    pub offline_since_unix: u64,
+    /// True when this instance is the host (fd_host_enable).
+    pub hosting: bool,
+    /// Event name + host callsign from the welcome.
+    pub event: String,
+    pub host_call: String,
+    /// Club counters as pushed down: claimed score, raw merged QSOs,
+    /// distinct sections.
+    pub score: u32,
+    pub qsos: u64,
+    pub sections: u32,
+    /// Local minus host clock (secs) at the last welcome — the UI warns
+    /// above ±30 s ("check this PC's clock"); nothing is ever adjusted.
+    pub skew_secs: i64,
+    /// The last host `error` line, verbatim (version refusal etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Club dupe keys `(call, band, mode class)` NOT already in the own log —
+    /// the entry fields' while-typing warning checks own ∪ these. Club-only
+    /// keys keep the list small (the own log already ships in `log`).
+    pub dupes: Vec<(String, String, String)>,
+    pub board: Vec<FdClubBoardRow>,
 }
 
 /// Serializable per-source upload status (mirror of `tempo_core` `UploadStatus`).
@@ -2087,6 +2213,11 @@ pub struct AppSnapshot {
     /// Bumped by an inbound UDP Clear — the UI erases its panes on change.
     #[serde(default)]
     pub clear_tick: u32,
+    /// Bumped every time a QSO is logged, by ANY path — the UI fires the
+    /// "clear DX call after logging" wipe on change, so a backend auto-log
+    /// clears the cockpit's DX fields just like a manual log does.
+    #[serde(default)]
+    pub logged_tick: u32,
     /// Pending one-click POTA/SOTA hunt (the next QSO with this call auto-tags
     /// the park). None = not hunting.
     #[serde(default)]
@@ -2135,6 +2266,7 @@ mod tests {
             operate: Some(true),
             transmitting: Some(false),
             output_watts: Some(250),
+            band_label: Some("80m".into()),
             swr: Some(1.5),
             swr_atu: Some(1.2),
             volts: Some(48.0),
@@ -2150,6 +2282,7 @@ mod tests {
         let json = serde_json::to_string(&filled).unwrap();
         for key in [
             "\"swrAtu\"",
+            "\"bandLabel\"",
             "\"outputWatts\"",
             "\"tempCelsius\"",
             "\"alarmRaised\"",
@@ -2164,7 +2297,13 @@ mod tests {
         }
         // The snake_case spellings must be ABSENT — a `contains` on the camelCase key alone
         // would pass just as happily if serde emitted both.
-        for wrong in ["swr_atu", "output_watts", "temp_celsius", "kpa_fault"] {
+        for wrong in [
+            "swr_atu",
+            "band_label",
+            "output_watts",
+            "temp_celsius",
+            "kpa_fault",
+        ] {
             assert!(
                 !json.contains(wrong),
                 "snake_case {wrong} reached the wire — the container rename_all was lost"

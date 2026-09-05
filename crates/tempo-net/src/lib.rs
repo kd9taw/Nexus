@@ -16,6 +16,9 @@
 //! - [`cluster`] / [`aprsis`] — long-lived telnet sessions against public ham
 //!   services (DX cluster / RBN, and APRS-IS). Same shape: a blocking thread
 //!   with reconnect backoff around a pure `Read`/`Write` pump.
+//! - [`fdsync`] — Nexus↔Nexus Field Day club sync (NDJSON over TCP + a UDP
+//!   discovery beacon). The one protocol here where Nexus owns BOTH ends, so
+//!   its codec is serde-derived instead of matching an external wire format.
 //!
 //! Everything is pure Rust over `std` sockets and byte buffers; encoders take
 //! plain field arguments so there is no dependency on the rest of the workspace
@@ -29,6 +32,7 @@
 pub mod aprsis;
 pub mod cluster;
 pub mod dxkeeper;
+pub mod fdsync;
 pub mod flexcat;
 pub mod flexdisc;
 pub mod flexvita;

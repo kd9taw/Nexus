@@ -228,10 +228,27 @@ describe('effectiveOrientation — the double-rotation guard', () => {
     expect(effectiveOrientation(6, intrinsic, { w: 3024, h: 4032 })).toBe(1)
   })
 
-  it('never second-guesses orientations 1–4 (there is nothing to double-apply)', () => {
-    for (const o of [1, 2, 3, 4]) {
-      expect(effectiveOrientation(o, intrinsic, { w: 3024, h: 4032 })).toBe(o)
+  it('⭐ orientation 3 (upside down) is the Mac bug: it changes no dimensions, so the probe decides', () => {
+    // The dimension guard is blind to 2/3/4 (no axis swap). Before the fix this returned the
+    // tag unconditionally, and on WebKit — which applies EXIF during decode — the app rotated
+    // an already-upright picture a second time, i.e. upside down. With the probe saying the
+    // engine already applied orientation, the matrix must be SKIPPED (return 1).
+    for (const o of [2, 3, 4]) {
+      // engine applied EXIF itself (WebKit / <img> fallback) → skip our matrix
+      expect(effectiveOrientation(o, intrinsic, { w: 4032, h: 3024 }, true)).toBe(1)
+      // engine honoured 'none' (WebView2) → apply our matrix
+      expect(effectiveOrientation(o, intrinsic, { w: 4032, h: 3024 }, false)).toBe(o)
+      // unknown probe → trust the tag (pre-fix behaviour, correct where the engine does nothing)
+      expect(effectiveOrientation(o, intrinsic, { w: 4032, h: 3024 })).toBe(o)
     }
+    // orientation 1 is always identity, whatever the probe says.
+    expect(effectiveOrientation(1, intrinsic, { w: 4032, h: 3024 }, true)).toBe(1)
+  })
+
+  it('a swap orientation with ambiguous dimensions falls back to the probe', () => {
+    // square decode: the size measurement carries nothing, so the engine probe breaks the tie.
+    expect(effectiveOrientation(6, { w: 512, h: 512 }, { w: 512, h: 512 }, true)).toBe(1)
+    expect(effectiveOrientation(6, { w: 512, h: 512 }, { w: 512, h: 512 }, false)).toBe(6)
   })
 
   it('trusts the tag when the file header could not be read', () => {

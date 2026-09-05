@@ -141,6 +141,17 @@ jobs:
           "$app" --appimage-extract >/dev/null
           hl=squashfs-root/usr/lib/Nexus/resources/hamlib
           [ -s "$hl/rigctld" ] || { echo "rigctld missing from the AppImage"; exit 1; }
+          # GSTREAMER PLUGINS, or every alert tone in the app is silently dead. linuxdeploy
+          # bundles GStreamer's core libraries and no plugins, then points the plugin search
+          # path INSIDE the AppImage at a directory it never created — which also suppresses
+          # the scan that would have found the host's. WebKit's Web Audio runs on appsrc,
+          # appsink and autoaudiosink, so the band-edge tones, alert sounds and DXped alarm
+          # all fail with "element not found" and nothing else says a word. build-linux.sh
+          # copies them in; this proves they survived into the shipped file.
+          gst=squashfs-root/usr/lib/gstreamer-1.0
+          for p in app autodetect coreelements; do
+            [ -s "$gst/libgst$p.so" ] || { echo "libgst$p.so missing from the AppImage — its alert tones cannot work"; exit 1; }
+          done
           # THE ONE THAT MATTERS: it has to find its own libhamlib, not the runner's. A CI box
           # with Hamlib installed would let a broken rpath pass a bare --version, which is exactly
           # how the first cut of fetch-hamlib-unix.sh looked correct while loading /lib's copy.
@@ -497,6 +508,41 @@ jobs:
           m="$app/Contents/Resources/resources/deepcw/model.onnx"
           [ -s "$m" ] || { echo "DeepCW model missing from the .app"; exit 1; }
           echo "$MODEL_SHA  $m" | shasum -a 256 -c -
+          # HAMLIB MUST BE IN THE .app, AND THE APP MUST LOOK WHERE IT LANDS (#190).
+          #
+          # The Linux job has had this gate since 1.9.0; macOS had the staging and the
+          # signing but no gate, and that is the hole 1.9.2 shipped through: the tools were
+          # in the bundle, correctly signed, at Contents/Resources/resources/hamlib — while
+          # the resolver looked one directory up the tree, so EVERY fresh macOS install had
+          # no CAT at all. Presence alone would not have caught it; the second check is the
+          # one that matters, because it asserts the shipped PATH against the shipped CODE
+          # instead of against a fixture that agrees with the code.
+          hl="$app/Contents/Resources/resources/hamlib"
+          for f in rigctld rigctl rotctld rotctl; do
+            [ -s "$hl/$f" ] || { echo "$f missing from the .app"; exit 1; }
+          done
+          grep -q '\.\./Resources/resources/hamlib/' crates/tempo-audio/src/rigctld_proc.rs \
+            || { echo "the app does not search Contents/Resources/resources/hamlib (#190)"; exit 1; }
+          # It also has to RUN from where it lands — a wrong install-name or a missing dylib
+          # looks identical to a working build until a user double-clicks.
+          "$hl/rigctld" --version || { echo "bundled rigctld will not run"; exit 1; }
+          # …AND RUNNING HERE PROVES LESS THAN IT LOOKS: this runner has Homebrew, so an
+          # absolute /opt/homebrew/... path baked into any shipped Mach-O resolves perfectly
+          # in CI and dies on an operator's Mac. That is how the 1.10.0 CAT regression
+          # shipped — the four tools were repointed to @rpath but libhamlib.4.dylib still
+          # named Homebrew's libusb, and dyld killed every bundled tool before main on any
+          # Mac without it. Sweep EVERY Mach-O in the shipped .app: only @rpath/@loader_path
+          # or genuine system libraries. Per-file positive control: a real Mach-O always
+          # links libSystem, so a scan that cannot see it is reading nothing.
+          for f in "$hl"/rigctld "$hl"/rigctl "$hl"/rotctld "$hl"/rotctl "$hl"/*.dylib; do
+            [ -f "$f" ] || continue
+            deps=$(otool -L "$f")
+            printf '%s\n' "$deps" | grep -q '/usr/lib/libSystem.B.dylib' \
+              || { echo "otool read no dependencies from $f"; exit 1; }
+            bad=$(printf '%s\n' "$deps" | tail -n +2 | awk '{print $1}' \
+                  | grep -vE '^@rpath/|^@loader_path/|^/usr/lib/|^/System/' || true)
+            [ -z "$bad" ] || { echo "$f links outside the bundle — dead on a Mac without those paths:"; echo "$bad"; exit 1; }
+          done
           mkdir -p out
           ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           cp "$dmg" "out/Nexus_${ver}_aarch64.dmg"
@@ -732,12 +778,53 @@ jobs:
           Write-Host "alive after 45 s (pid $($p.Id)) — startup smoke passed"
           Stop-Process -Id $p.Id -Force
 
+  # The offline manual (PDF + EPUB), built from the same docs/guide pages the website
+  # syncs, so the downloadable manual can never drift from the shipped one. GitHub's ubuntu
+  # runner already carries google-chrome (the PDF renders through it via CDP for real page
+  # numbers); pandoc and the websockets client are the only adds. Uploaded as an artifact the
+  # publish job attaches to the Release, where the site's download buttons point
+  # (releases/latest/download/Nexus-Manual.pdf / .epub — stable names, version on the cover).
+  manual:
+    name: Manual (PDF + EPUB)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tools (pandoc + the CDP websockets client; Chrome is preinstalled)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pandoc
+          python3 -m pip install --quiet websockets pillow  # websockets: CDP for the PDF; pillow: WebP→PNG for the EPUB
+      - name: Build the manual
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          mkdir -p manualdist
+          python3 scripts/build-manual-pdf.py  --version "$ver" --out manualdist/Nexus-Manual.pdf
+          python3 scripts/build-manual-epub.py --version "$ver" --out manualdist/Nexus-Manual.epub
+          ls -l manualdist
+          # A real PDF and a real EPUB, or fail the job — never ship an empty download.
+          [ -s manualdist/Nexus-Manual.pdf ] && head -c4 manualdist/Nexus-Manual.pdf | grep -q '%PDF'
+          [ -s manualdist/Nexus-Manual.epub ]
+      - name: Validate the EPUB (W3C epubcheck — the shipped download must be valid)
+        run: |
+          set -euo pipefail
+          EC=5.3.0
+          curl -fsSL "https://github.com/w3c/epubcheck/releases/download/v${EC}/epubcheck-${EC}.zip" -o /tmp/ec.zip
+          python3 -c "import zipfile; zipfile.ZipFile('/tmp/ec.zip').extractall('/tmp')"
+          java -jar "/tmp/epubcheck-${EC}/epubcheck.jar" manualdist/Nexus-Manual.epub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-manual
+          path: manualdist/*
+          if-no-files-found: error
+
   publish:
     name: Publish GitHub Release
     # Windows + Linux gate the release (operator's release order); the Pi .debs attach
     # in publish-pi as they finish and can never hold the primary artifacts hostage.
     # smoke-windows gates too: an installer that dies at launch must never publish.
-    needs: [linux-x86, windows, smoke-windows, macos, smoke-macos]
+    needs: [linux-x86, windows, smoke-windows, macos, smoke-macos, manual]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # `actions: write` is for the downstream hand-off at the end of this job. Job-level
@@ -773,21 +860,25 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           ver="${tag#v}"
+          # A prerelease tag (v1.10.3-beta.1) heads to the same BASE version the artifacts and
+          # tauri.conf.json carry (1.10.3); strip the -suffix for those cross-checks. ver/tag keep
+          # the suffix for the release title and the latest.json version.
+          base_ver="${ver%%-*}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
           # The tag must match the version in tauri.conf.json — the single source of truth
           # every artifact is stamped from. A mismatch means someone forgot to bump.
           conf=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
-          [ "$conf" = "$ver" ] || { echo "tag $tag ($ver) != tauri.conf.json ($conf)"; exit 1; }
+          [ "$conf" = "$base_ver" ] || { echo "tag $tag (base $base_ver) != tauri.conf.json ($conf)"; exit 1; }
           # And every artifact filename must carry that exact version — catches a stale
           # artifact from a cached/retried job sneaking into the release.
           for f in dist/*; do
             case "$(basename "$f")" in
-              *"$ver"*) : ;;
-              *) echo "artifact does not carry version $ver: $f"; exit 1 ;;
+              *"$base_ver"*) : ;;
+              *) echo "artifact does not carry version $base_ver: $f"; exit 1 ;;
             esac
           done
-          echo "All artifacts stamped $ver:"; ls -la dist/
+          echo "All artifacts stamped $base_ver:"; ls -la dist/
 
       - name: Assemble release notes
         run: |
@@ -847,15 +938,25 @@ jobs:
           python3 -c "import json;json.load(open('dist/latest.json'));print('latest.json valid')"
           cat dist/latest.json
 
+      - name: Bring in the manual (PDF + EPUB)
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-manual
+          path: dist
+
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # A SemVer prerelease tag (any hyphen, e.g. -beta.N) publishes as a GitHub pre-release so
+          # it never becomes "Latest" and downstream leaves the stable feeds alone; a plain X.Y.Z is
+          # explicitly marked --latest.
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "Nexus ${{ steps.ver.outputs.ver }}" \
             --notes-file dist/NOTES.md \
-            dist/Nexus_* dist/SHA256SUMS.txt \
+            $( case "${{ steps.ver.outputs.tag }}" in *-*) echo --prerelease ;; *) echo --latest ;; esac ) \
+            dist/Nexus_* dist/Nexus-Manual.pdf dist/Nexus-Manual.epub dist/SHA256SUMS.txt \
             $( [ -f dist/latest.json ] && echo dist/latest.json )
 
   # Second wave (operator's release order: Windows + Linux first, then Pi): attach the

@@ -81,6 +81,21 @@ pub trait RigBackend: Send + Sync {
     fn stop_morse(&self) -> Option<bool> {
         None
     }
+    /// Play the rig's voice memory `ch` (`\send_voice_mem N` — Hamlib's NET client sends
+    /// exactly this spelling; on a Yaesu it becomes the `PB0N;` CAT command). ⚠️ PLAYBACK
+    /// TRANSMITS: the RIG keys itself for the message, exactly as a front-panel PB press —
+    /// Nexus never commands PTT here, and the rig arbitrates against whatever else it is
+    /// doing. `Some(true)` means Nexus accepted and relayed the request, not that audio has
+    /// gone out — the broker's whole write surface answers at the accepted-by-Nexus seam.
+    fn send_voice_mem(&self, _ch: u32) -> Option<bool> {
+        None
+    }
+    /// Abort a voice-memory playback in progress (`\stop_voice_mem`). Served even though
+    /// Hamlib 4.7.1's NET client never sends it (a raw script can, and the abort must not
+    /// be the one verb a scripter cannot reach).
+    fn stop_voice_mem(&self) -> Option<bool> {
+        None
+    }
     /// Split on/off + TX VFO (`S 0|1 VFOB`).
     fn set_split(&self, _on: bool, _tx_vfo: &str) -> Option<bool> {
         None
@@ -322,11 +337,21 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
         "\\chk_vfo" => Handled::Reply("CHKVFO 0\n".into()),
         "\\get_powerstat" => Handled::Reply("1\n".into()), // powered on
         "\\stop_morse" => Handled::Reply(rprt_ext(backend.stop_morse())),
+        "\\stop_voice_mem" => Handled::Reply(rprt_ext(backend.stop_voice_mem())),
         "q" | "Q" => Handled::Close,
         _ => {
             let mut p = line.split_whitespace();
             let reply = match p.next() {
                 Some("f") => format!("{}\n", backend.freq_hz()),
+                // No single-letter form exists for this verb — Hamlib's own NET client
+                // sends the spelled `\send_voice_mem <ch>` (netrigctl.c, 4.7.1), so it
+                // dispatches here rather than through `canonical_line`. A channel that
+                // does not parse is refused, never guessed at.
+                Some("\\send_voice_mem") => rprt_ext(
+                    p.next()
+                        .and_then(|c| c.parse::<u32>().ok())
+                        .map_or(Some(false), |ch| backend.send_voice_mem(ch)),
+                ),
                 // Hamlib sends freq as printf %lf ("F 14074000.000000"), so parse
                 // as f64 and round to Hz — a u64 parse rejects every real client.
                 Some("F") => rprt(
@@ -1199,6 +1224,7 @@ pub(crate) mod tests {
     struct ExtRig {
         base: MockRig,
         morse: Mutex<Vec<String>>,
+        voice: Mutex<Vec<u32>>,
         rit: Mutex<i32>,
     }
     impl RigBackend for ExtRig {
@@ -1240,10 +1266,49 @@ pub(crate) mod tests {
         fn stop_morse(&self) -> Option<bool> {
             Some(true)
         }
+        fn send_voice_mem(&self, ch: u32) -> Option<bool> {
+            self.voice.lock().unwrap().push(ch);
+            Some(true)
+        }
+        fn stop_voice_mem(&self) -> Option<bool> {
+            Some(true)
+        }
         fn set_rit(&self, hz: i32) -> Option<bool> {
             *self.rit.lock().unwrap() = hz;
             Some(true)
         }
+    }
+
+    /// The FT-991A DVS ask (2026-09-01): a script plays a voice memory through the broker
+    /// with Hamlib's own NET wire form — netrigctl sends exactly `\send_voice_mem <ch>`
+    /// (rigs/dummy/netrigctl.c, 4.7.1), and `\stop_voice_mem` exists for the abort even
+    /// though 4.7.1's NET client never sends it (a raw script can). A backend that does not
+    /// implement them answers `RPRT -11`, the same not-implemented contract as every other
+    /// extended verb — which is byte-identically what the pre-verb broker said, so an old
+    /// client sees no change. A malformed channel is a refusal, not a crash and not a relay.
+    #[test]
+    fn voice_memory_verbs_relay_with_hamlibs_own_wire_form() {
+        let b = ExtRig {
+            base: MockRig::default(),
+            morse: Mutex::new(Vec::new()),
+            voice: Mutex::new(Vec::new()),
+            rit: Mutex::new(0),
+        };
+        assert_eq!(reply("\\send_voice_mem 2", &b), "RPRT 0\n");
+        assert_eq!(*b.voice.lock().unwrap(), vec![2]);
+        assert_eq!(reply("\\stop_voice_mem", &b), "RPRT 0\n");
+        // Malformed or missing channel: refused, never relayed as a guess.
+        assert_eq!(reply("\\send_voice_mem x", &b), "RPRT -1\n");
+        assert_eq!(reply("\\send_voice_mem", &b), "RPRT -1\n");
+        assert_eq!(
+            b.voice.lock().unwrap().len(),
+            1,
+            "the refusals relayed nothing"
+        );
+        // The default backend keeps the pre-verb bytes: not implemented.
+        let plain = MockRig::default();
+        assert_eq!(reply("\\send_voice_mem 1", &plain), "RPRT -11\n");
+        assert_eq!(reply("\\stop_voice_mem", &plain), "RPRT -11\n");
     }
 
     #[test]
@@ -1251,6 +1316,7 @@ pub(crate) mod tests {
         let b = ExtRig {
             base: MockRig::default(),
             morse: Mutex::new(Vec::new()),
+            voice: Mutex::new(Vec::new()),
             rit: Mutex::new(0),
         };
         // Levels: `l` replies the value line; `L` acks.

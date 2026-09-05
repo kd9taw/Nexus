@@ -54,6 +54,9 @@ struct SatSplit {
 pub struct CivBackend {
     h: CivHandle,
     addr: u8,
+    /// When the dial was last READ from the radio (not merely cached). Bounds how long a
+    /// timed-out `f` may serve the cache — see [`cache_fresh`].
+    last_freq_ok: Mutex<Option<std::time::Instant>>,
     /// Which Icom DATA mode to select for digital operating (1..=3, default 1 = today's
     /// behaviour). Atomic because a settings save must move it under a RUNNING daemon: the
     /// alternative is a CI-V restart to change a menu choice, which drops CAT mid-session.
@@ -84,11 +87,20 @@ pub struct CivBackend {
     band: Mutex<SatSplit>,
 }
 
+/// How long a timed-out dial read may still serve the last real reading.
+const CIV_CACHE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Is the cached dial still recent enough to stand in for a read that timed out?
+fn cache_fresh(last_ok: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last_ok.is_some_and(|t| now.saturating_duration_since(t) <= CIV_CACHE_GRACE)
+}
+
 impl CivBackend {
     pub fn new(h: CivHandle, addr: u8, tx_intent: Arc<AtomicBool>, data_mode: u8) -> Self {
         CivBackend {
             h,
             addr,
+            last_freq_ok: Mutex::new(None),
             data_mode: std::sync::atomic::AtomicU8::new(data_mode.clamp(1, 3)),
             split: AtomicBool::new(false),
             tx_intent,
@@ -370,13 +382,28 @@ impl RigBackend for CivBackend {
             return 0;
         }
         match self.read(commands::read_freq(self.addr), 0x03, None) {
-            Ok(f) => commands::parse_freq(&f)
-                .or(self.h.state().freq_hz)
-                .unwrap_or(0),
+            Ok(f) => {
+                *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(std::time::Instant::now());
+                commands::parse_freq(&f)
+                    .or(self.h.state().freq_hz)
+                    .unwrap_or(0)
+            }
             // Radio busy (a timeout can be one crowded moment): the last transceive/
-            // reply is honest recent truth. A DEAD engine gets no such grace — serving
-            // the frozen cache would paint a zombie green with a frozen dial.
-            Err(CivError::Timeout) => self.h.state().freq_hz.unwrap_or(0),
+            // reply is honest recent truth — FOR A MOMENT. ⚠️ Unbounded, this cache was a
+            // lie that never expired (the overnight-radio review, 2026-09-02): a rig switched
+            // OFF with its port still present times out on every `03`, and `f` kept serving
+            // the last dial — a plausible nonzero number — so the loop's breaker never
+            // tripped and the pill stayed green over a dead radio while every write failed.
+            // Past [`CIV_CACHE_GRACE`] the honest answer is 0, exactly as for a dead engine.
+            Err(CivError::Timeout) => {
+                let last = *self.last_freq_ok.lock().unwrap_or_else(|e| e.into_inner());
+                if cache_fresh(last, std::time::Instant::now()) {
+                    self.h.state().freq_hz.unwrap_or(0)
+                } else {
+                    0
+                }
+            }
             Err(_) => 0,
         }
     }
@@ -962,6 +989,21 @@ impl Drop for CivDaemon {
 
 #[cfg(test)]
 mod tests {
+    /// The cached dial stands in for ONE crowded moment, never for a radio that is off.
+    #[test]
+    fn a_timed_out_dial_read_serves_the_cache_only_briefly() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        assert!(
+            !super::cache_fresh(None, t0),
+            "never read = nothing to serve"
+        );
+        assert!(super::cache_fresh(Some(t0), t0 + Duration::from_secs(2)));
+        assert!(
+            !super::cache_fresh(Some(t0), t0 + Duration::from_secs(6)),
+            "past the grace the honest dial is 0 and the breaker can see the rig is mute"
+        );
+    }
 
     use super::super::engine::tests_support::FakeRadio;
     use super::*;

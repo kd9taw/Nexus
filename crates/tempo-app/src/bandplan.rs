@@ -38,6 +38,24 @@ pub struct BandChannel {
     pub label: String,
     /// Short note: what it sits near / clearance / privilege flag.
     pub note: String,
+    /// May THIS operator's licence class transmit here? (#184, akhepcat)
+    ///
+    /// ⚠️ FALSE MEANS RECEIVE-ONLY, NOT HIDDEN. The band dropdowns used to drop a band the
+    /// class held no transmit segment for, which applied a TRANSMIT rule to a TUNING list:
+    /// no licence restricts LISTENING, and the radio itself will happily tune there. A US
+    /// General was therefore unable to select 4 m at all, rather than being able to listen
+    /// and being refused the over.
+    ///
+    /// This field is DISPLAY ONLY and the transmit gate does not read it —
+    /// [`crate::privileges::tx_allowed`] is still the only thing that decides whether an
+    /// over may be keyed, and it is unchanged. Defaults true so every existing plan entry
+    /// and any stored JSON keeps its current meaning.
+    #[serde(default = "yes")]
+    pub tx: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn ch(band: &str, group: &str, dial_mhz: f64, mode: &str, label: &str, note: &str) -> BandChannel {
@@ -48,6 +66,7 @@ fn ch(band: &str, group: &str, dial_mhz: f64, mode: &str, label: &str, note: &st
         mode: mode.to_string(),
         label: label.to_string(),
         note: note.to_string(),
+        tx: true,
     }
 }
 

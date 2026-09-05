@@ -230,7 +230,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'depth', 'deep', 'auto cq', 'cq', 'hound', 'fox', 'dxpedition', 'auto log', 'blocked',
       'ap decode', 'f low', 'f high', 'tune', 'tune timeout', 'tune carrier', 'key down',
       'tx period', 't/r period', 'disable tx after 73', 'tune power', 'low power tune',
-      'atu power', 'loop antenna'],
+      'atu power', 'loop antenna', 'db reports', 'comments', 'reports to comments'],
   },
   {
     id: 'jt65',
@@ -336,7 +336,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Alerts',
     tab: 'spots',
     keywords: ['alert', 'notify', 'my call', 'cq', 'new dxcc', 'new grid', 'rare', 'watch list',
-      'wanted', 'sound'],
+      'wanted', 'sound', 'lotw', 'confirm', 'confirmation', 'confirm tier'],
   },
 
   // ---- Logging & Connectors ----------------------------------------------------
@@ -402,13 +402,21 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['fcc', 'state', 'was', 'callsign database', 'us states'],
   },
   {
+    id: 'country-file',
+    label: 'Country file (DXCC)',
+    tab: 'logging',
+    keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
+      'country'],
+  },
+  {
     id: 'confirmations',
     label: 'Confirmations',
     tab: 'logging',
     neededInHourOne: true,
     keywords: ['lotw', 'eqsl', 'qrz', 'clublog', 'club log', 'hrdlog', 'cloudlog', 'wavelog',
       'hamqth', 'qsl', 'upload', 'auto-upload', 'password', 'api key', 'credential', 'login',
-      'callbook', 'repeaterbook', 'tqsl', 'station location'],
+      'callbook', 'repeaterbook', 'tqsl', 'station location',
+      'wrl', 'world radio league', 'qth nickname', 'nickname'],
   },
 
   // ---- Contesting --------------------------------------------------------------
@@ -423,7 +431,34 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Field Day Setup',
     tab: 'contesting',
     keywords: ['field day', 'arrl', 'class', 'section', 'exchange', 'power multiplier',
-      'winter field day'],
+      'winter field day', 'rules', 'rules year', 'rules update', 'wfd'],
+  },
+  // A club site answers "who are you?" three different ways — the call that goes on the air,
+  // the tent you are sitting in, and the person at the key — and all three already existed as
+  // settings (`mycall`, `fd_position_name`, `fd_operator`). What did not exist was one place
+  // that showed them as a set: two lived on Station, the third sat under a networking heading
+  // on Contesting, and the club report that produced this section is an operator asking what
+  // the position name was even for. So this is a VIEW of three existing fields, deliberately
+  // not new state, placed where a Field Day operator meets them.
+  {
+    id: 'field-day-identity',
+    label: "Who's who at this event",
+    tab: 'contesting',
+    keywords: ['callsign', 'club call', 'position name', 'position', 'tent', 'trailer',
+      'operator', 'operator at the key', 'multi-op', 'multiop', 'swap seats', 'who is operating',
+      'station name', 'my call'],
+  },
+  {
+    id: 'field-day-club',
+    label: 'Field Day Club Sync',
+    tab: 'contesting',
+    // 'position' and 'tent' moved to `field-day-identity` with the control they name. Search
+    // scores an exact keyword above everything but a label, and ties break alphabetically, so
+    // leaving either word here would have kept sending "position"/"tent" to the networking
+    // section — which is exactly the section the operator could not make sense of.
+    keywords: ['club', 'sync', 'host', 'join', 'multi-op', 'multiop', 'lan',
+      'network', 'band board', 'scoreboard', 'dupe sharing', 'discover', 'find club events',
+      'club log', 'spectator', 'tv', 'projector', 'big screen'],
   },
 
   // ---- Appearance --------------------------------------------------------------
@@ -435,11 +470,29 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'density', 'compact', 'pane', 'layout'],
   },
   {
+    // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at
+    // Connect, not a station or contest setting — and the keywords carry the words an
+    // operator would actually search for ("tv", "chromecast", "cast", "browser").
+    id: 'connect-web',
+    label: 'Connect on a TV',
+    tab: 'appearance',
+    keywords: ['tv', 'television', 'big screen', 'wall display', 'browser', 'lan', 'hamclock',
+      'network', 'web page', 'cast', 'chromecast', 'firestick', 'fire stick', 'tablet',
+      'phone', 'remote view', 'read only', 'shack tv'],
+  },
+  {
     id: 'features',
     label: 'Features',
     tab: 'appearance',
     keywords: ['sections', 'enable', 'disable', 'turn off', 'hide', 'profile', 'goal',
       'pota', 'setup wizard', 'field day mode'],
+  },
+  {
+    id: 'app-updates',
+    label: 'App updates',
+    tab: 'appearance',
+    keywords: ['beta', 'update', 'pre-release', 'prerelease', 'channel', 'stable',
+      'auto update', 'early access'],
   },
   {
     id: 'accessibility',

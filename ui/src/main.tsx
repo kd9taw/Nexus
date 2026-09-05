@@ -9,6 +9,7 @@ import { initLocale, installCatalog } from './i18n'
 import { DE } from './i18n/de'
 import { ES } from './i18n/es'
 import { FR } from './i18n/fr'
+import { JA } from './i18n/ja'
 import { installExternalLinkInterceptor } from './externalLinks'
 import { isTauri, openExternalUrl } from './api'
 import { pushToast } from './toast'
@@ -108,6 +109,7 @@ void loadDurable().finally(() => {
   installCatalog('de', DE)
   installCatalog('es', ES)
   installCatalog('fr', FR)
+  installCatalog('ja', JA)
   initLocale()
   createRoot(document.getElementById('root')!).render(tree)
 })

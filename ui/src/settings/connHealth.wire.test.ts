@@ -38,7 +38,7 @@ describe('the connector id slugs agree across the wire', () => {
     // Without this, a regex that matched nothing would make every assertion below vacuous:
     // two empty arrays are equal, and the guard would pass forever while drifting freely.
     const ids = rustIds()
-    expect(ids.length).toBe(8)
+    expect(ids.length).toBe(9)
     expect(ids).toContain('qrz-logbook')
   })
 

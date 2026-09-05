@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
-import type { FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
-import { exportLog, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads } from '../api'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import type { FdClubStatus, FieldDayQso, FieldDayStatus, ModeRequest, Settings } from '../types'
+import { exportLog, fdClubExport, getSettings, setSettings, setFdOperator, openPanelWindow, saveTextToDownloads, type FdRulesetDto } from '../api'
+import { FdAdvisories } from './FdAdvisories'
 import { pushToast } from '../toast'
-import { fdNextEvent, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
+import { fdEventFromWindow, fdHeaderSubtitle, FD_EVENT_NAMES, type FdKind } from '../fdEvent'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { ARRL_SECTIONS_BY_DIVISION, ARRL_SECTION_TOTAL } from '../features/arrlSections'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
+import { bandColor } from '../bandColors'
+import { modeClassOf } from '../features/needs'
 
 /**
  * ⚠️ INVARIANT — the FD mode codes an entry is scored by, printed as they are logged and
@@ -48,6 +51,67 @@ export const FD_BONUSES: FdBonus[] = [
   { id: 'educational',        label: 'Educational Activity',        points: 100 },
 ]
 
+/**
+ * THREE STATES PER BONUS, out of two id lists.
+ *
+ * `settings.fdBonuses` is the EARNED set and keeps that meaning exactly — it is what the
+ * score is made of, on both sides of the wire (`fd_rules::bonus_points(&fd_bonuses)`).
+ * `settings.fdBonusesPlanned` is the club's Friday intent, and NOTHING that scores,
+ * exports or reports reads it. A plan is a plan, not points.
+ *
+ * Earned wins where an id sits in both lists, which is why confirming a bonus does not
+ * have to edit two lists — and why un-confirming a mis-click puts it back on the chase
+ * list instead of losing the plan.
+ */
+export type FdBonusState = 'none' | 'planned' | 'earned'
+
+export function fdBonusState(id: string, earned: string[], planned: string[]): FdBonusState {
+  if (earned.includes(id)) return 'earned'
+  if (planned.includes(id)) return 'planned'
+  return 'none'
+}
+
+/**
+ * The chase arithmetic. `earnedPoints` is the ONLY number here that reaches the score —
+ * it is the same sum `computeFdScore` falls back to. `plannedPoints` counts
+ * planned-but-not-yet-earned bonuses only, so a bonus never lands in both columns and
+ * "if all land" is a real ceiling rather than a double count.
+ */
+export function fdBonusTally(earned: string[], planned: string[]) {
+  let earnedCount = 0
+  let earnedPoints = 0
+  let plannedCount = 0
+  let plannedPoints = 0
+  for (const b of FD_BONUSES) {
+    const state = fdBonusState(b.id, earned, planned)
+    if (state === 'earned') {
+      earnedCount++
+      earnedPoints += b.points
+    } else if (state === 'planned') {
+      plannedCount++
+      plannedPoints += b.points
+    }
+  }
+  return {
+    earnedCount,
+    earnedPoints,
+    plannedCount,
+    plannedPoints,
+    potentialPoints: earnedPoints + plannedPoints,
+  }
+}
+
+/**
+ * The power tiers, one for one with Settings ▸ Contesting ▸ Field Day Setup. The SAME
+ * `fdPowerMult` field and the SAME catalog keys deliberately: two surfaces that edit one
+ * setting cannot drift, and they must not describe it in two different sets of words.
+ */
+const FD_POWER_TIERS = [
+  { value: 5, labelKey: 'settings.fieldDay.power.qrp.label',     hintKey: 'settings.fieldDay.power.qrp.hint' },
+  { value: 2, labelKey: 'settings.fieldDay.power.hundred.label', hintKey: 'settings.fieldDay.power.hundred.hint' },
+  { value: 1, labelKey: 'settings.fieldDay.power.high.label',    hintKey: 'settings.fieldDay.power.high.hint' },
+] as const
+
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
@@ -55,6 +119,14 @@ export const FD_BONUSES: FdBonus[] = [
 interface Props {
   fieldDay: FieldDayStatus | null
   onSetMode: (mode: ModeRequest) => void
+  /** The Field Day master switch (settings.fdActive) — gates the advisories. */
+  fdActive?: boolean
+  /** The active event's ruleset facts (App fetches get_fd_ruleset once per
+   *  configured event) — the warn-only advisories read these. */
+  fdRuleset?: FdRulesetDto | null
+  /** The active digital tier (App's snap.link.tier) — the banned-mode chip
+   *  checks it against the ruleset's bannedModes. */
+  tier?: string
 }
 
 interface LogRowMeta {
@@ -65,8 +137,15 @@ interface LogRowMeta {
   isDupe: boolean
 }
 
-type ExportFormat = 'cabrillo' | 'adif' | 'summary' | 'dupesheet'
-const EXT: Record<ExportFormat, string> = { cabrillo: 'cbr', adif: 'adi', summary: 'txt', dupesheet: 'txt' }
+type ExportFormat = 'cabrillo' | 'adif' | 'summary' | 'dupesheet' | 'club-cabrillo' | 'club-adif'
+const EXT: Record<ExportFormat, string> = {
+  cabrillo: 'cbr',
+  adif: 'adi',
+  summary: 'txt',
+  dupesheet: 'txt',
+  'club-cabrillo': 'cbr',
+  'club-adif': 'adi',
+}
 
 /**
  * Annotate each log entry with multiplier / dupe state. Sections are marked the
@@ -137,6 +216,10 @@ function bandCounts(log: FieldDayQso[]): { band: string; n: number }[] {
 interface SummaryArgs {
   eventName: string
   isWfd: boolean
+  /** Which rules data scored this summary (FieldDayStatus.rulesYear /
+   *  rulesGenerated) — 0/'' on an older backend skips the line. */
+  rulesYear: number
+  rulesGenerated: string
   myClass: string
   mySection: string
   log: FieldDayQso[]
@@ -160,11 +243,16 @@ interface SummaryArgs {
  * is submitted in. Localising the exports is a design decision of its own, not a mechanical
  * migration; it is recorded here rather than left looking like an omission.
  */
-function buildSummaryText(a: SummaryArgs): string {
+export function buildSummaryText(a: SummaryArgs): string {
   const L: string[] = []
   L.push(`${a.eventName.toUpperCase()} — SCORE SUMMARY`)
   L.push(`Station class ${a.myClass || '—'}   Section ${a.mySection || '—'}`)
   L.push(`Generated ${new Date().toISOString()}`)
+  // Which rules parameters scored this document (design 3f) — a data update
+  // that changes a number is visible on the artifact an operator hands over.
+  if (a.rulesYear) {
+    L.push(`Scored under ${a.rulesYear} rules (data ${a.rulesGenerated.slice(0, 10)})`)
+  }
   L.push('')
   L.push(`QSOs: ${a.log.length}`)
   L.push(`  By mode:  DIG ${a.modes.dig}   CW ${a.modes.cw}   PH ${a.modes.ph}`)
@@ -325,7 +413,7 @@ const CELL_UNWORKED: CSSProperties = {
 }
 
 /** The colored worked/unworked section grid, grouped by ARRL division. */
-function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
+export function SectionsBoard({ workedSet }: { workedSet: Set<string> }) {
   const workedCount = useMemo(
     () =>
       ARRL_SECTIONS_BY_DIVISION.reduce(
@@ -424,6 +512,424 @@ function computeFdScore(fieldDay: FieldDayStatus | null, settings: Settings | nu
     .reduce((sum, b) => sum + b.points, 0)
   const totalScore = fieldDay?.totalScore ?? poweredPoints + bonusPoints
   return { fdPowerMult, qsoPts, poweredPoints, claimedBonusIds, bonusPoints, totalScore }
+}
+
+// ---------------------------------------------------------------------------
+// Club sync (the Nexus↔Nexus event sync). Rendered only while the club block
+// rides the snapshot (hosting or joined) — a solo Field Day never sees it.
+// Inline styles off the shared tokens, the SectionsBoard idiom.
+// ---------------------------------------------------------------------------
+
+const CLUB_WRAP: CSSProperties = {
+  flex: '0 0 auto',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '10px 16px 12px',
+  borderBottom: '1px solid var(--border-soft)',
+}
+const CLUB_HEADER: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 10,
+}
+const CLUB_CHIP_BASE: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  padding: '3px 10px',
+  borderRadius: 'var(--radius-sm)',
+  fontSize: 12,
+  fontWeight: 700,
+  letterSpacing: '0.03em',
+}
+/** The sync chip's ink per state — every token exists in BOTH themes. */
+function clubChipStyle(state: string): CSSProperties {
+  const ink =
+    state === 'synced'
+      ? 'var(--status-confirmed)'
+      : state === 'behind'
+        ? 'var(--status-new-band)'
+        : 'var(--status-new-entity)'
+  return {
+    ...CLUB_CHIP_BASE,
+    color: ink,
+    background: `color-mix(in srgb, ${ink} 14%, transparent)`,
+    border: `1px solid color-mix(in srgb, ${ink} 50%, transparent)`,
+  }
+}
+const CLUB_BOARD_GRID: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0,1.6fr) 0.8fr 0.7fr minmax(0,1fr) 0.6fr 0.6fr',
+  columnGap: 10,
+  rowGap: 3,
+  fontSize: 13,
+  alignItems: 'baseline',
+}
+const CLUB_COL_HEAD: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: 'var(--text-faint)',
+}
+/** Column heads, at the docked size or the torn-off window's glance size. */
+function colHead(big: boolean): CSSProperties {
+  return big ? { ...CLUB_COL_HEAD, fontSize: 13 } : CLUB_COL_HEAD
+}
+const CLUB_WARN: CSSProperties = {
+  fontSize: 12,
+  color: 'var(--status-new-entity)',
+}
+
+/** The chip's text for each derived state (honesty rule: the queue is IN the
+ * label, so "connected but behind" can never masquerade as synced). */
+function clubChipText(club: FdClubStatus): string {
+  switch (club.syncState) {
+    case 'synced':
+      return t('fieldDay.club.state.synced')
+    case 'behind':
+      return t('fieldDay.club.state.behind', { queued: club.queued })
+    default:
+      return t('fieldDay.club.state.offline', { queued: club.queued })
+  }
+}
+
+/**
+ * The club band board — who is on what band, across every position on site.
+ *
+ * Exported because it is also the whole content of the `fdclub` pop-out
+ * (DetachedPanel), which the rail opens directly: a multi-station club watches
+ * this continuously — "to see where people are so they can move to the right
+ * bands when multiple stations are operating" — and the `fieldday` pop-out is
+ * already taken by the scoreboard. `onExport` is absent in the torn-off copy,
+ * because the export buttons report where the file landed through a toast and a
+ * detached window hosts none.
+ *
+ * `detached` is therefore TWO things: it drops the pop-out button and the export
+ * pair, and it sets the whole board in bigger type. The size is the point of the
+ * window — this board is watched from the operating position across the tent, not
+ * read at the keyboard — so it is a design choice here, NOT the hand-compensation
+ * the torn-off Needed window used to carry for the 65% zoom floor (see the
+ * `.np-grid` note in styles.css). It is honest because `PANEL_NATURAL.fdclub`
+ * declares the larger box, so auto-fit opens the window big enough for it instead
+ * of shrinking the type straight back.
+ */
+/** Bands Field Day is actually worked on. 60/30/17/12 are barred by both ARRL FD and WFD,
+ *  so a board that offered them as "free" would be inviting an illegal contact. */
+const FD_BOARD_BANDS = ['160m', '80m', '40m', '20m', '15m', '10m', '6m', '2m', '1.25m', '70cm']
+
+/** The dead-man for a presence reading, matching the club board's own stale mark: past this
+ *  many seconds the host has not heard the position and the row is a memory, not a fact. */
+const FD_PRESENCE_DEAD_SECS = 15
+
+/**
+ * The FD SCORING CLASS a position is running — "CW" | "PH" | "DIG", the three modes Field Day
+ * scores by, and the only thing this board can honestly compare.
+ *
+ * ⚠️ WHY THE CLASS AND NOT THE SUBMODE. `Engine::fd_position_report` puts the class on the wire
+ * (`OperatingMode` → PH/CW/DIG) and never the submode, so FT8 and RTTY arrive here as the same
+ * three letters — there is no finer comparison available even in principle. It is also the
+ * comparison that matches the rules an operator is judged by: ARRL FD scores one QSO per band
+ * per MODE CLASS (a station worked on 20m RTTY pays nothing again on 20m FT8) and Class A
+ * permits one transmitted signal per band/mode, so two digital positions on one band are
+ * splitting a single pool of contacts — a real conflict, not a false alarm. Comparing the raw
+ * string instead would be the useless end of the trade: it would call "SSB" and "USB" a clash
+ * and let the pool-splitting pair through.
+ *
+ * A peer on an older or third-party build can still report a raw on-air mode; route that through
+ * the app's own classifier rather than dropping it into DIG by accident.
+ */
+function fdModeClass(mode: string): 'CW' | 'PH' | 'DIG' {
+  const m = (mode || '').trim().toUpperCase()
+  if (m === 'CW' || m === 'PH' || m === 'DIG') return m
+  const cls = modeClassOf(m)
+  return cls === 'CW' ? 'CW' : cls === 'Phone' ? 'PH' : 'DIG'
+}
+
+/**
+ * THE COLLISION — the FD mode classes on this band that more than one LIVE position is running.
+ * Empty means no conflict, and that is the common case.
+ *
+ * ⚠️ STALE POSITIONS DO NOT PARTICIPATE. Past `FD_PRESENCE_DEAD_SECS` the reading says where a
+ * tent WAS; it may have moved and the report simply has not reached the host. Raising an alarm
+ * off a reading we know is out of date is how a board earns the habit of being ignored, and the
+ * alarm that matters is the one at 2 AM after that habit forms. The stale position is still
+ * listed and still ⚠-marked — nothing is hidden, it just cannot ring the bell.
+ */
+function bandClashClasses(here: FdClubStatus['board']): string[] {
+  const seen = new Map<string, number>()
+  for (const r of here) {
+    if (r.lastSeenSecs > FD_PRESENCE_DEAD_SECS) continue
+    // ⚠️ AND NEITHER DOES A POSITION THAT HAS NOT WORKED ANYBODY. Presence carries DEFAULTS:
+    // a freshly launched Nexus reports band "20m", mode DIG before a rig is even plugged in,
+    // and the pump sends that first report the instant it connects. Three club laptops opened
+    // on the Friday afternoon — or one logging-only seat, or a spare with no CAT — therefore
+    // all announce 20m/DIG at once, and a detector that counted them would paint ⛔ CLASH
+    // across the board before anyone had keyed a transmitter. That is the alarm-that-cries-
+    // wolf failure exactly: by 2 AM, when a real collision costs contacts, nobody is looking
+    // at it any more. A contact in the log is the cheapest available proof that a position is
+    // genuinely on that band and mode rather than merely switched on.
+    if (r.qsos === 0) continue
+    const cls = fdModeClass(r.mode)
+    seen.set(cls, (seen.get(cls) ?? 0) + 1)
+  }
+  return [...seen.entries()].filter(([, n]) => n > 1).map(([cls]) => cls)
+}
+
+/**
+ * WHO IS ON WHICH BAND — one row per BAND, not per position.
+ *
+ * ⚠️ THE INVERSION IS THE WHOLE POINT, and the reason the club board did not answer this.
+ * That board lists positions and puts each one's band in a column, which answers "what is
+ * the CW tent doing?". The question an operator actually has, four times over, is the other
+ * one: "which band can I move to?" — and to answer it from a position list you have to hold
+ * every row in your head and invert it yourself, at 2 AM, while somebody waits. Here an
+ * empty row IS the answer.
+ *
+ * Two stations on the same band is shown rather than hidden: at a multi-transmitter club
+ * that is either a mistake about to cost a QSO or a deliberate CW/phone split, and the
+ * operator is the one who can tell which.
+ *
+ * COLOUR carries the two readings this board is glanced at for. A busy band takes its own
+ * `BAND_COLOR` — the same ink the map spots and the band picker use, so 20m looks like 20m
+ * everywhere — while a free band stays dim and uncoloured, because the gap is what the eye is
+ * hunting for. A band where two live positions share a mode class goes to the alert ink with a
+ * ⛔ and the word CLASH: it is read from across a tent, so it has to be wrong at a glance, and
+ * the word (not the colour) is what carries it to a colour-blind operator or a screen reader.
+ */
+export function FdBandOccupancy({ club, big = false }: { club: FdClubStatus; big?: boolean }) {
+  const byBand = new Map<string, typeof club.board>()
+  for (const row of club.board) {
+    const b = (row.band || '').trim()
+    if (!b) continue
+    const list = byBand.get(b) ?? []
+    list.push(row)
+    byBand.set(b, list)
+  }
+  // Bands somebody is on that are not in the standard list (an off-plan band, or one of the
+  // barred ones worked by mistake) still appear — never hide a station that is transmitting.
+  const extra = [...byBand.keys()].filter((b) => !FD_BOARD_BANDS.includes(b)).sort(
+    (a, b) => bandRank(a) - bandRank(b),
+  )
+  const cell: CSSProperties = { fontSize: big ? 20 : 13, padding: big ? '4px 0' : '2px 0' }
+  return (
+    <div data-band-occupancy="" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: big ? 18 : 10 }}>
+      <span style={colHead(big)}>{t('fieldDay.club.bands.column.band')}</span>
+      <span style={colHead(big)}>{t('fieldDay.club.bands.column.who')}</span>
+      {[...FD_BOARD_BANDS, ...extra].map((band) => {
+        const here = byBand.get(band) ?? []
+        const busy = here.length > 0
+        const clash = bandClashClasses(here)
+        // The FD mode codes are invariant (FD_MODE_CODES), so the description names them as
+        // they are logged — a club board that said "digital" where the log says DIG is a
+        // second vocabulary to learn at 2 AM.
+        const why = clash.length
+          ? t('fieldDay.club.bands.clash.why', { band, mode: clash.join(' / ') })
+          : undefined
+        return (
+          <Fragment key={band}>
+            <span
+              className="mono"
+              style={{
+                ...cell,
+                fontWeight: 800,
+                opacity: busy ? 1 : 0.5,
+                color: clash.length
+                  ? 'var(--alert-critical)'
+                  : busy
+                    ? bandColor(band)
+                    : undefined,
+              }}
+            >
+              {band}
+            </span>
+            <span
+              className="mono"
+              data-band-clash={clash.length ? band : undefined}
+              title={why}
+              style={{
+                ...cell,
+                opacity: busy ? 1 : 0.45,
+                ...(clash.length
+                  ? {
+                      color: 'var(--alert-critical)',
+                      fontWeight: 700,
+                      background: 'color-mix(in srgb, var(--alert-critical) 18%, transparent)',
+                      padding: big ? '4px 8px' : '2px 6px',
+                      borderRadius: 4,
+                    }
+                  : null),
+              }}
+            >
+              {clash.length > 0 && (
+                <span aria-hidden="true">⛔ {t('fieldDay.club.bands.clash.mark')} · </span>
+              )}
+              {busy
+                ? here
+                    .map((r) => {
+                      const who = r.posName || r.operator || t('fieldDay.club.board.unnamed')
+                      const stale = r.lastSeenSecs > FD_PRESENCE_DEAD_SECS ? ' ⚠' : ''
+                      return `${who} · ${r.mode}${stale}`
+                    })
+                    .join('   |   ')
+                : t('fieldDay.club.bands.free')}
+              {/* The alarm in words, for a reader who gets neither the ink nor the glyph. */}
+              {why && <span className="sr-only"> {why}</span>}
+            </span>
+          </Fragment>
+        )
+      })}
+    </div>
+  )
+}
+
+export function FdClubSection({
+  club,
+  onExport,
+  busy = false,
+  detached = false,
+}: {
+  club: FdClubStatus
+  onExport?: (format: 'club-cabrillo' | 'club-adif') => void
+  busy?: boolean
+  detached?: boolean
+}) {
+  // The glance scale. One flag, applied at the handful of places that carry a
+  // px size, so the docked board is byte-for-byte what it was.
+  const big = detached
+  return (
+    <div
+      style={
+        big
+          ? // Torn off, the board IS the window: it takes the height and scrolls, rather
+            // than sitting flex:0 above five sibling blocks that are not here.
+            { ...CLUB_WRAP, flex: '1 1 auto', minHeight: 0, overflowY: 'auto', gap: 12, padding: '16px 22px 18px', borderBottom: 'none' }
+          : CLUB_WRAP
+      }
+      aria-label={t('fieldDay.club.aria')}
+    >
+      <div style={big ? { ...CLUB_HEADER, gap: 14 } : CLUB_HEADER}>
+        <span style={{ fontSize: big ? 17 : 13, fontWeight: 700, color: 'var(--text)' }}>
+          {t('fieldDay.club.head')}
+        </span>
+        <span
+          style={big ? { ...clubChipStyle(club.syncState), fontSize: 14, padding: '4px 12px' } : clubChipStyle(club.syncState)}
+          title={t('fieldDay.club.state.title')}
+        >
+          {clubChipText(club)}
+        </span>
+        {(club.event || club.hostCall) && (
+          <span style={{ fontSize: big ? 15 : 12, color: 'var(--text-dim)' }}>
+            {t('fieldDay.club.hostLine', { event: club.event || '—', call: club.hostCall || '—' })}
+          </span>
+        )}
+        <span style={{ flex: '1 1 auto' }} />
+        <span style={{ fontSize: big ? 16 : 13, color: 'var(--text-dim)' }}>
+          {t('fieldDay.club.counters', {
+            score: club.score,
+            qsos: club.qsos,
+            sections: club.sections,
+          })}
+        </span>
+        {club.hosting && onExport && (
+          <>
+            <button
+              type="button"
+              className="export-btn"
+              disabled={busy}
+              onClick={() => onExport('club-cabrillo')}
+              title={t('fieldDay.club.export.cabrillo.title')}
+            >
+              {t('fieldDay.club.export.cabrillo.label')}
+            </button>
+            <button
+              type="button"
+              className="export-btn"
+              disabled={busy}
+              onClick={() => onExport('club-adif')}
+              title={t('fieldDay.club.export.adif.title')}
+            >
+              {t('fieldDay.club.export.adif.label')}
+            </button>
+          </>
+        )}
+        {!detached && (
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => void openPanelWindow('fdclub')}
+            title={t('fieldDay.club.popOut.title')}
+          >
+            {t('fieldDay.club.popOut.label')}
+          </button>
+        )}
+      </div>
+      {Math.abs(club.skewSecs) > 30 && (
+        <div style={CLUB_WARN} role="alert">
+          {t('fieldDay.club.skew', { secs: Math.abs(club.skewSecs) })}
+        </div>
+      )}
+      {club.lastError && (
+        <div style={CLUB_WARN} role="alert">
+          {t('fieldDay.club.error', { msg: club.lastError })}
+        </div>
+      )}
+      {club.board.length === 0 ? (
+        // Sync IS on here (the block only rides the snapshot when it is), so this
+        // says what it is waiting for and never sends anyone to Settings — the
+        // torn-off window's own copy covers the sync-off case.
+        <span style={{ fontSize: big ? 16 : 12, color: 'var(--text-faint)' }}>
+          {t('fieldDay.club.board.empty')}
+        </span>
+      ) : (
+        <div
+          data-club-board=""
+          style={big ? { ...CLUB_BOARD_GRID, fontSize: 20, columnGap: 18, rowGap: 8 } : CLUB_BOARD_GRID}
+        >
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.position')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.band')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.mode')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.operator')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.qsos')}</span>
+          <span style={colHead(big)}>{t('fieldDay.club.board.column.rate')}</span>
+          {club.board.map((row) => {
+            // Stale-mark past 15 s (the DEAD_SECS threshold): readings stay on
+            // screen but never silently stale.
+            const stale = row.lastSeenSecs > 15
+            const dim: CSSProperties = stale ? { opacity: 0.45 } : {}
+            return (
+              <Fragment key={row.posid}>
+                <span
+                  className="mono"
+                  style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  title={
+                    stale
+                      ? t('fieldDay.club.board.stale', { secs: row.lastSeenSecs })
+                      : undefined
+                  }
+                >
+                  {/* An unnamed position falls back to who is sitting at it, and only
+                      then to a translated placeholder — never to the position id, which is
+                      internal plumbing an operator should never be shown. */}
+                  {row.posName || row.operator || t('fieldDay.club.board.unnamed')}
+                  {stale && <span aria-hidden="true"> ⚠</span>}
+                </span>
+                <span className="mono" style={dim}>{row.band}</span>
+                <span className="mono" style={dim}>{row.mode}</span>
+                <span className="mono" style={{ ...dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.operator}</span>
+                <span className="mono" style={dim}>{row.qsos}</span>
+                <span className="mono" style={dim}>
+                  {t('fieldDay.club.board.rate', { rate: row.rate })}
+                </span>
+              </Fragment>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // Scoreboard header (operator + pop-out) — inline off the shared tokens so it stays
@@ -603,7 +1109,7 @@ export function FieldDayScoreboard({
   )
 }
 
-export function FieldDayView({ fieldDay, onSetMode }: Props) {
+export function FieldDayView({ fieldDay, onSetMode, fdActive = false, fdRuleset = null, tier }: Props) {
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
   // snap on every logged QSO undid a mid-run scroll-back (checking a call two
   // contacts up) the moment the next contact landed. Pinned follows the run;
@@ -613,7 +1119,19 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
   const log = fieldDay?.log ?? []
   const [exportError, setExportError] = useState<string | null>(null)
   const [busy, setBusy] = useState<ExportFormat | null>(null)
+  // The 15 bonuses are worth ~1450 points — more than most clubs' QSO points — and they
+  // sat behind a collapsed disclosure an operator had to know was there. Once the event is
+  // running the panel opens itself, ONCE: `openedForRun` means a club that deliberately
+  // closes it is not fought on the next snapshot.
   const [bonusOpen, setBonusOpen] = useState(false)
+  const openedForRun = useRef(false)
+
+  useEffect(() => {
+    if (running && !openedForRun.current) {
+      openedForRun.current = true
+      setBonusOpen(true)
+    }
+  }, [running])
 
   // Settings round-trip for the bonus checklist (same pattern as specialOp in OperateCockpit).
   const [settings, setSettingsState] = useState<Settings | null>(null)
@@ -630,11 +1148,14 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
   // inside FieldDayScoreboard).
   const workedSet = useMemo(() => workedSectionSet(fieldDay), [fieldDay])
 
-  const toggleBonus = async (id: string) => {
+  // One optimistic writer for every scoring field on this panel (earned list, plan list,
+  // power multiplier) — the shape the single bonus checkbox already used. Each patches ONE
+  // field of the settings the panel is holding, so the three controls cannot write over
+  // each other's state, and the power chips edit the very same `fdPowerMult` the Settings
+  // panel does rather than a second copy of it.
+  const saveScoringPatch = async (patch: Partial<Settings>) => {
     if (!settings) return
-    const cur = settings.fdBonuses ?? []
-    const next = cur.includes(id) ? cur.filter((b) => b !== id) : [...cur, id]
-    const updated: Settings = { ...settings, fdBonuses: next }
+    const updated: Settings = { ...settings, ...patch }
     setSettingsState(updated)
     try {
       await setSettings(updated)
@@ -643,6 +1164,15 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
       setSettingsState(settings)
     }
   }
+  const toggle = (list: string[], id: string) =>
+    list.includes(id) ? list.filter((b) => b !== id) : [...list, id]
+  /** Confirm / un-confirm a bonus. THIS is the list the score is made of. */
+  const toggleEarned = (id: string) =>
+    saveScoringPatch({ fdBonuses: toggle(settings?.fdBonuses ?? [], id) })
+  /** Put a bonus on the chase list (or take it off). Never touches the score. */
+  const togglePlanned = (id: string) =>
+    saveScoringPatch({ fdBonusesPlanned: toggle(settings?.fdBonusesPlanned ?? [], id) })
+  const setPowerMult = (mult: number) => saveScoringPatch({ fdPowerMult: mult })
 
   // Persist the settable Field Day operator (optimistic). NOT the whole-struct save that
   // toggleBonus uses: a seat swap happens mid-QSO, and the heavyweight path drops the TX
@@ -660,16 +1190,30 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
     }
   }
 
-  // Event header: compute from current date for the configured event kind.
+  // Event header: the window arrives Rust-computed on the DTO (fd_rules data —
+  // real 27 h SFD / 30 h WFD durations; the old TS date math hardcoded 24 h and
+  // called WFD over with six hours left). Snapshots refresh it, so the year
+  // rollover and the active→next transition need no client-side clock walk.
   const eventKind: FdKind = (fieldDay?.event === 'wfd' ? 'wfd' : 'arrlfd')
   const isWfd = eventKind === 'wfd'
-  const fdEvent = useMemo(() => fdNextEvent(new Date(), eventKind), [eventKind])
-  const subtitle = useMemo(() => fdHeaderSubtitle(new Date(), fdEvent), [fdEvent])
+  const fdEvent = useMemo(
+    () => fdEventFromWindow(eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix),
+    [eventKind, fieldDay?.eventStartUnix, fieldDay?.eventEndUnix],
+  )
+  const subtitle = useMemo(() => (fdEvent ? fdHeaderSubtitle(new Date(), fdEvent) : ''), [fdEvent])
 
   // Score components (shared with the scoreboard tiles) — needed here for the
   // Summary export + the bonuses count.
   const { fdPowerMult, qsoPts, poweredPoints, claimedBonusIds: claimedBonuses, bonusPoints, totalScore } =
     computeFdScore(fieldDay, settings)
+
+  // The chase: earned vs planned. `computeFdScore` above is untouched by any of this —
+  // it reads `fdBonuses` and nothing else, which is what makes a plan unscoreable.
+  const plannedBonuses = settings?.fdBonusesPlanned ?? []
+  const tally = useMemo(
+    () => fdBonusTally(claimedBonuses, plannedBonuses),
+    [claimedBonuses, plannedBonuses],
+  )
 
   // Two words for two events, not one word with a variant: ARRL calls the exchange field
   // Class and WFD calls it Category.
@@ -687,6 +1231,8 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
         text = buildSummaryText({
           eventName: isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd,
           isWfd,
+          rulesYear: fieldDay?.rulesYear ?? 0,
+          rulesGenerated: fieldDay?.rulesGenerated ?? '',
           myClass: fieldDay?.myClass ?? '',
           mySection: fieldDay?.mySection ?? '',
           log,
@@ -701,11 +1247,21 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
         })
       } else if (format === 'dupesheet') {
         text = buildDupeSheetText(rows)
+      } else if (format === 'club-cabrillo' || format === 'club-adif') {
+        // The MERGED club log from the host, deduped earliest-wins — the
+        // submittable club artifact (host role only; the backend refuses
+        // elsewhere and the buttons only render while hosting).
+        text = await fdClubExport(format === 'club-cabrillo' ? 'cabrillo' : 'adif')
       } else {
         text = await exportLog(format)
       }
       const stamp = new Date().toISOString().slice(0, 10)
-      const base = format === 'cabrillo' || format === 'adif' ? 'fd-log' : `fd-${format}`
+      const base =
+        format === 'cabrillo' || format === 'adif'
+          ? 'fd-log'
+          : format.startsWith('club-')
+            ? 'fd-club-log'
+            : `fd-${format}`
       // Real Rust write to Downloads, same as the Logbook exports — a `<a download>` blob is
       // silently CANCELLED by wry on macOS (no download handler is wired), so all four FD
       // export buttons produced no file there while looking successful. The toast fires only
@@ -725,6 +1281,23 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
       <div className="fd-event-banner">
         <span className="fd-event-name">{isWfd ? FD_EVENT_NAMES.wfd : FD_EVENT_NAMES.arrlfd}</span>
         <span className="fd-event-subtitle">{subtitle}</span>
+        {/* Warn-only rule advisories (banned mode + assistance) — passive status
+            lines; nothing is ever removed or disabled by rule. */}
+        <FdAdvisories
+          fdActive={fdActive}
+          ruleset={fdRuleset}
+          activeMode={tier}
+          assistanceOn={fieldDay?.assistanceOn ?? []}
+          showAssistance
+        />
+        {fieldDay?.rulesYear ? (
+          <span className="fd-event-rules">
+            {t('fieldDay.rules.line', {
+              year: fieldDay.rulesYear,
+              date: (fieldDay.rulesGenerated ?? '').slice(0, 10),
+            })}
+          </span>
+        ) : null}
       </div>
 
       <div className="panel-header fd-header">
@@ -797,10 +1370,20 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
         </div>
       </div>
 
+      {/* CLUB SYNC (chip + counters + band board) — only while hosting/joined */}
+      {fieldDay?.club && (
+        <FdClubSection club={fieldDay.club} onExport={handleExport} busy={busy !== null} />
+      )}
+
       {/* SCOREBOARD (operator + score tiles + sections board) */}
       <FieldDayScoreboard fieldDay={fieldDay} settings={settings} onSaveOperator={saveOperator} />
 
-      {/* BONUSES COLLAPSIBLE */}
+      {/* SCORING: the power multiplier and the bonus chase, in one place.
+          Both halves of the score used to live on different screens — the multiplier in
+          Settings ▸ Contesting, the bonuses down here — so nobody could see the sum they
+          make. The multiplier keeps its Settings home (that is the registry's, and the
+          manual's, address for it) and is MIRRORED here on the same field: an operator
+          meets scoring where the score is, and there is only ever one value. */}
       <div className="fd-bonuses-section">
         <button
           type="button"
@@ -809,6 +1392,9 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
           aria-expanded={bonusOpen}
         >
           <span>{t('fieldDay.bonuses.head')}</span>
+          <span className="fd-scoring-power-chip">
+            {t('fieldDay.scoring.power.chip', { mult: fdPowerMult })}
+          </span>
           <span className="fd-bonuses-count">
             {t('fieldDay.bonuses.count', {
               claimed: claimedBonuses.length,
@@ -816,25 +1402,102 @@ export function FieldDayView({ fieldDay, onSetMode }: Props) {
               points: bonusPoints,
             })}
           </span>
+          {tally.plannedCount > 0 && (
+            <span className="fd-bonuses-planned-count">
+              {t('fieldDay.bonuses.planned.count', {
+                count: tally.plannedCount,
+                points: tally.plannedPoints,
+              })}
+            </span>
+          )}
           <span className="fd-bonuses-chevron">{bonusOpen ? '▲' : '▼'}</span>
         </button>
         {bonusOpen && (
-          <div className="fd-bonuses-list" role="group" aria-label={t('fieldDay.bonuses.aria')}>
-            {FD_BONUSES.map((b) => {
-              const checked = claimedBonuses.includes(b.id)
-              return (
-                <label key={b.id} className={`fd-bonus-row${checked ? ' checked' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => void toggleBonus(b.id)}
-                    aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
-                  />
-                  <span className="fd-bonus-label">{b.label}</span>
-                  <span className="fd-bonus-pts">{t('fieldDay.bonus.pts', { points: b.points })}</span>
-                </label>
-              )
-            })}
+          <div className="fd-bonuses-body">
+            {/* POWER MULTIPLIER — the same `fdPowerMult` Settings writes. A whole-settings
+                save, like the bonus checkboxes beside it: the engine keeps the contest log
+                across it (engine.rs pins that), and a power tier is set once per event. */}
+            <div className="fd-power-row">
+              <span className="fd-power-label">{t('settings.fieldDay.power.label')}</span>
+              <div
+                className="fd-power-chips"
+                role="group"
+                aria-label={t('settings.fieldDay.power.aria')}
+              >
+                {FD_POWER_TIERS.map((p) => (
+                  <button
+                    key={p.value}
+                    type="button"
+                    className={`fd-power-chip${fdPowerMult === p.value ? ' active' : ''}`}
+                    aria-pressed={fdPowerMult === p.value}
+                    title={t(p.hintKey)}
+                    disabled={!settings}
+                    onClick={() => void setPowerMult(p.value)}
+                  >
+                    {t(p.labelKey)}
+                  </button>
+                ))}
+              </div>
+              <span className="fd-power-hint">{t('settings.fieldDay.power.hint')}</span>
+            </div>
+
+            {/* THE CHASE. Which number is real is the whole point of this strip: earned
+                points are in the score, planned points are not, and the ceiling is what
+                the club is still chasing. */}
+            <div className="fd-chase" role="group" aria-label={t('fieldDay.bonuses.chase.aria')}>
+              <div className="fd-chase-tile earned">
+                <span className="fd-chase-val">
+                  {t('fieldDay.bonuses.chase.earned', { points: tally.earnedPoints })}
+                </span>
+                <span className="fd-chase-note">{t('fieldDay.bonuses.chase.earned.note')}</span>
+              </div>
+              <div className="fd-chase-tile planned">
+                <span className="fd-chase-val">
+                  {t('fieldDay.bonuses.chase.planned', { points: tally.plannedPoints })}
+                </span>
+                <span className="fd-chase-note">{t('fieldDay.bonuses.chase.planned.note')}</span>
+              </div>
+              <div className="fd-chase-tile potential">
+                <span className="fd-chase-val">
+                  {t('fieldDay.bonuses.chase.potential', { points: tally.potentialPoints })}
+                </span>
+              </div>
+            </div>
+
+            <div className="fd-bonuses-list" role="group" aria-label={t('fieldDay.bonuses.aria')}>
+              {FD_BONUSES.map((b) => {
+                const state = fdBonusState(b.id, claimedBonuses, plannedBonuses)
+                const earned = state === 'earned'
+                const onPlan = plannedBonuses.includes(b.id)
+                return (
+                  <div
+                    key={b.id}
+                    className={`fd-bonus-row${earned ? ' checked' : ''}${state === 'planned' ? ' planned' : ''}`}
+                    data-bonus-state={state}
+                  >
+                    <input
+                      id={`fd-bonus-${b.id}`}
+                      type="checkbox"
+                      checked={earned}
+                      onChange={() => void toggleEarned(b.id)}
+                      aria-label={t('fieldDay.bonus.aria', { label: b.label, points: b.points })}
+                    />
+                    <label className="fd-bonus-label" htmlFor={`fd-bonus-${b.id}`}>{b.label}</label>
+                    <button
+                      type="button"
+                      className={`fd-bonus-plan${onPlan ? ' on' : ''}`}
+                      aria-pressed={onPlan}
+                      title={t('fieldDay.bonus.plan.title')}
+                      aria-label={t('fieldDay.bonus.plan.aria', { label: b.label })}
+                      onClick={() => void togglePlanned(b.id)}
+                    >
+                      {onPlan ? t('fieldDay.bonus.plan.on') : t('fieldDay.bonus.plan.off')}
+                    </button>
+                    <span className="fd-bonus-pts">{t('fieldDay.bonus.pts', { points: b.points })}</span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
       </div>

@@ -11,7 +11,7 @@ import { t } from '../i18n'
 import { fdLogManual, getLog, logQso, lookupPark, lookupParkLive, qrzLookup, resolveEntity, searchParks, setCwPeerInfo, type Park } from '../api'
 import { bandKey, callHistory, entitySlots, isNewEntity, modeKey } from '../features/callHistory'
 import { ARRL_SECTIONS_BY_DIVISION } from '../features/arrlSections'
-import { isValidLoggedGrid } from '../grid'
+import { azimuthLabel, azimuthTo, isValidLoggedGrid } from '../grid'
 import { RecallPanel } from './RecallPanel'
 import { pushToast, withErrorToast } from '../toast'
 
@@ -145,6 +145,10 @@ interface Props {
    * the dial). Phone/CW ask (operator 2026-07-21); omitted = no button (FT8 has its
    * own roster-side spot affordance). */
   onSpot?: (call: string) => void
+  /** Open the Logbook filtered to a callsign — handed straight to the recall card below, whose
+   *  previous-contact rows become clickable when it is present (#192). Omitted = inert rows,
+   *  which is what a build with the Logbook section switched off gets. */
+  onOpenLogbook?: (call: string) => void
   /** Click-to-work handoff from the Needed board: the callsign to prefill + focus RST.
    * `ts` changes per click so re-working the same call refires the prefill. */
   pendingWork?: { call: string; ts: number } | null
@@ -167,10 +171,30 @@ interface Props {
    */
   fieldDay?: FieldDayStatus | null
   /**
-   * The FD mode code to pass to fdLogManual.
-   * Must be 'CW' or 'PH' when fieldDay is active.
+   * The FD mode code to pass to fdLogManual: the SCORING CLASS this position logs under.
+   *
+   * ⚠️ 'DIG' IS ONE OF THE THREE, and leaving it out was a silent scoring error. Field Day
+   * scores CW, phone and digital as three classes, and the engine's `log_mode_at`
+   * (tempo-core/src/fieldday.rs) already handles 'DIG' specially — it stamps the actual on-air
+   * submode behind the class so exports emit the real mode. A digital position logging a
+   * station by hand was the first consumer with a DIG contact to log; before this it had to
+   * send 'PH', which credits the wrong class and dupes against the wrong cell.
    */
-  fdMode?: 'CW' | 'PH'
+  fdMode?: 'CW' | 'PH' | 'DIG'
+  /**
+   * FD ONLY, AND 'DIG' ONLY — the mode that was actually ON THE AIR behind the digital
+   * scoring class (an ADIF name: 'RTTY', 'PSK31', 'QPSK31').
+   *
+   * ⚠️ REQUIRED FOR A KEYBOARD-MODE POSITION. `fdMode` is the scoring class, and 'DIG' covers
+   * every digital mode there is; the engine fills the missing detail from
+   * `FieldDayLog::current_submode`, which tracks the FT tier ALONE (`adif_mode_for_tier` has
+   * no RTTY or PSK variant). So an RTTY or PSK contact logged as bare 'DIG' is stamped "FT8" —
+   * the wrong mode in the ADIF export, Cabrillo "DG" where ARRL wants "RY", and a mode Winter
+   * Field Day bans outright on a QSO that was perfectly legal RTTY.
+   *
+   * Ignored unless `fdMode` is 'DIG': CW and PH ARE their on-air mode and carry no submode.
+   */
+  fdSubmode?: string
   /**
    * Does this strip render its OWN "Log this QSO" heading? Default true — today's
    * behaviour, unchanged, for every host that does not say otherwise.
@@ -203,11 +227,13 @@ export function LogEntry({
   defaultRst,
   exchange,
   onSpot,
+  onOpenLogbook,
   pendingWork,
   onConsumeWork,
   cwLive,
   fieldDay,
   fdMode,
+  fdSubmode,
   titled = true,
 }: Props) {
   const fdActive = fieldDay != null
@@ -260,6 +286,9 @@ export function LogEntry({
   // The callsign field (FD + standard layouts share this ref — only one is mounted
   // at a time), so a completed log can snap focus back for the next contact.
   const callInputRef = useRef<HTMLInputElement>(null)
+  /** The Field Day exchange boxes, so space can walk Call → Class → Section → Call. */
+  const fdClassRef = useRef<HTMLInputElement>(null)
+  const fdSectionRef = useRef<HTMLInputElement>(null)
 
   // FD-specific: class + section, defaulting from the last entry / fieldDay status.
   const [fdClass, setFdClass] = useState(() => fieldDay?.myClass ?? '')
@@ -283,6 +312,7 @@ export function LogEntry({
     fdSeenLen.current = fdLogLen
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fdActive, fdLogLen])
+
 
   // Live mirror of the typed call so a slow lookup can tell if the operator has since
   // changed the call (drop the stale result rather than fill the wrong call's data).
@@ -611,7 +641,13 @@ export function LogEntry({
     // tokens (keyed to the call so a stale lookup can't key the wrong name).
     void setCwPeerInfo(call, preferredName ?? '', r.state ?? '')
     if (!silent) {
-      const detail = [r.name, r.grid && t('callbook.detail.grid', { grid: r.grid }), r.state]
+      const detail = [
+        r.name,
+        r.grid && t('callbook.detail.grid', { grid: r.grid }),
+        r.state,
+        // Short-path bearing from the operator's grid, exactly as the StationCard shows it.
+        azimuthLabel(azimuthTo(snap.mygrid, r.grid, r.country)),
+      ]
         .filter(Boolean)
         .join(' · ')
       const vals = { call: r.call, detail: detail || r.country || t('callbook.detail.found') }
@@ -761,8 +797,11 @@ export function LogEntry({
       const cls = fdClass.trim().toUpperCase()
       const sec = fdSection.trim().toUpperCase()
       const fmode = fdMode ?? 'PH'
+      // The on-air mode behind the class, for 'DIG' alone — see `fdSubmode`. Sent only with
+      // that class so a CW or phone contact can never acquire one it has no meaning for.
+      const fsub = fmode === 'DIG' ? fdSubmode : undefined
       const r = await withErrorToast(
-        () => fdLogManual(call, cls, sec, fmode),
+        () => fdLogManual(call, cls, sec, fmode, fsub),
         t('logEntry.fd.failed'),
       )
       if (r) {
@@ -830,6 +869,31 @@ export function LogEntry({
     if (e.key === 'Enter') void logIt()
   }
 
+  /**
+   * SPACE ADVANCES THE CONTEST EXCHANGE, because that is the key contest operators already
+   * have in their fingers. N1MM's own keyboard reference puts it in capitals — "SPACE IS THE
+   * PREFERRED TAB CHARACTER" — and N3FJP's help tells operators to "press the space bar to
+   * tab". Both agree, so there is no house style to invent. Tab keeps working exactly as it
+   * did (plain DOM order, no tabIndex anywhere in this file).
+   *
+   * Scoped to the Field Day strip on purpose: a space is legitimate in a name, a park
+   * reference or a comment on the ordinary strip, so this belongs to the contest exchange
+   * and nowhere else.
+   *
+   * ⚠️ IT CANNOT KEY THE RIG. The phone cockpits' space push-to-talk is a WINDOW handler
+   * that ignores any event whose target is an input, so with the caret in these three boxes
+   * that keystroke is already inert — this gives a dead key a job rather than taking a live
+   * one away. `preventDefault` is what stops the space reaching the value: Class and Section
+   * have no space-stripping of their own, so without it a reflexive space would quietly log
+   * a class of "3A " or a section of " WI".
+   */
+  const onExchangeSpace = (e: React.KeyboardEvent, next: React.RefObject<HTMLInputElement>) => {
+    if (e.key !== ' ' && e.code !== 'Space') return
+    e.preventDefault()
+    next.current?.focus()
+    next.current?.select()
+  }
+
   // Enter in the CALL field: on a fresh call (not yet enriched, no name typed) do the QRZ lookup
   // first — like Tab — so a single Enter pulls the callbook; once enriched, Enter logs as usual.
   const onCallEnter = (e: React.KeyboardEvent) => {
@@ -856,6 +920,31 @@ export function LogEntry({
   // sitting beside the operator can read the exchange at a glance — using the
   // vertical room at the bottom of the strip. Scoped to .log-entry-fd, so the
   // normal (non-FD) log strip keeps its compact single-row layout.
+  //
+  // While-typing dupe verdict, zero IPC: the full own log already rides every
+  // snapshot and the club-sync block ships club-ONLY keys, so both checks are
+  // plain lookups on data in hand. OWN dupe = the hard block fdLogManual will
+  // refuse (same key: call, band, mode class). CLUB dupe = another position
+  // already worked them — N3FJP semantics, a WARNING only; logging proceeds
+  // and the host keeps both rows.
+  const fdTypedCall = logCall.trim().toUpperCase()
+  const fdModeClass = fdMode ?? 'PH'
+  const fdOwnDupe =
+    fdActive &&
+    fdTypedCall !== '' &&
+    (fieldDay?.log ?? []).some(
+      (q) =>
+        q.call.toUpperCase() === fdTypedCall &&
+        q.band === snap.radio.band &&
+        (q.mode ?? '') === fdModeClass,
+    )
+  const fdClubDupe =
+    fdActive &&
+    !fdOwnDupe &&
+    fdTypedCall !== '' &&
+    (fieldDay?.club?.dupes ?? []).some(
+      ([c, b, m]) => c === fdTypedCall && b === snap.radio.band && m === fdModeClass,
+    )
   if (fdActive) {
     return (
       <div className="log-entry log-entry-fd">
@@ -872,8 +961,16 @@ export function LogEntry({
               ref={callInputRef}
               className="settings-input mono le-fd-input le-fd-input-call"
               value={logCall}
-              onChange={(e) => setLogCall(e.target.value.toUpperCase())}
-              onKeyDown={onEnter}
+              // SPACES ARE DROPPED, not kept: no callsign contains one, and the space bar is
+              // the phone position's push-to-talk. An operator who reaches for it out of habit
+              // while the caret is in this field would otherwise log "K1 ABC" verbatim —
+              // `logIt` only trims the ends. Costs nothing on any other path (a pasted call
+              // with a stray space comes out clean).
+              onChange={(e) => setLogCall(e.target.value.replace(/\s+/g, '').toUpperCase())}
+              onKeyDown={(e) => {
+                onExchangeSpace(e, fdClassRef)
+                onEnter(e)
+              }}
               placeholder={LOG_EXAMPLES.call}
               autoComplete="off"
               spellCheck={false}
@@ -882,10 +979,14 @@ export function LogEntry({
           <label className="le-fd-field">
             <span className="le-fd-cap">{t('logEntry.fd.class.label')}</span>
             <input
+              ref={fdClassRef}
               className="settings-input mono le-fd-input le-fd-input-code"
               value={fdClass}
               onChange={(e) => setFdClass(e.target.value.toUpperCase())}
-              onKeyDown={onEnter}
+              onKeyDown={(e) => {
+                onExchangeSpace(e, fdSectionRef)
+                onEnter(e)
+              }}
               placeholder={LOG_EXAMPLES.fdClass}
               autoComplete="off"
               spellCheck={false}
@@ -895,10 +996,14 @@ export function LogEntry({
           <label className="le-fd-field">
             <span className="le-fd-cap">{t('logEntry.fd.section.label')}</span>
             <input
+              ref={fdSectionRef}
               className="settings-input mono le-fd-input le-fd-input-code"
               value={fdSection}
               onChange={(e) => setFdSection(e.target.value.toUpperCase())}
-              onKeyDown={onEnter}
+              onKeyDown={(e) => {
+                onExchangeSpace(e, callInputRef)
+                onEnter(e)
+              }}
               placeholder={LOG_EXAMPLES.fdSection}
               autoComplete="off"
               spellCheck={false}
@@ -927,6 +1032,17 @@ export function LogEntry({
           </button>
         </div>
 
+        {/* THE VERDICT SLOT — always present, empty or not.
+
+            The dock this strip lives in is bottom-anchored, so anything that makes the strip
+            taller moves the fields UP, and these three verdicts appear and vanish PER
+            KEYSTROKE right under the fingers that are typing. Reserving the height here rather
+            than on the strip is the difference between a reservation and a coincidence: a floor
+            on `.log-entry-fd` has to be re-derived every time the header row or the field row
+            changes height, and the one this shipped with (8.5em = 119px against a 117px natural
+            strip) reserved two pixels of an eleven-pixel line — i.e. nothing. The wrapper is
+            zero-height in every other host, so Phone and CW are unchanged. */}
+        <div className="le-fd-verdicts">
         {logCall.trim() !== '' && !fdExchangeOk && (
           <div className="le-fd-hint" role="alert">
             {fdClass.trim() === ''
@@ -934,6 +1050,25 @@ export function LogEntry({
               : t('logEntry.fd.badSection', { section: fdSection.trim() || '—' })}
           </div>
         )}
+        {fdOwnDupe && (
+          <div className="le-fd-hint" role="alert">
+            {t('logEntry.fd.dupe.own', {
+              call: fdTypedCall,
+              band: snap.radio.band,
+              mode: fdModeClass,
+            })}
+          </div>
+        )}
+        {fdClubDupe && (
+          <div className="le-fd-hint" role="status">
+            {t('logEntry.fd.dupe.club', {
+              call: fdTypedCall,
+              band: snap.radio.band,
+              mode: fdModeClass,
+            })}
+          </div>
+        )}
+        </div>
       </div>
     )
   }
@@ -1378,6 +1513,7 @@ export function LogEntry({
         newEntity={newEntity}
         newBandSlot={newBandSlot}
         newModeSlot={newModeSlot}
+        onOpenLog={onOpenLogbook}
       />
     </div>
   )

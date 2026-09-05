@@ -26,9 +26,19 @@ import { setFrequency } from '../api'
 import { pushToast } from '../toast'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
-vi.mock('../api', () => {
+vi.mock('../api', async (importOriginal) => {
   const nada = () => Promise.resolve(null)
+  // ⭐ DERIVED FROM THE REAL MODULE — see the note in stop-line.test.tsx. A hand-kept list omits
+  // any export added after it was written, and a component that calls one throws on mount, so
+  // the suite fails at a seam nothing in the diff explains. The entries below override only what
+  // this file's assertions depend on.
+  const actual = await importOriginal<Record<string, unknown>>()
+  const auto: Record<string, unknown> = {}
+  for (const k of Object.keys(actual)) {
+    auto[k] = typeof actual[k] === 'function' ? vi.fn(nada) : actual[k]
+  }
   return {
+    ...auto,
     // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
     // which reads as a behaviour regression rather than the stale mock it actually is.
     getCatCwUnprovenRigModels: vi.fn(async () => []),

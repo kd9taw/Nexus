@@ -14,8 +14,12 @@
 
 pub mod alltxt;
 pub mod bandplan;
+pub mod connect_web;
 pub mod dto;
 pub mod engine;
+pub mod fd_scoreboard;
+pub mod fdbridge;
+pub mod fdevent;
 pub mod keyboard;
 pub mod privileges;
 pub mod station;
@@ -927,6 +931,7 @@ impl AppState {
             recent_decodes: Vec::new(),
             highlights: Vec::new(),
             clear_tick: 0,
+            logged_tick: 0,
             hunt: None,
             // Filled by the engine while coordinated QSY is enabled; None here.
             qsy: None,

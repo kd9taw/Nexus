@@ -157,6 +157,23 @@ export function orderEntries(list: DecodeEntry[], sort: DecodeSort): DecodeEntry
 export class DecodeHistory {
   private map = new Map<string, DecodeEntry>()
   private scope: string | null = null
+  /**
+   * Transmit time (epoch SECONDS) of the newest over this pane has erased, or null.
+   *
+   * ⚠️ WHY A PANE HAS TO REMEMBER BEING ERASED (#178 reopened, #189). Erase clears the map,
+   * and the next 4 Hz poll used to paint the same overs straight back: the engine keeps a
+   * 30-deep DISPLAY ring of transmissions already sent and appends ALL of it to EVERY
+   * snapshot. That is deliberate on its side — see `own_tx` in engine.rs, where clearing it
+   * on a halt is what made an operator's own calls vanish on a band QSY performed under them
+   * — so the ring cannot be the thing that forgets. Received decodes never showed the fault
+   * because the engine's decode list is current-period; own-TX rows persist for 30 overs, so
+   * Erase appeared to do nothing to them and only restarting Nexus cleared them.
+   *
+   * Per-pane, like the map it guards: Band Activity and Rx Frequency are independent views
+   * (WSJT-X), so erasing one must not blank the other. A watermark also keeps the gesture
+   * meaning what it says — everything sent UP TO NOW is gone, the next over still arrives.
+   */
+  private erasedThroughSec: number | null = null
   /** The last NAMED band this pane was bound to — what an off-band dial keeps pointing at. */
   private lastBand = ''
 
@@ -180,6 +197,9 @@ export class DecodeHistory {
     if (this.scope === key) return false
     this.scope = key
     this.map.clear()
+    // A scope change is a fresh pane, not an erase: the new band's own-TX rows are all still
+    // to come, and carrying a watermark across would silently hide the first overs on it.
+    this.erasedThroughSec = null
     return true
   }
 
@@ -187,6 +207,11 @@ export class DecodeHistory {
   ingest(decodes: DecodeRow[], slot: number, now: number = Date.now()): void {
     const m = this.map
     for (const d of decodes) {
+      // Skip an own-TX row the operator has already erased — the engine re-offers its whole
+      // ring every poll (see `erasedThroughSec`). Only `mine` rows carry `txAt`, and a row
+      // without one cannot be aged, so it is kept rather than guessed at.
+      if (d.mine && d.txAt != null && this.erasedThroughSec != null && d.txAt <= this.erasedThroughSec)
+        continue
       // Own TX rows key by the engine's actual TRANSMIT time (txAt), so the same
       // transmission re-emitted across poll boundaries stays ONE row and each
       // new cycle is a new row. Received decodes key per (slot, message, ~freq):
@@ -220,9 +245,16 @@ export class DecodeHistory {
     }
   }
 
-  /** Wipe this pane (WSJT-X "Erase"). */
-  erase(): void {
+  /**
+   * Wipe this pane (WSJT-X "Erase").
+   *
+   * `nowSec` is the moment being erased THROUGH (epoch seconds, default now): every own-TX
+   * row the engine ring re-serves at or before it stays gone. See `erasedThroughSec`.
+   */
+  erase(nowSec: number = Math.floor(Date.now() / 1000)): void {
     this.map.clear()
+    this.erasedThroughSec =
+      this.erasedThroughSec == null ? nowSec : Math.max(this.erasedThroughSec, nowSec)
   }
 
   /** All entries in insertion (≈ chronological) order. */

@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, RttyState } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { LogEntry } from './LogEntry'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { RTTY_PANEL_IDS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -43,6 +44,9 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
 
 interface Props {
+  /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
+   *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
+  onOpenLogbook?: (call: string) => void
   /** Live snapshot — may be absent while the app is still connecting; the shell
    * (stream / macros / compose) renders without it, only the header needs it. */
   snap?: AppSnapshot | null
@@ -150,7 +154,7 @@ function seqLabel(s: string): string {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, panels }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, panels }: Props) {
   // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
   // bar are pinned; only the decoded-text stream is removable, filling the space between them.
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
@@ -652,6 +656,49 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       </div>
       </CockpitPaneFrame>
+      )}
+
+      {/* THE LOG STRIP — PSK's pane, verbatim, and for the same reason (#159 there): this
+          cockpit rendered no LogEntry at all, so a station worked by hand with the F-key
+          macros — which is how a great deal of RTTY is actually operated — had nowhere to be
+          written down. The auto-sequencer logs its own completed QSOs and always did; nothing
+          about that path changes here.
+
+          ⚠️ AND IT IS THE FIELD DAY ENTRY. Field Day is all-mode, and WFD's own rules data
+          keeps RTTY legal as Digital. `snap.fieldDay` (non-null exactly while the FD master
+          switch is on) flips the strip to the class/section exchange and routes the contact to
+          the CONTEST log — the only log that scores it, claims its section and writes its
+          Cabrillo line. The SCORING CLASS is DIG (2 points); `fdSubmode` names what was
+          actually on the air, so the export emits RTTY/RY rather than the FT tier the engine
+          would otherwise fill in.
+
+          NOT ⊞-REMOVABLE, and it renders as the shell's second bare pane frame. `paneId` is a
+          test/pop-out handle, not a vocabulary id: RTTY's vocabulary is {stream}, so this pane
+          has no menu entry and no ✕. It hosts NO stop control — the four that hold the stop
+          line up (Stop TX, the dock's Esc/Stop macro, the TX-enable latch, the sequencer's
+          Abort) are all in the header or the dock below, exactly where the sweep looks.
+
+          `titled={false}` and `weight={1.5}`: PSK's ruling and PSK's MEASUREMENT, which apply
+          here unchanged because the two shells share one declaration in styles.css
+          (`.layout.single.rtty-cockpit, .layout.single.psk-cockpit`), floor knob included.
+          The strip needs 296 px of pane height to put its Log button on screen; an even 1:1
+          split gives 292 px at 1920×1080 and misses it by four pixels, and `fit="content"`
+          (488 px with a recall card open) drives the SHELL onto its deficit valve in the
+          ordinary case. See PskCockpit.tsx for the full table of sizes. */}
+      {snap && (
+        <CockpitPaneFrame title={t('rtty.pane.log.title')} paneId="log" weight={1.5}>
+          <LogEntry
+            onOpenLogbook={onOpenLogbook}
+            snap={snap}
+            mode={RTTY}
+            defaultRst="599"
+            exchange="terrestrial"
+            titled={false}
+            fieldDay={snap.fieldDay ?? null}
+            fdMode="DIG"
+            fdSubmode={RTTY}
+          />
+        </CockpitPaneFrame>
       )}
 
       {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), the

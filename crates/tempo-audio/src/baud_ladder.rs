@@ -1442,10 +1442,22 @@ mod tests {
             m.to_lowercase().contains("permission"),
             "the verdict must name the fault: {m}"
         );
-        #[cfg(unix)]
+        // THE CURE IS PER-OS, so the assertion has to be too — `open_failure_cure` already
+        // branches on `target_os`, and this gate did not. `#[cfg(unix)]` admits macOS, where the
+        // cure is not the dialout group at all but the driver's Privacy & Security approval, so
+        // this assertion failed on every Mac while passing on Linux and being skipped on Windows.
+        // Splitting it keeps the coverage rather than narrowing the gate and losing it: each
+        // platform now asserts the cure it actually ships, and each names the step people miss.
+        #[cfg(target_os = "linux")]
         assert!(
             m.contains("dialout") && m.to_lowercase().contains("log out"),
-            "on Unix the cure is the group AND the re-login, which is the step people miss: {m}"
+            "on Linux the cure is the group AND the re-login, which is the step people miss: {m}"
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            m.contains("Privacy & Security"),
+            "on macOS a serial refusal is a driver the system has not been allowed to load, and \
+             the cure is in Settings — the dialout group does not exist here: {m}"
         );
 
         // POSITIVE CONTROL — a genuinely HELD port must still get the other-program cure, or

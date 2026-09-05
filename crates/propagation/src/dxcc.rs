@@ -11,6 +11,16 @@
 //! entries — e.g. `3Y0J`→Bouvet, which has no plain `3Y` prefix), then
 //! **longest-prefix** after stripping a portable affix.
 //!
+//! ⚠️ **The embedded file is the SEED, not the whole story.** A weekly-refreshed
+//! copy downloaded to the shared data dir can be installed at startup via
+//! [`init_from`] — but only *before* anything resolves: the `OnceLock` is set
+//! once, every [`DxccInfo`] borrow is `&'static` off it, and there is no live
+//! swap. The seed-floor rule (embedded wins over an invalid, truncated or
+//! *older* download) lives in [`init_from`]; a resolve that beats `init_from`
+//! to the lock is the ordering hazard [`CtyInitError::AlreadyInitialized`]
+//! makes loud. [`active_cty_ver`]/[`embedded_ver`] tell the status surface
+//! which file won.
+//!
 //! NB cty.dat stores **West-positive longitude**; we negate it to the usual
 //! East-positive convention the rest of the crate uses.
 
@@ -68,6 +78,10 @@ struct Resolver {
     exact: HashMap<String, (u32, Option<u8>)>,
     /// Prefix → (entity index, optional per-prefix CQ-zone override).
     prefixes: HashMap<String, (u32, Option<u8>)>,
+    /// AD1C's release date, from the `=VERyyyymmdd` pseudo-call in the exact
+    /// list (`=VER20250115` in the vendored file). `None` if the file carries
+    /// no marker.
+    ver: Option<String>,
 }
 
 static CTY: &str = include_str!("../data/cty.dat");
@@ -88,6 +102,7 @@ fn parse_cty(text: &str) -> Resolver {
     let mut prefixes: HashMap<String, (u32, Option<u8>)> = HashMap::new();
     let mut cur: Option<u32> = None;
     let mut buf = String::new();
+    let mut ver: Option<String> = None;
 
     for line in text.lines() {
         if line.trim().is_empty() {
@@ -148,6 +163,15 @@ fn parse_cty(text: &str) -> Resolver {
                             .and_then(|q| body[p + 1..p + 1 + q].trim().parse::<u8>().ok())
                     });
                     if is_exact {
+                        // AD1C's release-date marker rides the exact list as a
+                        // pseudo-call (`=VERyyyymmdd`, in Canada's block in
+                        // current files). Capture it; the map entry itself is
+                        // harmless — nobody's callsign is VER20250115.
+                        if let Some(d) = key.strip_prefix("VER") {
+                            if d.len() == 8 && d.bytes().all(|b| b.is_ascii_digit()) {
+                                ver = Some(d.to_string());
+                            }
+                        }
                         exact.insert(key, (idx, zone));
                     } else {
                         prefixes.insert(key, (idx, zone));
@@ -162,6 +186,196 @@ fn parse_cty(text: &str) -> Resolver {
         entities,
         exact,
         prefixes,
+        ver,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// cty.dat refresh: validation + the startup-only install seam.
+// ---------------------------------------------------------------------------
+
+/// Runtime floor for an installed (downloaded) file. Deliberately looser than the publisher
+/// gate (the generator script refuses < 340): this guards against a truncated or garbage
+/// download, not against entity-count drift between AD1C releases.
+const MIN_ENTITIES: usize = 330;
+
+/// What validation learned about a cty.dat text — the numbers the manifest, the meta stamp
+/// and the status surface carry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CtyStats {
+    pub entities: usize,
+    pub prefixes: usize,
+    /// The `=VERyyyymmdd` marker's date, e.g. `"20250115"`. Guaranteed `Some` when the text
+    /// passed [`validate`]/[`init_from`] (a file with no marker is refused).
+    pub ver: Option<String>,
+}
+
+/// Why [`init_from`] refused a candidate file. Each cause is distinct so the caller can log
+/// what actually happened; `AlreadyInitialized` is the one that names a CODE bug (something
+/// resolved a call before the startup install) rather than a bad file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CtyInitError {
+    /// Doesn't parse to a plausible country file: failed a spot resolve, or has no
+    /// `=VERyyyymmdd` marker.
+    Invalid(String),
+    /// Parsed, but far too few entities — a truncated or wrong file.
+    TooFewEntities(usize),
+    /// Valid, but older than the embedded seed (an app upgrade can bundle a newer file than
+    /// an old download) — the embedded file wins.
+    OlderThanEmbedded { candidate: String, embedded: String },
+    /// The resolver was already set — something resolved a callsign before the startup
+    /// install ran. The embedded file is locked in for this session; the ordering must be
+    /// fixed in code, not retried.
+    AlreadyInitialized,
+}
+
+impl std::fmt::Display for CtyInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CtyInitError::Invalid(why) => write!(f, "not a valid cty.dat: {why}"),
+            CtyInitError::TooFewEntities(n) => {
+                write!(f, "only {n} entities (floor {MIN_ENTITIES}) — truncated file?")
+            }
+            CtyInitError::OlderThanEmbedded { candidate, embedded } => write!(
+                f,
+                "candidate =VER{candidate} is older than the embedded =VER{embedded} — the seed wins"
+            ),
+            CtyInitError::AlreadyInitialized => write!(
+                f,
+                "resolver already initialized — something resolved a call before the startup install"
+            ),
+        }
+    }
+}
+
+/// Entity name for `call` against a CANDIDATE resolver — the same exact-then-longest-prefix
+/// walk [`resolve`] does, minus the affix/KG4 refinements the spot calls below don't need.
+/// Borrow-generic on purpose: validation must interrogate the candidate, never the global.
+fn spot_entity<'a>(r: &'a Resolver, call: &str) -> Option<&'a str> {
+    if let Some(&(i, _)) = r.exact.get(call) {
+        return Some(r.entities[i as usize].name.as_str());
+    }
+    let mut n = call.len();
+    while n > 0 {
+        if let Some(&(i, _)) = r.prefixes.get(&call[..n]) {
+            return Some(r.entities[i as usize].name.as_str());
+        }
+        n -= 1;
+    }
+    None
+}
+
+/// Parse + structural validation, against the CANDIDATE only (never the global): entity
+/// floor, two spot resolves on names that will never respell, and the `=VER` marker.
+///
+/// NB the wins-test fixture (`tests/cty_init_wins.rs`) renames a *different* entity — the two
+/// names pinned here must stay ones no fixture edits.
+fn analyze(text: &str) -> Result<(Resolver, CtyStats), CtyInitError> {
+    let r = parse_cty(text);
+    let stats = CtyStats {
+        entities: r.entities.len(),
+        prefixes: r.prefixes.len(),
+        ver: r.ver.clone(),
+    };
+    if stats.entities < MIN_ENTITIES {
+        return Err(CtyInitError::TooFewEntities(stats.entities));
+    }
+    for (call, want) in [("W1AW", "United States"), ("JA1XYZ", "Japan")] {
+        match spot_entity(&r, call) {
+            Some(got) if got == want => {}
+            got => {
+                return Err(CtyInitError::Invalid(format!(
+                    "spot resolve {call} → {got:?}, want {want:?}"
+                )))
+            }
+        }
+    }
+    if stats.ver.is_none() {
+        return Err(CtyInitError::Invalid("no =VERyyyymmdd marker".into()));
+    }
+    Ok((r, stats))
+}
+
+/// Validate a cty.dat text WITHOUT touching the global resolver — the scratch parse the
+/// download client runs before installing a file to disk (a corrupt download must never
+/// replace a good local copy).
+pub fn validate(text: &str) -> Result<CtyStats, String> {
+    analyze(text).map(|(_, s)| s).map_err(|e| e.to_string())
+}
+
+/// The embedded half of the seed-floor rule, split out so it is unit-testable without
+/// setting the global. Equal is allowed on purpose: an upgrade can bundle exactly the file
+/// the operator already downloaded, and rejecting it would strand a harmless install.
+fn embedded_floor(candidate: &str) -> Result<(), CtyInitError> {
+    if let Some(embedded) = embedded_ver() {
+        // `yyyymmdd` compares correctly as a plain string.
+        if *candidate < *embedded {
+            return Err(CtyInitError::OlderThanEmbedded {
+                candidate: candidate.to_string(),
+                embedded,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Install a downloaded cty.dat as THE resolver for this process. Startup-only: call before
+/// anything resolves (feed threads resolve on their first spot), because the `OnceLock` is
+/// set once and every accessor's `&'static` borrow hangs off it — there is no live swap, a
+/// downloaded file activates at the next launch.
+///
+/// Seed floor: the embedded file wins over a candidate that is unparseable
+/// ([`CtyInitError::Invalid`]), truncated ([`CtyInitError::TooFewEntities`]) or older than
+/// the seed ([`CtyInitError::OlderThanEmbedded`]) — on any `Err` the global is untouched and
+/// the embedded file activates lazily as before. `AlreadyInitialized` means something
+/// resolved first; the CALLER must log it loudly (it is a code-ordering regression).
+pub fn init_from(text: &str) -> Result<CtyStats, CtyInitError> {
+    let (r, stats) = analyze(text)?;
+    let candidate = stats.ver.clone().expect("analyze guarantees a ver");
+    embedded_floor(&candidate)?;
+    if RESOLVER.set(r).is_err() {
+        return Err(CtyInitError::AlreadyInitialized);
+    }
+    Ok(stats)
+}
+
+/// The EMBEDDED file's `=VER` date — the floor [`init_from`] compares against, and the
+/// status surface's "what would we fall back to". A lightweight scan (no full parse),
+/// cached; never touches the global resolver.
+pub fn embedded_ver() -> Option<String> {
+    static V: OnceLock<Option<String>> = OnceLock::new();
+    V.get_or_init(|| ver_marker(CTY)).clone()
+}
+
+/// First `=VERyyyymmdd` token in `text`, without a full parse. Scans every `=VER` hit
+/// because AD1C also ships a literal `=VERSION` pseudo-call, which is not the marker.
+fn ver_marker(text: &str) -> Option<String> {
+    for (i, _) in text.match_indices("=VER") {
+        let digits: String = text[i + 4..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.len() == 8 {
+            return Some(digits);
+        }
+    }
+    None
+}
+
+/// The ACTIVE file's `=VER` date — whichever file won at startup. NB this initializes the
+/// resolver (with the embedded seed) if nothing has yet, exactly like every other accessor.
+pub fn active_cty_ver() -> Option<String> {
+    resolver().ver.clone()
+}
+
+/// Entity/prefix counts + ver of the ACTIVE file, for the status surface. Same
+/// initialize-if-needed caveat as [`active_cty_ver`].
+pub fn active_stats() -> CtyStats {
+    let r = resolver();
+    CtyStats {
+        entities: r.entities.len(),
+        prefixes: r.prefixes.len(),
+        ver: r.ver.clone(),
     }
 }
 
@@ -546,6 +760,95 @@ mod tests {
         // A US call that merely STARTS with the letters of an excluded prefix is
         // United States, not Germany — the false positive a text match would make.
         assert_eq!(resolve("WD8L").unwrap().entity, "United States");
+    }
+}
+
+#[cfg(test)]
+mod cty_refresh_tests {
+    //! The seed-floor rules, unit-tested WITHOUT [`init_from`]: `analyze`/`embedded_floor`
+    //! build throwaway resolvers and read only `embedded_ver`'s private cache, so nothing
+    //! here can poison the global `RESOLVER` other tests in this process depend on. The
+    //! install path itself (set + win + the AlreadyInitialized hazard) lives in
+    //! `tests/cty_init_wins.rs` / `tests/cty_init_too_late.rs`, each its own process.
+    use super::*;
+
+    /// Positive control for the whole module: the embedded file itself must pass every
+    /// check, and the lightweight `ver_marker` scan must agree with the parser's capture.
+    #[test]
+    fn the_embedded_file_passes_validation() {
+        let stats = validate(CTY).expect("the vendored cty.dat must validate");
+        assert!(stats.entities >= 340, "entities: {}", stats.entities);
+        assert!(stats.prefixes > 1000, "prefixes: {}", stats.prefixes);
+        assert_eq!(stats.ver.as_deref(), Some("20250115"));
+        assert_eq!(
+            embedded_ver(),
+            stats.ver,
+            "ver_marker's scan and parse_cty's capture must agree on the same file"
+        );
+    }
+
+    #[test]
+    fn a_truncated_file_is_rejected_with_the_count_it_found() {
+        let short: String = CTY.lines().take(200).collect::<Vec<_>>().join("\n");
+        match analyze(&short) {
+            Err(CtyInitError::TooFewEntities(n)) => {
+                assert!(n > 0 && n < MIN_ENTITIES, "found {n}")
+            }
+            other => panic!("expected TooFewEntities, got {:?}", other.map(|(_, s)| s)),
+        }
+        // Garbage parses to zero entities and lands on the same floor.
+        assert_eq!(
+            analyze("hello world\n").map(|(_, s)| s),
+            Err(CtyInitError::TooFewEntities(0))
+        );
+    }
+
+    /// The spot resolves interrogate the CANDIDATE: a full-size file whose United States
+    /// entry respelled must be refused, proving the check reads the new text rather than
+    /// the global.
+    #[test]
+    fn a_wrong_spot_resolve_is_rejected() {
+        let bad = CTY.replace("United States:", "Untied States:");
+        assert_ne!(bad, CTY, "fixture edit missed");
+        match analyze(&bad) {
+            Err(CtyInitError::Invalid(why)) => assert!(why.contains("W1AW"), "{why}"),
+            other => panic!("expected Invalid, got {:?}", other.map(|(_, s)| s)),
+        }
+    }
+
+    #[test]
+    fn a_file_without_a_ver_marker_is_rejected() {
+        let bare = CTY.replace("=VER20250115,", "");
+        assert_ne!(bare, CTY, "fixture edit missed");
+        match analyze(&bare) {
+            Err(CtyInitError::Invalid(why)) => assert!(why.contains("=VER"), "{why}"),
+            other => panic!("expected Invalid, got {:?}", other.map(|(_, s)| s)),
+        }
+    }
+
+    /// The embedded-wins half: older is refused, equal and newer pass (an app upgrade can
+    /// bundle exactly the file the operator already downloaded).
+    #[test]
+    fn older_than_the_embedded_ver_is_rejected_equal_and_newer_pass() {
+        let embedded = embedded_ver().expect("embedded file carries =VER");
+        assert_eq!(
+            embedded_floor("20200101"),
+            Err(CtyInitError::OlderThanEmbedded {
+                candidate: "20200101".into(),
+                embedded: embedded.clone(),
+            })
+        );
+        assert_eq!(embedded_floor(&embedded), Ok(()), "equal must pass");
+        assert_eq!(embedded_floor("20991231"), Ok(()), "newer must pass");
+
+        // End to end on a real full-size text: only the ver edited, everything else valid.
+        let older = CTY.replace("=VER20250115", "=VER20200101");
+        let (_, stats) = analyze(&older).expect("still a valid file structurally");
+        assert_eq!(stats.ver.as_deref(), Some("20200101"));
+        assert!(matches!(
+            embedded_floor(stats.ver.as_deref().unwrap()),
+            Err(CtyInitError::OlderThanEmbedded { .. })
+        ));
     }
 }
 

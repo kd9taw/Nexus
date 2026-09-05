@@ -1360,6 +1360,14 @@ struct OwnTx {
     text: String,
     freq_hz: f32,
     when_unix: u64,
+    /// The BAND this over went out on. Without it the ring is band-blind and every over we
+    /// have ever sent is served to every pane: the decode panes wipe on a band change and
+    /// then immediately re-ingest the lot, so 20 m calls reappear on 40 m carrying their
+    /// original transmit times — reported as "changing the band doesn't change the
+    /// situation… the hours and bands change in the status lines" (#178). A pane cannot
+    /// filter on a fact the wire never carried, which is why this belongs here and not in
+    /// the UI.
+    band: String,
 }
 
 /// Drives transmit/receive against the modem and updates [`AppState`].
@@ -1376,7 +1384,23 @@ pub mod upload_legs {
     pub const HRDLOG: u8 = 1 << 3;
     pub const N3FJP: u8 = 1 << 4;
     pub const CLOUDLOG: u8 = 1 << 5;
-    pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG;
+    pub const WRL: u8 = 1 << 6;
+    pub const ALL: u8 = QRZ | CLUBLOG | EQSL | HRDLOG | N3FJP | CLOUDLOG | WRL;
+}
+
+/// Where a queued upload CAME FROM — the fact the transport could not previously
+/// recover (#193, KR8MER). A push to ClubLog's realtime endpoint is the same HTTP
+/// call either way, so without this marker a live contact and a replay of a QSO
+/// logged (or ADIF-imported) months ago are indistinguishable by the time they
+/// reach the wire — and ClubLog's objection is specifically to the replay.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UploadOrigin {
+    /// A contact just logged at the key. Goes out AT ONCE — that is what "realtime"
+    /// means, and pacing one of these would be a regression, not a fix.
+    Live,
+    /// A record swept back up by a catch-up scan ([`StationCore::requeue_failed_clublog`]):
+    /// history, not news. Paced — see [`CATCHUP_UPLOAD_SPACING_SECS`].
+    CatchUp,
 }
 
 /// One QSO awaiting connector auto-upload, plus which legs it still owes and how
@@ -1384,6 +1408,11 @@ pub mod upload_legs {
 #[derive(Clone)]
 pub struct PendingUpload {
     pub rec: tempo_core::logbook::QsoRecord,
+    /// Live contact or catch-up replay — see [`UploadOrigin`]. Set at BOTH enqueue
+    /// points (`log_qso` = Live, `requeue_failed_clublog` = CatchUp) and CARRIED
+    /// THROUGH the worker's transient-failure re-queue, so a catch-up record that
+    /// blips on the network cannot come back as a live one and skip the pacing.
+    pub origin: UploadOrigin,
     /// Owed connector legs (see [`upload_legs`]); `ALL` on the first attempt.
     pub legs: u8,
     /// Retry count — a record is dropped once it hits [`MAX_UPLOAD_RETRIES`] so a
@@ -1408,6 +1437,31 @@ pub fn upload_backoff_secs(attempts: u8) -> i64 {
 /// Give up on a queued upload after this many transient-failure retries (~1 per
 /// worker tick / 2 s), so a permanently-down service eventually stops retrying.
 pub const MAX_UPLOAD_RETRIES: u8 = 20;
+
+/// Seconds between two CATCH-UP uploads (see [`UploadOrigin::CatchUp`]). Live contacts
+/// are never subject to this.
+///
+/// WHY THIS EXISTS (#193, KR8MER — live in 1.9.2): saving the ClubLog app-password fires
+/// `requeue_failed_clublog`, which sweeps up to 256 never-uploaded QSOs — including ones
+/// that arrived by ADIF import — and queued them all due-now. The drain worker takes the
+/// whole queue per tick and pushes in a bare loop, so the only thing rationing the pushes
+/// was ClubLog's own response latency: the reporter measured 81 realtime uploads in 4
+/// minutes (~20/min) and ClubLog threatened to block his source IP, naming Nexus.
+///
+/// WHY 15 SECONDS. ClubLog objects to BOTH shapes: a burst of historical contacts through
+/// the realtime endpoint, and a long trickle of many tiny uploads. Their answer to bulk is
+/// the batch endpoint — which this product does not implement (there is no `putlogs.php`
+/// call anywhere; realtime is our only write path), so we cannot satisfy both and must
+/// pick a point on that axis. 15 s is 4/min — a 5× cut on the rate that drew the
+/// complaint, and slower than a human can log by hand, so no burst detector has anything
+/// to fire on — while still draining the full 256-record cap in about an hour, i.e. inside
+/// one operating session. Going much slower would trade a rate complaint for a catch-up
+/// that never finishes: the queue is memory-only, so whatever is still pending when the
+/// app closes is dropped and waits for the next password save.
+///
+/// If a batch endpoint is ever added, bulk catch-up belongs there and this pacing becomes
+/// the fallback for the realtime-only path.
+pub const CATCHUP_UPLOAD_SPACING_SECS: i64 = 15;
 
 /// Where the STANDING N1MM broadcast should go, or `None` when it is off.
 ///
@@ -1628,6 +1682,15 @@ struct StalledQso {
     start_unix: Option<u64>,
 }
 
+/// A queued voice-memory relay for the radio loop (see `Engine::pending_voice_mem`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoiceMemCmd {
+    /// Play memory `ch` (`\send_voice_mem ch` → Yaesu `PB0<ch>;`).
+    Play(u32),
+    /// Abort a playback in progress (`\stop_voice_mem`).
+    Stop,
+}
+
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
@@ -1724,6 +1787,14 @@ pub struct Engine {
     /// companion decodes off the network regardless of the selected tier.
     source_kind: SourceKind,
     mode: Mode,
+    /// Host-role Field Day club log (`None` = not hosting). Lives behind the
+    /// engine lock; the fdsync accept loop reaches it ONLY through the
+    /// shell's `ClubBackend` impl, which is data-plane by construction.
+    fd_club: Option<crate::fdevent::ClubLog>,
+    /// Position-side club mirror + link state (host included — it mirrors
+    /// itself over its loopback self-connection, so every role reads club
+    /// state the same way). Meaningful only while sync is configured.
+    fd_mirror: crate::fdevent::ClubMirror,
     /// Whether normal slot TX is enabled. False = Monitor-off (transmit muted):
     /// [`Engine::poll_tx`] returns nothing. Also forced false by the watchdog.
     tx_enabled: bool,
@@ -1928,6 +1999,12 @@ pub struct Engine {
     /// the matching pane(s). Visual-only: the engine's decode context (answer
     /// parity, history) is NOT a window and stays intact.
     clear_tick: u32,
+    /// Bumped every time a contact reaches the log — through ANY path, so a
+    /// backend auto-log (the FT8/RTTY sequencer completing a QSO on its own)
+    /// increments it just like a manual log does. The UI watches it to fire the
+    /// "clear DX call after logging" wipe on the auto-log path, which used to be
+    /// invisible to the frontend because it intercepted only its own log actions.
+    logged_tick: u32,
     /// One-shot: the operator hit Erase — the radio loop tells cooperating
     /// apps via an outbound Clear (window byte; 0 = Band, 1 = Rx, 2 = both).
     pending_udp_clear: Option<u8>,
@@ -2039,6 +2116,14 @@ pub struct Engine {
     split_tx_mhz: Option<f64>,
     /// One-shot "apply the split state now" flag for the radio loop.
     split_dirty: bool,
+    /// One-shot voice-memory relay from the CAT broker (`\send_voice_mem` /
+    /// `\stop_voice_mem`), consumed by the radio loop's next tick — `take_split_request`'s
+    /// one-shot shape. ⚠️ PLAYBACK TRANSMITS, and the RIG keys itself (a front-panel PB
+    /// press over the wire): Nexus commands no PTT, sets no watchdog of its own, and sees
+    /// the transmission through the ordinary PTT poll exactly as it sees a mic key. A new
+    /// request simply replaces an unconsumed one — the newest ask wins, as everywhere else
+    /// in the one-shot family.
+    pending_voice_mem: Option<VoiceMemCmd>,
     /// The TX frequency Nexus COMMANDED and the rig ACKNOWLEDGED — the ONLY transmit frequency
     /// the privilege gate is allowed to judge.
     ///
@@ -3779,6 +3864,26 @@ struct TxGateStamp {
     generation: u64,
 }
 
+/// WSJT-X's "dB reports to comments" line, byte-for-byte (logqso.cpp:143-145):
+/// `"<mode>  Sent: <rpt>  Rcvd: <rpt>"` — TWO spaces before each part, either part
+/// omitted when its report is absent, and just the mode when both are. Returns `None`
+/// only for the nothing-at-all case so an empty comment is never written.
+fn reports_comment(mode: &str, sent: Option<&str>, rcvd: Option<&str>) -> Option<String> {
+    let mut t = mode.to_string();
+    if let Some(r) = sent.filter(|r| !r.is_empty()) {
+        t.push_str("  Sent: ");
+        t.push_str(r);
+    }
+    if let Some(r) = rcvd.filter(|r| !r.is_empty()) {
+        t.push_str("  Rcvd: ");
+        t.push_str(r);
+    }
+    if sent.is_none() && rcvd.is_none() {
+        return Some(t); // mode alone — exactly what WSJT-X writes then
+    }
+    Some(t)
+}
+
 impl Engine {
     /// Construct from explicit identity (back-compat; uses default settings).
     pub fn new(mycall: &str, mygrid: &str, tx_parity: u64) -> Self {
@@ -3881,6 +3986,8 @@ impl Engine {
             capture_epoch: 0,
             source_kind: SourceKind::Native,
             mode: Mode::Chat,
+            fd_club: None,
+            fd_mirror: crate::fdevent::ClubMirror::default(),
             // Transmit DISARMED at launch — WSJT-X's "Enable Tx" latch, which is off
             // until the operator arms it. Passive monitor + beacon-off were not enough:
             // any path that leaves a pending message in the sequencer (a CQ-run state, a
@@ -3935,6 +4042,7 @@ impl Engine {
             highlights: std::collections::HashMap::new(),
             highlight_seq: 0,
             clear_tick: 0,
+            logged_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
             hrd_pending: std::collections::VecDeque::new(),
@@ -3956,6 +4064,7 @@ impl Engine {
             tx_split_confirmed_hz: None,
             observed_split: None,
             split_dirty: false,
+            pending_voice_mem: None,
             rit_hz: 0,
             xit_hz: 0,
             active_vfo_b: false,
@@ -4642,6 +4751,19 @@ impl Engine {
     /// reset the operating mode or drop queued TX (never `apply_settings`).
     pub fn set_hrdlog_upload(&mut self, on: bool) -> Settings {
         self.settings.hrdlog_upload = on;
+        self.settings.clone()
+    }
+
+    pub fn set_wrl_upload(&mut self, on: bool) -> Settings {
+        self.settings.wrl_upload = on;
+        self.settings.clone()
+    }
+
+    /// Store the resolved WRL logbook id — the `set_lotw_cursor` pattern: a
+    /// lightweight setter, because `apply_settings` is heavyweight (resets the mode
+    /// and clears the TX queue) and key-save-time resolution must not do that.
+    pub fn set_wrl_logbook_id(&mut self, id: &str) -> Settings {
+        self.settings.wrl_logbook_id = id.to_string();
         self.settings.clone()
     }
 
@@ -5599,6 +5721,9 @@ impl Engine {
                         mode: "USB".into(),
                         label: format!("{} · {} (custom)", wf.band, mode_name),
                         note: "operator working-frequency override".into(),
+                        // The operator typed this frequency in deliberately; the transmit
+                        // gate still judges it at key-down.
+                        tx: true,
                     });
                 }
             }
@@ -6244,6 +6369,21 @@ impl Engine {
     /// The desired split TX dial (MHz), `None` = simplex — the UI's SPLIT badge.
     pub fn split_tx_mhz(&self) -> Option<f64> {
         self.split_tx_mhz
+    }
+
+    /// Queue a voice-memory playback (`\send_voice_mem ch`, the FT-991A DVS ask).
+    pub fn request_voice_mem(&mut self, ch: u32) {
+        self.pending_voice_mem = Some(VoiceMemCmd::Play(ch));
+    }
+
+    /// Queue a voice-memory abort (`\stop_voice_mem`).
+    pub fn request_voice_mem_stop(&mut self) {
+        self.pending_voice_mem = Some(VoiceMemCmd::Stop);
+    }
+
+    /// One-shot consume for the radio loop — `take_split_request`'s shape.
+    pub fn take_voice_mem(&mut self) -> Option<VoiceMemCmd> {
+        self.pending_voice_mem.take()
     }
 
     /// The rig REJECTED the split command at `tx_mhz` — drop the desired state
@@ -7948,13 +8088,52 @@ impl Engine {
         section: &str,
         mode: &str,
     ) -> Result<bool, String> {
+        self.fd_log_contact(call, class, section, mode, None)
+    }
+
+    /// As [`fd_log_manual`], but NAMING the actual on-air mode behind a "DIG"
+    /// scoring class instead of letting the log fill it from
+    /// `FieldDayLog::current_submode`.
+    ///
+    /// ⚠️ THE KEYBOARD MODES NEED THIS. `current_submode` tracks the FT tier
+    /// alone (`adif_mode_for_tier` has no RTTY or PSK variant), so an RTTY or
+    /// PSK contact logged as bare "DIG" would be stamped "FT8" — the wrong
+    /// mode in ADIF, "DG" instead of "RY" in Cabrillo, and a mode Winter Field
+    /// Day bans on a QSO that was perfectly legal RTTY.
+    pub fn fd_log_manual_submode(
+        &mut self,
+        call: &str,
+        class: &str,
+        section: &str,
+        mode: &str,
+        submode: &str,
+    ) -> Result<bool, String> {
+        self.fd_log_contact(call, class, section, mode, Some(submode))
+    }
+
+    /// The one Field Day write seam behind both of the above: stamp the REAL
+    /// band (a knob-QSY between contacts), funnel through the log's own
+    /// methods — which own the dupe check and the per-position sequence number
+    /// — and journal. `submode: None` lets `log_mode_at` derive it.
+    fn fd_log_contact(
+        &mut self,
+        call: &str,
+        class: &str,
+        section: &str,
+        mode: &str,
+        submode: Option<&str>,
+    ) -> Result<bool, String> {
         self.sync_fd_band(); // a knob-QSY between contacts must stamp the REAL band
+        let now = now_unix_secs();
         let Mode::FieldDay { station, .. } = &mut self.mode else {
             return Err("Field Day mode is not active".into());
         };
-        let logged = station
-            .log
-            .log_mode_at(call, class, section, mode, 0, now_unix_secs());
+        let logged = match submode {
+            Some(sub) => station
+                .log
+                .log_submode_at(call, class, section, mode, sub, 0, now),
+            None => station.log.log_mode_at(call, class, section, mode, 0, now),
+        };
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
         }
@@ -7977,6 +8156,410 @@ impl Engine {
             .qso_and_powered(&station.log, self.settings.fd_power_mult);
         let bonus = rs.bonus_points(&self.settings.fd_bonuses);
         Some((qso_pts, powered, bonus))
+    }
+
+    // -----------------------------------------------------------------------
+    // Field Day club sync (the Nexus↔Nexus event sync).
+    //
+    // The wire lives in `tempo_net::fdsync`, the policy in `crate::fdevent`;
+    // these methods are the seam the shell's ClubBackend / PositionSync impls
+    // call under the engine lock. Everything here is data-plane: rows in,
+    // club state out — none of it can key TX, touch CAT, or change settings.
+    // -----------------------------------------------------------------------
+
+    /// Ensure this instance has its persistent 8-hex club-sync position id,
+    /// generating one on first run. Returns `(id, generated_now)` — the shell
+    /// saves settings when `generated_now` (this bypasses `apply_settings` on
+    /// purpose: identity init at startup must not run the full settings
+    /// apply, which clears TX queues and rebuilds decoders).
+    pub fn fd_ensure_position_id(&mut self) -> (String, bool) {
+        if !self.settings.fd_position_id.trim().is_empty() {
+            return (self.settings.fd_position_id.clone(), false);
+        }
+        // Uniqueness only has to hold across one club's machines; 32 bits of
+        // clock/pid/ASLR entropy through a hasher is plenty, with no new
+        // dependency. Ids are identity, not secrets.
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+            .hash(&mut h);
+        std::process::id().hash(&mut h);
+        (&self.settings as *const _ as usize).hash(&mut h); // ASLR salt
+        self.settings.mycall.hash(&mut h);
+        let id = format!("{:08x}", (h.finish() & 0xffff_ffff) as u32);
+        self.settings.fd_position_id = id.clone();
+        (id, true)
+    }
+
+    /// Start hosting: build the club log for the configured event and replay
+    /// its append-only journal (the host-restart recovery). Idempotent-ish:
+    /// called again it rebuilds from the same journal.
+    pub fn fd_host_start(&mut self, journal_path: PathBuf) -> std::io::Result<()> {
+        let event = tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+        let name = if self.settings.fd_event_name.trim().is_empty() {
+            // An unnamed event still needs an on-air label for the beacon.
+            format!("{} Field Day", self.settings.mycall)
+        } else {
+            self.settings.fd_event_name.trim().to_string()
+        };
+        let mut club = crate::fdevent::ClubLog::new(event, &name);
+        club.attach_journal(&journal_path)?;
+        self.fd_club = Some(club);
+        Ok(())
+    }
+
+    /// Stop hosting (the manager flipped `fd_host_enable` off, or is
+    /// re-porting). The journal file stays — a restart replays it.
+    pub fn fd_host_stop(&mut self) {
+        self.fd_club = None;
+    }
+
+    pub fn fd_hosting(&self) -> bool {
+        self.fd_club.is_some()
+    }
+
+    /// Whether sync is configured at all (drives `SyncState::Disabled`).
+    pub fn fd_sync_enabled(&self) -> bool {
+        self.settings.fd_host_enable || !self.settings.fd_join_addr.trim().is_empty()
+    }
+
+    /// The club event's display name (beacon + welcome), host role only.
+    pub fn fd_event_label(&self) -> Option<String> {
+        self.fd_club.as_ref().map(|c| c.event_name.clone())
+    }
+
+    // --- host half (the ClubBackend impl calls these) ----------------------
+
+    /// A position joined. Err when not hosting (a race with the toggle).
+    pub fn fd_club_join(
+        &mut self,
+        pos: &str,
+        name: &str,
+        call: &str,
+    ) -> Result<tempo_net::fdsync::JoinAccept, String> {
+        let now = now_unix_secs();
+        let Some(club) = self.fd_club.as_mut() else {
+            return Err("this station is not hosting a club event".into());
+        };
+        let acked = club.join(pos, name, call, now);
+        Ok(tempo_net::fdsync::JoinAccept {
+            event: club.event_name.clone(),
+            host_call: self.settings.mycall.clone(),
+            acked,
+        })
+    }
+
+    /// Merge one wire row (idempotent) → the position's ack high-water.
+    pub fn fd_club_merge(&mut self, row: &tempo_net::fdsync::WireQso) -> u64 {
+        let now = now_unix_secs();
+        self.fd_club
+            .as_mut()
+            .map(|c| c.merge(row, now))
+            .unwrap_or(0)
+    }
+
+    pub fn fd_club_counts(&self) -> (usize, usize) {
+        self.fd_club.as_ref().map(|c| c.counts()).unwrap_or((0, 0))
+    }
+
+    /// Down-flow state past the cursors, scored under the HOST's power
+    /// multiplier + bonuses (the design's flagged judgment call — per-position
+    /// multipliers are ignored; an ARRL entry is one station, one power tier,
+    /// and the operator saw and accepted this).
+    pub fn fd_club_state(
+        &mut self,
+        dupes_from: usize,
+        sections_from: usize,
+        mark_seen: &str,
+    ) -> tempo_net::fdsync::ClubState {
+        let now = now_unix_secs();
+        let (mycall, class, section, mult, bonuses) = (
+            self.settings.mycall.clone(),
+            self.settings.fd_class.clone(),
+            self.settings.fd_section.clone(),
+            self.settings.fd_power_mult,
+            self.settings.fd_bonuses.clone(),
+        );
+        match self.fd_club.as_mut() {
+            Some(club) => {
+                club.mark_seen(mark_seen, now);
+                let (_, _, _, total) = club.scored(&mycall, &class, &section, mult, &bonuses);
+                club.club_state(dupes_from, sections_from, total, now)
+            }
+            None => tempo_net::fdsync::ClubState::default(),
+        }
+    }
+
+    /// A position's presence report. `report.name` is its current friendly
+    /// name — empty means "no news" (an older peer sends none), never
+    /// "clear it".
+    pub fn fd_club_pos_status(&mut self, pos: &str, report: &tempo_net::fdsync::PosReport) {
+        let now = now_unix_secs();
+        if let Some(club) = self.fd_club.as_mut() {
+            club.position_status(pos, report, now);
+        }
+    }
+
+    pub fn fd_club_disconnect(&mut self, _pos: &str) {
+        // Presence is age-based (last_seen), so a disconnect needs no state
+        // change: the board row stale-marks itself past 15 s. Kept as a seam
+        // so the shell impl is total over the trait.
+    }
+
+    /// Club export from the host, deduped earliest-wins by `(call, band,
+    /// mode class)` — the submittable club artifact. `None` = not hosting.
+    pub fn fd_club_export(&self, cabrillo: bool) -> Option<String> {
+        let club = self.fd_club.as_ref()?;
+        let (mycall, class, section) = (
+            self.settings.mycall.as_str(),
+            self.settings.fd_class.as_str(),
+            self.settings.fd_section.as_str(),
+        );
+        Some(if cabrillo {
+            club.export_cabrillo(mycall, class, section)
+        } else {
+            club.export_adif(mycall, class, section)
+        })
+    }
+
+    /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.
+    /// `Some` ONLY in the host role — a non-host position holds just the
+    /// compact `ClubMirror` (no per-QSO attribution), which is why the HTTP
+    /// scoreboard runs at the host.
+    pub fn fd_board_snapshot(&self) -> Option<crate::fd_scoreboard::FdBoardData> {
+        let club = self.fd_club.as_ref()?;
+        let mut positions: Vec<crate::fd_scoreboard::FdBoardPosition> = club
+            .positions()
+            .iter()
+            .map(|(id, p)| crate::fd_scoreboard::FdBoardPosition {
+                id: id.clone(),
+                label: if p.label.is_empty() {
+                    id.clone()
+                } else {
+                    p.label.clone()
+                },
+                operator: p.operator.clone(),
+                band: p.band.clone(),
+                mode: p.mode.clone(),
+                last_seen_unix: p.last_seen_unix,
+            })
+            .collect();
+        positions.sort_by(|a, b| a.id.cmp(&b.id));
+        Some(crate::fd_scoreboard::FdBoardData {
+            event: club.event,
+            call: self.settings.mycall.clone(),
+            class: self.settings.fd_class.clone(),
+            section: self.settings.fd_section.clone(),
+            power_mult: self.settings.fd_power_mult,
+            claimed: self.settings.fd_bonuses.clone(),
+            positions,
+            rows: club
+                .rows()
+                .iter()
+                .map(|r| crate::fd_scoreboard::FdBoardRow {
+                    posid: r.posid.clone(),
+                    seq: r.seq,
+                    call: r.call.clone(),
+                    class: r.class.clone(),
+                    section: r.section.clone(),
+                    band: r.band.clone(),
+                    mode_class: r.mode_class.clone(),
+                    submode: r.submode.clone(),
+                    when_unix: r.when_unix,
+                    operator: r.operator.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    // --- position half (the PositionSync impl calls these) -----------------
+
+    /// What this position calls itself on the club band board: the operator's
+    /// position name, falling back to the station callsign.
+    ///
+    /// The fallback is COMPUTED here rather than written into
+    /// `settings.fd_position_name` as a default, for three reasons. A stored
+    /// default would be stamped at one moment — before the operator has typed
+    /// a callsign on a fresh install, or from the callsign of the day it ran —
+    /// while this reads the live one. Nothing writes settings behind the
+    /// operator's back, so the field keeps saying exactly what they typed.
+    /// And it covers EVERY route to a blank name, not just the ones that pass
+    /// through a particular save: an upgraded profile that predates the field,
+    /// a restored backup, a hand-edited settings.json. The Settings panel is
+    /// what refuses a deliberately-blanked name (it can say so where the
+    /// operator is looking); this is what guarantees the board never shows the
+    /// 8-hex position id, which is plumbing and means nothing to anybody.
+    pub fn fd_position_label(&self) -> String {
+        let name = self.settings.fd_position_name.trim();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+        self.settings.mycall.trim().to_uppercase()
+    }
+
+    /// This position's JOIN identity: `(posid, label, call, own max seq)`.
+    /// An empty posid means the shell has not initialized identity yet — the
+    /// pump treats that as "don't connect".
+    pub fn fd_sync_identity(&self) -> (String, String, String, u64) {
+        let max_seq = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.max_seq(),
+            _ => 0,
+        };
+        (
+            self.settings.fd_position_id.clone(),
+            self.fd_position_label(),
+            self.settings.mycall.clone(),
+            max_seq,
+        )
+    }
+
+    /// THE OUTBOX: own FD rows with `seq > after`, as wire rows — derived
+    /// from the journal-backed log, so there is no separate queue file to
+    /// corrupt. Operator is stamped here (enqueue time) from `fd_operator`.
+    pub fn fd_sync_outbox(&self, after: u64) -> Vec<tempo_net::fdsync::WireQso> {
+        let Mode::FieldDay { station, .. } = &self.mode else {
+            return Vec::new();
+        };
+        let posid = &self.settings.fd_position_id;
+        if posid.is_empty() {
+            return Vec::new();
+        }
+        let op = if self.settings.fd_operator.trim().is_empty() {
+            self.settings.mycall.clone()
+        } else {
+            self.settings.fd_operator.trim().to_uppercase()
+        };
+        let mut rows: Vec<_> = station
+            .log
+            .qsos()
+            .iter()
+            .filter(|q| q.seq > after)
+            .map(|q| tempo_net::fdsync::WireQso {
+                pos: posid.clone(),
+                seq: q.seq,
+                call: q.call.clone(),
+                class: q.class.clone(),
+                sect: q.section.clone(),
+                band: q.band.clone(),
+                mode: q.mode.clone(),
+                sub: q.submode.clone(),
+                when: q.when_unix,
+                op: op.clone(),
+            })
+            .collect();
+        rows.sort_by_key(|r| r.seq);
+        rows
+    }
+
+    /// The mirror, for the pump's welcome/ack/club/link callbacks.
+    pub fn fd_mirror_mut(&mut self) -> &mut crate::fdevent::ClubMirror {
+        &mut self.fd_mirror
+    }
+
+    /// Presence for the club band board — the n3fjp `report_band` idea made
+    /// native. The position NAME rides along on every report (not just the
+    /// join line) so renaming this position in Settings reaches the board on
+    /// the next tick instead of waiting for the connection to be rebuilt.
+    pub fn fd_position_report(&self) -> tempo_net::fdsync::PosReport {
+        let mode = match self.settings.operating_mode {
+            crate::settings::OperatingMode::Phone => "PH",
+            crate::settings::OperatingMode::Cw => "CW",
+            _ => "DIG",
+        };
+        let op = if self.settings.fd_operator.trim().is_empty() {
+            self.settings.mycall.clone()
+        } else {
+            self.settings.fd_operator.trim().to_uppercase()
+        };
+        tempo_net::fdsync::PosReport {
+            band: self.settings.band.clone(),
+            mode: mode.to_string(),
+            op,
+            freq: (self.settings.dial_mhz * 1e6) as u64,
+            name: self.fd_position_label(),
+        }
+    }
+
+    /// The sync chip — DERIVED from (enabled, link, queued = own max seq −
+    /// host ack), so it can never disagree with the queue.
+    pub fn fd_sync_state(&self) -> crate::fdevent::SyncState {
+        let own_max = match &self.mode {
+            Mode::FieldDay { station, .. } => station.log.max_seq(),
+            _ => 0,
+        };
+        crate::fdevent::SyncState::derive(
+            self.fd_sync_enabled(),
+            self.fd_mirror.connected,
+            own_max.saturating_sub(self.fd_mirror.acked),
+            self.fd_mirror.down_since_unix,
+        )
+    }
+
+    /// The `FieldDayStatus.club` block, `None` while sync is not configured.
+    /// `own` is the live FD log (subtracts own keys from the club dupe set —
+    /// the UI's while-typing check is own ∪ club, and own already ships).
+    fn fd_club_dto(
+        &self,
+        own: &tempo_core::fieldday::FieldDayLog,
+    ) -> Option<crate::dto::FdClubDto> {
+        if !self.fd_sync_enabled() {
+            return None;
+        }
+        let m = &self.fd_mirror;
+        let state = self.fd_sync_state();
+        let (queued, offline_since) = match state {
+            crate::fdevent::SyncState::Offline { queued, since } => (queued, since),
+            crate::fdevent::SyncState::Behind { queued } => (queued, 0),
+            _ => (0, 0),
+        };
+        let mut dupes: Vec<(String, String, String)> = m
+            .dupes
+            .iter()
+            .filter(|(call, band, mode)| !own.worked_key(call, band, mode))
+            .cloned()
+            .collect();
+        dupes.sort();
+        let mut board: Vec<crate::dto::FdClubBoardRow> = m
+            .board
+            .iter()
+            .map(|r| crate::dto::FdClubBoardRow {
+                posid: r.pos.clone(),
+                pos_name: r.name.clone(),
+                band: r.band.clone(),
+                mode: r.mode.clone(),
+                operator: r.op.clone(),
+                qsos: r.qsos,
+                rate: r.rate,
+                last_seen_secs: r.age,
+            })
+            .collect();
+        // Named positions first, alphabetically; unnamed ones after, in id order so
+        // the ordering is stable rather than "whichever empty string sorted first".
+        board.sort_by(|a, b| {
+            (a.pos_name.is_empty(), &a.pos_name, &a.posid).cmp(&(
+                b.pos_name.is_empty(),
+                &b.pos_name,
+                &b.posid,
+            ))
+        });
+        Some(crate::dto::FdClubDto {
+            sync_state: state.code().to_string(),
+            queued,
+            offline_since_unix: offline_since,
+            hosting: self.fd_club.is_some(),
+            event: m.event.clone(),
+            host_call: m.host_call.clone(),
+            score: m.score,
+            qsos: m.qsos,
+            sections: m.sections.len() as u32,
+            skew_secs: m.skew_secs,
+            last_error: m.last_error.clone(),
+            dupes,
+            board,
+        })
     }
 
     /// Manually add a contact to the logbook (the UI "Log QSO" button). Adds in
@@ -8020,6 +8603,9 @@ impl Engine {
     }
 
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
+        // Every log path funnels through here, so this is the one place that can tell the UI a
+        // contact was written — including a backend auto-log the frontend never initiated.
+        self.logged_tick = self.logged_tick.wrapping_add(1);
         // Any contact reaching the log ends the #153 rescue window. The stash is a lifeline for
         // the contact the operator just watched fail, and once ANY contact is written they have
         // moved on — keeping it past that point risks the Log button reaching back to an old
@@ -8208,6 +8794,9 @@ impl Engine {
         }
         self.station.pending_uploads.push_back(PendingUpload {
             rec,
+            // LIVE, and it must stay that way: this is the contact at the key, and the
+            // catch-up pacing added for #193 deliberately does not touch it.
+            origin: UploadOrigin::Live,
             legs: upload_legs::ALL,
             attempts: 0,
             retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
@@ -8410,6 +8999,9 @@ impl Engine {
                     let mut st = FieldDayStation::running(&mycall, &mygrid, exch, &band);
                     st.log.event =
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                    // The submode funnel: the sequencer's log() calls record
+                    // the tier actually keyed (set_tier re-stamps on a change).
+                    st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st
                 }),
                 running: true,
@@ -8419,6 +9011,7 @@ impl Engine {
                     let mut st = FieldDayStation::search_and_pounce(&mycall, &mygrid, exch, &band);
                     st.log.event =
                         tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                    st.log.current_submode = self.adif_mode_for_tier().to_string();
                     st
                 }),
                 running: false,
@@ -9101,6 +9694,7 @@ impl Engine {
             text,
             freq_hz: self.tx_offset_hz,
             when_unix: now_unix_secs(),
+            band: self.settings.band.clone(),
         });
         if self.own_tx.len() > OWN_TX_RING {
             self.own_tx.pop_front();
@@ -9275,6 +9869,14 @@ impl Engine {
                     running: false,
                 };
             }
+        }
+        // Field Day records the ACTUAL on-air mode behind each "DIG" contact
+        // (`LoggedQso::submode`); a tier change moves what the sequencer keys,
+        // so the log's funnel follows it (FD entry stamps it the same way) —
+        // an FT4-tier WFD contact must never export or push as "FT8".
+        let fd_submode = self.adif_mode_for_tier();
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.log.current_submode = fd_submode.to_string();
         }
         // ⭐ MSK144 PARKS BOTH OFFSETS ON 1500 Hz, exactly as WSJT-X does on entering the
         // mode (mainwindow.cpp:8169-8173, clamp 1400-1600). The transmitter ALREADY keys
@@ -13552,6 +14154,31 @@ impl Engine {
                 }
             }
             Action::LogQso { call, exchange } => {
+                // FIELD DAY IS ALL-MODE, AND THIS CONTACT IS A CONTEST CONTACT.
+                // `set_rtty_auto` already worked it with the FD exchange, so the
+                // completed QSO belongs to the CONTEST log and to nothing else:
+                // that is the log that scores it, claims its section and writes
+                // its Cabrillo line. A second copy in the general logbook would
+                // also re-broadcast it on the WSJT-X UDP sink and the connector
+                // upload queue — the rule the FT8 FD sequencer keeps
+                // structurally (see the two `a_field_day_contact_…` tests) and
+                // the manual FD strip keeps by returning early.
+                //
+                // Logged UNCONDITIONALLY, like that sequencer: auto-log and
+                // prompt-to-log are general-logbook preferences, and a contest
+                // log that silently drops a worked contact is this defect again.
+                if let (Some((class, section)), true) = (
+                    Self::fd_exchange(&exchange),
+                    matches!(self.mode, Mode::FieldDay { .. }),
+                ) {
+                    // "DIG" is the scoring class (2 points); "RTTY" is what was
+                    // actually on the air, so the export says RY and not FT8.
+                    // Ok(false) = already worked this band+class, the NORMAL
+                    // outcome for a repeat and nothing to report — the contact
+                    // is in the log already. Err is unreachable: FD is the mode.
+                    let _ = self.fd_log_manual_submode(&call, &class, &section, "DIG", "RTTY");
+                    return;
+                }
                 if self.settings.auto_log {
                     let rec = self.rtty_qso_record(&call, &exchange);
                     if self.settings.prompt_to_log {
@@ -13565,6 +14192,22 @@ impl Engine {
             }
             Action::Abort => {}
         }
+    }
+
+    /// The Field Day pair out of a sequencer exchange: `Some((class, section))`
+    /// only when BOTH arrived non-blank. The FIELD_DAY schema marks both
+    /// required, so a completed FD QSO always has them and a CASUAL one
+    /// (RST/NAME/QTH) never does — which is what keeps the contest route off
+    /// the ordinary RTTY path without re-reading a settings flag.
+    fn fd_exchange(exchange: &[(String, String)]) -> Option<(String, String)> {
+        let get = |key: &str| {
+            exchange
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.trim())
+                .filter(|v| !v.is_empty())
+        };
+        Some((get("CLASS")?.to_string(), get("SECTION")?.to_string()))
     }
 
     /// Build a [`QsoRecord`] for an auto-sequenced RTTY contact from the peer's
@@ -14843,6 +15486,9 @@ impl Engine {
                 let (qso_pts, powered) =
                     rs.scoring.qso_and_powered(log, self.settings.fd_power_mult);
                 let bonus = rs.bonus_points(&self.settings.fd_bonuses);
+                // The running-or-next event window, from the rules data (the
+                // banner/countdown's single source — no TS date math).
+                let event_window = rs.next_or_running(now_unix_secs());
                 s.field_day = Some(FieldDayStatus {
                     my_class: log.myexch.class.clone(),
                     my_section: log.myexch.section.clone(),
@@ -14861,6 +15507,19 @@ impl Engine {
                     powered_points: powered,
                     bonus_points: bonus,
                     total_score: powered + bonus,
+                    event_start_unix: event_window.start_unix,
+                    event_end_unix: event_window.end_unix,
+                    rules_year: rs.rules_year,
+                    rules_generated: tempo_core::fd_rules::active_generated().to_string(),
+                    // The effectively-ON assistance sources, by their display
+                    // labels — the advisory UI's single source (never re-derived).
+                    assistance_on: self
+                        .settings
+                        .assistance_sources()
+                        .iter()
+                        .filter(|&&(_, on)| on)
+                        .map(|&(label, _)| label.to_string())
+                        .collect(),
                     log: log
                         .qsos()
                         .iter()
@@ -14870,9 +15529,11 @@ impl Engine {
                             section: q.section.clone(),
                             band: q.band.clone(),
                             mode: q.mode.clone(),
+                            submode: q.submode.clone(),
                             when_unix: q.when_unix,
                         })
                         .collect(),
+                    club: self.fd_club_dto(log),
                 });
             }
         }
@@ -15084,7 +15745,16 @@ impl Engine {
         // their calls in the decode feed (WSJT-X own-TX). The UI keys these by
         // cycle so repeated identical calls stack as distinct timestamped lines.
         let mycall = self.settings.mycall.clone();
-        for tx in &self.own_tx {
+        // Only the overs sent on the band we are ON. An empty stored band is an over from
+        // before this was recorded (or an off-band excursion, where the backend reports no
+        // band claim) — those still ride, because dropping them would silently lose an
+        // operator's own record, which is the fault the ring exists to prevent.
+        let here = self.settings.band.clone();
+        for tx in self
+            .own_tx
+            .iter()
+            .filter(|t| t.band.is_empty() || t.band == here)
+        {
             s.recent_decodes.push(DecodeRow {
                 from: Some(mycall.clone()),
                 snr: 0,
@@ -15124,6 +15794,7 @@ impl Engine {
             })
             .collect();
         s.clear_tick = self.clear_tick;
+        s.logged_tick = self.logged_tick;
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
         s.work_call = self.work_call.clone();
@@ -15688,9 +16359,15 @@ impl Engine {
                 // ("A13DE KD9TAW") was the band-activity garble bug. Also skip a SINGLE
                 // bare broadcast frame ("DE <CALL> 73", the S3 fast-path) — likewise
                 // recorded once at source as the clean body.
-                let is_chunk = tempo_core::text::parse_chunk(&t).is_some();
-                let is_broadcast = tempo_core::inbox::parse_broadcast(&t).is_some();
-                if !is_chunk && !is_broadcast {
+                // Scoped to Mode::Chat — the only mode whose wire chunks messages at
+                // all. Unscoped, parse_chunk also matched any STRUCTURED over whose
+                // first word starts letter-digit-digit — i.e. a real DX call (P29YY,
+                // T77C, SP2GIF — issue #178): the operator's own overs to those calls
+                // vanished from Rx Frequency and ALL.TXT while the QSO completed fine.
+                let chat_wire = matches!(self.mode, Mode::Chat)
+                    && (tempo_core::text::parse_chunk(&t).is_some()
+                        || tempo_core::inbox::parse_broadcast(&t).is_some());
+                if !chat_wire {
                     self.record_own_tx(t.clone());
                     // ALL.TXT parity with WSJT-X: log OUR over as a `Tx` line too. The RX-only
                     // ALL.TXT left the operator's own CQ / reports / RR73 invisible — to tailing
@@ -16493,7 +17170,23 @@ impl Engine {
         // A Fox confirm half is the SENDER-LESS 2-token "K1ABC RR73" — re-add
         // the Fox's call so it parses as a standard Rr73 and passes the
         // sequencer's sender lock. Only exact 2-token <call> RR73/RRR/73 forms.
+        //
+        // ⚠️ #236: NEVER fabricate a partner-as-sender outside a genuine Hound/SuperHound QSO. This
+        // reattach is legitimate ONLY when our partner IS the Fox we are hounding. De-gated to every
+        // FT8 QSO by 06ec4ab2 ("a Fox is readable without Hound"), it stamped our CURRENT ordinary
+        // partner onto a bystander Fox's confirm addressed to us — forging an RR73 the partner never
+        // sent and keying a premature 73 (a WSJT-X-cadence violation: no Tx5 without a real roger).
+        // The DISPLAY split below still runs so a Fox stays readable; only the sequencer-feeding
+        // fabrication is gated. A sender-LESS 2-token half cannot parse as a terminal (Rr73/Rrr/Bye73
+        // all need 3 tokens), so un-reattached it never advances the sequencer.
+        let hound_active = matches!(
+            self.settings.special_op,
+            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+        );
         let reattach = |m: String| -> String {
+            if !hound_active {
+                return m;
+            }
             let t: Vec<&str> = m.split_whitespace().collect();
             if let (Some(f), [to, fin]) = (&fox, t.as_slice()) {
                 if matches!(*fin, "RR73" | "RRR" | "73") && tempo_core::message::is_callsign(to) {
@@ -17180,6 +17873,18 @@ impl Engine {
         // contact — see `log_frequencies`, which owns the rule and the satellite exclusion.
         let (freq_mhz, freq_rx_mhz) = self.log_frequencies();
         let grid = self.dx_grid_resolved(&dxcall, dxgrid);
+        // Built BEFORE the struct literal moves `mode` into the record.
+        let reports_note = if self.settings.log_reports_to_comments {
+            reports_comment(
+                &mode,
+                self.qso_report_sent
+                    .map(tempo_core::message::fmt_report)
+                    .as_deref(),
+                rx_report.map(tempo_core::message::fmt_report).as_deref(),
+            )
+        } else {
+            None
+        };
         QsoRecord {
             call: dxcall,
             grid,
@@ -17201,7 +17906,11 @@ impl Engine {
             rst_rcvd: rx_report.map(tempo_core::message::fmt_report),
             name: None,
             qth: None,
-            comment: None,
+            // WSJT-X's "dB reports to comments" (opt-in): the COMMENT carries
+            // "<mode>  Sent: <rpt>  Rcvd: <rpt>" in WSJT-X's own byte format, built
+            // from the SAME formatted reports logged above, so the comment can never
+            // disagree with the record.
+            comment: reports_note,
             notes: None,
             tx_power: None,
             // TIME_ON = when the exchange began (set on answer / first CQ reply);
@@ -17508,9 +18217,24 @@ impl Engine {
         legs: u8,
         attempts: u8,
         retry_after_unix: i64,
+        origin: UploadOrigin,
     ) {
         self.station
-            .requeue_upload_at(rec, legs, attempts, retry_after_unix)
+            .requeue_upload_at(rec, legs, attempts, retry_after_unix, origin)
+    }
+
+    /// See [`StationCore::requeue_after_failure`] — the re-queue path for an upload that
+    /// just failed, which paces a catch-up record instead of trusting its raw backoff.
+    pub fn requeue_after_failure(
+        &mut self,
+        rec: tempo_core::logbook::QsoRecord,
+        legs: u8,
+        attempts: u8,
+        earliest_due: i64,
+        origin: UploadOrigin,
+    ) {
+        self.station
+            .requeue_after_failure(rec, legs, attempts, earliest_due, origin)
     }
 
     /// See [`StationCore::requeue_failed_clublog`].
@@ -19279,6 +20003,72 @@ mod tests {
         assert_eq!(log[0].rst_rcvd.as_deref(), Some("599"));
         assert_eq!(log[0].name.as_deref(), Some("BOB"), "copied exchange");
         assert_eq!(log[0].qth.as_deref(), Some("BOSTON"), "copied exchange");
+    }
+
+    /// As [`rtty_auto_engine`], with the Field Day master switch on — which is
+    /// what makes `set_rtty_auto` build the FIELD_DAY exchange (class/section)
+    /// AND puts the engine in `Mode::FieldDay`, so the contest log exists.
+    fn rtty_auto_fd_engine() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let mut s = e.settings().clone();
+        s.fd_active = true;
+        s.fd_class = "3A".into();
+        s.fd_section = "WI".into();
+        e.apply_settings(s); // master on + class/section → enters Mode::FieldDay
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_auto(true);
+        e
+    }
+
+    /// FIELD DAY IS ALL-MODE, AND RTTY IS ITS DIGITAL CLASS. The auto-sequencer
+    /// already WORKS a Field Day contact correctly (`set_rtty_auto` builds the
+    /// class/section exchange the instant the master switch is on) — but the
+    /// completed contact went to the general logbook, which scores nothing:
+    /// not a QSO point, not the section multiplier, not a Cabrillo line. It
+    /// belongs to the contest log, and to that log ONLY.
+    #[test]
+    fn rtty_auto_field_day_qso_lands_in_the_contest_log_not_the_general_one() {
+        let mut e = rtty_auto_fd_engine();
+        e.rtty_auto_cq().unwrap();
+        assert!(e.poll_rtty_one().is_some(), "drain the CQ");
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW W1AW K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().peer.as_deref(), Some("W1AW"));
+        assert!(e.poll_rtty_one().is_some(), "drain our exchange");
+        // His Field Day exchange comes back — class + section, both required.
+        e.push_rtty_decode(&rtty_decoded("W9XYZ DE W1AW R 2A EMA K\n"), 0.0, true);
+        assert_eq!(e.rtty_state().seq_state, "confirmed", "the QSO completed");
+
+        let fd = e.snapshot().field_day.expect("FD master is on");
+        assert_eq!(fd.qso_count, 1, "the contact never reached the FD log");
+        assert_eq!(fd.log[0].call, "W1AW");
+        assert_eq!(fd.log[0].class, "2A", "his class, as copied");
+        assert_eq!(fd.log[0].section, "EMA", "his section — the multiplier");
+        assert_eq!(
+            fd.log[0].mode, "DIG",
+            "RTTY is the digital class (2 points)"
+        );
+        assert_eq!(
+            fd.log[0].submode, "RTTY",
+            "the ACTUAL on-air mode, so Cabrillo emits RY and ADIF RTTY — never \
+             the FT tier `current_submode` happens to hold"
+        );
+        // …and NOT the general logbook: one contact, one log (the rule the FT8
+        // Field Day sequencer already keeps structurally). The two consequences
+        // that rule exists for, asserted at the site that used to break it —
+        // both broadcast sinks stay clear, so the club emitter that reads the FD
+        // log is the ONLY thing that sends this contact.
+        assert!(
+            e.get_log().is_empty(),
+            "double-logged — the FD contact also landed in the general logbook"
+        );
+        assert!(
+            e.take_pending_udp_qsos().is_empty(),
+            "the FD contact was queued for the WSJT-X sink a second time"
+        );
+        assert!(
+            e.take_pending_uploads().is_empty(),
+            "the FD contact entered the general connector upload queue"
+        );
     }
 
     #[test]
@@ -22622,6 +23412,73 @@ mod tests {
     }
 
     #[test]
+    fn own_tx_rows_do_not_follow_the_operator_to_another_band() {
+        // #178 (Luk73), the sentence that outlived the Erase fix: "Changing the band doesn't
+        // change the situation. Additionally, the hours and bands change in the status lines."
+        //
+        // The own-TX display ring recorded text, audio offset and time — and NOT the band. So
+        // every over we have sent is appended to every snapshot forever, and the decode pane,
+        // which wipes itself on a band change, immediately re-ingests them: 20 m calls reappear
+        // on 40 m carrying their original transmit times. Nothing about Erase caused this and
+        // fixing Erase could not fix it; a pane cannot filter on a fact the wire never carried.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.call_station("W1AW");
+        for slot in [0u64, 1, 2, 3] {
+            let _ = e.poll_tx(slot);
+        }
+        let on_20 = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .count();
+        assert!(on_20 > 0, "harness: we recorded an over on 20 m");
+
+        e.set_frequency(7.074, "40m", "USB");
+        let mine_on_40: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            mine_on_40.is_empty(),
+            "overs sent on 20 m are being shown on 40 m: {mine_on_40:?}"
+        );
+    }
+
+    #[test]
+    fn own_tx_rows_survive_a_dx_call_shaped_like_a_chunk_header() {
+        // Field report (2026-08-28, 24.915 MHz): calling P29YY completed the QSO, but
+        // not one of our own overs ever appeared in Rx Frequency — and issue #178 is
+        // the same sighting against T77C and SP2GIF on the same band. The mechanism:
+        // the own-TX recorder skips chat-wire chunk frames, and parse_chunk reads ANY
+        // over whose first word starts letter-digit-digit — i.e. a DX call like
+        // P29YY — as a chunk header. The skip must be scoped to the chat wire, the
+        // only place chunked frames exist.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        e.set_tier(Tier::Ft8);
+        e.call_station("P29YY");
+        for slot in [0u64, 1, 2, 3] {
+            let _ = e.poll_tx(slot); // both parities: whichever the call armed, it keys
+        }
+        let mine: Vec<String> = e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .filter(|d| d.mine)
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            mine.iter().any(|m| m.starts_with("P29YY ")),
+            "our own over to a letter-digit-digit DX call is recorded, got {mine:?}"
+        );
+    }
+
+    #[test]
     fn switching_tier_re_qsys_to_the_new_mode_dial() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
@@ -24921,6 +25778,35 @@ mod tests {
         assert!(!e.get_log().is_empty(), "the Fox's multiplexed RR73 logs");
     }
 
+    /// #236 REGRESSION GUARD (on-air, WSJT-X cadence). On an ORDINARY (non-Hound) FT8 QSO, a
+    /// bystander DXpedition Fox's multiplexed confirm addressed to us — "W9XYZ RR73; H2 <FOX> -08"
+    /// — must NEVER be stamped with our current partner's call and read as a roger FROM the
+    /// partner. Before the fix, `reattach` (de-gated to every QSO by 06ec4ab2) forged our partner
+    /// as the sender, defeating the sequencer's sender-lock and keying a premature 73 to a station
+    /// that never rogered. The display split may still happen; the SEQUENCER must not advance.
+    #[test]
+    fn an_ordinary_qso_never_sends_73_from_a_bystander_fox_multiplex() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        assert_eq!(
+            e.settings.special_op,
+            crate::settings::SpecialOp::None,
+            "control: this is an ORDINARY QSO, Hound OFF — the fabrication's only legitimate home is a Hound QSO"
+        );
+        // Ordinary QSO with PJ4DX, advanced to where a roger would CLOSE it: we answered their CQ,
+        // then they sent us a report, so we have sent R+report and await their RR73.
+        e.ingest_decodes_for_test(&[dec_at("CQ PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ PJ4DX -08", -10, 400.0)], 3);
+        // A DIFFERENT Fox (we hounded earlier) sends its confirm addressed to us, multiplexed. Its
+        // sender-less first half "W9XYZ RR73" must NOT become "W9XYZ PJ4DX RR73" and close the QSO.
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; NEXTHOUND N0CALL -08", -10, 320.0)], 5);
+        assert!(
+            e.get_log().is_empty(),
+            "the ordinary QSO must NOT complete or key a 73 from a bystander Fox's confirm (#236)"
+        );
+    }
+
     #[test]
     fn fox_split_needs_an_active_qso_not_the_hound_setting() {
         // Not working anybody: never split on ';' — free text may legitimately carry one, and
@@ -25681,8 +26567,215 @@ mod tests {
             "only the ClubLog leg is owed — the catch-up must not re-push QRZ/eQSL etc."
         );
         assert!(
-            queued.iter().all(|p| p.retry_after_unix == 0),
-            "the catch-up is due immediately, no backoff"
+            queued.iter().all(|p| p.origin == UploadOrigin::CatchUp),
+            "a catch-up record is marked as one — the transport can't tell otherwise (#193)"
+        );
+        // Was `all(retry_after_unix == 0)` — "due immediately, no backoff" — and that WAS
+        // the #193 defect: every swept record due at once, drained in one worker tick.
+        // They are paced now; `a_clublog_catch_up_is_paced_not_a_burst` owns the detail.
+        assert!(
+            queued[1].retry_after_unix > queued[0].retry_after_unix,
+            "the catch-up is paced, not a burst"
+        );
+    }
+
+    #[test]
+    fn a_failed_catch_up_record_stays_in_the_pacing_lane() {
+        // ⚠️ THE PACING FIX'S OWN BLOCKER, and it made things WORSE than the bug it fixed.
+        //
+        // The slot allocator only paced an UNSTAMPED record (`retry_after_unix == 0`). A
+        // transient failure re-queues with `now + backoff`, which is not zero — so the first
+        // time ClubLog was busy, that record left the pacing lane for good and was rationed
+        // only by the shared exponential backoff, which flattens at 300 s.
+        //
+        // The scenario that follows is the whole point: ClubLog throttles us (which is
+        // SELF-REINFORCING — being rate-limited is exactly the transient failure), records
+        // come due through the outage, each fails and takes a backoff, and when the service
+        // returns every one of them is due IN THE PAST. The drain worker takes the whole
+        // queue per tick and pushes in a bare loop, so they all leave inside one 2 s tick:
+        // the same burst that drew the complaint, only now compressed. Before the pacing the
+        // exposure to this was two seconds; after it, an hour.
+        //
+        // So a re-queue AFTER A FAILURE is a fresh scheduling decision and must be paced —
+        // never sooner than its backoff, and never on top of another catch-up record.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..6 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        assert_eq!(e.requeue_failed_clublog(), 6);
+        let queued = e.take_pending_uploads();
+
+        // Every one of them now fails, the way a busy ClubLog fails them: back on the queue
+        // with a backoff, carrying its CatchUp origin.
+        for (i, p) in queued.iter().enumerate() {
+            let attempts = (i as u8 % 3) + 1; // different rungs of the ladder, as in life
+            let due = now_unix_secs() as i64 + upload_backoff_secs(attempts);
+            e.requeue_after_failure(p.rec.clone(), p.legs, attempts, due, p.origin);
+        }
+        let after = e.take_pending_uploads();
+        assert_eq!(after.len(), 6, "harness: all six came back");
+
+        // THE PIN: no two of them may come due within a spacing of each other. Sort, because
+        // the backoff ladder means they do not necessarily return in slot order.
+        let mut dues: Vec<i64> = after.iter().map(|p| p.retry_after_unix).collect();
+        dues.sort_unstable();
+        for w in dues.windows(2) {
+            assert!(
+                w[1] - w[0] >= CATCHUP_UPLOAD_SPACING_SECS,
+                "two failed catch-up records are due {}s apart — on recovery they leave in \
+                 one tick: {dues:?}",
+                w[1] - w[0]
+            );
+        }
+        // …and none of them jumped its own backoff to get there.
+        let now = now_unix_secs() as i64;
+        assert!(
+            dues.iter().all(|d| *d > now),
+            "a failed record must still wait out its backoff: {dues:?}"
+        );
+    }
+
+    #[test]
+    fn a_clublog_catch_up_is_paced_not_a_burst() {
+        // #193 (KR8MER), live in 1.9.2 and the reason ClubLog threatened to block his IP:
+        // saving the app-password swept every never-uploaded QSO — ADIF-imported history
+        // included — into the queue due-now, and the drain worker takes the WHOLE queue
+        // per tick and pushes in a bare loop with no rate limit. 81 realtime uploads in 4
+        // minutes. The pacing is what makes a catch-up a non-event on ClubLog's side.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..12 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads(); // drop the fresh-log queue; this is about the CATCH-UP
+
+        let n = e.requeue_failed_clublog();
+        assert_eq!(n, 12);
+        let queued = e.take_pending_uploads();
+        let now = now_unix_secs() as i64;
+
+        // The first one goes at once — the operator gets immediate evidence the credential
+        // worked, and one upload is not a burst.
+        assert!(
+            queued[0].retry_after_unix <= now,
+            "the first catch-up record is due now, not held back"
+        );
+        // …and every one after it is exactly one spacing behind the last. THE PIN: before
+        // the fix these were all 0 and the whole sweep left in a single tick.
+        for w in queued.windows(2) {
+            assert_eq!(
+                w[1].retry_after_unix - w[0].retry_after_unix,
+                CATCHUP_UPLOAD_SPACING_SECS,
+                "consecutive catch-up records are one spacing apart"
+            );
+        }
+        // The rate an outside observer sees: 12 records can't leave in under 11 spacings.
+        assert!(
+            queued[11].retry_after_unix - now >= 11 * CATCHUP_UPLOAD_SPACING_SECS,
+            "the sweep is spread across the wall clock, not queued due-now"
+        );
+    }
+
+    #[test]
+    fn a_live_contact_is_never_delayed_by_a_catch_up_in_flight() {
+        // The other half of #193, and the one a pacing fix could easily break: realtime
+        // upload exists so a live contact appears on ClubLog while the QSO is still warm.
+        // A catch-up occupying the pacing slots must not push it back by even a second.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..30 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        // A big catch-up now owns slots minutes into the future…
+        e.requeue_failed_clublog();
+        e.take_pending_uploads();
+
+        // …and the contact at the key still goes NOW.
+        let rec = e.qso_record("K1ABC".into(), None, None);
+        e.log_qso(rec);
+        let live = e.take_pending_uploads();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].origin, UploadOrigin::Live);
+        assert_eq!(
+            live[0].retry_after_unix, 0,
+            "a live contact is due immediately — pacing is for catch-up only"
+        );
+        assert_eq!(
+            live[0].legs,
+            upload_legs::ALL,
+            "and still owes every enabled connector, not just ClubLog"
+        );
+
+        // Same through the re-queue door, which is the one the pacing actually guards:
+        // a LIVE record put back due-now (a leg retried) must not be handed a catch-up
+        // slot just because a catch-up happens to be running.
+        let rec = e.qso_record("K1ABC".into(), None, None);
+        e.requeue_upload(rec, upload_legs::CLUBLOG, 1);
+        let again = e.take_pending_uploads();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].origin, UploadOrigin::Live);
+        assert_eq!(
+            again[0].retry_after_unix, 0,
+            "a live re-queue keeps its own timing — the catch-up slots are not its queue"
+        );
+    }
+
+    #[test]
+    fn a_paced_catch_up_record_keeps_its_slot_when_the_worker_puts_it_back() {
+        // The worker drains the whole queue every 2 s and re-queues whatever isn't due
+        // yet. If that re-queue allocated a FRESH slot, every waiting record would be
+        // shoved another spacing into the future on every tick and the catch-up would
+        // march away from the present and never drain — a worse bug than the burst.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for i in 0..4 {
+            let rec = e.qso_record(format!("W9AB{i}"), None, None);
+            e.log_qso(rec);
+        }
+        e.take_pending_uploads();
+        e.requeue_failed_clublog();
+        let queued = e.take_pending_uploads();
+        let dues: Vec<i64> = queued.iter().map(|p| p.retry_after_unix).collect();
+
+        // Ten worker ticks' worth of "not due yet → put it back untouched".
+        let mut round = queued;
+        for tick in 0..10 {
+            for p in round {
+                e.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
+            }
+            round = e.take_pending_uploads();
+            let got: Vec<i64> = round.iter().map(|p| p.retry_after_unix).collect();
+            assert_eq!(
+                got, dues,
+                "tick {tick}: a re-queued record keeps the slot it already had"
+            );
+        }
+    }
+
+    /// #210: the frontend's "clear DX call after logging" wipe rides `logged_tick`, and the
+    /// whole point is that it advances on EVERY log — including a backend auto-log the UI never
+    /// initiated. `log_qso` is the single funnel, so one bump here proves every path is covered.
+    #[test]
+    fn logged_tick_advances_on_every_logged_contact() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let before = e.snapshot().logged_tick;
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        assert_eq!(
+            e.snapshot().logged_tick,
+            before.wrapping_add(1),
+            "a logged QSO must advance logged_tick so the UI can clear the DX call"
+        );
+
+        let rec2 = e.qso_record("K7ABC".into(), None, None);
+        e.log_qso(rec2);
+        assert_eq!(
+            e.snapshot().logged_tick,
+            before.wrapping_add(2),
+            "each contact advances it — a second log is a second clear signal"
         );
     }
 
@@ -27092,6 +28185,261 @@ mod tests {
     }
 
     #[test]
+    fn an_unnamed_position_calls_itself_by_its_callsign_never_by_its_id() {
+        // The operator's premise (club Field Day, 2026-08-30): the board must
+        // never show something meaningless. An unnamed position used to reach
+        // the board as its 8-hex position id — internal plumbing — so the
+        // name falls back to the station callsign, live, wherever identity is
+        // built.
+        let mut e = Engine::new("KD9TAW", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_id = "9a85f060".into();
+            s.fd_position_name = String::new(); // never typed one
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "KD9TAW");
+        let (posid, label, call, _) = e.fd_sync_identity();
+        assert_eq!(
+            (posid.as_str(), label.as_str(), call.as_str()),
+            ("9a85f060", "KD9TAW", "KD9TAW"),
+            "the JOIN carries the callsign as the name, not the id"
+        );
+        assert_eq!(
+            e.fd_position_report().name,
+            "KD9TAW",
+            "and so does every presence report"
+        );
+        // Whitespace is not a name.
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_name = "   ".into();
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "KD9TAW");
+        // POSITIVE CONTROL: a real name wins over the fallback, trimmed.
+        {
+            let mut s = e.settings().clone();
+            s.fd_position_name = "  CW tent  ".into();
+            e.apply_settings(s);
+        }
+        assert_eq!(e.fd_position_label(), "CW tent");
+        assert_eq!(e.fd_sync_identity().1, "CW tent");
+        assert_eq!(e.fd_position_report().name, "CW tent");
+    }
+
+    #[test]
+    fn fd_board_snapshot_is_some_only_in_the_host_role() {
+        // THE SCOREBOARD SEAM CONTRACT: a non-host position (even one deep in
+        // Field Day with a live log) hands the board NOTHING — it holds only
+        // the compact mirror. The host hands the bounded clone.
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_join_addr = "192.168.1.10:42073".into(); // a POSITION, not a host
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        assert!(
+            e.fd_board_snapshot().is_none(),
+            "a non-host position exposes no board data"
+        );
+
+        // Become the host: the snapshot appears, carrying merged rows +
+        // positions in the reconciled shape.
+        let dir = std::env::temp_dir().join(format!("fd-board-seam-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let _ = e.fd_club_join("aaaa0001", "CW tent", "KD9TAW");
+        e.fd_club_merge(&tempo_net::fdsync::WireQso {
+            pos: "aaaa0001".into(),
+            seq: 1,
+            call: "W1AW".into(),
+            class: "1D".into(),
+            sect: "CT".into(),
+            band: "20m".into(),
+            mode: "DIG".into(),
+            sub: "FT8".into(),
+            when: 1_782_583_500,
+            op: "OP1".into(),
+        });
+        let board = e.fd_board_snapshot().expect("host role → Some");
+        assert_eq!(board.call, "W9ABC");
+        assert_eq!((board.class.as_str(), board.section.as_str()), ("3A", "WI"));
+        assert_eq!(board.rows.len(), 1);
+        let r = &board.rows[0];
+        assert_eq!(
+            (
+                r.posid.as_str(),
+                r.seq,
+                r.call.as_str(),
+                r.mode_class.as_str(),
+                r.submode.as_str()
+            ),
+            ("aaaa0001", 1, "W1AW", "DIG", "FT8")
+        );
+        assert_eq!(
+            r.operator, "OP1",
+            "operator stamped at enqueue rides through"
+        );
+        assert_eq!(board.positions.len(), 1);
+        assert_eq!(board.positions[0].label, "CW tent");
+
+        e.fd_host_stop();
+        assert!(e.fd_board_snapshot().is_none(), "stop hosting → None again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WHAT THE BAND BOARD IS BUILT FROM. "Who is on what band" is presence
+    /// the host already holds per position — the scoreboard seam simply
+    /// dropped it, carrying label + operator only, so the club TV could not
+    /// show the one thing a multi-station board exists for.
+    #[test]
+    fn the_board_snapshot_carries_each_positions_current_band_and_mode() {
+        let mut e = Engine::new("W9ABC", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        let dir = std::env::temp_dir().join(format!("fd-board-presence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        e.fd_host_start(dir.join("fd_event_test.jsonl")).unwrap();
+        let _ = e.fd_club_join("aaaa0001", "CW tent", "KD9TAW");
+        let _ = e.fd_club_join("bbbb0002", "GOTA tent", "KD9TAW");
+        e.fd_club_pos_status(
+            "aaaa0001",
+            &tempo_net::fdsync::PosReport {
+                band: "20m".into(),
+                mode: "cw".into(),
+                op: "w9aaa".into(),
+                freq: 14_050_000,
+                name: "CW tent".into(),
+            },
+        );
+        let board = e.fd_board_snapshot().expect("hosting");
+        let cw = board
+            .positions
+            .iter()
+            .find(|p| p.id == "aaaa0001")
+            .expect("the reporting position");
+        assert_eq!(
+            (cw.band.as_str(), cw.mode.as_str()),
+            ("20m", "CW"),
+            "the presence report's band and mode reach the scoreboard seam"
+        );
+        assert!(
+            cw.last_seen_unix > 0,
+            "…with the liveness stamp the stale mark is computed from"
+        );
+        // POSITIVE CONTROL: a position that has joined but never reported has
+        // no band to show — the empty string is a real state, not a default
+        // the plumbing invented.
+        let gota = board
+            .positions
+            .iter()
+            .find(|p| p.id == "bbbb0002")
+            .expect("the silent position");
+        assert_eq!((gota.band.as_str(), gota.mode.as_str()), ("", ""));
+
+        e.fd_host_stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_club_block_ships_club_only_dupes_and_an_honest_sync_chip() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        // Sync unconfigured → no club block at all (a solo FD pays nothing).
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-sp").unwrap();
+        assert!(e.snapshot().field_day.unwrap().club.is_none());
+
+        // Configure a join → the block appears, honestly OFFLINE with the
+        // whole log queued (nothing has connected yet).
+        {
+            let mut s = e.settings().clone();
+            s.fd_join_addr = "192.168.1.10:42073".into();
+            s.fd_position_id = "eeee0001".into(); // the shell generates this at startup
+            e.apply_settings(s);
+        }
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap());
+        let club = e
+            .snapshot()
+            .field_day
+            .unwrap()
+            .club
+            .expect("configured → Some");
+        assert_eq!(club.sync_state, "offline");
+        assert_eq!(club.queued, 1, "the unacked row is the queue");
+
+        // The pump connects and delivers club state: one key we ALSO worked
+        // ourselves (subtracted — own log already ships) and one club-only
+        // key (kept — the while-typing warning's input).
+        {
+            let m = e.fd_mirror_mut();
+            m.on_link(true, 100);
+            m.on_welcome(1, "TEST FD", "W9ABC", 3);
+            m.apply(&tempo_net::fdsync::ClubState {
+                reset: true,
+                dupes: vec![
+                    ("K1ABC".into(), "20m".into(), "CW".into()),  // own too
+                    ("N0XYZ".into(), "40m".into(), "DIG".into()), // club-only
+                ],
+                sections: vec!["EMA".into(), "MN".into()],
+                score: 42,
+                qsos: 7,
+                board: vec![tempo_net::fdsync::WireBoardRow {
+                    pos: "bbbb".into(),
+                    name: "SSB tent".into(),
+                    band: "40m".into(),
+                    mode: "PH".into(),
+                    op: "OP2".into(),
+                    qsos: 5,
+                    uniq: 5,
+                    rate: 12,
+                    age: 3,
+                }],
+            });
+        }
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(club.sync_state, "synced", "acked == own max seq");
+        assert_eq!(
+            club.dupes,
+            vec![("N0XYZ".into(), "40m".into(), "DIG".into())],
+            "own-log keys are subtracted; club-only keys ship"
+        );
+        assert_eq!((club.score, club.qsos, club.sections), (42, 7, 2));
+        assert_eq!(club.skew_secs, 3);
+        assert_eq!(club.board.len(), 1);
+        assert_eq!(club.board[0].pos_name, "SSB tent");
+        assert_eq!(club.board[0].last_seen_secs, 3);
+
+        // A second local contact while connected but unacked → BEHIND, queued 1.
+        assert!(e.fd_log_manual("W5DEF", "1E", "STX", "PH").unwrap());
+        let club = e.snapshot().field_day.unwrap().club.unwrap();
+        assert_eq!(club.sync_state, "behind");
+        assert_eq!(club.queued, 1);
+        // The outbox agrees with the chip (derived from the same numbers).
+        let out = e.fd_sync_outbox(1);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].seq, out[0].call.as_str()), (2, "W5DEF"));
+        assert_eq!(out[0].op, "W9XYZ", "operator falls back to mycall");
+    }
+
+    #[test]
     fn a_lone_rr73_seed_never_auto_logs_a_phantom_qso() {
         // The root-cause guard for the phantom bug: double-clicking (or a companion
         // auto-replying to) a decoded "<us> <dx> RR73" runs Station::start straight
@@ -27156,6 +28504,114 @@ mod tests {
         assert_eq!(fd.powered_points, 30);
         assert_eq!(fd.bonus_points, 150);
         assert_eq!(fd.total_score, 180);
+        // The rules-data plumbing rides the same snapshot: a real 27 h SFD
+        // window (the TS 24 h date math is dead) + the parameter identity the
+        // banner shows. Duration is clock-independent; the dates aren't, so
+        // only the invariants are pinned here (fd_rules pins the dates).
+        assert_eq!(fd.event_end_unix - fd.event_start_unix, 27 * 3600);
+        assert!(fd.event_start_unix > 0);
+        assert_eq!(fd.rules_year, 2026);
+        assert!(!fd.rules_generated.is_empty());
+    }
+
+    /// PLANNING IS NOT SCORING. A club knows on Friday which bonuses it expects
+    /// (media publicity, a safety officer, a youth op) and wants them tracked —
+    /// but an intention is worth nothing on a submitted entry. `fd_bonuses` is
+    /// the EARNED list and is the only one any scoring path reads;
+    /// `fd_bonuses_planned` is the chase list and must be invisible to the
+    /// score, the snapshot and the exports. A surface that quietly counted a
+    /// plan would hand the ARRL a score the club never made.
+    #[test]
+    fn planned_bonuses_are_a_plan_and_never_points() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let all: Vec<String> = tempo_core::fd_rules::ruleset(
+            tempo_core::fieldday::FdEvent::ArrlFd,
+            tempo_core::fd_rules::CURRENT_RULES_YEAR,
+        )
+        .bonuses
+        .iter()
+        .map(|b| b.id.to_string())
+        .collect();
+        assert_eq!(all.len(), 15, "the whole menu is planned below");
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 5;
+            s.fd_bonuses = Vec::new(); // nothing earned yet
+            s.fd_bonuses_planned = all.clone(); // every bonus planned
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        assert!(e.fd_log_manual("K1ABC", "2A", "EMA", "CW").unwrap()); // 2 pts
+
+        assert_eq!(
+            e.fd_score(),
+            Some((2, 10, 0)),
+            "15 planned bonuses (1450 pts if they were counted) must score ZERO"
+        );
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(
+            fd.bonus_points, 0,
+            "the scoreboard shows earned points only"
+        );
+        assert_eq!(fd.total_score, fd.powered_points, "planning adds nothing");
+
+        // And earning one of the planned bonuses is what moves the score — the
+        // plan list is untouched by that, so the positive control runs on the
+        // same fixture (a guard that can only ever read zero proves nothing).
+        {
+            let mut s = e.settings().clone();
+            s.fd_bonuses = vec!["w1aw-bulletin".into()];
+            e.apply_settings(s);
+        }
+        assert_eq!(
+            e.fd_score(),
+            Some((2, 10, 100)),
+            "the one EARNED bonus scores, and only it"
+        );
+        assert_eq!(
+            e.settings().fd_bonuses_planned.len(),
+            15,
+            "earning a bonus does not empty the chase list"
+        );
+    }
+
+    /// THE SUBMODE FUNNEL, end to end: the engine stamps the ACTIVE tier's
+    /// ADIF name into `FieldDayLog::current_submode` at FD entry and on every
+    /// tier change, the digital sequencer's own `log()` calls pick it up, and
+    /// the snapshot's `FieldDayQso.submode` carries it to the interop push —
+    /// so a WFD FT4/RTTY contact is never pushed or exported as "FT8". CW/PH
+    /// manual entries ARE their on-air mode and stay submode-less.
+    #[test]
+    fn fd_digital_qsos_snapshot_the_active_tier_as_submode() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            e.apply_settings(s);
+        }
+        e.set_tier(Tier::Ft8);
+        e.set_mode("fieldday-run").unwrap();
+        // A tier change mid-event must move the stamp with it.
+        e.set_tier(Tier::Ft4);
+        // The digital sequencer's own logging path (what `observe` calls on a
+        // completed exchange) — no submode argument anywhere in sight.
+        let Mode::FieldDay { station, .. } = &mut e.mode else {
+            panic!("in Field Day mode");
+        };
+        assert!(station.log.log("K1ABC", "2A", "EMA", 5));
+        // A CW manual entry, whose class IS its on-air mode: no submode.
+        assert!(e.fd_log_manual("W1AW", "1D", "CT", "CW").unwrap());
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(
+            fd.log[0].submode, "FT4",
+            "the digital QSO snapshots the tier actually keyed, not a class map"
+        );
+        assert_eq!(fd.log[1].submode, "", "CW carries no submode");
     }
 
     /// Master switch OFF (spec §1.3): even when the engine is still in
@@ -27201,6 +28657,51 @@ mod tests {
         assert!(!fd.running, "the master enters passive S&P, not a run");
         assert_eq!(fd.my_class, "3A");
         assert_eq!(fd.my_section, "WI");
+    }
+
+    /// `FieldDayStatus.assistance_on` mirrors `Settings::assistance_sources()`'s
+    /// effectively-ON labels — the single list the warn-only assistance advisory
+    /// reads. The UI must never re-derive cluster/AI-CW gating from raw toggles
+    /// (it would disagree with the journal about what counts as assistance), so
+    /// the DTO carries the answer.
+    #[test]
+    fn fd_snapshot_carries_the_live_assistance_sources() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_class = "3A".into();
+            s.fd_section = "WI".into();
+            s.cluster_enabled = true;
+            s.unassisted_mode = false;
+            e.apply_settings(s);
+        }
+        let expected: Vec<String> = e
+            .settings()
+            .assistance_sources()
+            .iter()
+            .filter(|&&(_, on)| on)
+            .map(|&(label, _)| label.to_string())
+            .collect();
+        // Control: the setup really has a live source, so an empty DTO list fails.
+        assert!(
+            expected.iter().any(|l| l == "DX cluster / RBN"),
+            "control broken: cluster should be effectively ON in this setup"
+        );
+        let fd = e.snapshot().field_day.expect("in Field Day");
+        assert_eq!(fd.assistance_on, expected);
+
+        // Unassisted mode suppresses the feeds; the DTO tracks the EFFECTIVE state.
+        {
+            let mut s = e.settings().clone();
+            s.unassisted_mode = true;
+            e.apply_settings(s);
+        }
+        let fd = e.snapshot().field_day.expect("still in Field Day");
+        assert!(
+            !fd.assistance_on.iter().any(|l| l == "DX cluster / RBN"),
+            "Unassisted mode is on — cluster must no longer be listed as live"
+        );
     }
 
     /// ⚠️ "ADD IT TO THE FD LOG AFTERWARDS" STAMPS THE BAND YOU ARE ON THEN,
@@ -30787,6 +32288,7 @@ mod tests {
             rotator_baud: p.rotator_baud,
             amp_model: p.amp_model.clone(),
             amp_port: p.amp_port.clone(),
+            amp_follow_band: p.amp_follow_band,
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
@@ -37269,6 +38771,36 @@ mod amp_tests {
         assert!(
             e.snapshot().radio.amp.is_none(),
             "the other radio's amplifier is not this radio's"
+        );
+    }
+
+    /// WSJT-X byte-format parity for "dB reports to comments" — logqso.cpp:143-145
+    /// builds `mode + "  Sent: " + rpt + "  Rcvd: " + rpt` with TWO spaces and drops
+    /// absent parts. An operator running both programs will diff the two logs, so the
+    /// spelling is the contract, not just the idea.
+    #[test]
+    fn reports_comment_matches_wsjtx_byte_for_byte() {
+        assert_eq!(
+            super::reports_comment("FT8", Some("-07"), Some("-12")).as_deref(),
+            Some("FT8  Sent: -07  Rcvd: -12")
+        );
+        assert_eq!(
+            super::reports_comment("FT4", Some("+03"), None).as_deref(),
+            Some("FT4  Sent: +03")
+        );
+        assert_eq!(
+            super::reports_comment("FT8", None, Some("-19")).as_deref(),
+            Some("FT8  Rcvd: -19")
+        );
+        // Both absent: WSJT-X writes just the mode — so do we.
+        assert_eq!(
+            super::reports_comment("FT8", None, None).as_deref(),
+            Some("FT8")
+        );
+        // An empty-string report is absent, not "Sent: ".
+        assert_eq!(
+            super::reports_comment("FT8", Some(""), Some("-01")).as_deref(),
+            Some("FT8  Rcvd: -01")
         );
     }
 }

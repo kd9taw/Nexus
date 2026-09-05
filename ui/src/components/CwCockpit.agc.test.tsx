@@ -40,35 +40,51 @@ const decodeState = {
 
 const { setAgc } = vi.hoisted(() => ({ setAgc: vi.fn(async () => ({})) }))
 
-vi.mock('../api', () => ({
-  // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
-  // which reads as a behaviour regression rather than the stale mock it actually is.
-  getCatCwUnprovenRigModels: vi.fn(async () => []),
-  setAgc,
-  getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
-  setSettings: vi.fn(async () => ({})),
-  sendCw: vi.fn(async () => {}),
-  setCwKeyer: vi.fn(async () => null),
-  setCwWpm: vi.fn(async () => {}),
-  stopCw: vi.fn(async () => {}),
-  cwDecode: vi.fn(async () => decodeState),
-  cwClear: vi.fn(async () => {}),
-  setAiCw: vi.fn(async () => {}),
-  selectPeer: vi.fn(async () => null),
-  previewCw: vi.fn(async (t: string) => t),
-  pointRotatorAtCall: vi.fn(async () => 0),
-  setRigFunc: vi.fn(async () => ({})),
-  setFilterWidth: vi.fn(async () => ({})),
-  setNrLevel: vi.fn(async () => {}),
-  setScopeSpan: vi.fn(async () => ({})),
-  setScopeRef: vi.fn(async () => {}),
-  setFlexPanSpan: vi.fn(async () => ({})),
-  setFlexPanRef: vi.fn(async () => ({})),
-  openPanelWindow: vi.fn(async () => {}),
-  setTune: vi.fn(async () => ({})),
-  setFrequency: vi.fn(async () => ({})),
-  haltTx: vi.fn(async () => ({})),
-}))
+vi.mock('../api', async (importOriginal) => {
+  // ⭐ DERIVED FROM THE REAL MODULE, not a hand-kept list. A hand-kept mock omits any export
+  // added after it was written, and a component that calls one THROWS ON MOUNT — so the suite
+  // goes red at a seam nothing in the diff explains, and the tempting fix is to make the test
+  // pass rather than ask why. That cost five files one evening when a single API call was added
+  // to the CW cockpit, this one among them.
+  //
+  // Every function the module exports is auto-stubbed here; the entries below override only the
+  // ones this file's assertions actually depend on, so their shapes are unchanged.
+  const actual = await importOriginal<Record<string, unknown>>()
+  const auto: Record<string, unknown> = {}
+  for (const k of Object.keys(actual)) {
+    auto[k] = typeof actual[k] === 'function' ? vi.fn(async () => ({})) : actual[k]
+  }
+  return {
+    ...auto,
+    // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
+    // which reads as a behaviour regression rather than the stale mock it actually is.
+    getCatCwUnprovenRigModels: vi.fn(async () => []),
+    setAgc,
+    getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
+    setSettings: vi.fn(async () => ({})),
+    sendCw: vi.fn(async () => {}),
+    setCwKeyer: vi.fn(async () => null),
+    setCwWpm: vi.fn(async () => {}),
+    stopCw: vi.fn(async () => {}),
+    cwDecode: vi.fn(async () => decodeState),
+    cwClear: vi.fn(async () => {}),
+    setAiCw: vi.fn(async () => {}),
+    selectPeer: vi.fn(async () => null),
+    previewCw: vi.fn(async (t: string) => t),
+    pointRotatorAtCall: vi.fn(async () => 0),
+    setRigFunc: vi.fn(async () => ({})),
+    setFilterWidth: vi.fn(async () => ({})),
+    setNrLevel: vi.fn(async () => {}),
+    setScopeSpan: vi.fn(async () => ({})),
+    setScopeRef: vi.fn(async () => {}),
+    setFlexPanSpan: vi.fn(async () => ({})),
+    setFlexPanRef: vi.fn(async () => ({})),
+    openPanelWindow: vi.fn(async () => {}),
+    setTune: vi.fn(async () => ({})),
+    setFrequency: vi.fn(async () => ({})),
+    haltTx: vi.fn(async () => ({})),
+  }
+})
 
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
 vi.mock('./PhoneScope', () => ({ PhoneScope: () => <div data-testid="scope-stub" /> }))

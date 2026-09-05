@@ -11,6 +11,7 @@ import { withErrorToast } from '../toast'
 import { gridToLatLon, stationLatLon, distanceLabelAt, bearingLabelAt } from '../grid'
 import { t } from '../i18n'
 import { useUnits } from '../units'
+import { useRovingList } from '../useRovingList'
 
 interface Props {
   call: string
@@ -48,6 +49,11 @@ interface Props {
    *  control which is not on screen reads as a broken card. Default true: every host that
    *  says nothing is a log strip, unchanged. */
   hasLookup?: boolean
+  /** Open the Logbook filtered to this callsign (#192, kr4fqg: "click a previous contact and
+   *  land in the log"). When passed, the prior-contact rows become clickable and
+   *  keyboard-reachable; when absent they stay inert, which is what a build with the Logbook
+   *  section disabled gets — a row that navigates nowhere must not advertise that it can. */
+  onOpenLog?: (call: string) => void
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -92,11 +98,22 @@ function initials(call: string): string {
  *   - The list stays a BOUNDED internal scroller (.recall-log-list, fixed em ceiling): the pane
  *     body is the card's real scroller, and a nested full-length list fights it.
  */
-export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false }: Props) {
+export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, image, myGrid, hist, newEntity, newBandSlot, newModeSlot, hasLookup = true, bounded = false, onOpenLog }: Props) {
   const units = useUnits()
   const c = call.trim()
-  if (c.length < 3) return null
   const cu = c.toUpperCase()
+  // ⚠️ ABOVE the short-call early return, both of them, because a hook may not be conditional
+  // and `useRovingList` needs the row count. `prior` is where it was in the render order
+  // otherwise — newest first, and `lastNote` still reads it below.
+  const prior = [...hist.qsos].sort((a, b) => b.whenUnix - a.whenUnix)
+  // One Tab stop for the whole list, arrows to move, Enter/Space to activate — the same
+  // `useRovingList` the decode and roster lists use, and for the same reason: 40 prior contacts
+  // would otherwise be 40 tab stops on a list where every row does the identical thing. The
+  // container keeps `role="list"` / `role="listitem"` rather than becoming a listbox: these rows
+  // are not a selection, and the pane's tests pin the listitem count.
+  const openLog = onOpenLog
+  const roving = useRovingList(prior.length, () => openLog?.(cu))
+  if (c.length < 3) return null
   const nm = name?.trim()
   const place = [qth?.trim(), grid?.trim() ? `(${grid.trim()})` : ''].filter(Boolean).join(' ')
   const ctry = country?.trim()
@@ -132,7 +149,6 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
       : newModeSlot
         ? t('recall.need.mode')
         : null
-  const prior = [...hist.qsos].sort((a, b) => b.whenUnix - a.whenUnix)
   const lastNote = prior.find((q) => (q.notes ?? '').trim())?.notes?.trim()
   // The link needs only the CALLSIGN (operator, 2026-07-31: open the call's QRZ page from the
   // recall photo "to look at the page while you're working them"). It used to ride on CS
@@ -250,13 +266,40 @@ export function RecallPanel({ call, band, name, qth, grid, lat, lon, country, im
           </div>
           {/* role=list: jsdom/AT reachability for rows scrolled under the em ceiling —
               carried over from the compact variant's list when compact was deleted. */}
-          <div className="recall-log-list" role="list" aria-label={t('recall.log.aria', { call: cu })}>
+          <div
+            className="recall-log-list"
+            role="list"
+            aria-label={t('recall.log.aria', { call: cu })}
+            onKeyDown={openLog ? roving.containerProps.onKeyDown : undefined}
+          >
             {prior.map((q, i) => {
               // Comment only — the private note is surfaced once, in the 📝 line above (showing
               // it here too would duplicate the newest QSO's note).
               const cmt = (q.comment ?? '').trim()
+              const rp = roving.rowProps(i)
+              // SEARCH, not "open this exact QSO". A `LoggedQso` has no stable id — the
+              // edit/delete API addresses rows by INDEX — so an index carried across a view
+              // switch is stale the moment anything is logged or imported. Every row here is
+              // the same callsign anyway, so the honest handoff is the call, and the Logbook's
+              // own matcher already covers it.
               return (
-                <div className="recall-log-row" role="listitem" key={`${q.whenUnix}-${i}`}>
+                <div
+                  className={`recall-log-row${openLog ? ' clickable' : ''}`}
+                  role="listitem"
+                  key={`${q.whenUnix}-${i}`}
+                  title={openLog ? t('recall.log.row.title', { call: cu }) : undefined}
+                  tabIndex={openLog ? rp.tabIndex : undefined}
+                  ref={openLog ? (rp.ref as (el: HTMLDivElement | null) => void) : undefined}
+                  onFocus={openLog ? rp.onFocus : undefined}
+                  onClick={
+                    openLog
+                      ? () => {
+                          rp.onClick()
+                          openLog(cu)
+                        }
+                      : undefined
+                  }
+                >
                   <span className="recall-log-date mono">{fmtDate(q.whenUnix)}</span>
                   <span className="recall-log-bm">{[q.band, q.mode].filter(Boolean).join(' ')}</span>
                   <span className="recall-log-rst mono">{rstPair(q)}</span>

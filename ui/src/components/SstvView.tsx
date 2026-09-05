@@ -17,7 +17,7 @@ import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { panelHost } from '../features/panelHost'
 import { sstvImageWidth } from '../sstvScale'
 import { readExifOrientation, readIntrinsicSize, sniffImageKind, type ImageKind } from '../sstvExif'
-import { effectiveOrientation, orientTransform } from '../sstvOrient'
+import { effectiveOrientation, orientTransform, probeDecoderAppliesOrientation } from '../sstvOrient'
 import {
   CENTRE,
   cropWindow,
@@ -1183,7 +1183,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
 
     // ⭐ ORIENTATION FIRST, and only when the decode did not already do it.
     const tag = readExifOrientation(head)
-    const eff = effectiveOrientation(tag, readIntrinsicSize(head), { w: decoded.w, h: decoded.h })
+    // The probe tells us whether THIS engine applied EXIF orientation during the decode —
+    // the only way to get orientation 3 (upside down) right, which changes no dimensions
+    // and so is invisible to the size comparison. Cached, so this awaits real work once.
+    const decoderApplies = await probeDecoderAppliesOrientation()
+    const eff = effectiveOrientation(tag, readIntrinsicSize(head), { w: decoded.w, h: decoded.h }, decoderApplies)
     srcRef.current = eff === 1 ? decoded : orientOnto(decoded, eff)
     centreRef.current = CENTRE
     setSrcSize({ w: srcRef.current.w, h: srcRef.current.h })

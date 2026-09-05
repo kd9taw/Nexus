@@ -19,6 +19,8 @@ type Handle = {
 }
 
 let nextCheck: () => Promise<Handle | null>
+/** What `check_beta_update` returns when the beta channel is exercised (null = up to date). */
+let betaInfo: { version: string; notes: string | null } | null = null
 const checkCalls: number[] = []
 /** Every `invoke(cmd)` the hook made through the api bridge, in order. */
 const invoked: string[] = []
@@ -27,6 +29,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   checkCalls.length = 0
   invoked.length = 0
+  betaInfo = null
   ;(window as unknown as { __TAURI__: unknown }).__TAURI__ = {
     updater: {
       check: () => {
@@ -39,7 +42,9 @@ beforeEach(() => {
     core: {
       invoke: (cmd: string) => {
         invoked.push(cmd)
-        return Promise.resolve(cmd === 'update_install_block' ? null : undefined)
+        if (cmd === 'update_install_block') return Promise.resolve(null)
+        if (cmd === 'check_beta_update') return Promise.resolve(betaInfo)
+        return Promise.resolve(undefined)
       },
     },
   }
@@ -70,7 +75,7 @@ async function settle() {
 describe('self-update dismissal', () => {
   it('downloads an offered update and reaches ready (control)', async () => {
     nextCheck = offering('9.9.9')
-    const { result } = renderHook(() => useSelfUpdate())
+    const { result } = renderHook(() => useSelfUpdate(false))
     await settle()
     expect(result.current.phase).toBe('ready')
     expect(result.current.version).toBe('9.9.9')
@@ -78,7 +83,7 @@ describe('self-update dismissal', () => {
 
   it('a dismissed version STAYS dismissed across the hourly re-check', async () => {
     nextCheck = offering('9.9.9')
-    const { result } = renderHook(() => useSelfUpdate())
+    const { result } = renderHook(() => useSelfUpdate(false))
     await settle()
     expect(result.current.phase).toBe('ready')
 
@@ -95,7 +100,7 @@ describe('self-update dismissal', () => {
 
   it('a NEWER version than the dismissed one still lands', async () => {
     nextCheck = offering('9.9.9')
-    const { result } = renderHook(() => useSelfUpdate())
+    const { result } = renderHook(() => useSelfUpdate(false))
     await settle()
     act(() => result.current.dismiss())
 
@@ -125,7 +130,7 @@ describe('install and restart', () => {
           return Promise.resolve()
         },
       })
-    const { result } = renderHook(() => useSelfUpdate())
+    const { result } = renderHook(() => useSelfUpdate(false))
     await settle()
     expect(result.current.phase).toBe('ready')
 
@@ -156,7 +161,7 @@ describe('install and restart', () => {
           return Promise.resolve()
         },
       })
-    const { result } = renderHook(() => useSelfUpdate())
+    const { result } = renderHook(() => useSelfUpdate(false))
     await settle()
 
     act(() => result.current.install())
@@ -176,7 +181,7 @@ describe('install and restart', () => {
         download: () => Promise.resolve(),
         install: () => Promise.reject(new Error('Read-only file system (os error 30)')),
       })
-    const { result } = renderHook(() => useSelfUpdate())
+    const { result } = renderHook(() => useSelfUpdate(false))
     await settle()
 
     act(() => result.current.install())
@@ -184,5 +189,46 @@ describe('install and restart', () => {
     expect(result.current.phase).toBe('error')
     expect(result.current.error).toContain('Read-only file system')
     expect(invoked, 'a failed swap must not restart into the old bundle').not.toContain('restart_app')
+  })
+})
+
+describe('opt-in beta channel', () => {
+  it('checks the beta feed (not the stable plugin) and reaches ready', async () => {
+    betaInfo = { version: '1.10.3-beta.2', notes: 'notes' }
+    // If the stable plugin check were used, this rejection would surface — it must NOT run.
+    nextCheck = () => Promise.reject(new Error('stable check must not run in beta mode'))
+    const { result } = renderHook(() => useSelfUpdate(true))
+    await settle()
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.version).toBe('1.10.3-beta.2')
+    expect(invoked, 'the beta check ran').toContain('check_beta_update')
+    expect(checkCalls, 'the stable plugin check never ran on the beta channel').toHaveLength(0)
+  })
+
+  it('installs through the beta path, flushing before the handoff, then restarts', async () => {
+    betaInfo = { version: '1.10.3-beta.2', notes: null }
+    nextCheck = () => Promise.reject(new Error('stable check must not run in beta mode'))
+    const { result } = renderHook(() => useSelfUpdate(true))
+    await settle()
+
+    act(() => result.current.install())
+    await settle()
+    const flush = invoked.indexOf('prepare_update_install')
+    const handoff = invoked.indexOf('install_beta_update')
+    expect(handoff, 'the beta installer ran').toBeGreaterThanOrEqual(0)
+    expect(flush, 'the backend was asked to flush').toBeGreaterThanOrEqual(0)
+    expect(flush, 'flush must precede the beta install — the process may not survive it').toBeLessThan(handoff)
+    expect(invoked, 'macOS/Linux restart goes through quit cleanup').toContain('restart_app')
+    // The stable plugin install must never be reached on the beta channel.
+    expect(invoked).not.toContain('plugin:install')
+  })
+
+  it('stays quiet when the beta feed reports nothing newer', async () => {
+    betaInfo = null
+    nextCheck = () => Promise.reject(new Error('stable check must not run in beta mode'))
+    const { result } = renderHook(() => useSelfUpdate(true))
+    await settle()
+    expect(result.current.phase).toBe('idle')
+    expect(result.current.version).toBeNull()
   })
 })

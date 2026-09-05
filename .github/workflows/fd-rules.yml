@@ -1,0 +1,75 @@
+# Publish-on-change of the Field Day rules data that Nexus downloads for FD scoring
+# parameters (crates/tempo-core/src/fd_rules.seed.json is BOTH the bundled seed and the
+# published artifact — see tempo_core::fd_rules: a downloaded copy activates at the next
+# launch, seed-floor rules apply).
+#
+# No cron: the rules change ~yearly, and the in-app refresh path is the pre-event
+# "check for updates" button, so a push touching the seed is the only publish trigger.
+# The rolling GitHub Release (`fd-rules`) needs NO secrets — the built-in GITHUB_TOKEN is
+# enough. The gate re-runs the SAME structural validation the in-app loader enforces
+# (scripts/check-fd-rules.mjs mirrors tempo_core::fd_rules::parse_spec): a seed the app
+# would refuse must never ship. Serving under hamradiotools.io is the same one-time
+# `_redirects` site edit as fcc-states/cty; the optional Cloudflare R2 step below hosts it
+# directly under the domain when the secret exists.
+name: Field Day rules data (fd-rules.json)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/tempo-core/src/fd_rules.seed.json
+      - scripts/check-fd-rules.mjs
+      - .github/workflows/fd-rules.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # publish the rolling Release asset
+
+concurrency:
+  group: fd-rules
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Validate the seed (the loader's own checks — refuses a bad file, exit 1)
+        run: node scripts/check-fd-rules.mjs crates/tempo-core/src/fd_rules.seed.json
+
+      - name: Stage the artifact
+        run: |
+          mkdir -p out
+          cp crates/tempo-core/src/fd_rules.seed.json out/fd-rules.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fd-rules
+          path: out/*
+          retention-days: 14
+
+      - name: Publish to the rolling `fd-rules` Release (automatic source, no secrets)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view fd-rules >/dev/null 2>&1 \
+            || gh release create fd-rules \
+                 --title "Field Day rules data (fd-rules.json)" \
+                 --notes "Auto-published when the in-repo rules seed changes. Nexus downloads this for Field Day scoring parameters; it activates at the next launch." \
+                 --latest=false
+          gh release upload fd-rules out/fd-rules.json --clobber
+
+      - name: (optional) Publish under hamradiotools.io via Cloudflare R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "No CLOUDFLARE_API_TOKEN secret — skipping R2 publish (the Release above is the source)."
+            exit 0
+          fi
+          npx --yes wrangler r2 object put nexus-data/fd-rules.json --file out/fd-rules.json --content-type application/json

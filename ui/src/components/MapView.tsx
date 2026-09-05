@@ -12,6 +12,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { workedGridSet } from '../coverage'
 import type { AprsStation } from '../api'
+import { bandLabelForMhz } from '../band'
+import type { OtaMapSpot } from '../types'
 import {
   ageFade,
   aprsRedrawMs,
@@ -39,7 +41,7 @@ import type {
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
 import type { Theme } from '../useTheme'
-import { getAurora, getDeclination, getPca, getSatellites, getLog, getLogStats } from '../api'
+import { getAurora, getDeclination, getPca, getSatellites, getLog, getLogStats, getOtaMapSpots } from '../api'
 // CQ-zone boundaries (HB9HIL hamradio-zones-geojson, MIT — see NOTICE): bundled
 // as a raw asset and fetched lazily so the 2.7 MB never loads until toggled on.
 import cqzonesUrl from '../data/cqzones.geojson?url'
@@ -54,7 +56,7 @@ import {
 } from '../features/satChase'
 import { decollideLabels } from '../features/mapLabels'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
-import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import {
   gridToLatLon,
   haversineKm,
@@ -114,9 +116,26 @@ interface Props {
   needByCall: Map<string, NeedTag>
   /** Connect intent preset — applied (soft) on change. Omitted = no preset. */
   intent?: MapIntent
+  /** This surface exists SOLELY for its `intent` (a dedicated pop-out like the POTA map), so it
+   * must NOT inherit another surface's layer picks. A general map inherits the primary surface's
+   * stored layers on first open (the #199 carry-over via `surfaceGet`) — right when a torn-off
+   * Connect map should keep the operator's picks. But on a dedicated surface that inherited value
+   * is a DIFFERENT purpose's setup, and it silently suppressed this intent's own preset (e.g. the
+   * POTA map opening with Parks off). Set true to make the preset yield only to a pick made ON
+   * THIS surface. Default false keeps every existing (inheriting) call site unchanged. */
+  dedicatedIntent?: boolean
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
-   * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off. */
-  onWorkSpot?: (t: { call: string; band: string; mode: string | null; freqMhz: number | null }) => void
+   * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off.
+   * `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one, so the
+   * handler can also tag the hunt target — omitted for a plain spot with no park. */
+  onWorkSpot?: (t: {
+    call: string
+    band: string
+    mode: string | null
+    freqMhz: number | null
+    program?: string
+    reference?: string
+  }) => void
   /** Click a satellite icon → open it in the Satellites section (passes, polar
    * plot, frequencies). Omitted = sat icons are hover-only. */
   onSelectSat?: (name: string) => void
@@ -144,6 +163,8 @@ interface Props {
    * packet has nothing to put on a map. */
   /** The STATION roster (not the packet log) — see `AprsStation` for why that distinction matters. */
   aprs?: AprsStation[]
+  /** Parks-on-the-air activators for the `ota` layer (see `OtaMapSpot` in Rust). */
+  ota?: OtaMapSpot[]
   /** Minutes of silence after which a station fades / is dropped, from the same backend read. */
   aprsFadeAfterMin?: number
   aprsTtlMin?: number
@@ -200,7 +221,7 @@ const INTENT_PRESETS: Record<
   // other intent — Chase DX, Ragchew and 6m/VHF are all globes, and having one intent silently
   // flip the map to flat reads as a rendering bug, not a preset. Only the projection changed;
   // the rings/heat de-emphasis is still right for this intent.
-  pota: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: false, heat: false } },
+  pota: { kind: 'globe', colorBy: 'need', layers: { dxped: false, rings: false, heat: false, ota: true } },
   // Ragchew: globe, who-can-I-hear (signal), calm — dxped off.
   casual: { kind: 'globe', colorBy: 'snr', layers: { dxped: false, rings: true, heat: false } },
   // 6m/VHF: heat ON — visualizing the Es/F2 opening footprint IS this intent.
@@ -219,6 +240,42 @@ const PROJECTION_KEY = 'nexus.connect.projection'
 function loadProjection(): Projection | null {
   const v = surfaceGet(PROJECTION_KEY)
   return v === 'globe' || v === 'aeqd' || v === 'world' ? v : null
+}
+
+// The operator's layer picks (#199) — same per-surface scoping and carry-over as the
+// projection above, and for the same reason: which layers you run is a deliberate setup,
+// and it reset to defaults-plus-preset on every launch while the control beside it
+// persisted. The embedded sat/APRS maps never touch this key (they force their own sets,
+// exactly as the detail globe force-locks its projection).
+const LAYERS_KEY = 'nexus.connect.layers'
+
+/** Stored blob → a full layer table, or `null` for anything unusable. Everything accepted
+ *  is CLAMPED against the current table: unknown keys dropped, missing keys defaulted,
+ *  opacity bounded to [0,1] — a persisted blob from an older or newer build is exactly the
+ *  input this will meet. Pure and exported for `MapView.layers.test.ts`. */
+export function layersFromStored(v: string | null): Record<LayerKey, Layer> | null {
+  if (!v) return null
+  let raw: unknown
+  try {
+    raw = JSON.parse(v)
+  } catch {
+    return null
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const blob = raw as Record<string, { visible?: unknown; opacity?: unknown }>
+  const out = { ...DEFAULT_LAYERS }
+  for (const k of Object.keys(DEFAULT_LAYERS) as LayerKey[]) {
+    const r = blob[k]
+    if (typeof r !== 'object' || r === null) continue
+    out[k] = {
+      visible: typeof r.visible === 'boolean' ? r.visible : DEFAULT_LAYERS[k].visible,
+      opacity:
+        typeof r.opacity === 'number' && r.opacity >= 0 && r.opacity <= 1
+          ? r.opacity
+          : DEFAULT_LAYERS[k].opacity,
+    }
+  }
+  return out
 }
 
 /** Grid-rarity → the dashed halo color (matches the .rarity-gem palette), or
@@ -272,6 +329,7 @@ type LayerKey =
   | 'stations'
   | 'paths'
   | 'dxped'
+  | 'ota'
 interface Layer {
   visible: boolean
   opacity: number
@@ -301,9 +359,10 @@ const LAYER_LABEL: Record<LayerKey, { labelKey: MessageKey }> = {
   stations: { labelKey: 'map.layer.stations.label' },
   paths: { labelKey: 'map.layer.paths.label' },
   dxped: { labelKey: 'map.layer.dxped.label' },
+  ota: { labelKey: 'map.layer.ota.label' },
 }
 const layerLabel = (k: LayerKey): string => t(LAYER_LABEL[k].labelKey)
-const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
+export const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   daynight: { visible: true, opacity: 1 },
   relief: { visible: true, opacity: 1 },
   muf: { visible: true, opacity: 0.9 },
@@ -336,6 +395,10 @@ const DEFAULT_LAYERS: Record<LayerKey, Layer> = {
   // Off by default: Connect is the PROPAGATION view (DXpeditions have their own area).
   // The layer toggle stays for anyone who wants DX-target markers on the map.
   dxped: { visible: false, opacity: 1 },
+  // Parks on the air. Off by default like the other activity overlays, but the
+  // POTA/SOTA intent preset turns it on — that preset's whole promise is
+  // "park/summit activators", and until this layer existed it could not keep it.
+  ota: { visible: false, opacity: 1 },
 }
 // The satellite-detail mini-globe (embedded mode) shows JUST the bird on a clean
 // planet: the basemap (day/night + coastline + graticule) plus the sat layer, and
@@ -445,9 +508,11 @@ export function MapView({
   onSelectCall,
   needByCall,
   intent,
+  dedicatedIntent = false,
   onWorkSpot,
   onSelectSat,
   aprs,
+  ota,
   onSelectAprs,
   selectedAprs,
   aprsFadeAfterMin = 20,
@@ -482,7 +547,19 @@ export function MapView({
   const [colorBy, setColorBy] = useState<'need' | 'snr'>('need')
   const [pathMode, setPathMode] = useState<'sp' | 'lp'>('sp')
   const [layers, setLayers] = useState(() =>
-    embedded ? (embedded.aprs ? APRS_EMBED_LAYERS : EMBED_LAYERS) : DEFAULT_LAYERS,
+    embedded
+      ? embedded.aprs
+        ? APRS_EMBED_LAYERS
+        : EMBED_LAYERS
+      : (layersFromStored(surfaceGet(LAYERS_KEY)) ?? DEFAULT_LAYERS),
+  )
+  // Whether a persisted layer pick seeded the state above — the intent preset yields to it
+  // on first mount, exactly as it yields to the persisted projection. A DEDICATED surface
+  // (`dedicatedIntent`) counts only a pick made ON ITSELF: `surfaceGet` above still inherits the
+  // primary surface's layers so the map opens on something sensible, but an inherited value is
+  // another surface's setup, not a reason to suppress THIS surface's preset — see the prop doc.
+  const hadStoredLayers = useRef(
+    !embedded && (dedicatedIntent ? surfaceHasOwn(LAYERS_KEY) : surfaceGet(LAYERS_KEY) != null),
   )
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string; info?: boolean } | null>(null)
@@ -684,8 +761,17 @@ export function MapView({
     // projection when the operator actively SWITCHES intent afterward. colorBy/layers always
     // follow the intent — they're derived identically in every window, so they carry over.
     if (!intentFirstRun.current) setKind(p.kind)
+    // Same first-mount rule for the layers (#199): a persisted pick seeded the state, and
+    // the preset only re-applies when the operator actively SWITCHES intent afterward. "A pick"
+    // means a pick this surface should honour — for a `dedicatedIntent` surface only its OWN
+    // stored layers count (see `hadStoredLayers`), so the true first open of a dedicated pop-out
+    // takes its intent's preset instead of inheriting another surface's layers. The persist
+    // effect writes this surface's own key on mount, so that force applies exactly ONCE: a later
+    // toggle here is then a pick of its own and is honoured on reopen.
+    const skipLayers = intentFirstRun.current && hadStoredLayers.current
     intentFirstRun.current = false
     setColorBy(p.colorBy)
+    if (skipLayers) return
     setLayers((L) => {
       const next = { ...L }
       for (const k of Object.keys(p.layers) as LayerKey[]) {
@@ -702,6 +788,13 @@ export function MapView({
     if (embedded) return
     surfaceSet(PROJECTION_KEY, kind)
   }, [kind, embedded])
+
+  // Persist the layer picks the same way (#199) — every toggle, opacity nudge, preset
+  // application and Reset writes through, so the next launch opens the map you left.
+  useEffect(() => {
+    if (embedded) return
+    surfaceSet(LAYERS_KEY, JSON.stringify(layers))
+  }, [layers, embedded])
 
   // The operator's real QTH — drives the "you are here" marker, and normally the
   // projection centre too.
@@ -813,6 +906,48 @@ export function MapView({
     }
     return out
   }, [me, kind, size, view, dxCards])
+
+  // Parks on the air — fetched only while the layer is on, the same politeness rule
+  // the aurora and PCA layers follow. An operator who never turns this on never
+  // touches the POTA feed, and the backend serves from a shared cache with its own
+  // TTL, so this poll and the POTA/SOTA board's refresh together still cost one
+  // request per TTL rather than two.
+  const [otaFetched, setOtaFetched] = useState<OtaMapSpot[]>([])
+  const otaOn = layers.ota.visible
+  useEffect(() => {
+    if (!otaOn) {
+      setOtaFetched([])
+      return
+    }
+    let live = true
+    const load = () =>
+      getOtaMapSpots()
+        .then((v) => live && setOtaFetched(v))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 120_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [otaOn])
+  // An explicit `ota` prop wins when a host supplies one (the APRS layer's shape);
+  // otherwise the layer feeds itself.
+  const otaSpots = ota ?? otaFetched
+
+  // Parks on the air, projected from the feed's own coordinates (a POTA row carries
+  // latitude/longitude, so the marker is the park rather than the 4 km square a grid
+  // would round it into).
+  const placedOta = useMemo(() => {
+    if (!me || size.w === 0) return [] as Array<{ sp: OtaMapSpot; xy: [number, number] }>
+    const proj = makeProjection(kind, me, size.w, size.h, view)
+    const out: Array<{ sp: OtaMapSpot; xy: [number, number] }> = []
+    for (const sp of otaSpots) {
+      const xy = project(proj, { lat: sp.lat, lon: sp.lon })
+      if (xy) out.push({ sp, xy })
+    }
+    return out
+  }, [me, kind, size, view, otaSpots])
 
   // Aurora oval — fetched only while the layer is on (polite; OVATION updates
   // ~30–45 min, so a 10-min refresh is ample). Cleared when the layer is off.
@@ -1914,6 +2049,35 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
+    // Parks on the air. A triangle rather than a dot, so an activator never reads as
+    // one more spot in the firehose: these are stations you go and work, at a fixed
+    // place, and the shape is the difference at a glance. A park never logged before
+    // is filled and accented; one already in the log is a hollow outline, so "what's
+    // new" is readable without a legend.
+    if (layers.ota.visible) {
+      const accent = cssVar('--accent')
+      const faint = cssVar('--text-faint')
+      for (const { sp, xy: p } of placedOta) {
+        // Same band-focus rule as the spot dots and dxped glyphs.
+        const band = bandLabelForMhz(sp.freqMhz)
+        ctx.globalAlpha = (band ? dimBand(band) : 1) * layers.ota.opacity
+        ctx.beginPath()
+        ctx.moveTo(p[0], p[1] - 5)
+        ctx.lineTo(p[0] + 4.5, p[1] + 3.5)
+        ctx.lineTo(p[0] - 4.5, p[1] + 3.5)
+        ctx.closePath()
+        if (sp.newRef) {
+          ctx.fillStyle = accent
+          ctx.fill()
+        } else {
+          ctx.strokeStyle = faint
+          ctx.lineWidth = 1.2
+          ctx.stroke()
+        }
+      }
+      ctx.globalAlpha = 1
+    }
+
     // Own station marker (on top) — a clear "you are here" QTH locus, one of the two
     // things an operator must read at a glance. A soft glow + two concentric rings +
     // crosshair make it unmistakable against the spot firehose, without animation
@@ -2160,6 +2324,7 @@ export function MapView({
     | { kind: 'spot'; d: number; sp: MapSpot }
     | { kind: 'sat'; d: number; name: string; norad?: number | null; chased: boolean }
     | { kind: 'aprs'; d: number; name: string }
+    | { kind: 'ota'; d: number; sp: OtaMapSpot }
     | { kind: 'muf'; d: number; muf: number }
   const hitTest = (mx: number, my: number): MapHit | null => {
     if (layers.stations.visible) {
@@ -2175,6 +2340,17 @@ export function MapView({
       for (const { card, xy } of placedDxped) {
         const d = Math.hypot(xy[0] - mx, xy[1] - my)
         if (d < 10 && (!best || d < best.d)) best = { kind: 'dxped', d, card }
+      }
+      if (best) return best
+    }
+    // Parks before the spot firehose: an activator is a deliberate target, and the
+    // triangle is drawn over the dots, so the hit order has to agree with the paint
+    // order or the top marker would not be the one you get.
+    if (layers.ota.visible) {
+      let best: MapHit | null = null
+      for (const { sp, xy } of placedOta) {
+        const d = Math.hypot(xy[0] - mx, xy[1] - my)
+        if (d < 10 && (!best || d < best.d)) best = { kind: 'ota', d, sp }
       }
       if (best) return best
     }
@@ -2253,6 +2429,21 @@ export function MapView({
         likelihood: c.likelihood,
       })
       return `${line}${c.liveConfirmed ? t('map.hover.liveConfirmed') : ''}${workHint}`
+    }
+    if (hit.kind === 'ota') {
+      const sp = hit.sp
+      // Reference first: a hunter logs the PARK, and the reference is what goes in
+      // the log. `approx` is stated rather than hidden — a grid-placed park is a
+      // 4 km square, and a marker that claims more precision than it has is a lie.
+      return t('map.hover.ota', {
+        activator: sp.activator,
+        reference: sp.reference,
+        name: sp.name ? ` · ${sp.name}` : '',
+        freq: sp.freqMhz.toFixed(3),
+        mode: sp.mode || '?',
+        badge: sp.newRef ? t('map.hover.ota.new') : '',
+        approx: sp.approx ? t('map.hover.ota.approx') : '',
+      })
     }
     if (hit.kind === 'muf') {
       return t('map.hover.muf', { muf: hit.muf.toFixed(1) })
@@ -2452,6 +2643,18 @@ export function MapView({
         band: hit.card.band,
         mode: dxpedWorkMode(hit.card.modes),
         freqMhz: null,
+      })
+    } else if (hit?.kind === 'ota') {
+      // Same atomic work path as a live spot or DXpedition — QSY + set mode + tag the
+      // hunt target (Task 1's `program`/`reference`). No transmit: `handleWorkMapSpot` /
+      // `DetachedPanel`'s `onWorkSpot` only ever QSY, set mode, and tag.
+      onWorkSpot({
+        call: hit.sp.activator,
+        band: bandLabelForMhz(hit.sp.freqMhz),
+        mode: hit.sp.mode || null,
+        freqMhz: hit.sp.freqMhz,
+        program: hit.sp.program,
+        reference: hit.sp.reference,
       })
     }
   }

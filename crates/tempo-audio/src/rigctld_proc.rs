@@ -118,6 +118,13 @@ impl LineState {
 /// nothing whatever about RTS. A fourth inference would be a fourth guess about a cable only the
 /// operator can see (the [`ControlLines::handshake_none`] ⚠️ has the full history).
 ///
+/// #200 AMENDED THE STRUCTURAL HALF (2026-09-01): when the dump positively reports BOTH keyed
+/// RTS and a HARDWARE handshake, the silence itself keyed a TS-2000 from launch to exit on
+/// Windows, and freeing the handshake there is not a cable guess — the operator's own PTT
+/// declaration makes the collision certain. That narrow case now rides
+/// [`SettableLines::keying_rts_on_hardware_handshake`]; the declaration remains the answer for
+/// every other shape, exactly as before.
+///
 /// [`Auto`](Handshake::Auto) is the default and is today's behaviour to the byte.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Handshake {
@@ -277,6 +284,24 @@ pub struct SettableLines {
     /// a real conflict, and a backend that offers no `rts_state` at all has nothing to set.
     /// Drives [`ControlLines::handshake_none`].
     pub rts_taken_by_handshake: bool,
+    /// The keyed-RTS collision (issue #200): the dump positively said BOTH that RTS is the
+    /// keying line (`ptt_type: RTS`) and that the backend declares HARDWARE handshake. The
+    /// two uses of the pin are incoherent in every configuration — flow control and PTT
+    /// cannot share it — and on Windows the collision is not latent: handshake=Hardware maps
+    /// to `RTS_CONTROL_HANDSHAKE`, the driver asserts RTS (the key line) from the moment the
+    /// daemon opens the port, and Hamlib's own un-key at rig_open (`ser_set_rts(pttp, 0)`)
+    /// is an `EscapeCommFunction(CLRRTS)` the driver refuses and Hamlib's termios shim
+    /// swallows (4.7.1 lib/termios.c:3305-3321, 3590 — returns 0 regardless). A TS-2000 on a
+    /// Digirig sat keyed from launch to exit. Unlike refusal #2's override this needs no
+    /// `rts_deliberate` gate: the operator's own PTT declaration on this very port IS the
+    /// deliberateness, at its strongest.
+    ///
+    /// Not folded into `rts_taken_by_handshake`, which means "the ORDINARY override can lift
+    /// this" and is deliberately false for the keying line (its consumers hold an operator
+    /// WISH for the line; the keyed case has no wish to deliver — only the handshake to
+    /// free). Same stale-vocabulary discipline as everything here: positively `Hardware` per
+    /// the pinned vocabulary, or the field claims nothing.
+    pub keying_rts_on_hardware_handshake: bool,
 }
 
 /// Narrow the operator's wishes to what this rig's Hamlib will actually accept. A line we
@@ -343,10 +368,18 @@ fn resolve_lines(
     // fourth inference was not the answer.
     let free_rts = match want.handshake {
         Handshake::Auto => {
-            !settable.rts
+            (!settable.rts
                 && settable.rts_taken_by_handshake
                 && want.rts != LineState::Untouched
-                && rts_deliberate
+                && rts_deliberate)
+                // The keyed-RTS collision (#200): hardware flow control on the line the
+                // operator declared as PTT keys the rig from port-open on Windows, and only
+                // freeing the handshake lets rig_open's own un-key move the pin. No
+                // `rts_deliberate` gate — the PTT declaration on this very port is the
+                // deliberateness — and no `want.rts` gate: there is no wish to deliver on a
+                // keying line (rigctld_args refuses `rts_state` for it regardless); the
+                // handshake is the whole trade.
+                || settable.keying_rts_on_hardware_handshake
         }
         Handshake::None | Handshake::XonXoff => true,
         Handshake::Hardware => false,
@@ -1436,7 +1469,19 @@ fn bundled_candidates(exe_name: &str, tool: &str) -> Vec<String> {
         format!("resources/hamlib/{tool}"),
         // Linux .deb and AppImage: usr/bin/<exe> → usr/lib/<exe>/resources/
         format!("../lib/{exe_name}/resources/hamlib/{tool}"),
-        // macOS .app: Contents/MacOS/<exe> → Contents/Resources/
+        // macOS .app: Contents/MacOS/<exe> → Contents/Resources/resources/
+        //
+        // ⚠️ THE `resources/` COMPONENT IS NOT OPTIONAL (#190). tauri.conf.json maps
+        // "resources/hamlib/*" → "resources/hamlib/", and that destination is relative to the
+        // bundle's own resource dir, so the tools land at Contents/Resources/resources/hamlib/.
+        // Shipping only the shorter path meant the correctly-staged, correctly-signed Hamlib
+        // inside every .app was never looked at: the resolver fell through to PATH and the
+        // Homebrew/MacPorts dirs, and on a Mac that had never installed Hamlib the spawn
+        // failed with "could not start its own rigctl" — i.e. NO CAT on 100% of fresh macOS
+        // installs, while Windows and Linux (both of which carry the component) were fine.
+        format!("../Resources/resources/hamlib/{tool}"),
+        // The pre-#190 path, kept as a harmless fallback: it costs one stat, and an older or
+        // hand-assembled bundle that really does put them here still resolves.
         format!("../Resources/hamlib/{tool}"),
     ]
 }
@@ -1467,6 +1512,38 @@ fn find_bundled(tool: &str) -> Option<std::ffi::OsString> {
     find_bundled_in(dir, &name, tool)
 }
 
+/// Admit a bundled candidate only if it can actually RUN — existence is not resolution.
+///
+/// ⚠️ WHY — the mac 1.10.0 CAT regression. "Found the bundled copy" SUPPRESSES the
+/// PATH/[`HAMLIB_SEARCH_DIRS`] fallback, so a bundled binary that dies before `main` costs
+/// more than nothing: it silently discards the operator's own working Hamlib. Concretely:
+/// fetch-hamlib-unix.sh repointed the libusb reference in the four TOOLS but not in
+/// libhamlib.4.dylib itself, so the shipped library still named
+/// /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib — present on every CI runner (the #190
+/// release gate ran `rigctld --version` there and stayed green) and absent on a Mac that
+/// never installed Homebrew's libusb, where dyld killed rigctld AND every one-shot rigctl
+/// ladder rung with SIGABRT before `main`. 1.9.2 had worked on the same machine because the
+/// pre-#190 resolver never FOUND the bundled tools and fell through to the operator's
+/// brew/MacPorts copy; #190 made it find them, and existence-only resolution turned a
+/// packaging defect into "the rig never answered at any speed". PATH and search-dir
+/// candidates have cleared [`runs_ok`] since 2026-08-13 for exactly this reason; this closes
+/// the same hole for the bundled branch. (Unix-only by construction, like `runs_ok`: the
+/// failure class — an absolute install-name into a package manager's prefix — does not exist
+/// in PE loading, and Windows keeps its existence-only resolution untouched.)
+#[cfg(unix)]
+fn bundled_if_runnable(tool: &str, p: std::ffi::OsString) -> Option<std::ffi::OsString> {
+    if runs_ok(&p) {
+        return Some(p);
+    }
+    crate::civ::diag::note(&format!(
+        "{tool}: the bundled copy at {} cannot run (killed by a signal — typically a library \
+         it needs is missing or unloadable); trying PATH and the package-manager directories \
+         instead",
+        p.to_string_lossy()
+    ));
+    None
+}
+
 /// Locate the `rigctld` binary. Prefers one **bundled next to the app** — the
 /// Windows installer ships Hamlib under the install dir (with its DLLs), so CAT
 /// works with no separate Hamlib install — then whatever `rigctld` the process's own `PATH`
@@ -1475,15 +1552,18 @@ fn find_bundled(tool: &str) -> Option<std::ffi::OsString> {
 /// `Command` the bare name. Launching the bundled exe by full path lets Windows resolve its
 /// co-located DLLs (libhamlib-4.dll etc.) from the exe's own directory.
 fn resolve_rigctld() -> std::ffi::OsString {
-    if let Some(p) = find_bundled("rigctld") {
-        return p;
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rigctld").and_then(|p| bundled_if_runnable("rigctld", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rigctld")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rigctld") {
+            return p;
+        }
         std::ffi::OsString::from("rigctld")
     }
 }
@@ -1567,15 +1647,18 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
 /// The bundled `rotctld` (ships beside rigctld in the Hamlib bundle), then the same
 /// [`HAMLIB_SEARCH_DIRS`] fallback, then PATH — same resolution as [`resolve_rigctld`].
 fn resolve_rotctld() -> std::ffi::OsString {
-    if let Some(p) = find_bundled("rotctld") {
-        return p;
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rotctld").and_then(|p| bundled_if_runnable("rotctld", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rotctld")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rotctld") {
+            return p;
+        }
         std::ffi::OsString::from("rotctld")
     }
 }
@@ -1778,15 +1861,18 @@ pub(crate) fn daemon_dump(args: &[&str]) -> Option<String> {
 /// headless `cargo clippy --workspace --all-targets -- -D warnings` CI job fails it as dead code.
 #[cfg(feature = "serial")]
 pub(crate) fn resolve_rigctl() -> std::ffi::OsString {
-    if let Some(p) = find_bundled("rigctl") {
-        return p;
-    }
     #[cfg(unix)]
     {
+        if let Some(p) = find_bundled("rigctl").and_then(|p| bundled_if_runnable("rigctl", p)) {
+            return p;
+        }
         resolve_hamlib_bin("rigctl")
     }
     #[cfg(not(unix))]
     {
+        if let Some(p) = find_bundled("rigctl") {
+            return p;
+        }
         std::ffi::OsString::from("rigctl")
     }
 }
@@ -1870,6 +1956,11 @@ fn parse_settable_lines(show_conf: &str) -> SettableLines {
         // someone's flow control.
         rts_taken_by_handshake: rts_offered
             && not_keying_rts
+            && handshake.is_some_and(|h| HANDSHAKE_RTS_TAKEN.contains(&h)),
+        // The #200 collision — the same positive-Hardware test, on the keyed side of
+        // `not_keying_rts`. `rts_offered` keeps it serial-only, same as everything above.
+        keying_rts_on_hardware_handshake: rts_offered
+            && !not_keying_rts
             && handshake.is_some_and(|h| HANDSHAKE_RTS_TAKEN.contains(&h)),
     }
 }
@@ -2146,6 +2237,41 @@ mod tests {
             "a path that cannot be spawned is not usable"
         );
 
+        for p in [picky, aborts] {
+            if let Some(d) = p.parent() {
+                let _ = std::fs::remove_dir_all(d);
+            }
+        }
+    }
+
+    /// Repro for the mac 1.10.0 CAT regression: a BUNDLED tool that dies by signal — how
+    /// `dyld` reports an unloadable library, and exactly how the shipped 1.10.0 tools died on
+    /// a Mac without Homebrew's libusb (libhamlib.4.dylib still named
+    /// /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib) — must NOT win the resolution, because
+    /// "found the bundled copy" suppresses the PATH/package-dir fallback that would have found
+    /// the operator's own working Hamlib, the one 1.9.2 was happily using. And the other
+    /// verdict matters as much: a candidate that merely exits non-zero for `--version` still
+    /// RUNS (the 2026-08-13 PATH-branch regression class) and must be kept.
+    #[cfg(unix)]
+    #[test]
+    fn a_bundled_tool_that_dies_by_signal_is_skipped_not_resolved() {
+        let aborts = stub_script("bundled-aborts", "#!/bin/sh\nkill -ABRT $$\n");
+        assert_eq!(
+            bundled_if_runnable("rigctld", aborts.clone().into_os_string()),
+            None,
+            "signal death is the unloadable-library signature; admitting this candidate \
+             suppresses the fallback that finds a working Hamlib on the same machine"
+        );
+        let picky = stub_script(
+            "bundled-picky",
+            "#!/bin/sh\n[ \"$1\" = \"-vvv\" ] || exit 9\n",
+        );
+        assert_eq!(
+            bundled_if_runnable("rigctld", picky.clone().into_os_string()).as_deref(),
+            Some(picky.as_os_str()),
+            "a nonzero exit for --version still runs; rejecting it would discard a \
+             perfectly good bundled copy"
+        );
         for p in [picky, aborts] {
             if let Some(d) = p.parent() {
                 let _ = std::fs::remove_dir_all(d);
@@ -2895,30 +3021,33 @@ mod tests {
         assert!(holds(&args, "dtr", "OFF"), "{args:?}");
     }
 
-    /// ⭐ #145 ON THE COMMAND LINE — the scene the reporter runs, before the fix: PTT method =
-    /// serial RTS with the PTT port left blank, so keying rides the CAT port. rigctld is
-    /// launched saying **nothing whatever about RTS**, and the line's idle level falls to
-    /// Hamlib's default and the CP210x driver — which can key the transmitter at launch.
+    /// ⭐ #145 ON THE COMMAND LINE, AS AMENDED BY #200 — the scene the reporter runs: PTT
+    /// method = serial RTS with the PTT port left blank, so keying rides the CAT port.
     ///
-    /// Both suppressions are structural, which is why a fourth inference was not the answer:
-    /// `settable_lines_for` reports RTS unsettable BECAUSE it is the keying line, so
-    /// `rts_taken_by_handshake` is false and `resolve_lines`' handshake override cannot fire;
-    /// and `rigctld_args` skips `rts_state=` for the line it passes `-P RTS` for.
+    /// The first half of this test used to pin the pre-#145 bug itself ("rigctld is launched
+    /// saying nothing whatever about RTS … and it must not change under an upgrade"), on the
+    /// #145 ruling that a fourth inference would be a fourth guess about a cable. #200 (a
+    /// TS-2000 keyed from launch to exit on Windows) is the field proof that for the
+    /// HARDWARE-handshake backends the silence was the transmitter-keying bug, and the
+    /// narrow keyed-RTS exception is not a cable guess: the operator's own PTT declaration
+    /// makes the flow-control collision certain. What still holds from the old pin:
+    /// `rts_state` is never emitted for the keying line — only the handshake is spoken for.
     #[test]
-    fn keying_on_the_cat_port_leaves_rts_unmentioned_until_the_operator_says_otherwise() {
+    fn keying_on_the_cat_port_frees_the_handshake_and_still_says_no_rts_state() {
         let ptt = Some(crate::rig::SerialLine::Rts);
         let settable = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
-        // TODAY, and it must not change under an upgrade: the shipped hold-low default with
-        // neither declaration made says nothing at all.
+        // The shipped hold-low default with neither declaration made: the handshake is freed
+        // (that is the #200 fix), and RTS itself still goes unmentioned.
         let lines = resolve_lines(settable, ControlLines::hold_low(), true);
         let args = rigctld_args(1035, "COM5", 38400, 4532, false, ptt, lines);
         assert!(
             says_nothing_about(&args, "rts"),
-            "the reported bug, pinned: {args:?}"
+            "no rts_state on the keying line, ever: {args:?}"
         );
         assert!(
-            !args.iter().any(|a| a.starts_with("serial_handshake")),
-            "and the handshake override cannot fire either: {args:?}"
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=None"),
+            "the #200 un-key: hardware flow control must not hold the key line up: {args:?}"
         );
 
         // THE FIX — the operator declares what only they can see, and both reach the daemon.
@@ -3132,31 +3261,89 @@ mod tests {
         );
     }
 
-    /// Keying with RTS is refusal #1, and no handshake override can lift it — Hamlib refuses
-    /// `rts_state` on the keying line whatever the flow control is. Trading the operator's
-    /// handshake away here would buy nothing at all.
+    /// Issue #200 (TS-2000 + Digirig, Windows): keying with RTS on a backend that declares
+    /// HARDWARE handshake must free the handshake, or the rig is keyed from the moment the
+    /// port opens. Windows maps handshake=Hardware to RTS_CONTROL_HANDSHAKE — the driver
+    /// asserts RTS (the key line) continuously, and Hamlib's own un-key at rig_open
+    /// (`ser_set_rts(pttp, 0)`) is an EscapeCommFunction the driver refuses and Hamlib's
+    /// termios shim swallows (hamlib-4.7.1 lib/termios.c:3305-3321, 3590). With
+    /// `serial_handshake=None` on the argv, the same rig_open un-key genuinely drives the
+    /// pin, and PTT toggles it from then on. `rts_state` stays unemittable on the keying
+    /// line — that half of the old rule was and is true.
     #[test]
-    fn keying_with_rts_is_not_something_the_override_can_rescue() {
+    fn keying_with_rts_on_a_hardware_handshake_backend_frees_the_handshake() {
         let settable = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
         assert!(
-            !settable.rts_taken_by_handshake,
-            "the handshake is not why this line is unavailable — the keying is"
+            settable.keying_rts_on_hardware_handshake,
+            "the dump positively said both: RTS is the keying line AND the handshake is Hardware"
         );
         let lines = resolve_lines(settable, ControlLines::hold_low(), true);
+        assert!(
+            lines.handshake_none,
+            "the incoherent flow control must be dropped"
+        );
         let args = rigctld_args(
-            1042,
-            "COM5",
-            38400,
+            2014,
+            "COM4",
+            19200,
             4532,
             false,
             Some(crate::rig::SerialLine::Rts),
             lines,
         );
         assert!(
-            !args.iter().any(|a| a.starts_with("serial_handshake")),
-            "no handshake was given up for a line we still cannot set: {args:?}"
+            args.windows(2)
+                .any(|w| w[0] == "-C" && w[1] == "serial_handshake=None"),
+            "the un-key at rig_open only works once RTS stops being flow control: {args:?}"
         );
         assert!(says_nothing_about(&args, "rts"), "{args:?}");
+    }
+
+    /// The #200 override is not a blanket one either. A backend whose handshake already
+    /// leaves RTS free has nothing to drop; an operator-DECLARED Hardware handshake outranks
+    /// the inference (#145 — their declaration is about their cable, not ours to trade); and
+    /// an unclassifiable handshake token claims nothing, exactly as everywhere else in this
+    /// module.
+    #[test]
+    fn the_keyed_rts_handshake_override_fires_only_on_a_positive_hardware_declaration() {
+        // Backend says None: nothing to free.
+        let free = parse_settable_lines(&show_conf("RTS", Some("None")));
+        assert!(!free.keying_rts_on_hardware_handshake);
+        let lines = resolve_lines(free, ControlLines::hold_low(), true);
+        assert!(!lines.handshake_none, "the line was already ours");
+        // Operator declared Hardware: the declaration wins, keyed line or not.
+        let hw = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
+        let declared = resolve_lines(
+            hw,
+            ControlLines {
+                handshake: Handshake::Hardware,
+                ..ControlLines::hold_low()
+            },
+            true,
+        );
+        assert!(
+            !declared.handshake_none,
+            "a declared Hardware handshake is the operator's to keep"
+        );
+        // Unclassifiable token: the stale-vocabulary discipline claims nothing.
+        let odd = show_conf("RTS", Some("Hardware")).replace("Hardware", "RtsCtsPlus");
+        assert!(!parse_settable_lines(&odd).keying_rts_on_hardware_handshake);
+    }
+
+    /// ⚠️ REWRITTEN FOR #200 — the old name here was `keying_with_rts_is_not_something_the_
+    /// override_can_rescue`, and its premise ("trading the operator's handshake away here
+    /// would buy nothing at all") was FALSIFIED by a field report: it buys the un-key at
+    /// rig_open. What SURVIVES of the old rule is pinned above (`rts_state` still never
+    /// emitted for the keying line) and here: `rts_taken_by_handshake` stays false when
+    /// keying with RTS, because that field means "the ORDINARY override can lift this", and
+    /// the keyed case rides its own flag with its own narrower conditions.
+    #[test]
+    fn keying_with_rts_still_does_not_masquerade_as_the_ordinary_handshake_refusal() {
+        let settable = parse_settable_lines(&show_conf("RTS", Some("Hardware")));
+        assert!(
+            !settable.rts_taken_by_handshake,
+            "keyed-RTS is refusal #1, not refusal #2 — it must not enable the ordinary override"
+        );
     }
 
     /// An operator who asked for `Untouched` keeps their flow control. The override exists to
@@ -3680,8 +3867,19 @@ mod tests {
             ("win", "win/resources/hamlib"),
             // Linux .deb + AppImage: usr/bin/Nexus, usr/lib/Nexus/resources/.
             ("linux/usr/bin", "linux/usr/lib/Nexus/resources/hamlib"),
-            // macOS .app: Contents/MacOS/Nexus, Contents/Resources/.
-            ("mac/Contents/MacOS", "mac/Contents/Resources/hamlib"),
+            // macOS .app: Contents/MacOS/Nexus, and resources land under
+            // Contents/Resources/**resources**/ — tauri.conf.json maps
+            // "resources/hamlib/*" to "resources/hamlib/", which is relative to the bundle's
+            // own resource dir. The fixture used to say Contents/Resources/hamlib, which is
+            // what the CODE assumed rather than what the BUILD produces, so this test
+            // confirmed the resolver against itself and passed while every fresh macOS
+            // install had no CAT at all (#190). release.yml opens the real shipped .app at
+            // Contents/Resources/resources/deepcw/model.onnx — a sibling entry of identical
+            // shape — which is the layout pinned here.
+            (
+                "mac/Contents/MacOS",
+                "mac/Contents/Resources/resources/hamlib",
+            ),
         ];
 
         for (exe_dir, res_dir) in layouts {

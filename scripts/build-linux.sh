@@ -168,13 +168,122 @@ else
 
 work=$(mktemp -d)
 ( cd "$work" && "$appimage" --appimage-extract >/dev/null ) || die "could not unpack the AppImage"
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# GSTREAMER PLUGINS — without these every alert tone in the app is silently dead.
+#
+# linuxdeploy bundles GStreamer's ten CORE libraries and ZERO plugins, then unconditionally
+# exports GST_PLUGIN_SYSTEM_PATH_1_0 pointing INSIDE the AppImage at a directory it never
+# created. Setting that variable suppresses GStreamer's default scan, so the host's plugins
+# are not found either: measured on a real machine, 257 plugins visible normally, ONE with
+# the AppImage's environment. The bundled libgstreamer is also relocatable and derives the
+# same missing path on its own, so it is broken twice over.
+#
+# WebKitGTK implements Web Audio on GStreamer — appsrc and autoaudiosink for output, appsink
+# for decodeAudioData — which is exactly the three elements an operator sees it fail to find:
+#     GStreamer element appsink not found. Please install it.
+# The band-edge tones, the alert sounds and the DXped alarm all go through Web Audio, so in
+# the AppImage they simply never sound. RX/TX audio is untouched (that is native cpal).
+#
+# The plugins are COPIED IN rather than pointed at on the host, deliberately: a host with a
+# newer GStreamer than the core libraries linuxdeploy bundled would fail in a different and
+# harder-to-read way. These come from the same machine that supplied the core, so they match.
+# About 1.4 MB against a 116 MB AppImage.
+gst_dst="$work/squashfs-root/usr/lib/gstreamer-1.0"
+if [ -d "$gst_dst" ] && [ -n "$(ls -A "$gst_dst" 2>/dev/null)" ]; then
+  ok "the AppImage already carries GStreamer plugins — leaving them alone"
+else
+  gst_src=""
+  for d in /usr/lib/x86_64-linux-gnu/gstreamer-1.0 /usr/lib64/gstreamer-1.0 /usr/lib/gstreamer-1.0; do
+    [ -d "$d" ] && { gst_src="$d"; break; }
+  done
+  if [ -z "$gst_src" ]; then
+    warn "no host GStreamer plugin directory found — the AppImage will ship without alert"
+    warn "tones. Install gstreamer1.0-plugins-base and gstreamer1.0-plugins-good and rebuild."
+  else
+    mkdir -p "$gst_dst"
+    copied=0
+    for plug in coreelements app autodetect audioconvert audioresample pulseaudio \
+                typefindfunctions playback; do
+      f="$gst_src/libgst$plug.so"
+      [ -f "$f" ] && { cp "$f" "$gst_dst/" && copied=$((copied + 1)); }
+    done
+    # A positive control on the copy: the three elements WebKit asks for by name live in
+    # coreelements (appsink/appsrc come from `app`, autoaudiosink from `autodetect`), so a
+    # count alone would not prove the right ones landed.
+    for need in app autodetect coreelements; do
+      [ -f "$gst_dst/libgst$need.so" ] \
+        || die "libgst$need.so did not reach the AppImage — refusing to ship an AppImage whose
+  alert tones cannot work. Is gstreamer1.0-plugins-base/-good installed on this machine?"
+    done
+    ok "bundled $copied GStreamer plugins ($(du -sh "$gst_dst" | cut -f1)) — alert tones will sound"
+    repack_needed=1
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────────────────
+# GST-PLUGIN-SCANNER — the plugins' out-of-process loader, and the second half of the fix
+# above. GStreamer prefers to introspect plugins in a helper CHILD process (a bad plugin
+# then crashes the helper, not WebKit); the bundled relocatable libgstreamer derives the
+# helper's path relative to itself, inside the AppImage, where nothing ever put it. Field
+# report (the same Linux operator who confirmed the file-chooser fix):
+#     GStreamer-WARNING: External plugin loader failed ... You might need to set the
+#     GST_PLUGIN_SCANNER environment variable ...
+# GStreamer falls back to loading plugins IN-PROCESS — which is why the tones work anyway —
+# but the fallback trades away the crash isolation and scares every operator who reads the
+# log. Bundle the helper from the same machine that supplied the plugins, and point
+# GST_PLUGIN_SCANNER at it from the hook AppRun already sources.
+scanner_dst="$work/squashfs-root/usr/libexec/gstreamer-1.0"
+if [ -f "$scanner_dst/gst-plugin-scanner" ]; then
+  ok "the AppImage already carries gst-plugin-scanner — leaving it alone"
+else
+  scanner_src=""
+  for c in /usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner            /usr/libexec/gstreamer-1.0/gst-plugin-scanner            /usr/lib64/gstreamer-1.0/gst-plugin-scanner            /usr/lib/gstreamer-1.0/gst-plugin-scanner; do
+    [ -f "$c" ] && { scanner_src="$c"; break; }
+  done
+  if [ -z "$scanner_src" ]; then
+    warn "gst-plugin-scanner not found on this machine — the AppImage will keep GStreamer's"
+    warn "in-process fallback (works, but warns in the log and loses crash isolation)."
+  else
+    mkdir -p "$scanner_dst"
+    cp "$scanner_src" "$scanner_dst/" && chmod +x "$scanner_dst/gst-plugin-scanner"
+    [ -x "$scanner_dst/gst-plugin-scanner" ]       || die "gst-plugin-scanner did not land executable — refusing to repack"
+    # The env var, in the hook AppRun sources (falling back to AppRun itself — it is a
+    # shell script). Idempotent: skip if some earlier run already added it.
+    hook="$work/squashfs-root/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+    [ -f "$hook" ] || hook="$work/squashfs-root/AppRun"
+    if grep -q "GST_PLUGIN_SCANNER" "$hook"; then
+      ok "GST_PLUGIN_SCANNER already exported in $(basename "$hook")"
+    else
+      printf '\nexport GST_PLUGIN_SCANNER="$APPDIR/usr/libexec/gstreamer-1.0/gst-plugin-scanner" # bundled helper — see build-linux.sh\n' >> "$hook"
+      # Positive control: the export must actually be in the file we ship.
+      grep -q 'GST_PLUGIN_SCANNER="\$APPDIR' "$hook"         || die "the GST_PLUGIN_SCANNER export did not reach $(basename "$hook") — refusing to repack"
+    fi
+    ok "bundled gst-plugin-scanner + exported GST_PLUGIN_SCANNER — the loader warning goes away"
+    repack_needed=1
+  fi
+fi
+
 if [ -e "$work/squashfs-root/usr/lib/libwayland-client.so.0" ]; then
-  bold "Repacking the AppImage without the host-owned libwayland-client"
+  bold "Dropping the host-owned libwayland-client"
   rm -f "$work/squashfs-root/usr/lib/libwayland-client.so.0"
   # A positive control on the removal itself: if the file is still there the repack would ship the
   # bug while reporting success, which is the failure mode this whole section exists to prevent.
   [ ! -e "$work/squashfs-root/usr/lib/libwayland-client.so.0" ] \
     || die "libwayland-client.so.0 survived removal — refusing to repack"
+  repack_needed=1
+  ok "libwayland-client.so.0 dropped; the host's copy is used instead"
+else
+  warn "libwayland-client.so.0 is not in this AppImage — nothing to strip (upstream may have"
+  warn "fixed it)."
+fi
+
+# ONE repack for whatever the two steps above changed. This used to hang off the libwayland
+# branch alone, so a bundle that only needed the GStreamer plugins would have been rebuilt in
+# the work directory and then thrown away — the plugins copied, the report cheerful, the
+# shipped file unchanged.
+if [ "${repack_needed:-0}" = "1" ]; then
+  bold "Repacking the AppImage"
   # Tauri already downloaded this during the bundle step, so the repack adds no new dependency and
   # uses the same packer that produced the original.
   packer="$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage"
@@ -185,10 +294,9 @@ if [ -e "$work/squashfs-root/usr/lib/libwayland-client.so.0" ]; then
     || die "repacking the AppImage failed"
   mv "$work/repacked.AppImage" "$appimage"
   chmod +x "$appimage"
-  ok "libwayland-client.so.0 dropped; the host's copy is used instead"
+  ok "AppImage repacked"
 else
-  warn "libwayland-client.so.0 is not in this AppImage — nothing to strip (upstream may have"
-  warn "fixed it). Leaving the bundle exactly as the bundler produced it."
+  ok "nothing to change in this AppImage — leaving it exactly as the bundler produced it"
 fi
 rm -rf "$work"
 

@@ -96,6 +96,16 @@
     </div>
 
     <div class="h-row">
+      <div class="h-name">.mv-cell.mv-cell-mode (Memories grid)</div>
+      <div class="h-surface">
+        <select id="s-mv-cell" class="mv-cell mv-cell-mode">
+          <option>USB</option>
+          <option>D-STAR</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="h-row">
       <div class="h-name">.sstv-tx-mode select</div>
       <div class="h-surface">
         <div class="sstv-tx-mode">
@@ -292,7 +302,7 @@
       document.documentElement.setAttribute('data-theme', q.get('theme') === 'light' ? 'light' : 'dark')
 
       const IDS = [
-        's-settings', 's-bare', 's-wizard', 's-mv', 's-sstv', 's-aprs', 's-od', 's-band',
+        's-settings', 's-bare', 's-wizard', 's-mv', 's-mv-cell', 's-sstv', 's-aprs', 's-od', 's-band',
         's-freq', 's-freq2', 's-logrow', 's-map', 's-trp', 's-specialop', 's-npchip',
         's-panepick', 's-cal', 's-satlead', 's-satvfo', 's-pota', 's-globe', 's-wfzoom',
         's-tuning', 's-control',

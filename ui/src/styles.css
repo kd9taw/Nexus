@@ -1531,6 +1531,11 @@ button.nb-chip:hover {
 .connect-map > .map-view {
   flex: 1;
 }
+/* The operatemap pop-out mounts a bare MapView with no .connect-map wrapper — same
+   flex-fill rule, direct child of the detached window's own flex column instead. */
+.app.detached > .map-view {
+  flex: 1;
+}
 .connect-strip {
   grid-area: strip;
   display: grid;
@@ -3679,6 +3684,30 @@ body.resizing {
 [data-viewport='xl'] .layout.single > .panel.radioprog {
   max-width: 1600px;
 }
+/* THE FIELD DAY DASHBOARD is a board, not prose — and it arrives here from somewhere else.
+   Until 2026-08-30 it was drawn in the three-pane operating workspace (App.tsx), which put a
+   waterfall and the stations rail on a scoreboard and left it a ~1180px centre column at
+   1920. Moving it to this shell removes the rails; inheriting the 1100px measure above would
+   have handed back a NARROWER panel than the column it left, so the fix would have answered
+   half the report and worsened the other half (the crowded header strip: class + section,
+   RUN / S&P, the cockpit toggle and four export buttons).
+
+   1600px, and not `none` like Settings: unlike a form of auto-fill grids, the widest thing
+   in here is the log's fixed column set, so past ~1600 the extra room stops buying anything
+   and only lengthens the eye's travel from the score tiles to the log. Same number the two
+   other DATA surfaces use.
+
+   md AND UP, the same scoping Settings uses below and for the same reason: md/lg/xl is
+   *exactly* the set of tiers where the 1100px cap could ever bind (classifyViewport starts md
+   at 1100 effective px), so listing them leaves the 1024x768 supported floor bit-identical
+   rather than merely "probably unchanged". **lg** is the one that matters — 1920 lands there,
+   not in xl, so the xl-only shape of the rule above would have missed the reported window
+   entirely. Computed per tier in fdDashboardShell.test.tsx. */
+[data-viewport='md'] .layout.single > .panel.fieldday,
+[data-viewport='lg'] .layout.single > .panel.fieldday,
+[data-viewport='xl'] .layout.single > .panel.fieldday {
+  max-width: 1600px;
+}
 /* SETTINGS IS NOT PROSE-SHAPED, and calling it that cost it half the window.
    (Operator, 2026-08-12: "make the settings full screen. It's small and in the middle.
    You have the opportunity to put far more on the page vs scrolling.")
@@ -4440,7 +4469,7 @@ select optgroup {
   font-weight: 800;
   font-size: 13px;
   letter-spacing: 0.06em;
-  padding: 6px var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   min-width: 46px;
   text-align: center;
@@ -7542,6 +7571,23 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .recall-log-row:nth-child(even) {
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }
+/* A prior-contact row that opens the Logbook filtered to this call (#192, kr4fqg). The
+   affordance is conditional on the host having wired the handoff — a row that navigates
+   nowhere must never advertise that it does — hence `.clickable` rather than styling every
+   row. Hover beats the zebra stripe on specificity (0,3,0 over 0,2,0), which it has to: the
+   even rows carry a background of their own.
+   The focus ring goes INSIDE the row. The global `:focus-visible` sits at `outline-offset: 2px`,
+   and this list is a bounded 12em scroller, so on the first and last visible rows an outset ring
+   is clipped by the scroller edge — exactly where a keyboard operator arrives. */
+.recall-log-row.clickable {
+  cursor: pointer;
+}
+.recall-log-row.clickable:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.recall-log-row.clickable:focus-visible {
+  outline-offset: -2px;
+}
 .recall-log-date {
   color: var(--text-dim);
 }
@@ -8496,16 +8542,21 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    =========================================================================== */
 .fieldday {
   min-width: 0;
-  /* THE COLUMN'S DEFICIT VALVE — the same fix `.layout.single > .panel` got on 2026-08-04,
-     for the same reason, in the view the three-pane workspace reaches instead. This column
-     is banner + header + operator row + score tiles + sections board + the Bonuses
-     disclosure + the log, and every one of them is `flex: 0 0 auto` except the board. Once
-     the board is at its floor (FieldDayView.tsx SECTIONS_BOARD_WRAP) the residual has
-     nowhere left to go, and `.panel { overflow: hidden }` would CLIP it — the log off the
-     bottom with no scrollbar in the chain, which is what opening Bonuses at 1200×750 did.
-     Wins over `.panel` on source order alone (both are (0,1,0); `.panel` is ~4400 lines
-     earlier), which is exactly how two fixes shipped dead here before — so it is COMPUTED,
-     not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
+  /* THE COLUMN'S DEFICIT VALVE. This column is banner + header + operator row + score tiles
+     + sections board + the Bonuses disclosure + the log, and every one of them is
+     `flex: 0 0 auto` except the board. Once the board is at its floor (FieldDayView.tsx
+     SECTIONS_BOARD_WRAP) the residual has nowhere left to go, and `.panel { overflow: hidden }`
+     would CLIP it — the log off the bottom with no scrollbar in the chain, which is what
+     opening Bonuses at 1200×750 did.
+
+     ⚠️ IT IS NO LONGER THIS DECLARATION THAT DELIVERS IT. Written 2026-08-04 for the view as
+     the three-pane workspace reached it, where it won over `.panel` on source order alone
+     (both (0,1,0)). Since 2026-08-30 the dashboard mounts in the single-column panel shell
+     instead (App.tsx), so `.layout.single > .panel { overflow-y: auto }` — (0,2,1) — is the
+     rule that actually resolves, and this one is a redundant restatement of the same value.
+     Kept, not deleted, because it is the only thing that would carry the valve if `.fieldday`
+     were ever mounted outside that shell; it is NOT relied on, and which rule wins is
+     COMPUTED, not asserted, in layout-single-deficit.test.tsx. overflow-x stays hidden. */
   overflow-y: auto;
 }
 .fd-header {
@@ -8718,6 +8769,32 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Which rules data is scoring (rules year + generated date) — quiet, end of the banner. */
+.fd-event-rules {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+/* Warn-only FD rule advisory (FdAdvisories.tsx) — a PASSIVE status line, never a
+   control, hosted by the FD event banner and the Operate cockpit header (outside
+   every ⊞-removable pane). --alert-warning exists in both themes. Ellipsizes in
+   a tight header; the title attribute carries the whole sentence. */
+.fd-advisory {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 32em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--alert-warning);
+  background: color-mix(in srgb, var(--alert-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--alert-warning) 45%, transparent);
+}
 
 /* Score math formula */
 .fd-score-math {
@@ -8816,9 +8893,117 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: 10px;
   color: var(--text-faint);
 }
+/* Collapsed-header echoes of the two scoring inputs: the power multiplier's current
+   value and, when the club has planned anything, what it is still chasing. Both are
+   readouts — the controls are inside. */
+.fd-scoring-power-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.fd-bonuses-planned-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+/* The expanded body wraps the power row, the chase strip and the (capped, scrolling)
+   list. The cap stays on `.fd-bonuses-list` alone — see the note there; the body is
+   `flex: 0 0 auto` like the section it lives in, and the column's deficit still goes to
+   `.fieldday { overflow-y: auto }`. */
+.fd-bonuses-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.fd-power-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+  background: var(--bg-elev);
+}
+.fd-power-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fd-power-chips {
+  display: flex;
+  gap: var(--space-1);
+}
+.fd-power-chip {
+  padding: var(--space-1) 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.fd-power-chip:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+/* The selected tier wears the same filled-accent treatment as the Settings chips it
+   mirrors (`.theme-chip.active`) — one setting, one look. */
+.fd-power-chip.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+.fd-power-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fd-power-hint {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+/* THE CHASE. Earned is the real number and is the only one wearing the accent; planned is
+   deliberately quieter and says so in words, not just in colour. */
+.fd-chase {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) 0;
+  background: var(--bg-elev);
+}
+.fd-chase-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.fd-chase-tile.earned {
+  border-color: var(--accent);
+}
+.fd-chase-tile.earned .fd-chase-val {
+  color: var(--accent);
+}
+.fd-chase-val {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.fd-chase-note {
+  font-size: 10px;
+  color: var(--text-faint);
+}
 .fd-bonuses-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 2px;
   padding: var(--space-2) var(--space-3) var(--space-3);
   background: var(--bg-elev);
@@ -8857,6 +9042,33 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .fd-bonus-row.checked {
   color: var(--text);
+}
+/* Planned but not yet earned: a dashed edge and the button's own "Planned" word — the
+   state is never carried by colour alone. */
+.fd-bonus-row.planned {
+  color: var(--text);
+  border: 1px dashed var(--border);
+  padding: 6px calc(var(--space-2) - 1px);
+}
+.fd-bonus-plan {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 10px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.fd-bonus-plan:hover {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+.fd-bonus-plan.on {
+  border-color: var(--text-dim);
+  color: var(--text);
+  font-weight: 700;
 }
 .fd-bonus-row input[type='checkbox'] {
   flex: 0 0 auto;
@@ -11729,6 +11941,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .logbook-field-wide {
   grid-column: 1 / -1;
 }
+/* macOS WKWebView renders the native <input type="datetime-local"> control wider than
+   Chromium does and clips the minutes segment inside a ~140px grid cell (#233, NEEDS-BENCH
+   mac). Give this one input a floor wide enough for the mac control; Chromium's control fits
+   comfortably within it, so the desktop layout is unchanged. Scoped to this input only — never
+   the shared .settings-input. */
+.logbook-field .logbook-when {
+  min-width: 190px;
+}
 .logbook-notes {
   resize: vertical;
   min-height: 58px;
@@ -12903,6 +13123,51 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: color-mix(in srgb, var(--state-weak) 16%, transparent);
   border-color: color-mix(in srgb, var(--state-weak) 45%, transparent);
 }
+/* The amplifier strip in the cockpit header — Operate/Standby, band ◀▶, watts.
+   Sits with the other header controls and matches .cockpit-pwr's metrics so it reads as one
+   row. It renders only when an amplifier is configured, so it costs nothing on the vast
+   majority of stations. Nothing here is a stop control: an amplifier in standby does not end
+   a transmission. */
+.amp-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.amp-strip button {
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 3px 6px;
+}
+/* Standby is the resting state and stays quiet. Operate means the amplifier is in line, which
+   is worth seeing at a glance from across the shack — but it is NOT an alert, so it takes the
+   good-state token rather than a warning colour. */
+.amp-op.on {
+  color: var(--state-good);
+  border-color: var(--state-good);
+}
+.amp-band {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.amp-band-label {
+  min-width: 3.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.amp-watts {
+  font-variant-numeric: tabular-nums;
+  min-width: 4.5em;
+  text-align: right;
+}
+/* A keystroke the queue refused. Amber, not red: nothing broke and nothing was transmitted —
+   the operator simply needs to click again. */
+.amp-strip-refused {
+  color: var(--alert-warning);
+}
+
 .cockpit-pwr {
   display: inline-flex;
   align-items: center;
@@ -13555,6 +13820,28 @@ button.cq-skiptx1.on {
   background: var(--accent);
   color: var(--accent-ink);
 }
+/* The Map button: a sibling control next to the Classic/Roster pill, not a member of it
+ * (it opens the POTA map pop-out, it does not switch layoutMode) — so it carries its own
+ * border+radius rather than a bare `.clt-opt` fragment, which relies on
+ * `.cockpit-layout-toggle` for the border/radius/overflow that make the pill read as one
+ * piece. Same type metrics and hover treatment as `.clt-opt` so it still reads as one
+ * family in the header, just its own pill beside the first.
+ */
+.cockpit-map-btn {
+  padding: 5px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cockpit-map-btn:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
 .cockpit-roster > * {
   flex: 1;
   min-width: 0;
@@ -13646,9 +13933,11 @@ button.cq-skiptx1.on {
   border-color: var(--accent);
   color: var(--accent);
 }
-/* Pop-out buttons on Connect + DXpeditions + Operate headers (multi-monitor tear-off). */
+/* Pop-out buttons on Connect + DXpeditions + POTA/SOTA + Operate headers (multi-monitor
+   tear-off). */
 .connect-popout,
 .dxped-popout,
+.pota-popout,
 .cockpit-popout {
   margin-left: auto;
   font-size: 0.75rem;
@@ -13662,7 +13951,8 @@ button.cq-skiptx1.on {
   white-space: nowrap;
 }
 .connect-popout:hover,
-.dxped-popout:hover {
+.dxped-popout:hover,
+.pota-popout:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -19205,8 +19495,13 @@ button.sat-chip:disabled {
   width: 7rem;
   font-family: var(--font-mono);
 }
+/* The mode cell is a <select> (see MemoriesView's ChoiceSelect — a datalist filtered its own
+   suggestions down to the value already in the field). A select spends 24px of its right
+   padding on the arrow that the input it replaced did not, so the width grew by that much to
+   keep the same text room: measured in `layout-harness/selects.html`, 88px left 58px for the
+   text and 104px leaves 74px — what the 5.5rem input had. */
 .mv-cell-mode {
-  width: 5.5rem;
+  width: 6.5rem;
 }
 .mv-ro {
   color: var(--text-dim);
@@ -19227,6 +19522,120 @@ button.sat-chip:disabled {
 .mv-row-actions button:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* ---- selection + bulk delete ----
+   The bar appears only once a row is ticked. Every number on it is the SELECTED ROWS ON
+   SCREEN (MemoriesView's `selectedShown`), so what it counts, what it highlights and what
+   Delete removes are the same rows. */
+.mv-selbar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+}
+.mv-selbar-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.mv-selbar-count {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.mv-selbar-del {
+  border-color: var(--state-weak);
+  color: var(--state-weak);
+}
+.mv-selbar-del:hover {
+  background: var(--state-weak);
+  border-color: var(--state-weak);
+  color: #fff;
+}
+.mv-pick {
+  flex: none;
+  margin: 0 2px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.mv-row.picked,
+.mv-grid tr.picked td {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+/* The row ＋ New just created, while its editor is open in the pinned panel below — so the
+   list still answers "where did it go?". The grid needs it more than the list does: it is the
+   200-channel spreadsheet view. Marked with an inset bar and the existing bottom border
+   recoloured, never an added border, so the row does not change height. */
+.mv-row.adding {
+  border-color: var(--accent);
+}
+.mv-grid tr.adding td {
+  border-bottom-color: var(--accent);
+}
+.mv-grid tr.adding td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* ---- the pinned add panel ----
+   ＋ New's editor, docked at the bottom of `.mv-main` instead of opening inline in the list
+   (the operator: "the add section adds inline … leading to difficulty and confusion").
+   `flex: none` keeps `.mv-scroll` the pane's one scroll owner; the cap is against --vh-eff
+   (raw vh is zoom-blind) so a tall repeater editor scrolls INSIDE the panel rather than
+   pushing the list off a 1024×768 window, and the background is opaque because a pinned
+   surface sits over scrolling content. */
+.mv-add {
+  flex: none;
+  max-height: calc(0.42 * var(--vh-eff, 100vh));
+  overflow-y: auto;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+}
+.mv-add-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+}
+.mv-add-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.mv-add-hint {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+.mv-add-discard {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.mv-add-discard:hover {
+  border-color: var(--state-weak);
+  color: var(--state-weak);
+}
+/* The editor inside the panel has the head above it, so it needs no border of its own. */
+.mv-add > .mv-editor {
+  border-top: none;
 }
 
 /* Starter-packs modal — overlays the section, scrolls internally on short windows */
@@ -22265,4 +22674,136 @@ tr.sel .aprs-sym {
 }
 .settings-save.danger:hover:not(:disabled) {
   filter: brightness(1.06);
+}
+
+/* ---- the three-day Kp outlook pane ----
+   Measured and modelled must not look alike: an observed bar is filled, a forecast
+   bar is a hollow outline of the same colour, so "this is a prediction" survives a
+   glance across the shack. The tone itself is the NOAA G-scale banding the rest of
+   the app uses, so a storm reads red here and red everywhere else. */
+.kp-outlook {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.kp-outlook.empty {
+  color: var(--text-faint);
+  font-size: 0.82rem;
+}
+.kp-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 64px;
+  /* A long forecast scrolls inside the pane rather than squeezing the bars to
+     nothing or pushing the pane wider than its grid slot. */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.kp-bar {
+  flex: 0 0 6px;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--kp-tone);
+}
+/* The forecast half: same colour, hollow — a prediction is not a reading. */
+.kp-bar.modelled {
+  background: transparent;
+  border: 1px solid var(--kp-tone);
+  /* Faint hatch so it still reads as "something is here" at 6 px wide. */
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--kp-tone) 45%, transparent) 0 2px,
+    transparent 2px 4px
+  );
+}
+.kp-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+.kp-line.warn {
+  color: var(--state-warn, #f5a524);
+}
+.kp-line.good {
+  color: var(--state-good, #30a46c);
+}
+
+/* ---- the TV page's chrome (src/tv/ConnectTv.tsx) ----
+   A thin bar over the full ConnectView; everything below it is the app's own view
+   and styles itself. The bar is fixed-height flex so ConnectView's pane grid gets an
+   honest remaining height. */
+.tv-app {
+  display: flex;
+  flex-direction: column;
+  /* --vh-eff, not raw vh: the TV entry runs useViewport() like the app, and the
+     zoom-blind-vh rule is a contract (responsive-vocab.test.ts computes it). */
+  height: var(--vh-eff, 100dvh);
+  background: var(--bg);
+}
+.tv-app > .connect-view,
+.tv-app > *:last-child {
+  flex: 1;
+  min-height: 0;
+}
+.tv-bar {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 6px var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.tv-call {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+}
+.tv-grid {
+  color: var(--text-faint);
+}
+.tv-spacer {
+  flex: 1;
+}
+.tv-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.05rem;
+}
+.tv-chip {
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: calc(var(--space-1) / 2) var(--space-2);
+}
+.tv-chip.tv-warn {
+  color: var(--state-warn, #f5a524);
+  border-color: currentColor;
+}
+.tv-chip.tv-bad {
+  color: var(--state-bad, #e5484d);
+  border-color: currentColor;
+}
+.tv-wait {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+}
+/* Wall-display geometry: slightly narrower rails give the center cell the width the
+   room is actually looking at. */
+.tv-app {
+  --cn-rail: 264px;
+}
+/* The roster hint invites an action this page cannot take — the read-only view never
+   has decoded stations, by design (the module threat model), so "decoded stations
+   appear here" is a promise the TV cannot keep. Spots still draw; only the hint goes. */
+.tv-app .map-empty-hint {
+  display: none;
 }
