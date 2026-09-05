@@ -2309,6 +2309,9 @@ export const EN = {
     'Show worked-but-unconfirmed award slots — LoTW confirmation chances — on the Needed board and as chips on decodes. Turn off to chase only new contacts.',
   'settings.alerts.cq.label': 'CQ calls',
   'settings.alerts.cq.hint': 'Alert on any decoded CQ. Off by default — CQs are constant.',
+  'settings.alerts.potaNewActivation.label': 'New POTA activation',
+  'settings.alerts.potaNewActivation.hint':
+    "Beep when a park is freshly spotted on the air (the map's Parks on the air layer). Off by default.",
   // One band-scope vocabulary, read by all three selects — the same four choices mean the
   // same thing on each, and a translator writes them once.
   'settings.alerts.scope.off': 'Off',

@@ -7806,6 +7806,28 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.alerts.cq.hint')}</span>
               </div>
 
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">
+                    {t('settings.alerts.potaNewActivation.label')}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.potaNewActivationAlert === true}
+                    className={`toggle${form.potaNewActivationAlert === true ? ' on' : ''}`}
+                    onClick={() =>
+                      updateBool('potaNewActivationAlert', form.potaNewActivationAlert !== true)
+                    }
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  {t('settings.alerts.potaNewActivation.hint')}
+                </span>
+              </div>
+
               {/* Per-type band scopes: all decode alerts fire on the CURRENT band, so the
                   scope is "should this alert on the band I'm on". VHF+ = 6 m and up. */}
               <div className="settings-field">

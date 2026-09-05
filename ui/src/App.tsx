@@ -126,6 +126,7 @@ import {
   resendChat,
   type RadioLaunchInfo,
   getKpForecast,
+  getOtaMapSpots,
 } from './api'
 import {
   hotkeyRecallTarget,
@@ -137,6 +138,7 @@ import {
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { processFlare, effectiveXray } from './flareAlert'
+import { processPotaAlert } from './features/potaAlert'
 import { processStorm, processStormForecast } from './stormAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -977,6 +979,27 @@ export default function App() {
   }, [settings?.operatingMode])
   // Ding/dong when the dial crosses your TX privileges (default on).
   useBandEdgeTones(snap?.radio.txAllowed, settings?.bandEdgeTones ?? true)
+  // Audible new-POTA-activation alert (opt-in, potaAlert.ts owns the dedup/priming): a poll of
+  // its own so the alert reaches the operator whether or not the map's pop-out is open — today
+  // MapView is the ONLY caller of get_ota_map_spots, and that poll dies with the pop-out.
+  // Gated on the setting itself (not just the alert inside it): an operator with this off pays
+  // no interval and no IPC, same politeness rule the map's own Parks layer follows — the backend
+  // serves both from one 120 s cache (OTA_MAP_TTL_SECS), so this poll costs nothing extra to run
+  // alongside the map or the POTA/SOTA board.
+  useEffect(() => {
+    if (!settings?.potaNewActivationAlert) return
+    let live = true
+    const load = () =>
+      getOtaMapSpots()
+        .then((spots) => live && processPotaAlert(spots))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 120_000)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [settings?.potaNewActivationAlert])
   // User watch list (localStorage) — fed to the decode alerter. Re-synced when the manager
   // edits it (it dispatches `nexus:watchlist-changed`), so alerts pick up changes live.
   const [watchlist, setWatchlist] = useState<WatchFilter[]>(() => loadWatchlist())

@@ -25,6 +25,8 @@ export const DE: PartialCatalog = {
   "settings.alerts.confirmTier.hint": "Gearbeitete, aber unbestätigte Award-Slots — LoTW-Bestätigungschancen — auf dem Needed-Board und als Chips an Decodes zeigen. Ausschalten, um nur neue Kontakte zu jagen.",
   "settings.alerts.cq.label": "CQ-Rufe",
   "settings.alerts.cq.hint": "Alarm bei jedem dekodierten CQ. Standardmäßig aus — CQ-Rufe kommen ständig.",
+  "settings.alerts.potaNewActivation.label": "Neue POTA-Aktivierung",
+  "settings.alerts.potaNewActivation.hint": "Signalton, wenn ein Park frisch als aktiv gemeldet wird (Kartenebene „Parks on the air“). Standardmäßig aus.",
   "settings.alerts.scope.off": "Aus",
   "settings.alerts.scope.hf": "Nur KW",
   "settings.alerts.scope.vhf": "VHF+ (ab 6 m)",

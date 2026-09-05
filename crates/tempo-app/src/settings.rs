@@ -1749,6 +1749,9 @@ pub struct Settings {
     pub alert_cq: bool,
     /// Alert when a new (not previously heard) station is decoded.
     pub alert_new: bool,
+    /// Beep when a park is freshly spotted on the air — App's own poll of
+    /// `get_ota_map_spots`, gated on this setting (no poll at all while off).
+    pub pota_new_activation_alert: bool,
     /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
     /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
     /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
@@ -3360,6 +3363,7 @@ impl Default for Settings {
             // New-DXCC / new-grid alerts: ON by default — these are the "new ones"
             // worth chasing (not per-decode spam, which we never alert on).
             alert_new: true,
+            pota_new_activation_alert: false,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             b4_match_mode: false,

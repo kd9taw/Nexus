@@ -3265,6 +3265,8 @@ export const ES: PartialCatalog = {
   "settings.accessibility.txRxEarcon.label": "Señal sonora TX / RX",
   "settings.alerts.cq.hint": "Alerta con cualquier CQ decodificado. Desactivado por defecto: los CQ son constantes.",
   "settings.alerts.cq.label": "Llamadas CQ",
+  "settings.alerts.potaNewActivation.hint": "Pitido cuando se detecta un parque recién activado (capa del mapa «Parks on the air»). Desactivado por defecto.",
+  "settings.alerts.potaNewActivation.label": "Nueva activación POTA",
   "settings.alerts.dxcc.aria": "Bandas de alerta de nuevo DXCC",
   "settings.alerts.dxcc.hint": "Alerta fuerte con una entidad DXCC nueva — un “nuevo”. NO alerta en cada decodificación. La elección de bandas decide además dónde se muestra el icono NUEVO.",
   "settings.alerts.dxcc.label": "Nuevo DXCC",

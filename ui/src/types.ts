@@ -3007,6 +3007,9 @@ export interface Settings {
   /** WSJT-X's "dB reports to comments": the logged QSO's COMMENT carries
    *  "<mode>  Sent: <rpt>  Rcvd: <rpt>". Opt-in, exactly as WSJT-X ships it. */
   logReportsToComments?: boolean
+  /** Beep when a park is freshly spotted on the air (App's own poll of
+   *  get_ota_map_spots, gated on this — see potaAlert.ts). Off by default. */
+  potaNewActivationAlert?: boolean
   /** Band scope for new-DXCC alerts: 'off' | 'hf' | 'vhf' | 'all' (alertNew stays the master). */
   alertDxccBands: string
   /** Band scope for plain new-grid alerts. Default 'vhf' — grid chasing is VHF-centric. */

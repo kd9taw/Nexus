@@ -1398,6 +1398,8 @@ export const JA: PartialCatalog = {
   "settings.alerts.confirmTier.hint": "交信済みで未コンファームのアワード枠（LoTWコンファームの機会）をNeededボードとデコードのチップに表示します。新規局だけを追う場合はオフに。",
   "settings.alerts.cq.label": "CQ呼び出し",
   "settings.alerts.cq.hint": "デコードされたすべてのCQでアラートします。CQは絶えず出ているため、デフォルトはオフです。",
+  "settings.alerts.potaNewActivation.label": "新規POTAアクティベーション",
+  "settings.alerts.potaNewActivation.hint": "公園が新たにスポットされるとビープで知らせます（マップの「Parks on the air」レイヤー）。デフォルトはオフです。",
   "settings.alerts.scope.off": "オフ",
   "settings.alerts.scope.hf": "HFのみ",
   "settings.alerts.scope.vhf": "VHF+（6m以上）",
