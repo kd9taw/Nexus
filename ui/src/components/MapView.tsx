@@ -2625,6 +2625,18 @@ export function MapView({
         mode: dxpedWorkMode(hit.card.modes),
         freqMhz: null,
       })
+    } else if (hit?.kind === 'ota') {
+      // Same atomic work path as a live spot or DXpedition — QSY + set mode + tag the
+      // hunt target (Task 1's `program`/`reference`). No transmit: `handleWorkMapSpot` /
+      // `DetachedPanel`'s `onWorkSpot` only ever QSY, set mode, and tag.
+      onWorkSpot({
+        call: hit.sp.activator,
+        band: bandLabelForMhz(hit.sp.freqMhz),
+        mode: hit.sp.mode || null,
+        freqMhz: hit.sp.freqMhz,
+        program: hit.sp.program,
+        reference: hit.sp.reference,
+      })
     }
   }
 
