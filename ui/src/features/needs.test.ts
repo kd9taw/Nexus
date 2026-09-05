@@ -59,6 +59,31 @@ describe('visibleNeeds', () => {
   })
 })
 
+// A park/summit activator is someone to HUNT, not a mode the operator must operate — a
+// digital-only op should see a CW or Phone POTA/SOTA activation exactly as GridTracker would.
+describe('visibleNeeds keeps a POTA/SOTA activity row through the mode gate', () => {
+  const activity = (mode: string, tags: NeedTag[]): NeedAlert => ({
+    ...alert('K1PARK', mode, '20m'),
+    tags,
+    priority: NEED_TIER[tags[0]],
+  })
+
+  it('a POTA activation survives even when CW/Phone features are off', () => {
+    const cwPotaActivation = activity('CW', ['Pota'])
+    const out = visibleNeeds([cwPotaActivation], { cw: false, phone: false })
+    expect(out).toHaveLength(1) // was 0 — dropped by the mode gate
+  })
+
+  it('a genuine CW need is still gated when CW is off (control)', () => {
+    const cwNeed = activity('CW', ['NewEntity'])
+    expect(visibleNeeds([cwNeed], { cw: false, phone: false })).toHaveLength(0)
+  })
+
+  it('a Phone SOTA activation survives when Phone is off, same rule', () => {
+    expect(visibleNeeds([activity('Phone', ['Sota'])], { cw: false, phone: false })).toHaveLength(1)
+  })
+})
+
 // ── The band scopes govern the ICONS, not only the sound/toast (operator, twice:
 // "I selected grids, vhf/uhf 6m and up in the settings and its still showing the grid
 // icons in ft8 in both roster and classic mode when on hf bands").

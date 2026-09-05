@@ -235,6 +235,10 @@ export function needScopeOk(
  *
  * Digital needs always show; CW/Phone needs only when that mode is enabled — so a
  * pure-digital op's board is unchanged even though the backend sends voice/CW needs too.
+ * An alert carrying a POTA/SOTA/DXpedition ACTIVITY tag (see [`isActivityTag`]) is the one
+ * exception to the mode gate: it says someone is out there to HUNT, not that the operator
+ * must operate that mode, so a CW park activation stays visible to a digital-only op exactly
+ * as it would in GridTracker.
  *
  * The band scope filters TAGS, not alerts: one station can be a new BAND (unscoped) and a
  * new GRID (scoped out on HF) at once, and dropping the whole alert would take its band
@@ -247,8 +251,12 @@ export function visibleNeeds(
 ): NeedAlert[] {
   const out: NeedAlert[] = []
   for (const a of alerts) {
-    if (a.mode === 'CW' && !enabled.cw) continue
-    if (a.mode === 'Phone' && !enabled.phone) continue // Digital/unknown always visible
+    // A genuine CW/Phone NEED (new entity, new grid, ...) is still gated — the operator has
+    // no way to close it without that mode. An ACTIVITY tag isn't a need at all, so it's
+    // exempt: a POTA/SOTA/DXpedition activator is an activity to hunt, not a need to close.
+    const isActivity = a.tags.some(isActivityTag)
+    if (a.mode === 'CW' && !enabled.cw && !isActivity) continue
+    if (a.mode === 'Phone' && !enabled.phone && !isActivity) continue // Digital/unknown always visible
     if (!scopes) {
       out.push(a)
       continue
