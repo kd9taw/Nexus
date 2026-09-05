@@ -16,8 +16,12 @@ import type { AppSnapshot } from './types'
 // one prop under test (intent) on a testid so the assertion is a rendered fact, not a
 // snapshot of props.
 vi.mock('./components/MapView', () => ({
-  MapView: (props: { intent?: string }) => (
-    <div data-testid="operatemap-map" data-intent={props.intent ?? ''} />
+  MapView: (props: { intent?: string; dedicatedIntent?: boolean }) => (
+    <div
+      data-testid="operatemap-map"
+      data-intent={props.intent ?? ''}
+      data-dedicated={props.dedicatedIntent ? '1' : ''}
+    />
   ),
 }))
 
@@ -56,6 +60,8 @@ describe('DetachedPanel operatemap panel', () => {
     })
     const map = screen.getByTestId('operatemap-map')
     expect(map.dataset.intent).toBe('pota')
+    // Dedicated surface: it must open on its own POTA preset, not inherit the Connect map's layers.
+    expect(map.dataset.dedicated).toBe('1')
     expect(screen.queryByText(t('detached.unavailable', { panel: 'operatemap' }))).toBeNull()
   })
 

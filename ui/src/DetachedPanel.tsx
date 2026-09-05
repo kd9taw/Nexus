@@ -812,6 +812,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needByCall={needByCall}
           onWorkSpot={onWorkSpot}
           intent="pota"
+          // This is a surface DEDICATED to POTA hunting, not a torn-off Connect map: it must
+          // open on its own intent preset (Parks on), never inherit the Connect map's layer
+          // picks off the shared primary key. See MapView's `dedicatedIntent`.
+          dedicatedIntent
         />
       </DetachedShell>
     )

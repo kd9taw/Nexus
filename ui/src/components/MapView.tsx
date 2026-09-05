@@ -56,7 +56,7 @@ import {
 } from '../features/satChase'
 import { decollideLabels } from '../features/mapLabels'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
-import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import {
   gridToLatLon,
   haversineKm,
@@ -116,6 +116,14 @@ interface Props {
   needByCall: Map<string, NeedTag>
   /** Connect intent preset — applied (soft) on change. Omitted = no preset. */
   intent?: MapIntent
+  /** This surface exists SOLELY for its `intent` (a dedicated pop-out like the POTA map), so it
+   * must NOT inherit another surface's layer picks. A general map inherits the primary surface's
+   * stored layers on first open (the #199 carry-over via `surfaceGet`) — right when a torn-off
+   * Connect map should keep the operator's picks. But on a dedicated surface that inherited value
+   * is a DIFFERENT purpose's setup, and it silently suppressed this intent's own preset (e.g. the
+   * POTA map opening with Parks off). Set true to make the preset yield only to a pick made ON
+   * THIS surface. Default false keeps every existing (inheriting) call site unchanged. */
+  dedicatedIntent?: boolean
   /** Double-click-to-work a live spot / DXpedition marker: the app's atomic
    * work path (rig → band+mode+freq, cockpit opens). Omitted = gesture off.
    * `program`/`reference` carry a park identity (POTA/SOTA) when the spot is one, so the
@@ -500,6 +508,7 @@ export function MapView({
   onSelectCall,
   needByCall,
   intent,
+  dedicatedIntent = false,
   onWorkSpot,
   onSelectSat,
   aprs,
@@ -545,8 +554,13 @@ export function MapView({
       : (layersFromStored(surfaceGet(LAYERS_KEY)) ?? DEFAULT_LAYERS),
   )
   // Whether a persisted layer pick seeded the state above — the intent preset yields to it
-  // on first mount, exactly as it yields to the persisted projection.
-  const hadStoredLayers = useRef(!embedded && surfaceGet(LAYERS_KEY) != null)
+  // on first mount, exactly as it yields to the persisted projection. A DEDICATED surface
+  // (`dedicatedIntent`) counts only a pick made ON ITSELF: `surfaceGet` above still inherits the
+  // primary surface's layers so the map opens on something sensible, but an inherited value is
+  // another surface's setup, not a reason to suppress THIS surface's preset — see the prop doc.
+  const hadStoredLayers = useRef(
+    !embedded && (dedicatedIntent ? surfaceHasOwn(LAYERS_KEY) : surfaceGet(LAYERS_KEY) != null),
+  )
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [hover, setHover] = useState<{ x: number; y: number; text: string; info?: boolean } | null>(null)
   // The hovered feature's call — drives the on-canvas hover ring (changes only
@@ -748,7 +762,12 @@ export function MapView({
     // follow the intent — they're derived identically in every window, so they carry over.
     if (!intentFirstRun.current) setKind(p.kind)
     // Same first-mount rule for the layers (#199): a persisted pick seeded the state, and
-    // the preset only re-applies when the operator actively SWITCHES intent afterward.
+    // the preset only re-applies when the operator actively SWITCHES intent afterward. "A pick"
+    // means a pick this surface should honour — for a `dedicatedIntent` surface only its OWN
+    // stored layers count (see `hadStoredLayers`), so the true first open of a dedicated pop-out
+    // takes its intent's preset instead of inheriting another surface's layers. The persist
+    // effect writes this surface's own key on mount, so that force applies exactly ONCE: a later
+    // toggle here is then a pick of its own and is honoured on reopen.
     const skipLayers = intentFirstRun.current && hadStoredLayers.current
     intentFirstRun.current = false
     setColorBy(p.colorBy)
