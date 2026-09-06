@@ -1171,6 +1171,10 @@ struct RxTaps {
 /// Linux only, deliberately: Windows (WASAPI) and macOS have no such report, and their
 /// shipped behaviour stays byte-identical rather than re-benched for a fix they don't need.
 fn capture_config(cfg: &cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+    // `mut` is REQUIRED on Linux — the block below reassigns `out.buffer_size` — and unnecessary
+    // everywhere else, where that block is compiled out. Removing it would break Linux; this is
+    // the same `cfg_attr` shape this file already uses on `sized_capture_buffer` below.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut out = cfg.config();
     #[cfg(target_os = "linux")]
     {
@@ -2299,7 +2303,12 @@ mod tx_route_tests {
 #[cfg(test)]
 mod device_naming_tests {
     use super::{cpal_device_name, resolve_configured, NamedDevice};
-    use cpal::traits::{DeviceTrait, HostTrait};
+    use cpal::traits::HostTrait;
+    // `DeviceTrait` is used ONLY by the Linux-gated test below, so importing it unconditionally
+    // makes it unused on macOS and Windows — and `-D warnings` turns that into a build failure.
+    // Gated rather than `allow`ed: the import now exists exactly where it is used.
+    #[cfg(target_os = "linux")]
+    use cpal::traits::DeviceTrait;
 
     /// ⚠️ THE REGRESSION THIS MIGRATION NEARLY SHIPPED TO EVERY LINUX STATION.
     ///
