@@ -16,6 +16,7 @@ pub mod speed;
 mod demod;
 mod downsample;
 mod params;
+mod subtract;
 mod sync;
 #[cfg(test)]
 pub(crate) mod testutil;
