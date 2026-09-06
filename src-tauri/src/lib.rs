@@ -1922,6 +1922,16 @@ fn pending_msgs_path() -> PathBuf {
         .join("pending_msgs.json")
 }
 
+/// `<config dir>/js8_station.json` — the JS8 station journal (inbox, heard list, @ALLCALL
+/// reply times), beside the Tempo message journal. A stored message survives a restart.
+fn js8_station_path() -> PathBuf {
+    settings_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("js8_station.json")
+}
+
 /// Where the grid-activity census is persisted (beside settings.json): a small
 /// bounded JSON of decayed per-grid heard counts — the demote-only refinement
 /// evidence for the rarity gems. Losing it is harmless (it re-accumulates).
@@ -10166,6 +10176,155 @@ fn psk_auto_arm(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
 fn get_psk_state(state: State<'_, SharedEngine>) -> Result<PskStateDto, String> {
     let eng = engine_lock(&state);
     Ok(psk_state_dto(&eng))
+}
+
+// ---- JS8 (the `engine::js8` adapter; every command answers the whole Js8State — the PSK
+// shape — and the DTO is `tempo_app::dto::Js8State` serialised directly, no copy here) ----
+
+/// The operator ENTERED the JS8 view: `set_tier(JS8)` + retune to the JS8 watering hole for
+/// the current band. RX ONLY by construction — it confers neither TX-enable nor any
+/// auto-reply arm (the APRS/PSK auto-arm doctrine, minus even a decoder latch: a slotted
+/// tier decodes whenever active).
+#[tauri::command(async)]
+fn js8_enter(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_enter();
+    Ok(eng.js8_state())
+}
+
+/// The live JS8 state (poll ~500 ms while the JS8 cockpit is visible).
+#[tauri::command(async)]
+fn get_js8_state(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let eng = engine_lock(&state);
+    Ok(eng.js8_state())
+}
+
+/// Persist the engine's settings after a JS8 verb changed one of them (the engine holds
+/// settings, the command layer owns the file — the `purge_log` shape).
+fn js8_persist_settings(eng: &Engine) {
+    if let Err(e) = eng.settings().clone().save(&settings_path()) {
+        eprintln!("tempo: failed to save settings after a JS8 change: {e}");
+    }
+}
+
+/// Select the TRANSMIT speed (0 Slow | 1 Normal | 2 Fast | 3 Turbo): the slot clock and the
+/// boundary decode window follow. Persisted. Never touches the TX latch.
+#[tauri::command(async)]
+fn js8_set_speed(
+    state: State<'_, SharedEngine>,
+    speed: u8,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_speed(speed)?;
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// Select which speeds the receiver decodes (bitmask: slow 1 · normal 2 · fast 4 · turbo 8).
+/// Persisted. A mask that decodes nothing is refused.
+#[tauri::command(async)]
+fn js8_set_rx_speeds(
+    state: State<'_, SharedEngine>,
+    mask: u8,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_rx_speeds(mask)?;
+    js8_persist_settings(&eng);
+    Ok(eng.js8_state())
+}
+
+/// Queue a message (`to` = a callsign, `@GROUP`, or null for @ALLCALL). REFUSED in this
+/// receive-only build; the operator-gated TX batch supplies the body behind it.
+#[tauri::command(async)]
+fn js8_send(
+    state: State<'_, SharedEngine>,
+    to: Option<String>,
+    text: String,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_send(to, text)?;
+    Ok(eng.js8_state())
+}
+
+/// Queue a directed command (`cmd` = the 32-entry table id) with its argument. Refused here.
+#[tauri::command(async)]
+fn js8_send_command(
+    state: State<'_, SharedEngine>,
+    to: String,
+    cmd: u8,
+    arg: String,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_send_command(to, cmd, arg)?;
+    Ok(eng.js8_state())
+}
+
+/// Call CQ (`idx` = the CQ variant 0..=7). Refused here.
+#[tauri::command(async)]
+fn js8_call_cq(
+    state: State<'_, SharedEngine>,
+    idx: u8,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_call_cq(idx)?;
+    Ok(eng.js8_state())
+}
+
+/// The SECOND act of the two-act rule (autoreply | relay | hback persisted; hb session-only).
+/// Refused here: nothing can act on it yet.
+#[tauri::command(async)]
+fn js8_arm(
+    state: State<'_, SharedEngine>,
+    which: tempo_app::engine::js8::Js8Switch,
+    on: bool,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_arm(which, on)?;
+    Ok(eng.js8_state())
+}
+
+/// Cancel the pending automatic reply (safe no-op when none).
+#[tauri::command(async)]
+fn js8_cancel(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_cancel();
+    Ok(eng.js8_state())
+}
+
+/// Drop the outbox — a SENDER-class control, not a stop (Stop TX is `halt_tx`).
+#[tauri::command(async)]
+fn js8_drop_queue(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_drop_queue();
+    Ok(eng.js8_state())
+}
+
+/// Mark an inbox row (`unread | read | store | delivered`). Journaled.
+///
+/// ⚠️ The wire argument is called `state` (interfaces.md §3.6, `api.ts`), and Tauri maps
+/// arguments by PARAMETER NAME — so the engine handle is `eng_state` in this one command,
+/// not `state` as everywhere else. Renaming the wire key instead would silently break the
+/// UI (a missing required key fails at the IPC boundary, in the field).
+#[tauri::command(async)]
+fn js8_inbox_mark(
+    eng_state: State<'_, SharedEngine>,
+    id: u32,
+    state: tempo_app::dto::Js8InboxState,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&eng_state);
+    eng.js8_inbox_mark(id, state)?;
+    Ok(eng.js8_state())
+}
+
+/// Delete an inbox row. Journaled.
+#[tauri::command(async)]
+fn js8_inbox_delete(
+    state: State<'_, SharedEngine>,
+    id: u32,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_inbox_delete(id)?;
+    Ok(eng.js8_state())
 }
 
 /// Clear the decoded-PSK transcript (display only; the decoder keeps running).
@@ -19257,6 +19416,12 @@ pub fn run() {
         if let Ok(text) = std::fs::read_to_string(pending_msgs_path()) {
             eng.load_pending_msgs(&text);
         }
+        // JS8 store-and-forward inbox: same contract as the Tempo journal above —
+        // best-effort, a missing or corrupt file yields an empty station.
+        eng.set_js8_journal_path(js8_station_path());
+        if let Ok(text) = std::fs::read_to_string(js8_station_path()) {
+            eng.js8_load_journal(&text);
+        }
         // Restore persisted Tempo conversation threads so chat history (and the `*`
         // band feed) survives an app restart. Best-effort: a missing/corrupt file
         // just yields an empty roster of threads.
@@ -20441,6 +20606,18 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             psk_arm,
             psk_auto_arm,
             get_psk_state,
+            js8_enter,
+            get_js8_state,
+            js8_set_speed,
+            js8_set_rx_speeds,
+            js8_send,
+            js8_send_command,
+            js8_call_cq,
+            js8_arm,
+            js8_cancel,
+            js8_drop_queue,
+            js8_inbox_mark,
+            js8_inbox_delete,
             psk_clear,
             psk_afc_reset,
             psk_net,
@@ -20861,6 +21038,19 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
 
 #[cfg(test)]
 mod tests {
+    /// The JS8 station journal lives beside settings.json, exactly where pending_msgs.json
+    /// does — one config dir, one backup story.
+    #[test]
+    fn js8_station_journal_sits_beside_settings_json() {
+        let p = super::js8_station_path();
+        assert_eq!(
+            p.file_name().and_then(|f| f.to_str()),
+            Some("js8_station.json")
+        );
+        assert_eq!(p.parent(), super::settings_path().parent());
+        assert_eq!(p.parent(), super::pending_msgs_path().parent());
+    }
+
     /// `conn-health.json` round-trips, drops ids this build does not know, and treats a
     /// malformed file as nothing — a status file must never be able to fail a launch.
     #[test]

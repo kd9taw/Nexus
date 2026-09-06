@@ -1429,6 +1429,120 @@ export interface PskState {
   keyerError: string | null
 }
 
+// ---- JS8 (the `get_js8_state` poll; mirrors tempo_app::dto::Js8State field for field) ----
+
+/** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). */
+export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo'
+/** Who originated a queued/pending frame (serde camelCase). CQ counts as `operator`. */
+export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay'
+/** The second act of the two-act rule: three persisted switches + the session-only HB. */
+export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
+/** Inbox row state, lowercase on the wire. */
+export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
+
+/** Which automatic origins may key RIGHT NOW: `switch && txEnabled && !idleTripped`. Paint
+ * "armed" from THIS, never from the persisted switch alone. */
+export interface Js8Armed {
+  autoreply: boolean
+  relay: boolean
+  hbAck: boolean
+  hb: boolean
+}
+
+/** One activity-pane row: a decoded frame (or a reassembled multi-frame message). */
+export interface Js8ActivityRow {
+  /** Unix ms of the cycle the frame was decoded in. */
+  atMs: number
+  speed: Js8Speed
+  freqHz: number
+  snrDb: number
+  dtS: number
+  /** The sending station as the frame names it (empty for a continuation data frame). */
+  from: string
+  /** JS8Call's display line, byte-exact, or the reassembled text. */
+  text: string
+  /** Addressed to my call, @ALLCALL, or a group I have joined. */
+  directedToMe: boolean
+  /** My own transmission (always false in the receive-only build). */
+  mine: boolean
+  /** False for a message the reassembler force-closed or dropped incomplete. */
+  complete: boolean
+  /** Decode quality below JS8Call's 0.17 low-confidence threshold. */
+  lowConf: boolean
+}
+
+/** A heard station (the message layer's own row, serde camelCase). */
+export interface Js8Heard {
+  call: string
+  grid: string | null
+  snrDb: number
+  freqHz: number
+  speed: Js8Speed
+  lastMs: number
+  lastHb: boolean
+  lastCq: boolean
+  storedMsgs: number
+}
+
+/** One inbox row. */
+export interface Js8InboxEntry {
+  id: number
+  from: string
+  to: string
+  text: string
+  /** Relay hops, sender first. */
+  path: string[]
+  state: Js8InboxState
+  atMs: number
+  freqHz: number
+  snrDb: number
+}
+
+/** One outbox row (empty in the receive-only build). */
+export interface Js8QueueRow {
+  origin: Js8Origin
+  display: string
+  first: boolean
+  last: boolean
+}
+
+/** An automatic reply waiting out its countdown (cancellable until `firesAtMs`). */
+export interface Js8PendingReply {
+  origin: Js8Origin
+  to: string
+  display: string
+  firesAtMs: number
+}
+
+/** The live JS8 state (poll ~500 ms while the cockpit is visible). Every field is engine
+ * truth at poll time. */
+export interface Js8State {
+  /** The TRANSMIT speed (= the slot clock). */
+  speed: Js8Speed
+  /** Bitmask of decoded speeds: slow 1 · normal 2 · fast 4 · turbo 8. */
+  rxSpeeds: number
+  txEnabled: boolean
+  sending: boolean
+  hbOn: boolean
+  hbNextAtMs: number | null
+  hbIntervalMin: number
+  /** The persisted switches (the second act), echoed so the chips render engine truth. */
+  autoreply: boolean
+  relay: boolean
+  hbAck: boolean
+  armed: Js8Armed
+  idleMinutes: number
+  idleLimitMin: number
+  idleTripped: boolean
+  activity: Js8ActivityRow[]
+  stations: Js8Heard[]
+  inbox: Js8InboxEntry[]
+  queue: Js8QueueRow[]
+  pendingReply: Js8PendingReply | null
+  /** The last refused verb's reason, cleared by the next successful verb. */
+  lastError: string | null
+}
+
 /** One saved SSTV image in the local gallery (a BMP in the sstv-gallery folder
  * of the Nexus local data dir, beside its gallery.json metadata). */
 export interface SstvGalleryEntry {
