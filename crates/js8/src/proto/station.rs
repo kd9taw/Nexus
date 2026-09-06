@@ -770,7 +770,14 @@ impl Station {
             if let Some(next) = self.hb_next_ms {
                 if now_ms >= next {
                     let _ = self.enqueue_heartbeat(now_ms);
-                    self.bump_hb_schedule(now_ms);
+                    if self.cfg.hb_interval_min > 0 {
+                        self.bump_hb_schedule(now_ms);
+                    } else {
+                        // interval 0 = "on demand" = ONCE: clear the schedule so this does not
+                        // re-enqueue every drain cycle, and the cockpit shows no stuck past
+                        // `hb_next_ms`. Re-arming (`set_hb`) schedules the next on-demand HB.
+                        self.hb_next_ms = None;
+                    }
                 }
             }
         }
@@ -793,13 +800,11 @@ impl Station {
     }
 
     fn bump_hb_schedule(&mut self, now_ms: u64) {
+        // Only reschedules a PERIODIC heartbeat; at interval 0 ("on demand") it is a no-op, so
+        // a call from `on_event` (RX resets the HB timer) cannot cancel a pending on-demand HB.
+        // The interval-0 "fire once" clear lives in `tick`, right after the heartbeat fires.
         if self.hb_on && self.cfg.hb_interval_min > 0 {
             self.hb_next_ms = Some(now_ms + self.cfg.hb_interval_min as u64 * 60 * 1000);
-        } else {
-            // interval 0 = "on demand" = ONCE: clear the schedule so `tick` does not
-            // re-enqueue a heartbeat every drain cycle, and the cockpit shows no stuck past
-            // `hb_next_ms`. Re-arming (`set_hb`) schedules the next on-demand heartbeat.
-            self.hb_next_ms = None;
         }
     }
 
@@ -1513,6 +1518,40 @@ mod tests {
             s.hb_next_ms(),
             None,
             "the on-demand schedule is cleared after firing (no stuck timestamp)"
+        );
+    }
+
+    /// The interval-0 "fire once" clear lives in `tick` after the HB fires, NOT in
+    /// `bump_hb_schedule` — so received directed traffic (which resets the HB timer via
+    /// `on_event`) must NOT cancel a pending on-demand heartbeat before it has a chance to fire.
+    #[test]
+    fn inbound_traffic_does_not_cancel_a_pending_on_demand_heartbeat() {
+        let mut c = cfg();
+        c.hb_interval_min = 0; // on demand
+        c.autoreply = false; // keep the outbox empty for the HB
+        let mut s = Station::new(c);
+        s.set_hb(true, 0); // armed; hb_next_ms = Some(0), not yet fired
+                           // A directed message TO ME arrives first — `on_event` calls `bump_hb_schedule`.
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+            1000,
+        );
+        assert!(
+            s.hb_next_ms().is_some(),
+            "inbound traffic must not cancel the pending on-demand HB"
+        );
+        // …and the heartbeat still fires on the next tick.
+        s.tick(2000);
+        let mut fired = 0;
+        while let Some(f) = drain(&mut s, 2000) {
+            if f.origin == Origin::Heartbeat {
+                fired += 1;
+            }
+            s.note_tx_done(&f, 2000);
+        }
+        assert_eq!(
+            fired, 1,
+            "the on-demand heartbeat fires despite the inbound traffic"
         );
     }
 
