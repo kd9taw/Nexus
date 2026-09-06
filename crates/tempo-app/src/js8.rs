@@ -39,8 +39,6 @@ const JS8_LOW_CONF: f32 = 0.17;
 const JS8_SEEN_CAP: usize = 64;
 /// JS8Call's @ALLCALL reply cap: one reply per station per 15 minutes.
 const JS8_ALLCALL_INTERVAL_MS: u64 = 15 * 60 * 1000;
-/// The one refusal every transmit verb returns in the receive-only build.
-const JS8_RX_ONLY: &str = "JS8 transmit is not in this build yet — receive only";
 
 /// The SECOND act of the two-act rule, by origin: `Autoreply`/`Relay`/`HbAck` are the
 /// persisted switches, `Hb` is the session-only heartbeat schedule. Lowercase on the wire
@@ -487,24 +485,87 @@ impl Engine {
         }
     }
 
-    // ---- transmit verbs: REFUSING STUBS in the receive-only build (the TX batch replaces
-    // every body below; the signatures are the contract) ----
+    // ---- operator transmit verbs (each resets the idle counter and, on success, restarts
+    // the wall-clock watchdog; none arms TX — the TX latch is the operator's first act) ----
 
-    fn js8_refuse(&mut self) -> Result<(), String> {
-        self.js8_last_error = Some(JS8_RX_ONLY.to_string());
-        Err(JS8_RX_ONLY.to_string())
+    /// One operator-facing sentence per compose refusal. English at the engine (the
+    /// `structured_tx_ready` precedent); the cockpit shows `Js8State.last_error` verbatim.
+    fn js8_compose_error(e: ::js8::proto::compose::ComposeError) -> String {
+        use ::js8::proto::compose::ComposeError as E;
+        match e {
+            E::NoCallsign => "Set your callsign in Settings before transmitting JS8.".to_string(),
+            E::ForbiddenDestination => {
+                "JS8Call refuses @APRSIS and @JS8NET as destinations, and so does Nexus."
+                    .to_string()
+            }
+            E::Empty => "Nothing to send.".to_string(),
+            E::TooLong { frames, max } => format!(
+                "That message needs {frames} frames; the cap at this speed is {max} \
+                 (one message must stay under 10 minutes of airtime, §97.119). \
+                 Shorten it or send it in parts."
+            ),
+        }
     }
 
-    pub fn js8_send(&mut self, _to: Option<String>, _text: String) -> Result<(), String> {
-        self.js8_refuse()
+    /// Operator send: `to` is a callsign or @group (None = plain text, which compose
+    /// prefixes with "MYCALL: " — identity on the wire, spec invariant 10). An operator
+    /// verb: on success it restarts the wall-clock watchdog. Never arms TX.
+    pub fn js8_send(&mut self, to: Option<String>, text: String) -> Result<(), String> {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        let to_ref = match to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) => Some(
+                ::js8::proto::callsign::CallRef::parse(s)
+                    .ok_or_else(|| format!("{s} is not a callsign or @group JS8 can address"))?,
+            ),
+            None => None,
+        };
+        let r = self
+            .js8_station
+            .send(to_ref.as_ref(), text.trim(), now_ms)
+            .map(|_| ())
+            .map_err(Self::js8_compose_error);
+        self.js8_after_verb(&r);
+        r
     }
 
-    pub fn js8_send_command(&mut self, _to: String, _cmd: u8, _arg: String) -> Result<(), String> {
-        self.js8_refuse()
+    /// A directed command from the 32-entry palette (`cmd` = `Command::id`).
+    pub fn js8_send_command(&mut self, to: String, cmd: u8, arg: String) -> Result<(), String> {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        let to_ref = ::js8::proto::callsign::CallRef::parse(to.trim())
+            .ok_or_else(|| format!("{to} is not a callsign or @group JS8 can address"))?;
+        let command =
+            ::js8::Command::from_id(cmd).ok_or_else(|| format!("unknown JS8 command {cmd}"))?;
+        let r = self
+            .js8_station
+            .send_command(&to_ref, command, arg.trim(), now_ms)
+            .map(|_| ())
+            .map_err(Self::js8_compose_error);
+        self.js8_after_verb(&r);
+        r
     }
 
-    pub fn js8_call_cq(&mut self, _idx: u8) -> Result<(), String> {
-        self.js8_refuse()
+    /// CQ (`idx` into the CQS table: 0 "CQ CQ CQ" … 7 "CQ"). Counts as Operator origin.
+    pub fn js8_call_cq(&mut self, idx: u8) -> Result<(), String> {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        let r = self
+            .js8_station
+            .call_cq(idx, now_ms)
+            .map_err(Self::js8_compose_error);
+        self.js8_after_verb(&r);
+        r
+    }
+
+    /// What every operator verb does with its outcome: a success clears `last_error` and
+    /// restarts the wall-clock watchdog (an operator act); a refusal is kept for the
+    /// cockpit and touches no clock.
+    fn js8_after_verb(&mut self, r: &Result<(), String>) {
+        match r {
+            Ok(()) => {
+                self.js8_last_error = None;
+                self.reset_tx_watchdog();
+            }
+            Err(e) => self.js8_last_error = Some(e.clone()),
+        }
     }
 
     /// The SECOND operator act (the first is the session TX latch). Autoreply / Relay /

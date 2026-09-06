@@ -33263,10 +33263,12 @@ mod tests {
     /// the autoreply countdown of one period + 2 s.
     #[test]
     fn js8_station_config_applies_the_idle_floor_and_the_reply_countdown() {
-        let mut s = Settings::default();
-        s.mycall = "KD9TAW".to_string();
-        s.js8_speed = modes::Js8Speed::Slow.index();
-        s.js8_idle_watchdog_min = 3;
+        let mut s = Settings {
+            mycall: "KD9TAW".to_string(),
+            js8_speed: modes::Js8Speed::Slow.index(),
+            js8_idle_watchdog_min: 3,
+            ..Settings::default()
+        };
         let cfg = Engine::js8_station_config(&s);
         assert_eq!(cfg.idle_watchdog_min, 5, "floor 5");
         assert_eq!(cfg.reply_delay_ms, 30_000 + 2_000, "one Slow period + 2 s");
@@ -33418,12 +33420,344 @@ mod tests {
         );
     }
 
-    // NOTE: the remaining JS8 TX-planner tests all drive `js8_send` (B7.8) —
-    // js8_operator_frames_key_in_consecutive_periods_with_no_parity,
-    // js8_plans_at_most_one_frame_per_slot, the_wall_clock_watchdog_is_re_applied_to_js8_
-    // operator_traffic, js8_never_keys_outside_the_digital_operating_mode (B7.5's send half),
-    // js8_drop_queue_is_not_a_stop (B7.7), and B7.6's three halt tests — so they land with
-    // B7.8. Their bodies are frozen verbatim in task-B7.5/B7.6-report.md.
+    // ===== B7.5 planner tests (the send half — land at B7.8 with js8_send) =====
+
+    /// G1: every period is a TX slot. Two queued operator messages go out on CONSECUTIVE
+    /// slots — one even, one odd — which the FT parity gate would have split across four.
+    #[test]
+    fn js8_operator_frames_key_in_consecutive_periods_with_no_parity() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST ONE".to_string()).expect("queues");
+        e.js8_send(None, "TEST TWO".to_string()).expect("queues");
+        let s = js8_slot_now() + 1;
+        assert!(!e.poll_tx(s).is_empty(), "first period keys");
+        assert!(
+            !e.poll_tx(s + 1).is_empty(),
+            "the very next period keys too (no parity)"
+        );
+        assert!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .filter(|d| d.mine)
+                .count()
+                >= 2,
+            "both overs appear as own-TX rows"
+        );
+    }
+
+    /// One frame per period: a second poll inside the same slot (the snappy path, a re-plan)
+    /// must not pop the next frame and key it mid-period.
+    #[test]
+    fn js8_plans_at_most_one_frame_per_slot() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST ONE".to_string()).expect("queues");
+        e.js8_send(None, "TEST TWO".to_string()).expect("queues");
+        let s = js8_slot_now() + 1;
+        assert!(e.plan_tx(s).is_some(), "first poll of the slot plans");
+        assert!(
+            e.plan_tx(s).is_none(),
+            "second poll of the SAME slot plans nothing"
+        );
+        assert!(
+            e.plan_tx(s + 1).is_some(),
+            "the next slot plans the next frame"
+        );
+    }
+
+    /// Spec invariant 3: an operator frame planned after the limit elapsed trips exactly like
+    /// an FT8 over — disarm + one-shot abort + nothing keyed, nothing booked.
+    #[test]
+    fn the_wall_clock_watchdog_is_re_applied_to_js8_operator_traffic() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.tx_watchdog_min = 6;
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST".to_string()).expect("queues"); // an operator verb restarts the clock…
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999)); // …then pretend 6+ min passed
+        assert!(
+            e.poll_tx(js8_slot_now() + 1).is_empty(),
+            "tripped: nothing keys"
+        );
+        assert!(!e.tx_enabled(), "tripped: TX disarmed");
+        assert!(
+            e.tx_watchdog && e.slot_tx_abort,
+            "tripped: flagged + one-shot abort armed"
+        );
+        assert!(
+            !e.snapshot().recent_decodes.iter().any(|d| d.mine),
+            "nothing booked"
+        );
+    }
+
+    /// The route sits below every "do not transmit at all" guard: on a Phone operating mode
+    /// the JS8 planner is never reached, so nothing keys and nothing is booked.
+    #[test]
+    fn js8_never_keys_outside_the_digital_operating_mode() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.settings.operating_mode = crate::settings::OperatingMode::Phone;
+        assert!(e.poll_tx(js8_slot_now() + 1).is_empty());
+        assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+        assert!(
+            !e.js8_state().queue.is_empty(),
+            "the frame waits; it was not consumed"
+        );
+    }
+
+    // ===== B7.6 halt tests =====
+
+    /// Spec invariant 7 — halt is TOTAL: Stop TX drops the JS8 outbox, the pending autoreply
+    /// and the heartbeat schedule, on top of everything `halt_tx` already kills. A halt that
+    /// left a queued frame behind would key it the moment the operator re-armed.
+    #[test]
+    fn halt_tx_clears_the_js8_queue_heartbeat_and_pending_reply() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_send(
+            None,
+            "A LONG ENOUGH MESSAGE TO NEED SEVERAL FRAMES AT NORMAL SPEED".to_string(),
+        )
+        .expect("queues");
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
+        let st = e.js8_state();
+        assert!(
+            st.hb_on && !st.queue.is_empty() && st.pending_reply.is_some(),
+            "precondition"
+        );
+
+        e.halt_tx();
+        let st = e.js8_state();
+        assert!(!e.tx_enabled(), "halt disarms");
+        assert!(!st.hb_on, "halt cancels the HB schedule");
+        assert!(st.queue.is_empty(), "halt drops the outbox");
+        assert!(st.pending_reply.is_none(), "halt cancels the pending reply");
+        e.set_tx_enabled(true);
+        for s in js8_slot_now() + 1..js8_slot_now() + 5 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "re-arming after a halt keys nothing on slot {s}"
+            );
+        }
+    }
+
+    /// Leaving the tier cancels the HB schedule (risk register: a pending HB must not fire on
+    /// return) and empties the outbox; coming back is a clean slate.
+    #[test]
+    fn leaving_the_js8_tier_cancels_the_heartbeat_and_drops_the_queue() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.set_tier(Tier::Ft8);
+        assert!(
+            !e.js8_hb_on && !e.js8_station.hb_on(),
+            "HB schedule cancelled on the way out"
+        );
+        assert!(
+            e.js8_state().queue.is_empty(),
+            "outbox dropped on the way out"
+        );
+        e.set_tier(Tier::Js8);
+        e.set_tx_enabled(true);
+        for s in js8_slot_now() + 1..js8_slot_now() + 4 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "nothing left over keys on return, slot {s}"
+            );
+        }
+    }
+
+    /// `set_mode` clears the Tempo queues; it clears the JS8 ones too.
+    #[test]
+    fn set_mode_drops_the_js8_queue_and_heartbeat() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.set_mode("qso-monitor")
+            .expect("a passive spec is always accepted");
+        assert!(e.js8_state().queue.is_empty() && !e.js8_hb_on);
+    }
+
+    // ===== B7.7 sender-class control =====
+
+    /// Drop queue is a SENDER-class control (not a stop): the outbox goes, HB and TX stay.
+    #[test]
+    fn js8_drop_queue_is_not_a_stop() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.js8_drop_queue();
+        let st = e.js8_state();
+        assert!(st.queue.is_empty());
+        assert!(
+            st.hb_on && e.tx_enabled(),
+            "HB schedule and the TX latch survive a queue drop"
+        );
+    }
+
+    // ===== B7.8 operator-verb tests =====
+
+    /// §97.119 airtime cap (spec invariant 6): a message whose frames × period would exceed
+    /// ten minutes is REFUSED with the reason, not silently truncated or sent. Slow is the
+    /// tightest (19 frames × 30 s); the same text fits at Turbo (99 frames × 6 s).
+    #[test]
+    fn js8_refuses_a_message_over_the_airtime_cap_with_the_reason() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_speed = modes::Js8Speed::Slow.index();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        let long = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ".repeat(20);
+        let err = e.js8_send(None, long.clone()).expect_err("over the cap");
+        assert!(err.contains("10 minutes") && err.contains("19"), "{err}");
+        assert!(e.js8_state().queue.is_empty(), "nothing queued");
+        assert_eq!(e.js8_state().last_error.as_deref(), Some(err.as_str()));
+        assert_eq!(::js8::proto::compose::max_frames(modes::Js8Speed::Slow), 19);
+        // The cap is per speed: the same text fits comfortably at Turbo.
+        e.js8_set_speed(modes::Js8Speed::Turbo.index())
+            .expect("speed change");
+        assert!(e.js8_send(None, long).is_ok());
+        assert!(
+            e.js8_state().last_error.is_none(),
+            "a success clears the last error"
+        );
+    }
+
+    /// Only OPERATOR verbs restart the wall clock; an inbound query (an automatic reply) does not.
+    #[test]
+    fn js8_operator_verbs_restart_the_wall_clock_and_automatic_replies_do_not() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.tx_watchdog_start = Some(1);
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        assert_eq!(e.tx_watchdog_start, None, "js8_send restarts the clock");
+        e.tx_watchdog_start = Some(1);
+        e.js8_call_cq(0).expect("queues");
+        assert_eq!(e.tx_watchdog_start, None, "js8_call_cq restarts the clock");
+        e.tx_watchdog_start = Some(1);
+        e.js8_send_command(
+            "W1AW".to_string(),
+            ::js8::Command::SnrQuery.id(),
+            String::new(),
+        )
+        .expect("queues");
+        assert_eq!(
+            e.tx_watchdog_start, None,
+            "js8_send_command restarts the clock"
+        );
+        e.tx_watchdog_start = Some(1);
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
+        assert_eq!(
+            e.tx_watchdog_start,
+            Some(1),
+            "an inbound query is not an operator act"
+        );
+    }
+
+    /// Identity, fail-closed: with no callsign nothing is queued (compose refuses), and a
+    /// frame queued BEFORE the callsign was lost never plans — `structured_tx_ready(false)`
+    /// refuses at plan time.
+    #[test]
+    fn js8_never_keys_without_a_callsign() {
+        let mut blank = Engine::new("", "EN52", 0);
+        blank.js8_enter();
+        blank.set_tx_enabled(true);
+        assert!(
+            blank.js8_send(None, "TEST".to_string()).is_err(),
+            "compose refuses NoCallsign"
+        );
+        assert!(blank.js8_state().queue.is_empty());
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.settings.mycall = String::new(); // identity lost between queue and plan
+        for s in js8_slot_now() + 1..js8_slot_now() + 3 {
+            assert!(
+                e.plan_tx(s).is_none(),
+                "the identity gate refuses on slot {s}"
+            );
+        }
+    }
+
+    /// `chat_mode_at_ft8_tier_stays_silent`'s JS8 analogue: Mode::Chat is the boot state and
+    /// a legitimate resting state at Tier::Js8; it must stay inert there — no Tempo frame, no
+    /// ACK drain, nothing keyed, no own row.
+    #[test]
+    fn chat_mode_resting_at_js8_tier_keys_nothing_and_drains_no_tempo_ack() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter(); // boot mode is Chat; the tier is JS8
+        assert!(
+            matches!(e.mode, Mode::Chat),
+            "precondition: resting in Chat"
+        );
+        e.set_tx_enabled(true);
+        for s in js8_slot_now()..js8_slot_now() + 8 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "Chat+JS8 with nothing queued keyed on slot {s}"
+            );
+        }
+        assert!(
+            e.broadcast_queue.is_empty(),
+            "no Tempo ACK was queued on a JS8 dial"
+        );
+        assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+    }
+
+    /// `commit_tx`'s stale-plan refusal applies to JS8 unchanged (spec invariant 5): tier
+    /// moved, slot rolled over, Stop TX between plan and commit — each refuses on its own.
+    #[test]
+    fn commit_tx_refuses_a_stale_js8_plan() {
+        let mk = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.js8_enter();
+            e.set_tx_enabled(true);
+            e.js8_call_cq(0).expect("queues");
+            let plan = e.plan_tx(js8_slot_now() + 1).expect("plans");
+            let wave = plan.waveform.build();
+            assert!(!wave.is_empty());
+            (e, plan, wave)
+        };
+        let (mut e, plan, wave) = mk();
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot + 1).is_empty(),
+            "slot rollover refuses"
+        );
+        let (mut e, plan, wave) = mk();
+        e.set_tier(Tier::Ft8);
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "tier change refuses"
+        );
+        let (mut e, plan, wave) = mk();
+        e.halt_tx();
+        e.set_tx_enabled(true);
+        assert!(
+            e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "Stop TX between plan and commit refuses"
+        );
+        let (mut e, plan, wave) = mk();
+        assert!(
+            !e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "control: an unchanged plan commits"
+        );
+    }
 
     /// One decoded packet, ready to push. `raw` doubles as the payload text so two calls with
     /// different `raw` are genuinely different packets.
