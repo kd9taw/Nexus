@@ -10,8 +10,10 @@ pub mod bits;
 pub mod callsign;
 pub mod command;
 pub mod crc16;
+pub mod frame;
 pub mod grid;
 pub mod huffman;
 pub mod jsc;
 
 pub use command::Command;
+pub use frame::{decode_word, encode_frame, Frame, FrameError, FrameType};
