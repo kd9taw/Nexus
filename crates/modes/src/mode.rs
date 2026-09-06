@@ -82,8 +82,8 @@ pub enum ModeKind {
     /// 4 s, which already "carries no slack at all".
     Ft2,
     /// **JS8** (JS8Call-compatible, `crates/js8`) — keyboard-to-keyboard over an FT8-class
-    /// physical layer. **RECEIVE-ONLY in this build** (see [`Capabilities::tx`]); the TX
-    /// batch flips it.
+    /// physical layer. **Transmit-capable since B7 (operator gate G1)**: the engine's
+    /// tier-routed planner is the only TX path; the encoder here serves the lab.
     ///
     /// Carries its speed for the same reason FST4/Q65 carry a period: the T/R period is
     /// 30/15/10/6 s and the decode window is `speed.frames_needed()` samples, so both
@@ -1125,11 +1125,12 @@ mod tx_capability_tests {
     /// FST4W) once the transmit-percentage scheduler existed, then MSK144, then
     /// JT65. Beacons are `tx: true` AND `beacon_only: true` — transmit-capable, but
     /// never handed to the QSO sequencer.
-    fn rx_only(kind: ModeKind) -> bool {
-        // JS8 is the ONE receive-only mode in this build: the modem and message layer are
-        // in, the operator-gated TX batch is not. Listing it here is the deliberate act the
-        // two-sided test below demands; the TX batch removes it together with `tx: false`.
-        matches!(kind, ModeKind::Js8 { .. })
+    fn rx_only(_kind: ModeKind) -> bool {
+        // EMPTY — every shipped mode transmits. JS8 was listed here between B5 and B7
+        // (receive-only staging); JT65 in 0.19.17 alone. Kept as a predicate, not
+        // deleted: it is the deliberate act that makes the next receive-only mode
+        // silent, and the two-sided test below enforces it.
+        false
     }
 
     #[test]
@@ -1353,10 +1354,10 @@ mod tx_capability_tests {
     }
 
     #[test]
-    fn js8_registers_as_a_parametric_receive_only_kind() {
-        // ⭐ B5 SHIPS JS8 RECEIVE-ONLY. `tx: false` is the whole safety story of this
-        // batch: `tx_mode` refuses the kind, so the engine's `tier_is_rx_only` refuses
-        // to arm the latch, and no encoder path exists for the radio loop to reach.
+    fn js8_registers_as_a_parametric_kind() {
+        // ⭐ B7 (operator gate G1) makes JS8 transmit-capable: `tx_mode` now hands back a
+        // Mode at every speed, so the engine's `tier_is_rx_only` no longer refuses to arm
+        // the latch. The parametric registration (one name, four speeds) is unchanged.
         for speed in Js8Speed::ALL {
             let kind = ModeKind::Js8 { speed };
             let m = make_mode(kind);
@@ -1374,12 +1375,8 @@ mod tx_capability_tests {
             );
             assert_eq!(m.passband(), (100.0, 4000.0));
             let caps = m.capabilities();
-            assert!(
-                !caps.tx,
-                "{}: receive-only until the TX batch",
-                kind.as_str()
-            );
-            assert!(tx_mode(kind).is_none());
+            assert!(caps.tx, "{}: transmit-capable since B7", kind.as_str());
+            assert!(tx_mode(kind).is_some());
             assert!(caps.free_text && caps.structured_identity && caps.early_decode);
             assert!(!caps.beacon_only && !caps.split_reduce && !caps.fox_hound && !caps.contest);
         }
@@ -1392,6 +1389,19 @@ mod tx_capability_tests {
         assert_eq!(ModeKind::js8_all().count(), 4);
         assert_eq!(ModeKind::ALL.len(), 10);
         assert!(ModeKind::ALL.contains(&ModeKind::JS8_NORMAL));
+    }
+
+    /// B7 flips JS8 from receive-only to transmit-capable: `tx_mode` must now hand back a
+    /// Mode at every speed (the engine's `tier_is_rx_only` reads this and refuses arming
+    /// while it is None). `structured_identity` stays TRUE — fail-closed identity gate.
+    #[test]
+    fn js8_mode_is_transmit_capable_at_every_speed_and_keeps_the_identity_gate() {
+        for kind in ModeKind::js8_all() {
+            let m = tx_mode(kind).unwrap_or_else(|| panic!("{kind:?} must be tx-capable"));
+            let caps = m.capabilities();
+            assert!(caps.tx && caps.free_text && caps.structured_identity && caps.early_decode);
+            assert!(!caps.beacon_only && !caps.split_reduce && !caps.fox_hound && !caps.contest);
+        }
     }
 
     #[test]
@@ -2024,10 +2034,8 @@ impl Mode for WsprMode {
 }
 
 /// **JS8** (JS8Call-compatible) — the pure-Rust modem in `crates/js8`, one instance per
-/// speed. **RECEIVE-ONLY in this build**: `tx` is false until the operator-gated TX batch,
-/// so [`tx_mode`] refuses it and the engine refuses to arm the latch at its tier. The
-/// encoder and waveform exist for the lab (`encode_wav_js8`) and for `tx_mode`
-/// consistency only; nothing in the radio loop can reach them while `tx` is false.
+/// speed. **Transmit-capable since B7 (operator gate G1)**: the engine's tier-routed
+/// planner is the only TX path; the encoder here serves the lab.
 ///
 /// `structured_identity: true` — the FAIL-CLOSED default kept deliberately (judge.md ruling):
 /// JS8 frames carry the callsign, so a blank MYCALL must refuse to build a frame; the JS8
@@ -2053,14 +2061,16 @@ impl Mode for Js8Mode {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            // ⭐ RECEIVE-ONLY (B5). The TX batch flips this ONE flag together with the
-            // tier-routed planner; nothing else in this impl changes.
-            tx: false,
+            // B7 (operator gate G1 re-confirmed): JS8 transmits. Until B7 this was
+            // `false` so the receive-only tier could not be armed by construction.
+            tx: true,
             fox_hound: false,
             ir_harq: false,
             free_text: true,
             beacon_only: false,
             contest: false,
+            // FAIL-CLOSED identity gate: `plan_js8_tx` calls `structured_tx_ready(false)`
+            // itself and `proto::compose` refuses a non-packable MYCALL on top of it.
             structured_identity: true,
             early_decode: true,
             split_reduce: false,

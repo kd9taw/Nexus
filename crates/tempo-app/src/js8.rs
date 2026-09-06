@@ -93,6 +93,13 @@ impl Engine {
         }
     }
 
+    /// The speed the station TRANSMITS at: the persisted `js8_speed` index, degraded to
+    /// Normal on a stale or hand-edited value — the same degrade-don't-refuse rule
+    /// `Tier::js8_kind` applies to the decoder, so TX and RX can never disagree.
+    pub(crate) fn js8_tx_speed(&self) -> modes::Js8Speed {
+        modes::Js8Speed::from_index(self.settings().js8_speed).unwrap_or(modes::Js8Speed::Normal)
+    }
+
     /// Push the current Settings into the station. Called by `apply_settings`, by every
     /// speed/mask change and by `js8_enter`.
     pub(crate) fn js8_apply_station_config(&mut self) {

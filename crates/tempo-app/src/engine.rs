@@ -10715,15 +10715,12 @@ impl Engine {
             Tier::Msk144 => f64::from(self.settings.msk144_period_s),
             Tier::Jt65 => 60.0,
             Tier::Wspr => 120.0,
-            // JS8 = start delay + 79 symbols at the TRANSMIT speed: 25.78 / 13.14 / 8.10 /
-            // 4.05 s in 30 / 15 / 10 / 6 s periods — read from the crate (`slot_fit_s`), the
-            // same value the per-speed slot-fit test pins. Receive-only in this build, so a
-            // fit check can never be consulted; the value is nonetheless the true airtime so
-            // the TX batch inherits a correct table rather than a placeholder.
-            Tier::Js8 => match self.tier_mode_kind(Tier::Js8) {
-                Some(modes::ModeKind::Js8 { speed }) => f64::from(speed.slot_fit_s()),
-                _ => 30.0,
-            },
+            // JS8 = start delay + 79 symbols at the TX speed (25.78 / 13.14 / 8.10 /
+            // 4.05 s in 30 / 15 / 10 / 6 s periods). The REAL wave length, like FT2 —
+            // there is no trailing pad in `js8::phy::modulate`'s buffer. `js8_tx_speed`
+            // reads `Settings::js8_speed` and degrades a stale index to Normal, so this
+            // value never disagrees with the decoder.
+            Tier::Js8 => f64::from(self.js8_tx_speed().slot_fit_s()),
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
             // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
             // generated buffer also carries ~1.0 s of TRAILING silence — that is
@@ -32887,6 +32884,37 @@ mod tests {
                 speed.slot_fit_s()
             );
         }
+    }
+
+    /// The per-tier over-length table feeds the "over longer than the whole watchdog limit"
+    /// refusal and the snappy-first-over room check. JS8's value is the REAL wave length per
+    /// speed (`Speed::slot_fit_s`: 25.78 / 13.14 / 8.10 / 4.05 s), always under its period.
+    #[test]
+    fn tx_over_secs_at_js8_is_the_slot_fit_length_of_the_tx_speed() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        for speed in modes::Js8Speed::ALL {
+            e.settings.js8_speed = speed.index();
+            let secs = e.tx_over_secs();
+            assert!(
+                (secs - f64::from(speed.slot_fit_s())).abs() < 1e-3,
+                "{speed:?}: {secs} != slot_fit_s"
+            );
+            assert!(secs < f64::from(speed.period_s()), "{speed:?} fits its period");
+        }
+        // A stale settings index degrades to Normal, never refuses (Tier::js8_kind's rule).
+        e.settings.js8_speed = 200;
+        assert!((e.tx_over_secs() - f64::from(modes::Js8Speed::Normal.slot_fit_s())).abs() < 1e-3);
+    }
+
+    /// The other half of B7.3: the TX latch can now be armed on the tier (B5's
+    /// `tier_is_rx_only` refusal retires with `tx: false`).
+    #[test]
+    fn the_tx_latch_arms_on_the_js8_tier_once_the_mode_declares_tx() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        e.set_tx_enabled(true);
+        assert!(e.tx_enabled(), "JS8 is no longer receive-only");
     }
 
     /// One decoded packet, ready to push. `raw` doubles as the payload text so two calls with
