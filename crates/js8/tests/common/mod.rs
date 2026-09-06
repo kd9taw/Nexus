@@ -136,3 +136,188 @@ pub fn verify_fixture_pins() -> Vec<(String, PathBuf)> {
     assert!(!verified.is_empty(), "SHA256SUMS lists no fixtures");
     verified
 }
+
+/// Deterministic LCG + Box–Muller (crates/ft8/tests/decode_parity.rs:31-47).
+pub struct Rng(pub u64);
+impl Rng {
+    pub fn next_f64(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((self.0 >> 11) as f64) / ((1u64 << 53) as f64)
+    }
+    pub fn gauss(&mut self) -> f32 {
+        let u1 = (self.next_f64() + 1e-12).min(1.0);
+        let u2 = self.next_f64();
+        ((-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()) as f32
+    }
+}
+
+/// A slot-positioned wave into a `period_s × 12000` PCM-16 buffer. `snr_db` = WSJT-X's
+/// 2500 Hz convention in the FT8 harness's arithmetic (unit-variance noise ×100, signal
+/// amplitude sqrt(2·2500/6000)·10^(snr/20)); `None` = clean, peak 8000.
+pub fn place_in_period(
+    wave: &[f32],
+    speed: js8::phy::Speed,
+    snr_db: Option<f32>,
+    seed: u64,
+) -> Vec<i16> {
+    let slot_len = speed.period_s() as usize * 12_000;
+    let mut buf = vec![0f32; slot_len];
+    let n = wave.len().min(slot_len);
+    buf[..n].copy_from_slice(&wave[..n]);
+    match snr_db {
+        Some(snr) => {
+            let sig = (2.0f32 * 2500.0 / 6000.0).sqrt() * 10f32.powf(0.05 * snr);
+            let mut rng = Rng(seed);
+            buf.iter()
+                .map(|&s| (((sig * s + rng.gauss()) * 100.0).clamp(-32768.0, 32767.0)) as i16)
+                .collect()
+        }
+        None => {
+            let peak = buf.iter().fold(0f32, |m, &x| m.max(x.abs())).max(1e-9);
+            buf.iter().map(|&x| (x * 8000.0 / peak) as i16).collect()
+        }
+    }
+}
+
+/// Mono PCM-16 RIFF writer — the layout of tempo_core::wavfile::write_wav_i16 (wavfile.rs:25-47),
+/// re-stated here because crates/js8 cannot depend on tempo-core.
+pub fn write_wav_i16(path: &Path, samples: &[i16], sample_rate: u32) {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + data_len as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes()); // block align
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits/sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for &s in samples {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    std::fs::write(path, out).expect("write wav");
+}
+
+/// One decode line of the stock CLI (lib/decoder.f90 js8_decoded, format
+/// `(i6.6,i4,f5.1,i5,a3,1x,a22,1x,a2)`): `NNNNNN SNR DT FREQ L <12 sixbit>         <i3>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StockDecode {
+    pub snr_db: i32,
+    pub dt_s: f32,
+    pub freq_hz: i32,
+    pub letter: char,
+    pub sixbit: String,
+    pub i3: u8,
+}
+
+/// `JS8_STOCK_BIN` when it names an executable file; None otherwise. The caller decides
+/// whether None is "ignored" (default run) or a panic (`--ignored` run).
+pub fn stock_js8_bin() -> Option<PathBuf> {
+    let p = PathBuf::from(std::env::var_os("JS8_STOCK_BIN")?);
+    let meta = std::fs::metadata(&p).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 == 0 {
+            return None;
+        }
+    }
+    Some(p)
+}
+
+/// `js8 -8 -b <letter> -d <depth> <wav>` with cwd = the WAV's directory (the CLI writes
+/// jt9_wisdom.dat + timer.out into cwd). One process per file (paritylab rule). Returns the
+/// parsed decode lines and the `<DecodeFinished>` count. Panics on a non-zero exit or a
+/// missing `<DecodeFinished>` line — a crashed oracle is never "zero decodes".
+pub fn run_stock_js8(bin: &Path, letter: char, depth: u8, wav: &Path) -> (Vec<StockDecode>, usize) {
+    let out = std::process::Command::new(bin)
+        .args(["-8", "-b", &letter.to_string(), "-d", &depth.to_string()])
+        .arg(wav)
+        .current_dir(wav.parent().expect("wav has a parent dir"))
+        .output()
+        .unwrap_or_else(|e| panic!("cannot run {}: {e}", bin.display()));
+    assert!(
+        out.status.success(),
+        "stock js8 exited {:?} on {}\nstdout:\n{}\nstderr:\n{}",
+        out.status.code(),
+        wav.display(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut decodes = Vec::new();
+    let mut finished = None;
+    for line in stdout.lines() {
+        // Fortran list-directed `write(*,*)` lines (` <DecodeDebug> …`, ` EOF on input file …`)
+        // carry a leading space; the formatted ones (`<DecodeStarted>`, `<DecodeFinished>`,
+        // the decode lines) do not. Trim before classifying.
+        let line = line.trim_start();
+        if let Some(rest) = line.strip_prefix("<DecodeFinished>") {
+            finished = rest.trim().parse::<usize>().ok();
+            continue;
+        }
+        if line.starts_with('<') || line.starts_with("EOF on input file") || line.is_empty() {
+            continue; // <DecodeStarted>, <DecodeDebug> …, the short-file EOF notice
+        }
+        if let Some(d) = parse_stock_line(line) {
+            decodes.push(d);
+        }
+    }
+    let finished = finished.unwrap_or_else(|| panic!("no <DecodeFinished> line in:\n{stdout}"));
+    (decodes, finished)
+}
+
+/// Tokens: nutc snr dt freq letter sixbit i3 [annot]. The 22-char field prints as the twelve
+/// sixbit chars, nine spaces, and the i3 digit — whitespace-split keeps them apart. `nutc`
+/// prints as `******` when the WAV name has no 6-digit UTC, so accept a 6-char token that is
+/// all digits OR all `*`.
+pub fn parse_stock_line(line: &str) -> Option<StockDecode> {
+    let t: Vec<&str> = line.split_whitespace().collect();
+    if t.len() < 7 || t[0].len() != 6 || !t[0].bytes().all(|b| b.is_ascii_digit() || b == b'*') {
+        return None;
+    }
+    let letter = t[4].chars().next()?;
+    if t[4].len() != 1 || t[5].len() != 12 || t[6].len() != 1 {
+        return None;
+    }
+    Some(StockDecode {
+        snr_db: t[1].parse().ok()?,
+        dt_s: t[2].parse().ok()?,
+        freq_hz: t[3].parse().ok()?,
+        letter,
+        sixbit: t[5].to_string(),
+        i3: t[6].parse().ok()?,
+    })
+}
+
+#[test]
+fn stock_line_parser_reads_the_fortran_format() {
+    let d = parse_stock_line("000000  10  0.0 1500 A  KD9TAWabcxyz         3   ").unwrap();
+    assert_eq!(
+        d,
+        StockDecode {
+            snr_db: 10,
+            dt_s: 0.0,
+            freq_hz: 1500,
+            letter: 'A',
+            sixbit: "KD9TAWabcxyz".into(),
+            i3: 3
+        }
+    );
+    assert!(parse_stock_line("<DecodeFinished>   1").is_none());
+    assert!(parse_stock_line(" <DecodeDebug> mode A decode started").is_none());
+    assert!(parse_stock_line("000000 -24 -0.3  812 E  -+-+-+-+-+-+         7   ").is_some());
+    // nutc overflow prints ******; the parser must still read the decode.
+    assert!(parse_stock_line("******  -6 -0.0 1500 C  -+-+-+-+-+-+         7   ").is_some());
+}
