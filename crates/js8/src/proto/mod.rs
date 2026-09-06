@@ -4,3 +4,7 @@
 //! wire layouts (varicode.cpp read as the spec). B1 lands the primitives (`bits`, `alphabet`,
 //! `crc16`, `grid`, `callsign`, `command`); B4 lands `frame`, `huffman`, `jsc`, `compose`,
 //! `reassembly`, `station`.
+
+pub mod alphabet;
+pub mod bits;
+pub mod crc16;

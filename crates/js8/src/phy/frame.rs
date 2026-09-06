@@ -422,4 +422,20 @@ mod tests {
         );
         assert_eq!(Word87::from_lab("0123456789AB x"), None, "i3 not a number");
     }
+
+    /// The drift guard team-lead required after B1.2's `phy::frame` doc comment claimed a
+    /// hand-mirrored copy was "independently tested" with nothing actually enforcing it: a
+    /// comment is not a guard. `phy` cannot depend on `proto` (module direction), so
+    /// `SIXBIT_CHARS` here and `proto::alphabet::SIXBIT` (Task B1.8, JS8.cpp:849-892's same
+    /// 64-character alphabet) are two copies by construction — this test is what keeps them
+    /// byte-identical instead of a comment's word.
+    #[test]
+    fn sixbit_chars_matches_proto_alphabet_sixbit_byte_for_byte() {
+        assert_eq!(
+            SIXBIT_CHARS,
+            crate::proto::alphabet::SIXBIT,
+            "phy::frame::SIXBIT_CHARS has drifted from proto::alphabet::SIXBIT — fix whichever \
+             one no longer matches JS8.cpp:849-892"
+        );
+    }
 }
