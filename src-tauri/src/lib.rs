@@ -10270,8 +10270,9 @@ fn js8_call_cq(
     Ok(eng.js8_state())
 }
 
-/// The SECOND act of the two-act rule (autoreply | relay | hback persisted; hb session-only).
-/// Refused here: nothing can act on it yet.
+/// The two-act arm's SECOND act. Autoreply / relay / HB-ack are persisted (JS8Call keeps them
+/// across sessions too); HB is session-only by design and is never written to disk. Neither
+/// arms TX — the TX latch is the first act and only the operator's TX button supplies it.
 #[tauri::command(async)]
 fn js8_arm(
     state: State<'_, SharedEngine>,
@@ -10280,6 +10281,11 @@ fn js8_arm(
 ) -> Result<tempo_app::dto::Js8State, String> {
     let mut eng = engine_lock(&state);
     eng.js8_arm(which, on)?;
+    if which != tempo_app::engine::js8::Js8Switch::Hb {
+        if let Err(e) = eng.settings().save(&settings_path()) {
+            eprintln!("tempo: failed to persist JS8 switch: {e}");
+        }
+    }
     Ok(eng.js8_state())
 }
 

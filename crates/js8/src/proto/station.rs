@@ -985,7 +985,13 @@ impl Station {
         self.hb_next_ms = None;
     }
 
-    fn mark_active(&mut self, now_ms: u64) {
+    /// Reset the idle-watchdog baseline to `now_ms` (and clear any standing trip). Called
+    /// internally by every operator send, and PUBLICLY by the engine when the operator
+    /// ENTERS the tier: a freshly built `Station` has `last_activity_ms == 0`, so without a
+    /// baseline the first `tick` at a real wall clock would read the station as decades idle
+    /// and trip the watchdog on the operator's first decode. Entering the view is the
+    /// session start; the idle clock counts from there.
+    pub fn mark_active(&mut self, now_ms: u64) {
         self.last_activity_ms = now_ms;
         if self.idle_tripped {
             self.idle_tripped = false; // an operator verb clears the trip

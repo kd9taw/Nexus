@@ -19179,6 +19179,7 @@ mod tests {
         );
     }
     use super::*;
+    use crate::engine::js8::Js8Switch;
     use modes::Decode;
     // The station owns every write to the shared log now (`StationCore::append_to_log`),
     // so the only code left reaching `Logbook` directly is the concurrency guards,
@@ -33143,17 +33144,286 @@ mod tests {
         assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
     }
 
-    // NOTE (checkpoint): the remaining B7.5 planner tests — js8_operator_frames_key_in_
-    // consecutive_periods_with_no_parity, js8_plans_at_most_one_frame_per_slot,
-    // js8_heartbeat_lands_in_the_hb_subband_and_moves_nothing_else,
-    // the_wall_clock_watchdog_is_re_applied_to_js8_operator_traffic,
-    // a_js8_heartbeat_is_exempt_from_the_wall_clock_watchdog and
-    // js8_never_keys_outside_the_digital_operating_mode — drive the planner through js8_send
-    // (B7.8) and js8_arm's HB body (B7.7), which are still refusing stubs at this checkpoint.
-    // Their source is verbatim in the plan; they land with B7.7/B7.8 (as the plan already
-    // defers its two HB tests to B7.7 Step 6). plan_js8_tx itself is proven here by a
-    // positive control that seeds the station through the B4 API (Station::send /
-    // heartbeat_now) — the exact calls those verbs will wrap.
+    /// A JS8 decode as `process_decodes` would deliver it: the rendered line in `message`,
+    /// the 11 word bytes in `raw`, the speed in `mode`. Built through the real frame codec.
+    pub(super) fn js8_decode(frame: &::js8::Frame) -> modes::Decode {
+        let word = ::js8::proto::frame::encode_frame(
+            frame,
+            ::js8::I3 {
+                first: true,
+                last: true,
+                data: false,
+            },
+            modes::Js8Speed::Normal,
+        )
+        .expect("test frame packs");
+        modes::Decode {
+            message: frame.render(),
+            sync: 10.0,
+            snr: -5,
+            dt: 0.1,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            mode: Some(modes::ModeKind::JS8_NORMAL),
+            raw: Some(*word.as_bytes()),
+        }
+    }
+
+    /// `<call>: KD9TAW SNR?` — a directed query the station autoreplies to (cmd 0 is in the
+    /// autoreply set) when, and only when, both operator acts are present.
+    pub(super) fn js8_snr_query_from(call: &str) -> modes::Decode {
+        use ::js8::proto::callsign::CallRef;
+        js8_decode(&::js8::Frame::Directed {
+            from: CallRef::Base(call.to_string()),
+            to: CallRef::Base("KD9TAW".to_string()),
+            cmd: ::js8::Command::SnrQuery,
+            num: None,
+            portable_from: false,
+            portable_to: false,
+        })
+    }
+
+    /// Spec invariant 9 + G2: a heartbeat's f0 is a random free 50 Hz slot in 500–1000 Hz,
+    /// chosen for the PLAN only — the operator's TX offset and the dial never move — and the
+    /// plan is flagged `beacon` so `commit_tx` applies the (approved) watchdog exemption.
+    #[test]
+    fn js8_heartbeat_lands_in_the_hb_subband_and_moves_nothing_else() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_frequency(14.078, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("session HB toggle");
+        // The audio service ticks the engine once a second at Tier::Js8 (service.rs); that
+        // tick is what moves a due heartbeat from the schedule into the station outbox, so
+        // the test mirrors it before polling. `js8_arm` only SCHEDULES the HB (set_hb).
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64);
+        let plan = e
+            .plan_tx(js8_slot_now() + 1)
+            .expect("an armed HB plans an over");
+        assert!(plan.beacon, "HB rides plan.beacon (G2)");
+        let TxWaveform::Js8 { f0, speed, .. } = &plan.waveform else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert!(
+            (500.0..=1000.0).contains(f0),
+            "HB f0 {f0} outside the 500–1000 Hz sub-band"
+        );
+        assert_eq!(*f0 % 50.0, 0.0, "a 50 Hz slot");
+        assert_eq!(*speed, modes::Js8Speed::Normal);
+        assert_eq!(
+            e.tx_offset_hz(),
+            1500.0,
+            "the operator's offset is untouched"
+        );
+        assert!(
+            (e.settings.dial_mhz - 14.078).abs() < 1e-6,
+            "the dial is untouched"
+        );
+        let wave = plan.waveform.build();
+        assert!(
+            !e.commit_tx(&plan, wave, plan.slot).is_empty(),
+            "…and it keys"
+        );
+        assert!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .any(|d| d.mine && d.message.contains("HEARTBEAT")),
+            "own-TX row booked"
+        );
+    }
+
+    /// G2: a HEARTBEAT is exempt from the wall clock (it rides `plan.beacon`), and stays
+    /// bounded by its slot (`slot_fit_s` < period) and the idle watchdog (B7.7).
+    #[test]
+    fn a_js8_heartbeat_is_exempt_from_the_wall_clock_watchdog() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.tx_watchdog_min = 6;
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        // Enqueue the due HB the way the once-a-second service tick does (js8_arm only
+        // schedules it), then age the wall clock and confirm the HB still keys.
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64);
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        let waves = e.poll_tx(js8_slot_now() + 1);
+        assert!(
+            !waves.is_empty(),
+            "the heartbeat keys despite the elapsed wall clock"
+        );
+        assert!(e.tx_enabled() && !e.tx_watchdog, "…and trips nothing");
+        assert!(waves[0].len() < 15 * 12_000, "bounded by its period");
+    }
+
+    /// B5's config builder is the ONE settings → station seam; B7 depends on two of its
+    /// numbers: the idle-watchdog floor of 5 minutes (JS8Call's minimum; 0 stays "off") and
+    /// the autoreply countdown of one period + 2 s.
+    #[test]
+    fn js8_station_config_applies_the_idle_floor_and_the_reply_countdown() {
+        let mut s = Settings::default();
+        s.mycall = "KD9TAW".to_string();
+        s.js8_speed = modes::Js8Speed::Slow.index();
+        s.js8_idle_watchdog_min = 3;
+        let cfg = Engine::js8_station_config(&s);
+        assert_eq!(cfg.idle_watchdog_min, 5, "floor 5");
+        assert_eq!(cfg.reply_delay_ms, 30_000 + 2_000, "one Slow period + 2 s");
+        assert_eq!(cfg.allcall_reply_interval_ms, 15 * 60 * 1000);
+        s.js8_idle_watchdog_min = 0;
+        assert_eq!(
+            Engine::js8_station_config(&s).idle_watchdog_min,
+            0,
+            "0 = off survives the floor"
+        );
+    }
+
+    /// THE PIN (risk register): if a future change persists `tx_enabled`, autoreply ON — the
+    /// G3 default — would key on launch. At launch the latch is down; a query still gets a
+    /// visible countdown ("would have replied"), never a frame; the expired countdown is
+    /// CANCELLED, so arming TX later cannot fire a stale reply.
+    #[test]
+    fn js8_autoreply_never_keys_at_launch() {
+        let mut e = Engine::with_settings(Settings {
+            mycall: "KD9TAW".to_string(),
+            mygrid: "EN52".to_string(),
+            js8_autoreply: true, // the G3 default, spelled out
+            js8_relay: true,
+            ..Settings::default()
+        });
+        e.js8_enter();
+        assert!(!e.tx_enabled(), "launch is listen-only");
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        let st = e.js8_state();
+        assert!(
+            st.pending_reply.is_some(),
+            "the station still computes the reply (shown, not sent)"
+        );
+        assert!(!st.armed.autoreply, "…and reports it as NOT armed");
+        for s in s0..s0 + 4 {
+            assert!(e.poll_tx(s).is_empty(), "nothing keys on slot {s}");
+        }
+        assert!(!e.tx_enabled());
+        // The countdown expires while the latch is down → cancelled, never carried.
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 120_000);
+        assert!(
+            e.js8_state().pending_reply.is_none(),
+            "an expired unarmed reply is cancelled"
+        );
+        e.set_tx_enabled(true);
+        for s in s0 + 4..s0 + 8 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "arming later must not fire the stale reply"
+            );
+        }
+    }
+
+    /// Act 2 without act 1: the persisted switch alone is silent.
+    #[test]
+    fn a_js8_switch_without_the_tx_latch_is_silent() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_arm(Js8Switch::Autoreply, true).expect("switch");
+        e.js8_arm(Js8Switch::Relay, true).expect("switch");
+        e.js8_arm(Js8Switch::HbAck, true).expect("switch");
+        assert!(!e.tx_enabled(), "a switch never arms TX by itself");
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        for s in s0..s0 + 6 {
+            assert!(e.poll_tx(s).is_empty());
+        }
+    }
+
+    /// Both acts: EXACTLY ONE reply, after the countdown (one period + 2 s), never a second.
+    #[test]
+    fn both_acts_present_yield_exactly_one_reply_after_the_countdown() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true); // act 1 (session)
+        assert!(
+            e.settings.js8_autoreply,
+            "act 2 is the persisted default (G3)"
+        );
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        let pending = e.js8_state().pending_reply.expect("a countdown is shown");
+        assert!(pending.display.contains("W1AW SNR"), "{}", pending.display);
+        assert!(e.js8_state().armed.autoreply);
+        let keyed: Vec<u64> = (s0..s0 + 6).filter(|&s| !e.poll_tx(s).is_empty()).collect();
+        assert_eq!(keyed.len(), 1, "exactly one reply: keyed on {keyed:?}");
+        assert!(
+            keyed[0] >= s0 + 2,
+            "…and only after the countdown (keyed on {})",
+            keyed[0]
+        );
+        assert!(e.js8_state().pending_reply.is_none());
+        assert!(e
+            .snapshot()
+            .recent_decodes
+            .iter()
+            .any(|d| d.mine && d.message.contains("W1AW SNR")));
+    }
+
+    /// Cancel is the operator's veto on the countdown.
+    #[test]
+    fn js8_cancel_stops_a_pending_reply() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        assert!(e.js8_state().pending_reply.is_some());
+        e.js8_cancel();
+        assert!(e.js8_state().pending_reply.is_none());
+        for s in s0..s0 + 6 {
+            assert!(e.poll_tx(s).is_empty());
+        }
+    }
+
+    /// JS8Call parity: the 60-min idle watchdog stands HB/autoreply/relay down and drops the
+    /// queues; `tx_enabled` is UNTOUCHED (it is the operator's latch, not the station's); the
+    /// persisted switches are not rewritten — `Js8Armed` reads `!idle_tripped`; any operator
+    /// verb (here: re-checking a switch) clears the trip.
+    #[test]
+    fn the_idle_watchdog_stands_the_automatic_origins_down_but_leaves_tx_armed() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        for minute in 1..=61u64 {
+            e.js8_tick(base + minute * 60_000);
+        }
+        let st = e.js8_state();
+        assert!(st.idle_tripped, "61 idle minutes trip the 60-min watchdog");
+        assert!(!st.hb_on && !st.armed.hb && !st.armed.autoreply && !st.armed.relay);
+        assert!(e.tx_enabled(), "tx_enabled untouched (JS8Call semantics)");
+        assert!(
+            e.settings.js8_autoreply,
+            "the persisted switch is not rewritten"
+        );
+        let s0 = js8_slot_now();
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], s0);
+        for s in s0..s0 + 6 {
+            assert!(e.poll_tx(s).is_empty(), "tripped: no autoreply keys");
+        }
+        e.js8_arm(Js8Switch::Autoreply, true)
+            .expect("an operator verb");
+        assert!(
+            !e.js8_state().idle_tripped,
+            "an operator verb clears the trip"
+        );
+    }
+
+    // NOTE: the remaining JS8 TX-planner tests all drive `js8_send` (B7.8) —
+    // js8_operator_frames_key_in_consecutive_periods_with_no_parity,
+    // js8_plans_at_most_one_frame_per_slot, the_wall_clock_watchdog_is_re_applied_to_js8_
+    // operator_traffic, js8_never_keys_outside_the_digital_operating_mode (B7.5's send half),
+    // js8_drop_queue_is_not_a_stop (B7.7), and B7.6's three halt tests — so they land with
+    // B7.8. Their bodies are frozen verbatim in task-B7.5/B7.6-report.md.
 
     /// One decoded packet, ready to push. `raw` doubles as the payload text so two calls with
     /// different `raw` are genuinely different packets.

@@ -29,6 +29,7 @@ use super::{now_unix_secs, Engine, TxPlan, TxWaveform};
 use crate::dto::{
     Js8ActivityRow, Js8Armed, Js8PendingReply, Js8QueueRow, Js8State, SourceKind, Tier,
 };
+use crate::settings::Settings;
 
 /// Activity rows kept for the cockpit (newest last).
 const JS8_ACTIVITY_CAP: usize = 200;
@@ -66,12 +67,14 @@ fn js8_rng_next(state: &mut u32) -> u32 {
 }
 
 impl Engine {
-    /// ONE place Settings → `StationConfig`. Identity is uppercased and trimmed the way the
-    /// wire packs it; the idle floor of 5 minutes is applied here (0 stays 0 = off); the
-    /// autoreply countdown is one period + 2 s at the TRANSMIT speed.
-    pub(crate) fn js8_station_config(&self) -> StationConfig {
-        let s = &self.settings;
-        let speed = self.js8_tx_speed_setting();
+    /// ONE place Settings → `StationConfig` (an associated fn on `&Settings`, so the arm
+    /// verbs and `js8_apply_station_config` build it from the SAME source the persisted
+    /// switches live in). Identity is uppercased and trimmed the way the wire packs it; the
+    /// idle floor of 5 minutes is applied here (0 stays 0 = off); the autoreply countdown is
+    /// one period + 2 s at the TRANSMIT speed (`js8_speed`, degraded to Normal on a stale
+    /// index — the same rule `js8_tx_speed` applies).
+    pub(crate) fn js8_station_config(s: &Settings) -> StationConfig {
+        let speed = Js8Speed::from_index(s.js8_speed).unwrap_or(Js8Speed::Normal);
         StationConfig {
             mycall: s.mycall.trim().to_ascii_uppercase(),
             grid: s.mygrid.trim().to_ascii_uppercase(),
@@ -113,16 +116,13 @@ impl Engine {
     }
 
     /// Push the current Settings into the station. Called by `apply_settings`, by every
-    /// speed/mask change and by `js8_enter`.
+    /// speed/mask change and by `js8_enter`. B7 removed the B5 receive-only override (the
+    /// three lines that forced the station's autoreply/relay/HB-ack OFF): the station now
+    /// carries the operator's real switches, so `Js8State.armed` and actual station
+    /// behaviour agree. Nothing keys without the TX latch regardless — `plan_js8_tx` gates
+    /// on it — so the two-act rule still holds.
     pub(crate) fn js8_apply_station_config(&mut self) {
-        let mut cfg = self.js8_station_config();
-        // ⭐ B5 RECEIVE-ONLY OVERRIDE. The persisted switches keep JS8Call's defaults (the
-        // cockpit shows them), but the STATION is told they are off: a station with no
-        // transmit path must never compute a reply into an outbox nothing drains. The TX
-        // batch deletes these three lines together with the refusing stubs below.
-        cfg.autoreply = false;
-        cfg.relay = false;
-        cfg.hb_ack = false;
+        let cfg = Self::js8_station_config(&self.settings);
         if self.js8_station.config() != &cfg {
             self.js8_station.set_config(cfg);
         }
@@ -135,6 +135,10 @@ impl Engine {
     /// refuses to arm it anyway.
     pub fn js8_enter(&mut self) {
         self.js8_apply_station_config();
+        // Entering the view is the session start: seed the idle-watchdog baseline to now so
+        // the operator's first decode doesn't read as decades idle and trip the watchdog
+        // (a freshly built Station has `last_activity_ms == 0`).
+        self.js8_station.mark_active(now_unix_secs() * 1000);
         self.set_tier(Tier::Js8);
     }
 
@@ -251,6 +255,17 @@ impl Engine {
     pub fn js8_tick(&mut self, now_ms: u64) {
         let aged = self.js8_reasm.age(now_ms);
         self.js8_handle_events(aged, false, now_ms);
+        // A countdown that expires while the TX latch is DOWN is cancelled, never carried:
+        // arming TX ten minutes later must not fire a reply to a query nobody is waiting
+        // for. The countdown was shown the whole time (the cockpit's "would have replied"
+        // row) — that is the Auto-arm behaviour spec invariant 11 asks for.
+        if !self.tx_enabled() {
+            if let Some(p) = self.js8_station.pending_reply() {
+                if p.fires_at_ms <= now_ms {
+                    self.js8_station.cancel_pending_reply();
+                }
+            }
+        }
         let actions = self.js8_station.tick(now_ms);
         self.js8_handle_actions(actions);
     }
@@ -356,10 +371,19 @@ impl Engine {
                     "js8",
                     &format!("relayed via {}: {text}", path.join(">")),
                 ),
-                // Receive-only: nothing to trip, nothing queued, nothing pending. The heard
-                // list is read straight from the station at poll time.
-                StationAction::IdleTripped
-                | StationAction::Queued { .. }
+                StationAction::IdleTripped => {
+                    // JS8Call parity: HB, autoreply and relay stand down and the queues
+                    // drop; `tx_enabled` is UNTOUCHED (it is the operator's latch, not the
+                    // station's). The persisted switches are NOT rewritten — `Js8State.armed`
+                    // reads `!idle_tripped`, and any operator verb clears the trip. The
+                    // cockpit toasts on the rising edge of `idle_tripped` (B7.9).
+                    self.js8_hb_on = false;
+                    self.js8_station.halt();
+                }
+                // Queued/ReplyPending/HeardChanged carry no engine-side effect: the queue,
+                // pending countdown and heard list are read straight from the station at
+                // poll time.
+                StationAction::Queued { .. }
                 | StationAction::ReplyPending { .. }
                 | StationAction::HeardChanged => {}
             }
@@ -483,18 +507,41 @@ impl Engine {
         self.js8_refuse()
     }
 
-    /// The second act. Refused outright here: with no transmit path there is nothing to arm,
-    /// and persisting a switch from a verb that cannot act would misreport the station.
-    pub fn js8_arm(&mut self, _which: Js8Switch, _on: bool) -> Result<(), String> {
-        self.js8_refuse()
+    /// The SECOND operator act (the first is the session TX latch). Autoreply / Relay /
+    /// HB-ack persist to Settings (the Tauri command saves them); Hb is session-only and
+    /// never persisted (G3). Turning a switch ON keys nothing by itself — `plan_js8_tx`
+    /// still needs `tx_enabled` — but it is an operator verb: it retires an idle trip and
+    /// restarts the wall-clock watchdog, exactly as any other operator action does.
+    pub fn js8_arm(&mut self, which: Js8Switch, on: bool) -> Result<(), String> {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        match which {
+            Js8Switch::Autoreply => self.settings.js8_autoreply = on,
+            Js8Switch::Relay => self.settings.js8_relay = on,
+            Js8Switch::HbAck => self.settings.js8_hb_ack = on,
+            Js8Switch::Hb => {}
+        }
+        let cfg = Self::js8_station_config(&self.settings);
+        self.js8_station.set_config(cfg);
+        if which == Js8Switch::Hb {
+            // `Station::set_hb(true)` schedules the first heartbeat for the next period
+            // (JS8Call: nextTransmitCycle + interval; interval 0 = "on demand" = once).
+            self.js8_hb_on = on;
+            self.js8_station.set_hb(on, now_ms);
+        }
+        if on {
+            self.js8_station.clear_idle_trip();
+            self.reset_tx_watchdog();
+        }
+        Ok(())
     }
 
-    /// Cancel the pending autoreply (none can exist here; safe no-op through the station).
+    /// The operator's veto on a pending automatic reply (the visible countdown's Cancel).
     pub fn js8_cancel(&mut self) {
         self.js8_station.cancel_pending_reply();
     }
 
-    /// Drop the outbox (sender-class, not a stop; empty here).
+    /// Sender-class, NOT a stop: empties the outbox and nothing else. The HB schedule, the
+    /// TX latch and a frame already on the air are untouched — Stop TX is `halt_tx`.
     pub fn js8_drop_queue(&mut self) {
         self.js8_station.drop_queue();
     }
@@ -757,11 +804,12 @@ mod tests {
     }
 
     /// The RX chain end to end: `Decode.raw` → `RawDecode` → `Reassembler` → `Station`, with the
-    /// activity pane and the heard list populated — and the receive-only override holding: a
-    /// query addressed to me computes NO reply (empty outbox, no countdown), because a station
-    /// with no way to drain an outbox must not build one.
+    /// activity pane and the heard list populated. B7 removed the receive-only override, so a
+    /// query addressed to me now schedules a SHOWN autoreply countdown (autoreply is JS8Call's
+    /// default) — it is a pending countdown, not yet an outbox frame, and nothing keys here
+    /// because the TX latch is down (proved end to end by `js8_autoreply_never_keys_at_launch`).
     #[test]
-    fn js8_ingest_feeds_the_station_and_never_queues_a_reply_in_the_rx_only_build() {
+    fn js8_ingest_feeds_the_station_and_a_directed_query_schedules_a_shown_countdown() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.js8_enter();
         let heartbeat = hb("KD2UWR", "FN30");
@@ -795,16 +843,19 @@ mod tests {
         assert_eq!(st.activity[1].speed, Js8Speed::Fast);
         assert!(
             st.queue.is_empty(),
-            "receive-only: the station must not queue an autoreply"
+            "the reply is a pending countdown, not yet an outbox frame"
         );
-        assert!(st.pending_reply.is_none());
         assert!(
-            !e.js8_station.config().autoreply,
-            "the B5 override forces autoreply OFF in the station"
+            st.pending_reply.is_some(),
+            "autoreply ON (the B5 override is gone): the query gets a shown countdown"
+        );
+        assert!(
+            e.js8_station.config().autoreply,
+            "the station now carries the operator's real autoreply switch"
         );
         assert!(
             e.settings().js8_autoreply,
-            "…while the persisted switch keeps JS8Call's default"
+            "…matching the persisted JS8Call default"
         );
     }
 
@@ -923,27 +974,12 @@ mod tests {
         assert!(!e.tx_enabled());
     }
 
-    /// Every transmit verb refuses in this build and says so in `last_error`; nothing keys.
-    #[test]
-    fn js8_tx_verbs_refuse_in_the_receive_only_build() {
-        let mut e = Engine::new("KD9TAW", "EN52", 0);
-        e.js8_enter();
-        assert!(e.js8_send(None, "HELLO".to_string()).is_err());
-        assert!(e
-            .js8_send_command("KD2UWR".to_string(), 0, String::new())
-            .is_err());
-        assert!(e.js8_call_cq(0).is_err());
-        assert!(e.js8_arm(Js8Switch::Hb, true).is_err());
-        assert!(e.js8_state().last_error.is_some());
-        assert!(!e.js8_hb_on);
-        assert!(e.js8_state().queue.is_empty());
-        e.js8_cancel();
-        e.js8_drop_queue();
-        e.js8_halt_clear();
-        for slot in 0..4 {
-            assert!(e.poll_tx(slot).is_empty());
-        }
-    }
+    // REMOVED at B7.7: `js8_tx_verbs_refuse_in_the_receive_only_build` tested a state that no
+    // longer exists — the receive-only build where EVERY transmit verb refuses. B7.7 makes
+    // `js8_arm` a real verb (the two-act arm), and B7.8 does the same for `js8_send` /
+    // `js8_send_command` / `js8_call_cq`. The two-act arm tests in engine.rs (js8_autoreply_
+    // never_keys_at_launch, a_js8_switch_without_the_tx_latch_is_silent, both_acts_present_…)
+    // and B7.8's operator-verb tests replace it — a real replacement, not a deletion.
 
     /// A real multi-speed job: a Normal heartbeat and a Turbo heartbeat, each in its own
     /// speed's window, decoded in parallel under `std::thread::scope`, folding into the
