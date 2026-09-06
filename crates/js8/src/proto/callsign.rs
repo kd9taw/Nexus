@@ -13,8 +13,14 @@
 //! that character is `/`, pad to 11, radix 39 at slot 0 and 38 elsewhere, `/`-flag bits at
 //! 3 and 7 — a 10-character compound call in 50 bits.
 //!
-//! The validators are JS8Call's, not WSJT-X's: `tempo_core::message::is_callsign` is the
-//! 77-bit rule and differs (and tempo-core cannot be imported here anyway).
+//! The validators (`is_base_call`, `is_compound_call`, both below) are transcribed from
+//! JS8Call's `isValidCallsign`/`isCompoundCallsign`/`isValidCompoundCallsign`
+//! (varicode.cpp:1232-1320), not project-derived approximations — an earlier draft of this
+//! file invented an untranscribed ">1 slash" rule that rejected real JS8Call-valid compound
+//! calls (multiple slashes are explicitly permitted upstream), caught and reverted after
+//! fetching and reading the actual functions. They are still not WSJT-X's rule:
+//! `tempo_core::message::is_callsign` is the 77-bit rule and differs (and tempo-core cannot be
+//! imported here anyway).
 
 use crate::proto::alphabet::{ALNUM39, GROUPS};
 
@@ -251,15 +257,16 @@ pub fn split_portable(call: &str) -> (&str, bool) {
     }
 }
 
-/// varicode.cpp:40 `base_callsign_pattern` full-match (`([0-9A-Z])?([0-9A-Z])([0-9])([A-Z])?([A-Z])?([A-Z])?`,
-/// optional `/P`) plus `isValidCallsign`'s rule (:1275-1279): longer than two characters and
-/// containing a digit–letter or letter–digit pair.
-pub fn is_base_call(s: &str) -> bool {
-    // No `split_portable` here (deliberately, unlike an earlier draft): a base call carries no
-    // `/` at all — `"KD9TAW/P"` is compound (see `is_compound_call`), and stripping `/P` first
-    // would wrongly accept it as a bare base call. `apply_prefix_workarounds` still applies
-    // (a call like "3DA0AB" only fits the digit-in-position-3 shape after the substitution).
-    let core = apply_prefix_workarounds(s);
+/// varicode.cpp:40 `base_callsign_pattern`'s `base` group alone
+/// (`([0-9A-Z])?([0-9A-Z])([0-9])([A-Z])?([A-Z])?([A-Z])?`) plus `isValidCallsign`'s rule
+/// (:1275-1279): longer than two characters and containing a digit–letter or letter–digit
+/// pair. Deliberately NOT the regex's own optional `(?<portable>[/][P])?` group — that lives
+/// in [`is_compound_call`], which checks it directly against the RAW string (no workaround),
+/// because the real regex never sees the 3DA0/3X substitution either. Callers wanting "is this
+/// shape, ignoring the workaround" (i.e. matching the literal upstream regex) use this
+/// function directly on their own core string; [`is_base_call`] is "is this shape, WITH the
+/// workaround applied" — the two answer different questions on purpose.
+fn raw_shape_and_pair_ok(core: &str) -> bool {
     let b = core.as_bytes();
     if b.len() < 3 || b.len() > 6 {
         return false;
@@ -279,24 +286,53 @@ pub fn is_base_call(s: &str) -> bool {
     (shape_ok(1) || shape_ok(2)) && pair
 }
 
-/// varicode.cpp:1232-1258 `isValidCompoundCallsign` after the compound regex (:41): characters
-/// from `[A-Z0-9/]` (a leading `@` allowed), at most 11 characters and 9 excluding `/`; then a
-/// group, or a slash form whose prefix is not a special, or a digit–letter pair — and never a
-/// base call (:1302-1320 `isCompoundCallsign`).
+/// `raw_shape_and_pair_ok`, with the 3DA0/3X workaround applied first (a call like "3DA0AB"
+/// only fits the digit-in-position shape after the substitution). No `split_portable` here
+/// (deliberately, unlike an earlier draft): a base call carries no `/` at all — `"KD9TAW/P"`
+/// is compound (see [`is_compound_call`]), and stripping `/P` first would wrongly accept it as
+/// a bare base call.
+pub fn is_base_call(s: &str) -> bool {
+    raw_shape_and_pair_ok(&apply_prefix_workarounds(s))
+}
+
+/// varicode.cpp:1292-1310 `isCompoundCallsign`, in upstream's own precedence, NOT the
+/// project-derived approximation an earlier draft of this file used:
+///
+/// 1. An exact `basecalls` entry that does not start with `@` — only `"<....>"` — is never
+///    compound (:1293-1296).
+/// 2. `base_callsign_pattern` fully matching the RAW string (its own optional
+///    `(?<portable>[/][P])?` group, no 3DA0/3X substitution — the regex never applies it) means
+///    it's a base call, portable or not, never compound (:1298-1300). This is why `"KD9TAW/P"`
+///    is NOT compound (`"KD9TAW"` already fits the digit-in-position-2-or-3 shape with no
+///    workaround) while `"3DA0AB/P"` STILL IS (`"3DA0AB"` only fits after the substitution,
+///    which this step does not apply, so it falls through to step 3 below and stays compound).
+/// 3. Otherwise `^compound_callsign_pattern` must match and `isValidCompoundCallsign`
+///    (:1232-1258) decides: reject over 9 characters excluding `/`; a slash form is valid
+///    unless the text before the FIRST `/` is itself a `basecalls` special (multiple slashes
+///    are explicitly fine — there is no slash-count limit upstream, only the length one); an
+///    `@`-prefixed name is valid; otherwise a digit-letter/letter-digit pair over 2+ characters
+///    is valid.
 pub fn is_compound_call(s: &str) -> bool {
     let b = s.as_bytes();
-    if b.is_empty() || b.len() > 11 || is_base_call(s) {
+    if b.is_empty() || b.len() > 11 {
         return false;
     }
+    // (1) the lone non-'@' special: "<....>".
+    if let Some(c) = CallRef::parse(s) {
+        if !matches!(c, CallRef::Base(_)) && !s.starts_with('@') {
+            return false;
+        }
+    }
+    // (2) base_callsign_pattern's own shape, /P included, checked on the RAW string.
+    let raw_core = s.strip_suffix("/P").unwrap_or(s);
+    if raw_shape_and_pair_ok(raw_core) {
+        return false;
+    }
+    // (3) isValidCompoundCallsign, verbatim.
     let body_ok = b.iter().enumerate().all(|(i, &c)| {
         c.is_ascii_digit() || c.is_ascii_uppercase() || c == b'/' || (i == 0 && c == b'@')
     });
     if !body_ok || b.len() - b.iter().filter(|&&c| c == b'/').count() > 9 {
-        return false;
-    }
-    // At most one slash: "VE3/LB9YHX" or "KD9TAW/QRP" are real compound shapes;
-    // "A/B/C/D/E/F" is not, and the single-slash prefix check below has no sane meaning for it.
-    if s.matches('/').count() > 1 {
         return false;
     }
     if let Some(slash) = s.find('/') {
@@ -456,11 +492,25 @@ mod tests {
         assert_eq!(split_portable("W1AW"), ("W1AW", false));
         assert_eq!(split_portable("W1AW/QRP"), ("W1AW/QRP", false));
         // varicode.cpp:40 base regex + isValidCallsign's "> 2 chars and a digit-letter pair" rule.
+        // NOT mutually exclusive with is_compound_call for every entry: "3DA0AB" and "3XA1BC"
+        // (workaround-only shapes) genuinely satisfy BOTH predicates upstream too — real
+        // isCompoundCallsign's base_callsign_pattern check never applies the 3DA0/3X
+        // substitution either, so "3DA0AB" falls through to the compound path and its own
+        // digit-letter pair ('3','D') makes isValidCompoundCallsign accept it. Verified against
+        // varicode.cpp:1292-1310 directly — this is upstream's own overlap, not a defect here.
         for good in [
-            "KD9TAW", "W1AW", "K1JT", "F5RXL", "2E0ABC", "3DA0AB", "W12ABC", "W1A", "A1B",
+            "KD9TAW", "W1AW", "K1JT", "F5RXL", "2E0ABC", "W12ABC", "W1A", "A1B",
         ] {
             assert!(is_base_call(good), "{good}");
             assert!(!is_compound_call(good), "{good}");
+        }
+        for workaround_only in ["3DA0AB", "3XA1BC"] {
+            assert!(is_base_call(workaround_only), "{workaround_only}");
+            assert!(
+                is_compound_call(workaround_only),
+                "{workaround_only}: real JS8Call's own base_callsign_pattern never applies the \
+                 workaround either, so this genuinely satisfies both predicates upstream"
+            );
         }
         for bad in [
             "",
@@ -477,8 +527,19 @@ mod tests {
             assert!(!is_base_call(bad), "{bad:?}");
         }
         // varicode.cpp:1232-1258 isValidCompoundCallsign: ≤ 9 chars excluding '/', group or slash
-        // form or a digit-letter pair, never a base call.
-        for good in ["KD9TAW/QRP", "VE3/LB9YHX", "@POTA", "3DA0AB/P", "KD9TAW/P"] {
+        // form or a digit-letter pair, never a base call. Multiple slashes ARE permitted
+        // upstream (isValidCompoundCallsign has no slash-count limit beyond the length rule) —
+        // "A/B/C/D/E/F" is 11 chars / 5 slashes, 11-5=6 ≤ 9, and "A" (the text before the FIRST
+        // slash) is not a basecalls special, so real JS8Call accepts it.
+        for good in [
+            "KD9TAW/QRP",
+            "VE3/LB9YHX",
+            "@POTA",
+            "3DA0AB/P",
+            "@ALLCALL",
+            "@DX/NA",
+            "A/B/C/D/E/F",
+        ] {
             assert!(is_compound_call(good), "{good}");
         }
         for bad in [
@@ -487,10 +548,26 @@ mod tests {
             "",
             "ABCDEFGHIJ/K",
             "W1AW/ABCDEFGHIJ",
-            "A/B/C/D/E/F",
+            "A1CDEFGHIJ",
+            "@ALLCALL/X",
         ] {
             assert!(!is_compound_call(bad), "{bad:?}");
         }
+        // "KD9TAW/P" is NOT compound (unlike "3DA0AB/P"): varicode.cpp's isCompoundCallsign
+        // checks base_callsign_pattern FIRST, and that pattern's own optional `(?<portable>[/]
+        // [P])?` group absorbs a trailing /P — "KD9TAW" alone already fits the digit-in-
+        // position-2-or-3 shape with no workaround, so "KD9TAW/P" matches base_callsign_pattern
+        // fully and upstream calls it a (portable) base call, never compound. "3DA0AB" does NOT
+        // fit that shape without the Swaziland workaround, and the regex never applies it, so
+        // "3DA0AB/P" falls through to the compound path instead and stays compound (see above).
+        assert!(
+            !is_compound_call("KD9TAW/P"),
+            "matches base_callsign_pattern's own /P group"
+        );
+        assert!(
+            is_base_call("KD9TAW"),
+            "the /P-stripped core is a real base call"
+        );
     }
 
     #[test]
