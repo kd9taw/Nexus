@@ -14,6 +14,7 @@ pub mod modulate;
 pub mod speed;
 
 mod params;
+mod sync;
 #[cfg(test)]
 pub(crate) mod testutil;
 
