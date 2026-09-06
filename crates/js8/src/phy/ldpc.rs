@@ -284,9 +284,11 @@ mod tests {
             }
         }
         assert!(
-            failures <= 4,
-            "{failures}/20 failed to converge at 12 flips — worse than the measured 2/20; \
-             a real regression, not just an unlucky seed"
+            failures <= 2,
+            "{failures}/20 failed to converge at 12 flips — this test is fully deterministic \
+             (fixed seed, deterministic lcg, single-threaded), so `failures` is a constant; \
+             the measured value is 2, and anything higher is a real regression, not an \
+             unlucky seed"
         );
     }
 
