@@ -6,7 +6,7 @@
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
 import { useEffect, useRef, useState } from 'react'
-import type { AppSnapshot, BandChannel, Js8InboxState, Js8State } from '../types'
+import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PanelsMenu } from './PanelsMenu'
@@ -23,6 +23,8 @@ import {
   haltTx,
   js8Arm,
   js8CallCq,
+  js8Cancel,
+  js8DropQueue,
   js8Enter,
   js8InboxDelete,
   js8InboxMark,
@@ -40,18 +42,23 @@ import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
 import {
   ALLCALL,
+  AUTOREPLY,
   CQ,
   HB,
+  HB_ACK,
   HZ,
   JS8,
+  JS8_COMMANDS,
   JS8_CQS,
   JS8_QUICK_QUERIES,
   JS8_SPEEDS,
   JS8_SPEED_LIST,
+  RELAY,
   RX_PLATE,
   TX_PLATE,
   ageLabel,
   countBits,
+  estimateFrames,
   fmtSnr,
   utcClock,
 } from '../js8Vocab'
@@ -214,6 +221,8 @@ export function Js8Cockpit({
   const [toCall, setToCall] = useState('')
   const [text, setText] = useState('')
   const [cqIdx, setCqIdx] = useState(0)
+  /** The directed command the composer sends, or null for a plain message / MSG. */
+  const [cmdId, setCmdId] = useState<number | null>(null)
   const snapRef = useRef(snap)
   snapRef.current = snap
   const selectStation = (call: string) => setToCall(call.toUpperCase())
@@ -233,14 +242,34 @@ export function Js8Cockpit({
   }
   const send = () => {
     const body = text.trim()
-    if (!body) return
-    if (refuseIfUnready()) return
     const to = toCall.trim().toUpperCase()
-    void withErrorToast(() => js8Send(to || null, body), t('js8.toast.send.failed')).then((s) => {
+    if (cmdId !== null && !to) {
+      pushToast(t('js8.toast.noAddressee'), 'info', 3000)
+      return
+    }
+    if (cmdId === null && !body) return
+    if (refuseIfUnready()) return
+    const call = cmdId !== null ? () => js8SendCommand(to, cmdId, body) : () => js8Send(to || null, body)
+    void withErrorToast(call, t('js8.toast.send.failed')).then((s) => {
       if (s) {
         setJs8(s)
         setText('')
       }
+    })
+  }
+  const toggleSwitch = (which: Js8Switch, on: boolean) => {
+    void withErrorToast(() => js8Arm(which, !on), t('js8.toast.arm.failed')).then((s) => {
+      if (s) setJs8(s)
+    })
+  }
+  const cancelPending = () => {
+    void withErrorToast(() => js8Cancel(), t('js8.toast.cancel.failed')).then((s) => {
+      if (s) setJs8(s)
+    })
+  }
+  const dropQueue = () => {
+    void withErrorToast(() => js8DropQueue(), t('js8.toast.drop.failed')).then((s) => {
+      if (s) setJs8(s)
     })
   }
   const callCq = () => {
@@ -300,6 +329,56 @@ export function Js8Cockpit({
       : js8?.hbOn
         ? t('js8.dock.hb.title.on')
         : t('js8.dock.hb.title.off')
+
+  // THE ESTIMATE beside Send — a hint, not a gate (js8Vocab.estimateFrames). The engine is
+  // the authority and refuses over the §97.119 cap; the `over` face and the disabled Send
+  // just save the round trip.
+  const speedInfo = JS8_SPEEDS[js8?.speed ?? 'normal']
+  const frames = estimateFrames(toCall, cmdId, text, snap?.mycall ?? '', speedInfo.key)
+  const overCap = frames > speedInfo.maxFrames
+  const estimateText =
+    frames === 0
+      ? ''
+      : overCap
+        ? t('js8.dock.estimate.over', { count: frames, max: speedInfo.maxFrames })
+        : t('js8.dock.estimate', { count: frames, secs: frames * speedInfo.periodS })
+  const canSend = !overCap && (cmdId !== null ? toCall.trim() !== '' : text.trim() !== '')
+  const pendingSecs = js8?.pendingReply ? Math.max(0, Math.ceil((js8.pendingReply.firesAtMs - now) / 1000)) : 0
+
+  /** Literal keys per origin, so the orphan guard sees each referenced. */
+  const originLabel = (o: Js8Origin): string => {
+    switch (o) {
+      case 'operator':
+        return t('js8.dock.origin.operator')
+      case 'heartbeat':
+        return t('js8.dock.origin.heartbeat')
+      case 'hbAck':
+        return t('js8.dock.origin.hbAck')
+      case 'autoReply':
+        return t('js8.dock.origin.autoReply')
+      case 'relay':
+        return t('js8.dock.origin.relay')
+    }
+  }
+  /** One second-act chip with its three faces: off · on-but-TX-off · ARMED. */
+  const armChip = (
+    which: Js8Switch,
+    cls: string,
+    label: string,
+    on: boolean,
+    armed: boolean,
+    titles: [off: string, on: string, armed: string],
+  ) => (
+    <button
+      type="button"
+      className={`cw-macro rtty-arm js8-arm ${cls}${on ? ' on' : ''}${on && armed ? ' armed' : ''}`}
+      aria-pressed={on}
+      onClick={() => toggleSwitch(which, on)}
+      title={on && armed ? titles[2] : on ? titles[1] : titles[0]}
+    >
+      <span className="cw-macro-label">{label}</span>
+    </button>
+  )
 
   // ---- panes ----
   const activityPane = shown('activity') && (
@@ -640,7 +719,11 @@ export function Js8Cockpit({
 
       {/* TX DOCK — every transmit control, pinned OUTSIDE the pane region. None has a ⊞ id.
           Stop TX and Tune are up in the header: THE STOP LINE. Everything down here is a
-          SENDER (Send, CQ) or a second-act arm (HB) — never a stop. */}
+          SENDER (Send, CQ), a second-act arm (HB / AUTOREPLY / RELAY / HB ACK — each is only
+          the SECOND act; the session TX latch in the header is the first, and the chip shows
+          "armed" only when both agree), a cancel for a reply that has not fired, or Drop
+          queue — a SENDER-class control (it empties the queue; a frame already keyed
+          finishes) that must never enter the stop-line sweep. */}
       <div className="cockpit-txdock">
         <div className="js8-dock-row js8-compose-row" role="group" aria-label={t('js8.dock.aria')}>
           <input
@@ -658,6 +741,22 @@ export function Js8Cockpit({
               <option key={c} value={c} />
             ))}
           </datalist>
+          {/* THE 32-COMMAND PALETTE: ids are the wire values; labels are the trimmed wire
+              texts (invariant tokens). Freetext (31) is a bare space on the wire, so its row
+              gets a word. */}
+          <select
+            className="settings-input js8-cmd-select"
+            value={cmdId === null ? '' : String(cmdId)}
+            onChange={(e) => setCmdId(e.target.value === '' ? null : Number(e.target.value))}
+            aria-label={t('js8.dock.cmd.aria')}
+          >
+            <option value="">{t('js8.dock.cmd.none')}</option>
+            {JS8_COMMANDS.map((c) => (
+              <option key={c.id} value={String(c.id)}>
+                {c.id === 31 ? t('js8.dock.cmd.freetext') : c.label}
+              </option>
+            ))}
+          </select>
           <input
             className="settings-input cw-type js8-compose"
             value={text}
@@ -665,17 +764,21 @@ export function Js8Cockpit({
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return
               e.preventDefault()
-              send()
+              if (canSend) send()
             }}
             placeholder={t('js8.dock.compose.placeholder')}
             aria-label={t('js8.dock.compose.aria')}
             autoComplete="off"
             spellCheck={false}
           />
-          <button type="button" className="cw-send-btn js8-send" onClick={send} disabled={!text.trim()}>
+          <span className={`js8-estimate${overCap ? ' over' : ''}`} title={t('js8.dock.estimate.title')}>
+            {estimateText}
+          </span>
+          <button type="button" className="cw-send-btn js8-send" onClick={send} disabled={!canSend}>
             {t('js8.dock.send.label')}
           </button>
         </div>
+
         <div className="js8-dock-row js8-beacon-row">
           <select
             className="settings-input js8-cq-select"
@@ -694,14 +797,76 @@ export function Js8Cockpit({
           </button>
           <button
             type="button"
-            className={`cw-macro rtty-arm js8-arm js8-hb${js8?.hbOn ? ' on' : ''}${js8?.armed.hb ? ' armed' : ''}`}
+            className={`cw-macro rtty-arm js8-arm js8-hb${js8?.hbOn ? ' on' : ''}${js8?.hbOn && js8.armed.hb ? ' armed' : ''}`}
             aria-pressed={js8?.hbOn === true}
             onClick={toggleHb}
             title={hbTitle}
           >
             <span className="cw-macro-label">{HB}</span>
           </button>
+          {armChip('autoreply', 'js8-autoreply', AUTOREPLY, js8?.autoreply === true, js8?.armed.autoreply === true, [
+            t('js8.dock.autoreply.title.off'),
+            t('js8.dock.autoreply.title.on'),
+            t('js8.dock.autoreply.title.armed'),
+          ])}
+          {armChip('relay', 'js8-relay', RELAY, js8?.relay === true, js8?.armed.relay === true, [
+            t('js8.dock.relay.title.off'),
+            t('js8.dock.relay.title.on'),
+            t('js8.dock.relay.title.armed'),
+          ])}
+          {armChip('hback', 'js8-hback', HB_ACK, js8?.hbAck === true, js8?.armed.hbAck === true, [
+            t('js8.dock.hbAck.title.off'),
+            t('js8.dock.hbAck.title.on'),
+            t('js8.dock.hbAck.title.armed'),
+          ])}
+          {/* JS8Call's idle watchdog (60 min default, floor 5, 0 = off): trips HB / AUTOREPLY /
+              RELAY off and leaves the TX latch alone. An operator verb restarts it. */}
+          {js8 &&
+            (js8.idleTripped ? (
+              <span className="js8-chip js8-idle tripped" role="alert">
+                {t('js8.dock.idle.tripped')}
+              </span>
+            ) : js8.idleLimitMin === 0 ? (
+              <span className="js8-chip js8-idle">{t('js8.dock.idle.off')}</span>
+            ) : (
+              <span className="js8-chip js8-idle">
+                {t('js8.dock.idle', { min: js8.idleMinutes, limit: js8.idleLimitMin })}
+              </span>
+            ))}
         </div>
+
+        {/* THE PENDING AUTO-REPLY (spec invariant 11): visible, counted down, cancellable.
+            Under the auto arm with TX off the station only SHOWS what it would have sent. */}
+        {js8?.pendingReply && (
+          <div className="js8-dock-row js8-pending-row" role="status">
+            <span className="js8-pending-text">
+              {js8.txEnabled
+                ? t('js8.dock.pending', { to: js8.pendingReply.to, secs: pendingSecs, text: js8.pendingReply.display })
+                : t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
+            </span>
+            <button type="button" className="cw-macro js8-cancel" onClick={cancelPending} title={t('js8.dock.pending.cancel.title')}>
+              {t('js8.dock.pending.cancel.label')}
+            </button>
+          </div>
+        )}
+
+        {/* THE QUEUE — one frame leaves per period once TX is on. F/L are the i3 First/Last
+            flags (tokens). Drop queue is NOT a stop; Stop TX is in the header. */}
+        {js8 && js8.queue.length > 0 && (
+          <div className="js8-dock-row js8-queue-row" title={t('js8.dock.queue.title')}>
+            {js8.queue.map((r, i) => (
+              <span key={`${i}-${r.display}`} className={`js8-queue-item origin-${r.origin}`}>
+                <span className="js8-chip">{originLabel(r.origin)}</span>
+                <span className="js8-queue-text">{r.display}</span>
+                {r.first && <span className="js8-chip">F</span>}
+                {r.last && <span className="js8-chip">L</span>}
+              </span>
+            ))}
+            <button type="button" className="cw-macro js8-drop" onClick={dropQueue} title={t('js8.dock.queue.drop.title')}>
+              {t('js8.dock.queue.drop.label')}
+            </button>
+          </div>
+        )}
       </div>
     </main>
   )

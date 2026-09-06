@@ -7043,6 +7043,48 @@ export const EN = {
   'js8.dock.hb.title.armed':
     'Heartbeats are going out on schedule, on a random free slot between 500 and 1000 Hz. Click to stop the schedule.',
 
+  // ── JS8 ▸ the dock: command palette, the estimate, the second-act chips, pending, queue ──
+  'js8.dock.cmd.aria': 'Directed command',
+  'js8.dock.cmd.none': 'Message (no command)',
+  'js8.dock.cmd.freetext': 'free text',
+  'js8.dock.estimate': { one: '≈ {{count}} frame · ≈ {{secs}} s', other: '≈ {{count}} frames · ≈ {{secs}} s' },
+  'js8.dock.estimate.over': { one: '≈ {{count}} frame — over the {{max}}-frame airtime cap; shorten it', other: '≈ {{count}} frames — over the {{max}}-frame airtime cap; shorten it' },
+  'js8.dock.estimate.title':
+    'How many periods this takes on the air (one frame per period). An estimate — the engine packs the real frames and refuses anything over ten minutes of airtime.',
+  'js8.dock.autoreply.title.off':
+    'Auto-reply is off — SNR?, GRID?, INFO?, QUERY and MSG to you go unanswered. Click to turn it on (remembered). It answers only while TX is on.',
+  'js8.dock.autoreply.title.on':
+    'Auto-reply is on, but TX is off — nothing keys; a reply is shown as “would have replied”. Enable TX (the header pill) to let replies go out.',
+  'js8.dock.autoreply.title.armed':
+    'Auto-reply is ARMED: SNR?, GRID?, INFO?, QUERY and MSG addressed to you, @ALLCALL or a group you joined are answered after a visible countdown you can cancel. Click to turn it off.',
+  'js8.dock.relay.title.off':
+    'Relay is off — a > message routed through you is displayed and not passed on. Click to turn it on (remembered). Relaying is third-party traffic; you are responsible for it.',
+  'js8.dock.relay.title.on':
+    'Relay is on, but TX is off — nothing keys. Enable TX (the header pill) to relay.',
+  'js8.dock.relay.title.armed':
+    'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. Click to turn it off.',
+  'js8.dock.hbAck.title.off':
+    'Heartbeat acknowledgements are off (JS8Call’s default). Click to answer heartbeats with HEARTBEAT SNR (remembered). Answers only while TX is on.',
+  'js8.dock.hbAck.title.on':
+    'Heartbeat acknowledgements are on, but TX is off — nothing keys. Enable TX (the header pill).',
+  'js8.dock.hbAck.title.armed':
+    'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
+  'js8.dock.pending': 'Auto-reply to {{to}} in {{secs}} s: {{text}}',
+  'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
+  'js8.dock.pending.cancel.label': 'Cancel',
+  'js8.dock.pending.cancel.title': 'Cancel this automatic reply before it goes out',
+  'js8.dock.queue.title': 'Queued frames — one leaves per period while TX is on. F/L mark the first and last frame of a message.',
+  'js8.dock.queue.drop.label': 'Drop queue',
+  'js8.dock.queue.drop.title': 'Drop every queued frame. Not a stop: a frame already on the air finishes — Stop TX cuts it.',
+  'js8.dock.origin.operator': 'you',
+  'js8.dock.origin.heartbeat': 'heartbeat',
+  'js8.dock.origin.hbAck': 'heartbeat ack',
+  'js8.dock.origin.autoReply': 'auto-reply',
+  'js8.dock.origin.relay': 'relay',
+  'js8.dock.idle': 'Idle {{min}}/{{limit}} min',
+  'js8.dock.idle.off': 'Idle watchdog off',
+  'js8.dock.idle.tripped': 'Idle watchdog tripped — heartbeats, auto-reply and relay are off until you send something',
+
   // ── JS8 ▸ the toasts ─────────────────────────────────────────────────────────────────
   'js8.toast.noCallsign': 'Set your callsign in Settings before transmitting',
   'js8.toast.txLocked': 'TX locked — this frequency is outside your license privileges',
@@ -7050,6 +7092,9 @@ export const EN = {
   'js8.toast.cq.failed': 'JS8 CQ refused',
   'js8.toast.arm.failed': 'JS8 switch refused',
   'js8.toast.command.failed': 'JS8 command refused',
+  'js8.toast.noAddressee': 'A command needs a station — put a callsign, @ALLCALL or a group in To',
+  'js8.toast.cancel.failed': 'Could not cancel the reply',
+  'js8.toast.drop.failed': 'Could not drop the queue',
 
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
   // Positive identification only: an unrecognised header falls through to the decoder, so

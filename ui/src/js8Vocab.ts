@@ -16,6 +16,12 @@ export const HZ = 'Hz'
 export const RX_PLATE = 'RX ▼'
 export const TX_PLATE = 'TX ▲'
 
+/** JS8Call's own names for its three persisted automatic-origin switches — the chips carry
+ *  them verbatim (a JS8Call operator reads AUTOREPLY as a control name, not as a word). */
+export const AUTOREPLY = 'AUTOREPLY'
+export const RELAY = 'RELAY'
+export const HB_ACK = 'HB ACK'
+
 export interface Js8SpeedInfo {
   key: Js8Speed
   /** Index into `Speed::ALL` — the `js8_speed` setting and `js8_set_speed`'s argument. */

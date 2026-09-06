@@ -20152,6 +20152,49 @@ button.sat-chip:disabled {
 .js8-path {
   color: var(--text-dim);
 }
+.js8-cmd-select {
+  flex: 0 1 11em;
+}
+.js8-estimate {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.js8-estimate.over {
+  color: var(--snr-weak);
+  font-weight: 700;
+}
+.js8-idle.tripped {
+  border-color: var(--snr-weak);
+  color: var(--snr-weak);
+  font-weight: 700;
+}
+.js8-pending-row {
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+.js8-pending-text,
+.js8-queue-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-queue-row {
+  font-size: var(--fs-label);
+}
+.js8-queue-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  border-right: 1px solid var(--border);
+}
+.js8-queue-item.origin-operator .js8-queue-text {
+  color: var(--accent);
+}
 /* Stop button in the macro row — live (red-tinted) only while sending. */
 .rtty-stop:not(:disabled) {
   color: var(--state-weak);
