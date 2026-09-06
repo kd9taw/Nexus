@@ -9947,6 +9947,19 @@ impl Engine {
         if from == Tier::Js8 {
             self.js8_halt_clear();
         }
+        // ENTERING JS8: seed the idle-watchdog baseline, symmetric with the leave branch
+        // above — and here rather than in `js8_enter` because THIS is the only place every
+        // path into the tier must pass. A freshly built `Station` carries
+        // `last_activity_ms == 0`, the audio service ticks it once a second, and the first
+        // real-clock tick then reads the station as ~55 years idle: the idle watchdog trips
+        // and stands autoreply/relay/HB down silently, on the operator's first decode.
+        // `js8_enter` seeds it too, but `set_tier` is PUBLIC SURFACE — the Tauri `set_tier`
+        // command takes any member of `Tier::ALL`, which now includes `"JS8"` — so the
+        // companion/UDP path, the rig-share broker, or any later UI change reaches the tier
+        // without that verb. Seeding at the transition closes the class instead of one door.
+        if tier == Tier::Js8 {
+            self.js8_station.mark_active(now_unix_secs() * 1000);
+        }
         // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
         //
         // This was gated on `tier_is_rx_only`, which stopped covering the case that
@@ -33004,6 +33017,50 @@ mod tests {
     /// (`fires_at_ms`) lives on. Shared by every B7 test.
     pub(super) fn js8_slot_now() -> u64 {
         now_unix_secs() / 15
+    }
+
+    /// ENTERING THE TIER BY ANY DOOR SEEDS THE IDLE BASELINE — the regression test for a
+    /// bug that shipped silently once already.
+    ///
+    /// A freshly built `Station` has `last_activity_ms == 0`. The audio service ticks the
+    /// station once a second while the JS8 tier is live, so the FIRST real-clock tick reads
+    /// it as ~55 years idle, the idle watchdog trips, and autoreply/relay/HB are stood down
+    /// on the operator's first decode — no error, no log, just a mode that stops answering.
+    ///
+    /// The fix belongs on the TIER TRANSITION, not in `js8_enter`: `set_tier` is public
+    /// surface (the Tauri `set_tier` command accepts any `Tier::ALL` member, `"JS8"`
+    /// included), so the companion/UDP path, the rig-share broker or a later UI change can
+    /// reach the tier without that verb. **This test therefore enters the tier the way those
+    /// callers do — `set_tier` alone, never `js8_enter` — which is exactly the path the
+    /// original fix left open.**
+    #[test]
+    fn entering_js8_by_set_tier_alone_seeds_the_idle_baseline() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        // Startup installs the LIVE station config (`apply_settings` calls this too, per
+        // `js8_apply_station_config`'s own doc) — which is what turns the idle watchdog on
+        // at all. Without this the bootstrap config carries `idle_watchdog_min: 0` and the
+        // watchdog can never trip, so a test that skipped this step would pass against a
+        // broken build for the wrong reason.
+        e.settings.js8_idle_watchdog_min = 60;
+        e.settings.js8_autoreply = true;
+        e.js8_apply_station_config();
+        // The door that is NOT js8_enter.
+        e.set_tier(Tier::Js8);
+        // One service tick at the real wall clock — what the audio loop does a second later.
+        e.js8_tick(now_unix_secs() * 1000);
+        assert!(
+            !e.js8_station.idle_tripped(),
+            "entering JS8 via set_tier left the station at last_activity_ms = 0, so the \
+             first tick read it as decades idle and the watchdog stood the automatic \
+             origins down — the bug this seeds against"
+        );
+        // Positive control: the watchdog CAN still trip, so the assertion above is not
+        // passing merely because nothing ever trips.
+        e.js8_tick(now_unix_secs() * 1000 + 61 * 60 * 1000);
+        assert!(
+            e.js8_station.idle_tripped(),
+            "control: past the 60-minute idle limit the watchdog must still trip"
+        );
     }
 
     /// Spec invariant 3: the tier route returns ABOVE the mode-match tail that holds the
