@@ -135,12 +135,98 @@ mod tests {
     fn geometry_matches_js8call_mode_blocks() {
         let rows = [
             // speed,      nmax,   nfft1, nstep, nhsym, ndown, ndfft1, ndfft2, np2,  fs2,   df,     tstep,  jstrt, nq, az,   basesub
-            (Speed::Slow,   360_000, 7680, 960,  372,   120,   360_960, 3008,  2528, 100.0, 1.5625, 0.08,   6,     8,  2.0,  42.0),
-            (Speed::Normal, 180_000, 3840, 480,  372,   60,    192_000, 3200,  2528, 200.0, 3.125,  0.04,   12,    8,  4.0,  40.0),
-            (Speed::Fast,   120_000, 2400, 300,  397,   60,    120_000, 2000,  1580, 200.0, 5.0,    0.025,  8,     5,  8.0,  39.0),
-            (Speed::Turbo,  72_000,  1200, 150,  477,   50,    72_000,  1440,  948,  240.0, 10.0,   0.0125, 8,     3,  12.0, 38.0),
+            (
+                Speed::Slow,
+                360_000,
+                7680,
+                960,
+                372,
+                120,
+                360_960,
+                3008,
+                2528,
+                100.0,
+                1.5625,
+                0.08,
+                6,
+                8,
+                2.0,
+                42.0,
+            ),
+            (
+                Speed::Normal,
+                180_000,
+                3840,
+                480,
+                372,
+                60,
+                192_000,
+                3200,
+                2528,
+                200.0,
+                3.125,
+                0.04,
+                12,
+                8,
+                4.0,
+                40.0,
+            ),
+            (
+                Speed::Fast,
+                120_000,
+                2400,
+                300,
+                397,
+                60,
+                120_000,
+                2000,
+                1580,
+                200.0,
+                5.0,
+                0.025,
+                8,
+                5,
+                8.0,
+                39.0,
+            ),
+            (
+                Speed::Turbo,
+                72_000,
+                1200,
+                150,
+                477,
+                50,
+                72_000,
+                1440,
+                948,
+                240.0,
+                10.0,
+                0.0125,
+                8,
+                3,
+                12.0,
+                38.0,
+            ),
         ];
-        for (speed, nmax, nfft1, nstep, nhsym, ndown, ndfft1, ndfft2, np2, fs2, df, tstep, jstrt, nq, az, basesub) in rows {
+        for (
+            speed,
+            nmax,
+            nfft1,
+            nstep,
+            nhsym,
+            ndown,
+            ndfft1,
+            ndfft2,
+            np2,
+            fs2,
+            df,
+            tstep,
+            jstrt,
+            nq,
+            az,
+            basesub,
+        ) in rows
+        {
             let g = geom(speed);
             assert_eq!(g.nmax, nmax, "{speed:?} nmax");
             assert_eq!(g.nfft1, nfft1, "{speed:?} nfft1");
@@ -153,18 +239,33 @@ mod tests {
             assert_eq!(g.np2, np2, "{speed:?} np2");
             assert!((g.fs2 - fs2).abs() < 1e-3, "{speed:?} fs2 {}", g.fs2);
             assert!((g.df - df).abs() < 1e-5, "{speed:?} df {}", g.df);
-            assert!((g.tstep - tstep).abs() < 1e-6, "{speed:?} tstep {}", g.tstep);
+            assert!(
+                (g.tstep - tstep).abs() < 1e-6,
+                "{speed:?} tstep {}",
+                g.tstep
+            );
             assert_eq!(g.jstrt, jstrt, "{speed:?} jstrt");
             assert_eq!(g.jz, speed.jz() as isize, "{speed:?} jz");
             assert_eq!(g.nqsymbol, nq, "{speed:?} nqsymbol");
             assert!((g.az - az).abs() < 1e-4, "{speed:?} az {}", g.az);
             assert!((g.basesub - basesub).abs() < 1e-6, "{speed:?} basesub");
-            assert!((g.astart - speed.delay_ms() as f32 / 1000.0).abs() < 1e-6, "{speed:?} astart");
+            assert!(
+                (g.astart - speed.delay_ms() as f32 / 1000.0).abs() < 1e-6,
+                "{speed:?} astart"
+            );
             // The downsample window must cover the whole period (JS8.cpp:1578 zero-pads
             // "any remainder"; NDFFT1 < NMAX would truncate audio).
-            assert!(g.ndfft1 >= g.nmax, "{speed:?}: NDFFT1 {} < NMAX {}", g.ndfft1, g.nmax);
+            assert!(
+                g.ndfft1 >= g.nmax,
+                "{speed:?}: NDFFT1 {} < NMAX {}",
+                g.ndfft1,
+                g.nmax
+            );
             // Every symbol of a dt-0 frame lies inside the downsampled buffer.
-            assert!(((g.astart * g.fs2) as usize) + g.np2 <= g.ndfft2, "{speed:?}: frame outruns NDFFT2");
+            assert!(
+                ((g.astart * g.fs2) as usize) + g.np2 <= g.ndfft2,
+                "{speed:?}: frame outruns NDFFT2"
+            );
         }
     }
 
@@ -177,9 +278,18 @@ mod tests {
             let iw = synth_window(&[(word("KD9TAWEN52ab"), 1500.0, 20.0)], speed, 1);
             assert_eq!(iw.len(), speed.period_s() as usize * 12_000);
             let delay = speed.delay_ms() as usize * 12;
-            let head: f64 = iw[..delay].iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / delay as f64;
-            let body: f64 = iw[delay..delay + 12_000].iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / 12_000.0;
-            assert!(body > 20.0 * head, "{speed:?}: body/head power {}", body / head);
+            let head: f64 =
+                iw[..delay].iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / delay as f64;
+            let body: f64 = iw[delay..delay + 12_000]
+                .iter()
+                .map(|&s| (s as f64).powi(2))
+                .sum::<f64>()
+                / 12_000.0;
+            assert!(
+                body > 20.0 * head,
+                "{speed:?}: body/head power {}",
+                body / head
+            );
         }
     }
 }

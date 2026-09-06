@@ -13,6 +13,7 @@ pub mod ldpc_tables;
 pub mod modulate;
 pub mod speed;
 
+mod decoder;
 mod demod;
 mod downsample;
 mod params;
@@ -22,6 +23,7 @@ mod sync;
 pub(crate) mod testutil;
 
 pub use crc12::crc12;
+pub use decoder::decode;
 pub use frame::{Payload72, Word87, I3};
 pub use modulate::{encode_word, modulate};
 pub use speed::Speed;

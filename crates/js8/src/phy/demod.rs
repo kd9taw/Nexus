@@ -22,7 +22,7 @@
 //! floor −60) and the 79 tones for subtraction. Pure.
 //!
 //! Acceptance per pass (:1387-1390): nharderrors in 0..60; not (sync < 2 and
-//! > 35) where `sync` is the RAW fine-sync power after the tweak (:1227);
+//! nh > 35) where `sync` is the RAW fine-sync power after the tweak (:1227);
 //! not (pass > 2 and > 39); not (pass 4 and > 30); the all-zero codeword is
 //! rejected first (:1382-1385); CRC-12 must verify (:1392).
 //!
@@ -202,10 +202,17 @@ pub(crate) fn demod_candidate(
             *c = Complex::new(0.0, 0.0);
         }
         if i1 >= 0 && i1 as usize + nds <= NP2_SYMBOL_BOUND {
-            // cd0 is zero past NDFFT2 in the reference (its array is NP = 3200 long).
+            // cd0 is zero past NDFFT2 in the reference (its array runs to NP2 =
+            // 3200 and is zero-filled beyond the ndfft2 valid samples). OUR cd0
+            // is exactly ndfft2 long, so a symbol that starts at or past its end
+            // stays all-zero (JS8Call reads those zeros) and a straddling symbol
+            // copies only the samples that exist — a start >= len would make the
+            // `cd0[start..start+avail]` slice illegal even when avail == 0.
             let start = i1 as usize;
-            let avail = cd0.len().saturating_sub(start).min(nds);
-            csymb[..avail].copy_from_slice(&cd0[start..start + avail]);
+            if start < cd0.len() {
+                let avail = (cd0.len() - start).min(nds);
+                csymb[..avail].copy_from_slice(&cd0[start..start + avail]);
+            }
         }
         fft.process(&mut csymb);
         for (r, row) in s2.iter_mut().enumerate() {
@@ -338,8 +345,16 @@ mod tests {
             let d = demod_candidate(&sp, &sr.baseline_db, speed, &cand, &mut planner)
                 .unwrap_or_else(|| panic!("{speed:?}: no decode from {cand:?}"));
             assert_eq!(d.word, w, "{speed:?}: wrong word");
-            assert!((d.freq_hz - 1500.0).abs() <= 0.5, "{speed:?}: freq {}", d.freq_hz);
-            assert!(d.dt_s.abs() <= 2.0 * g.tstep + 1e-6, "{speed:?}: dt {}", d.dt_s);
+            assert!(
+                (d.freq_hz - 1500.0).abs() <= 0.5,
+                "{speed:?}: freq {}",
+                d.freq_hz
+            );
+            assert!(
+                d.dt_s.abs() <= 2.0 * g.tstep + 1e-6,
+                "{speed:?}: dt {}",
+                d.dt_s
+            );
             assert!((d.start_s - d.dt_s - g.astart).abs() < 1e-6);
             assert_eq!(d.tones, crate::phy::encode_word(&w, speed));
             // Gross-scale sanity only: a −5 dB (2500 Hz convention) frame must not
@@ -371,7 +386,11 @@ mod tests {
         let mut planner = FftPlanner::<f32>::new();
         let sr = find_candidates(&dd, speed, 100.0, 4000.0, &mut planner);
         let sp = spectrum(&dd, speed, &mut planner);
-        let cand = Candidate { freq_hz: 1500.0, dt_s: 0.0, sync: 1.6 };
+        let cand = Candidate {
+            freq_hz: 1500.0,
+            dt_s: 0.0,
+            sync: 1.6,
+        };
         assert!(demod_candidate(&sp, &sr.baseline_db, speed, &cand, &mut planner).is_none());
     }
 
@@ -393,6 +412,10 @@ mod tests {
         };
         let hi = snr_at(0.0);
         let lo = snr_at(-10.0);
-        assert!((7..=13).contains(&(hi - lo)), "SNR delta {} (hi {hi}, lo {lo})", hi - lo);
+        assert!(
+            (7..=13).contains(&(hi - lo)),
+            "SNR delta {} (hi {hi}, lo {lo})",
+            hi - lo
+        );
     }
 }

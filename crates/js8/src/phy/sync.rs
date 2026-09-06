@@ -65,7 +65,10 @@ fn nuttall(n: usize) -> Vec<f32> {
     let mut sum = 0f64;
     for i in 0..n {
         let x = i as f64 / n as f64;
-        let v = A[0] + A[1] * (2.0 * pi * x).cos() + A[2] * (4.0 * pi * x).cos() + A[3] * (6.0 * pi * x).cos();
+        let v = A[0]
+            + A[1] * (2.0 * pi * x).cos()
+            + A[2] * (4.0 * pi * x).cos()
+            + A[3] * (6.0 * pi * x).cos();
         w.push(v);
         sum += v;
     }
@@ -80,31 +83,38 @@ fn solve_vandermonde(x: &[f64; 6], y: &[f64; 6]) -> [f64; 6] {
     let mut a = [[0f64; 7]; 6];
     for i in 0..6 {
         let mut p = 1f64;
-        for k in 0..6 {
-            a[i][k] = p;
+        for cell in a[i].iter_mut().take(6) {
+            *cell = p;
             p *= x[i];
         }
         a[i][6] = y[i];
     }
     for col in 0..6 {
-        let piv = (col..6).max_by(|&r, &s| a[r][col].abs().total_cmp(&a[s][col].abs())).unwrap();
+        let piv = (col..6)
+            .max_by(|&r, &s| a[r][col].abs().total_cmp(&a[s][col].abs()))
+            .unwrap();
         a.swap(col, piv);
         let d = a[col][col];
         if d == 0.0 {
             continue; // degenerate nodes cannot happen for distinct Chebyshev abscissae
         }
-        for r in 0..6 {
+        let pivot = a[col]; // Copy of the pivot row so the r-loop needn't alias `a`.
+        for (r, row) in a.iter_mut().enumerate() {
             if r != col {
-                let f = a[r][col] / d;
-                for k in col..7 {
-                    a[r][k] -= f * a[col][k];
+                let f = row[col] / d;
+                for (dst, &pv) in row.iter_mut().zip(pivot.iter()).skip(col) {
+                    *dst -= f * pv;
                 }
             }
         }
     }
     let mut c = [0f64; 6];
     for i in 0..6 {
-        c[i] = if a[i][i] != 0.0 { a[i][6] / a[i][i] } else { 0.0 };
+        c[i] = if a[i][i] != 0.0 {
+            a[i][6] / a[i][i]
+        } else {
+            0.0
+        };
     }
     c
 }
@@ -122,13 +132,17 @@ fn baseline(savg: &mut [f32], g: &Geom, ia: usize, ib: usize) {
     let arm = size / (2 * (DEGREE + 1));
     // Power → dB (:1490-1497). Divergence: a zero bin is floored at 1e-30
     // (−300 dB) instead of −inf so silence stays finite.
-    let data: Vec<f32> = savg[bmin..=bmax].iter().map(|&v| 10.0 * v.max(1e-30).log10()).collect();
+    let data: Vec<f32> = savg[bmin..=bmax]
+        .iter()
+        .map(|&v| 10.0 * v.max(1e-30).log10())
+        .collect();
     // Six Chebyshev nodes on [0, size): 0.5·(1 − cos((2i+1)π/12)) (:401-416), each
     // sampled at the 10th percentile of its ±arm span (:1501-1512).
     let mut xs = [0f64; 6];
     let mut ys = [0f64; 6];
     for (i, (xi, yi)) in xs.iter_mut().zip(ys.iter_mut()).enumerate() {
-        let node = size as f64 * 0.5 * (1.0 - (std::f64::consts::PI / 12.0 * (2 * i + 1) as f64).cos());
+        let node =
+            size as f64 * 0.5 * (1.0 - (std::f64::consts::PI / 12.0 * (2 * i + 1) as f64).cos());
         let base = node.round() as isize;
         let lo = (base - arm as isize).clamp(0, size as isize) as usize;
         let hi = (base + arm as isize).clamp(0, size as isize) as usize;
@@ -149,15 +163,15 @@ fn baseline(savg: &mut [f32], g: &Geom, ia: usize, ib: usize) {
     }
     let last = (size - 1) as f32;
     let span = (ib - ia).max(1) as f32;
-    for i in ia..=ib {
-        let x = ((i - ia) as f32 * last / span) as f64;
+    for (offset, v) in savg[ia..=ib].iter_mut().enumerate() {
+        let x = (offset as f32 * last / span) as f64;
         let mut acc = 0f64;
         let mut pw = 1f64;
         for &ck in &c {
             acc += ck * pw;
             pw *= x;
         }
-        savg[i] = acc as f32 + 0.65;
+        *v = acc as f32 + 0.65;
     }
 }
 
@@ -171,8 +185,15 @@ pub(crate) fn find_candidates(
     planner: &mut FftPlanner<f32>,
 ) -> SyncResult {
     let g = geom(speed);
-    debug_assert_eq!(dd.len(), g.nmax, "decoder must hand sync exactly one period");
-    let empty = |baseline_db: Vec<f32>| SyncResult { candidates: Vec::new(), baseline_db };
+    debug_assert_eq!(
+        dd.len(),
+        g.nmax,
+        "decoder must hand sync exactly one period"
+    );
+    let empty = |baseline_db: Vec<f32>| SyncResult {
+        candidates: Vec::new(),
+        baseline_db,
+    };
 
     // 1. Symbol spectra (JS8.cpp:1712-1739): row j = |FFT(dd[j·NSTEP ..+NFFT1] · nuttall)|²,
     //    bins 0..NH1; savg accumulates. Rows whose window passes the period end stay zero.
@@ -234,13 +255,13 @@ pub(crate) fn find_candidates(
             let mut tx = [0f32; 3];
             let mut t0 = [0f32; 3];
             for p in 0..3usize {
-                for n in 0..7usize {
+                for (n, &tone) in costas[p].iter().enumerate() {
                     let offset = j + g.jstrt + (NSSY * n) as isize + (p * 36 * NSSY) as isize;
                     if offset < 0 || offset as usize >= g.nhsym {
                         continue;
                     }
                     let row = offset as usize;
-                    tx[p] += at(i + NFOS * costas[p][n] as usize, row);
+                    tx[p] += at(i + NFOS * tone as usize, row);
                     for f in 0..7usize {
                         t0[p] += at(i + NFOS * f, row);
                     }
@@ -271,7 +292,13 @@ pub(crate) fn find_candidates(
     //    of ascending rank floor(n·4/10). Silence has no floor → no candidates.
     let mut ranked: Vec<f32> = entries
         .iter()
-        .map(|e| if e.sync.is_finite() { e.sync } else { f32::NEG_INFINITY })
+        .map(|e| {
+            if e.sync.is_finite() {
+                e.sync
+            } else {
+                f32::NEG_INFINITY
+            }
+        })
         .collect();
     ranked.sort_by(f32::total_cmp);
     let base = ranked[ranked.len() * 4 / 10];
@@ -297,7 +324,10 @@ pub(crate) fn find_candidates(
         candidates.push(best);
         pool.retain(|c| (c.freq_hz - best.freq_hz).abs() > g.az);
     }
-    SyncResult { candidates, baseline_db: savg }
+    SyncResult {
+        candidates,
+        baseline_db: savg,
+    }
 }
 
 #[cfg(test)]
@@ -323,15 +353,26 @@ mod tests {
             let r = find_candidates(&dd, speed, 100.0, 4000.0, &mut planner);
             assert!(!r.candidates.is_empty(), "{speed:?}: no candidates");
             let top = r.candidates[0];
-            assert!((top.freq_hz - 1500.0).abs() < 1.0, "{speed:?}: top freq {}", top.freq_hz);
-            assert!(top.dt_s.abs() <= 3.0 * g.tstep + 1e-6, "{speed:?}: top dt {}", top.dt_s);
+            assert!(
+                (top.freq_hz - 1500.0).abs() < 1.0,
+                "{speed:?}: top freq {}",
+                top.freq_hz
+            );
+            assert!(
+                top.dt_s.abs() <= 3.0 * g.tstep + 1e-6,
+                "{speed:?}: top dt {}",
+                top.dt_s
+            );
             assert!(top.sync > 5.0, "{speed:?}: top sync {}", top.sync);
             assert!(r.candidates.len() <= NMAXCAND);
             assert_eq!(r.baseline_db.len(), g.nh1);
             // The baseline is a finite dB figure across the search band.
             let ia = (100.0 / g.df).round() as usize;
             let ib = (4000.0 / g.df).round() as usize;
-            assert!(r.baseline_db[ia..=ib].iter().all(|v| v.is_finite()), "{speed:?}: non-finite baseline");
+            assert!(
+                r.baseline_db[ia..=ib].iter().all(|v| v.is_finite()),
+                "{speed:?}: non-finite baseline"
+            );
         }
     }
 
@@ -343,7 +384,11 @@ mod tests {
             let dd = vec![0f32; geom(speed).nmax];
             let mut planner = FftPlanner::<f32>::new();
             let r = find_candidates(&dd, speed, 100.0, 4000.0, &mut planner);
-            assert!(r.candidates.is_empty(), "{speed:?}: {} candidates from silence", r.candidates.len());
+            assert!(
+                r.candidates.is_empty(),
+                "{speed:?}: {} candidates from silence",
+                r.candidates.len()
+            );
         }
     }
 
@@ -366,7 +411,10 @@ mod tests {
             assert!(x.sync.is_finite() && x.sync >= ASYNCMIN);
             assert!(x.freq_hz >= 100.0 && x.freq_hz <= 4000.0);
             for y in &c[i + 1..] {
-                assert!((x.freq_hz - y.freq_hz).abs() > g.az, "two candidates within AZ: {x:?} {y:?}");
+                assert!(
+                    (x.freq_hz - y.freq_hz).abs() > g.az,
+                    "two candidates within AZ: {x:?} {y:?}"
+                );
             }
         }
     }
@@ -378,7 +426,12 @@ mod tests {
         let dd = vec![0f32; geom(Speed::Turbo).nmax];
         let mut planner = FftPlanner::<f32>::new();
         // Purely structural: no panic on absurd edges, and no candidates from silence.
-        for (nfa, nfb) in [(0.0, 20.0), (-50.0, 6000.0), (4900.0, 4950.0), (100.0, 4000.0)] {
+        for (nfa, nfb) in [
+            (0.0, 20.0),
+            (-50.0, 6000.0),
+            (4900.0, 4950.0),
+            (100.0, 4000.0),
+        ] {
             let r = find_candidates(&dd, Speed::Turbo, nfa, nfb, &mut planner);
             assert!(r.candidates.is_empty());
         }

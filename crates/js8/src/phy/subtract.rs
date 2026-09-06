@@ -149,7 +149,11 @@ mod tests {
             subtract(&mut dd, &cref, g.astart, &filter, &mut planner);
             let after: f32 = dd.iter().map(|x| x * x).sum();
             eprintln!("{speed:?}: residual {:.4}", after / before);
-            assert!(after / before < 0.05, "{speed:?}: residual {:.4}", after / before);
+            assert!(
+                after / before < 0.05,
+                "{speed:?}: residual {:.4}",
+                after / before
+            );
         }
     }
 

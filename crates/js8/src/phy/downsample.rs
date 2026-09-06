@@ -42,7 +42,11 @@ pub(crate) fn spectrum(dd: &[f32], speed: Speed, planner: &mut FftPlanner<f32>) 
     }
     planner.plan_fft_forward(g.ndfft1).process(&mut buf);
     buf.truncate(g.ndfft1 / 2 + 1);
-    Spectrum { bins: buf, ndfft1: g.ndfft1, df: 12_000.0 / g.ndfft1 as f32 }
+    Spectrum {
+        bins: buf,
+        ndfft1: g.ndfft1,
+        df: 12_000.0 / g.ndfft1 as f32,
+    }
 }
 
 /// Mix `f0` to baseband and decimate (JS8.cpp:1589-1647).
@@ -54,7 +58,10 @@ pub(crate) fn downsample(
 ) -> Vec<Complex<f32>> {
     let g = geom(speed);
     let baud = 12_000.0 / g.nsps as f32;
-    let top = (g.ndfft1 / 2) as f32;
+    // Use the spectrum's own recorded geometry (== geom(speed).ndfft1 by
+    // construction); the caller-owned Spectrum carries it so downsample reads
+    // it rather than re-deriving from the speed.
+    let top = (sp.ndfft1 / 2) as f32;
     let i0 = (f0_hz / sp.df).round() as isize; // :1602
     let it = ((f0_hz + 8.5 * baud) / sp.df).round().min(top) as usize; // :1603
     let ib = ((f0_hz - 1.5 * baud) / sp.df).round().max(0.0) as usize; // :1604
@@ -64,8 +71,8 @@ pub(crate) fn downsample(
     }
     let range = it - ib + 1;
     cd0[..range].copy_from_slice(&sp.bins[ib..=it]); // :1611-1613
-    // Head taper (reversed) over cd0[0..=NDD], tail taper over the last NDD+1
-    // of the range (:1100-1110, :1622-1623): taper(k) = 0.5·(1 + cos(kπ/NDD)).
+                                                     // Head taper (reversed) over cd0[0..=NDD], tail taper over the last NDD+1
+                                                     // of the range (:1100-1110, :1622-1623): taper(k) = 0.5·(1 + cos(kπ/NDD)).
     let ndd = g.ndd;
     if range > ndd {
         for k in 0..=ndd {
@@ -78,7 +85,7 @@ pub(crate) fn downsample(
     // that puts the bin of f0 at index 0 (:1629).
     cd0.rotate_left(((i0 - ib as isize) as usize) % g.ndfft2);
     planner.plan_fft_inverse(g.ndfft2).process(&mut cd0); // :1635 (unnormalised, as FFTW)
-    let fac = 1.0 / ((g.ndfft1 as f32) * (g.ndfft2 as f32)).sqrt(); // :1641
+    let fac = 1.0 / ((sp.ndfft1 as f32) * (g.ndfft2 as f32)).sqrt(); // :1641
     for c in &mut cd0 {
         *c *= fac;
     }
@@ -151,7 +158,10 @@ mod tests {
             let got = mean_mag(speed);
             // 5 %: the period is shorter than NDFFT1 at Slow/Normal, so the tone is
             // rectangular-windowed and the band-limited reconstruction ripples slightly.
-            assert!((got - expect).abs() / expect < 0.05, "{speed:?}: |cd| {got} vs {expect}");
+            assert!(
+                (got - expect).abs() / expect < 0.05,
+                "{speed:?}: |cd| {got} vs {expect}"
+            );
         }
     }
 }

@@ -63,6 +63,10 @@ pub(crate) fn word(chars12: &str) -> Word87 {
     let c = crate::proto::alphabet::sixbit_from_str(chars12).expect("12 sixbit chars");
     Word87::new(
         Payload72::from_chars12(c),
-        I3 { first: true, last: true, data: false },
+        I3 {
+            first: true,
+            last: true,
+            data: false,
+        },
     )
 }
