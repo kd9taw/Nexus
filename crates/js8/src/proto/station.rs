@@ -43,6 +43,51 @@ use crate::proto::frame::{encode_frame, format_snr, Frame};
 use crate::proto::reassembly::{Message, MessageEvent};
 use std::collections::HashMap;
 
+// ---- resource bounds (hostile input: the station processes frames from anyone with a TX) -----
+//
+// Every collection here grows from air-sourced data, and JS8 stations run unattended for days, so
+// each limit is picked from the protocol's own numbers, not a round guess:
+//
+// A JS8 frame carries at most 12 six-bit characters, and the §97.119 airtime cap tops a message
+// out at 99 frames (Turbo); a callsign is at most 11 characters even compound. So no single
+// air-sourced string is legitimately large: callsign-shaped fields clamp to 32 bytes, a message
+// body / display line to 512 bytes (well above any real multi-frame message), operator
+// info/status to 256. A relay chain has NO hop counter upstream (mainwindow.cpp) — a deliberate
+// omission we DIVERGE from for safety: the path is capped at 8 hops so a relay loop terminates.
+const MAX_CALL_LEN: usize = 32;
+const MAX_TEXT_LEN: usize = 512;
+const MAX_INFO_LEN: usize = 256;
+const MAX_PATH_HOPS: usize = 8;
+
+// Store-and-forward puts a stranger's text in our memory. Cap the entry count AND the total
+// stored bytes, and expire at 48 h — upstream's group-message lifetime. Over a cap, drop the
+// OLDEST and toast; never silently. `heard` is one row per station: a busy band holds a few
+// hundred, so cap at 500 and evict least-recently-heard. `allcall_replied` records a reply time
+// per callsign; past the reply interval it carries no information, so it self-prunes.
+const MAX_INBOX: usize = 100;
+const MAX_INBOX_BYTES: usize = 64 * 1024;
+const INBOX_TTL_MS: u64 = 48 * 60 * 60 * 1000;
+const MAX_HEARD: usize = 500;
+
+// The outbox drains once per period; pending auto-replies queue faster than that under a flood.
+// Cap both — refusing an auto-reply under flood is correct (the alternative transmits stale
+// traffic for hours), and the refusal is surfaced as a Toast, never silent.
+const MAX_OUTBOX: usize = 32;
+const MAX_PENDING: usize = 32;
+
+/// Truncate `s` to at most `max` bytes on a char boundary (air-sourced strings are never large;
+/// see the bounds block above).
+fn clamp_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut n = max;
+    while n > 0 && !s.is_char_boundary(n) {
+        n -= 1;
+    }
+    s[..n].to_string()
+}
+
 /// Which automatic (or operator) class produced a frame — the gate key B7 uses. CQ counts as
 /// Operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -359,10 +404,11 @@ impl Station {
     }
 
     fn record_heard(&mut self, m: &Message, actions: &mut Vec<StationAction>) {
-        let call = split_portable(&m.from).0.to_ascii_uppercase();
+        let call = clamp_str(split_portable(&m.from).0, MAX_CALL_LEN).to_ascii_uppercase();
         if call.is_empty() || call == "<....>" {
             return;
         }
+        let grid = m.grid.as_deref().map(|g| clamp_str(g, MAX_CALL_LEN));
         let stored = self
             .inbox
             .iter()
@@ -375,14 +421,14 @@ impl Station {
             h.last_ms = m.last_ms;
             h.last_hb = m.is_heartbeat() && m.cq.is_none();
             h.last_cq = m.cq.is_some();
-            if m.grid.is_some() {
-                h.grid = m.grid.clone();
+            if grid.is_some() {
+                h.grid = grid;
             }
             h.stored_msgs = stored;
         } else {
             self.heard.push(Heard {
                 call,
-                grid: m.grid.clone(),
+                grid,
                 snr_db: m.snr_db,
                 freq_hz: m.freq_hz,
                 speed: m.speed,
@@ -391,8 +437,72 @@ impl Station {
                 last_cq: m.cq.is_some(),
                 stored_msgs: stored,
             });
+            self.prune_heard();
         }
         actions.push(StationAction::HeardChanged);
+    }
+
+    /// Evict the least-recently-heard station when `heard` exceeds `MAX_HEARD`.
+    fn prune_heard(&mut self) {
+        while self.heard.len() > MAX_HEARD {
+            if let Some((idx, _)) = self.heard.iter().enumerate().min_by_key(|(_, h)| h.last_ms) {
+                self.heard.remove(idx);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Expire inbox entries older than 48 h, then, while over the count or byte cap, drop the
+    /// OLDEST (by `at_ms`) and toast — never silently. Returns whether anything changed.
+    fn prune_inbox(&mut self, now_ms: u64, actions: &mut Vec<StationAction>) {
+        let before = self.inbox.len();
+        self.inbox
+            .retain(|e| now_ms.saturating_sub(e.at_ms) < INBOX_TTL_MS);
+        let mut evicted = before != self.inbox.len();
+        while self.inbox.len() > MAX_INBOX || self.inbox_bytes() > MAX_INBOX_BYTES {
+            let Some((idx, _)) = self.inbox.iter().enumerate().min_by_key(|(_, e)| e.at_ms) else {
+                break;
+            };
+            self.inbox.remove(idx);
+            evicted = true;
+        }
+        if evicted {
+            actions.push(StationAction::InboxChanged);
+            actions.push(StationAction::Toast {
+                text: "Inbox full: oldest stored messages evicted".into(),
+                directed_to_me: false,
+            });
+        }
+    }
+
+    fn inbox_bytes(&self) -> usize {
+        self.inbox
+            .iter()
+            .map(|e| {
+                e.from.len()
+                    + e.to.len()
+                    + e.text.len()
+                    + e.path.iter().map(String::len).sum::<usize>()
+            })
+            .sum()
+    }
+
+    /// Drop `allcall_replied` entries older than the reply interval: past it they carry no
+    /// information (the rate limiter would allow a reply again), so the map self-limits.
+    fn prune_allcall(&mut self, now_ms: u64) {
+        let ttl = self.cfg.allcall_reply_interval_ms;
+        self.allcall_replied
+            .retain(|_, &mut t| now_ms.saturating_sub(t) < ttl);
+    }
+
+    /// Enqueue an outbox message unless the outbox is at `MAX_OUTBOX`; returns false if refused.
+    fn push_outbox(&mut self, out: OutMsg) -> bool {
+        if self.outbox.len() >= MAX_OUTBOX {
+            return false;
+        }
+        self.outbox.push_back(out);
+        true
     }
 
     fn maybe_hb_ack(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
@@ -429,6 +539,7 @@ impl Station {
                 }
             }
             self.allcall_replied.insert(from.clone(), now_ms);
+            self.prune_allcall(now_ms); // keep the map self-limiting, not one entry per call ever
         }
         let reply = match cmd {
             Command::SnrQuery => Some(format!("{from} SNR {}", format_snr(m.snr_db))),
@@ -452,12 +563,26 @@ impl Station {
     }
 
     fn handle_relay(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
-        let rest = m.text.trim();
+        let rest = clamp_str(m.text.trim(), MAX_TEXT_LEN);
         if m.from.contains('>') {
-            // I am the tail of a relay chain `A>B>…>me`: answer `A>B>…>me ACK` (unless the
-            // carried text is itself an autoreply command, which the caller handles instead).
-            let chain = format!("{}>{}", m.from, self.base());
-            let path: Vec<String> = chain.split('>').map(|s| s.trim().to_string()).collect();
+            // I am the tail of a relay chain `A>B>…>me`: answer `A>B>…>me ACK`. Upstream has NO
+            // hop counter, so a chain can grow forever — we cap it at MAX_PATH_HOPS (a deliberate,
+            // safety-motivated divergence: over the cap the chain is refused, not relayed).
+            let mut path: Vec<String> = m
+                .from
+                .split('>')
+                .take(MAX_PATH_HOPS - 1)
+                .map(|s| clamp_str(s.trim(), MAX_CALL_LEN))
+                .collect();
+            path.push(self.base());
+            if m.from.split('>').count() >= MAX_PATH_HOPS {
+                actions.push(StationAction::Toast {
+                    text: format!("Relay chain over {MAX_PATH_HOPS} hops refused"),
+                    directed_to_me: false,
+                });
+                return;
+            }
+            let chain = path.join(">");
             let text = format!("{chain} ACK");
             actions.push(StationAction::Relayed {
                 path,
@@ -474,7 +599,7 @@ impl Station {
         } else {
             // A relay REQUEST to me: retransmit the payload with `*DE* MYCALL`.
             let text = format!("{rest} *DE* {}", self.base());
-            let path = vec![m.from.clone(), self.base()];
+            let path = vec![clamp_str(&m.from, MAX_CALL_LEN), self.base()];
             actions.push(StationAction::Relayed {
                 path,
                 text: text.clone(),
@@ -502,9 +627,9 @@ impl Station {
         self.next_inbox_id += 1;
         self.inbox.push(InboxEntry {
             id,
-            from: split_portable(&m.from).0.to_ascii_uppercase(),
-            to: target,
-            text: text.to_string(),
+            from: clamp_str(split_portable(&m.from).0, MAX_CALL_LEN).to_ascii_uppercase(),
+            to: clamp_str(&target, MAX_CALL_LEN),
+            text: clamp_str(text, MAX_TEXT_LEN),
             path: Vec::new(),
             state: InboxState::Store,
             at_ms: now_ms,
@@ -512,6 +637,7 @@ impl Station {
             snr_db: m.snr_db,
         });
         actions.push(StationAction::InboxChanged);
+        self.prune_inbox(now_ms, actions); // cap count + bytes, drop oldest, never silently
     }
 
     fn handle_query_msg(&mut self, m: &Message, now_ms: u64, actions: &mut Vec<StationAction>) {
@@ -563,7 +689,7 @@ impl Station {
         if self.cfg.status.is_empty() {
             format!("IDLE {} VERSION Nexus", self.idle_minutes())
         } else {
-            self.cfg.status.clone()
+            clamp_str(&self.cfg.status, MAX_INFO_LEN)
         }
     }
 
@@ -587,12 +713,23 @@ impl Station {
         now_ms: u64,
         actions: &mut Vec<StationAction>,
     ) {
+        // Cap the pending auto-reply queue: under a flood, refuse and toast rather than growing.
+        // Refusing an auto-reply is correct — the alternative keys stale traffic for hours.
+        if self.pending.len() >= MAX_PENDING {
+            actions.push(StationAction::Toast {
+                text: "Reply queue full: auto-reply dropped".into(),
+                directed_to_me: false,
+            });
+            return;
+        }
         let fires_at_ms = now_ms + self.reply_delay_ms();
+        let to = clamp_str(to, MAX_CALL_LEN);
+        let text = clamp_str(text, MAX_TEXT_LEN);
         let display = format!("{}: {text}", self.base());
         self.pending.push(Pending {
             origin,
-            to: to.to_string(),
-            text: text.to_string(),
+            to: to.clone(),
+            text,
             display: display.clone(),
             fires_at_ms,
             freq_hint,
@@ -618,6 +755,9 @@ impl Station {
     /// Once per second: advance the HB schedule and check the idle watchdog.
     pub fn tick(&mut self, now_ms: u64) -> Vec<StationAction> {
         let mut actions = Vec::new();
+        // reclaim aged state each tick (inbox 48 h expiry + caps, allcall interval prune).
+        self.prune_inbox(now_ms, &mut actions);
+        self.prune_allcall(now_ms);
         // idle watchdog
         if self.cfg.idle_watchdog_min > 0 && !self.idle_tripped {
             let limit = self.cfg.idle_watchdog_min as u64 * 60 * 1000;
@@ -675,7 +815,9 @@ impl Station {
             if self.pending[i].fires_at_ms <= period_start_ms {
                 let p = self.pending.remove(i);
                 if let Ok(out) = self.compose_out(p.origin, &p.text, p.freq_hint) {
-                    self.outbox.push_back(out);
+                    // If the outbox is full, the reply is dropped rather than queued behind stale
+                    // traffic (bounded downstream of the surfaced `MAX_PENDING` cap).
+                    let _ = self.push_outbox(out);
                 }
             } else {
                 i += 1;
@@ -732,14 +874,14 @@ impl Station {
         self.mark_active(now_ms);
         let seq = frames(&self.cfg.mycall, to, text, self.cfg.speed)?;
         let n = seq.len();
-        self.outbox.push_back(OutMsg {
+        let out = OutMsg {
             origin: Origin::Operator,
             display: format!("{}: {text}", self.base()),
             frames: seq,
             cursor: 0,
             freq_hint: FreqHint::Dial,
-        });
-        Ok(n)
+        };
+        Ok(if self.push_outbox(out) { n } else { 0 })
     }
 
     pub fn send_command(
@@ -758,14 +900,14 @@ impl Station {
         };
         let seq = frames(&self.cfg.mycall, None, &line, self.cfg.speed)?;
         let n = seq.len();
-        self.outbox.push_back(OutMsg {
+        let out = OutMsg {
             origin: Origin::Operator,
             display: format!("{}: {line}", self.base()),
             frames: seq,
             cursor: 0,
             freq_hint: FreqHint::Dial,
-        });
-        Ok(n)
+        };
+        Ok(if self.push_outbox(out) { n } else { 0 })
     }
 
     pub fn call_cq(&mut self, idx: u8, now_ms: u64) -> Result<(), ComposeError> {
@@ -773,13 +915,14 @@ impl Station {
         let cqs = crate::proto::alphabet::CQS[(idx & 7) as usize];
         let line = format!("{cqs} {}", self.cfg.grid);
         let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
-        self.outbox.push_back(OutMsg {
+        let out = OutMsg {
             origin: Origin::Operator,
             display: format!("{}: @ALLCALL {line}", self.base()),
             frames: seq,
             cursor: 0,
             freq_hint: FreqHint::Dial,
-        });
+        };
+        self.push_outbox(out);
         Ok(())
     }
 
@@ -791,13 +934,14 @@ impl Station {
     fn enqueue_heartbeat(&mut self, _now_ms: u64) -> Result<(), ComposeError> {
         let line = format!("HEARTBEAT {}", self.cfg.grid);
         let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
-        self.outbox.push_back(OutMsg {
+        let out = OutMsg {
             origin: Origin::Heartbeat,
             display: format!("{}: @HB {line}", self.base()),
             frames: seq,
             cursor: 0,
             freq_hint: FreqHint::HbSubband(0.0),
-        });
+        };
+        self.push_outbox(out);
         Ok(())
     }
 
@@ -962,6 +1106,22 @@ fn query_msg_id(m: &Message) -> Option<u32> {
     let t = m.text.trim();
     let rest = t.strip_prefix("MSG ").or_else(|| t.strip_prefix("MSGS "))?;
     rest.split_whitespace().next()?.parse().ok()
+}
+
+#[cfg(test)]
+impl Station {
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+    pub(crate) fn outbox_len(&self) -> usize {
+        self.outbox.len()
+    }
+    pub(crate) fn heard_len(&self) -> usize {
+        self.heard.len()
+    }
+    pub(crate) fn allcall_len(&self) -> usize {
+        self.allcall_replied.len()
+    }
 }
 
 #[cfg(test)]
@@ -1300,5 +1460,282 @@ mod tests {
             .inbox()
             .iter()
             .any(|e| e.to == "K1ABC" && e.state == InboxState::Store));
+    }
+
+    // ---- resource-exhaustion / hostile-input bounds (security fix) ----
+
+    #[test]
+    fn inbox_is_bounded_under_a_flood_of_msg_to_from_cycled_callsigns() {
+        let mut s = Station::new(cfg());
+        for i in 0..5000u32 {
+            let from = format!("K{}AAA", i % 10);
+            let to = format!("T{i:04}X");
+            let mut acts = s.on_event(
+                &directed(
+                    &from,
+                    "KD9TAW",
+                    Some(Command::MsgTo),
+                    None,
+                    &format!("{to} HELLO {i}"),
+                    -5,
+                ),
+                i as u64 * 1000,
+            );
+            let _ = acts.drain(..);
+        }
+        assert!(
+            s.inbox().len() <= 100,
+            "inbox grew unbounded: {} entries",
+            s.inbox().len()
+        );
+    }
+
+    #[test]
+    fn inbox_eviction_is_surfaced_and_normal_traffic_is_not_evicted() {
+        // positive control: a handful of stores stays put, no eviction toast.
+        let mut s = Station::new(cfg());
+        for i in 0..5u32 {
+            let acts = s.on_event(
+                &directed(
+                    "W1AW",
+                    "KD9TAW",
+                    Some(Command::MsgTo),
+                    None,
+                    &format!("T{i} HI {i}"),
+                    -5,
+                ),
+                i as u64,
+            );
+            assert!(!acts.iter().any(
+                |a| matches!(a, StationAction::Toast { text, .. } if text.contains("Inbox full"))
+            ));
+        }
+        assert_eq!(s.inbox().len(), 5);
+        // now flood past the cap: eviction is surfaced (never silent) and the oldest goes.
+        let mut saw_evict = false;
+        for i in 0..2000u32 {
+            let acts = s.on_event(
+                &directed(
+                    "W1AW",
+                    "KD9TAW",
+                    Some(Command::MsgTo),
+                    None,
+                    &format!("T{i} HI {i}"),
+                    -5,
+                ),
+                100 + i as u64,
+            );
+            if acts.iter().any(
+                |a| matches!(a, StationAction::Toast { text, .. } if text.contains("Inbox full")),
+            ) {
+                saw_evict = true;
+            }
+        }
+        assert!(saw_evict, "eviction happened but was never surfaced");
+        assert!(s.inbox().len() <= 100);
+    }
+
+    #[test]
+    fn inbox_bytes_and_48h_expiry_are_enforced() {
+        // byte cap: even under 100 entries, oversized bodies cannot blow past 64 KB.
+        let mut s = Station::new(cfg());
+        for i in 0..100u32 {
+            s.on_event(
+                &directed(
+                    "W1AW",
+                    "KD9TAW",
+                    Some(Command::MsgTo),
+                    None,
+                    &format!("T{i} {}", "X".repeat(2000)),
+                    -5,
+                ),
+                i as u64,
+            );
+        }
+        let bytes: usize = s.inbox().iter().map(|e| e.text.len()).sum();
+        assert!(bytes <= 64 * 1024 + 512, "inbox bytes unbounded: {bytes}");
+        // 48 h expiry: a stored message older than the TTL is reclaimed on the next tick.
+        let mut s2 = Station::new(cfg());
+        s2.on_event(
+            &directed(
+                "W1AW",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                "K1ABC HELLO",
+                -5,
+            ),
+            1000,
+        );
+        assert_eq!(s2.inbox().len(), 1);
+        s2.tick(1000 + 48 * 60 * 60 * 1000 + 1);
+        assert!(
+            s2.inbox().is_empty(),
+            "48 h expiry did not reclaim the entry"
+        );
+    }
+
+    #[test]
+    fn heard_is_bounded_and_normal_population_is_kept() {
+        // positive control: a small band is fully retained.
+        let mut s = Station::new(cfg());
+        for i in 0..50u32 {
+            s.on_event(&heartbeat(&format!("N{i:03}AA"), -10), i as u64 * 1000);
+        }
+        assert_eq!(s.heard_len(), 50);
+        // flood distinct callsigns → capped, least-recently-heard evicted.
+        for i in 0..5000u32 {
+            s.on_event(
+                &heartbeat(&format!("K{i:04}Z"), -10),
+                100000 + i as u64 * 1000,
+            );
+        }
+        assert!(
+            s.heard_len() <= 500,
+            "heard grew unbounded: {}",
+            s.heard_len()
+        );
+    }
+
+    #[test]
+    fn allcall_replied_self_prunes_past_the_interval() {
+        let mut s = Station::new(cfg());
+        // positive control: a few distinct stations inside the interval are all remembered.
+        for i in 0..5u32 {
+            s.on_event(
+                &directed(
+                    &format!("K{i}XYZ"),
+                    "@ALLCALL",
+                    Some(Command::SnrQuery),
+                    None,
+                    "",
+                    -7,
+                ),
+                i as u64 * 1000,
+            );
+        }
+        assert_eq!(s.allcall_len(), 5);
+        // flood distinct callsigns spread over long gaps → entries older than the 15-min interval
+        // are dropped, so the map never grows one-per-station-ever.
+        for i in 0..5000u32 {
+            s.on_event(
+                &directed(
+                    &format!("W{i:04}"),
+                    "@ALLCALL",
+                    Some(Command::SnrQuery),
+                    None,
+                    "",
+                    -7,
+                ),
+                1_000_000 + i as u64 * 1000,
+            );
+        }
+        assert!(
+            s.allcall_len() <= 16 * 60 + 5,
+            "allcall map unbounded: {}",
+            s.allcall_len()
+        );
+    }
+
+    #[test]
+    fn pending_and_outbox_refuse_under_a_direct_to_me_flood() {
+        let mut s = Station::new(cfg());
+        // positive control: a few direct queries all queue.
+        for i in 0..5u32 {
+            s.on_event(
+                &directed(
+                    &format!("K{i}ABC"),
+                    "KD9TAW",
+                    Some(Command::SnrQuery),
+                    None,
+                    "",
+                    -7,
+                ),
+                i as u64,
+            );
+        }
+        assert_eq!(s.pending_len(), 5);
+        // flood direct-to-me (NOT rate-limited like @ALLCALL) → pending is capped and refusals
+        // are surfaced as toasts, never grown.
+        let mut refused = false;
+        for i in 0..5000u32 {
+            let acts = s.on_event(
+                &directed(
+                    &format!("N{i:04}"),
+                    "KD9TAW",
+                    Some(Command::SnrQuery),
+                    None,
+                    "",
+                    -7,
+                ),
+                100 + i as u64,
+            );
+            if acts.iter().any(|a| matches!(a, StationAction::Toast { text, .. } if text.contains("Reply queue full"))) { refused = true; }
+        }
+        assert!(
+            refused,
+            "flood exceeded the cap but no refusal was surfaced"
+        );
+        assert!(
+            s.pending_len() <= 32,
+            "pending unbounded: {}",
+            s.pending_len()
+        );
+        // drain does not let the outbox grow past its cap either.
+        let mut rng = || 0u32;
+        for k in 0..200u64 {
+            let _ = s.next_frame(1_000_000 + k * 15000, &|_| false, &mut rng);
+        }
+        assert!(s.outbox_len() <= 32, "outbox unbounded: {}", s.outbox_len());
+    }
+
+    #[test]
+    fn air_sourced_strings_and_relay_depth_are_clamped() {
+        // a giant MSG TO: body is truncated to the text cap before storage.
+        let mut s = Station::new(cfg());
+        s.on_event(
+            &directed(
+                "W1AW",
+                "KD9TAW",
+                Some(Command::MsgTo),
+                None,
+                &format!("K1ABC {}", "A".repeat(10_000)),
+                -5,
+            ),
+            0,
+        );
+        assert!(
+            s.inbox()[0].text.len() <= 512,
+            "stored text not clamped: {}",
+            s.inbox()[0].text.len()
+        );
+        // a relay chain over the hop cap is refused, not relayed forever.
+        let mut s2 = Station::new(cfg());
+        let long_chain = (0..50)
+            .map(|i| format!("K{i}AA"))
+            .collect::<Vec<_>>()
+            .join(">");
+        let acts = s2.on_event(
+            &directed(&long_chain, "KD9TAW", Some(Command::Relay), None, "HI", -5),
+            0,
+        );
+        assert!(acts.iter().any(
+            |a| matches!(a, StationAction::Toast { text, .. } if text.contains("Relay chain"))
+        ));
+        assert!(
+            !acts
+                .iter()
+                .any(|a| matches!(a, StationAction::Relayed { .. })),
+            "an over-long chain was still relayed"
+        );
+        // a short chain still relays (positive control).
+        let mut s3 = Station::new(cfg());
+        let acts = s3.on_event(
+            &directed("W1AW>N0XYZ", "KD9TAW", Some(Command::Relay), None, "HI", -5),
+            0,
+        );
+        assert!(acts
+            .iter()
+            .any(|a| matches!(a, StationAction::Relayed { .. })));
     }
 }
