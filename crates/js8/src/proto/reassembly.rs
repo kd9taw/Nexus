@@ -139,6 +139,12 @@ pub fn render_directed(m: &Message) -> String {
 
 const CLOSE_MS: u64 = 60_000;
 const DROP_MS: u64 = 90_000;
+/// Hard ceiling on simultaneously-open reassembly buffers. `age` bounds `open` in practice
+/// (buffers past DROP_MS drop), so this fires only against a pathological flood of one-frame
+/// decodes at distinct offsets; the least-recently-touched buffer is evicted (LRU), matching
+/// the count caps in station.rs. The JS8 decode band holds ~78 50 Hz slots per speed, so 128
+/// clears a very busy real band across speeds with headroom.
+const MAX_OPEN_BUFFERS: usize = 128;
 
 /// A compound-callsign announcement queued to resolve a `<....>` placeholder.
 #[derive(Debug, Clone)]
@@ -361,6 +367,11 @@ impl Reassembler {
         self.open.clear();
     }
 
+    #[cfg(test)]
+    fn open_len(&self) -> usize {
+        self.open.len()
+    }
+
     /// Find (or, clearing on `first`, create) the buffer for this frame's offset.
     fn buffer_for(&mut self, rx: &RawDecode, now_ms: u64, first: bool) -> &mut Buffer {
         if first {
@@ -374,6 +385,14 @@ impl Reassembler {
             b.last_ms = now_ms;
             b.frames = b.frames.saturating_add(1);
             return &mut self.open[idx];
+        }
+        if self.open.len() >= MAX_OPEN_BUFFERS {
+            // LRU eviction: abandon the least-recently-touched buffer incomplete, exactly as
+            // `age` does past DROP_MS, so `open` can never grow without bound under a flood
+            // of distinct-offset one-frame decodes.
+            if let Some(lru) = (0..self.open.len()).min_by_key(|&i| self.open[i].last_ms) {
+                self.open.remove(lru);
+            }
         }
         self.open.push(Buffer {
             offset: rx.freq_hz,
@@ -522,6 +541,43 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    /// FINDING 3: `open` has a hard cap with LRU eviction, so a flood of distinct-offset
+    /// one-frame decodes cannot grow it without bound (aging bounds it in practice; this is
+    /// the ceiling). Feeding the open head of a multi-frame message at many distinct offsets
+    /// keeps the count at `MAX_OPEN_BUFFERS`, and the oldest are the ones evicted.
+    #[test]
+    fn open_buffers_are_capped_with_lru_eviction() {
+        let to = CallRef::Base("W1AW".into());
+        let seq = frames(
+            "KD9TAW",
+            Some(&to),
+            "A LONG MULTIFRAME MESSAGE FOR THE OPEN-BUFFER CAP TEST",
+            Speed::Fast,
+        )
+        .unwrap();
+        assert!(
+            seq.len() > 1,
+            "need a multi-frame message so the head stays open"
+        );
+        let mut r = Reassembler::new();
+        for i in 0..(MAX_OPEN_BUFFERS + 20) {
+            let freq = 200.0 + i as f32 * 30.0; // distinct offsets, well past drift
+            r.feed(
+                &raw(&seq[0].0, seq[0].1, Speed::Fast, freq),
+                i as u64 * 1000,
+            );
+            assert!(
+                r.open_len() <= MAX_OPEN_BUFFERS,
+                "open buffers never exceed the cap (at i={i})"
+            );
+        }
+        assert_eq!(
+            r.open_len(),
+            MAX_OPEN_BUFFERS,
+            "the cap holds after the flood"
+        );
     }
 
     #[test]
