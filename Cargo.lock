@@ -1253,6 +1253,7 @@ dependencies = [
  "ft2",
  "ft4",
  "ft8",
+ "js8",
  "jt65",
  "msk144",
  "q65",

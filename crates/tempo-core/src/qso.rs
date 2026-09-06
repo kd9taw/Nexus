@@ -1576,6 +1576,7 @@ mod start_context_tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }]);
         assert_eq!(s.state, State::Done);
@@ -1592,6 +1593,7 @@ mod start_context_tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }
@@ -2073,6 +2075,7 @@ mod harq_seq_tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }

@@ -36,6 +36,12 @@ pub struct Decode {
     ///
     /// [`NativeSource`]: crate::NativeSource
     pub mode: Option<ModeKind>,
+    /// The 11 raw `Word87` bytes of a JS8 decode — 87 info bits MSB-first (72 payload +
+    /// 3 i3 + 12 CRC-12), CRC-verified by the modem. `Some` ONLY from `Js8Mode`; every other
+    /// `From` impl and every companion/UDP row leaves it `None`. Rides beside `message` (the
+    /// JS8Call-rendered line) so ALL.TXT, the roster and UDP need no JS8 knowledge while the
+    /// engine's JS8 adapter parses the typed word instead of re-parsing text.
+    pub raw: Option<[u8; 11]>,
 }
 
 impl From<tempo_fast::Decode> for Decode {
@@ -53,6 +59,7 @@ impl From<tempo_fast::Decode> for Decode {
             // The source (NativeSource / WsjtxUdpSource) tags the mode; the raw
             // type conversion can't tell native FT1 from DX1's reuse of it.
             mode: None,
+            raw: None,
         }
     }
 }
@@ -70,6 +77,7 @@ impl From<fst4::Decode> for Decode {
             // FST4 has no redundancy-version concept (that is FT1's IR-HARQ).
             rv: None,
             mode: None,
+            raw: None,
         }
     }
 }
@@ -97,6 +105,7 @@ impl From<q65::Decode> for Decode {
             // No redundancy-version concept (that is FT1's IR-HARQ).
             rv: None,
             mode: None,
+            raw: None,
         }
     }
 }
@@ -120,6 +129,7 @@ impl From<msk144::Decode> for Decode {
             qual: 0.0,
             rv: None,
             mode: None,
+            raw: None,
         }
     }
 }
@@ -150,6 +160,7 @@ impl From<ft2::Decode> for Decode {
             // No redundancy-version concept (that is FT1's IR-HARQ).
             rv: None,
             mode: None,
+            raw: None,
         }
     }
 }
@@ -177,6 +188,7 @@ impl From<jt65::Decode> for Decode {
             qual: 0.0,
             rv: None,
             mode: None,
+            raw: None,
         }
     }
 }
@@ -205,6 +217,7 @@ impl From<wspr::Decode> for Decode {
             qual: 0.0,
             rv: None,
             mode: None,
+            raw: None,
         }
     }
 }
@@ -221,6 +234,7 @@ impl From<ft8::Decode> for Decode {
             qual: d.qual,
             rv: None,
             mode: None,
+            raw: None,
         }
     }
 }
@@ -237,6 +251,28 @@ impl From<ft4::Decode> for Decode {
             qual: d.qual,
             rv: None,
             mode: None,
+            raw: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_is_none_for_every_non_js8_source() {
+        // `raw` is the JS8 word carrier and NOTHING else; every other From impl leaves it None
+        // so a consumer that sees Some(raw) can trust it is a Word87.
+        let d: Decode = ft2::Decode {
+            message: "CQ KD9TAW EN52".to_string(),
+            snr: -5,
+            dt: 0.1,
+            freq: 1500.0,
+            ap_type: 0,
+        }
+        .into();
+        assert_eq!(d.raw, None);
+        assert_eq!(d.mode, None);
     }
 }

@@ -18902,6 +18902,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }
@@ -23430,6 +23431,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }
@@ -23490,6 +23492,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: Some(modes::ModeKind::Wspr),
         };
         e.last_decodes = vec![wspr.clone()];
@@ -23531,6 +23534,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: Some(modes::ModeKind::Wspr),
         };
         e.ingest_decodes_for_test(std::slice::from_ref(&wspr), 1);
@@ -25830,6 +25834,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }

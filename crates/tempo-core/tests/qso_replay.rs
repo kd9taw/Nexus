@@ -84,6 +84,7 @@ fn decode_of(l: &Line) -> Decode {
         nap: 0,
         qual: 1.0,
         rv: None,
+        raw: None,
         mode: None,
     }
 }

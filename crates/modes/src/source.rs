@@ -254,6 +254,9 @@ fn wsjtx_mode_to_kind(m: &str) -> Option<ModeKind> {
         other if other.eq_ignore_ascii_case("FT4") => Some(ModeKind::Ft4),
         // Name only — see the ⚠️ above on why `+` is not mapped.
         other if other.eq_ignore_ascii_case("FT2") => Some(ModeKind::Ft2),
+        // JS8Call's UDP API is a different (JSON) protocol; this only lets a WSJT-X-style
+        // status line that says "JS8" label its rows truly. Normal is the representative.
+        other if other.eq_ignore_ascii_case("JS8") => Some(ModeKind::JS8_NORMAL),
         other if other.eq_ignore_ascii_case("Q65") => Some(ModeKind::Q65 {
             period_s: 60,
             submode: 0,
@@ -339,6 +342,9 @@ impl WsjtxUdpSource {
                     // Carry the upstream app's mode so the feed labels it truly,
                     // not as our selected tier.
                     mode: wsjtx_mode_to_kind(&mode),
+                    // A companion (UDP) row is never a native JS8 decode: no Word87 crosses
+                    // the wire, so the typed carrier stays None. Only `Js8Mode` sets it.
+                    raw: None,
                 });
                 true
             }

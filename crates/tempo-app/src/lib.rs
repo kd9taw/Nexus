@@ -988,6 +988,7 @@ mod tests {
             nap: 0,
             qual: 1.0,
             rv: None,
+            raw: None,
             mode: None,
         }
     }
