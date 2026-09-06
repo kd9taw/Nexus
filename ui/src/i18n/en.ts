@@ -5279,6 +5279,44 @@ export const EN = {
   'settings.psk.rxAutoArm.hint':
     'The PSK screen starts the decoder as soon as you open it — click a trace on the waterfall and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). Stopping the receiver yourself is already remembered for the rest of the session. This arms the RECEIVER only — transmitting is never armed for you.',
 
+  // ── Settings ▸ JS8 ──────────────────────────────────────────────────────────────────
+  // Speed names (Slow/Normal/Fast/Turbo) and the command words (SNR?, GRID?, HEARTBEAT SNR,
+  // MSG TO:, @ALLCALL, @GROUP) are the mode's own vocabulary and stay verbatim in every locale.
+  'settings.js8.legend': 'JS8',
+  'settings.js8.receiving.title': 'Speed & receiving',
+  'settings.js8.speed.label': 'Transmit speed',
+  'settings.js8.speed.hint':
+    'The speed your frames go out at, and the period the TX clock follows: Slow 30 s, Normal 15 s, Fast 10 s, Turbo 6 s. Normal is what most of the band runs. The speed chips in the JS8 header change this same setting.',
+  'settings.js8.rxSpeeds.label': 'Decode these speeds',
+  'settings.js8.rxSpeeds.hint':
+    'All four are decoded at once by default, as JS8Call does — a Slow station and a Turbo station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C).',
+  'settings.js8.automatic.title': 'Automatic transmissions',
+  'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
+  'settings.js8.hbIntervalMin.hint':
+    '0 = a heartbeat only when you press HB. Otherwise, while the HB chip is on, one goes out every this-many minutes on a random free slot between 500 and 1000 Hz. The HB chip itself is never remembered across launches, and nothing keys unless TX is on.',
+  'settings.js8.hbAck.label': 'Answer heartbeats',
+  'settings.js8.hbAck.hint':
+    'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
+  'settings.js8.autoreply.label': 'Auto-reply to queries',
+  'settings.js8.autoreply.hint':
+    'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered after a one-period countdown you can cancel in the cockpit. @ALLCALL queries are answered at most once per station every 15 minutes. Needs TX on.',
+  'settings.js8.relay.label': 'Relay for other stations',
+  'settings.js8.relay.hint':
+    'On by default, as in JS8Call: a message routed through your callsign is passed along, and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
+  'settings.js8.idleWatchdogMin.label': 'Idle watchdog (minutes)',
+  'settings.js8.idleWatchdogMin.hint':
+    'After this long with nothing typed, heartbeats, auto-replies and relaying all switch off and the cockpit says so — the JS8Call rule, so an unattended station goes quiet. 60 by default; 0 turns the watchdog off; anything below 5 counts as 5. TX enable is left as it was.',
+  'settings.js8.station.title': 'Station text',
+  'settings.js8.info.label': 'INFO',
+  'settings.js8.info.hint':
+    'What an INFO? query gets back — rig, antenna, power, a QTH. Upper-case letters, digits and basic punctuation pack tightest; anything else costs extra frames.',
+  'settings.js8.status.label': 'STATUS',
+  'settings.js8.status.hint':
+    'What a STATUS? query gets back. Leave it blank for the JS8Call form: IDLE, the idle minutes, and the app name.',
+  'settings.js8.groups.label': 'Groups',
+  'settings.js8.groups.hint':
+    'The @GROUP names you belong to, comma-separated — a message to one of them counts as addressed to you. @ALLCALL is everyone and is always on.',
+
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its
   // duration and its raster — and are data, not prose. `{{freq}}` is the ISS downlink and

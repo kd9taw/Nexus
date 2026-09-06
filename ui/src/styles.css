@@ -20195,6 +20195,15 @@ button.sat-chip:disabled {
 .js8-queue-item.origin-operator .js8-queue-text {
   color: var(--accent);
 }
+/* Settings ▸ Digital ▸ JS8: the four decode-speed switches on one row. */
+.js8-rx-speeds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.js8-rx-speeds .settings-toggle {
+  flex: 0 0 auto;
+}
 /* Stop button in the macro row — live (red-tinted) only while sending. */
 .rtty-stop:not(:disabled) {
   color: var(--state-weak);

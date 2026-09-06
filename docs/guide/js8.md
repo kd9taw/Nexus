@@ -13,7 +13,10 @@ canned exchange is not a conversation.
 Digital group of the rail after APRS. Entering the screen tunes the rig to the JS8
 watering hole for the current band (7.078, 14.078, 3.578 … — JS8Call's own list, USB) and
 starts decoding every speed at once. Nothing transmits until you enable TX in the
-header, every session.
+header, every session. The mode's own switches — transmit speed, which speeds to
+decode, heartbeat interval, the three automatic-reply switches, the idle watchdog and
+your INFO/STATUS/group texts — are in
+[Settings ▸ Digital ▸ JS8](settings-reference.md#js8).
 
 ## The tour
 

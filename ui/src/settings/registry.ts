@@ -300,6 +300,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan'],
   },
   {
+    id: 'js8',
+    label: 'JS8',
+    tab: 'digital',
+    keywords: ['js8', 'js8call', 'heartbeat', 'hb', 'autoreply', 'relay', 'inbox',
+      'store and forward', 'slow', 'normal', 'fast', 'turbo', '7.078', '14.078',
+      'idle watchdog', 'allcall'],
+  },
+  {
     id: 'sstv',
     label: 'SSTV',
     tab: 'digital',
