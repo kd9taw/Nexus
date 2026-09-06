@@ -52,3 +52,19 @@ fn directed_fixture_reads_with_the_expected_shape() {
     assert!(rows.iter().any(|r| r.text == "KD2UWR: @HB HEARTBEAT"));
     assert!(rows.iter().any(|r| r.text.contains(" HEARTBEAT SNR ")));
 }
+
+#[test]
+fn jsc_blob_matches_its_sha256_pin() {
+    let pin = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/proto/jsc/dict.sha256"
+    ))
+    .unwrap();
+    let canonical = js8::proto::jsc::canonical_bytes();
+    assert_eq!(common::hex(&common::sha256(&canonical)), pin.trim(), "dict.bin does not inflate to the pinned canonical table — regenerate with scripts/gen-js8-jsc-dict.mjs");
+    assert_eq!(
+        pin.trim(),
+        "146c354f9804e48c68d9ae45d6836fbb6228178fd080fe8176ba9bdba7f201a4",
+        "the pin itself moved: upstream jsc_list.cpp changed under the pinned commit?"
+    );
+}

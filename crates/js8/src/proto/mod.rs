@@ -12,5 +12,6 @@ pub mod command;
 pub mod crc16;
 pub mod grid;
 pub mod huffman;
+pub mod jsc;
 
 pub use command::Command;

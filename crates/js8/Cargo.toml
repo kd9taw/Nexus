@@ -16,6 +16,10 @@ workspace = true
 rustfft = "6"
 # `Speed` and `Command` ride the settings/DTO wire (interfaces.md §0: rename_all = "lowercase").
 serde = { version = "1", features = ["derive"] }
+# JSC dictionary blob (raw deflate). Already in Cargo.lock transitively — no new crate.
+flate2 = "1"
 
 [dev-dependencies]
 serde_json = "1"
+# Property identities for the message layer (Task B4.5). Already in Cargo.lock via tempo-sstv.
+proptest = "1"

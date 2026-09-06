@@ -1050,6 +1050,8 @@ dependencies = [
 name = "js8"
 version = "0.1.0"
 dependencies = [
+ "flate2",
+ "proptest",
  "rustfft",
  "serde",
  "serde_json",
