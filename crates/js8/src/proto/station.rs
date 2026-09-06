@@ -795,6 +795,11 @@ impl Station {
     fn bump_hb_schedule(&mut self, now_ms: u64) {
         if self.hb_on && self.cfg.hb_interval_min > 0 {
             self.hb_next_ms = Some(now_ms + self.cfg.hb_interval_min as u64 * 60 * 1000);
+        } else {
+            // interval 0 = "on demand" = ONCE: clear the schedule so `tick` does not
+            // re-enqueue a heartbeat every drain cycle, and the cockpit shows no stuck past
+            // `hb_next_ms`. Re-arming (`set_hb`) schedules the next on-demand heartbeat.
+            self.hb_next_ms = None;
         }
     }
 
@@ -973,8 +978,21 @@ impl Station {
     }
 
     pub fn note_tx_done(&mut self, f: &TxFrame, now_ms: u64) {
+        // Display state, updated for EVERY origin.
         self.last_tx_display = Some(f.display.clone());
-        self.mark_active(now_ms);
+        // Idle-watchdog baseline: only OPERATOR TX resets it. JS8Call's `resetIdleTimer()`
+        // fires on UI key/mouse activity alone (mainwindow.cpp:2987), never on any TX — so
+        // its own heartbeats do NOT hold its idle watchdog off, and an idle station stops
+        // beaconing after `watchdog` minutes. If automatic origins (heartbeat/autoreply/
+        // relay) reset the baseline here, an unattended station beacons forever with no
+        // bound. Autoreply/relay stay bounded by the 6-minute wall clock (which automatic TX
+        // does not reset either — `js8_operator_verbs_restart_the_wall_clock_and_automatic_
+        // replies_do_not`). Operator TX resetting the baseline is the engine's proxy for the
+        // UI activity JS8Call watches — the same as upstream in the unattended case, never
+        // more lenient.
+        if f.origin == Origin::Operator {
+            self.mark_active(now_ms);
+        }
     }
 
     /// Stop TX / set_tier / set_mode: drop the outbox, pending replies and the HB schedule.
@@ -1403,6 +1421,98 @@ mod tests {
         assert!(
             drain(&mut s, 10 * 60 * 1000).is_none(),
             "the outbox and pending were cleared"
+        );
+    }
+
+    /// FINDING 1: automatic TX must NOT reset the idle watchdog. JS8Call resets its idle
+    /// timer only on UI key/mouse activity (mainwindow.cpp:2987 `resetIdleTimer()`), never on
+    /// any TX — so an unattended station's own heartbeats do not hold the watchdog off, and it
+    /// stops beaconing after `watchdog` minutes. Here a periodic HB station, ticked and drained
+    /// (each over `note_tx_done`'d as `plan_js8_tx` does), MUST still trip at 60 min. Positive
+    /// control: heartbeats DID fire, so "it stopped" is not a broken fixture.
+    #[test]
+    fn heartbeats_do_not_reset_the_idle_watchdog() {
+        let mut c = cfg();
+        c.idle_watchdog_min = 60;
+        c.hb_interval_min = 5; // a PERIODIC heartbeat
+        let mut s = Station::new(c);
+        s.mark_active(0); // session start at t = 0 (the engine seeds this on entry)
+        s.set_hb(true, 0);
+        let mut hb_sent = 0;
+        let mut tripped_at = None;
+        for min in 1..=61u64 {
+            let now = min * 60 * 1000;
+            if s.tick(now)
+                .iter()
+                .any(|a| matches!(a, StationAction::IdleTripped))
+            {
+                tripped_at = Some(min);
+                break;
+            }
+            // The engine sends every enqueued HB and notes it done — exactly `plan_js8_tx`.
+            while let Some(f) = drain(&mut s, now) {
+                s.note_tx_done(&f, now);
+                if f.origin == Origin::Heartbeat {
+                    hb_sent += 1;
+                }
+            }
+        }
+        assert!(hb_sent > 0, "positive control: heartbeats DID fire");
+        assert_eq!(
+            tripped_at,
+            Some(60),
+            "the idle watchdog must trip at 60 min despite the heartbeats"
+        );
+        assert!(!s.hb_on(), "the trip stands the heartbeat down");
+    }
+
+    /// Positive control for FINDING 1's fix: an OPERATOR over STILL resets the idle baseline —
+    /// the fix silences automatic origins only, it does not disable the reset entirely.
+    #[test]
+    fn an_operator_over_still_resets_the_idle_watchdog() {
+        let mut c = cfg();
+        c.idle_watchdog_min = 60;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        let t59 = 59 * 60 * 1000;
+        s.send(None, "HELLO", t59).expect("queues");
+        let f = drain(&mut s, t59).expect("an operator frame");
+        assert_eq!(f.origin, Origin::Operator);
+        s.note_tx_done(&f, t59);
+        s.tick(t59 + 59 * 60 * 1000);
+        assert!(!s.idle_tripped(), "the operator over reset the idle clock");
+        s.tick(t59 + 61 * 60 * 1000);
+        assert!(
+            s.idle_tripped(),
+            "…and 60 min after the operator over it trips"
+        );
+    }
+
+    /// FINDING 2: `hb_interval_min == 0` is "on demand" and must arm EXACTLY ONE heartbeat,
+    /// not one per drain cycle. Ticked and drained across ten periods, exactly one HB fires and
+    /// the schedule is cleared (no stuck past `hb_next_ms` for the cockpit to show).
+    #[test]
+    fn heartbeat_interval_zero_arms_exactly_one() {
+        let mut c = cfg();
+        c.hb_interval_min = 0; // on demand
+        let mut s = Station::new(c);
+        s.set_hb(true, 0);
+        let mut count = 0;
+        for min in 0..10u64 {
+            let now = min * 60 * 1000;
+            s.tick(now);
+            while let Some(f) = drain(&mut s, now) {
+                if f.origin == Origin::Heartbeat {
+                    count += 1;
+                }
+                s.note_tx_done(&f, now);
+            }
+        }
+        assert_eq!(count, 1, "interval 0 = on demand = exactly one heartbeat");
+        assert_eq!(
+            s.hb_next_ms(),
+            None,
+            "the on-demand schedule is cleared after firing (no stuck timestamp)"
         );
     }
 
