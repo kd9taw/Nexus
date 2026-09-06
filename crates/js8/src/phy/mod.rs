@@ -13,6 +13,10 @@ pub mod ldpc_tables;
 pub mod modulate;
 pub mod speed;
 
+mod params;
+#[cfg(test)]
+pub(crate) mod testutil;
+
 pub use crc12::crc12;
 pub use frame::{Payload72, Word87, I3};
 pub use modulate::{encode_word, modulate};
