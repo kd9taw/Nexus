@@ -352,7 +352,13 @@ impl Station {
                 text: crate::proto::reassembly::render_directed(m),
                 directed_to_me: true,
             });
-            self.last_activity_ms = now_ms; // directed traffic to me resets the idle + HB timers
+            // Defer a periodic heartbeat while a QSO is in progress — JS8Call's
+            // HeartbeatQSOPause. This is POLITENESS on frequency, not evidence a human is
+            // present, so it does NOT reset the idle-watchdog baseline: only operator TX
+            // (`note_tx_done` for `Origin::Operator`) and entering the tier (`mark_active`)
+            // do. A stranger calling us must not hold our unattended station on the air —
+            // JS8Call resets its idle timer on UI key/mouse activity alone, never on RX
+            // (mainwindow.cpp:2987). (No-op at interval 0, the on-demand case.)
             self.bump_hb_schedule(now_ms);
         }
 
@@ -1552,6 +1558,110 @@ mod tests {
         assert_eq!(
             fired, 1,
             "the on-demand heartbeat fires despite the inbound traffic"
+        );
+    }
+
+    /// FINDING 1's RX SIBLING: inbound directed traffic must NOT reset the idle-watchdog
+    /// baseline. The watchdog answers "is a human still here?"; a stranger calling us is not
+    /// evidence of that (JS8Call resets on UI key/mouse only, never on RX), and letting it reset
+    /// the timer means a third party can hold our unattended, autoreply-armed station on the air
+    /// indefinitely. An hour of inbound queries every 5 minutes MUST still trip the watchdog.
+    #[test]
+    fn inbound_traffic_does_not_hold_off_the_idle_watchdog() {
+        let mut c = cfg();
+        c.idle_watchdog_min = 60;
+        c.autoreply = true; // armed to answer
+        let mut s = Station::new(c);
+        s.mark_active(0); // session start; only the operator (or entering) resets this
+        let mut tripped_at = None;
+        for min in 1..=61u64 {
+            let now = min * 60 * 1000;
+            if min % 5 == 0 {
+                // a stranger calls us — not evidence a human is at the station
+                s.on_event(
+                    &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+                    now,
+                );
+            }
+            if s.tick(now)
+                .iter()
+                .any(|a| matches!(a, StationAction::IdleTripped))
+            {
+                tripped_at = Some(min);
+                break;
+            }
+        }
+        assert_eq!(
+            tripped_at,
+            Some(60),
+            "inbound traffic must not hold off the idle watchdog"
+        );
+        assert!(!s.config().autoreply, "…and the trip stands autoreply down");
+    }
+
+    /// Positive control for the RX-sibling fix: an OPERATOR verb during the same inbound window
+    /// DOES reset the baseline, so a station a human is actually working stays alive — the fix
+    /// gates the reset on presence, it does not turn the watchdog into an unconditional timer.
+    #[test]
+    fn an_operator_verb_during_inbound_traffic_still_resets_the_idle_baseline() {
+        let mut c = cfg();
+        c.idle_watchdog_min = 60;
+        c.autoreply = true;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        let mut tripped_at = None;
+        for min in 1..=61u64 {
+            let now = min * 60 * 1000;
+            if min % 5 == 0 {
+                s.on_event(
+                    &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+                    now,
+                );
+            }
+            if min == 50 {
+                // a human sends — this DOES reset the idle baseline
+                s.send(None, "HELLO", now).expect("operator send");
+                while let Some(f) = drain(&mut s, now) {
+                    s.note_tx_done(&f, now);
+                }
+            }
+            if s.tick(now)
+                .iter()
+                .any(|a| matches!(a, StationAction::IdleTripped))
+            {
+                tripped_at = Some(min);
+                break;
+            }
+        }
+        assert_eq!(
+            tripped_at, None,
+            "the operator send at min 50 keeps the station alive past min 61 (would trip at 110)"
+        );
+    }
+
+    /// The HB-schedule bump is KEPT on inbound traffic (JS8Call's HeartbeatQSOPause: defer a
+    /// periodic heartbeat while a QSO is in progress — politeness on frequency, not presence).
+    /// Gating the idle reset must NOT take the deferral with it.
+    #[test]
+    fn inbound_traffic_still_defers_a_periodic_heartbeat() {
+        let mut c = cfg();
+        c.hb_interval_min = 5; // periodic
+        let mut s = Station::new(c);
+        s.set_hb(true, 0); // hb_next_ms = 5 min
+        let before = s.hb_next_ms().unwrap();
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -5),
+            3 * 60 * 1000,
+        );
+        let after = s.hb_next_ms().unwrap();
+        assert!(
+            after > before,
+            "inbound traffic defers the next periodic heartbeat"
+        );
+        assert_eq!(
+            after,
+            3 * 60 * 1000 + 5 * 60 * 1000,
+            "deferred to now + interval (HeartbeatQSOPause)"
         );
     }
 
