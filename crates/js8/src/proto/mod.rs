@@ -11,5 +11,6 @@ pub mod callsign;
 pub mod command;
 pub mod crc16;
 pub mod grid;
+pub mod huffman;
 
 pub use command::Command;
