@@ -14,6 +14,8 @@
 //! ~/work/twowayfd/paritylab/js8/fetch_media_tests.sh is where bytes come from.
 #![allow(dead_code)] // each integration-test binary compiles this module separately
 
+pub mod golden;
+
 use std::path::{Path, PathBuf};
 
 /// FIPS 180-4 SHA-256 of `data`.

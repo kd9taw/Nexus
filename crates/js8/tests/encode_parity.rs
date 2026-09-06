@@ -52,17 +52,28 @@ fn sha256_helper_matches_fips_vectors_and_sees_a_flipped_bit() {
 }
 
 /// Every pinned upstream WAV is present and byte-identical to its pin, and the pinned set is
-/// exactly the three files NOTICE credits (A_2_9, A_3_3, E_2_1 — three distinct blobs).
+/// exactly the three WAVs NOTICE credits (A_2_9, A_3_3, E_2_1 — three distinct blobs) plus the
+/// two sanitised JS8Call log fixtures Task B4.1 appended (js8call_frames/js8call_directed.txt).
 #[test]
 fn upstream_media_test_fixtures_match_their_sha256_pins() {
     let verified = common::verify_fixture_pins();
     let mut names: Vec<&str> = verified.iter().map(|(n, _)| n.as_str()).collect();
     names.sort_unstable();
-    assert_eq!(names, ["A_2_9.wav", "A_3_3.wav", "E_2_1.wav"]);
+    assert_eq!(
+        names,
+        [
+            "A_2_9.wav",
+            "A_3_3.wav",
+            "E_2_1.wav",
+            "js8call_directed.txt",
+            "js8call_frames.txt"
+        ]
+    );
     // Sizes are protocol facts: 15 s and 30 s of 12 kHz PCM-16 mono. Upstream's files are a
     // canonical 44-byte header + the data chunk + a 164/170-byte TRAILING chunk, so assert
-    // the sample count from the `data` chunk length, never from the byte count.
-    for (name, path) in &verified {
+    // the sample count from the `data` chunk length, never from the byte count. (The two text
+    // fixtures carry no WAV `data` chunk — the sample-count fact is a WAV-only assertion.)
+    for (name, path) in verified.iter().filter(|(n, _)| n.ends_with(".wav")) {
         let bytes = std::fs::read(path).unwrap();
         let expect_samples = if name.starts_with('E') {
             30 * 12_000
