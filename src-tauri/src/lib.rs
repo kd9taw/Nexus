@@ -11470,12 +11470,12 @@ fn get_licensed_band_plan(
     use tempo_app::settings::OperatingMode;
     let eng = engine_lock(&state);
     let class = eng.settings().license_class;
-    // RTTY / SSTV / PSK: fixed standard watering-hole channels (like WSJT-X's
+    // RTTY / SSTV / PSK / JS8: fixed standard watering-hole channels (like WSJT-X's
     // per-mode dials), license-filtered per band — a Technician sees only the
-    // bands their class can key there (RTTY and PSK ride data privileges, SSTV
-    // rides phone).
+    // bands their class can key there (RTTY, PSK and JS8 ride data privileges, SSTV
+    // rides phone). JS8's list is JS8Call's FrequencyList defaults (bandplan::js8_band_plan).
     let lower = mode.to_ascii_lowercase();
-    if lower == "rtty" || lower == "sstv" || lower == "psk" {
+    if lower == "rtty" || lower == "sstv" || lower == "psk" || lower == "js8" {
         let (plan, priv_mode) = if lower == "rtty" {
             (
                 tempo_app::bandplan::rtty_band_plan(),
@@ -11486,6 +11486,8 @@ fn get_licensed_band_plan(
                 tempo_app::bandplan::psk_band_plan(),
                 OperatingMode::Keyboard,
             )
+        } else if lower == "js8" {
+            (tempo_app::bandplan::js8_band_plan(), OperatingMode::Digital)
         } else {
             (tempo_app::bandplan::sstv_band_plan(), OperatingMode::Phone)
         };
