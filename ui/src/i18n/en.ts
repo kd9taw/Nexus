@@ -7109,6 +7109,9 @@ export const EN = {
     'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
   'js8.dock.pending': 'Auto-reply to {{to}} in {{secs}} s: {{text}}',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
+  'js8.dock.pending.idle': 'Would reply to {{to}} — not armed (idle watchdog), nothing keys: {{text}}',
+  'js8.toast.idleTripped':
+    'JS8 idle watchdog: no operator activity for {{min}} min — heartbeat, autoreply and relay are off. TX stays as you left it; any send or switch re-arms them.',
   'js8.dock.pending.cancel.label': 'Cancel',
   'js8.dock.pending.cancel.title': 'Cancel this automatic reply before it goes out',
   'js8.dock.queue.title': 'Queued frames — one leaves per period while TX is on. F/L mark the first and last frame of a message.',

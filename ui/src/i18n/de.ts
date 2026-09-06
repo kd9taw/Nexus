@@ -4546,6 +4546,9 @@ export const DE: PartialCatalog = {
   "js8.dock.hbAck.title.armed": "Heartbeat-Bestätigungen sind SCHARF: jeder gehörte Heartbeat wird mit HEARTBEAT SNR auf einem zufälligen freien Platz beantwortet. Klicken zum Ausschalten.",
   "js8.dock.pending": "Auto-Antwort an {{to}} in {{secs}} s: {{text}}",
   "js8.dock.pending.txOff": "Würde {{to}} antworten — TX ist aus, nichts tastet: {{text}}",
+  "js8.dock.pending.idle": "Würde {{to}} antworten — nicht scharf (Leerlaufwächter), nichts tastet: {{text}}",
+  "js8.toast.idleTripped":
+    "JS8-Leerlaufwächter: {{min}} min ohne Bedienereingriff – heartbeat, autoreply und relay sind aus. TX bleibt wie eingestellt; jedes Senden oder jeder Schalter aktiviert sie wieder.",
   "js8.dock.pending.cancel.label": "Abbrechen",
   "js8.dock.pending.cancel.title": "Diese automatische Antwort abbrechen, bevor sie rausgeht",
   "js8.dock.queue.title": "Frames in der Warteschlange — bei eingeschaltetem TX geht pro Periode einer raus. F/L markieren den ersten und letzten Frame einer Nachricht.",

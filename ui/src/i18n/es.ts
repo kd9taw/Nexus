@@ -1257,6 +1257,9 @@ export const ES: PartialCatalog = {
   "js8.dock.hbAck.title.armed": "Confirmaciones de heartbeat ARMADAS: cada heartbeat oído se responde con HEARTBEAT SNR en un hueco libre al azar. Pulsa para desactivarlas.",
   "js8.dock.pending": "Respuesta automática a {{to}} en {{secs}} s: {{text}}",
   "js8.dock.pending.txOff": "Respondería a {{to}} — TX está apagado, nada transmite: {{text}}",
+  "js8.dock.pending.idle": "Respondería a {{to}}: no armado (vigilante de inactividad), nada transmite: {{text}}",
+  "js8.toast.idleTripped":
+    "Vigilante de inactividad JS8: {{min}} min sin actividad del operador; heartbeat, autoreply y relay están apagados. TX queda como estaba; cualquier envío o interruptor los vuelve a activar.",
   "js8.dock.pending.cancel.label": "Cancelar",
   "js8.dock.pending.cancel.title": "Cancelar esta respuesta automática antes de que salga",
   "js8.dock.queue.title": "Tramas en cola — sale una por periodo mientras TX está activado. F/L marcan la primera y la última trama de un mensaje.",

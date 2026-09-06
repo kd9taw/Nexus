@@ -4236,6 +4236,9 @@ export const JA: PartialCatalog = {
   "js8.dock.hbAck.title.armed": "ハートビート応答は有効(アーム済み):受信した各ハートビートにランダムな空きスロットで HEARTBEAT SNR を返します。クリックでオフ。",
   "js8.dock.pending": "{{secs}} 秒後に {{to}} へ自動応答: {{text}}",
   "js8.dock.pending.txOff": "{{to}} へ応答するはずでした — TX がオフのため何も送信しません: {{text}}",
+  "js8.dock.pending.idle": "{{to}} に応答するところでした — 未アーム（アイドル監視）、何も送信しません: {{text}}",
+  "js8.toast.idleTripped":
+    "JS8 アイドル監視: {{min}} 分間オペレーター操作がないため、heartbeat・autoreply・relay をオフにしました。TX はそのままです。送信またはスイッチ操作で再度有効になります。",
   "js8.dock.pending.cancel.label": "キャンセル",
   "js8.dock.pending.cancel.title": "この自動応答を送信前にキャンセル",
   "js8.dock.queue.title": "キュー中のフレーム — TX オンの間、1 周期に 1 つ送信されます。F/L はメッセージの最初と最後のフレームを示します。",

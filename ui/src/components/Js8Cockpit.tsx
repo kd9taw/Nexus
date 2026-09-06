@@ -168,6 +168,17 @@ export function Js8Cockpit({
     }
   }, [active])
 
+  // Rising-edge toast for the idle-watchdog trip: the automatic origins just stood down
+  // with no click behind it, so the operator is told ONCE per trip — not on every poll.
+  const idleTrippedRef = useRef(false)
+  useEffect(() => {
+    const tripped = js8?.idleTripped ?? false
+    if (tripped && !idleTrippedRef.current) {
+      pushToast(t('js8.toast.idleTripped', { min: js8?.idleLimitMin ?? 60 }), 'info', 8000)
+    }
+    idleTrippedRef.current = tripped
+  }, [js8?.idleTripped, js8?.idleLimitMin])
+
   // ENTER the mode on the rising edge of `active` (works unconfigured, spec §Works unconfigured):
   // `js8_enter` sets the tier and the dial. ⚠️ RX ONLY, and the ENGINE guarantees it — the call
   // confers neither TX-enable nor any automatic-origin arm.
@@ -344,6 +355,17 @@ export function Js8Cockpit({
         : t('js8.dock.estimate', { count: frames, secs: frames * speedInfo.periodS })
   const canSend = !overCap && (cmdId !== null ? toCall.trim() !== '' : text.trim() !== '')
   const pendingSecs = js8?.pendingReply ? Math.max(0, Math.ceil((js8.pendingReply.firesAtMs - now) / 1000)) : 0
+
+  /** Whether the pending reply's ORIGIN can key right now — the engine's per-origin arm
+   *  (switch && txEnabled && !idleTripped), not the latch alone. */
+  const pendingCanKey = (s: Js8State): boolean => {
+    const p = s.pendingReply
+    if (!p) return false
+    if (p.origin === 'autoReply') return s.armed.autoreply
+    if (p.origin === 'relay') return s.armed.relay
+    if (p.origin === 'hbAck') return s.armed.hbAck
+    return s.txEnabled
+  }
 
   /** Literal keys per origin, so the orphan guard sees each referenced. */
   const originLabel = (o: Js8Origin): string => {
@@ -840,9 +862,11 @@ export function Js8Cockpit({
         {js8?.pendingReply && (
           <div className="js8-dock-row js8-pending-row" role="status">
             <span className="js8-pending-text">
-              {js8.txEnabled
+              {pendingCanKey(js8)
                 ? t('js8.dock.pending', { to: js8.pendingReply.to, secs: pendingSecs, text: js8.pendingReply.display })
-                : t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
+                : !js8.txEnabled
+                  ? t('js8.dock.pending.txOff', { to: js8.pendingReply.to, text: js8.pendingReply.display })
+                  : t('js8.dock.pending.idle', { to: js8.pendingReply.to, text: js8.pendingReply.display })}
             </span>
             <button type="button" className="cw-macro js8-cancel" onClick={cancelPending} title={t('js8.dock.pending.cancel.title')}>
               {t('js8.dock.pending.cancel.label')}
