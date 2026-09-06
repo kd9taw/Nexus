@@ -24,6 +24,7 @@ import {
   MapPin,
   RotateCcw,
   Users,
+  MessagesSquare,
 } from 'lucide-react'
 import { Fragment, useState, type ButtonHTMLAttributes } from 'react'
 import { Tooltip, TooltipProvider } from './ui/Tooltip'
@@ -33,7 +34,7 @@ import { orderNav, moveNav, loadNavOrder, saveNavOrder, resetNavOrder } from '..
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every button's
 // TOOLTIP is prose and lives in the catalog. Its LABEL is prose only where the section is
-// named for itself: the six mode buttons (FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS) and
+// named for itself: the seven mode buttons (FT, Tempo, Phone, CW, RTTY, PSK, SSTV, APRS, JS8) and
 // the two named for an event or a programme (Field Day, POTA / SOTA) carry their names
 // verbatim below, because a mode name and a programme name are the same letters in every
 // language (`i18n/index.ts`, the invariant-token rule).
@@ -63,7 +64,7 @@ interface Props {
 }
 
 /** The cockpits grouped under "Digital" in the rail (FT · Tempo · RTTY · PSK · SSTV · APRS). */
-export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'psk' | 'sstv' | 'aprs'
+export type DigitalMode = 'digital' | 'tempo' | 'rtty' | 'psk' | 'sstv' | 'aprs' | 'js8'
 
 interface DigitalSub {
   mode: DigitalMode
@@ -125,6 +126,15 @@ const DIGITAL_SUBS: DigitalSub[] = [
     icon: MapPin,
     titleKey: 'nav.digital.aprs.title',
     active: (v) => v === 'aprs',
+  },
+  // JS8 is a STAGED section (registry defaultOff) — the filter below hides it until the
+  // operator turns it on in Settings ▸ Features, like RTTY/SSTV when disabled.
+  {
+    mode: 'js8',
+    label: 'JS8',
+    icon: MessagesSquare,
+    titleKey: 'nav.digital.js8.title',
+    active: (v) => v === 'js8',
   },
 ]
 

@@ -32,6 +32,7 @@ export type View =
   | 'psk'
   | 'sstv'
   | 'aprs'
+  | 'js8'
   | 'connect'
   | 'dxped'
   | 'sats'
@@ -256,6 +257,25 @@ export const FEATURES: FeatureDef[] = [
     // Global (no workspace — RX-first): monitoring decodes packets; a beacon is an explicit send.
     get oneLine() {
       return t('features.aprs.oneLine')
+    },
+  },
+  {
+    id: 'js8',
+    label: 'JS8',
+    kind: 'section',
+    category: 'Operate',
+    core: false,
+    dependsOn: [],
+    // Mode, not a goal — same doctrine as CW/Phone/RTTY/PSK: a goal profile never auto-enables it.
+    intents: [],
+    view: 'js8',
+    // STAGED (defaultOff): hidden from every profile, 'everything' included, until the operator
+    // turns it on in Settings ▸ Features. It flips on in a later release, after the on-air bench
+    // against JS8Call (spec B8). Global (no workspace): the view asserts the DIGITAL rig mode
+    // through rigModeForView and `js8_enter` sets the tier + the JS8 watering hole — RX only.
+    defaultOff: true,
+    get oneLine() {
+      return t('features.js8.oneLine')
     },
   },
   feature({

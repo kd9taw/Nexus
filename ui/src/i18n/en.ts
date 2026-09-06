@@ -7742,6 +7742,8 @@ export const EN = {
   'nav.digital.sstv.title': 'SSTV — slow-scan TV: received images decode into the gallery',
   'nav.digital.aprs.title':
     'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon',
+  'nav.digital.js8.title':
+    'JS8 — JS8Call-compatible keyboard mode: heartbeats, directed messages, relay and a store-and-forward inbox, all four speeds decoded at once',
   'nav.phone.title': 'Phone (SSB) operating — PTT, sideband, RF power, panadapter (casual)',
   'nav.cw.title': 'CW operating — keyboard + F-key macros, WPM, spectrum (casual)',
   'nav.connect.label': 'Connect',
@@ -8340,6 +8342,8 @@ export const EN = {
     'SSTV — slow-scan images auto-decode into a gallery (Martin/Scottie/Robot/PD).',
   'features.aprs.oneLine':
     'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon.',
+  'features.js8.oneLine':
+    'JS8 — JS8Call-compatible keyboard chat on FT8’s waveform: heartbeats, directed messages, relay, store-and-forward inbox.',
   'features.logbook.label': 'Logbook',
   'features.logbook.oneLine': 'Your ADIF contacts — the system of record.',
   'features.settings.label': 'Settings',
