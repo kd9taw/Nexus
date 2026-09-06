@@ -7,7 +7,9 @@
 
 pub mod costas;
 pub mod crc12;
+pub mod frame;
 pub mod speed;
 
 pub use crc12::crc12;
+pub use frame::{Payload72, Word87, I3};
 pub use speed::Speed;
