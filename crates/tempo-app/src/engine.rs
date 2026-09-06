@@ -688,6 +688,12 @@ use crate::settings::Settings;
 use crate::station::StationCore;
 use crate::AppState;
 
+/// The JS8 adapter (`crates/tempo-app/src/js8.rs`) — a CHILD of this module, so it reaches
+/// the engine's private fields with no visibility widening; the file lives beside this one.
+/// ⚠️ From here on, `js8` names THIS module; the crate is spelled `::js8::…` in engine.rs.
+#[path = "js8.rs"]
+pub mod js8;
+
 /// Live CAT read-back for one NON-active radio (dual-radio), fed by the monitor thread. `None` fields
 /// mean "not read yet / not reported". `cat_ok` mirrors the active radio's `(Option<bool>)` health.
 #[derive(Debug, Clone, Default)]
@@ -1954,6 +1960,23 @@ pub struct Engine {
     /// upcoming boundary slot, so the boundary's full-window decode ingests only
     /// the stragglers it newly found (no double rows / double observe).
     early_seen: Option<(u64, std::collections::HashSet<String>)>,
+    /// JS8 message layer (heard table, inbox, outbox, autoreply policy) — pure, clock
+    /// injected, never keys. Configured from `Settings` by `js8_apply_station_config`.
+    js8_station: ::js8::Station,
+    /// JS8 multi-frame reassembly keyed by audio offset (60 s close / 90 s drop).
+    js8_reasm: ::js8::Reassembler,
+    /// Heartbeat schedule ON — SESSION-ONLY, never persisted: the app can never launch
+    /// beaconing. Always false in the receive-only build.
+    js8_hb_on: bool,
+    /// Row dedupe between the multi-speed pass and the boundary pass: (speed, first-seen
+    /// unix ms, the 11 word bytes), 64 deep. See `js8_dedupe`.
+    js8_seen: VecDeque<(modes::Js8Speed, u64, [u8; 11])>,
+    /// The activity pane, newest last, capped at 200.
+    js8_activity: VecDeque<crate::dto::Js8ActivityRow>,
+    /// The last refused JS8 verb's reason (surfaced as `Js8State.last_error`).
+    js8_last_error: Option<String>,
+    /// `<config dir>/js8_station.json` — the inbox/heard journal (`set_js8_journal_path`).
+    js8_journal_path: Option<PathBuf>,
     /// One-shot: drop Enable-Tx once the CURRENT over finishes playing — set
     /// when our final 73 goes out with "Disable Tx after sending 73" on. The
     /// radio loop consumes it AFTER tx_until expires; disabling immediately
@@ -3933,6 +3956,24 @@ impl Engine {
                 .unwrap_or_else(|| settings.band.clone());
             qsy.enable(home, None);
         }
+        // JS8 station BOOTSTRAP config — identity only. `js8_apply_station_config` (called by
+        // `apply_settings` and by every JS8 view entry) is the truth; this exists so the field
+        // has a value before any of that runs, and it is receive-only by construction.
+        let js8_boot = ::js8::StationConfig {
+            mycall: settings.mycall.trim().to_ascii_uppercase(),
+            grid: settings.mygrid.trim().to_ascii_uppercase(),
+            speed: modes::Js8Speed::Normal,
+            autoreply: false,
+            relay: false,
+            hb_ack: false,
+            hb_interval_min: 0,
+            idle_watchdog_min: 0,
+            groups: Vec::new(),
+            info: String::new(),
+            status: String::new(),
+            allcall_reply_interval_ms: 15 * 60 * 1000,
+            reply_delay_ms: 17_000,
+        };
         Self {
             app,
             settings,
@@ -4010,6 +4051,13 @@ impl Engine {
             route_target: None,
             decode_history: std::collections::VecDeque::new(),
             early_seen: None,
+            js8_station: ::js8::Station::new(js8_boot),
+            js8_reasm: ::js8::Reassembler::new(),
+            js8_hb_on: false,
+            js8_seen: VecDeque::new(),
+            js8_activity: VecDeque::new(),
+            js8_last_error: None,
+            js8_journal_path: None,
             pending_tx_disable: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),
@@ -4640,6 +4688,8 @@ impl Engine {
                 self.clear_decode_context();
             }
         }
+        // The JS8 station reads identity, groups, switches and speed from Settings.
+        self.js8_apply_station_config();
         if self.settings.qsy_enabled && !self.qsy.enabled {
             let home = self.qsy_token_for_current();
             let partner = self.app.active_peer().map(|s| s.to_string());
@@ -16781,6 +16831,13 @@ impl Engine {
                 // If the early pass already ingested this boundary's messages, keep
                 // only the stragglers the full-window decode newly found.
                 let decodes = self.drop_early_dupes(decodes, slot);
+                // JS8: the multi-speed pass decoded the tier speed ~1-2 s ago at JS8Call's
+                // decode moment; this boundary re-decode of the same audio is stragglers only.
+                let decodes = if self.app.tier() == Tier::Js8 {
+                    self.js8_dedupe(decodes)
+                } else {
+                    decodes
+                };
                 let n = self.process_decodes(&frame, decodes, slot);
                 DecodeApplied::Boundary { n, slot, frame }
             }
@@ -17068,6 +17125,11 @@ impl Engine {
         }
         while self.decode_history.len() > 240 {
             self.decode_history.pop_front();
+        }
+        // JS8: parse the typed words behind these rows into the message layer (activity
+        // rows, heard table, inbox). Text consumers above already had their turn.
+        if self.app.tier() == Tier::Js8 {
+            self.js8_ingest(&decodes, slot);
         }
         self.last_wire_decodes = wire_copy.unwrap_or_else(|| decodes.clone());
         self.last_decodes = decodes;

@@ -594,6 +594,11 @@ impl AppState {
         self.radio.transmitting = on;
     }
 
+    /// Whether the radio is transmitting right now (the `set_transmitting` mirror).
+    pub fn transmitting(&self) -> bool {
+        self.radio.transmitting
+    }
+
     /// Set the RX input audio level (0.0–1.0) shown in the UI meter.
     pub fn set_rx_level(&mut self, level: f32) {
         self.radio.rx_level = level.clamp(0.0, 1.0);
