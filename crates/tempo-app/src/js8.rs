@@ -918,6 +918,22 @@ mod tests {
             e.settings().js8_autoreply,
             "…matching the persisted JS8Call default"
         );
+        // The OTHER half of the pair (a test that only checked the first half would pass on a
+        // build that keys the shown reply): the countdown is SHOWN but does NOT key, because
+        // the TX latch is down (never armed here). Proved end to end by
+        // `js8_autoreply_never_keys_at_launch`; asserted here so this test is self-contained.
+        assert!(!e.tx_enabled(), "the latch was never armed");
+        let s0 = now_unix_secs() / 15;
+        for s in s0..s0 + 4 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "the shown reply must not key with the latch down (slot {s})"
+            );
+        }
+        assert!(
+            !e.snapshot().recent_decodes.iter().any(|d| d.mine),
+            "nothing was booked as an own-TX row"
+        );
     }
 
     /// The boundary pass re-decodes the tier speed a second or two after the multi-speed

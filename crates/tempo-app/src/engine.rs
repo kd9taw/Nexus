@@ -33396,6 +33396,35 @@ mod tests {
         }
     }
 
+    /// The "unless armed" half of the retired `js8_tx_verbs_refuse_in_the_receive_only_build`:
+    /// an operator SEND is a real verb now (it queues), but a queued operator frame still does
+    /// NOT key while the TX latch is down — the first act is required for the operator origin
+    /// exactly as for the automatic ones. `a_js8_switch_without_the_tx_latch_is_silent` covers
+    /// the automatic origins; this is the operator-send companion, so retiring "every transmit
+    /// verb refuses" did not shrink the set of things asserting "this does not key".
+    #[test]
+    fn a_queued_js8_operator_send_is_silent_without_the_tx_latch() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        e.js8_send(None, "TEST".to_string())
+            .expect("queues even with the latch down");
+        assert!(!e.tx_enabled(), "the send did not arm TX");
+        assert!(
+            !e.js8_state().queue.is_empty(),
+            "the frame waits in the outbox"
+        );
+        for s in js8_slot_now()..js8_slot_now() + 6 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "nothing keys with the latch down, slot {s}"
+            );
+        }
+        assert!(
+            !e.snapshot().recent_decodes.iter().any(|d| d.mine),
+            "nothing booked"
+        );
+    }
+
     /// Both acts: EXACTLY ONE reply, after the countdown (one period + 2 s), never a second.
     #[test]
     fn both_acts_present_yield_exactly_one_reply_after_the_countdown() {
