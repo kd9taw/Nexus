@@ -759,4 +759,73 @@ mod tests {
             assert!(e.poll_tx(slot).is_empty());
         }
     }
+
+    /// A real multi-speed job: a Normal heartbeat and a Turbo heartbeat, each in its own
+    /// speed's window, decoded in parallel under `std::thread::scope`, folding into the
+    /// activity pane with the right speed on each row — and NOT reaching the boundary path.
+    #[test]
+    fn run_js8_multi_job_decodes_each_slice_and_folds_as_early() {
+        use super::super::{run_js8_multi_job, DecodeApplied, DecodePass};
+        fn slice(frame: &Frame, speed: Js8Speed, f0: f32) -> Vec<f32> {
+            let word = encode_frame(frame, whole(), speed).expect("packable");
+            let tones: Vec<i32> = ::js8::phy::encode_word(&word, speed)
+                .iter()
+                .map(|&t| i32::from(t))
+                .collect();
+            let m = modes::make_mode(modes::ModeKind::Js8 { speed });
+            let wave = m.gen_wave(&tones, 12_000.0, f0);
+            // Capture scale: the engine's `capture_to_i16` multiplies by 32767, so a ±0.03
+            // wave lands at ±1000 — the same level the modes tests decode cleanly.
+            let mut out = vec![0.0f32; speed.frames_needed()];
+            for (dst, &s) in out.iter_mut().zip(&wave) {
+                *dst = s * 0.03;
+            }
+            out
+        }
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.js8_enter();
+        // The tier switch bumped the decode epoch; the radio loop re-syncs the capture epoch
+        // at every consumed boundary (`begin_slot_capture`). Without it the result is Stale.
+        e.begin_slot_capture();
+        let job = e.build_js8_multi_job(
+            vec![
+                (
+                    Js8Speed::Normal,
+                    slice(&hb("KD2UWR", "FN30"), Js8Speed::Normal, 1500.0),
+                    0,
+                ),
+                (
+                    Js8Speed::Turbo,
+                    slice(&hb("W0IND", "EN52"), Js8Speed::Turbo, 900.0),
+                    0,
+                ),
+            ],
+            7,
+        );
+        let results = run_js8_multi_job(job);
+        assert_eq!(results.len(), 2);
+        let mut folded = 0;
+        for r in results {
+            assert!(matches!(r.pass(), DecodePass::Js8Multi { .. }));
+            match e.apply_decode_result(r) {
+                DecodeApplied::Early { n } => folded += n,
+                _ => panic!("a Js8Multi result must fold as Early"),
+            }
+        }
+        assert_eq!(folded, 2, "one decode per slice");
+        let st = e.js8_state();
+        assert_eq!(st.activity.len(), 2);
+        assert!(st
+            .activity
+            .iter()
+            .any(|r| r.speed == Js8Speed::Normal && r.from == "KD2UWR"));
+        assert!(st
+            .activity
+            .iter()
+            .any(|r| r.speed == Js8Speed::Turbo && r.from == "W0IND"));
+        assert!(st
+            .stations
+            .iter()
+            .any(|h| h.call == "W0IND" && h.speed == Js8Speed::Turbo));
+    }
 }

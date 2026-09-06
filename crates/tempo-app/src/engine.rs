@@ -970,6 +970,13 @@ pub enum DecodePass {
     Early,
     /// F6 review re-decode over retained audio: `a7_final = false`.
     Redecode,
+    /// One JS8 multi-speed decode of `speed`'s window that began at `cycle_start_ms` — the
+    /// scheduler's pass (JS8Call's decode moment, `frames_needed` samples into the cycle).
+    /// Folds like an EARLY result: rows and spots, never the boundary TX decision.
+    Js8Multi {
+        speed: modes::Js8Speed,
+        cycle_start_ms: u64,
+    },
 }
 
 impl DecodePass {
@@ -1111,6 +1118,90 @@ impl DecodeResult {
     pub fn slot(&self) -> u64 {
         self.slot
     }
+}
+
+/// One multi-speed JS8 decode job: the due speeds' windows (each `speed.frames_needed()`
+/// samples, cycle-start aligned, sliced from the 36 s ring by `RxRing::tail_window`), the
+/// operator's decode controls, the boundary-slot index they are stamped with (`audio slot +
+/// 1`, the early pass's convention) and the capture epoch (`build_decode_job`'s rule: a
+/// mid-slot band change must not launder the old band's air into the new roster).
+pub struct Js8MultiJob {
+    pub slices: Vec<(modes::Js8Speed, Vec<f32>, u64 /* cycle_start_ms */)>,
+    pub params: ::js8::DecodeParams,
+    pub slot: u64,
+    epoch: u64,
+}
+
+/// Run one [`Js8MultiJob`]: every slice on its own scoped thread — legal ONLY because the
+/// JS8 modem is pure Rust with no process-global state (no `MODEM_LOCK`, no Fortran
+/// statics) — returning ONE [`DecodeResult`] per slice so each folds under its own speed.
+/// A panic in one slice is contained to that slice (the `run_decode_job` rule: a result
+/// must always come back, or the loop's pending count sticks).
+pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
+    use modes::Mode; // `Js8Mode::decode_frame` is a trait method
+    let Js8MultiJob {
+        slices,
+        params,
+        slot,
+        epoch,
+    } = job;
+    let decoded: Vec<(modes::Js8Speed, u64, Vec<f32>, Vec<modes::Decode>)> =
+        std::thread::scope(|s| {
+            let handles: Vec<_> = slices
+                .into_iter()
+                .map(|(speed, frame, cycle_start_ms)| {
+                    s.spawn(move || {
+                        let iwave = channel::capture_to_i16(&frame);
+                        let mode = modes::Js8Mode { speed };
+                        let decodes =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                mode.decode_frame(
+                                    &iwave,
+                                    params.nfa as i32,
+                                    params.nfb as i32,
+                                    i32::from(params.depth),
+                                    "",
+                                    "",
+                                    0,
+                                    0,
+                                    0,
+                                    false,
+                                    false,
+                                )
+                            }))
+                            .unwrap_or_else(|_| {
+                                eprintln!(
+                                    "[decode] PANIC in the JS8 {speed:?} multi-speed decode — \
+                                 contained, receive continues. This is a bug; please report it."
+                                );
+                                Vec::new()
+                            });
+                        (speed, cycle_start_ms, frame, decodes)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .expect("a JS8 decode thread never panics past catch_unwind")
+                })
+                .collect()
+        });
+    decoded
+        .into_iter()
+        .map(|(speed, cycle_start_ms, frame, decodes)| DecodeResult {
+            decodes,
+            frame,
+            pass: DecodePass::Js8Multi {
+                speed,
+                cycle_start_ms,
+            },
+            slot,
+            epoch,
+            failed: false,
+        })
+        .collect()
 }
 
 /// One journaled store-and-forward entry (`pending_msgs.json`). Internal format —
@@ -16603,6 +16694,34 @@ impl Engine {
     /// the branch (Native / DX1 / Companion), the AP request context, the HARQ-reset
     /// flag and the current decode epoch, plus an `Arc` clone of the decoder. No heavy
     /// work — the actual decode runs later in [`run_decode_job`] off the engine mutex.
+    /// Build the OWNED multi-speed JS8 job under the engine lock: the operator's decode
+    /// controls clamped to JS8's 100–4000 Hz passband (not FT8's 200–3900), stock depth, and
+    /// the capture epoch — no heavy work (that is `run_js8_multi_job`, on the worker).
+    pub fn build_js8_multi_job(
+        &self,
+        slices: Vec<(modes::Js8Speed, Vec<f32>, u64)>,
+        slot: u64,
+    ) -> Js8MultiJob {
+        let nfa = self.settings.decode_flow_hz.clamp(100, 3900);
+        let nfb = self
+            .settings
+            .decode_fhigh_hz
+            .clamp(200, 4000)
+            .max(nfa + 100);
+        Js8MultiJob {
+            slices,
+            params: ::js8::DecodeParams {
+                nfa: nfa as f32,
+                nfb: nfb as f32,
+                depth: self.settings.decode_depth.clamp(1, 3),
+                // JS8Call's stock outer passes (3, subtraction on 1-2).
+                subtract_passes: 2,
+            },
+            slot,
+            epoch: self.capture_epoch,
+        }
+    }
+
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
         // The epoch stamped here decides whether the RESULT still applies (see
@@ -16613,7 +16732,9 @@ impl Engine {
         // (#103). Redecode replays `last_rx`, whose fold is display-only and gated by
         // its own history filter, so it keeps the live epoch (unchanged behavior).
         let epoch = match pass {
-            DecodePass::Boundary | DecodePass::Early => self.capture_epoch,
+            DecodePass::Boundary | DecodePass::Early | DecodePass::Js8Multi { .. } => {
+                self.capture_epoch
+            }
             DecodePass::Redecode => self.decode_epoch,
         };
         // Companion: decodes arrive over UDP; the audio is irrelevant. Drain the
@@ -16855,6 +16976,17 @@ impl Engine {
                         .map(|d| d.message.trim().to_string())
                         .collect(),
                 ));
+                let n = self.process_decodes(&frame, decodes, slot);
+                DecodeApplied::Early { n }
+            }
+            // The multi-speed JS8 pass: rows + spots, exactly like an EARLY result — and never
+            // the boundary TX decision (`DecodeApplied::Boundary` is what the loop keys on).
+            // Dedupe against the boundary pass first, so the roster/ALL.TXT see each word once.
+            DecodePass::Js8Multi { .. } => {
+                if decodes.is_empty() {
+                    return DecodeApplied::Early { n: 0 };
+                }
+                let decodes = self.js8_dedupe(decodes);
                 let n = self.process_decodes(&frame, decodes, slot);
                 DecodeApplied::Early { n }
             }
