@@ -607,6 +607,52 @@ pub struct Settings {
     /// move up the letters as the path degrades. Defaults to A.
     #[serde(default)]
     pub q65_submode: u8,
+    // --- JS8 (JS8Call-compatible keyboard-to-keyboard; `crates/js8`) ---
+    /// JS8 TRANSMIT speed as an index into `Js8Speed::ALL`: 0 Slow (30 s), 1 Normal (15 s),
+    /// 2 Fast (10 s), 3 Turbo (6 s). An index rather than the enum — the house shape of
+    /// `q65_submode`/`jt65_submode` — so a stale or hand-edited file degrades to Normal
+    /// (`Tier::js8_kind`) instead of refusing to load. Sets the slot clock and the boundary
+    /// decode window; receive decodes every speed in `js8_rx_speeds` regardless.
+    #[serde(default = "default_js8_speed")]
+    pub js8_speed: u8,
+    /// Bitmask of speeds the receiver decodes each cycle: Slow 1 · Normal 2 · Fast 4 ·
+    /// Turbo 8. Defaults to 15 (all four) — JS8Call's `SubModeMultiDecode=true` — so a
+    /// fresh install hears every station on the watering hole with zero toggles. 0 is
+    /// treated as 15 by the scheduler (a mask that decodes nothing is never what anyone
+    /// meant).
+    #[serde(default = "default_js8_rx_speeds")]
+    pub js8_rx_speeds: u8,
+    /// Heartbeat repeat interval in minutes; 0 = on demand (JS8Call `HBInterval` default).
+    /// Whether HB is ON is NOT a setting — it is session-only (`Engine.js8_hb_on`), so the
+    /// app can never launch beaconing.
+    #[serde(default)]
+    pub js8_hb_interval_min: u16,
+    /// Answer heard heartbeats with `HEARTBEAT SNR +NN` (JS8Call `SubModeHBAck`, default
+    /// OFF). The persisted SECOND act of the two-act rule; the session TX latch is the first.
+    #[serde(default)]
+    pub js8_hb_ack: bool,
+    /// Autoreply to directed queries (SNR? GRID? INFO? …) addressed to me, @ALLCALL or a
+    /// joined group. JS8Call default ON (G3). Second act of the two-act rule.
+    #[serde(default = "default_js8_autoreply")]
+    pub js8_autoreply: bool,
+    /// Relay `>` traffic for other stations (third-party traffic — §97.115 is the operator's).
+    /// JS8Call default ON (G3). Second act of the two-act rule.
+    #[serde(default = "default_js8_relay")]
+    pub js8_relay: bool,
+    /// JS8Call's idle watchdog (`TxIdleWatchdog`): minutes without an operator act before
+    /// HB/autoreply/relay switch themselves OFF. Default 60; the engine applies the floor
+    /// of 5; 0 disables. The ordinary 6-min wall-clock watchdog is a separate clock.
+    #[serde(default = "default_js8_idle_watchdog_min")]
+    pub js8_idle_watchdog_min: u16,
+    /// Free text answered to `INFO?` (JS8Call "My Info").
+    #[serde(default)]
+    pub js8_info: String,
+    /// Free text answered to `STATUS?`; empty = JS8Call's default `IDLE <min> VERSION …`.
+    #[serde(default)]
+    pub js8_status: String,
+    /// Joined @GROUP names (e.g. `@FUN`) the station answers directed traffic for.
+    #[serde(default)]
+    pub js8_groups: Vec<String>,
     /// FM repeater offset override in Hz (0 = use the band convention from
     /// [`Self::rptr_offset_hz`]). Set by the Program section's tune-now so
     /// odd-split machines (e.g. +1 MHz on 2 m) key the right input.
@@ -3075,6 +3121,31 @@ fn default_msk144_period_s() -> u16 {
     15
 }
 
+/// JS8 Normal = index 1 of `Js8Speed::ALL`. See [`Settings::js8_speed`].
+fn default_js8_speed() -> u8 {
+    1
+}
+
+/// All four JS8 speeds (Slow 1 | Normal 2 | Fast 4 | Turbo 8). See [`Settings::js8_rx_speeds`].
+fn default_js8_rx_speeds() -> u8 {
+    15
+}
+
+/// JS8Call ships autoreply ON (G3). See [`Settings::js8_autoreply`].
+fn default_js8_autoreply() -> bool {
+    true
+}
+
+/// JS8Call ships relay ON (G3). See [`Settings::js8_relay`].
+fn default_js8_relay() -> bool {
+    true
+}
+
+/// JS8Call's `TxIdleWatchdog` default (minutes). See [`Settings::js8_idle_watchdog_min`].
+fn default_js8_idle_watchdog_min() -> u16 {
+    60
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -3110,6 +3181,16 @@ impl Default for Settings {
             msk144_period_s: default_msk144_period_s(),
             jt65_submode: 0,
             q65_submode: 0,
+            js8_speed: default_js8_speed(),
+            js8_rx_speeds: default_js8_rx_speeds(),
+            js8_hb_interval_min: 0,
+            js8_hb_ack: false,
+            js8_autoreply: default_js8_autoreply(),
+            js8_relay: default_js8_relay(),
+            js8_idle_watchdog_min: default_js8_idle_watchdog_min(),
+            js8_info: String::new(),
+            js8_status: String::new(),
+            js8_groups: Vec::new(),
             rptr_offset_override_hz: 0, // 0 = band-convention offset
             fd_active: false,           // never auto-enabled — only the operator's toggle sets this
             fd_class: String::new(),
@@ -6353,6 +6434,94 @@ mod tests {
         assert!(old.rtty_rx_auto_arm, "an upgrader's file predates the key");
         let off: Settings = serde_json::from_str(r#"{"rttyRxAutoArm":false}"#).unwrap();
         assert!(!off.rtty_rx_auto_arm, "and an explicit opt-out survives");
+    }
+
+    /// The ten JS8 fields: JS8Call's own defaults (G3, operator-approved 2026-09-05), the
+    /// exact camelCase wire keys, an upgrader's file, and the TS mirror — read from
+    /// `ui/src/types.ts` itself, the `the_typescript_patch_carries_every_field_the_rust_patch_does`
+    /// cure, because a hand-written key that disagrees compiles clean on both sides and the
+    /// control silently does nothing (reference-settings-plumbing).
+    #[test]
+    fn js8_settings_defaults_wire_keys_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(s.js8_speed, 1, "Normal is index 1 of Speed::ALL");
+        assert_eq!(
+            s.js8_rx_speeds, 15,
+            "all four speeds decode with zero toggles"
+        );
+        assert_eq!(
+            s.js8_hb_interval_min, 0,
+            "HB on demand (JS8Call HBInterval=0)"
+        );
+        assert!(!s.js8_hb_ack, "JS8Call SubModeHBAck default false");
+        assert!(s.js8_autoreply, "JS8Call autoreply default ON (G3)");
+        assert!(s.js8_relay, "JS8Call relay default ON (G3)");
+        assert_eq!(
+            s.js8_idle_watchdog_min, 60,
+            "JS8Call TxIdleWatchdog default"
+        );
+        assert!(s.js8_info.is_empty() && s.js8_status.is_empty() && s.js8_groups.is_empty());
+
+        let json = serde_json::to_string(&s).unwrap();
+        let keys = [
+            "\"js8Speed\":1",
+            "\"js8RxSpeeds\":15",
+            "\"js8HbIntervalMin\":0",
+            "\"js8HbAck\":false",
+            "\"js8Autoreply\":true",
+            "\"js8Relay\":true",
+            "\"js8IdleWatchdogMin\":60",
+            "\"js8Info\":\"\"",
+            "\"js8Status\":\"\"",
+            "\"js8Groups\":[]",
+        ];
+        for k in keys {
+            assert!(json.contains(k), "missing wire key/value {k} in {json}");
+        }
+        // An upgrader's file predates every key: defaults apply, nothing fails to load.
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_speed, 1);
+        assert!(old.js8_autoreply && old.js8_relay && !old.js8_hb_ack);
+        // An explicit opt-out survives the round trip.
+        let off: Settings = serde_json::from_str(
+            r#"{"js8Autoreply":false,"js8Relay":false,"js8Speed":3,"js8RxSpeeds":2,"js8Groups":["@FUN"]}"#,
+        )
+        .unwrap();
+        assert!(!off.js8_autoreply && !off.js8_relay);
+        assert_eq!((off.js8_speed, off.js8_rx_speeds), (3, 2));
+        assert_eq!(off.js8_groups, vec!["@FUN".to_string()]);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
+        assert_eq!(back, off);
+
+        // The TS mirror carries every key, as a typed field line (`  js8Speed: number`).
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        for key in [
+            "js8Speed",
+            "js8RxSpeeds",
+            "js8HbIntervalMin",
+            "js8HbAck",
+            "js8Autoreply",
+            "js8Relay",
+            "js8IdleWatchdogMin",
+            "js8Info",
+            "js8Status",
+            "js8Groups",
+        ] {
+            assert!(
+                body.lines()
+                    .any(|l| l.trim_start().starts_with(&format!("{key}:"))),
+                "ui/src/types.ts Settings is missing `{key}`"
+            );
+        }
+        // CONTROL: a key that must NOT exist is not found, so the scan is not vacuous.
+        assert!(
+            !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:")),
+            "HB on/off is session-only and must never be a setting"
+        );
     }
 
     /// The tune carrier's own power level, on the exact wire key the UI hand-writes.

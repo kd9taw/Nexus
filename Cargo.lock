@@ -2342,6 +2342,7 @@ dependencies = [
 name = "tempo-app"
 version = "0.2.0"
 dependencies = [
+ "js8",
  "modes",
  "serde",
  "serde_json",

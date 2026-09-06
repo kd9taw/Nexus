@@ -2606,6 +2606,32 @@ export interface Settings {
   beaconRrSlots: number
   /** JT65 submode 0/1/2 for A/B/C (tone spacing 1x/2x/4x). */
   jt65Submode: number
+  /** JS8 TRANSMIT speed as an index: 0 Slow (30 s) | 1 Normal (15 s) | 2 Fast (10 s) |
+   * 3 Turbo (6 s). Receive decodes every speed in `js8RxSpeeds` regardless. */
+  js8Speed: number
+  /** Bitmask of speeds the receiver decodes: Slow 1 · Normal 2 · Fast 4 · Turbo 8.
+   * Default 15 (all four — JS8Call's SubModeMultiDecode). */
+  js8RxSpeeds: number
+  /** Heartbeat repeat interval in minutes; 0 = on demand. HB on/off itself is
+   * session-only and is NOT here — the app can never launch beaconing. */
+  js8HbIntervalMin: number
+  /** Answer heard heartbeats with HEARTBEAT SNR (JS8Call default off). The persisted
+   * second act of the two-act rule; the session TX latch is the first. */
+  js8HbAck: boolean
+  /** Autoreply to directed queries addressed to me / @ALLCALL / a joined group
+   * (JS8Call default on). Second act of the two-act rule. */
+  js8Autoreply: boolean
+  /** Relay `>` traffic for other stations (third-party traffic; JS8Call default on). */
+  js8Relay: boolean
+  /** JS8Call's idle watchdog in minutes (default 60, floor 5, 0 = off): HB/autoreply/
+   * relay switch OFF after this long without an operator act. */
+  js8IdleWatchdogMin: number
+  /** Free text answered to INFO?. */
+  js8Info: string
+  /** Free text answered to STATUS?; empty = JS8Call's `IDLE <min> VERSION …`. */
+  js8Status: string
+  /** Joined @GROUP names the station answers directed traffic for. */
+  js8Groups: string[]
   /** FM repeater offset override in Hz (0 = band convention). Set by the
    * Program section's tune-now for odd-split machines. */
   rptrOffsetOverrideHz?: number
