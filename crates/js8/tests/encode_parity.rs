@@ -17,6 +17,15 @@
 //!
 //! Fixture pins: the three upstream media/tests WAVs land here for B3's decoder gate; this
 //! file owns their pin check because B2 is the batch that lands them.
+//!
+//! CALIBRATION (lab, 2026-09-06, stock js8 -d 3 over paritylab/js8/corpus, 5/point):
+//!   knee (yield ≤ 2/5): Slow -24 dB · Normal -22 dB · Fast -18 dB · Turbo -16 dB
+//!   reported − nominal SNR at 0…−10 dB: Slow -5.0 · Normal -7.3 · Fast -11.4 · Turbo -15.9
+//!   false decodes: 0 over 295 files
+//! These are what B3's AWGN ladder (decode_parity.rs) may expect of a stock-equivalent
+//! decoder on THIS encoder; re-run stock_yield.py rather than trusting them. The negative
+//! delta is the 2500 Hz-convention offset (widens with per-symbol bandwidth), not an encoder
+//! bug — it is why the parity test above does not assert reported SNR.
 
 mod common;
 
