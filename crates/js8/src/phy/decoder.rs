@@ -26,10 +26,12 @@
 //! may run four speeds under `std::thread::scope`. No decode path can key:
 //! this returns bits.
 //!
-//! Bench (fill in at Task B3.9 from `cargo run --release -p js8 --example
-//! decode_bench`): <date> <box>: Slow … ms, Normal … ms, Fast … ms, Turbo …
-//! ms at depth 3, 3 signals + noise. B5's all-four-speeds-by-default ruling
-//! (Turbo's 6 s cycle is the bound) cites this line.
+//! Bench (2026-09-06, WSL2 dev box, --release, `cargo run --release -p js8
+//! --example decode_bench`): Slow 65.6 ms, Normal 34.8 ms, Fast 26.9 ms,
+//! Turbo 15.3 ms at depth 3, 3 signals + noise (142.6 ms all four serial).
+//! Every speed is two orders of magnitude inside Turbo's 6 s cycle, so B5's
+//! all-four-speeds-by-default ruling (Turbo's 6 s cycle is the bound) holds
+//! with room to spare — even run serially, not under thread::scope.
 
 use rustfft::FftPlanner;
 
