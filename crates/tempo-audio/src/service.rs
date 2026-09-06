@@ -9455,6 +9455,9 @@ fn tier_mode(tier: Tier) -> &'static str {
         // lie: a receiver that does not know "FT2" ignores the row, where sending
         // "FT4" would put a wrong mode in somebody else's database.
         Tier::Ft2 => "FT2",
+        // JS8Call's own UDP API is a different (JSON) protocol; on the WSJT-X-style wire the
+        // registered name is the truth a cooperating logger can act on.
+        Tier::Js8 => "JS8",
         // These feed the WSJT-X UDP Decode message and the PSK Reporter spot
         // queue, so they must be the names cooperating loggers and the reporter
         // expect — "Q65" without the submode, as in ADIF, not the "Q65-30A" the

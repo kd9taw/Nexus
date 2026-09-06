@@ -3496,6 +3496,10 @@ fn rtty_filter(text: &str) -> String {
 /// under the name RTTY's call sites have always used.
 pub use crate::keyboard::KbTick as RttyStreamTick;
 
+/// The JS8 speed enum for the audio service (tempo-audio depends on tempo-app, not on
+/// `modes`) — the multi-speed scheduler names speeds through this path.
+pub use modes::Js8Speed;
+
 /// PSK31's instantiation of the per-mode [`crate::keyboard::kb_filter`]:
 /// full-ASCII varicode, case preserved — the ONE filter every PSK TX path
 /// runs, so what is queued (or typed into a latched stream) is exactly what
@@ -4200,6 +4204,7 @@ impl Engine {
             self.settings.fst4_period_s,
             self.settings.msk144_period_s,
             self.settings.jt65_submode,
+            self.settings.js8_speed,
         )
     }
 
@@ -9792,6 +9797,9 @@ impl Engine {
         // FT2 is on the SHORT side by a wide margin — a 3.02 s over in a 3.75 s
         // period, the briefest of any tier here — so leaving it trails out inside a
         // second, exactly like leaving FT4.
+        //
+        // JS8 is NOT in the short-over list: its Slow over is 25.78 s, the "26 s" end of the
+        // stand-down family below, so a tier switch away from it halts like the specialty modes.
         let leaving_a_long_over = self.tx_enabled
             && !matches!(
                 from,
@@ -9900,7 +9908,11 @@ impl Engine {
             //
             // This is a BAND CHANGE, not an in-band nudge — `clear_decode_context`
             // at the top of this function has already flushed the stale context.
-            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2);
+            //
+            // JS8 joins the stay-on-band family for the same reason FT2 does: its plan
+            // (JS8Call's table) spans 160 m–2 m, so a miss is an exotic band and dragging the
+            // operator to 160 m would be the same defect.
+            let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
             let target = plan
                 .iter()
                 .find(|c| c.band.eq_ignore_ascii_case(&band))
@@ -10544,6 +10556,15 @@ impl Engine {
             Tier::Msk144 => f64::from(self.settings.msk144_period_s),
             Tier::Jt65 => 60.0,
             Tier::Wspr => 120.0,
+            // JS8 = start delay + 79 symbols at the TRANSMIT speed: 25.78 / 13.14 / 8.10 /
+            // 4.05 s in 30 / 15 / 10 / 6 s periods — read from the crate (`slot_fit_s`), the
+            // same value the per-speed slot-fit test pins. Receive-only in this build, so a
+            // fit check can never be consulted; the value is nonetheless the true airtime so
+            // the TX batch inherits a correct table rather than a placeholder.
+            Tier::Js8 => match self.tier_mode_kind(Tier::Js8) {
+                Some(modes::ModeKind::Js8 { speed }) => f64::from(speed.slot_fit_s()),
+                _ => 30.0,
+            },
             Tier::TempoDeep => 12.64, // no lead-in; a safe over-estimate of the ~9.9 s frame
             // FT4 = 0.5 s lead-in + 5.04 s tones (105 sym × 576 sa @ 12 kHz). The
             // generated buffer also carries ~1.0 s of TRAILING silence — that is
@@ -17699,6 +17720,11 @@ impl Engine {
             Tier::Jt65 => "JT65",
             // ADIF-registered. Unreachable while receive-only, like the others.
             Tier::Wspr => "WSPR",
+            // "JS8" is an ADIF SUBMODE (under MFSK), not a MODE. Stored verbatim for the same
+            // reason FT2 is, and written by the ADIF writer as MODE=MFSK SUBMODE=JS8 through
+            // `logbook::adif_submode` — the cascade TQSL/LoTW accept. Unreachable while
+            // receive-only; the right answer the moment that changes.
+            Tier::Js8 => "JS8",
             Tier::TempoFast => "TempoFast",
         }
     }
@@ -22664,6 +22690,10 @@ mod tests {
             Tier::Fst4,
             Tier::Msk144,
             Tier::Jt65,
+            // JS8 keeps structured_identity: true even while receive-only, so the identity
+            // gate refuses a blank call/grid exactly like the others (the gate reads the
+            // mode's Capabilities, not its tx flag).
+            Tier::Js8,
         ] {
             let mut e = Engine::new("", "EN52", 0);
             e.set_tier(tier);
@@ -22671,7 +22701,18 @@ mod tests {
                 e.structured_tx_ready(true).is_err(),
                 "{tier:?}: a blank mycall must refuse structured TX"
             );
-            e.set_mode("qso-run").unwrap(); // engine set_mode doesn't gate; arms TX
+            // A tx-capable structured tier can ENTER the CQ run (set_mode arms TX), but the
+            // blank-mycall gate keeps the slot backstop silent. A receive-only structured
+            // tier (JS8) is refused the run outright by `require_tx_capable` — a stronger
+            // guarantee: it never reaches the backstop because it cannot transmit at all.
+            if e.tier_is_rx_only(tier) {
+                assert!(
+                    e.set_mode("qso-run").is_err(),
+                    "{tier:?}: a receive-only structured tier must refuse to enter a CQ run"
+                );
+            } else {
+                e.set_mode("qso-run").unwrap(); // engine set_mode doesn't gate here; arms TX
+            }
             assert!(
                 e.poll_tx(0).is_empty() && e.poll_tx(1).is_empty(),
                 "{tier:?}: the slot backstop must not key with a blank mycall"

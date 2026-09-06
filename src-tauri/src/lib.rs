@@ -2739,7 +2739,13 @@ fn archive_conversation(
 fn set_tier(state: State<'_, SharedEngine>, tier: String) -> Result<AppSnapshot, String> {
     let tier: Tier =
         serde_json::from_value(serde_json::Value::String(tier.clone())).map_err(|_| {
-            format!("invalid tier {tier:?}: expected \"FT1\", \"FT8\", \"FT4\", or \"DX1\"")
+            format!(
+                "invalid tier {tier:?}: expected one of {:?}",
+                Tier::ALL
+                    .iter()
+                    .map(|t| serde_json::to_value(t).unwrap_or_default())
+                    .collect::<Vec<_>>()
+            )
         })?;
     let mut eng = engine_lock(&state);
     eng.set_tier(tier);

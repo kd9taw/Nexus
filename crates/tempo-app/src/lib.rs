@@ -849,6 +849,9 @@ impl AppState {
             Tier::Ft2 => 3.75,
             Tier::TempoFast => 4.0,
             Tier::Msk144 => 15.0,
+            // JS8's period follows the transmit speed (30/15/10/6 s); 15 s (Normal, the
+            // default) is fine for a presence colour — the same trade the Q65/FST4 line makes.
+            Tier::Js8 => 15.0,
             Tier::Q65 | Tier::Fst4 | Tier::Fst4w | Tier::Jt65 | Tier::Wspr => 60.0,
             _ => 15.0,
         };
@@ -1584,6 +1587,7 @@ mod tests {
             Tier::Ft4,
             Tier::Ft2,
             Tier::TempoFast,
+            Tier::Js8,
         ] {
             app.set_tier(t);
             assert_eq!(app.tier(), t);

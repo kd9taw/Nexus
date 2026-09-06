@@ -1741,6 +1741,9 @@ pub(crate) fn adif_submode(mode: &str) -> Option<(&'static str, &'static str)> {
         // 4-GFSK at 41.67 baud — the same continuous-phase FSK family as FST4,
         // which already lives under MFSK, and as FT4, whose symbol time it halves.
         "FT2" => Some(("MFSK", "FT2")),
+        // JS8 is a registered ADIF SUBMODE under MFSK (JS8Call logs it that way too); a bare
+        // MODE=JS8 misses the MODE enumeration and TQSL drops it, exactly as for FT2.
+        "JS8" => Some(("MFSK", "JS8")),
         // -- #68 (rogerloxton): FreeDV and VarAC ------------------------------------
         // Neither program's mode name is a MODE value; both are SUBMODE values whose
         // parent IS in the enumeration. FreeDV's parent is DIGITALVOICE (it is digital
@@ -2836,6 +2839,19 @@ mod tests {
         );
         // Round-trip fidelity: our own log can still tell TempoFast from TempoDeep.
         assert!(adif.contains("APP_TEMPO_MODE"), "app field missing: {adif}");
+    }
+
+    /// JS8 rides out as MODE=MFSK SUBMODE=JS8 — JS8 IS in the ADIF SUBMODE enumeration under
+    /// MFSK (ADIF 3.1.x lists JS8 as an MFSK submode), and a bare <MODE:3>JS8 is not a MODE
+    /// value, so TQSL would drop it exactly as it drops a bare FT2.
+    #[test]
+    fn js8_rides_out_as_mfsk_submode() {
+        assert_eq!(adif_submode("JS8"), Some(("MFSK", "JS8")));
+        assert_eq!(
+            adif_submode("js8"),
+            Some(("MFSK", "JS8")),
+            "case-insensitive on the way in"
+        );
     }
 
     /// #68 (rogerloxton): FreeDV and VarAC QSOs exported with an invalid ADIF mode.

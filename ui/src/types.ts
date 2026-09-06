@@ -4,17 +4,15 @@
 
 export type Presence = 'active' | 'idle' | 'stale'
 
-export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FT2' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR'
+export type Tier = 'TempoFast' | 'TempoDeep' | 'FT8' | 'FT4' | 'FT2' | 'FST4' | 'FST4W' | 'Q65' | 'MSK144' | 'JT65' | 'WSPR' | 'JS8'
 
 /** Tiers Nexus DECODES but will not transmit. Mirrors `Capabilities { tx: false }`
  * in the `modes` crate — the engine is the enforcement (it refuses to arm TX or
  * start a CQ run on these); this list exists so the UI does not OFFER controls the
  * engine will refuse. Keep the two in step when a mode gains a transmitter. */
-// JT65 only, and TEMPORARILY: its encoder is verified, but transmit is disabled
-// pending a Windows crash on Call CQ. See Jt65Mode::capabilities in the modes crate.
-// Every shipped tier can transmit. JT65 was listed here in 0.19.17 only, as a
-// mitigation for a Windows crash fixed in 0.19.18 (see xcor.f90).
-export const RX_ONLY_TIERS: readonly Tier[] = []
+// JS8 is receive-only in this build: the modem and message layer shipped first (B5); the
+// operator-gated transmit batch flips `Js8Mode::capabilities().tx` and removes it here.
+export const RX_ONLY_TIERS: readonly Tier[] = ['JS8']
 
 /** BEACON tiers: they transmit, but on a SCHEDULE and with no QSO sequence — the
  * payload is callsign, grid and power. Mirrors `Capabilities { beacon_only: true }`.
