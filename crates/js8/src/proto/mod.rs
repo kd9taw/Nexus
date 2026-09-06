@@ -8,5 +8,8 @@
 pub mod alphabet;
 pub mod bits;
 pub mod callsign;
+pub mod command;
 pub mod crc16;
 pub mod grid;
+
+pub use command::Command;

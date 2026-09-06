@@ -18,3 +18,6 @@
 
 pub mod phy;
 pub mod proto;
+
+pub use phy::{DecodeParams, Payload72, RawDecode, Speed, Word87, I3};
+pub use proto::Command;
