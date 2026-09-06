@@ -21,11 +21,11 @@ use std::path::PathBuf;
 
 use ::js8::proto::callsign::{split_portable, CallRef};
 use ::js8::proto::reassembly::RxFrame;
-use ::js8::proto::station::{InboxState, StationSnapshot};
-use ::js8::{Frame, MessageEvent, RawDecode, StationAction, StationConfig, Word87};
+use ::js8::proto::station::{FreqHint, InboxState, StationSnapshot};
+use ::js8::{Frame, MessageEvent, Origin, RawDecode, StationAction, StationConfig, Word87};
 use modes::Js8Speed;
 
-use super::{now_unix_secs, Engine};
+use super::{now_unix_secs, Engine, TxPlan, TxWaveform};
 use crate::dto::{
     Js8ActivityRow, Js8Armed, Js8PendingReply, Js8QueueRow, Js8State, SourceKind, Tier,
 };
@@ -51,6 +51,18 @@ pub enum Js8Switch {
     Relay,
     HbAck,
     Hb,
+}
+
+/// xorshift32 — a deterministic, dependency-free source for the heartbeat sub-band pick.
+/// Quality is irrelevant (it spreads HBs across 50 Hz slots); having no new crate is what
+/// matters. Never used for anything that could key the radio differently.
+fn js8_rng_next(state: &mut u32) -> u32 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    x
 }
 
 impl Engine {
@@ -522,21 +534,141 @@ impl Engine {
             self.js8_activity.pop_front();
         }
         if self.settings.write_all_txt {
-            self.station.all_txt_pending.push(crate::alltxt::all_txt_line(
-                now_ms / 1000,
-                self.settings.dial_mhz,
-                true,
-                "JS8",
-                0,
-                0.0,
-                self.tx_offset_hz,
-                plan_display,
-            ));
+            self.station
+                .all_txt_pending
+                .push(crate::alltxt::all_txt_line(
+                    now_ms / 1000,
+                    self.settings.dial_mhz,
+                    true,
+                    "JS8",
+                    0,
+                    0.0,
+                    self.tx_offset_hz,
+                    plan_display,
+                ));
             let len = self.station.all_txt_pending.len();
             if len > 5000 {
                 self.station.all_txt_pending.drain(0..len - 5000);
             }
         }
+    }
+
+    /// Tier-routed TX planner — the ONLY place a `proto::TxFrame` becomes a `TxPlan`
+    /// (spec invariant 13). Reached only after `plan_tx`'s mode-agnostic guards
+    /// (`!tx_enabled || tuning || !tx_allowed()`, `tier_is_rx_only`, operating mode
+    /// Digital), so `tx_enabled` — the FIRST operator act — is already true here.
+    ///
+    /// Order: identity gate → decode-only refusal → one-frame-per-period latch → station
+    /// outbox → origin gate (the SECOND act, re-read at plan time every slot) → wall-clock
+    /// watchdog (all origins but Heartbeat) → f0 → book → plan. Nothing here moves the dial
+    /// (invariant 9). Booking is at plan time, the beacon / QSO arms' rule.
+    pub fn plan_js8_tx(&mut self, slot: u64) -> Option<TxPlan> {
+        // Identity, fail-closed: Js8Mode declares `structured_identity`, so a blank or
+        // unparsable MYCALL refuses here (`needs_grid = false` — JS8 frames carry the
+        // grid optionally; NMAXGRID means "no grid"). `proto::compose` additionally
+        // refuses a MYCALL that cannot be base-packed, before anything is queued.
+        if self.structured_tx_ready(false).is_err() {
+            self.set_transmitting(false);
+            return None;
+        }
+        let speed = self.js8_tx_speed();
+        // Decode-only refusal, in the planner and not the builder (the FT arms' rule):
+        // a `None` here means a receive-only mode reached the TX path, which is a bug,
+        // and refusing to key is the right answer to a bug.
+        if modes::tx_mode(modes::ModeKind::Js8 { speed }).is_none() {
+            self.set_transmitting(false);
+            return None;
+        }
+        // ONE frame per period. `plan_tx` is polled once at the boundary, but the snappy
+        // immediate-TX path can poll again inside the period; popping a second frame
+        // there would key it mid-period on top of the first.
+        if self.js8_planned_slot == Some(slot) {
+            return None;
+        }
+        let period_ms = u64::from(speed.period_s()) * 1000;
+        let period_start_ms = slot.saturating_mul(period_ms);
+        // JS8Call's "free HB slot" rule: no activity within one signal bandwidth in the
+        // last 30 s. Snapshot the heard table first — the station is borrowed mutably
+        // by `next_frame` below.
+        let bw = 8.0 * speed.tone_spacing_hz();
+        let heard: Vec<(f32, u64)> = self
+            .js8_station
+            .heard()
+            .iter()
+            .map(|h| (h.freq_hz, h.last_ms))
+            .collect();
+        let busy = move |f: f32| {
+            heard
+                .iter()
+                .any(|&(hf, at)| (hf - f).abs() < bw && period_start_ms.saturating_sub(at) < 30_000)
+        };
+        let mut seed = self.js8_rng;
+        let next = {
+            let mut rng = || js8_rng_next(&mut seed);
+            self.js8_station
+                .next_frame(period_start_ms, &busy, &mut rng)
+        };
+        self.js8_rng = seed;
+        let Some(tf) = next else {
+            self.set_transmitting(false);
+            return None;
+        };
+        // The frame is POPPED now; whatever happens below, this slot is spent.
+        self.js8_planned_slot = Some(slot);
+        // THE SECOND ACT, re-read at plan time: an automatic origin keys only with its
+        // persisted switch on and no idle trip standing. Operator frames were queued by an
+        // operator verb; a Heartbeat exists only because of the session toggle — that IS
+        // the act (HB is never persisted, G3).
+        let switch_on = match tf.origin {
+            Origin::Operator | Origin::Heartbeat => true,
+            Origin::HbAck => self.settings().js8_hb_ack,
+            Origin::AutoReply => self.settings().js8_autoreply,
+            Origin::Relay => self.settings().js8_relay,
+        };
+        if !switch_on || self.js8_station.idle_tripped() {
+            // Dropped, not deferred: a reply withheld now must not fire ten minutes later
+            // when the operator flips a switch (the `js8_tick` rule cancels an expired
+            // unarmed countdown for the same reason).
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "JS8 {:?} frame withheld (not armed): {}",
+                    tf.origin, tf.display
+                ),
+            );
+            self.set_transmitting(false);
+            return None;
+        }
+        // Wall-clock watchdog, RE-APPLIED for every origin but Heartbeat (G2: the HB is a
+        // beacon by design — `plan.beacon` below carries the exemption to commit_tx).
+        if tf.origin != Origin::Heartbeat && self.js8_wall_clock_trips() {
+            return None;
+        }
+        // f0: the operator's TX offset, or the station's HB sub-band pick — an AUDIO
+        // offset only. A pick outside 500–1000 Hz cannot come from a correct station;
+        // fall back to the operator's offset rather than trust it.
+        let f0 = match tf.freq_hint {
+            FreqHint::Dial => self.tx_offset_hz(),
+            FreqHint::HbSubband(f) if (500.0..=1000.0).contains(&f) => f,
+            FreqHint::HbSubband(_) => self.tx_offset_hz(),
+        };
+        let beacon = tf.origin == Origin::Heartbeat;
+        // Book the over (station bookkeeping: Last sent, HB timer, idle counter; own-TX
+        // row; activity row; ALL.TXT Tx line) — plan time, on the period-start axis.
+        self.js8_station.note_tx_done(&tf, period_start_ms);
+        self.js8_note_tx_done(&tf.display, period_start_ms);
+        self.set_transmitting(true);
+        Some(TxPlan {
+            slot,
+            tier: Tier::Js8,
+            waveform: TxWaveform::Js8 {
+                speed,
+                word: tf.word,
+                f0,
+            },
+            beacon,
+            stamp: self.tx_gate_stamp(),
+        })
     }
 }
 
@@ -582,10 +714,12 @@ mod tests {
         }
     }
 
-    /// View entry = the tier + the watering hole, and NOTHING that keys: the latch stays
-    /// off, arming it is refused by the receive-only backstop, and `poll_tx` yields nothing.
-    /// This is the B5 half of `js8_autoreply_never_keys_at_launch` (the TX batch adds the
-    /// switch-on half).
+    /// View entry = the tier + the watering hole, and NOTHING that keys: at launch the TX
+    /// latch is down (the first act), so every armed flag is false and no slot keys — even
+    /// with autoreply persisted ON. This is the B5 half of `js8_autoreply_never_keys_at_launch`
+    /// (the TX batch's `js8_arm` + the armed-latch case add the switch-on half). B7.3 makes
+    /// the tier transmit-capable, so the latch CAN now be armed — that is pinned separately by
+    /// `the_tx_latch_arms_on_the_js8_tier` and `js8_enter_keys_nothing_even_with_tx_enabled`.
     #[test]
     fn js8_enter_keys_nothing_and_lands_on_the_watering_hole() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -600,22 +734,20 @@ mod tests {
             "20 m JS8: {}",
             e.settings().dial_mhz
         );
-        assert!(!e.tx_enabled());
-        e.set_tx_enabled(true);
-        assert!(
-            !e.tx_enabled(),
-            "the receive-only backstop refuses the latch at Tier::Js8"
-        );
+        assert!(!e.tx_enabled(), "launch is listen-only");
         for slot in 0..8 {
             assert!(
                 e.poll_tx(slot).is_empty(),
-                "slot {slot}: a receive-only tier never plans an over"
+                "slot {slot}: launch is listen-only, nothing keys"
             );
         }
         let st = e.js8_state();
         assert_eq!(st.speed, Js8Speed::Normal);
         assert_eq!(st.rx_speeds, 15);
-        assert!(!st.armed.autoreply && !st.armed.relay && !st.armed.hb_ack && !st.armed.hb);
+        assert!(
+            !st.armed.autoreply && !st.armed.relay && !st.armed.hb_ack && !st.armed.hb,
+            "latch down at launch → nothing is armed"
+        );
         assert!(st.queue.is_empty() && st.pending_reply.is_none() && st.activity.is_empty());
     }
 
