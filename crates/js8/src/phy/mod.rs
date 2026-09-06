@@ -8,6 +8,7 @@
 pub mod costas;
 pub mod crc12;
 pub mod frame;
+pub mod ldpc_tables;
 pub mod speed;
 
 pub use crc12::crc12;
