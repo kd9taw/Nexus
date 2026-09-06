@@ -9178,10 +9178,11 @@ impl Engine {
         self.reset_tx_watchdog();
         self.tx_queue.clear();
         self.broadcast_queue.clear();
-        // `own_tx` is NOT cleared here either — same rule as `halt_tx` (#178): a new QSO spec
-        // starts with fresh outbound queues, but the overs already transmitted are history and
-        // stay in the Rx-Frequency pane.
-        // A new QSO (or mode change) starts a fresh auto-log window.
+        self.js8_halt_clear(); // a new operating spec starts with an empty JS8 outbox too
+                               // `own_tx` is NOT cleared here either — same rule as `halt_tx` (#178): a new QSO spec
+                               // starts with fresh outbound queues, but the overs already transmitted are history and
+                               // stay in the Rx-Frequency pane.
+                               // A new QSO (or mode change) starts a fresh auto-log window.
         self.qso_logged = false;
         self.qso_report_sent = None;
         self.qso_start_unix = None; // a fresh QSO stamps its own start time
@@ -9941,6 +9942,11 @@ impl Engine {
         // logged; current state never is, and nothing here is on a timer.
         tempo_core::applog::info("mode", &format!("tier {:?} → {:?}", self.app.tier(), tier));
         self.app.set_tier(tier);
+        // Leaving JS8: a scheduled heartbeat must not fire on return, and a half-sent
+        // multi-frame message cannot resume on another tier — clear all of it now.
+        if from == Tier::Js8 {
+            self.js8_halt_clear();
+        }
         // ⭐ ANY TIER SWITCH WHILE AN OVER IS IN FLIGHT STANDS TRANSMIT DOWN.
         //
         // This was gated on `tier_is_rx_only`, which stopped covering the case that
@@ -10288,6 +10294,10 @@ impl Engine {
         self.sstv_tx_progress = None;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
+        // JS8: outbox, pending autoreply and HB schedule go too — halt is total (spec
+        // invariant 7). `slot_tx_abort` above cuts a JS8 frame in flight exactly as it
+        // cuts an FT8 over.
+        self.js8_halt_clear();
         // A halt ends the one over still owed to a partner the run has left (#170, #153):
         // it is a queued transmission like any other, and this is the universal stop. It
         // matters most on the path that is NOT an operator press — `halt_tx_for_context_change`

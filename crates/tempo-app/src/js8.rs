@@ -499,11 +499,16 @@ impl Engine {
         self.js8_station.drop_queue();
     }
 
-    /// Halt is total: outbox, pending reply and HB schedule. Wired from `halt_tx` /
-    /// `set_tier` / `set_mode` by the TX batch; callable now.
+    /// Halt is TOTAL (spec invariant 7): drop the outbox, the pending autoreply and the
+    /// heartbeat schedule, release the per-slot latch. Called from `halt_tx` (Stop TX, the
+    /// UDP HaltTx, the watchdog kill path), from `set_tier` when LEAVING the tier, and
+    /// from `set_mode`. `tx_enabled` is the caller's business: `halt_tx` drops it, a tier
+    /// change decides for itself, `set_mode` may be arming. The one-shot `slot_tx_abort`
+    /// that cuts a frame in flight is `halt_tx`'s and is armed there.
     pub fn js8_halt_clear(&mut self) {
         self.js8_station.halt();
         self.js8_hb_on = false;
+        self.js8_planned_slot = None;
     }
 
     /// Book a JS8 over at PLAN time — the beacon and QSO arms' rule, and for the same
