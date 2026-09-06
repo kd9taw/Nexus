@@ -6,6 +6,8 @@
 //! (`sync`, `downsample`, `demod`, `subtract`, `decoder`) and the `decode` entry point.
 
 pub mod costas;
+pub mod crc12;
 pub mod speed;
 
+pub use crc12::crc12;
 pub use speed::Speed;
