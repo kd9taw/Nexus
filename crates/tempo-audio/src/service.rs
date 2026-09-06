@@ -3615,14 +3615,21 @@ impl RadioLoop {
     /// FORK-LOCAL: start/stop the FT-710's FT4222 waterfall reader for the ACTIVE radio, refresh the
     /// metadata it needs, and say something useful when nothing is flowing.
     ///
-    /// ⚠️ THE SILENT CASE IS AN INSTRUCTION, NOT A FAULT. The FT4222 only appears on USB once
-    /// **SCU-LAN10** is enabled in the radio's EX menu, and frames only flow once the **external
-    /// display** output is on. Both are EX-menu items Nexus cannot set over CAT, so retrying forever
+    /// ⚠️ THE SILENT CASE IS AN INSTRUCTION, NOT A FAULT — for the half that is verified. The
+    /// FT4222 only appears on USB once **SCU-LAN10** is enabled in the radio's EX menu, which is
+    /// measured. The second half of this sentence used to read "and frames only flow once the
+    /// external display output is on": never verified, and disproven on the bench — `EX 04-04-01`
+    /// read OFF on a station whose waterfall was working perfectly (2026-08-20). What silence
+    /// actually means is not known. SCU-LAN10 is an EX-menu item Nexus cannot set over CAT, so
+    /// retrying forever
     /// while the pane stays blank would leave the operator debugging the app instead of the radio.
     /// The two failures are told apart deliberately — they have different cures:
     ///
     /// * the bridge would not OPEN → SCU-LAN10 is off (the device is not on the bus at all);
-    /// * it opened but has published NOTHING after a grace period → the external display is off.
+    /// * it opened but has published NOTHING after a grace period → the bridge is silent, and
+    ///   this code does NOT know why. It used to say "the external display is off"; that was
+    ///   never verified and is now disproven — `EX 04-04-01` read OFF on a station whose
+    ///   waterfall was working perfectly (bench, 2026-08-20; see `YAESU_WF_NO_FRAMES`).
     ///
     /// Cheap on the common path: one key compare, and the metadata read is rate-limited to once
     /// every [`YAESU_WF_META_MS`].
@@ -4007,7 +4014,8 @@ impl RadioLoop {
             }
         }
         // Opened, but has it ever produced a row? After the grace period, silence means the radio is
-        // not sending — which on this rig means the external display output is off.
+        // not sending. WHY it is silent is not known — see `YAESU_WF_NO_FRAMES`; the external
+        // display setting was the old guess and the bench disproved it.
         if wf.published() == 0 {
             if now - self.yaesu_wf_started > YAESU_WF_GRACE_MS {
                 e.set_scope_error(Some(YAESU_WF_NO_FRAMES.to_string()));

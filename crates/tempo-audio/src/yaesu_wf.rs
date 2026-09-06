@@ -373,7 +373,9 @@ pub enum ScopePosition {
 /// The FT-710 has three families — 3DSS (`0 1 2`), W/F EXPAND (`3 6 9`) and W/F NORMAL (`4 7 A`) —
 /// and each carries all three positions. Mapping every request onto W/F NORMAL would quietly drag a
 /// 3DSS operator out of 3DSS for asking to centre the sweep, so the family comes from `current`.
-/// An unrecognised current code falls back to W/F NORMAL, which is the family this app can place.
+/// An unrecognised current code falls back to W/F NORMAL, which is the family this app
+/// DERIVES a code for when it has nothing to preserve — not the only one it can place.
+/// [`mode_is_centered`] places `'0'`, `'3'` and `'4'`: the CENTER code of all three families.
 pub fn mode_code_for(pos: ScopePosition, current: u8) -> u8 {
     let family: [u8; 3] = match current {
         b'0' | b'1' | b'2' => [b'0', b'1', b'2'],
@@ -639,17 +641,6 @@ pub fn parse_ss_reply(reply: &str, expect_p2: u8) -> Option<u8> {
 /// [`Pumped::Unavailable`] and clears the RF feed rather than publishing rows it cannot place.
 pub type SharedMeta = std::sync::Arc<std::sync::Mutex<Option<SweepMeta>>>;
 
-/// A running reader: a thread that pumps frames into the feed until dropped.
-///
-/// WHY A THREAD AND NOT THE RADIO POLL LOOP. The loop's heavy tick is `RIG_POLL_MS` = 750 ms, and
-/// one frame per tick is ~1.3 rows/s — a waterfall that scrolls once a second is not a waterfall.
-/// A read costs 12 ms measured, so a dedicated reader at ~15/s is cheap and never blocks CAT: the
-/// bridge is a SEPARATE USB function from the CAT port, which is the whole reason this is
-/// possible at all.
-///
-/// Lifecycle mirrors [`crate::flexspectrum::FlexSpectrum`] deliberately — that is the existing
-/// answer in this codebase to "a second device that feeds the spectrum": the owner holds it in an
-/// `Option` beside a KEY, and a rig switch drops it (stopping the thread) before starting the one
 /// Does this Hamlib model have the internal FT4222 bridge?
 ///
 /// Only the FT-710 (1049) is confirmed — measured on hardware 2026-08-17. The FTX-1 (1051) is NOT
@@ -706,6 +697,17 @@ pub fn open_default_source() -> Option<Box<dyn WaterfallSource + Send>> {
     }
 }
 
+/// A running reader: a thread that pumps frames into the feed until dropped.
+///
+/// WHY A THREAD AND NOT THE RADIO POLL LOOP. The loop's heavy tick is `RIG_POLL_MS` = 750 ms, and
+/// one frame per tick is ~1.3 rows/s — a waterfall that scrolls once a second is not a waterfall.
+/// A read costs 12 ms measured, so a dedicated reader at ~15/s is cheap and never blocks CAT: the
+/// bridge is a SEPARATE USB function from the CAT port, which is the whole reason this is
+/// possible at all.
+///
+/// Lifecycle mirrors [`crate::flexspectrum::FlexSpectrum`] deliberately — that is the existing
+/// answer in this codebase to "a second device that feeds the spectrum": the owner holds it in an
+/// `Option` beside a KEY, and a rig switch drops it (stopping the thread) before starting the one
 /// the new radio needs. Getting that wrong is how a scope keeps streaming the previous radio's
 /// band, which is the dual-radio fault this project has already been bitten by elsewhere.
 pub struct YaesuWaterfall {
@@ -1411,7 +1413,8 @@ mod tests {
         // check that the set is well formed.
         assert_eq!(set_span_command(b'7'), "SS0570000;");
         assert_eq!(set_span_command(b'3'), "SS0530000;");
-        // Mode 4 = W/F CENTER (NORMAL), the family whose edges `sweep_edges` can place.
+        // Mode 4 = W/F CENTER (NORMAL). One of THREE placeable CENTER codes, not the only
+        // one — `sweep_edges` places `'0'` and `'3'` too, via `mode_is_centered`.
         assert_eq!(set_mode_command(b'4'), "SS0640000;");
         // A set is the read's shape with P3 filled in, so parsing it back must yield the code —
         // the same function the reply path uses, pointed at what we are about to send.
