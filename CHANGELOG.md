@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Chase pane stopped updating once you selected a station.** Its "open now / best 1400Z"
+  column and the colour accent on each row come from the modelled band outlook, and that was
+  deliberately not refreshed while a station was selected — correct for the map, which switches to
+  a per-station prediction, but it also starved Chase, the Chase feed and the band-outlook heatmap,
+  which use it all the time. Pick a station and their propagation column froze at whatever it last
+  held. It was most visible in a detached Connect window left open on a second monitor, but it
+  happened in the main window too. The outlook now refreshes on its own every minute regardless of
+  what is selected; the map is unchanged.
+
 - **CW and SSB park activations were missing from the roster for digital-only stations.** If
   the CW or Phone features were off (the wizard's FT-only choice), a POTA or SOTA activator
   running CW or SSB was dropped as if it were a CW/Phone *need* — so the Nexus roster showed
