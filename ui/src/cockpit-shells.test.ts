@@ -301,6 +301,8 @@ const SHELLS: Array<[string, Array<Set<string>>]> = [
   // PSK (Keyboard Modes Phase 1) rides RTTY's region-less shell rule — one
   // comma group in styles.css, but the cascade is computed per shell here.
   ['.layout.single.psk-cockpit', shellChain('psk-cockpit')],
+  // JS8 (2026-09) takes CW's REGION shell rule — its own block in styles.css, computed here.
+  ['.layout.single.js8-cockpit', shellChain('js8-cockpit')],
   ['.layout.single.sstv-view', shellChain('sstv-view')],
   // APRS is the sixth cockpit and was ABSENT from this census until 2026-08-04: nothing had
   // ever computed its shell, and it was the one surface in the tree with no deficit valve —
@@ -590,6 +592,7 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
     ['rtty-cockpit', 'cw-macros (macro row)', ['cw-macros']],
     ['rtty-cockpit', 'cw-macros.rtty-auto-row (auto-sequencer)', ['cw-macros', 'rtty-auto-row']],
     ['rtty-cockpit', 'cw-send (compose bar)', ['cw-send']],
+    ['js8-cockpit', 'js8-dock-row (compose + beacon rows)', ['js8-dock-row']],
   ]
   for (const [shell, name, rowClasses] of ROWS) {
     it(`.${shell} dock ${name} resolves flex-shrink 0`, () => {

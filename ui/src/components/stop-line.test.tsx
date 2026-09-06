@@ -32,12 +32,14 @@
 //
 // EACH COCKPIT IS RENDERED WITH THE PROPS APP GIVES IT, and that is load-bearing rather than
 // tidiness: CockpitHeader draws the TX-enable latch (▼ TX On / ■ TX Off) only when it is
-// handed `onSetTxEnabled`, which App passes to RTTY and SSTV and to nothing else — those two
-// cockpits have no other Enable-Tx affordance, the TopBar's being hidden with the digital
-// chrome. The first version of this file omitted the prop, so for RTTY and SSTV the latch was
-// never in the document and the sweep proved nothing about the one control the rule names
-// BY NAME (gating it on a panel id in either cockpit was green). Phone and CW arm elsewhere
-// and legitimately have no latch on screen; their `stopControls` say so by not listing one.
+// handed `onSetTxEnabled`, which App passes to RTTY, PSK, SSTV and JS8 — in JS8 the latch is
+// NOT a stop (slotted mode), so the JS8 case passes the prop for parity with App and lists
+// Stop TX + Tune only. RTTY and SSTV have no other Enable-Tx affordance, the TopBar's being
+// hidden with the digital chrome. The first version of this file omitted the prop, so for
+// RTTY and SSTV the latch was never in the document and the sweep proved nothing about the
+// one control the rule names BY NAME (gating it on a panel id in either cockpit was green).
+// Phone and CW arm elsewhere and legitimately have no latch on screen; their `stopControls`
+// say so by not listing one.
 //
 // WHAT THIS FILE DOES NOT CARE ABOUT: whether a pane can START a transmission. Six can —
 // Operate's Tx messages, its two decode panes and its two rosters, Phone's voice keyer — and
@@ -94,6 +96,7 @@ import { PhoneCockpit } from './PhoneCockpit'
 import { CwCockpit } from './CwCockpit'
 import { RttyCockpit } from './RttyCockpit'
 import { PskCockpit } from './PskCockpit'
+import { Js8Cockpit } from './Js8Cockpit'
 import { SstvView } from './SstvView'
 import {
   ALL_PANEL_VOCABULARIES,
@@ -101,10 +104,11 @@ import {
   CW_PANEL_IDS,
   RTTY_PANEL_IDS,
   PSK_PANEL_IDS,
+  JS8_PANEL_IDS,
   SSTV_PANEL_IDS,
 } from '../features/panelState'
 import type { PanelLayoutApi } from '../features/panelState'
-import type { AppSnapshot, FieldDayStatus, PskState, RttyState, SstvState } from '../types'
+import type { AppSnapshot, FieldDayStatus, Js8State, PskState, RttyState, SstvState } from '../types'
 
 const decodeState = {
   text: 'CQ CQ DE KD9TAW',
@@ -153,6 +157,29 @@ const pskState = {
   latched: false,
   keyerError: null,
 } as unknown as PskState
+
+const js8State = {
+  speed: 'normal',
+  rxSpeeds: 15,
+  txEnabled: true,
+  sending: false,
+  hbOn: false,
+  hbNextAtMs: null,
+  hbIntervalMin: 0,
+  autoreply: true,
+  relay: true,
+  hbAck: false,
+  armed: { autoreply: false, relay: false, hbAck: false, hb: false },
+  idleMinutes: 0,
+  idleLimitMin: 60,
+  idleTripped: false,
+  activity: [],
+  stations: [],
+  inbox: [],
+  queue: [],
+  pendingReply: null,
+  lastError: null,
+} as unknown as Js8State
 
 const sstvState = {
   armed: false,
@@ -276,6 +303,22 @@ vi.mock('../api', async (importOriginal) => {
     pskSetLatched: vi.fn(async () => pskState),
     pskType: vi.fn(async () => pskState),
     pskStop: vi.fn(async () => pskState),
+    getJs8State: vi.fn(async () => js8State),
+    // `js8_enter` fires on the rising edge of `active`; the auto-stub would answer `{}` and
+    // the cockpit would then render a state with no `armed` — pin the fixture.
+    js8Enter: vi.fn(async () => js8State),
+    js8Arm: vi.fn(async () => js8State),
+    js8Send: vi.fn(async () => js8State),
+    js8SendCommand: vi.fn(async () => js8State),
+    js8CallCq: vi.fn(async () => js8State),
+    js8SetSpeed: vi.fn(async () => js8State),
+    js8Cancel: vi.fn(async () => js8State),
+    js8DropQueue: vi.fn(async () => js8State),
+    js8InboxMark: vi.fn(async () => js8State),
+    js8InboxDelete: vi.fn(async () => js8State),
+    setTxLevel: vi.fn(async () => ({})),
+    setRxOffset: vi.fn(async () => ({})),
+    setTxOffset: vi.fn(async () => ({})),
     getSstvState: vi.fn(async () => sstvState),
     sstvArm: vi.fn(async () => sstvState),
     sstvAutoArm: vi.fn(async () => sstvState),
@@ -515,6 +558,24 @@ const psk: Case<(typeof PSK_PANEL_IDS)[number]> = {
   render: (panels) => render(<PskCockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
 }
 
+const js8: Case<(typeof JS8_PANEL_IDS)[number]> = {
+  cockpit: 'JS8',
+  view: 'js8',
+  ids: JS8_PANEL_IDS,
+  // The OPERATE shape of the census, because JS8 is a SLOTTED mode: Stop TX (→ halt_tx, which
+  // also empties the JS8 queue from B7 on) and Tune, both in the header. NOT LISTED, on
+  // purpose: the TX-enable latch — `set_tx_enabled(false)` deliberately does not arm
+  // slot_tx_abort (the operator's 2026-07-31 ruling: the frame in flight completes), so in a
+  // slotted mode it is not a stop; and the dock's "Drop queue", a SENDER-class control (the
+  // RTTY "TX" ruling) that empties the queue without cutting anything. Esc is keyboard-only
+  // and census-only. `onSetTxEnabled` is still passed, exactly as App passes it.
+  stopControls: [
+    ['Stop TX', /^stop tx$/i],
+    ['Tune', /^tune$|^tuning…$/i],
+  ],
+  render: (panels) => render(<Js8Cockpit snap={snap} panels={panels} onSetTxEnabled={() => {}} />),
+}
+
 const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
   cockpit: 'SSTV',
   view: 'sstv',
@@ -525,7 +586,7 @@ const sstv: Case<(typeof SSTV_PANEL_IDS)[number]> = {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const CASES: Array<Case<any>> = [phone, cw, rtty, psk, sstv]
+const CASES: Array<Case<any>> = [phone, cw, rtty, psk, js8, sstv]
 
 async function settle() {
   await act(async () => {

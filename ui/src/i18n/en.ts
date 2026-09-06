@@ -6985,6 +6985,72 @@ export const EN = {
   'psk.drive.title':
     "PSK31 is an amplitude-shaped mode: if the rig's ALC is compressing, the signal splatters into the neighbors (IMD). Nexus keys at a modest drive by default — set TX audio / power so the rig's ALC meter barely moves.",
 
+  // ── JS8 ▸ the ⊞ panel labels (the pane heads reuse them) ───────────────────────────────
+  'js8.panel.scope': 'Waterfall',
+  'js8.panel.activity': 'Activity',
+  'js8.panel.stations': 'Stations',
+  'js8.panel.inbox': 'Inbox',
+  'js8.panel.log': 'Log',
+  'js8.panel.activity.title':
+    'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
+  'js8.panel.activity.empty': 'Listening… frames decoded at every enabled speed print here',
+  'js8.panel.activity.row.title': 'Double-click to write to this station',
+
+  // ── JS8 ▸ the header ─────────────────────────────────────────────────────────────────
+  'js8.header.power.label': 'Drive',
+  'js8.header.power.title':
+    'TX audio drive — set it so the rig’s ALC barely moves; JS8 is a constant-envelope mode, but an overdriven sound card still splatters',
+  'js8.header.speed.title': 'JS8 — JS8Call-compatible keyboard mode on FT8’s waveform',
+  'js8.header.speed.aria': 'Transmit speed',
+  'js8.header.speed.chip.title':
+    'Transmit at {{speed}} ({{period}} s periods). Receiving decodes every speed ticked in Settings ▸ Digital ▸ JS8, whatever this is set to.',
+  'js8.header.speed.failed': 'JS8 speed change refused',
+  'js8.header.rx.title':
+    'Decoding {{n}} of the 4 speeds at once — choose them in Settings ▸ Digital ▸ JS8',
+  'js8.header.band.title': "Showing the rig's current band",
+
+  // ── JS8 ▸ the stations pane ──────────────────────────────────────────────────────────
+  'js8.station.empty': 'No stations heard yet — the heard list fills as heartbeats and CQs decode',
+  'js8.station.select.title': 'Write to {{call}} (fills the To box and the log strip)',
+  'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
+  'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
+
+  // ── JS8 ▸ the inbox pane ─────────────────────────────────────────────────────────────
+  'js8.inbox.empty': 'Nothing in the inbox — messages addressed to you, and MSG TO: messages you hold for others, appear here',
+  'js8.inbox.state.unread': 'unread',
+  'js8.inbox.state.read': 'read',
+  'js8.inbox.state.store': 'held for delivery',
+  'js8.inbox.state.delivered': 'delivered',
+  'js8.inbox.read.label': 'Read',
+  'js8.inbox.read.title': 'Mark as read',
+  'js8.inbox.delete.label': 'Delete',
+  'js8.inbox.delete.title': 'Delete this message from the inbox',
+  'js8.inbox.failed': 'Inbox change refused',
+
+  // ── JS8 ▸ the dock: addressee, composer, CQ, HB ──────────────────────────────────────
+  'js8.dock.aria': 'JS8 composer',
+  'js8.dock.to.placeholder': 'To — a callsign, @ALLCALL or @GROUP (blank = everyone)',
+  'js8.dock.to.aria': 'Addressee',
+  'js8.dock.compose.placeholder': 'Type a message… (Enter queues it; one frame goes out per period)',
+  'js8.dock.compose.aria': 'JS8 message',
+  'js8.dock.send.label': 'Send',
+  'js8.dock.cq.aria': 'CQ variant',
+  'js8.dock.cq.title': 'Call CQ — a heartbeat frame addressed to @ALLCALL, in the next period',
+  'js8.dock.hb.title.off':
+    'Heartbeat schedule is off. Click to send a heartbeat every period’s interval (Settings ▸ Digital ▸ JS8) — it keys only while TX is on, and it is never remembered across launches.',
+  'js8.dock.hb.title.on':
+    'Heartbeat schedule is on, but TX is off — nothing keys. Enable TX (the header pill) to let heartbeats go out.',
+  'js8.dock.hb.title.armed':
+    'Heartbeats are going out on schedule, on a random free slot between 500 and 1000 Hz. Click to stop the schedule.',
+
+  // ── JS8 ▸ the toasts ─────────────────────────────────────────────────────────────────
+  'js8.toast.noCallsign': 'Set your callsign in Settings before transmitting',
+  'js8.toast.txLocked': 'TX locked — this frequency is outside your license privileges',
+  'js8.toast.send.failed': 'JS8 send refused',
+  'js8.toast.cq.failed': 'JS8 CQ refused',
+  'js8.toast.arm.failed': 'JS8 switch refused',
+  'js8.toast.command.failed': 'JS8 command refused',
+
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
   // Positive identification only: an unrecognised header falls through to the decoder, so
   // there is no "unknown format" entry here. The iPhone path names Apple's own menu items —
