@@ -21634,19 +21634,22 @@ mod tests {
     #[test]
     fn switching_radio_drops_the_scope_state_of_the_one_left_behind() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
-        let mut st = Settings::default();
-        st.radios = vec![
-            crate::settings::RadioProfile {
-                id: 0,
-                yaesu_rf_scope: true,
-                ..Default::default()
-            },
-            crate::settings::RadioProfile {
-                id: 1,
-                ..Default::default()
-            },
-        ];
-        st.active_radio = 0;
+        // One initializer, for the same clippy reason as the fixture below.
+        let st = Settings {
+            radios: vec![
+                crate::settings::RadioProfile {
+                    id: 0,
+                    yaesu_rf_scope: true,
+                    ..Default::default()
+                },
+                crate::settings::RadioProfile {
+                    id: 1,
+                    ..Default::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
         e.apply_restored_settings(st);
         e.set_scope_mode_code(Some(0x32)); // FIX
         e.set_scope_fix_start(Some(14.0));
@@ -21682,16 +21685,17 @@ mod tests {
         // Drives the FLAT mirror as well as the profile: a save of the ACTIVE radio arrives
         // through the flat form, and `apply_settings` keeps the engine's roster, so a fixture that
         // sets only the profile changes nothing the engine will read.
-        let profile = |scope: bool| {
-            let mut st = Settings::default();
-            st.yaesu_rf_scope = scope;
-            st.radios = vec![crate::settings::RadioProfile {
+        // Built in ONE initializer: CI denies clippy's `field_reassign_with_default`, which fires
+        // on any field assigned after `Settings::default()`.
+        let profile = |scope: bool| Settings {
+            yaesu_rf_scope: scope,
+            radios: vec![crate::settings::RadioProfile {
                 id: 0,
                 yaesu_rf_scope: scope,
                 ..Default::default()
-            }];
-            st.active_radio = 0;
-            st
+            }],
+            active_radio: 0,
+            ..Settings::default()
         };
         e.apply_restored_settings(profile(true));
         e.set_scope_mode_code(Some(0x32));
