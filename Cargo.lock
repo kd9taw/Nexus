@@ -2375,6 +2375,7 @@ name = "tempo-core"
 version = "0.2.0"
 dependencies = [
  "fst4",
+ "js8",
  "jt65",
  "microfft",
  "modes",
