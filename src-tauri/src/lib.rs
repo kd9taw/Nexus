@@ -721,7 +721,7 @@ fn sync_aprs_is_feed(engine: &SharedEngine) {
     }
     if !want {
         {
-            let mut eng = engine_lock(&engine);
+            let mut eng = engine_lock(engine);
             eng.set_aprs_is_status(Default::default());
         }
         return;
@@ -3370,7 +3370,10 @@ async fn get_dxped_windows(
             return Ok(Vec::new()); // no snapshot yet — the board is empty too
         };
         let mut seen = std::collections::HashSet::new();
-        let mut targets: Vec<(String, (f64, f64), Option<i64>, Option<i64>)> = Vec::new();
+        // (call, latlon, start_unix, end_unix) — start/end are `None` for an active
+        // (on-the-air-now) card, `Some` for an upcoming calendar entry.
+        type TargetRow = (String, (f64, f64), Option<i64>, Option<i64>);
+        let mut targets: Vec<TargetRow> = Vec::new();
         // Active cards carry no dates (they're on the air NOW); calendar entries
         // carry the announced start/end so the alarm can gate on them.
         let cards = s
@@ -4783,7 +4786,7 @@ struct SatView {
     /// and reported in `excluded` as `noPosition`). Not the drawn birds, and
     /// not every bird held: `held_back_count` is the rest. The UI badges
     /// > 14 d as stale. Median, never the oldest ([`TleSetCurrency`]): a
-    /// slow-cadence tail must not badge a current catalog.
+    /// > slow-cadence tail must not badge a current catalog.
     tle_age_days: f64,
     /// The same three set-wide bands `TleStatus` carries, from the same
     /// partition ([`tle_set_currency`]) — the Satellites chip and the Connect
@@ -8553,8 +8556,6 @@ fn export_general_log(
     Ok(eng.export_logbook(&format, from_unix, to_unix))
 }
 
-/// Distinct operators present in the log (#25). Empty for a single-op station, which is what
-
 /// Fields stripped from a settings backup (#28 item 4), by their serialised (camelCase) names.
 ///
 /// The bundle is written to Downloads and operators mail these to themselves, so anything a
@@ -8689,6 +8690,7 @@ fn import_settings_bundle(
     Ok(snap)
 }
 
+/// Distinct operators present in the log (#25). Empty for a single-op station, which is what
 /// the UI uses to decide whether a per-operator export is worth offering at all.
 #[tauri::command(async)]
 fn log_operators(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
@@ -9520,11 +9522,9 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
         let Some(host) = host else {
             return Ok(None); // no rotator configured — the pane shows its hint
         };
-        Ok(
-            tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_azimuth(&host))
-                .await
-                .map_err(|e| e.to_string())?,
-        )
+        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_azimuth(&host))
+            .await
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(feature = "radio"))]
     {
@@ -13256,7 +13256,7 @@ async fn get_need_alerts(
     //   2. workable_by_getting_out: a third party is hearing a DX in a region your
     //      OWN signal is reaching (who-heard-me reports) on that band — you can
     //      likely work it even if you aren't hearing it yet.
-    let now = now_unix() as i64;
+    let now = now_unix();
     let me_ll = propagation::geo::maidenhead_to_latlon(snap.mygrid.trim());
     // UNASSISTED mode drops both PSK Reporter evidence arms. ARRL's glossary names
     // "PSKReporter" in Spotting/QSO Finding Assistance, so an unassisted entry cannot use
@@ -13353,7 +13353,7 @@ async fn get_need_alerts(
     // (warmed by a startup primer + every prop refresh) — NOT the PropCache, which
     // is only populated once the operator visits Connect/DXpeditions. The match is
     // suffix/prefix-tolerant ("3Y0J/MM" still tags as 3Y0J).
-    let active = propagation::live::dxped::cached_active_calls(now_unix() as i64);
+    let active = propagation::live::dxped::cached_active_calls(now_unix());
     if !active.is_empty() {
         for a in &mut alerts {
             let call = a.call.to_uppercase();
@@ -13530,10 +13530,10 @@ async fn sync_lotw_report(
                 r.newly_confirmed, r.newly_credited
             )
         },
-        (|| {
+        {
             let mut eng = engine_lock(&state);
             Ok(eng.merge_lotw_report(&text).into())
-        })(),
+        },
     )
 }
 
@@ -13766,7 +13766,7 @@ fn conn_log(connector: &str, level: &str, message: impl Into<String>) {
     eprintln!("conn[{connector}/{level}]: {message}");
     let mut log = CONN_LOG.lock().unwrap_or_else(|e| e.into_inner());
     log.push_back(ConnEvent {
-        ts_unix: now_unix() as i64,
+        ts_unix: now_unix(),
         connector: connector.to_string(),
         level: level.to_string(),
         message,
@@ -14284,7 +14284,7 @@ enum UploadToggle {
 /// the requested state.
 fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: bool) {
     {
-        let mut eng = engine_lock(&state);
+        let mut eng = engine_lock(state);
         let (connector, already) = {
             let s = eng.settings();
             match which {
@@ -14861,7 +14861,7 @@ fn sync_qrz_since(
             .reason
             .unwrap_or_else(|| "QRZ rejected the FETCH — check your Logbook API key.".into()));
     }
-    let mut eng = engine_lock(&engine);
+    let mut eng = engine_lock(engine);
     let (added, summary) = eng.merge_qrz_report(&fetched.adif);
     let mut result: LotwSyncResult = summary.into();
     result.added = added;
@@ -14873,7 +14873,7 @@ fn sync_qrz_since(
 /// Outcome of one lookup attempt with a given session key/id. Shared by QRZ and its
 /// HamQTH fallback — both flow into the same [`QrzLookupDto`](tempo_app::dto::QrzLookupDto).
 enum QrzOutcome {
-    Found(tempo_app::dto::QrzLookupDto),
+    Found(Box<tempo_app::dto::QrzLookupDto>),
     NotFound,
     NeedLogin, // the session key/id is expired/invalid → (re)login
 }
@@ -14890,7 +14890,7 @@ fn qrz_try_lookup(session_key: &str, callsign: &str) -> Result<QrzOutcome, Strin
         return Ok(QrzOutcome::NeedLogin);
     }
     Ok(match tempo_core::qrz::parse_callsign(&body) {
-        Some(rec) => QrzOutcome::Found(rec.into()),
+        Some(rec) => QrzOutcome::Found(Box::new(rec.into())),
         None => QrzOutcome::NotFound,
     })
 }
@@ -14931,7 +14931,7 @@ fn hamqth_try_lookup(session_id: &str, callsign: &str) -> Result<QrzOutcome, Str
         return Ok(QrzOutcome::NeedLogin);
     }
     Ok(match tempo_core::hamqth::parse_callsign(&body) {
-        Some(rec) => QrzOutcome::Found(rec.into()),
+        Some(rec) => QrzOutcome::Found(Box::new(rec.into())),
         None => QrzOutcome::NotFound,
     })
 }
@@ -14973,7 +14973,7 @@ fn qrz_lookup_attempt(
     let cached = qrz_session.lock().ok().and_then(|g| g.clone());
     if let Some(key) = cached {
         match qrz_try_lookup(&key, call)? {
-            QrzOutcome::Found(dto) => return Ok(Some(dto)),
+            QrzOutcome::Found(dto) => return Ok(Some(*dto)),
             QrzOutcome::NotFound => return Ok(None), // authoritative miss — don't re-login
             QrzOutcome::NeedLogin => {}              // fall through to a single re-login
         }
@@ -14984,7 +14984,7 @@ fn qrz_lookup_attempt(
         *g = Some(key.clone());
     }
     match qrz_try_lookup(&key, call)? {
-        QrzOutcome::Found(dto) => Ok(Some(dto)),
+        QrzOutcome::Found(dto) => Ok(Some(*dto)),
         QrzOutcome::NotFound => Ok(None),
         // A fresh key still reporting expiry is anomalous — give up (→ HamQTH fallback).
         QrzOutcome::NeedLogin => Ok(None),
@@ -15004,7 +15004,7 @@ fn hamqth_lookup_attempt(
     let cached = hamqth_session.0.lock().ok().and_then(|g| g.clone());
     if let Some(id) = cached {
         match hamqth_try_lookup(&id, call)? {
-            QrzOutcome::Found(dto) => return Ok(Some(dto)),
+            QrzOutcome::Found(dto) => return Ok(Some(*dto)),
             QrzOutcome::NotFound => return Ok(None), // authoritative miss — don't re-login
             QrzOutcome::NeedLogin => {}              // fall through to a single re-login
         }
@@ -15015,18 +15015,12 @@ fn hamqth_lookup_attempt(
         *g = Some(id.clone());
     }
     match hamqth_try_lookup(&id, call)? {
-        QrzOutcome::Found(dto) => Ok(Some(dto)),
+        QrzOutcome::Found(dto) => Ok(Some(*dto)),
         QrzOutcome::NotFound => Ok(None),
         // A fresh id still reporting expiry is anomalous — give up.
         QrzOutcome::NeedLogin => Ok(None),
     }
 }
-
-/// Look up a callsign, enriching with name / grid / QTH / state. QRZ is tried first
-/// (its paid tier carries grid/state); when QRZ is **unconfigured** (no username or
-/// no stored password) or has **no match**, the lookup falls through to the FREE
-/// HamQTH fallback so it works without a QRZ subscription. Each path uses the same
-/// bounded cached-session → login-once → retry pattern; both produce the same DTO, so
 
 /// The callsigns a callbook lookup should try, in order (#46).
 ///
@@ -15053,6 +15047,11 @@ fn callbook_candidates(call: &str) -> Vec<String> {
     }
 }
 
+/// Look up a callsign, enriching with name / grid / QTH / state. QRZ is tried first
+/// (its paid tier carries grid/state); when QRZ is **unconfigured** (no username or
+/// no stored password) or has **no match**, the lookup falls through to the FREE
+/// HamQTH fallback so it works without a QRZ subscription. Each path uses the same
+/// bounded cached-session → login-once → retry pattern; both produce the same DTO, so
 /// the command's return type and the whole UI are unchanged.
 #[tauri::command]
 async fn qrz_lookup(
@@ -15301,7 +15300,7 @@ fn qrz_push_qso_impl(
             .reason
             .as_deref()
             .and_then(tempo_core::lotw_upload::sanitize_detail);
-        let mut eng = engine_lock(&engine);
+        let mut eng = engine_lock(engine);
         eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
     }
     Ok(push.into())
@@ -15613,7 +15612,7 @@ fn hrdlog_push_qso_impl(
     engine: &SharedEngine,
 ) -> Result<tempo_app::dto::HrdLogPushResultDto, String> {
     let callsign = {
-        let eng = engine_lock(&engine);
+        let eng = engine_lock(engine);
         eng.settings().mycall.trim().to_string()
     };
     if callsign.is_empty() {
@@ -15671,7 +15670,7 @@ fn clublog_push_qso_impl(
         );
     }
     let (email, callsign_setting, api_setting, mycall) = {
-        let eng = engine_lock(&engine);
+        let eng = engine_lock(engine);
         let s = eng.settings();
         (
             s.clublog_email.trim().to_string(),
@@ -15731,7 +15730,7 @@ fn clublog_push_qso_impl(
             .message
             .as_deref()
             .and_then(tempo_core::lotw_upload::sanitize_detail);
-        let mut eng = engine_lock(&engine);
+        let mut eng = engine_lock(engine);
         eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
     }
     Ok(push.into())
@@ -15774,7 +15773,7 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
         );
     }
     let (user, qth_nickname) = {
-        let eng = engine_lock(&engine);
+        let eng = engine_lock(engine);
         let s = eng.settings();
         (
             s.eqsl_username.trim().to_string(),
@@ -15809,7 +15808,7 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
             detail: Some("eQSL is temporarily unavailable — try again shortly.".into()),
         }),
         Some(outcome) => {
-            let mut eng = engine_lock(&engine);
+            let mut eng = engine_lock(engine);
             eng.stamp_eqsl_upload(&rec, outcome, now_unix(), None);
             Ok(UploadReportDto {
                 dispatched: 1,
@@ -15826,7 +15825,7 @@ fn eqsl_push_qso_impl(record: LoggedQso, engine: &SharedEngine) -> Result<Upload
 /// next snapshot poll — `upload_tick` bumps).
 fn note_upload_shared(engine: &SharedEngine, msg: String, ok: bool) {
     {
-        let mut eng = engine_lock(&engine);
+        let mut eng = engine_lock(engine);
         eng.note_upload(msg, ok);
     }
 }
@@ -15859,7 +15858,7 @@ fn n3fjp_mode(mode: &str) -> String {
 /// same `n3fjp_host`/`n3fjp_port` as the Field-Day push; N3FJP's EXCLUDEDUPES dedupes any overlap.
 fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), String> {
     let (host, port, mycall) = {
-        let eng = engine_lock(&engine);
+        let eng = engine_lock(engine);
         let s = eng.settings();
         (
             s.n3fjp_host.trim().to_string(),
@@ -15951,7 +15950,7 @@ fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String
 /// settings.json), read here at push time.
 fn cloudlog_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<String, String> {
     let (url, station_id) = {
-        let eng = engine_lock(&engine);
+        let eng = engine_lock(engine);
         let s = eng.settings();
         (
             s.cloudlog_url.trim().to_string(),
@@ -15974,13 +15973,9 @@ fn cloudlog_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<Stri
     propagation::live::cloudlog::upload(&url, &key, &station_id, &adif)
 }
 
-/// Push one logged QSO to each enabled+owed connector. Returns the bitmask of
-/// legs that failed TRANSIENTLY (network down / service busy) and should be
-/// retried — a permanent reject (bad auth, malformed) or a success is NOT in the
-/// return, so the worker's re-queue never re-pushes a leg that already landed.
-fn auto_push_one(
-    engine: &SharedEngine,
-    dto: LoggedQso,
+/// Which connectors are enabled, for [`auto_push_one`] — bundled into one struct
+/// purely to keep that function's argument count down; each field is independent.
+struct ConnectorToggles {
     qrz_on: bool,
     clublog_on: bool,
     eqsl_on: bool,
@@ -15988,8 +15983,22 @@ fn auto_push_one(
     wrl_on: bool,
     n3fjp_on: bool,
     cloudlog_on: bool,
-    owed: u8,
-) -> u8 {
+}
+
+/// Push one logged QSO to each enabled+owed connector. Returns the bitmask of
+/// legs that failed TRANSIENTLY (network down / service busy) and should be
+/// retried — a permanent reject (bad auth, malformed) or a success is NOT in the
+/// return, so the worker's re-queue never re-pushes a leg that already landed.
+fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, owed: u8) -> u8 {
+    let ConnectorToggles {
+        qrz_on,
+        clublog_on,
+        eqsl_on,
+        hrdlog_on,
+        wrl_on,
+        n3fjp_on,
+        cloudlog_on,
+    } = on;
     use tempo_app::engine::upload_legs as legs;
     let call = dto.call.clone();
     let mut parts: Vec<String> = Vec::new();
@@ -16271,7 +16280,8 @@ fn get_ota_spots(
     }
     // Bands where MY signal is getting out right now (live PSKR receptions of
     // my call inside the last 15 min) — the "workable now" differentiator.
-    let (mycall, park_worked): (String, Box<dyn Fn(&str) -> bool>) = {
+    type ParkWorkedFn = Box<dyn Fn(&str) -> bool>;
+    let (mycall, park_worked): (String, ParkWorkedFn) = {
         let eng = engine_lock(&state);
         let worked: std::collections::HashSet<String> = spots
             .iter()
@@ -16881,7 +16891,7 @@ fn load_hunted_parks_cache(engine: &SharedEngine) {
     if let Ok(csv) = std::fs::read_to_string(hunted_parks_cache_path()) {
         let refs = tempo_core::pota::ParkIndex::parse_csv(&csv).references();
         {
-            let mut eng = engine_lock(&engine);
+            let mut eng = engine_lock(engine);
             eng.set_hunted_parks_import(refs);
         }
     }
@@ -19654,13 +19664,15 @@ pub fn run() {
                 let failed = auto_push_one(
                     &push_engine,
                     LoggedQso::from(p.rec),
-                    qrz_on,
-                    clublog_live,
-                    eqsl_on,
-                    hrdlog_on,
-                    wrl_on,
-                    n3fjp_on,
-                    cloudlog_on,
+                    ConnectorToggles {
+                        qrz_on,
+                        clublog_on: clublog_live,
+                        eqsl_on,
+                        hrdlog_on,
+                        wrl_on,
+                        n3fjp_on,
+                        cloudlog_on,
+                    },
                     p.legs,
                 );
                 // Transient failures (network down / service busy) → re-queue ONLY
