@@ -25,6 +25,15 @@
 //! B/C audio (Task B3.11, ~/work/twowayfd/paritylab/js8/results/). On-air
 //! interop at B/C is a NEEDS-BENCH item (B8); the first captured Fast/Turbo
 //! WAV belongs in fixtures/ beside a count assertion the day it exists.
+//! Lab result 2026-09-06 (paritylab/js8/results/B3-2026-09-06.txt, 60-file
+//! corpus): stock js8 cross-decodes our synthetic B/C audio payload-identical
+//! — at −10 dB Fast 3/3 vs 3/3 and Turbo 3/3 vs 3/3, zero payload/dt
+//! mismatches, zero Nexus false decodes, mean SNR offset stock−Nexus −0.33 dB
+//! (B) / −1.67 dB (C) (Slow +1.00 / Normal +0.33), all < 3 dB. The weaker B/C
+//! corpus points sit at/below the knee (0/3 both sides). One yield gap worth
+//! naming: at Normal −20 dB stock decodes 2/3 and Nexus 0/3 — this decoder
+//! runs ~2 dB less sensitive than stock on synthetic AWGN at Normal (it still
+//! reproduces every real off-air Normal decode). Reported, not gated.
 //!
 //! Tolerances vs stock: the spec's 1 Hz / 0.02 s PLUS the CLI's print
 //! quantisation — `js8` prints FREQ as an integer (±0.5 Hz) and DT with one
