@@ -9,8 +9,11 @@ mod common;
 
 use js8::proto::callsign::{is_base_call, pack28, unpack28, CallRef};
 use js8::proto::command::Command;
+use js8::proto::compose::frames;
 use js8::proto::frame::{decode_word, encode_frame, pack_data_prefix, Frame, FrameError};
 use js8::proto::jsc;
+use js8::proto::reassembly::{MessageEvent, Reassembler};
+use js8::RawDecode;
 use js8::{Speed, Word87, I3};
 use proptest::prelude::*;
 
@@ -111,5 +114,42 @@ proptest! {
         let flipped = Word87::from_bytes(bytes);
         prop_assert!(!flipped.verify());
         prop_assert_eq!(decode_word(&flipped, speed).err(), Some(FrameError::Crc));
+    }
+
+    /// The reassembly safety property (Task B4.6): compose a multi-frame checksummed message,
+    /// then feed its frames with one dropped. A closed message either carries the EXACT body or
+    /// is reported incomplete/checksum-bad — a lossy stream never yields confident WRONG text.
+    #[test]
+    fn reassembly_is_exact_or_incomplete_never_wrong(to in base_call(), body in "[A-Z0-9 ]{3,30}", speed in speed()) {
+        let body = body.trim().to_string();
+        prop_assume!(!body.is_empty());
+        let toref = CallRef::Base(to);
+        let Ok(seq) = frames("KD9TAW", Some(&toref), &format!("MSG {body}"), speed) else { return Ok(()); };
+        prop_assume!(seq.len() >= 2);
+        let period = speed.period_s() as u64 * 1000;
+        let feed = |drop_idx: Option<usize>| -> Vec<js8::proto::reassembly::Message> {
+            let mut r = Reassembler::new();
+            let mut out = Vec::new();
+            for (n, (f, i3)) in seq.iter().enumerate() {
+                if Some(n) == drop_idx { continue; }
+                let word = encode_frame(f, *i3, speed).unwrap();
+                let rx = RawDecode { speed, freq_hz: 1500.0, dt_s: 0.0, snr_db: -10, sync: 0.0, word, nharderrors: 0, quality: 1.0 };
+                for e in r.feed(&rx, n as u64 * period) { if let MessageEvent::Message(m) = e { out.push(m); } }
+            }
+            for e in r.age(u64::MAX / 2) { if let MessageEvent::Message(m) = e { out.push(m); } }
+            out
+        };
+        // Whole stream: exactly one complete message with the exact body.
+        let whole = feed(None);
+        prop_assert_eq!(whole.len(), 1);
+        prop_assert!(whole[0].complete && whole[0].text == body, "whole: {:?}", whole[0]);
+        // Dropping any one frame: no closed message may claim the wrong body as complete.
+        for d in 0..seq.len() {
+            for m in feed(Some(d)) {
+                if m.complete {
+                    prop_assert_eq!(&m.text, &body, "lossy drop {} produced wrong complete text", d);
+                }
+            }
+        }
     }
 }

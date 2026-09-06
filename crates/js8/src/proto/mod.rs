@@ -15,7 +15,9 @@ pub mod frame;
 pub mod grid;
 pub mod huffman;
 pub mod jsc;
+pub mod reassembly;
 
 pub use command::Command;
 pub use compose::{frame_count_estimate, frames, max_frames, ComposeError};
 pub use frame::{decode_word, encode_frame, Frame, FrameError, FrameType};
+pub use reassembly::{render_directed, Checksum, Message, MessageEvent, Reassembler, RxFrame};
