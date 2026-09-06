@@ -3691,12 +3691,22 @@ pub enum TxWaveform {
         text: String,
         f0: f32,
     },
+    /// JS8: a TYPED 87-bit word. The frame never round-trips through text —
+    /// `Js8Mode::encode` is the lab's "<12 sixbit> <i3>" form, not the engine's
+    /// wire (a sentinel text form would make consumers guess). `f0` is the plan's
+    /// audio offset: the operator's TX offset, or the 500–1000 Hz heartbeat
+    /// sub-band slot the station picked — NEVER a dial move (spec invariant 9).
+    Js8 {
+        speed: modes::Js8Speed,
+        word: ::js8::Word87,
+        f0: f32,
+    },
 }
 
 impl TxWaveform {
-    /// Synthesise the audio. **Takes the modem lock; call it with no other lock
-    /// held.** Returns empty on any refusal, which every caller already treats
-    /// as "do not key".
+    /// Synthesise the audio. **Takes the modem lock for the Fortran-backed variants;
+    /// call it with no other lock held.** JS8 is pure Rust and takes none. Returns
+    /// empty on any refusal, which every caller already treats as "do not key".
     pub fn build(&self) -> Vec<f32> {
         match self {
             TxWaveform::Deep { text, f0 } => {
@@ -3714,6 +3724,14 @@ impl TxWaveform {
                     return Vec::new();
                 }
                 mode.gen_wave(&tones, tempo_fast::SAMPLE_RATE, *f0)
+            }
+            TxWaveform::Js8 { speed, word, f0 } => {
+                // Pure Rust — takes no modem lock. Slot-positioned by construction:
+                // `modulate` prepends `speed.delay_ms()` of silence (JS8Call's start
+                // delay) and returns delay + 79·NSPS samples, always < the period
+                // (pinned per speed by the slot-fit test).
+                let tones = ::js8::phy::encode_word(word, *speed);
+                ::js8::phy::modulate(&tones, *speed, *f0, tempo_fast::SAMPLE_RATE)
             }
         }
     }
@@ -32830,6 +32848,45 @@ mod tests {
             );
         }
         assert!(!e.snapshot().recent_decodes.iter().any(|d| d.mine));
+    }
+
+    // ===== Native JS8 — Batch B7 (OPERATOR GATE → TX) engine tests =====
+
+    /// Spec invariant 6 (bounded airtime): every JS8 wave is SLOT-POSITIONED — `delay_ms` of
+    /// silence, then 79 symbols — and strictly shorter than its period at every speed, so
+    /// `tempo_audio::slot::tx_deadline_ms`'s clamp never truncates a frame and PTT always drops
+    /// before the next period. The typed word never round-trips through text.
+    #[test]
+    fn js8_waveform_is_slot_positioned_and_fits_its_period_at_every_speed() {
+        use ::js8::{Payload72, Word87, I3};
+        let word = Word87::new(
+            Payload72::from_bytes([0u8; 9]),
+            I3 { first: true, last: true, data: false },
+        );
+        for speed in modes::Js8Speed::ALL {
+            let wave = TxWaveform::Js8 { speed, word, f0: 1500.0 }.build();
+            let delay = speed.delay_ms() as usize * 12; // ms → samples at 12 kHz
+            assert_eq!(
+                wave.len(),
+                delay + 79 * speed.nsps(),
+                "{speed:?}: start delay + 79 symbols, nothing else"
+            );
+            assert!(
+                wave.len() < speed.period_s() as usize * 12_000,
+                "{speed:?}: the wave must be shorter than its period"
+            );
+            assert!(
+                wave[..delay].iter().all(|&s| s == 0.0),
+                "{speed:?}: the start delay is silence (slot-positioned)"
+            );
+            assert!(wave[delay..].iter().any(|&s| s != 0.0), "{speed:?}: then tones");
+            let secs = wave.len() as f32 / 12_000.0;
+            assert!(
+                (secs - speed.slot_fit_s()).abs() < 0.01,
+                "{speed:?}: `slot_fit_s` ({}) must describe the real wave ({secs})",
+                speed.slot_fit_s()
+            );
+        }
     }
 
     /// One decoded packet, ready to push. `raw` doubles as the payload text so two calls with
