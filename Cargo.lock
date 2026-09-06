@@ -1047,6 +1047,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "js8"
+version = "0.1.0"
+dependencies = [
+ "rustfft",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "jt65"
 version = "0.1.0"
 dependencies = [

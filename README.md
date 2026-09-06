@@ -415,6 +415,11 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   channel-estimation chain are IU8LMC's work; the supporting files are K1JT's FT4 sources with
   a halved symbol time. Decodium's on-air behavior is the compatibility baseline for the mode
   (see **[NOTICE](NOTICE)** for the per-file provenance split).
+- **[JS8Call](https://github.com/js8call/js8call)** (GPLv3) — **Jordan Sherer KN4CRD** and the
+  JS8Call contributors. Nexus's **JS8** mode is on-air compatible with JS8Call, implemented in Rust
+  (`crates/js8/`) from JS8Call's source read as the protocol reference; the transcribed tables
+  (Costas arrays, LDPC(174,87) parity tables from WSJT-X, alphabets, command and group tables,
+  the JSC dictionary) are credited in **[NOTICE](NOTICE)**. No JS8Call code is copied.
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
 - **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the waterfall's 3D
   stacked-spectrum view (`ui/src/dss.ts`) and retained-history model

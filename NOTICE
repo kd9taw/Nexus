@@ -271,6 +271,40 @@ GPL-compatible, so the vendored receiver redistributes cleanly inside the GPLv3
 whole. slowrx is an independent project, unmaintained upstream; Nexus is not
 affiliated with or endorsed by it.
 
+### JS8Call — protocol facts and transcribed tables
+License of the reference: **GNU GPL, version 3** (GPLv3) at repository level
+<https://github.com/js8call/js8call> (read at commit `a7ff1be0`, 2025-12-05). Per-file
+headers are inconsistent upstream and are stated here rather than assumed: `JS8.cpp`
+carries an "All Rights Reserved" header without a GPL grant; `varicode.cpp`, `jsc.cpp`,
+`jsc_list.cpp` and `jsc_map.cpp` carry the GPLv3 notice plus "All Rights Reserved";
+`JS8Submode.cpp`, `commons.h` and `JS8.hpp` carry no header.
+
+Nexus's JS8 mode (`crates/js8/`) is an **original implementation** written from JS8Call's
+source read as the on-air protocol specification. **No code was copied.** The following are
+transcribed as protocol FACTS, each cited to its upstream file in the Rust source:
+
+- the four submode constants and the two Costas arrays (`commons.h`, `JS8Submode.cpp`,
+  `JS8.hpp`);
+- the CRC-12 constants (`lib/crc12.cpp`), the 64-character 6-bit alphabet (`JS8.cpp`), the
+  41-, 39- and 68-character alphabets, the 51-entry group table, the CQ/HB tables and the
+  32-entry directed-command table with its autoreply/buffered/checksum subsets
+  (`varicode.cpp`);
+- the legacy Huffman table and the JSC dense-coder parameters (`varicode.cpp`, `jsc.cpp`);
+- the 262,144-word JSC dictionary (`jsc_list.cpp`, GPLv3), shipped as the generated blob
+  `crates/js8/src/proto/jsc/dict.bin` (sha256 in `dict.sha256`; generator
+  `scripts/gen-js8-jsc-dict.mjs`);
+- the default dial frequencies (`models/FrequencyList.cpp`).
+
+The LDPC(174,87) generator matrix and column order are WSJT-X's
+(`lib/ft8/ldpc_174_87_params.f90`, GPLv3, K1JT / WSJT Development Group) and the
+parity-check tables are WSJT-X 1.9.1's `lib/ft8/bpdecode174.f90` (GPLv3) — the same file
+JS8Call carries at `lib/ft8/bpdecode174.f90`, which is the copy the generator
+`scripts/gen-js8-ldpc-tables.mjs` reads (sha256-pinned) to emit
+`crates/js8/src/phy/ldpc_tables.rs`; the tables are transcribed, the decoder is original.
+Three decoder test recordings in `crates/js8/tests/fixtures/` (`A_2_9.wav`, `A_3_3.wav`,
+`E_2_1.wav`) are JS8Call's own `media/tests/` files, GPLv3, pinned by sha256. JS8Call is an
+independent project; Nexus is not affiliated with or endorsed by it.
+
 ---
 
 ## Bundled components (shipped in the Windows installer)

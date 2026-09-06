@@ -1,0 +1,21 @@
+[package]
+publish = false
+name = "js8"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "JS8 — JS8Call-compatible modem (phy) and message layer (proto), pure Rust. Written from JS8Call's source read as the on-air protocol specification; tables transcribed as facts (see NOTICE); no code copied."
+
+[lints]
+workspace = true
+
+[dependencies]
+# Symbol FFTs at 3840/2400/1200/600 points (B3): tempo-core's microfft is power-of-two only.
+# Already a workspace dependency via crates/tempo-sstv (rustfft 6.4.1 in Cargo.lock).
+rustfft = "6"
+# `Speed` and `Command` ride the settings/DTO wire (interfaces.md §0: rename_all = "lowercase").
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
