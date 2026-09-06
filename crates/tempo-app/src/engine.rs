@@ -2068,6 +2068,13 @@ pub struct Engine {
     js8_last_error: Option<String>,
     /// `<config dir>/js8_station.json` — the inbox/heard journal (`set_js8_journal_path`).
     js8_journal_path: Option<PathBuf>,
+    /// xorshift32 state for the heartbeat sub-band pick (`Station::next_frame`'s `rng`).
+    /// Seeded from the clock; it only ever chooses an AUDIO offset inside 500–1000 Hz.
+    pub(crate) js8_rng: u32,
+    /// The slot `plan_js8_tx` last popped a frame for. ONE frame per period: a second poll
+    /// in the same slot (the snappy immediate-TX path, a re-plan) must not pop the NEXT
+    /// frame and key it mid-period. Cleared by `js8_halt_clear`.
+    pub(crate) js8_planned_slot: Option<u64>,
     /// One-shot: drop Enable-Tx once the CURRENT over finishes playing — set
     /// when our final 73 goes out with "Disable Tx after sending 73" on. The
     /// radio loop consumes it AFTER tx_until expires; disabling immediately
@@ -3753,11 +3760,12 @@ pub struct TxPlan {
     /// A WSPR/FST4W beacon over. Beacons are EXEMPT from the wall-clock TX
     /// watchdog (operator-approved 2026-08-17, matching WSJT-X — see the
     /// `plan.beacon` branch in [`Engine::commit_tx`]); the flag now only marks
-    /// the transmitting state at commit.
-    beacon: bool,
+    /// the transmitting state at commit. Also set on a JS8 HEARTBEAT plan —
+    /// operator gate G2, 2026-09-05.
+    pub(crate) beacon: bool,
     /// Everything the TX gate evaluated when this plan was made — see
     /// [`TxGateStamp`].
-    stamp: TxGateStamp,
+    pub(crate) stamp: TxGateStamp,
 }
 
 /// A keying source that currently owns the transmitter — see [`Engine::tx_owner`].
@@ -4167,6 +4175,8 @@ impl Engine {
             js8_activity: VecDeque::new(),
             js8_last_error: None,
             js8_journal_path: None,
+            js8_rng: (tempo_core::timing::now_unix_ms() as u32) | 1,
+            js8_planned_slot: None,
             pending_tx_disable: false,
             pending_cw_id: false,
             highlights: std::collections::HashMap::new(),
@@ -14934,7 +14944,7 @@ impl Engine {
 
     /// The current TX-gate inputs, stamped into every [`TxPlan`] and re-checked
     /// by [`Self::commit_tx`] — see [`TxGateStamp`] for why.
-    fn tx_gate_stamp(&self) -> TxGateStamp {
+    pub(crate) fn tx_gate_stamp(&self) -> TxGateStamp {
         // A pass owning the dial swaps the dial for the tuning identity — see
         // TxGateStamp::dial_hz for why the two cases are opposites.
         let sat_tuning = self.sat_dial_owner.clone();
@@ -15239,7 +15249,7 @@ impl Engine {
 
     /// Reset the transmit-watchdog: clear the tripped flag and restart the wall-clock
     /// timer on the next over. Called on any operator-initiated action.
-    fn reset_tx_watchdog(&mut self) {
+    pub(crate) fn reset_tx_watchdog(&mut self) {
         self.tx_watchdog = false;
         self.tx_watchdog_start = None;
     }
@@ -16591,6 +16601,42 @@ impl Engine {
                 None
             }
         }
+    }
+
+    /// The wall-clock TX watchdog, as `plan_tx`'s mode-match tail applies it (the
+    /// `Some(t)` arm above) — DUPLICATED here on purpose. The JS8 tier route returns
+    /// above that tail, and a route that skipped it would leave operator, autoreply
+    /// and relay JS8 traffic bounded by nothing but the 60-minute idle clock. Same
+    /// fields, same three outcomes: start the clock on the first over after an
+    /// operator act (the operator verbs call `reset_tx_watchdog`); trip once REAL
+    /// elapsed time reaches `tx_watchdog_min` (disarm + one-shot abort, and the caller
+    /// RETURNS — never builds the wave); refuse an over longer than the whole limit.
+    /// Heartbeats never reach this fn (G2). Returns true when the over must NOT go out.
+    /// Keep this body textually aligned with the tail above; the engine test
+    /// `js8_wall_clock_trips_mirrors_the_mode_match_tail` pins its outcomes.
+    pub(crate) fn js8_wall_clock_trips(&mut self) -> bool {
+        let limit_secs = u64::from(self.settings.tx_watchdog_min) * 60;
+        if limit_secs == 0 {
+            return false; // 0 = watchdog off, exactly as for the FT arms
+        }
+        let now = now_unix_secs();
+        let start = *self.tx_watchdog_start.get_or_insert(now);
+        let over_secs = self.tx_over_secs() as u64;
+        if now.saturating_sub(start) >= limit_secs || over_secs > limit_secs {
+            self.tx_watchdog = true;
+            self.tx_enabled = false;
+            // A trip is a hard kill: the loop's mid-over cut is the one-shot abort.
+            self.slot_tx_abort = true;
+            self.app.set_transmitting(false);
+            return true;
+        }
+        false
+    }
+
+    /// The TX indicator (`AppSnapshot.radio.transmitting`), for planners that live outside
+    /// this module. Same call every arm of `plan_tx` makes; `app` is private.
+    pub(crate) fn set_transmitting(&mut self, on: bool) {
+        self.app.set_transmitting(on);
     }
 
     /// Decide, build and commit an over in one call — the whole transmit decision
@@ -32915,6 +32961,69 @@ mod tests {
         e.set_tier(Tier::Js8);
         e.set_tx_enabled(true);
         assert!(e.tx_enabled(), "JS8 is no longer receive-only");
+    }
+
+    /// The current JS8 Normal period index on the wall clock (slot = floor(unix / 15)), so
+    /// `slot × 15 000 ms` is a real period start on the same axis the station's countdown
+    /// (`fires_at_ms`) lives on. Shared by every B7 test.
+    pub(super) fn js8_slot_now() -> u64 {
+        now_unix_secs() / 15
+    }
+
+    /// Spec invariant 3: the tier route returns ABOVE the mode-match tail that holds the
+    /// wall-clock watchdog, so the route carries its own copy. This pins the copy to the
+    /// original's three outcomes: (1) the first over after an operator act STARTS the clock
+    /// and does not trip; (2) real elapsed time ≥ the limit trips — disarm, flag, one-shot
+    /// abort; (3) 0 minutes = watchdog off. (The original's fourth outcome, "an over longer
+    /// than the whole limit", cannot occur for JS8: the longest over is 25.78 s and the
+    /// smallest non-zero limit is 60 s.)
+    #[test]
+    fn js8_wall_clock_trips_mirrors_the_mode_match_tail() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        e.settings.tx_watchdog_min = 6;
+        e.set_tx_enabled(true); // an operator act: the clock is cleared
+        assert_eq!(e.tx_watchdog_start, None);
+        assert!(!e.js8_wall_clock_trips(), "the first over starts the clock, no trip");
+        assert!(e.tx_watchdog_start.is_some() && e.tx_enabled() && !e.tx_watchdog);
+
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(6 * 60 + 1));
+        assert!(e.js8_wall_clock_trips(), "elapsed ≥ limit trips");
+        assert!(!e.tx_enabled(), "tripped: TX disarmed");
+        assert!(e.tx_watchdog && e.slot_tx_abort, "tripped: flagged + one-shot abort armed");
+
+        e.set_tx_enabled(true);
+        e.settings.tx_watchdog_min = 0;
+        e.tx_watchdog_start = Some(1);
+        assert!(!e.js8_wall_clock_trips(), "0 = off, exactly as for the FT arms");
+        assert!(e.tx_enabled());
+    }
+
+    /// Booking happens at PLAN time (the beacon / QSO precedent): one own-TX row in the
+    /// Rx-Frequency feed, one `mine` row in the JS8 activity ring, and — when ALL.TXT is on —
+    /// exactly one `Tx` line stamped with the PERIOD START the caller hands in (alltxt.rs:
+    /// never round the wall clock), mode JS8, SNR/DT zero, audio = our TX offset.
+    #[test]
+    fn js8_note_tx_done_books_one_row_and_one_all_txt_line() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Js8);
+        e.settings.write_all_txt = true;
+        e.set_tx_offset(1500.0);
+        let period_start_ms = js8_slot_now() * 15_000;
+        e.js8_note_tx_done("KD9TAW: @HB HEARTBEAT EN52", period_start_ms);
+        let lines = e.take_all_txt_pending();
+        assert_eq!(lines.len(), 1, "one Tx line: {lines:?}");
+        assert!(lines[0].contains(" Tx JS8") && lines[0].ends_with("KD9TAW: @HB HEARTBEAT EN52"), "{}", lines[0]);
+        assert!(lines[0].contains(" 1500 "), "audio column = our TX offset: {}", lines[0]);
+        assert_eq!(e.snapshot().recent_decodes.iter().filter(|d| d.mine).count(), 1);
+        let st = e.js8_state();
+        assert_eq!(st.activity.iter().filter(|r| r.mine).count(), 1);
+        assert_eq!(st.activity.last().map(|r| r.at_ms), Some(period_start_ms));
+        // ALL.TXT off: still the rows, no line.
+        e.settings.write_all_txt = false;
+        e.js8_note_tx_done("KD9TAW: @ALLCALL CQ CQ CQ EN52", period_start_ms + 15_000);
+        assert!(e.take_all_txt_pending().is_empty());
+        assert_eq!(e.snapshot().recent_decodes.iter().filter(|d| d.mine).count(), 2);
     }
 
     /// One decoded packet, ready to push. `raw` doubles as the payload text so two calls with

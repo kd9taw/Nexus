@@ -494,9 +494,50 @@ impl Engine {
         self.js8_hb_on = false;
     }
 
-    /// Called by the radio loop when a JS8 wave finished playing. No wave can play in this
-    /// build; the TX batch supplies the body (`note_tx_done` + `record_own_tx` + ALL.TXT).
-    pub fn js8_note_tx_done(&mut self, _plan_display: &str, _now_ms: u64) {}
+    /// Book a JS8 over at PLAN time — the beacon and QSO arms' rule, and for the same
+    /// reason: the plan is the transmit decision, and `commit_tx` refuses only the
+    /// microsecond races (JS8's build is pure Rust). Three records: the own-TX row for the
+    /// Rx-Frequency feed (`record_own_tx`), a `mine` row in the JS8 activity ring the
+    /// cockpit's activity pane reads, and — when ALL.TXT is on — the `Tx` line in the
+    /// FT/beacon writers' shape (SNR/DT 0, audio = our TX offset, into the shared ALL.TXT
+    /// buffer with the same 5000-line cap). `now_ms` is the PERIOD START of the over
+    /// (slot × period), not the wall clock: alltxt.rs's rule is that only the slot knows
+    /// which period an over belongs to.
+    pub(crate) fn js8_note_tx_done(&mut self, plan_display: &str, now_ms: u64) {
+        self.record_own_tx(plan_display.to_string());
+        self.js8_activity.push_back(Js8ActivityRow {
+            at_ms: now_ms,
+            speed: self.js8_tx_speed(),
+            freq_hz: self.tx_offset_hz,
+            snr_db: 0,
+            dt_s: 0.0,
+            from: self.settings.mycall.trim().to_ascii_uppercase(),
+            text: plan_display.to_string(),
+            directed_to_me: false,
+            mine: true,
+            complete: true,
+            low_conf: false,
+        });
+        while self.js8_activity.len() > JS8_ACTIVITY_CAP {
+            self.js8_activity.pop_front();
+        }
+        if self.settings.write_all_txt {
+            self.station.all_txt_pending.push(crate::alltxt::all_txt_line(
+                now_ms / 1000,
+                self.settings.dial_mhz,
+                true,
+                "JS8",
+                0,
+                0.0,
+                self.tx_offset_hz,
+                plan_display,
+            ));
+            let len = self.station.all_txt_pending.len();
+            if len > 5000 {
+                self.station.all_txt_pending.drain(0..len - 5000);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
