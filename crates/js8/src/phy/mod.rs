@@ -13,6 +13,7 @@ pub mod ldpc_tables;
 pub mod modulate;
 pub mod speed;
 
+mod downsample;
 mod params;
 mod sync;
 #[cfg(test)]
