@@ -185,7 +185,9 @@ mod tests {
     fn blob(mid: &[u8], subject: &str) -> Vec<u8> {
         assemble_b2(&Message {
             mid: mid.to_vec(),
-            headers: vec![(b"Subject".to_vec(), subject.as_bytes().to_vec())],
+            headers: vec![(b"Subject".to_vec(), subject.as_bytes().to_vec())]
+                .into_iter()
+                .collect(),
             body: b"hello\r\n".to_vec(),
             attachments: Vec::new(),
         })

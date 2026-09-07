@@ -103,6 +103,124 @@ pub struct Attachment {
     pub data: Vec<u8>,
 }
 
+/// A message's non-structural headers, stored as one block with spans into it.
+///
+/// **Not `Vec<(Vec<u8>, Vec<u8>)>`, and the reason is a measurement.** That shape costs a 48-byte
+/// tuple slot in the vector plus two separate heap allocations per header, so `A: B\r\n` — six
+/// plaintext bytes — cost about ten times its own size by requested capacity alone. A Winlink
+/// message at the published 120,000-byte account maximum expands to roughly 5.7 MB of plaintext,
+/// which is legitimate mail no CMS would refuse. One block plus a 16-byte span per header brings
+/// the same message close to its own size, and — the part capacity cannot show — replaces two
+/// allocations per header with two for the whole message.
+///
+/// The read API is unchanged in shape: [`Headers::iter`] yields `(&[u8], &[u8])`, which is what
+/// [`assemble_b2`] and `mailbox::entry_from_blob` — the only two non-test consumers — already do.
+///
+/// ⚠️ `PartialEq` is derived over `(raw, spans)`, which is sequence equality **only because
+/// [`Headers::push`] appends both halves in order and nothing else ever writes `raw`**. If a
+/// later change writes into `raw` out of order, or reuses a span, the derive silently stops
+/// meaning what the tests think it means.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Headers {
+    /// Every header's name and value, concatenated with no separators. The spans say where each
+    /// begins and ends, so no delimiter is needed and no byte is escaped.
+    raw: Vec<u8>,
+    /// One entry per header, in wire order.
+    spans: Vec<Span>,
+}
+
+/// One header's extent inside [`Headers::raw`].
+///
+/// `u32` because a B2 header block that needed more than 4 GiB of offsets is not a message. Each
+/// half is `(start, end)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Span {
+    /// The name's `(start, end)` in `raw`.
+    name: (u32, u32),
+    /// The value's `(start, end)` in `raw`.
+    value: (u32, u32),
+}
+
+impl Headers {
+    /// Appends one header, keeping wire order.
+    ///
+    /// Silently ignores a name or value that would push `raw` past `u32::MAX` — unreachable for
+    /// any message that got this far (`b2f` bounds a transfer far below 4 GiB) and a truncating
+    /// cast would be worse than a dropped header, because it would produce a span pointing at
+    /// somebody else's bytes.
+    pub fn push(&mut self, name: &[u8], value: &[u8]) {
+        let start = self.raw.len();
+        if u32::try_from(start + name.len() + value.len()).is_err() {
+            return;
+        }
+        self.raw.extend_from_slice(name);
+        let mid = self.raw.len();
+        self.raw.extend_from_slice(value);
+        let end = self.raw.len();
+        self.spans.push(Span {
+            name: (start as u32, mid as u32),
+            value: (mid as u32, end as u32),
+        });
+    }
+
+    /// How many headers there are.
+    pub fn len(&self) -> usize {
+        self.spans.len()
+    }
+
+    /// Whether there are none.
+    pub fn is_empty(&self) -> bool {
+        self.spans.is_empty()
+    }
+
+    /// Every header as `(name, value)`, in wire order.
+    pub fn iter(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
+        self.spans.iter().map(|s| {
+            (
+                &self.raw[s.name.0 as usize..s.name.1 as usize],
+                &self.raw[s.value.0 as usize..s.value.1 as usize],
+            )
+        })
+    }
+
+    /// The first header with this name, matched ASCII-case-insensitively.
+    ///
+    /// First match and case-insensitive because that is `mailbox::entry_from_blob`'s existing
+    /// rule — a gateway that writes `SUBJECT:` is naming the field.
+    pub fn get(&self, name: &[u8]) -> Option<&[u8]> {
+        self.iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
+    }
+
+    /// Bytes of heap these headers hold. Exhaustively destructured; see [`Message::heap_bytes`].
+    pub fn heap_bytes(&self) -> usize {
+        let Headers { raw, spans } = self;
+        raw.capacity() + spans.capacity() * size_of::<Span>()
+    }
+}
+
+impl FromIterator<(Vec<u8>, Vec<u8>)> for Headers {
+    /// Lets an existing `vec![(name, value), …]` become a [`Headers`] with `.into_iter().collect()`.
+    fn from_iter<T: IntoIterator<Item = (Vec<u8>, Vec<u8>)>>(iter: T) -> Self {
+        let mut h = Headers::default();
+        for (name, value) in iter {
+            h.push(&name, &value);
+        }
+        h
+    }
+}
+
+impl<'a> IntoIterator for &'a Headers {
+    type Item = (&'a [u8], &'a [u8]);
+    type IntoIter = Box<dyn Iterator<Item = (&'a [u8], &'a [u8])> + 'a>;
+
+    /// So `for (name, value) in &msg.headers` keeps working unchanged.
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
+
 /// A parsed or composed B2 message.
 ///
 /// The three structural headers are fields; every other header is carried in
@@ -113,7 +231,10 @@ pub struct Message {
     pub mid: Vec<u8>,
     /// Every non-structural header, `(name, value)`, in the order they appeared on the wire.
     /// Names are kept in the case they were sent in; values have one leading space stripped.
-    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    ///
+    /// A [`Headers`] rather than a `Vec` of pairs; see that type for the measurement that forced
+    /// it. Build one from pairs with `.into_iter().collect()`.
+    pub headers: Headers,
     /// The readable body. Always plain text on the wire (module header, spec §3); bytes here.
     pub body: Vec<u8>,
     /// The attachments, in `File:` header order — which is the order their payloads appear in.
@@ -288,7 +409,7 @@ pub fn parse_b2(bytes: &[u8]) -> Result<Message, MessageError> {
     let mut body_len: Option<usize> = None;
     // The `File:` headers in wire order, which is also their payloads' order.
     let mut files: Vec<(usize, Vec<u8>)> = Vec::new();
-    let mut headers: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut headers = Headers::default();
 
     // The header block: `Name: value` lines up to the first blank one. Running out of lines
     // before that blank one is malformed rather than "the headers were all of it" — without the
@@ -316,7 +437,7 @@ pub fn parse_b2(bytes: &[u8]) -> Result<Message, MessageError> {
         } else if name.eq_ignore_ascii_case(HDR_FILE) {
             files.push(split_file(value)?);
         } else {
-            headers.push((name.to_vec(), value.to_vec()));
+            headers.push(name, value);
         }
     }
 
@@ -431,6 +552,38 @@ fn take_part(rest: &[u8], n: usize) -> Option<(&[u8], &[u8])> {
     Some((&rest[..n], &rest[end..]))
 }
 
+/// The heap this message costs, in bytes.
+///
+/// **Exhaustively destructured, `capacity()` never `len()`** — `b2f::Session::held_bytes`'s
+/// discipline, for its reason: adding a field is `error[E0027]: pattern does not mention field`,
+/// so a buffer cannot be added silently. ⚠️ What the compiler enforces is a *decision*, not a
+/// correct answer: rustc's own suggested fix is `<field>: _`, which silences it while charging
+/// nothing. That hole is a human one.
+///
+/// `capacity` rather than `len` because the question this answers is how much memory is held, not
+/// how many bytes arrived. Charging wire bytes instead is the accounting error the B2F session
+/// shipped with and had to have corrected.
+impl Message {
+    /// Bytes of heap this message holds. See the note above the impl.
+    pub fn heap_bytes(&self) -> usize {
+        let Message {
+            mid,
+            headers,
+            body,
+            attachments,
+        } = self;
+        let attachment_bytes: usize = attachments
+            .iter()
+            .map(|a| a.name.capacity() + a.data.capacity())
+            .sum();
+        mid.capacity()
+            + headers.heap_bytes()
+            + body.capacity()
+            + attachments.capacity() * size_of::<Attachment>()
+            + attachment_bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,7 +593,9 @@ mod tests {
     fn sample() -> Message {
         Message {
             mid: b"ABCDE1234567".to_vec(),
-            headers: vec![(b"Subject".to_vec(), b"test".to_vec())],
+            headers: vec![(b"Subject".to_vec(), b"test".to_vec())]
+                .into_iter()
+                .collect(),
             body: b"hello world".to_vec(),
             attachments: vec![Attachment {
                 name: b"a.txt".to_vec(),
@@ -494,7 +649,7 @@ mod tests {
         // not silently truncate.
         let mut bytes = assemble_b2(&Message {
             mid: b"ABCDE1234567".to_vec(),
-            headers: vec![],
+            headers: Headers::default(),
             body: b"body".to_vec(),
             attachments: vec![Attachment {
                 name: b"a".to_vec(),
@@ -513,7 +668,7 @@ mod tests {
     fn a_short_file_length_truncates_nothing_and_is_rejected() {
         let good = assemble_b2(&Message {
             mid: b"ABCDE1234567".to_vec(),
-            headers: vec![],
+            headers: Headers::default(),
             body: b"body".to_vec(),
             attachments: vec![Attachment {
                 name: b"a".to_vec(),
@@ -575,7 +730,10 @@ mod tests {
     #[test]
     fn structural_headers_do_not_leak_into_headers() {
         let back = parse_b2(&assemble_b2(&sample()).unwrap()).unwrap();
-        assert_eq!(back.headers, vec![(b"Subject".to_vec(), b"test".to_vec())]);
+        assert_eq!(
+            back.headers.iter().collect::<Vec<_>>(),
+            vec![(&b"Subject"[..], &b"test"[..])]
+        );
         assert_eq!(back.mid, b"ABCDE1234567");
     }
 
@@ -617,7 +775,7 @@ mod tests {
     fn an_empty_body_and_no_attachments_round_trip() {
         let msg = Message {
             mid: b"M".to_vec(),
-            headers: vec![],
+            headers: Headers::default(),
             body: vec![],
             attachments: vec![],
         };
@@ -633,7 +791,7 @@ mod tests {
     fn binary_payloads_survive_including_embedded_crlf() {
         let msg = Message {
             mid: b"M".to_vec(),
-            headers: vec![],
+            headers: Headers::default(),
             body: b"line\r\nline\x00\xff".to_vec(),
             attachments: vec![Attachment {
                 name: b"bin\xc3(".to_vec(),
@@ -650,7 +808,7 @@ mod tests {
     fn an_attachment_name_may_contain_spaces() {
         let msg = Message {
             mid: b"M".to_vec(),
-            headers: vec![],
+            headers: Headers::default(),
             body: vec![],
             attachments: vec![Attachment {
                 name: b"ICS 213 form.xml".to_vec(),
@@ -784,11 +942,8 @@ mod tests {
     fn a_header_value_keeps_its_bytes_but_loses_one_leading_space() {
         let m = parse_b2(b"Mid: A\r\nX:v\r\nY:  v \r\nBody: 0\r\n\r\n\r\n").unwrap();
         assert_eq!(
-            m.headers,
-            vec![
-                (b"X".to_vec(), b"v".to_vec()),
-                (b"Y".to_vec(), b" v ".to_vec()),
-            ]
+            m.headers.iter().collect::<Vec<_>>(),
+            vec![(&b"X"[..], &b"v"[..]), (&b"Y"[..], &b" v "[..])]
         );
     }
 
@@ -800,7 +955,7 @@ mod tests {
     fn an_unrepresentable_header_is_refused_by_assemble() {
         let with = |name: &[u8], value: &[u8]| Message {
             mid: b"M".to_vec(),
-            headers: vec![(name.to_vec(), value.to_vec())],
+            headers: vec![(name.to_vec(), value.to_vec())].into_iter().collect(),
             body: vec![],
             attachments: vec![],
         };
@@ -836,7 +991,7 @@ mod tests {
     fn an_unrepresentable_mid_or_attachment_name_is_refused_by_assemble() {
         let msg = |mid: &[u8], name: &[u8]| Message {
             mid: mid.to_vec(),
-            headers: vec![],
+            headers: Headers::default(),
             body: vec![],
             attachments: vec![Attachment {
                 name: name.to_vec(),
@@ -874,7 +1029,7 @@ mod tests {
         ] {
             let wire = assemble_b2(&Message {
                 mid: b"M".to_vec(),
-                headers: vec![(name.to_vec(), value.to_vec())],
+                headers: vec![(name.to_vec(), value.to_vec())].into_iter().collect(),
                 body: b"ab".to_vec(),
                 attachments: vec![],
             })
@@ -938,7 +1093,7 @@ mod tests {
         ) {
             let msg = Message {
                 mid,
-                headers,
+                headers: headers.into_iter().collect(),
                 body,
                 attachments: atts
                     .into_iter()
@@ -947,5 +1102,116 @@ mod tests {
             };
             prop_assert_eq!(parse_b2(&assemble_b2(&msg).unwrap()), Ok(msg));
         }
+    }
+}
+
+#[cfg(test)]
+mod heap_tests {
+    use super::*;
+
+    #[test]
+    fn a_message_of_many_headers_does_not_cost_ten_times_its_plaintext() {
+        // 200_000 header lines of "A: B\r\n" — 1_200_024 plaintext bytes. This is not a hostile
+        // input: it is legal B2, inside every ceiling b2f enforces, and answered `FS +`.
+        //
+        // MEASURED, on this machine, by running the test before and after the representation
+        // change: 12_982_916 bytes (10.8x) as `Vec<(Vec<u8>, Vec<u8>)>`, 4_718_596 bytes (3.9x)
+        // as one block with spans.
+        //
+        // ⚠️ **3x is unreachable for THIS shape and the bound says 4 for that reason, not to be
+        // generous.** A `Span` is 16 bytes and a header line here is 6 plaintext bytes, so the
+        // span table alone is a 2.67x floor. That is an artefact of one-byte names and values;
+        // `a_message_at_winlinks_account_maximum_costs_about_its_own_size` below measures the
+        // shape real mail actually has.
+        //
+        // ⚠️ **And this counts requested `capacity()` only — it is a LOWER bound on real memory.**
+        // The old shape made two allocations per header (400_000 of them here), each carrying an
+        // allocator header and rounded up to a minimum chunk; that per-allocation overhead is
+        // what the ~22.6x figure in the programme ledger reflects and it is not countable from
+        // inside this process. The new shape makes TWO allocations for the whole message, so the
+        // uncounted half of the win is larger than the counted half.
+        let mut blob = Vec::from(&b"Mid: AAA1\r\n"[..]);
+        for _ in 0..200_000 {
+            blob.extend_from_slice(b"A: B\r\n");
+        }
+        blob.extend_from_slice(b"Body: 0\r\n\r\n\r\n");
+        let plain = blob.len();
+        let msg = parse_b2(&blob).expect("legal B2");
+        let heap = msg.heap_bytes();
+        // Print it, because the number is the finding.
+        eprintln!(
+            "plaintext {plain} bytes -> Message {heap} bytes ({:.1}x)",
+            heap as f64 / plain as f64
+        );
+        assert!(
+            heap <= plain * 4,
+            "a Message costs {:.1}x its plaintext ({heap} bytes for {plain}); at Winlink's own \
+             120,000-byte account maximum that is a message a CMS can legitimately send us",
+            heap as f64 / plain as f64
+        );
+    }
+
+    /// The shape that actually matters: a message at Winlink's published 120,000-byte account
+    /// maximum, which expands to roughly 5.7 MB of plaintext. That is legitimate mail no CMS
+    /// would refuse, and it is what the programme ledger escalated.
+    ///
+    /// Real mail is a handful of headers and a large body, so the span table is noise and the
+    /// message should cost about its own size. The bound is 1.25x rather than 1.0x because a
+    /// `Vec` that grew by doubling can hold up to twice its length, and `capacity()` — correctly
+    /// — charges what is held, not what was asked for.
+    #[test]
+    fn a_message_at_winlinks_account_maximum_costs_about_its_own_size() {
+        let body_len = 5_700_000usize;
+        let mut blob = Vec::from(&b"Mid: ABCDEFGHIJKL\r\n"[..]);
+        for (name, value) in [
+            ("Date", "2026/09/07 12:00"),
+            ("Type", "Private"),
+            ("From", "SMTP:netcontrol@example.com"),
+            ("To", "N0CALL"),
+            ("Cc", "W1AW"),
+            ("Subject", "Traffic for the section net"),
+            ("Mbo", "WL2K"),
+        ] {
+            blob.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+        }
+        blob.extend_from_slice(format!("Body: {body_len}\r\n\r\n").as_bytes());
+        blob.extend(std::iter::repeat_n(b'x', body_len));
+        blob.extend_from_slice(b"\r\n");
+
+        let plain = blob.len();
+        let msg = parse_b2(&blob).expect("legal B2");
+        let heap = msg.heap_bytes();
+        eprintln!(
+            "account-maximum message: plaintext {plain} bytes -> Message {heap} bytes ({:.2}x)",
+            heap as f64 / plain as f64
+        );
+        assert!(
+            heap * 4 <= plain * 5,
+            "a message at the account maximum costs {:.2}x its plaintext ({heap} bytes for \
+             {plain}) — real mail should cost about its own size",
+            heap as f64 / plain as f64
+        );
+    }
+
+    /// `heap_bytes` must actually respond to the headers, or both bounds above are vacuous.
+    ///
+    /// THE POSITIVE CONTROL: an empty-header message and a many-header message with the same
+    /// body must not cost the same.
+    #[test]
+    fn heap_bytes_charges_the_header_block() {
+        let bare = parse_b2(b"Mid: A\r\nBody: 0\r\n\r\n\r\n").expect("legal B2");
+        let mut with_headers = Vec::from(&b"Mid: A\r\n"[..]);
+        for i in 0..1000 {
+            with_headers.extend_from_slice(format!("H{i}: value-{i}\r\n").as_bytes());
+        }
+        with_headers.extend_from_slice(b"Body: 0\r\n\r\n\r\n");
+        let loaded = parse_b2(&with_headers).expect("legal B2");
+        assert!(
+            loaded.heap_bytes() > bare.heap_bytes() + 10_000,
+            "heap_bytes does not charge the header block: {} vs {}",
+            loaded.heap_bytes(),
+            bare.heap_bytes()
+        );
+        assert_eq!(loaded.headers.len(), 1000);
     }
 }

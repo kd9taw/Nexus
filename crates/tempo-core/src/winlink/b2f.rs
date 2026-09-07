@@ -1886,7 +1886,7 @@ mod tests {
     fn body_and_image(mid: &[u8], body: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let plain = message::assemble_b2(&Message {
             mid: mid.to_vec(),
-            headers: vec![],
+            headers: Default::default(),
             body: body.to_vec(),
             attachments: vec![],
         })

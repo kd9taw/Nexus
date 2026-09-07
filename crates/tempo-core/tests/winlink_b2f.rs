@@ -191,7 +191,7 @@ fn golden_message() -> Message {
             (b"To".to_vec(), b"N0CALL".to_vec()),
             (b"Subject".to_vec(), b"Net check-in".to_vec()),
             (b"Mbo".to_vec(), b"WL2K".to_vec()),
-        ],
+        ].into_iter().collect(),
         body: crlf(&[
             "Net control: all stations please check in on",
             "146.520 simplex at 1900Z. KD9TAW is NCS.",

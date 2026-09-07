@@ -405,17 +405,22 @@ fn entry_from_blob(mid: &[u8], blob: &[u8]) -> IndexEntry {
     entry.parsed = true;
     entry.body_len = msg.body.len();
     entry.attachments = msg.attachments.into_iter().map(|a| a.name).collect();
-    for (name, value) in msg.headers {
+    // `.iter()` borrows rather than consuming: `Message::headers` is a `Headers` block with spans
+    // into it, not a `Vec` of owned pairs, so the values here are slices of one allocation.
+    for (name, value) in msg.headers.iter() {
         // Header names are case-insensitive on the wire and `message.rs` keeps the case they were
         // sent in, so match on the folded name rather than assuming a gateway's capitalisation.
+        // `.to_vec()` where the loop used to move: the index OUTLIVES the message, so it must own
+        // its strings rather than borrow the header block. That is one copy per lifted field —
+        // four short values per message — and it is what lets the block itself be freed.
         if name.eq_ignore_ascii_case(HDR_DATE) {
-            entry.date = value;
+            entry.date = value.to_vec();
         } else if name.eq_ignore_ascii_case(HDR_FROM) {
-            entry.from = value;
+            entry.from = value.to_vec();
         } else if name.eq_ignore_ascii_case(HDR_TO) {
-            entry.to.push(value);
+            entry.to.push(value.to_vec());
         } else if name.eq_ignore_ascii_case(HDR_SUBJECT) {
-            entry.subject = value;
+            entry.subject = value.to_vec();
         }
     }
     entry
@@ -560,7 +565,9 @@ mod tests {
                 (b"From".to_vec(), from.to_vec()),
                 (b"To".to_vec(), b"N0CALL".to_vec()),
                 (b"Subject".to_vec(), subject.to_vec()),
-            ],
+            ]
+            .into_iter()
+            .collect(),
             body: body.to_vec(),
             attachments: vec![Attachment {
                 name: b"ICS 213.xml".to_vec(),
