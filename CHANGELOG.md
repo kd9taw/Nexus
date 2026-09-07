@@ -37,7 +37,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backlog that was already active when you turned it on. It works whether or not the map
   window is open.
 
+- **Hound is one click, on the FT8 screen.** The DXpedition Hound mode was a dropdown in the
+  Operate header behind a setting only Settings otherwise wrote; it is now a single **Hound**
+  button you click on and off while you work. That matters because Hound is a per-DXpedition
+  mode, not a station setting — Nexus drops it at every restart for exactly that reason — and
+  you should be able to enter and leave it in the middle of a session without going anywhere.
+  Toggling it mid-QSO is safe: a contact already on the air keeps the rules it started under,
+  and the button governs the next one. The retired *SuperHound* option is not offered as a
+  choice, because it never did anything a plain Hound did not.
+
+- **Nexus tells you a DXpedition is running SuperFox before you call it.** SuperFox is a
+  transmission format this version has no decoder for, so such an operation never appears in
+  the decode list and Hound mode does not change that — which, found out mid-pileup, looks
+  exactly like bad propagation. When the DXpedition calendar shows a SuperFox operation on the
+  air, the Operate header now names it beside the Hound button and its card on the DXpeditions
+  board says the same thing: work that one in WSJT-X.
+
 ### Fixed
+
+- **Turning Hound off during a QSO with a Fox could strand the contact.** A DXpedition Fox
+  packs two replies into one transmission, and the half confirming you arrives without a
+  sender; Nexus put the Fox's callsign back on it so the exchange could close. That repair
+  was keyed to the Hound switch *as it stood right then* rather than to the contact, so
+  switching Hound off part way through stopped it: the Fox's confirmation no longer read as
+  one, and you kept calling a station that had already rogered you. The reverse could happen
+  too — switching Hound on during an ordinary contact let a passing Fox's confirmation be read
+  as your partner's. A contact now keeps the rules it started under from end to end.
 
 - **The satellite catalog was publishing years-old orbits for birds that had stopped being
   tracked.** The mirror took the freshest elements it could find for each active bird — but for a

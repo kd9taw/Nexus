@@ -17252,10 +17252,11 @@ impl Engine {
         let fox_capable = self
             .tier_mode_kind(self.app.tier())
             .is_some_and(|k| modes::make_mode(k).capabilities().fox_hound);
-        // The station we're working (for reconstructing the Fox's implied sender below).
-        let fox: Option<String> = match &self.mode {
-            Mode::Qso { station, .. } => station.dxcall.clone(),
-            _ => None,
+        // The station we're working (for reconstructing the Fox's implied sender below), and
+        // whether THAT contact began as a Hound QSO — see the reattach gate below.
+        let (fox, hound_qso): (Option<String>, bool) = match &self.mode {
+            Mode::Qso { station, .. } => (station.dxcall.clone(), station.quiet_finish),
+            _ => (None, false),
         };
         if fox.is_none() || !fox_capable {
             // Fox multiplexing is an FT8 DXpedition construct — the mode declares
@@ -17275,12 +17276,19 @@ impl Engine {
         // The DISPLAY split below still runs so a Fox stays readable; only the sequencer-feeding
         // fabrication is gated. A sender-LESS 2-token half cannot parse as a terminal (Rr73/Rrr/Bye73
         // all need 3 tokens), so un-reattached it never advances the sequencer.
-        let hound_active = matches!(
-            self.settings.special_op,
-            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
-        );
+        //
+        // ⚠️ GATED ON THE CONTACT, NOT ON THE LIVE SETTING. `station.quiet_finish` is the marker
+        // `call_station_ctx` stamps on TRUE Hound QSOs — the same one the QSY-to-the-Fox rule
+        // reads, and for the same reason. Reading `settings.special_op` here let a mid-QSO
+        // toggle reach inside a contact already on the air, in both directions: leaving Hound
+        // stranded a Fox exchange (its sender-less RR73 half stopped parsing, so the contact
+        // never closed and we kept calling a station that had rogered us), and entering Hound
+        // opened #236 on the ordinary QSO in flight. Everything else Hound decides for a
+        // contact — the quiet finish, the >1000 Hz initial offset — was already captured once at
+        // `call_station_ctx`; this was the one live read. A QSO in flight keeps the rules it
+        // started under, and the toggle governs the NEXT one.
         let reattach = |m: String| -> String {
-            if !hound_active {
+            if !hound_qso {
                 return m;
             }
             let t: Vec<&str> = m.split_whitespace().collect();
@@ -25998,6 +26006,68 @@ mod tests {
         assert!(
             e.get_log().is_empty(),
             "the ordinary QSO must NOT complete or key a 73 from a bystander Fox's confirm (#236)"
+        );
+    }
+
+    /// THE MID-QSO TOGGLE RULE, both directions: **a QSO in flight keeps the rules it started
+    /// under.** Written as a pair because one direction is half a test.
+    ///
+    /// Hound became a one-click button in the Operate header (operator: "so users can click it
+    /// on and off without having to go into the settings"), which turns a mid-QSO toggle from a
+    /// thing nobody did — it needed a Settings trip — into a thing that happens by hand at the
+    /// wrong moment. Everything Hound decides for a contact was already captured at
+    /// `call_station_ctx`: the quiet finish and the >1000 Hz initial offset are both read there,
+    /// once. `hound_split`'s sender REATTACH was the exception — it read the LIVE setting on
+    /// every decode, so the toggle reached inside a contact already on the air.
+    ///
+    /// It is the same marker the QSY-to-the-Fox rule already uses (`station.quiet_finish`, "the
+    /// marker call_station sets on TRUE hound QSOs — not just the persistent setting").
+    #[test]
+    fn leaving_hound_mid_qso_still_completes_the_fox_exchange() {
+        // Hound ON, the operator double-clicks the Fox, then flips the header button OFF while
+        // the contact is running. The Fox's confirm arrives sender-less inside a multiplex; with
+        // the reattach gone it parses as nothing and the contact strands, calling forever at a
+        // station that has already rogered us.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest_decodes_for_test(&[dec_at("CQ DX PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("K1ABC RR73; W9XYZ PJ4DX -08", -10, 320.0)], 3);
+        // THE TOGGLE, mid-contact.
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)], 5);
+        assert!(
+            !e.get_log().is_empty(),
+            "leaving Hound mid-QSO stranded the contact — the Fox's multiplexed RR73 must still \
+             close a QSO that STARTED as a Hound QSO"
+        );
+    }
+
+    #[test]
+    fn entering_hound_mid_qso_never_fabricates_a_roger_from_the_partner() {
+        // The other direction, and it is #236 reached through the new button: an ORDINARY QSO is
+        // running when the operator flips Hound on to go chase a DXpedition. A bystander Fox's
+        // multiplexed confirm addressed to us must still not be stamped with our current
+        // partner's call — this contact did not start under Hound, so it does not get Hound's
+        // reattach part way through.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        assert_eq!(
+            e.settings.special_op,
+            crate::settings::SpecialOp::None,
+            "control: the contact STARTS ordinary — Hound off"
+        );
+        e.ingest_decodes_for_test(&[dec_at("CQ PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ PJ4DX -08", -10, 400.0)], 3);
+        // THE TOGGLE, mid-contact.
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; NEXTHOUND N0CALL -08", -10, 320.0)], 5);
+        assert!(
+            e.get_log().is_empty(),
+            "turning Hound on mid-QSO forged a roger from the partner — #236 through the header \
+             button"
         );
     }
 
