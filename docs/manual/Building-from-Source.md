@@ -72,6 +72,32 @@ No MSYS2 needed; produces the same installer.
 
 ---
 
+## Path C — macOS (Apple Silicon)
+
+Produces `Nexus.app` and the `.dmg`. The full guide is [`MACOS.md`](../../MACOS.md); this is the short version.
+
+1. **Install the toolchain:**
+
+   ```bash
+   xcode-select --install
+   brew install cmake ninja gcc fftw boost node
+   ```
+
+   `gcc` is what provides `gfortran` — there is no standalone formula, and macOS ships no system Fortran compiler. Then rustup (the default host toolchain; no target to add) and `cargo install tauri-cli --version "^2"`.
+
+2. **Point `pkg-config` at Homebrew** — `export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"`. Both the CMake project and `tempo-fast-sys/build.rs` find FFTW this way, and a MacPorts `pkg-config` earlier on `PATH` cannot see Homebrew's `.pc` files: the failure reads as `No package 'fftw3f' found` on a machine where FFTW is installed.
+
+3. **Build:**
+
+   ```bash
+   npm --prefix ui ci && npm --prefix ui run build
+   cd src-tauri && cargo tauri build --features radio,custom-protocol --bundles app,dmg
+   ```
+
+**Apple Silicon only, and there is no universal binary:** a universal build means building the Fortran/FFTW modem twice and `lipo`-ing it, and Homebrew's `gfortran` is single-arch. Intel is a source build that works but ships no binaries. The modem's Fortran runtimes (gfortran, quadmath, fftw3f, plus GCC's `libemutls_w.a`) are linked **statically** — a dynamically-linked `.app` runs on the machine that built it and dies at load on any Mac without your Homebrew tree. And a build you sign yourself is not notarized, so Gatekeeper blocks it on a double-click: right-click ▸ **Open** once. `MACOS.md` covers all three.
+
+---
+
 ## Headless modem / engine tests (any platform)
 
 You don't need WebView2 or a radio to run the test suite — just the native modem toolchain so `ft1-sys` can build `libtempo` via CMake.
@@ -109,4 +135,5 @@ The GUI is built with `--features radio,custom-protocol` (`radio` = `device` + `
 
 - [Architecture and Protocol](Architecture-and-Protocol.md) — the layer-by-layer design.
 - [`WINDOWS.md`](../../WINDOWS.md) — the full Windows build/setup reference.
+- [`MACOS.md`](../../MACOS.md) — the full macOS build reference.
 - [`CONTRIBUTING.md`](../../CONTRIBUTING.md) — crate layout, code style, PR workflow.

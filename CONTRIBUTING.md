@@ -63,7 +63,8 @@ Outside the workspace:
   `tempofast_cabi.f90` is the C ABI; `libtempo/tempodeep/` is the TempoDeep mode; `mingw-w64.cmake`
   is the cross toolchain file.
 - `scripts/` — build and asset scripts (see below).
-- `WINDOWS.md` — the authoritative Windows build and setup guide.
+- `WINDOWS.md`, `LINUX.md`, `MACOS.md` — the authoritative per-platform build and
+  setup guides.
 
 ---
 
@@ -156,6 +157,22 @@ Windows is the primary target. Two supported paths, both documented fully in
 Supporting scripts: `scripts/fetch-hamlib.sh` (stages `rigctld` + DLLs as a
 Tauri bundle resource so the installer ships CAT control offline) and
 `scripts/gen-icons.py` (app icons).
+
+### macOS build
+
+Apple Silicon, documented fully in [`MACOS.md`](MACOS.md). Needs
+`brew install cmake ninja gcc fftw boost node` (`gcc` is what provides
+`gfortran`; macOS ships no system Fortran), rustup's default host toolchain, and
+`tauri-cli` v2 — then `cargo tauri build --features radio,custom-protocol
+--bundles app,dmg` from `src-tauri/`.
+
+> **Export `PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"` first.** Both the
+> `libtempo` CMake project and `tempo-fast-sys/build.rs` find FFTW through
+> `pkg-config`, and a MacPorts `pkg-config` earlier on `PATH` cannot see
+> Homebrew's `.pc` files — which fails as `No package 'fftw3f' found` on a
+> machine where FFTW is installed. `MACOS.md` also covers why the Fortran
+> runtimes are linked statically (a dynamically-linked `.app` is dead on arrival
+> on any Mac without your Homebrew tree) and why there is no universal binary.
 
 ---
 
