@@ -41,6 +41,30 @@
 //! this is not reachable from a real gateway, and normalising the case would change the MID's
 //! identity — which is worse than the collision it avoids.
 //!
+//! # Concurrency: this process's threads, not a second process
+//!
+//! [`Mailbox`] is `Clone` and holds only a path, so a session task and the mailbox pane will each
+//! hold one over the same directory. The index update in [`Mailbox::store`] is a read-modify-write
+//! — load the cache, upsert one row, publish it — and two of those interleaved lose a row: both
+//! read the same cache, both publish it with only their own row added, and the message that lost
+//! is on disk with no index entry. That is verbatim the failure the section above says this design
+//! prevents, so it is prevented rather than described.
+//!
+//! A process-local [`std::sync::Mutex`] serialises it. Every path that publishes `index.json`
+//! takes it, and [`Mailbox::store`] holds it across the blob write as well, so two stores of one
+//! MID cannot race on one `<MID>.tmp.<pid>` scratch and publish the splice either. It guards a
+//! `()` — the state being protected is the file, not anything in memory — and it is not reentrant,
+//! which is why the two writing paths have private `_locked` halves. Readers take nothing:
+//! [`Mailbox::read`] and [`Mailbox::load_index`] are never blocked by a store, and concurrent
+//! stores are serialised through each other's `sync_all`, which is what a mail store does anyway.
+//!
+//! ⚠️ **What it does not cover: a second Nexus process on the same mailbox.** Two processes can
+//! still interleave the read-modify-write and lose an index row, and nothing here detects it. No
+//! file lock is taken, deliberately — a lock file carries its own failure mode (a crash leaves it
+//! held, and the next launch has to decide whether to believe it) and the app runs one instance.
+//! The cost of being wrong about that is bounded by everything above: the blob is on disk,
+//! `index.json` is only a cache, and [`Mailbox::rebuild_index`] recovers the row in full.
+//!
 //! # The index is JSON, but its fields are wire bytes
 //!
 //! A subject, a callsign or a filename off the air is bytes in whatever encoding the sender used
@@ -61,6 +85,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +102,25 @@ pub const INDEX_JSON: &str = "index.json";
 /// deliberately does not enforce it; this ceiling exists so a hostile MID cannot be used to blow
 /// past a filesystem's name limit, not to police the protocol, hence the generous value.
 pub const MID_MAX: usize = 64;
+
+/// Serialises every write to a mailbox **within this process** — the module header's concurrency
+/// section says what that covers and what it does not.
+///
+/// One lock for every mailbox rather than one per root, because it is not held over anything
+/// contended: the app has one mailbox, and a lock keyed by root would have to be a map that is
+/// itself locked to reach. `Mailbox` cannot carry it, since two `open()` calls on one directory —
+/// the session task and the pane — would then hold two different locks over one `index.json`.
+static INDEX_LOCK: Mutex<()> = Mutex::new(());
+
+/// Takes [`INDEX_LOCK`], ignoring poisoning.
+///
+/// A panic while it is held leaves no broken in-memory invariant to inherit — the guarded value is
+/// `()` — and the file it protects is a cache that [`Mailbox::rebuild_index`] re-derives in full.
+/// Propagating the poison would turn one panicking store into a mailbox that can never write its
+/// index again, which is worse than anything the poison would be warning about.
+fn lock_index() -> MutexGuard<'static, ()> {
+    INDEX_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// The `Date:` header, lifted into [`IndexEntry::date`].
 const HDR_DATE: &[u8] = b"Date";
@@ -181,10 +225,19 @@ impl Mailbox {
     /// and a cache that will not load is not patched around: it is rebuilt from the blobs, which
     /// is the recovery path doing exactly its job.
     ///
+    /// The load-upsert-publish below is a read-modify-write and is serialised against every other
+    /// store and rebuild in this process by [`INDEX_LOCK`]; see the module header for what that
+    /// covers.
+    ///
     /// Errors: [`io::ErrorKind::InvalidInput`] for a MID that is not filename-safe (module
     /// header), otherwise whatever the filesystem said.
     pub fn store(&self, mid: &[u8], b2f_blob: &[u8]) -> io::Result<()> {
         let path = self.blob_path(mid)?;
+        // Validation is above the lock (it touches no disk); everything that writes is below it.
+        // The blob write is inside deliberately, not just the index update: two stores of the same
+        // MID would otherwise interleave into one `<MID>.tmp.<pid>` scratch and rename the splice
+        // over the message. Readers hold nothing, so this never blocks the mailbox pane.
+        let _guard = lock_index();
         std::fs::create_dir_all(self.messages_dir())?;
         write_atomic(&path, b2f_blob)?;
 
@@ -192,16 +245,16 @@ impl Mailbox {
         match self.load_index() {
             Ok(mut index) => {
                 // Drop-then-push rather than a binary-search insert: it assumes nothing about the
-                // order of the cache it just read. `write_index` below re-imposes both index
+                // order of the cache it just read. `write_index_locked` below re-imposes both index
                 // invariants on the result, so a mangled-but-parseable `index.json` cannot leave
                 // a store holding a cache the rebuild would disagree with.
                 index.entries.retain(|e| e.mid != entry.mid);
                 index.entries.push(entry);
-                self.write_index(&mut index)
+                self.write_index_locked(&mut index)
             }
             // Missing or unreadable cache: derive the whole thing from the blobs, which now
             // include the one just written.
-            Err(_) => self.rebuild_index().map(|_| ()),
+            Err(_) => self.rebuild_index_locked().map(|_| ()),
         }
     }
 
@@ -233,6 +286,15 @@ impl Mailbox {
     /// never be listed as a whole one. A blob that is present but unparseable is **not** skipped —
     /// it is listed with [`IndexEntry::parsed`] false. Nothing is deleted either way.
     pub fn rebuild_index(&self) -> io::Result<Index> {
+        let _guard = lock_index();
+        self.rebuild_index_locked()
+    }
+
+    /// [`rebuild_index`](Self::rebuild_index) with [`INDEX_LOCK`] already held.
+    ///
+    /// Split out because the lock is not reentrant and [`store`](Self::store) — which holds it —
+    /// falls through to a rebuild when the cache will not load.
+    fn rebuild_index_locked(&self) -> io::Result<Index> {
         let dir = self.messages_dir();
         std::fs::create_dir_all(&dir)?;
         let mut entries = Vec::new();
@@ -249,9 +311,9 @@ impl Mailbox {
             entries.push(entry_from_blob(&mid, &bytes));
         }
         let mut index = Index { entries };
-        // `write_index` imposes the ordering; the returned value is the canonicalised one, so a
-        // caller sees exactly what landed on disk.
-        self.write_index(&mut index)?;
+        // `write_index_locked` imposes the ordering; the returned value is the canonicalised one,
+        // so a caller sees exactly what landed on disk.
+        self.write_index_locked(&mut index)?;
         Ok(index)
     }
 
@@ -265,8 +327,9 @@ impl Mailbox {
     /// row for an unrelated MID carried the duplicate straight through).
     ///
     /// Private: an index is written by the two paths above, never handed in from outside, or the
-    /// cache could be made to say something the blobs do not.
-    fn write_index(&self, index: &mut Index) -> io::Result<()> {
+    /// cache could be made to say something the blobs do not. **The caller holds [`INDEX_LOCK`]** —
+    /// the `_locked` suffix says so, and both call sites are in this file.
+    fn write_index_locked(&self, index: &mut Index) -> io::Result<()> {
         index.entries.sort_by(|a, b| a.mid.cmp(&b.mid));
         // Stable sort + dedup keeps the first row for a repeated MID. Which one survives does not
         // matter (both are stale relative to the blob); that exactly one does is the invariant.
@@ -362,8 +425,10 @@ fn blob_mid(name: &Path) -> Option<Vec<u8>> {
 /// The `sync_all` is the half that makes it a *crash* guarantee and not just a concurrency one —
 /// without it the rename can be durable while the data behind it is not, and the mailbox comes
 /// back holding a zero-length message. The temp name carries the pid (the `logbook.rs` per-process
-/// tmp pattern) so two Nexus instances sharing one mailbox cannot interleave writes into one
-/// scratch file and publish the splice.
+/// tmp pattern) so two Nexus *instances* sharing one mailbox cannot interleave writes into one
+/// scratch file and publish the splice. Two *threads* of one instance share a pid, so the pid does
+/// nothing for them; what covers them is that every caller of this function holds [`INDEX_LOCK`]
+/// (module header).
 ///
 /// ⚠️ The parent directory is not fsynced, so on a crash immediately after the rename some
 /// filesystems can lose the directory entry — the blob is then missing, never half-written, and
@@ -735,6 +800,84 @@ mod tests {
                 b"ZZZ000000001".to_vec()
             ]
         );
+    }
+
+    /// Overlapping stores must not lose a row from the cache.
+    ///
+    /// The interleave the lock exists to stop: two threads each write their blob, each
+    /// `load_index()` and see the *same* cache, and each publishes that cache with only its own
+    /// row added — so whichever renames second silently drops the other's message from the list
+    /// while its blob sits on disk, which is the module header's opening failure. A tighter
+    /// overlap splices `index.tmp.<pid>` instead (one pid, two threads) and the cache stops
+    /// loading at all; both are failures of this test.
+    ///
+    /// Many small stores rather than two threads racing once: the losing window is the gap between
+    /// the load and the rename, and a single pair can step past it. `THREADS * PER_THREAD` MIDs
+    /// released together by a barrier hits it on every run — measured against the unlocked code,
+    /// see the mutation note in the review record.
+    #[test]
+    fn concurrent_stores_do_not_lose_an_index_row() {
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 8;
+
+        let dir = scratch("concurrent-stores");
+        let mb = open(&dir);
+        // Every thread blocks here and is released at once, so the stores actually overlap instead
+        // of running in whatever order the spawns happened to complete.
+        let start = std::sync::Barrier::new(THREADS);
+
+        std::thread::scope(|s| {
+            for t in 0..THREADS {
+                // A clone each, as a session task and the mailbox pane would each hold one.
+                let mb = mb.clone();
+                let start = &start;
+                s.spawn(move || {
+                    start.wait();
+                    for i in 0..PER_THREAD {
+                        let mid = format!("MID{t:02}{i:02}0001").into_bytes();
+                        // Not `put`: the store itself is an assertion here. Unlocked, the tighter
+                        // interleave has two threads renaming one `index.tmp.<pid>` and the loser
+                        // gets ENOENT, so a store that merely *errors* is this test failing too.
+                        mb.store(&mid, &blob(&mid, b"W1AW", b"s", b"body"))
+                            .expect("a concurrent store must not fail on a shared temp file");
+                    }
+                });
+            }
+        });
+
+        // Control first: every blob really did land, so a missing row below is the cache losing a
+        // message and not a store that never happened.
+        for t in 0..THREADS {
+            for i in 0..PER_THREAD {
+                let mid = format!("MID{t:02}{i:02}0001").into_bytes();
+                assert!(
+                    mb.read(&mid).is_ok(),
+                    "control: every concurrent store must have written its blob"
+                );
+            }
+        }
+
+        let loaded = mb
+            .load_index()
+            .expect("the cache must still parse after concurrent stores");
+        assert_eq!(
+            loaded.entries.len(),
+            THREADS * PER_THREAD,
+            "a concurrent store lost an index row: the blob is on disk and the mailbox list \
+             cannot see it"
+        );
+        for t in 0..THREADS {
+            for i in 0..PER_THREAD {
+                let mid = format!("MID{t:02}{i:02}0001").into_bytes();
+                assert!(
+                    loaded.entries.iter().any(|e| e.mid == mid),
+                    "the cache is missing a message that is sitting on disk"
+                );
+            }
+        }
+        // And the cache must still equal the re-derivation — the property the whole module rests
+        // on, not just a row count that happens to come out right.
+        assert_eq!(loaded.entries, mb.rebuild_index().unwrap().entries);
     }
 
     /// A leftover temp file from a crashed write must not become a phantom message.
