@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The RTTY auto-sequencer could not log a single Winter Field Day contact.** Winter Field Day
+  uses its own station classes — H (Home), I (Indoor), O (Outdoor), M (Mobile) — but the
+  sequencer matched the ARRL Field Day letters A–F for both events. None of the Winter classes is
+  in that set, so a station sending a perfectly legal `2M EPA` never satisfied the required Class
+  slot: the exchange stalled, the QSO never auto-logged, and the only way through was to log it by
+  hand. The sequencer now copies against the class set of whichever event is selected, so `2M EPA`
+  completes at Winter Field Day and `2A WI` still completes at ARRL Field Day. An ARRL Field Day
+  sequencer continues to refuse a Winter class, and vice versa — the two sets are not
+  interchangeable. Scoring, Cabrillo and ADIF output are untouched.
+
 - **The Chase pane stopped updating once you selected a station.** Its "open now / best 1400Z"
   column and the colour accent on each row come from the modelled band outlook, and that was
   deliberately not refreshed while a station was selected — correct for the map, which switches to

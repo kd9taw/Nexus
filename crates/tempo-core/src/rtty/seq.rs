@@ -1072,7 +1072,9 @@ mod tests {
     fn fd_seq() -> RttySeq {
         RttySeq::new(
             MYCALL,
-            crate::contest::field_day(),
+            // ARRL FD: `2A` is an A-F class. The Winter FD leg has its own
+            // fixtures below, because the two letter sets are disjoint.
+            crate::contest::field_day(crate::fieldday::FdEvent::ArrlFd),
             &[("CLASS", "2A"), ("SECTION", "WI")],
         )
     }
@@ -1208,6 +1210,67 @@ mod tests {
 
         seq.feed_text("TU 73\n", 45_000);
         assert_eq!(seq.state(), SeqState::Done);
+    }
+
+    /// FAILING-FIRST REPRO for the Winter Field Day class letters.
+    ///
+    /// Winter Field Day's classes are H/I/O/M (Home / Indoor / Outdoor /
+    /// Mobile) — winterfieldday.org/downloads/2026-rules-v3.pdf, "V3 9.8.25",
+    /// read in full 2026-09-07: *"Class Options: H - Home station… I - Indoor
+    /// station… O - Outdoor station… M - Mobile / Mobile Stationary"*, with the
+    /// worked example *"If you have two stations and you are mobile in East
+    /// Pennsylvania, you are 2M EPA."*
+    ///
+    /// The shipped parser matched `^[0-9]{1,2}[ABCDEF]$` for BOTH events, so a
+    /// legal WFD class never satisfied the required CLASS slot and the QSO
+    /// never auto-logged. Not a cosmetic mismatch: NONE of H/I/O/M is in
+    /// ABCDEF, so the RTTY auto-sequencer could not complete a single Winter
+    /// Field Day contact.
+    #[test]
+    fn a_winter_field_day_class_completes_the_exchange() {
+        let mut seq = RttySeq::new(
+            MYCALL,
+            crate::contest::field_day(crate::fieldday::FdEvent::WinterFd),
+            &[("CLASS", "2M"), ("SECTION", "EPA")],
+        );
+        seq.start_cq(0);
+        seq.feed_text("W1XYZ W1XYZ K\n", 10_000);
+        assert_eq!(seq.state(), SeqState::ExchangeSent);
+        seq.take_actions();
+
+        // The sponsor's own example exchange, sent back at me.
+        seq.feed_text("KD9TAW DE W1XYZ R 2M EPA 2M EPA K\n", 30_000);
+        assert_eq!(
+            seq.state(),
+            SeqState::Confirmed,
+            "a legal WFD class must complete the exchange"
+        );
+        let l = logs(&seq.take_actions());
+        assert_eq!(l.len(), 1, "the QSO must auto-log");
+        assert_eq!(field(&l[0].1, "CLASS"), Some("2M"));
+        assert_eq!(field(&l[0].1, "SECTION"), Some("EPA"));
+    }
+
+    /// The other half of the same rule, and the reason the fix is per-event
+    /// rather than a widened letter set: ARRL Field Day's classes are A–F, so
+    /// an ARRL FD sequencer must still REFUSE a WFD class. A build that
+    /// accepted both would log `2M` as a legal ARRL FD entry.
+    #[test]
+    fn arrl_field_day_still_refuses_a_winter_field_day_class() {
+        let mut seq = RttySeq::new(
+            MYCALL,
+            crate::contest::field_day(crate::fieldday::FdEvent::ArrlFd),
+            &[("CLASS", "2A"), ("SECTION", "WI")],
+        );
+        seq.start_cq(0);
+        seq.feed_text("W1XYZ W1XYZ K\n", 10_000);
+        seq.take_actions();
+        seq.feed_text("KD9TAW DE W1XYZ R 2M EPA 2M EPA K\n", 30_000);
+        assert_ne!(
+            seq.state(),
+            SeqState::Confirmed,
+            "2M is not an ARRL Field Day class"
+        );
     }
 
     #[test]

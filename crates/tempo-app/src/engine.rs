@@ -13971,7 +13971,15 @@ impl Engine {
                     ("CLASS", self.settings.fd_class.trim()),
                     ("SECTION", self.settings.fd_section.trim()),
                 ];
-                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::contest::field_day(), &exch)
+                // Per EVENT: the class letter sets are disjoint (ARRL A-F vs
+                // Winter H/I/O/M), so the active event decides which exchange
+                // the sequencer copies against.
+                let event = tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                tempo_core::rtty::RttySeq::new(
+                    &mycall,
+                    tempo_core::contest::field_day(event),
+                    &exch,
+                )
             } else {
                 let exch = [
                     ("RST", "599"),

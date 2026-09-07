@@ -9,6 +9,7 @@
 //! Batch 1 makes the rules file able to CARRY an exchange block; these two stay the
 //! shipped definition until a later batch wires the loaded block through.
 use super::spec::{AdifTags, ExchangeSpec, FieldKind, FieldSpec, RoleSelector, RoleSpec};
+use crate::fieldday::FdEvent;
 use std::sync::OnceLock;
 
 static CASUAL_FIELDS: &[FieldSpec] = &[
@@ -78,6 +79,32 @@ static FD_ROLES: &[RoleSpec] = &[RoleSpec {
     constant_sent: &[],
 }];
 
+/// The class-designator pattern for an event, as an anchored `Pattern` source.
+///
+/// The two events do NOT share a letter set, and shipping one that covers both
+/// would be worse than either: it would accept `2M` as an ARRL Field Day entry
+/// and `3A` as a Winter Field Day one, logging a class its sponsor does not
+/// define.
+///
+/// * ARRL Field Day — `A`–`F`. arrl.org/field-day-rules (2026 rules, rev.
+///   2026-03-01): Class A club/group portable, B one-or-two-person portable,
+///   C mobile, D home stations, E home on emergency power, F EOC.
+/// * Winter Field Day — `H`, `I`, `O`, `M`. winterfieldday.org's own rules PDF
+///   (`downloads/2026-rules-v3.pdf`, stamped "V3 9.8.25", read in full
+///   2026-09-07) states verbatim: *"Class Options: H - Home station… I -
+///   Indoor station… O - Outdoor station… M - Mobile / Mobile Stationary"*,
+///   with the worked example *"If you have two stations and you are mobile in
+///   East Pennsylvania, you are 2M EPA."*
+///
+/// Ordering inside the bracket is the sponsor's own presentation order, not
+/// alphabetical, so the string reads back against the rules text it came from.
+const fn class_pattern(event: FdEvent) -> &'static str {
+    match event {
+        FdEvent::ArrlFd => "^[0-9]{1,2}[ABCDEF]$",
+        FdEvent::WinterFd => "^[0-9]{1,2}[HIOM]$",
+    }
+}
+
 /// ARRL / Winter Field Day: class + section, both required.
 ///
 /// ⚠️ This LOADS THE RULES TABLE (for the section domain) and therefore carries
@@ -85,13 +112,23 @@ static FD_ROLES: &[RoleSpec] = &[RoleSpec {
 /// `fd_rules::install_from`, or the bundled seed is locked in for the session.
 /// Its live callers are in `Engine::set_rtty_auto`, an operator action.
 ///
-/// The class pattern's letter set is TODAY's, for both events: the shipped RTTY
-/// parser matches `ABCDEF` for ARRL FD and Winter FD alike. A code comment in that
-/// parser guesses WFD "would pass HIOM"; a code comment is not a source, and changing
-/// the letter set is a behaviour change that needs the sponsor's own page read first.
-pub fn field_day() -> &'static ExchangeSpec {
-    static S: OnceLock<ExchangeSpec> = OnceLock::new();
-    S.get_or_init(|| {
+/// **Per-event by necessity, not by taste.** The class letter sets are disjoint
+/// (see [`class_pattern`]), so a single shared exchange cannot be correct for
+/// both: until 2026-09-07 this function returned one spec matching `ABCDEF` for
+/// both events, which meant the RTTY auto-sequencer could not complete a single
+/// Winter Field Day contact — none of H/I/O/M satisfied the required CLASS slot,
+/// so the QSO stalled unlogged. The SECTION half is genuinely shared: both
+/// events use the ARRL/RAC sections plus `MX` and `DX` (WFD rules, "Location
+/// Identifier": *"Mexico stations will use MX, and all other stations outside of
+/// the US will use DX."*).
+pub fn field_day(event: FdEvent) -> &'static ExchangeSpec {
+    static ARRL: OnceLock<ExchangeSpec> = OnceLock::new();
+    static WFD: OnceLock<ExchangeSpec> = OnceLock::new();
+    let cell = match event {
+        FdEvent::ArrlFd => &ARRL,
+        FdEvent::WinterFd => &WFD,
+    };
+    cell.get_or_init(|| {
         let section_domain = crate::fd_rules::fd_sections_domain();
         let fields: &'static [FieldSpec] = Box::leak(Box::new([
             FieldSpec {
@@ -105,7 +142,7 @@ pub fn field_day() -> &'static ExchangeSpec {
                 label: None,
                 required: true,
                 kind: FieldKind::Pattern {
-                    re: "^[0-9]{1,2}[ABCDEF]$",
+                    re: class_pattern(event),
                 },
             },
             FieldSpec {
@@ -138,7 +175,11 @@ mod tests {
     /// that does not exist is a rules bug that must never reach a runtime lookup.
     #[test]
     fn every_role_names_only_declared_slots_and_always_is_alone() {
-        for spec in [casual(), field_day()] {
+        for spec in [
+            casual(),
+            field_day(FdEvent::ArrlFd),
+            field_day(FdEvent::WinterFd),
+        ] {
             assert!(!spec.roles.is_empty(), "{}: no roles", spec.name);
             for r in spec.roles {
                 for key in r.sends.iter().chain(r.receives).chain(r.constant_sent) {
@@ -174,21 +215,50 @@ mod tests {
         }
     }
 
-    /// The class pattern must carry TODAY's letter set. `rtty/seq.rs` guesses in a
-    /// comment that a WFD schema "would pass HIOM" — that is a code comment, not a
-    /// source, and the shipped parser uses ABCDEF for both events. Changing it is a
-    /// behaviour change that needs winterfieldday.org read first (Ruling B1-D).
+    /// The class pattern is the SPONSOR'S letter set, per event, and the two are
+    /// disjoint. Sources are quoted on [`class_pattern`]; the Winter Field Day
+    /// half is `downloads/2026-rules-v3.pdf` ("V3 9.8.25") read in full
+    /// 2026-09-07. Until that read, both events shipped `ABCDEF`, which made
+    /// every Winter Field Day contact unloggable through the RTTY sequencer.
     #[test]
-    fn the_field_day_class_pattern_is_todays_letter_set() {
-        let f = field_day().field("CLASS").expect("CLASS slot");
+    fn each_event_carries_its_own_sponsors_class_letters() {
+        let arrl = field_day(FdEvent::ArrlFd).field("CLASS").expect("CLASS");
         assert_eq!(
-            f.kind,
+            arrl.kind,
             FieldKind::Pattern {
                 re: "^[0-9]{1,2}[ABCDEF]$"
             }
         );
-        assert!(f.required);
-        assert_eq!(f.label, None, "the class is positional, not labeled");
+        let wfd = field_day(FdEvent::WinterFd).field("CLASS").expect("CLASS");
+        assert_eq!(
+            wfd.kind,
+            FieldKind::Pattern {
+                re: "^[0-9]{1,2}[HIOM]$"
+            }
+        );
+        assert_ne!(
+            arrl.kind, wfd.kind,
+            "the two events do not share a class set"
+        );
+        for f in [arrl, wfd] {
+            assert!(f.required);
+            assert_eq!(f.label, None, "the class is positional, not labeled");
+        }
+    }
+
+    /// The SECTION half genuinely IS shared — both sponsors use the ARRL/RAC
+    /// sections plus `MX`/`DX`. Pinned so a later per-event split does not
+    /// quietly fork a domain that has no reason to fork.
+    #[test]
+    fn both_events_share_one_section_domain() {
+        let a = field_day(FdEvent::ArrlFd)
+            .field("SECTION")
+            .expect("SECTION");
+        let w = field_day(FdEvent::WinterFd)
+            .field("SECTION")
+            .expect("SECTION");
+        assert_eq!(a.kind, w.kind);
+        assert_eq!(a.adif, w.adif);
     }
 
     #[test]
