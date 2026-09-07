@@ -19,6 +19,7 @@ on:
     paths:
       - crates/tempo-core/src/fd_rules.seed.json
       - scripts/check-fd-rules.mjs
+      - scripts/rust-serde-schema.mjs
       - .github/workflows/fd-rules.yml
   workflow_dispatch: {}
 

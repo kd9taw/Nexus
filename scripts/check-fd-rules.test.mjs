@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // The node half of the fd-rules validator-parity gate. Walks the SAME corpus
 // crates/tempo-core/tests/fd_rules_corpus.rs walks and asserts the same verdict
-// and the same reason substring, so a rule that lands in one validator and not
-// the other goes red HERE instead of at publish time.
+// and the same reason, so a rule that lands in one validator and not the other
+// goes red HERE instead of at publish time.
 //
 // check-fd-rules.mjs is the gate .github/workflows/fd-rules.yml runs before the
-// rolling `fd-rules` Release; parse_spec is what the shipped app enforces. They
-// are two independent implementations of one contract and nothing kept them in
-// step until this file.
+// rolling `fd-rules` Release; parse_spec is what the shipped app enforces, and
+// nothing kept them in step until this file. Each `.expect` is the WHOLE
+// message both halves must produce (Rust adds serde's ` at line N column N`,
+// which node cannot know) — a keyword-sized expectation hides two validators
+// refusing the same file for DIFFERENT reasons.
 //
 // Run:  node --test scripts/check-fd-rules.test.mjs      (from the repo root)
 import { test } from 'node:test'

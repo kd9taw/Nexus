@@ -1,1 +1,1 @@
-enforcement
+ruleset arrlfd/2026: enforcement "block" (this build only warns — never removes or disables)

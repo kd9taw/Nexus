@@ -1,1 +1,1 @@
-always
+ruleset arrlfd/2026: role "" selector `always` must be the only role (a role after it could never be reached)

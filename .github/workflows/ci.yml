@@ -204,16 +204,22 @@ jobs:
       - name: Test the TLE mirror generator
         run: node --test scripts/gen-tles.test.mjs
 
-      # The fd-rules validator-parity gate. tempo_core::fd_rules::parse_spec and
-      # scripts/check-fd-rules.mjs are two INDEPENDENT implementations of the
-      # same structural validation, and check-fd-rules.mjs is the publish gate
-      # fd-rules.yml runs before the rolling fd-rules Release. Both files'
-      # headers said "keep the two in step" and nothing enforced it, so a rule
-      # could land in one and not the other — surfacing either as a seed the app
-      # refuses shipping green, or a publish blocked for a reason the app does
-      # not hold. This walks ONE corpus through both and demands the same
-      # verdict and the same reason from each. The Rust half is
-      # `cargo test -p tempo-core --test fd_rules_corpus`, in the test job.
+      # The fd-rules validator-parity gate. check-fd-rules.mjs is the publish gate
+      # fd-rules.yml runs before the rolling fd-rules Release; parse_spec is what
+      # the shipped app enforces. Both files' headers said "keep the two in step"
+      # and nothing enforced it, so a rule could land in one and not the other —
+      # surfacing either as a seed the app refuses shipping green, or a publish
+      # blocked for a reason the app does not hold.
+      #
+      # The two halves agree by two different means, on purpose. SHAPE (which
+      # fields are required, which integer fits) is DERIVED from the Rust
+      # `Deserialize` types by scripts/rust-serde-schema.mjs — restating it by
+      # hand is what let `role.selector` absent, `text.max_len` 300 (`u8`) and
+      # `number.min` -1 (`u32`) pass the gate and be refused by every shipped
+      # app. VALUES stay two independent implementations. This walks ONE corpus
+      # through both and demands the same verdict and the same reason from each.
+      # The Rust half is `cargo test -p tempo-core --test fd_rules_corpus`, in
+      # the test job.
       - name: fd-rules validator parity (node half)
         run: node --test scripts/check-fd-rules.test.mjs
 

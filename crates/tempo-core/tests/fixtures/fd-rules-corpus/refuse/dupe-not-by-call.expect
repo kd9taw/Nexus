@@ -1,1 +1,1 @@
-dupe.by_call is false
+ruleset arrlfd/2026: dupe.by_call is false (a dupe rule must key on the callsign)

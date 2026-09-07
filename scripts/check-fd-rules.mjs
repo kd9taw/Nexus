@@ -8,19 +8,51 @@
 //
 // Run:  node scripts/check-fd-rules.mjs [path]   (default: the in-repo seed)
 // Exits 1 with a specific reason on any miss.
+//
+// TWO passes, in parse_spec's own order. The SHAPE pass is derived from the Rust
+// `Deserialize` types (scripts/rust-serde-schema.mjs) because the halves check
+// different things and always did: this file checks VALUES, serde checks PRESENCE and
+// INTEGER WIDTH — so `role.selector` absent, `text.max_len` 300 (`u8`) and
+// `number.min` -1 (`u32`) all exited 0 here and were refused by every shipped app.
+// The VALUE pass below is this file's own, and every rule in it has a corpus fixture
+// (crates/tempo-core/tests/fixtures/fd-rules-corpus) proving parse_spec refuses the
+// same file for the same reason.
 
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { checkAgainstSchema, schemaFromRust } from './rust-serde-schema.mjs'
 
 const path = process.argv[2] || 'crates/tempo-core/src/fd_rules.seed.json'
-const spec = JSON.parse(readFileSync(path, 'utf8'))
 
 function fail(msg) {
   console.error(`fd-rules INVALID: ${msg}`)
   process.exit(1)
 }
 
-if (spec.schema !== 2) fail(`schema ${spec.schema} (the app reads schema 2)`)
+let spec
+try {
+  spec = JSON.parse(readFileSync(path, 'utf8'))
+} catch (e) {
+  // parse_spec wraps serde's own parse error the same way, so a malformed file is a
+  // clean refusal here rather than a stack trace.
+  fail(`bad JSON: ${e.message}`)
+}
+
+// PASS 1 — the shape serde will accept, read off the Rust types. Anchored on this
+// script's own location: the schema's source of truth must not depend on the cwd.
+const RUST_SPEC_SRC = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../crates/tempo-core/src/fd_rules.rs',
+)
+const shapeError = checkAgainstSchema(
+  spec,
+  schemaFromRust(readFileSync(RUST_SPEC_SRC, 'utf8'), 'FileSpec'),
+)
+if (shapeError) fail(`bad JSON: ${shapeError}`)
+
+// PASS 2 — the value rules, in parse_spec's order.
+if (spec.schema !== 2) fail(`schema ${spec.schema} (this build reads schema 2)`)
 if (!spec.generated) fail('empty `generated` stamp')
 
 // §8(d)'s inversion, mirroring tempo_core::fd_rules::seed_events(): a candidate
@@ -40,9 +72,9 @@ for (const want of seedEvents)
 const RESERVED_DOMAIN_IDS = ['arrl_sections', 'fd_sections']
 // Lowercase snake, so a domain id is never confused with an exchange SLOT id
 // (uppercase).
-const isDomainId = (id) => typeof id === 'string' && /^[a-z][a-z0-9_]*$/.test(id)
+const isDomainId = (id) => /^[a-z][a-z0-9_]*$/.test(id)
 // `''` is the explicit "no standard ADIF column this direction" marker.
-const isAdifTag = (t) => t === '' || (typeof t === 'string' && /^[A-Z][A-Z0-9_]*$/.test(t))
+const isAdifTag = (t) => t === '' || /^[A-Z][A-Z0-9_]*$/.test(t)
 
 const seenEvents = new Set()
 for (const r of spec.rulesets) {
@@ -55,33 +87,24 @@ for (const r of spec.rulesets) {
   // `scoring` is a BLOCK (schema 2): the model plus the two tables that were
   // always part of it. Required, never defaulted — mirrors ScoringSpec.
   const sc = r.scoring
-  if (!sc || typeof sc !== 'object') fail(`${tag}: missing the \`scoring\` block`)
   if (!['powered_multiplier', 'objectives'].includes(sc.model))
     fail(`${tag}: unknown scoring model ${JSON.stringify(sc.model)}`)
-  if (!sc.points_by_mode_class || typeof sc.points_by_mode_class !== 'object')
-    fail(`${tag}: scoring misses points_by_mode_class`)
   for (const k of ['PH', 'CW', 'DIG'])
     if (!(k in sc.points_by_mode_class)) fail(`${tag}: points_by_mode_class misses ${k}`)
-  if (!Array.isArray(sc.power_tiers) || !sc.power_tiers.length)
-    fail(`${tag}: empty power_tiers`)
+  if (!sc.power_tiers.length) fail(`${tag}: empty power_tiers`)
   for (let i = 1; i < sc.power_tiers.length; i++)
     if (sc.power_tiers[i - 1] >= sc.power_tiers[i]) fail(`${tag}: power_tiers not strictly ascending`)
   // The dupe key, as data (schema 2) rather than a shared const. Required, and
   // by_call must be true: a rule that does not key on the callsign is a mistake
   // far more often than a new contest shape, and the cost of being wrong is a
   // log full of contacts that should have been refused as dupes.
-  const dupe = r.dupe
-  if (!dupe || typeof dupe !== 'object') fail(`${tag}: missing the \`dupe\` block`)
-  for (const k of ['by_call', 'by_band', 'by_mode_class'])
-    if (typeof dupe[k] !== 'boolean') fail(`${tag}: dupe.${k} must be a boolean`)
-  if (!dupe.by_call)
+  if (!r.dupe.by_call)
     fail(`${tag}: dupe.by_call is false (a dupe rule must key on the callsign)`)
 
   // File-declared domains. `arrl_sections` / `fd_sections` are DERIVED from the
   // top-level section list, so a file declaring one would be a second copy of a
   // list it cannot fully represent (a Domain value is a code/label pair; a
   // Section also carries a division). Mirrors DomainSpec's checks exactly.
-  if (!Array.isArray(r.domains)) fail(`${tag}: missing the \`domains\` array`)
   const domainIds = new Set()
   for (const d of r.domains) {
     if (!isDomainId(d.id)) fail(`${tag}: domain id ${JSON.stringify(d.id)} is not ^[a-z][a-z0-9_]*$`)
@@ -89,9 +112,9 @@ for (const r of spec.rulesets) {
       fail(`${tag}: domain id ${JSON.stringify(d.id)} is reserved (derived from the section list)`)
     if (domainIds.has(d.id)) fail(`${tag}: duplicate domain id ${JSON.stringify(d.id)}`)
     domainIds.add(d.id)
-    if (!d.adif || !isAdifTag(d.adif.rcvd) || !isAdifTag(d.adif.sent))
+    if (!isAdifTag(d.adif.rcvd) || !isAdifTag(d.adif.sent))
       fail(`${tag}: domain ${d.id} has a malformed adif tag`)
-    if (!Array.isArray(d.values) || !d.values.length) fail(`${tag}: domain ${d.id} has no values`)
+    if (!d.values.length) fail(`${tag}: domain ${d.id} has no values`)
     const codes = new Set()
     for (const v of d.values) {
       if (!v.code || v.code !== v.code.toUpperCase())
@@ -106,13 +129,12 @@ for (const r of spec.rulesets) {
   // every rule here is a rules bug that must be a REFUSAL rather than a runtime
   // lookup miss on the air.
   const x = r.exchange
-  if (!x || typeof x !== 'object') fail(`${tag}: missing the \`exchange\` block`)
   if (!x.name) fail(`${tag}: exchange has no name`)
   const resolvesDomain = (id) =>
     RESERVED_DOMAIN_IDS.includes(id) || r.domains.some((d) => d.id === id)
 
   const checkKind = (key, k) => {
-    switch (k && k.type) {
+    switch (k.type) {
       case 'rst':
         if (!(k.digits === 2 || k.digits === 3))
           fail(`${tag}: ${key} rst digits ${k.digits} (expected 2 or 3)`)
@@ -132,7 +154,7 @@ for (const r of spec.rulesets) {
         break
       case 'pattern':
         // Anchored both ends or it is not the pattern it claims.
-        if (!k.re || !k.re.startsWith('^') || !k.re.endsWith('$'))
+        if (k.re === '' || !k.re.startsWith('^') || !k.re.endsWith('$'))
           fail(`${tag}: ${key} pattern ${JSON.stringify(k.re)} is not ^…$-anchored`)
         break
       case 'number':
@@ -143,17 +165,19 @@ for (const r of spec.rulesets) {
           fail(`${tag}: ${key} grid chars ${k.chars} (expected 4 or 6)`)
         break
       case 'text':
-        if (!(k.max_len >= 1)) fail(`${tag}: ${key} text max_len ${k.max_len}`)
+        if (k.max_len === 0) fail(`${tag}: ${key} text max_len 0`)
         break
       case 'call':
         break
       case 'one_of':
-        if (!Array.isArray(k.of) || k.of.length < 2)
-          fail(`${tag}: ${key} one_of needs at least 2 arms`)
+        // One arm is not a choice; zero is not a slot.
+        if (k.of.length < 2) fail(`${tag}: ${key} one_of needs at least 2 arms`)
         for (const arm of k.of) checkKind(key, arm)
         break
       default:
-        fail(`${tag}: ${key} unknown kind ${JSON.stringify(k && k.type)}`)
+        // `check_kind` has no such arm: its `match` is exhaustive over KindSpec,
+        // and pass 1 refuses a `type` that is not one of the variants.
+        throw new Error(`unreachable: pass 1 admitted kind ${JSON.stringify(k.type)}`)
     }
   }
 
@@ -163,18 +187,14 @@ for (const r of spec.rulesets) {
       fail(`${tag}: exchange slot ${JSON.stringify(f.key)} not uppercase`)
     if (slots.has(f.key)) fail(`${tag}: duplicate exchange slot ${JSON.stringify(f.key)}`)
     slots.add(f.key)
-    // §2.1.1: BOTH adif halves must be WRITTEN. An absent key is the
-    // direction-blind shape that rule exists to kill; `''` is the explicit
-    // "no standard column this direction" marker.
-    if (!f.adif || typeof f.adif.rcvd !== 'string' || typeof f.adif.sent !== 'string')
-      fail(`${tag}: slot ${f.key} must write both adif.rcvd and adif.sent`)
+    // §2.1.1's "BOTH adif halves must be WRITTEN" is AdifTagsSpec's two required
+    // `String`s, so an absent `sent` is pass 1's `missing field \`sent\``; `''`
+    // stays the explicit "no standard column this direction" marker.
     if (!isAdifTag(f.adif.rcvd) || !isAdifTag(f.adif.sent))
       fail(`${tag}: slot ${f.key} has a malformed adif tag`)
-    if (typeof f.label !== 'string') fail(`${tag}: slot ${f.key} must write a label ('' = positional)`)
-    if (typeof f.required !== 'boolean') fail(`${tag}: slot ${f.key} must write required`)
     checkKind(f.key, f.kind)
   }
-  if (!Array.isArray(x.roles) || !x.roles.length) fail(`${tag}: exchange has no roles`)
+  if (!x.roles.length) fail(`${tag}: exchange has no roles`)
   const roleIds = new Set()
   for (const role of x.roles) {
     if (roleIds.has(role.id)) fail(`${tag}: duplicate role id ${JSON.stringify(role.id)}`)
@@ -193,14 +213,14 @@ for (const r of spec.rulesets) {
       fail(
         `${tag}: role ${JSON.stringify(role.id)} receives ${role.receives.length} fields (max 5)`,
       )
-    if (role.selector && role.selector.type === 'always' && x.roles.length !== 1)
+    if (role.selector.type === 'always' && x.roles.length !== 1)
       fail(
         `${tag}: role ${JSON.stringify(role.id)} selector \`always\` must be the only role ` +
           `(a role after it could never be reached)`,
       )
-    if (role.selector && role.selector.type === 'my_location_in' && !role.selector.locations?.length)
+    if (role.selector.type === 'my_location_in' && !role.selector.locations.length)
       fail(`${tag}: role ${JSON.stringify(role.id)} my_location_in is empty`)
-    if (role.selector && role.selector.type === 'my_category_is' && !role.selector.category)
+    if (role.selector.type === 'my_category_is' && !role.selector.category)
       fail(`${tag}: role ${JSON.stringify(role.id)} my_category_is is empty`)
   }
 
@@ -213,20 +233,26 @@ for (const r of spec.rulesets) {
   for (const m of r.banned_modes)
     if (!m || m !== m.toUpperCase()) fail(`${tag}: banned mode ${JSON.stringify(m)} not uppercase`)
   if (r.enforcement !== 'warn')
-    fail(`${tag}: enforcement ${JSON.stringify(r.enforcement)} (the app only warns)`)
+    fail(
+      `${tag}: enforcement ${JSON.stringify(r.enforcement)} ` +
+        `(this build only warns — never removes or disables)`,
+    )
   const w = r.window
   if (!(w.month >= 1 && w.month <= 12)) fail(`${tag}: window month ${w.month}`)
-  if (w.weekend === 'nth_full') {
-    if (!(w.n >= 1 && w.n <= 4)) fail(`${tag}: nth_full n=${w.n}`)
-  } else if (w.weekend !== 'last_full') {
-    fail(`${tag}: window weekend ${JSON.stringify(w.weekend)}`)
-  }
-  if (!(w.start_hour_utc >= 0 && w.start_hour_utc < 24))
-    fail(`${tag}: window start_hour_utc ${w.start_hour_utc}`)
+  // ONE message for both halves, as parse_spec's single `match` arm gives: a
+  // `nth_full` with a bad `n` and an unknown weekend are the same refusal. `n` is
+  // `#[serde(default)]`, so an absent one is 0 here exactly as it is there.
+  const n = w.n ?? 0
+  if (!(w.weekend === 'last_full' || (w.weekend === 'nth_full' && n >= 1 && n <= 4)))
+    fail(`${tag}: window weekend ${JSON.stringify(w.weekend)} n=${n}`)
+  if (w.start_hour_utc >= 24) fail(`${tag}: window start_hour_utc ${w.start_hour_utc}`)
   if (!(w.duration_hours >= 1 && w.duration_hours <= 72))
     fail(`${tag}: window duration_hours ${w.duration_hours}`)
-  for (const [y, o] of Object.entries(w.overrides || {})) {
-    if (!/^\d{4}$/.test(y)) fail(`${tag}: override year ${JSON.stringify(y)}`)
+  for (const [y, o] of Object.entries(w.overrides ?? {})) {
+    // `y.parse::<u16>()` — digits only, and inside u16. NOT a 4-digit shape: a
+    // node-only narrowing would block a publish for a reason the app does not hold.
+    if (!/^\d+$/.test(y) || Number(y) > 65535)
+      fail(`${tag}: override year ${JSON.stringify(y)}`)
     if (!(o.start_unix < o.end_unix)) fail(`${tag}: override ${y} start ≥ end`)
   }
 }

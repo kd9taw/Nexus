@@ -1,18 +1,28 @@
 //! The drift gate (§2.5, §8d). `tempo_core::fd_rules::parse_spec` and
-//! `scripts/check-fd-rules.mjs` are TWO independent implementations of the same
-//! structural validation, and the node one is the publish gate
-//! `.github/workflows/fd-rules.yml` runs before the rolling `fd-rules` Release.
-//! Both files' headers have said "keep the two in step" since they were written
-//! and nothing enforced it — so a rule could land in one and not the other, and
-//! the first symptom would be a seed the app refuses shipping green, or a
-//! publish blocked for a reason the app does not actually hold.
+//! `scripts/check-fd-rules.mjs` validate the same rules file, and the node one
+//! is the publish gate `.github/workflows/fd-rules.yml` runs before the rolling
+//! `fd-rules` Release. Both files' headers have said "keep the two in step"
+//! since they were written and nothing enforced it — so a rule could land in
+//! one and not the other, and the first symptom would be a seed the app refuses
+//! shipping green, or a publish blocked for a reason the app does not actually
+//! hold.
 //!
 //! This corpus is the enforcement: every fixture gets the same verdict from
-//! both, and a refusal carries the same reason substring in both. The node half
-//! walks the SAME directory in `scripts/check-fd-rules.test.mjs`.
+//! both, and a refusal carries the same reason in both. The node half walks the
+//! SAME directory in `scripts/check-fd-rules.test.mjs`.
+//!
+//! **The `.expect` is the WHOLE message**, not a keyword from it. A bare `dupe`
+//! passed while Rust said serde's "missing field `dupe`" and node said a
+//! hand-written "missing the `dupe` block" — same verdict, different reason,
+//! and the fixture could not see it. The only text a `.expect` may drop is the
+//! ` at line N column N` serde appends, which node has no way to know.
 //!
 //! Adding a validation rule means adding a fixture here. A rule with no fixture
-//! is a rule only one validator has.
+//! is a rule only one validator has. VALUE rules are two independent
+//! implementations; the SHAPE rules serde enforces before any of them (which
+//! fields are required, which integer fits) are derived from these very
+//! `Deserialize` types by `scripts/rust-serde-schema.mjs`, because restating
+//! them by hand is what let four mutations through the publish gate.
 use std::path::Path;
 use tempo_core::fd_rules::validate;
 
