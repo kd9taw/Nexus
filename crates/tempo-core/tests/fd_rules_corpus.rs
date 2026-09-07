@@ -23,6 +23,16 @@
 //! fields are required, which integer fits) are derived from these very
 //! `Deserialize` types by `scripts/rust-serde-schema.mjs`, because restating
 //! them by hand is what let four mutations through the publish gate.
+//!
+//! ⚠️ **A fixture may be one mutation off `accept/seed.json` and no more.** serde
+//! reports the FIRST fault it meets, and the two halves can meet a different one
+//! first, so a fixture carrying two defects can pass while the halves disagree.
+//!
+//! ⚠️ **Some of these mutations are invisible to `JSON.parse`** — `2.0` where `2`
+//! belongs, a repeated key, an integer past `u64`, an unpaired `\u` surrogate. The
+//! node half reads the SOURCE TEXT for its shape pass for exactly that reason (see
+//! `scripts/rust-serde-schema.mjs`'s header); a tool that rewrites a fixture through
+//! `JSON.parse` + `stringify` would silently erase what it pins.
 use std::path::Path;
 use tempo_core::fd_rules::validate;
 

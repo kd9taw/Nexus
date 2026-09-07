@@ -17,11 +17,31 @@
 // The VALUE pass below is this file's own, and every rule in it has a corpus fixture
 // (crates/tempo-core/tests/fixtures/fd-rules-corpus) proving parse_spec refuses the
 // same file for the same reason.
+//
+// ⚠️ WHICH PASS READS WHICH INPUT, and it is the whole reason the shape pass works.
+// The two passes are handed DIFFERENT readings of the same file:
+//
+//   PASS 1 (shape) reads the SOURCE TEXT, through `readJson`. It has to: serde
+//     judges a document, and `JSON.parse` destroys three things serde judges on
+//     before this file can look — `2.0` becomes the same JS number as `2`, a
+//     repeated key silently collapses to the last one, and an integer past 2^53
+//     stops being distinguishable from the `u64` bound it is compared against.
+//     All three exited 0 here and were refused by every shipped app.
+//   PASS 2 (values) reads the PARSED value. That is the right input for it: every
+//     rule below is about what a field MEANS (tiers ascend, `by_call` is true, a
+//     pattern is anchored), and each compares a small number, a string or a list —
+//     nothing whose meaning survives only in the text.
+//
+// The value pass carries its own trap in the other direction, and both halves of it
+// are marked below: a rule stated in JS terms rather than in Rust's REFUSES a file
+// the app accepts, which reddens the publish gate on a seed that would have worked.
+// `toUpperCase()` (full Unicode) is not `to_ascii_uppercase`, and `/^\d+$/` is not
+// `str::parse::<u16>`.
 
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { checkAgainstSchema, schemaFromRust } from './rust-serde-schema.mjs'
+import { checkAgainstSchema, readJson, schemaFromRust } from './rust-serde-schema.mjs'
 
 const path = process.argv[2] || 'crates/tempo-core/src/fd_rules.seed.json'
 
@@ -30,12 +50,26 @@ function fail(msg) {
   process.exit(1)
 }
 
+const text = readFileSync(path, 'utf8')
+
 let spec
 try {
-  spec = JSON.parse(readFileSync(path, 'utf8'))
+  spec = JSON.parse(text)
 } catch (e) {
   // parse_spec wraps serde's own parse error the same way, so a malformed file is a
   // clean refusal here rather than a stack trace.
+  fail(`bad JSON: ${e.message}`)
+}
+
+// The same text again, as its SOURCE characters (see the header). A fault here is one
+// serde_json reports and `JSON.parse` does not — an unpaired `\u` surrogate, a number
+// too big to be an f64 — and `parse_spec` wraps it the same way. Anything else thrown
+// is a reader bug on text that already parsed, and it stays loud.
+let doc
+try {
+  doc = readJson(text)
+} catch (e) {
+  if (!e.serdeJson) throw e
   fail(`bad JSON: ${e.message}`)
 }
 
@@ -46,7 +80,7 @@ const RUST_SPEC_SRC = resolve(
   '../crates/tempo-core/src/fd_rules.rs',
 )
 const shapeError = checkAgainstSchema(
-  spec,
+  doc,
   schemaFromRust(readFileSync(RUST_SPEC_SRC, 'utf8'), 'FileSpec'),
 )
 if (shapeError) fail(`bad JSON: ${shapeError}`)
@@ -75,6 +109,10 @@ const RESERVED_DOMAIN_IDS = ['arrl_sections', 'fd_sections']
 const isDomainId = (id) => /^[a-z][a-z0-9_]*$/.test(id)
 // `''` is the explicit "no standard ADIF column this direction" marker.
 const isAdifTag = (t) => t === '' || /^[A-Z][A-Z0-9_]*$/.test(t)
+// parse_spec's uppercase test is `s != s.to_ascii_uppercase()`, which leaves every
+// non-ASCII letter exactly as it found it. JS `toUpperCase()` is full Unicode and
+// rewrites some of them (`ß` → `SS`, `µ` → `Μ`), so it refused codes the app takes.
+const asciiUpper = (s) => s.replace(/[a-z]/g, (c) => c.toUpperCase())
 
 const seenEvents = new Set()
 for (const r of spec.rulesets) {
@@ -117,7 +155,7 @@ for (const r of spec.rulesets) {
     if (!d.values.length) fail(`${tag}: domain ${d.id} has no values`)
     const codes = new Set()
     for (const v of d.values) {
-      if (!v.code || v.code !== v.code.toUpperCase())
+      if (!v.code || v.code !== asciiUpper(v.code))
         fail(`${tag}: domain ${d.id} code ${JSON.stringify(v.code)} not uppercase`)
       if (codes.has(v.code)) fail(`${tag}: domain ${d.id} duplicate code ${JSON.stringify(v.code)}`)
       codes.add(v.code)
@@ -183,7 +221,7 @@ for (const r of spec.rulesets) {
 
   const slots = new Set()
   for (const f of x.fields) {
-    if (!f.key || f.key !== f.key.toUpperCase())
+    if (!f.key || f.key !== asciiUpper(f.key))
       fail(`${tag}: exchange slot ${JSON.stringify(f.key)} not uppercase`)
     if (slots.has(f.key)) fail(`${tag}: duplicate exchange slot ${JSON.stringify(f.key)}`)
     slots.add(f.key)
@@ -231,7 +269,7 @@ for (const r of spec.rulesets) {
     ids.add(b.id)
   }
   for (const m of r.banned_modes)
-    if (!m || m !== m.toUpperCase()) fail(`${tag}: banned mode ${JSON.stringify(m)} not uppercase`)
+    if (!m || m !== asciiUpper(m)) fail(`${tag}: banned mode ${JSON.stringify(m)} not uppercase`)
   if (r.enforcement !== 'warn')
     fail(
       `${tag}: enforcement ${JSON.stringify(r.enforcement)} ` +
@@ -249,9 +287,12 @@ for (const r of spec.rulesets) {
   if (!(w.duration_hours >= 1 && w.duration_hours <= 72))
     fail(`${tag}: window duration_hours ${w.duration_hours}`)
   for (const [y, o] of Object.entries(w.overrides ?? {})) {
-    // `y.parse::<u16>()` — digits only, and inside u16. NOT a 4-digit shape: a
-    // node-only narrowing would block a publish for a reason the app does not hold.
-    if (!/^\d+$/.test(y) || Number(y) > 65535)
+    // `y.parse::<u16>()`, and nothing narrower — a node-only narrowing blocks a
+    // publish for a reason the app does not hold. `str::parse` for an UNSIGNED type
+    // takes an optional leading `+` (never a `-`), then ASCII digits (leading zeros
+    // and all), and refuses only what does not fit. It is not a 4-digit shape and it
+    // is not `/^\d+$/`, which rejected the `+` the app accepts.
+    if (!/^\+?\d+$/.test(y) || BigInt(y.replace(/^\+/, '')) > 65535n)
       fail(`${tag}: override year ${JSON.stringify(y)}`)
     if (!(o.start_unix < o.end_unix)) fail(`${tag}: override ${y} start ≥ end`)
   }
@@ -262,7 +303,7 @@ for (const r of spec.rulesets) {
 if (spec.sections.length !== 83) fail(`${spec.sections.length} sections (expected 83)`)
 const codes = new Set()
 for (const s of spec.sections) {
-  if (!s.code || s.code !== s.code.toUpperCase())
+  if (!s.code || s.code !== asciiUpper(s.code))
     fail(`section code ${JSON.stringify(s.code)} not uppercase`)
   if (codes.has(s.code)) fail(`duplicate section code ${JSON.stringify(s.code)}`)
   codes.add(s.code)
