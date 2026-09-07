@@ -142,6 +142,14 @@ impl Login {
             // One branch covers the first prompt AND every re-prompt: the CMS asks for the
             // callsign again after refusing one, and answering only the first wedges the session
             // forever — open TCP, no data, no retry. cluster.rs paid for that lesson.
+            //
+            // ⚠️ ASSUMPTION, and it is the one thing here that could wedge a session: the two
+            // prompts never share a read. That holds because the server cannot write `Password :`
+            // before it has read our callsign, so TCP has nothing to coalesce them from. If a
+            // future CMS or a proxy ever does send both at once, the callsign prompt is no longer
+            // the buffer's tail, this suffix test misses it, and the pre-login sits forever. The
+            // password prompt is NOT exposed to that risk — it is found by substring search
+            // ([`password_prompt_end`]) precisely because the SID legitimately shares its read.
             if is_callsign_prompt(&self.buf) {
                 self.answered_call = true;
                 let mut line = self.callsign.clone();
@@ -348,6 +356,100 @@ mod tests {
         assert_eq!(sends(&steps), vec!["N0CALL\r".to_string()], "{steps:?}");
     }
 
+    /// A `Read` that hands over one queued chunk per call, then reports EOF — a socket's
+    /// framing, which `std::io::Cursor` deliberately does not have.
+    struct Chunks(Vec<Vec<u8>>);
+
+    impl Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Ok(0);
+            }
+            let next = self.0.remove(0);
+            let n = next.len().min(buf.len());
+            buf[..n].copy_from_slice(&next[..n]);
+            Ok(n)
+        }
+    }
+
+    /// A `ByteSession` that answers `PING\r` with `PONG\r` and then wants to close.
+    struct Pong {
+        saw: Vec<u8>,
+        done: bool,
+    }
+
+    impl ByteSession for Pong {
+        fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
+            self.saw.extend_from_slice(chunk);
+            if !self.done && self.saw.windows(5).any(|w| w == b"PING\r") {
+                self.done = true;
+                return vec![b"PONG\r".to_vec()];
+            }
+            Vec::new()
+        }
+        fn wants_close(&self) -> bool {
+            self.done
+        }
+    }
+
+    #[test]
+    fn pump_latches_logged_in_at_the_handover_and_carries_the_shared_bytes() {
+        // `pump` is pure over Read/Write, so the latch is observable here where the loopback test
+        // cannot see it: `run` clears the live state as it returns (a status chip must not read
+        // "logged in" after a disconnect), so the loopback test asserts the durable evidence
+        // instead and this one asserts the latch itself.
+        //
+        // The reader hands the password prompt and the first protocol bytes over in ONE chunk,
+        // which is the boundary `Step::Ready` exists for: without the carry, `PING` is swallowed
+        // by the pre-login and the session never speaks.
+        // One chunk per `read`, like a socket — and unlike a `Cursor`, which would hand the
+        // whole script over in one call and put both prompts in one buffer, a shape a real CMS
+        // cannot produce (see the assumption noted at `Login::feed`).
+        let script = Chunks(vec![
+            b"Callsign :".to_vec(),
+            b"\r\nPassword :PING\r".to_vec(),
+        ]);
+        let mut written: Vec<u8> = Vec::new();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let state = SessionState::default();
+        let mut sess = Pong {
+            saw: Vec::new(),
+            done: false,
+        };
+        let outcome = pump(
+            script,
+            &mut written,
+            Login::new("N0CALL", CMS_TELNET_PASSWORD),
+            &mut sess,
+            &stop,
+            &state,
+            &|| 1_700_000_000,
+        );
+        assert_eq!(outcome, Outcome::Complete, "written: {written:?}");
+        assert!(
+            state.logged_in.load(std::sync::atomic::Ordering::Relaxed),
+            "logged_in never latched at the handover"
+        );
+        let sent = String::from_utf8_lossy(&written).into_owned();
+        assert_eq!(
+            sent,
+            format!("N0CALL\r{CMS_TELNET_PASSWORD}\rPONG\r"),
+            "{sent:?}"
+        );
+        assert_eq!(
+            state.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+            written.len() as u64,
+            "the byte counter drifted from the writes"
+        );
+        assert_eq!(
+            state
+                .last_byte_unix
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1_700_000_000,
+            "the clock the caller supplied is the one recorded"
+        );
+    }
+
     #[test]
     fn a_flood_with_no_prompt_in_it_does_not_grow_without_bound() {
         let mut l = Login::new("N0CALL", CMS_TELNET_PASSWORD);
@@ -360,4 +462,199 @@ mod tests {
             l.held_bytes()
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The socket half: one bounded connect, one pump, one session. See the module header's rule 1.
+// ---------------------------------------------------------------------------------------------
+
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::time::Duration;
+
+/// Bounded connect — `flexcat.rs`'s rule, for its reason: a `TcpStream::connect` with no timeout
+/// can sit for the OS's own SYN budget (over two minutes on Linux) with the UI showing nothing.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The socket read timeout. It is not a protocol timeout — it exists so the pump loop periodically
+/// wakes to observe `stop`, which is what makes Disconnect prompt on a silent socket.
+const READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Live state of one session, for the status chip. Written by the socket thread, read by the UI
+/// poll. Atomics rather than a lock for `aprsis::FeedState`'s reason: a stalled reader must never
+/// be able to block a status read.
+#[derive(Debug, Default)]
+pub struct SessionState {
+    /// The TCP connection is up.
+    pub connected: AtomicBool,
+    /// The telnet pre-login finished — the B2F session has begun.
+    pub logged_in: AtomicBool,
+    /// Bytes received from the peer this session.
+    pub bytes_in: AtomicU64,
+    /// Bytes written to the peer this session.
+    pub bytes_out: AtomicU64,
+    /// Unix seconds of the most recent byte in either direction.
+    pub last_byte_unix: AtomicI64,
+}
+
+/// How a session ended. Not a `Result`, because three of the four are ordinary outcomes an
+/// operator needs told apart, and only the fourth is an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// The session said it was finished and we closed. The good ending.
+    Complete,
+    /// The stop flag was set: the operator disconnected.
+    Stopped,
+    /// The peer closed the socket before the session was finished.
+    PeerClosed,
+    /// A socket error, rendered. **Never carries anything the caller passed in** — see [`run`].
+    Io(String),
+}
+
+/// Drive one pre-login and one [`ByteSession`] over a connected duplex until the session is
+/// finished, the peer closes, or `stop` is set.
+///
+/// Pure over any `Read`/`Write`, so the whole path is testable from a pair of buffers.
+pub fn pump<R: Read, W: Write>(
+    mut reader: R,
+    mut writer: W,
+    mut login: Login,
+    session: &mut dyn ByteSession,
+    stop: &AtomicBool,
+    state: &SessionState,
+    now_unix: &dyn Fn() -> i64,
+) -> Outcome {
+    let mut buf = [0u8; 4096];
+    // Bytes that arrived with the last prompt and belong to the session, not the pre-login.
+    let mut carry: Vec<u8> = Vec::new();
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Outcome::Stopped;
+        }
+        if login.done() && session.wants_close() {
+            return Outcome::Complete;
+        }
+        if !carry.is_empty() {
+            let chunk = std::mem::take(&mut carry);
+            for out in session.feed(&chunk) {
+                if let Err(e) = write_all(&mut writer, &out, state) {
+                    return Outcome::Io(e.to_string());
+                }
+            }
+            continue;
+        }
+        let n = match reader.read(&mut buf) {
+            Ok(0) => {
+                return if login.done() && session.wants_close() {
+                    Outcome::Complete
+                } else {
+                    Outcome::PeerClosed
+                }
+            }
+            Ok(n) => n,
+            // The read timeout wakes the loop so `stop` is observed on a quiet socket.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                continue
+            }
+            Err(e) => return Outcome::Io(e.to_string()),
+        };
+        let chunk = &buf[..n];
+        state.bytes_in.fetch_add(n as u64, Ordering::Relaxed);
+        state.last_byte_unix.store(now_unix(), Ordering::Relaxed);
+
+        if !login.done() {
+            for step in login.feed(chunk) {
+                match step {
+                    Step::Send(bytes) => {
+                        if let Err(e) = write_all(&mut writer, &bytes, state) {
+                            return Outcome::Io(e.to_string());
+                        }
+                    }
+                    Step::Ready(rest) => {
+                        state.logged_in.store(true, Ordering::Relaxed);
+                        carry = rest;
+                    }
+                }
+            }
+            continue;
+        }
+        for out in session.feed(chunk) {
+            if let Err(e) = write_all(&mut writer, &out, state) {
+                return Outcome::Io(e.to_string());
+            }
+        }
+    }
+}
+
+/// Writes and counts. One function so the counter cannot drift from the write.
+fn write_all<W: Write>(w: &mut W, bytes: &[u8], state: &SessionState) -> std::io::Result<()> {
+    w.write_all(bytes)?;
+    w.flush()?;
+    state
+        .bytes_out
+        .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+    Ok(())
+}
+
+/// Connect to `host:port`, bounded by [`CONNECT_TIMEOUT`], with [`READ_TIMEOUT`] set.
+///
+/// A literal IP parses straight through with no name lookup; a hostname falls back to
+/// `ToSocketAddrs` (`flexcat::connect`'s shape, and `server.winlink.org` is a hostname, so this
+/// path is the normal one here rather than the fallback).
+pub fn connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    let target: SocketAddr = match format!("{host}:{port}").parse() {
+        Ok(sa) => sa,
+        Err(_) => (host, port).to_socket_addrs()?.next().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("cannot resolve {host}"),
+            )
+        })?,
+    };
+    let stream = TcpStream::connect_timeout(&target, CONNECT_TIMEOUT)?;
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    // A B2F answer held back by Nagle waiting for more data arrives at the CMS seconds late, and
+    // the CMS is waiting for it before it sends anything else.
+    let _ = stream.set_nodelay(true);
+    Ok(stream)
+}
+
+/// Connect once, run one session, return what happened.
+///
+/// ⚠️ **There is no reconnect loop here and there must never be one** — module header, rule 1.
+/// If you are about to add `while !stop.load(...)` around this body because `aprsis::run` has one,
+/// stop: that loop is correct for a telemetry feed and wrong for a mail transaction.
+pub fn run(
+    host: &str,
+    port: u16,
+    login: Login,
+    session: &mut dyn ByteSession,
+    stop: &AtomicBool,
+    state: &SessionState,
+) -> Outcome {
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    };
+    let stream = match connect(host, port) {
+        Ok(s) => s,
+        Err(e) => return Outcome::Io(e.to_string()),
+    };
+    let reader = match stream.try_clone() {
+        Ok(r) => r,
+        Err(e) => return Outcome::Io(e.to_string()),
+    };
+    state.connected.store(true, Ordering::Relaxed);
+    let outcome = pump(reader, stream, login, session, stop, state, &now);
+    state.connected.store(false, Ordering::Relaxed);
+    state.logged_in.store(false, Ordering::Relaxed);
+    outcome
 }
