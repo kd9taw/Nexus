@@ -14103,8 +14103,10 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             .is_ok()
     };
     // LoTW, QRZ Logbook, eQSL and ClubLog read their history off the persisted per-QSO
-    // stamps, so it survives a restart. The lookup-only rows (QRZ callbook, RepeaterBook)
-    // carry `uploads: false` and no history at all — see the note on `uploads`.
+    // stamps, so it survives a restart. The lookup-only rows carry `uploads: false`, and since
+    // #245 that no longer means they carry no history: the QRZ callbook stamps every completed
+    // lookup through `conn_health_of("qrz-xml")` and those survive a restart too. RepeaterBook
+    // is the one row still without a history of any kind.
     let stored_lotw = has(lotw_keychain());
     let stored_qrz = has(qrz_keychain());
     let stored_rb = has(repeaterbook_keychain());
@@ -14129,9 +14131,10 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             connector: "QRZ callbook (name/QTH)".into(),
             stored: stored_qrz,
             identity: qrz_user.clone(),
-            // Lookup only. The signal genuinely exists (lookups run constantly while
-            // operating) but is not wired to this panel — an expired XML subscription
-            // still reads as a benign grey row. Flagged rather than pretended away.
+            // Lookup only — it never uploads, and the panel's second line says "last lookup"
+            // rather than "last upload" because of this flag. The signal itself IS wired now
+            // (#245): every completed callbook lookup stamps `qrz-xml`, so an expired XML
+            // subscription reads red with QRZ's own words instead of as a benign grey row.
             uploads: false,
             enabled: stored_qrz,
             last_success_unix: qrz_xml.0,

@@ -100,7 +100,13 @@ export function whenLabel(unix: number | null | undefined, now = Date.now()): st
 }
 
 /** The second line of a row: when it last worked, or when and why it last failed. Empty
- *  when there is nothing honest to say — an empty string renders as no line at all. */
+ *  when there is nothing honest to say — an empty string renders as no line at all.
+ *
+ *  A success names the event that actually happened. #245 gave the QRZ callbook row real
+ *  timestamps for the first time, and it went straight to "last upload 3m ago" — for a
+ *  connector whose `uploads` flag is false and which has never uploaded anything in its life.
+ *  This line is the panel's whole explanation of what the green dot means, so naming the wrong
+ *  event undoes the fix that produced it. */
 export function whenText(c: CredStatus, s: ConnState, now = Date.now()): string {
   if (s === 'failing' || s === 'paused') {
     const when = whenLabel(c.lastFailureUnix, now)
@@ -110,5 +116,5 @@ export function whenText(c: CredStatus, s: ConnState, now = Date.now()): string 
     return `failed ${when}${why ? ` — ${why}` : ''}`.trim()
   }
   const when = whenLabel(c.lastSuccessUnix, now)
-  return when ? `last upload ${when}` : ''
+  return when ? `last ${c.uploads ? 'upload' : 'lookup'} ${when}` : ''
 }

@@ -111,6 +111,17 @@ describe('whenText says which thing happened', () => {
     expect(whenText(cred({ lastSuccessUnix: at(600) }), 'working', now)).toBe('last upload 10m ago')
   })
 
+  it('says lookup, not upload, for a connector that never uploads', () => {
+    // #245 gave the QRZ callbook row real timestamps for the first time, and the row went
+    // straight to "last upload 3m ago" — for a connector whose own `uploads` flag is false
+    // and which has never uploaded anything. The line is the panel's whole explanation of
+    // what the green dot means, so naming the wrong event undoes the fix it is reporting.
+    const callbook = cred({ id: 'qrz-xml', uploads: false, lastSuccessUnix: at(180) })
+    expect(whenText(callbook, 'working', now)).toBe('last lookup 3m ago')
+    // The control: an uploading connector is unchanged.
+    expect(whenText(cred({ lastSuccessUnix: at(180) }), 'working', now)).toBe('last upload 3m ago')
+  })
+
   it('says nothing rather than something empty when there is no history', () => {
     expect(whenText(cred(), 'idle', now)).toBe('')
     expect(whenText(cred({ stored: false }), 'none', now)).toBe('')
