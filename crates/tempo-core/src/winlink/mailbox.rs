@@ -66,10 +66,14 @@
 //! it describes and watching it go red, and two of the three mutations discriminate cleanly:
 //! narrowing `store`'s guard to the index update alone turns the blob test red and nothing else,
 //! and deleting [`Mailbox::rebuild_index`]'s acquisition turns the rebuild test red and nothing
-//! else. The third does not, and the claim is weaker for it: unguarding the index
-//! read-modify-write turns the index-row test red on every run and usually the other two with it,
-//! because both of those read the cache back afterwards. That half has a gate; it does not have
-//! an exclusive one.
+//! else. The third does not, and the claim is weaker for it — and "unguarding the index
+//! read-modify-write" has two readings, which is why an earlier wording here said "usually the
+//! other two with it" and named no count. Both were measured, five runs each, and neither is
+//! "usually": narrowing the guard to the blob write alone — the mirror image of the mutation
+//! above, leaving the read-modify-write outside it — turns **two** red every run, the index-row
+//! test and the rebuild test, with the blob test green; and removing the guard from
+//! [`Mailbox::store`] altogether turns **all three** red every run. Either way the read-modify-write has a gate and not an exclusive one,
+//! because the other two read the cache back afterwards.
 //!
 //! ⚠️ **What it does not cover: a second Nexus process on the same mailbox.** Two processes can
 //! still interleave the read-modify-write and lose an index row, and nothing here detects it. No
