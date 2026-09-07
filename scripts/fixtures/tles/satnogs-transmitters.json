@@ -206,6 +206,19 @@
   "sat_id": "FIXT61999"
  },
  {
+  "uuid": "FIXT62222",
+  "description": "Telemetry",
+  "alive": true,
+  "type": "Transmitter",
+  "status": "active",
+  "service": "Amateur",
+  "uplink_low": null,
+  "downlink_low": 437300000,
+  "mode": "GMSK",
+  "norad_cat_id": 62222,
+  "sat_id": "FIXT62222"
+ },
+ {
   "uuid": "FIXT25338",
   "description": "APT",
   "alive": true,

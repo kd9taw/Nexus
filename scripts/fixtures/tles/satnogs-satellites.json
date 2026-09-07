@@ -130,6 +130,16 @@
   "launched": "2020-01-01T00:00:00Z"
  },
  {
+  "sat_id": "FIXT62222",
+  "norad_cat_id": 62222,
+  "norad_follow_id": null,
+  "name": "FROZEN BIRD",
+  "names": "",
+  "status": "alive",
+  "decayed": null,
+  "launched": "2020-01-01T00:00:00Z"
+ },
+ {
   "sat_id": "FIXT25338",
   "norad_cat_id": 25338,
   "norad_follow_id": null,

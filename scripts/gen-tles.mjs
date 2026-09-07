@@ -45,7 +45,12 @@
 // Measured: 443 listed, 381 alive (376 of them active), 6 dead, 17 pre-launch,
 // 39 recently re-entered. Elements are NOT published for the inactive tier —
 // SGP4 on a decayed object is a fiction, and a bird with nothing left to work
-// belongs in a row, not on the map.
+// belongs in a row, not on the map. The same rule applies to an element that
+// is a fiction through AGE: an active bird whose freshest available element is
+// older than MAX_ELEMENT_AGE_DAYS is published in the same listed-without-
+// elements shape. SatNOGS `/api/tle/` never expires a record, so without that
+// ceiling a bird that leaves Celestrak's groups is republished forever with a
+// frozen element ageing one day per day — read that constant for the census.
 //
 // NO PER-CATNR LOOP — deliberately. The three legs above leave 5 of 376 birds
 // uncovered, and a per-CATNR fetch does not rescue them: both measured
@@ -94,14 +99,20 @@
 //      dropping means the payload is bad, not the birds, and refuses the run.
 //      The floor of one is deliberate: a single corrupt line in a 376-bird
 //      feed must cost that bird, never the whole mirror cycle.
-//   8. Epoch freshness: median age <= 7 d, p90 <= 30 d, AND at least 60% of
-//      birds under 3 d. Median-shaped, NEVER max — AO-10 is legitimately old
-//      and must not fail a fresh set. The p90 ceiling is 30 d rather than the
-//      group era's 14 because the union deliberately carries a long tail
-//      Celestrak does not (measured: 330 of 371 within 7 d, 348 within 30).
-//      The under-3-d floor exists to mirror the CLIENT's stricter rule:
-//      validate_tles refuses any set with fewer than half its birds under 3 d,
-//      so publishing one would age every install's elements for nothing.
+//   8. Epoch freshness: median age <= 7 d, p90 <= MAX_ELEMENT_AGE_DAYS, AND at
+//      least 60% of birds under 3 d. Median-shaped, NEVER max — AO-10 is
+//      legitimately old and must not fail a fresh set. The under-3-d floor
+//      exists to mirror the CLIENT's stricter rule: validate_tles refuses any
+//      set with fewer than half its birds under 3 d, so publishing one would
+//      age every install's elements for nothing.
+//      THE p90 CLAUSE IS NOW A BACKSTOP, not the rule. It was standing in for
+//      a per-element ceiling that did not exist, and as a rank statistic over a
+//      bimodal set it could not do the job: it never saw the 4534-day element
+//      at all, and it moved 18 days on a single bird crossing the rank, which
+//      is how this gate went permanently red in 2026-09 with the payload's
+//      freshest 90% unchanged. MAX_ELEMENT_AGE_DAYS is the rule; p90 <= it is
+//      now a CONSEQUENCE of the union, and it fires only if that ceiling is
+//      removed.
 //   9. Identity: every catalog entry claiming elements has them, under exactly
 //      its own NORAD, and no element is published for a bird outside the
 //      ACTIVE population.
@@ -369,6 +380,42 @@ const WORKED_CANARIES = [
   [25544, 'ISS'],
 ]
 const WORKED_CANARY_MIN = 6
+
+/// How old an element may be and still be PUBLISHED — the per-element rule
+/// gate 8's p90 ceiling was only ever a proxy for.
+///
+/// WHY IT EXISTS. The union below used to publish the freshest AVAILABLE
+/// element for each active bird whatever its age, and SatNOGS `/api/tle/` —
+/// the third leg, and the only source for placeholder-NORAD birds — is a
+/// LAST-KNOWN-VALUE CACHE WITH NO EXPIRY: it serves a bird's final recorded
+/// TLE forever. So the moment a bird drops out of Celestrak's two groups the
+/// mirror fell back to a frozen element and republished it every six hours,
+/// one day staler each time. Measured against live upstream 2026-09-07: 39 of
+/// 374 published birds carried an element over 30 d old, every one of them
+/// from `satnogs-tle`, the oldest a 2014 epoch — 4534 days. Four are objects
+/// Celestrak's SATCAT says have RE-ENTERED, so the payload was telling an
+/// operator where to point an antenna at something that burned up.
+///
+/// It is the same principle the ACTIVE tier already applies one line down —
+/// "SGP4 on a decayed object is a fiction" — extended to an element that is a
+/// fiction through age. A bird whose only element is over the ceiling keeps
+/// its catalog row with no `src`: the listed-without-elements tier the client
+/// already renders with its status chip.
+///
+/// WHY 30, AND WHY IT IS NOT A NEW NUMBER. It is the ceiling gate 8's p90
+/// already declares, so this adds no policy — it ENFORCES the existing one per
+/// element instead of hoping a rank statistic notices. Which it could not: p90
+/// over a bimodal set reports which side of the cliff the 90th-ranked bird
+/// lands on, moved 18 days on one bird crossing the rank, and could not see
+/// the 4534-day element at all. The pick is not delicate either — the live
+/// distribution has essentially nothing between 30 d and 51 d, so any ceiling
+/// from 14 d to 60 d selects the same set to within 6 birds.
+///
+/// AND IT CANNOT MASK AN OUTAGE. Gate 3 floors the published count at 0.85×
+/// the previous publish: a Celestrak failure would leave only the fresh
+/// SatNOGS remainder, far under that floor, and the run refuses loudly. That
+/// is the right backstop already — resist adding a second staleness budget.
+const MAX_ELEMENT_AGE_DAYS = 30
 
 /// Absolute counts the gates floor and ceiling on. Only these numbers differ
 /// between a production run and a fixture run — every structural, ratio,
@@ -825,6 +872,7 @@ export function assemble({
   const catalog = []
   const chosen = new Map() // published NORAD → element
   const uncovered = []
+  const staleDropped = []
   for (const b of birds) {
     // Only the ACTIVE tier looks for elements (see TWO TIERS in the header):
     // a dead, re-entered, pre-launch or gone-silent bird gets its row and
@@ -834,13 +882,25 @@ export function assemble({
     let best = null
     if (b.active) {
       const ids = b.satnogsNorad === b.norad ? [b.norad] : [b.norad, b.satnogsNorad]
+      let offered = false
       for (const id of ids) {
         const c = pool.get(id)
-        if (c && (!best || c.epoch > best.epoch)) best = c
+        if (!c) continue
+        offered = true
+        // THE STALENESS CEILING (see MAX_ELEMENT_AGE_DAYS): INELIGIBLE, not
+        // merely out-ranked. A frozen element must never win by being the only
+        // one on offer — that is exactly how a 2014 epoch reached the payload.
+        if ((now - c.epoch) / 86400 > MAX_ELEMENT_AGE_DAYS) continue
+        if (!best || c.epoch > best.epoch) best = c
       }
-      // Active and unfindable is the one worth naming in the job log — the
-      // rest are listed without elements ON PURPOSE.
-      if (!best) uncovered.push(b)
+      // Both are ACTIVE birds published without elements, and both are worth
+      // naming in the job log — the rest are listed without elements ON
+      // PURPOSE. They are reported apart because they are different questions:
+      // `uncovered` means no source carries this bird at all (coverage),
+      // `staleDropped` means every source that does has only a frozen element
+      // (curation — the bird has left Celestrak's groups and is not coming
+      // back on its own).
+      if (!best) (offered ? staleDropped : uncovered).push(b)
     }
     if (!best) {
       catalog.push({
@@ -888,7 +948,16 @@ export function assemble({
         `— ${uncovered.map((b) => `${b.name} (${b.norad})`).join(', ')}`,
     )
   }
-  const listedOnly = finalCatalog.filter((r) => !r.src).length - uncovered.length
+  if (staleDropped.length) {
+    const names = staleDropped.slice(0, 25).map((b) => `${b.name} (${b.norad})`).join(', ')
+    say(
+      `STALE-DROPPED: ${staleDropped.length} ACTIVE amateur bird(s) have elements, but none newer ` +
+        `than ${MAX_ELEMENT_AGE_DAYS} d — listed without elements rather than published stale: ` +
+        `${names}${staleDropped.length > 25 ? ', …' : ''}`,
+    )
+  }
+  const listedOnly =
+    finalCatalog.filter((r) => !r.src).length - uncovered.length - staleDropped.length
   say(`listed without elements: ${listedOnly} bird(s) outside the active tier (dead, re-entered, pre-launch, silent)`)
   // The count ratchet is blind to a SWAP: 50 birds curated out and 50 new ones
   // in passes it silently. The previous manifest names its birds, so name the
@@ -956,7 +1025,13 @@ export function assemble({
   const p90 = ages[Math.min(ages.length - 1, Math.floor(ages.length * 0.9))]
   const under3 = ages.filter((a) => a < 3).length
   if (median > 7) fail(`median epoch age ${median.toFixed(1)} d (> 7 d) — the feed has gone stale`)
-  if (p90 > 30) fail(`p90 epoch age ${p90.toFixed(1)} d (> 30 d) — too much of the set is stale`)
+  // Reads the ceiling constant deliberately: with MAX_ELEMENT_AGE_DAYS applied
+  // per element this can no longer fire on a healthy run — it is the BACKSTOP
+  // that catches the ceiling being removed or bypassed, so the two numbers must
+  // never drift apart.
+  if (p90 > MAX_ELEMENT_AGE_DAYS) {
+    fail(`p90 epoch age ${p90.toFixed(1)} d (> ${MAX_ELEMENT_AGE_DAYS} d) — too much of the set is stale`)
+  }
   if (under3 * 10 < ages.length * 6) {
     fail(
       `only ${under3} of ${ages.length} birds under 3 d old (< 60%) — the CLIENT's validate_tles ` +

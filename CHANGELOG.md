@@ -39,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The satellite catalog was publishing years-old orbits for birds that had stopped being
+  tracked.** The mirror took the freshest elements it could find for each active bird — but for a
+  bird that has dropped out of Celestrak's amateur groups the only source left is a SatNOGS cache
+  that never expires, so it kept serving that bird's last recorded orbit, one day staler every
+  day. Forty birds were affected, the oldest carrying an orbit from 2014, and four of them had
+  already re-entered: pointing an antenna at one of those was pointing it at nothing. An element
+  more than 30 days old is no longer published. Those birds keep their row in the satellite list
+  with the status chip that says why, exactly like the ones that have gone silent — a row that
+  reads "no current elements" is honest, a track twelve years out of date is not. Every bird
+  anyone actually works is unaffected: ISS, SO-50, RS-44, AO-91, AO-7, QO-100, PO-101, AO-73 and
+  FO-29 all carry elements hours old.
+
 - **The Chase pane stopped updating once you selected a station.** Its "open now / best 1400Z"
   column and the colour accent on each row come from the modelled band outlook, and that was
   deliberately not refreshed while a station was selected — correct for the map, which switches to
