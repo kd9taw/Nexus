@@ -78,7 +78,7 @@ open and any failure, updater checks, panics, and webview failures — not routi
 traffic. When a launch fails, **the last line is the answer**: it names the last step that
 completed.
 
-Two things worth knowing:
+Three things worth knowing:
 
 - **It cannot grow without bound.** There are two files at most — the active
   `nexus-diag.log` and one previous generation, `nexus-diag.1.log` — about 8 MB in total,
@@ -86,6 +86,27 @@ Two things worth knowing:
   started, so a large log never slows a launch down.
 - **It is safe to attach to a public bug report.** Passwords, API keys and tokens are
   masked before anything is written to it. It is designed to be sent to a stranger.
+- **There is no way to turn it off, and that is deliberate.** The runs worth diagnosing are
+  the ones that die during startup, before any setting has been read — a log you could
+  switch off would be missing on exactly the launch you needed it for, and the switch itself
+  would have to live in a file that launch may never have reached. The size cap and the
+  masking above are what make "always on" reasonable rather than rude.
+
+### More detail in the log, and the `--debug` that does not exist
+
+When we ask you to "turn logging up", this is the switch: **Settings ▸ Logging & Connectors ▸
+Integrations & Feeds ▸ Local APIs & Loggers ▸ "Extra detail in the diagnostic log"**. It sits
+below the ALL.TXT row and below the diagnostic-log entry itself, a fair way down that page. It
+takes effect immediately — no restart — and it adds each transmission, the per-period decode
+counts and the CAT traffic. The log records at the top when it was on.
+
+**Nexus takes exactly one command-line argument, `--profile <name>`**, which picks a separate
+config directory so two instances can run side by side (`NEXUS_PROFILE` does the same job as an
+environment variable). There is **no `--debug` flag**, and there is not going to be one: the
+switch above already applies live, which is the better instrument for a fault that is happening
+right now, and the case a launch flag would uniquely cover — a crash before Settings is
+reachable — is already covered by the base log, which is always on from the first moments of
+startup.
 
 ---
 

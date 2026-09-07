@@ -8190,15 +8190,27 @@ export function SettingsPanel({
                     startup, deliberately, because the failures worth diagnosing are the early
                     ones. That is exactly why it needs a line HERE: it was the one
                     operator-facing artefact nothing in the interface named, on a file we ask
-                    people to send us when something goes wrong. */}
+                    people to send us when something goes wrong.
+
+                    #101 (akhepcat) asked for a way to turn it off, and the answer is no —
+                    ruled 2026-09-07 and written into the hint below rather than left as a
+                    silent “Always on”. A log that can be switched off is missing on exactly
+                    the run that needed it, and the switch would have to live in a settings
+                    file the failing launch may never have reached. The tier that IS
+                    switchable is the field underneath. */}
                 <div className="settings-field">
                   <span className="settings-label">Diagnostic log</span>
                   <span className="settings-hint">
-                    Always on. A plain-text record of what Nexus did — startup steps, the CAT and
-                    audio device open, updater checks, and any failure — so a “it won’t start” or
-                    “it stopped decoding” report has something to look at. Passwords, API keys and
-                    tokens are masked before anything is written, so it is safe to attach to a bug
-                    report. Bounded to two files, about 8 MB in total.
+                    Always on, and there is no switch for it — by design. The runs worth
+                    diagnosing are the ones that die during startup, before any setting has been
+                    read, so a log you could turn off would be missing on precisely the launch
+                    you needed it for. It is a plain-text record of what Nexus did — startup
+                    steps, the CAT and audio device open, updater checks, and any failure — so a
+                    “it won’t start” or “it stopped decoding” report has something to look at.
+                    Passwords, API keys and tokens are masked before anything is written, so it
+                    is safe to attach to a bug report. Bounded to two files, about 8 MB in total,
+                    so it cannot grow without limit. What you can turn on and off is the extra
+                    detail below; there is no command-line switch for either.
                     {diagLogPath && (
                       <>
                         {' '}Saved at <code>{diagLogPath}</code>.
