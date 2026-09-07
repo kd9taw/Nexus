@@ -47,7 +47,8 @@ use tauri::State;
 use tauri_plugin_updater::UpdaterExt;
 use tempo_app::dto::{
     AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, MeterReadout,
-    SourceKind, Spectrum, Tier, UploadReportDto,
+    SourceKind, Spectrum, Tier, UploadReportDto, WinlinkAttachment, WinlinkMessage, WinlinkRow,
+    WinlinkSession,
 };
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::{Settings, VoiceMessage};
@@ -13583,6 +13584,7 @@ const CLUBLOG_KEYCHAIN_USER: &str = "clublog-password";
 const HRDLOG_KEYCHAIN_USER: &str = "hrdlog-code";
 const WRL_KEYCHAIN_USER: &str = "wrl-key";
 const CLOUDLOG_KEYCHAIN_USER: &str = "cloudlog-key";
+const WINLINK_KEYCHAIN_USER: &str = "winlink-password";
 
 /// Client name Nexus sends to HRDLog.net's `NewEntry.aspx` as `App` (aids their
 /// support / usage stats). Non-secret.
@@ -14016,7 +14018,7 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             id: "hrdlog".into(),
             connector: "HRDLog.net".into(),
             stored: has(hrdlog_keychain()),
-            identity: mycall,
+            identity: mycall.clone(),
             uploads: true,
             enabled: hrdlog_on,
             // Session-only: HRDLog leaves no per-QSO stamp, so after a restart this reads
@@ -14064,6 +14066,26 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             identity: String::new(),
             uploads: false,
             enabled: stored_rb,
+            last_success_unix: None,
+            last_failure_unix: None,
+            last_failure_detail: None,
+            paused: false,
+        },
+        CredStatus {
+            // The Winlink account password, used once per session to answer the CMS's `;PQ:`
+            // challenge. The identity is the callsign — Winlink accounts ARE callsigns.
+            id: "winlink".into(),
+            connector: "Winlink".into(),
+            stored: has(winlink_keychain()),
+            identity: mycall.clone(),
+            // Winlink carries MAIL, not QSO uploads, so "never uploaded anything" is not a fault
+            // and must not be rendered as one — the same reason the two lookup-only rows above
+            // carry `uploads: false`.
+            uploads: false,
+            enabled: has(winlink_keychain()),
+            // ⚠️ Session outcomes are NOT wired to this panel: a failed CMS connect appears in
+            // the connection log and in the session status chip, not here. Flagged rather than
+            // pretended away, exactly as the QRZ callbook row flags its own gap.
             last_success_unix: None,
             last_failure_unix: None,
             last_failure_detail: None,
@@ -20407,6 +20429,16 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             save_png_to_downloads,
             civ_diagnostic_log,
             all_txt_location,
+            winlink_mailbox_list,
+            winlink_message,
+            winlink_mailbox_rebuild,
+            winlink_mark_read,
+            winlink_mailbox_location,
+            winlink_connect,
+            winlink_session_status,
+            winlink_disconnect,
+            set_winlink_password,
+            clear_winlink_password,
             diag_log_location,
             reveal_diag_log,
             recordings_location,
@@ -20894,6 +20926,517 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             }
         })
         .build(tauri::generate_context!())
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Winlink — the mailbox commands.
+//
+// The read side of the Winlink internet path. Nothing here keys a radio, opens an audio device
+// or touches the transmit path: the transport underneath is TCP to `server.winlink.org:8772`,
+// and none of the programme's TX-safety invariants is exercised by any line below.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// The Winlink mailbox root: `<shared data dir>/winlink`.
+///
+/// Beside `log.adi` in [`shared_data_dir`] rather than in the per-profile config dir, for the
+/// logbook's reason: mail is the operator's data, not this instance's settings, and a second
+/// profile must see the same mailbox. `NEXUS_DATA_DIR` therefore relocates it too.
+///
+/// ⚠️ `mailbox.rs`'s concurrency note applies: its lock is PROCESS-local, so two Nexus instances
+/// on one `NEXUS_DATA_DIR` can still lose an index row. That is already true of the logbook and
+/// is not this batch's to fix — but nothing here adds a second instance path, and no lock file is
+/// taken (a crash leaves one held, which is worse than the race).
+fn winlink_dir() -> PathBuf {
+    shared_data_dir().join("winlink")
+}
+
+/// Validates a MID arriving from the front end and returns its bytes.
+///
+/// The front end sends a `String`; the store keys on bytes and uses the MID as a **filename**.
+/// So this enforces the same alphabet `mailbox::mid_stem` does — ASCII alphanumerics, `-`, `_`,
+/// 1..=64 bytes — before any path is built. That makes the String→bytes round trip exact by
+/// construction (no lossy conversion can survive it) and it refuses `..` and `/` at the boundary
+/// the front end actually reaches, which is the class of check `sstv_delete_image`'s
+/// gallery-directory guard exists for.
+///
+/// The mailbox refuses these too. This is deliberate belt and braces: a later refactor that
+/// routed around the mailbox would otherwise hand an unvalidated path fragment to the
+/// filesystem.
+fn winlink_mid_bytes(mid: &str) -> Result<Vec<u8>, String> {
+    let bytes = mid.as_bytes();
+    let ok = !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_');
+    if !ok {
+        // The offending MID is NOT echoed: it is remote-influenced input and an error string
+        // ends up in logs and toasts. Same rule as `mailbox::mid_stem`.
+        return Err("that is not a usable Winlink message id".into());
+    }
+    Ok(bytes.to_vec())
+}
+
+/// Bytes → `String` for display. **Lossy on purpose** — see the DTO section's note in
+/// `tempo_app::dto`: this is the display boundary, nothing here goes back toward the wire, and a
+/// replacement character in a subject beats refusing to list a message that is on disk.
+fn wl_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Builds the mailbox list from a restored state.
+///
+/// Sorting, stated once so it is not re-invented per call site: **descending by `arrivedUnix`,
+/// with `None` LAST, ties broken by MID ascending.** `None` last because an arrival this station
+/// cannot account for is not "oldest" and not "newest" — it is unknown, and putting it at the end
+/// says that without inventing a timestamp to say it with.
+///
+/// The one-line comparison is enough, and that was MEASURED rather than reasoned: `None < Some`
+/// in `Option`'s derived order, so reversing the operands to sort descending already sends every
+/// `None` to the back. An explicit four-arm `match` was written first, on the assumption that the
+/// derived order got this backwards; mutating it away left the test green, which is what showed
+/// the assumption false. The test below still pins the behaviour, because a later change to
+/// ascending order would silently move the unknowns to the front.
+fn winlink_rows_from(state: &tempo_core::winlink::restore::MailboxState) -> Vec<WinlinkRow> {
+    let mut rows: Vec<WinlinkRow> = state
+        .index
+        .entries
+        .iter()
+        .map(|e| WinlinkRow {
+            mid: wl_text(&e.mid),
+            from: wl_text(&e.from),
+            to: e.to.iter().map(|t| wl_text(t)).collect(),
+            subject: wl_text(&e.subject),
+            date: wl_text(&e.date),
+            body_len: e.body_len,
+            attachments: e.attachments.iter().map(|a| wl_text(a)).collect(),
+            blob_len: e.blob_len,
+            parsed: e.parsed,
+            arrived_unix: state.arrived.get(&e.mid).copied(),
+            unread: state.unread.contains(&e.mid),
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.arrived_unix
+            .cmp(&a.arrived_unix)
+            .then_with(|| a.mid.cmp(&b.mid))
+    });
+    rows
+}
+
+/// The mailbox list, newest arrival first, with unaccountable arrivals last.
+///
+/// ⚠️ **`(async)` here is correct-for-I/O, NOT gate-enforced, and that was measured.** The
+/// `no_engine_locking_command_runs_on_the_ui_thread` scan finds a bare `#[tauri::command]` whose
+/// body mentions `State<'_, SharedEngine>` or `engine_lock`; none of the five Winlink mailbox
+/// commands touches the engine, so making this one bare leaves that test GREEN — checked. The
+/// attribute is still required: every one of them reads a directory and parses JSON, and on
+/// Windows a bare command runs on the UI thread, so a slow disk would stall the whole window.
+///
+/// Runs the full ordered restore on every call rather than caching state in the engine. That is a
+/// directory read and a JSON parse over a mailbox measured in hundreds of messages, and it buys
+/// the property that matters here: the pane and the session task can never disagree about what is
+/// on disk, because neither of them is holding a copy. Revisit only with a measurement.
+#[tauri::command(async)]
+fn winlink_mailbox_list() -> Result<Vec<WinlinkRow>, String> {
+    let state = tempo_core::winlink::restore::restore(&winlink_dir())
+        .map_err(|e| format!("could not read the Winlink mailbox: {e}"))?;
+    Ok(winlink_rows_from(&state))
+}
+
+/// One message, parsed for display. Errors if the MID is not filename-safe or the blob is gone.
+#[tauri::command(async)]
+fn winlink_message(mid: String) -> Result<WinlinkMessage, String> {
+    let mid = winlink_mid_bytes(&mid)?;
+    let mb = tempo_core::winlink::mailbox::open(&winlink_dir());
+    let blob = mb
+        .read(&mid)
+        .map_err(|e| format!("could not read that message: {e}"))?;
+    let msg = tempo_core::winlink::message::parse_b2(&blob)
+        .map_err(|e| format!("that message is on disk but is not readable B2: {e:?}"))?;
+    Ok(WinlinkMessage {
+        mid: wl_text(&msg.mid),
+        headers: msg
+            .headers
+            .iter()
+            .map(|(n, v)| (wl_text(n), wl_text(v)))
+            .collect(),
+        body: wl_text(&msg.body),
+        attachments: msg
+            .attachments
+            .iter()
+            .map(|a| WinlinkAttachment {
+                name: wl_text(&a.name),
+                len: a.data.len(),
+            })
+            .collect(),
+    })
+}
+
+/// Re-derives `index.json` from the blobs and returns the fresh list. The recovery path the
+/// mailbox module is designed around, surfaced as a button.
+#[tauri::command(async)]
+fn winlink_mailbox_rebuild() -> Result<Vec<WinlinkRow>, String> {
+    let root = winlink_dir();
+    tempo_core::winlink::mailbox::open(&root)
+        .rebuild_index()
+        .map_err(|e| format!("could not rebuild the Winlink index: {e}"))?;
+    let state = tempo_core::winlink::restore::restore(&root)
+        .map_err(|e| format!("could not read the Winlink mailbox: {e}"))?;
+    Ok(winlink_rows_from(&state))
+}
+
+/// Records that the operator has read this message. Appends one journal row; idempotent in
+/// effect (a second row supersedes the first, and compaction keeps the last).
+#[tauri::command(async)]
+fn winlink_mark_read(mid: String) -> Result<(), String> {
+    let mid = winlink_mid_bytes(&mid)?;
+    tempo_core::winlink::journal::open(&winlink_dir())
+        .append(&tempo_core::winlink::journal::Event::Read {
+            mid,
+            at: now_unix(),
+        })
+        .map_err(|e| format!("could not record that as read: {e}"))
+}
+
+/// The mailbox folder, for a Settings "Reveal" button. Matches `all_txt_location`'s shape.
+#[tauri::command(async)]
+fn winlink_mailbox_location() -> Result<String, String> {
+    Ok(winlink_dir().to_string_lossy().into_owned())
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Winlink — the session, and the account credential.
+//
+// Still the internet path: TCP to `server.winlink.org:8772`. Nothing below keys a radio, opens
+// an audio device, or touches the transmit path, and `winlink_disconnect` is a CLEAN TEARDOWN,
+// not a stop control — there is no transmitter here to stop. It must never be added to any
+// cockpit's `stopControls`.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// The running Winlink session, if any.
+///
+/// One at a time, and a second `winlink_connect` **refuses rather than replaces**. That is the
+/// opposite of `APRS_IS_FEED`, correctly: replacing a telemetry feed costs a few seconds of
+/// spots, while replacing a mail session drops a socket mid-transfer with mail still outstanding
+/// on the CMS. The operator disconnects first.
+struct WinlinkFeed {
+    /// Set to end the session. The pump observes it within one read timeout (2 s) even on a
+    /// silent socket, which is what `the_stop_flag_ends_a_session_parked_in_read` proves.
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    /// Live byte counters and connection flags, written by the socket thread.
+    state: Arc<tempo_net::wl2k::SessionState>,
+    /// Mirrored out of the driver after every chunk, so the status pane sees traces while the
+    /// session runs rather than only when it ends.
+    log: Arc<Mutex<tempo_app::winlink::SessionLog>>,
+    /// How it ended, as one of `dto::WINLINK_OUTCOMES`. `None` while it is still running.
+    outcome: Arc<Mutex<Option<String>>>,
+}
+
+static WINLINK_SESSION: Mutex<Option<WinlinkFeed>> = Mutex::new(None);
+
+/// The Winlink account password's keychain entry.
+///
+/// Same service as every other connector, its own user slug — the pattern LoTW, QRZ, eQSL,
+/// ClubLog, HRDLog, Cloudlog, WRL and RepeaterBook already ship. Write-only from the UI's point
+/// of view: [`set_winlink_password`] stores it, [`winlink_connect`] reads it, and nothing ever
+/// hands it back to the front end.
+fn winlink_keychain() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, WINLINK_KEYCHAIN_USER)
+        .map_err(|e| format!("keychain unavailable: {e}"))
+}
+
+/// Store (or, if `password` is empty, clear) the Winlink account password in the OS keychain.
+/// Write-only: the password is never read back to the UI.
+#[tauri::command(async)]
+fn set_winlink_password(password: String) -> Result<(), String> {
+    let entry = winlink_keychain()?;
+    if password.is_empty() {
+        clear_keychain_entry(&entry)?;
+        conn_log("Winlink", "info", "password cleared from the OS keychain");
+        return Ok(());
+    }
+    entry
+        .set_password(&password)
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("Winlink", "ok", "password saved to the OS keychain");
+    Ok(())
+}
+
+/// Remove the stored Winlink password from the OS keychain (idempotent).
+#[tauri::command(async)]
+fn clear_winlink_password() -> Result<(), String> {
+    let r = clear_keychain_entry(&winlink_keychain()?);
+    if r.is_ok() {
+        conn_log("Winlink", "info", "password cleared from the OS keychain");
+    }
+    r
+}
+
+/// Mirrors the driver's log into a shared slot after every chunk.
+///
+/// The driver owns its [`tempo_app::winlink::SessionLog`] by value and lives on the socket
+/// thread, so without this the status pane would see nothing until the session ended — which is
+/// precisely when an operator has stopped needing to watch it.
+///
+/// ⚠️ **The mirror appends; it must never assign.** This runs once per chunk off the socket, so
+/// `*slot = log.clone()` is O(n²) in the number of chunks — measured at 63 s of CPU for 16 MiB of
+/// banner text a CMS is allowed to send, which is a denial of service in the status pane's own
+/// bookkeeping. `mirror_into` copies the delta and carries the measurements; see its doc for why
+/// the destination's own length is a sound cursor.
+struct LiveDriver {
+    /// The real driver: owns the B2F session and the mailbox.
+    inner: tempo_app::winlink::Driver,
+    /// Where the status command reads from.
+    log: Arc<Mutex<tempo_app::winlink::SessionLog>>,
+}
+
+impl tempo_net::wl2k::ByteSession for LiveDriver {
+    fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
+        let out = self.inner.feed(chunk);
+        self.inner
+            .log()
+            .mirror_into(&mut self.log.lock().unwrap_or_else(|e| e.into_inner()));
+        out
+    }
+    fn wants_close(&self) -> bool {
+        self.inner.wants_close()
+    }
+}
+
+/// Renders an [`tempo_net::wl2k::Outcome`] as one of `dto::WINLINK_OUTCOMES`.
+///
+/// A token the UI switches on, never prose to render — `AMP_REASONS`' rule. ⚠️ The `Io` variant's
+/// own string is deliberately **dropped** here rather than concatenated into the token: it is an
+/// `io::Error` rendering and belongs in the traces, not in a value a `switch` compares.
+fn winlink_outcome_token(o: &tempo_net::wl2k::Outcome) -> &'static str {
+    match o {
+        tempo_net::wl2k::Outcome::Complete => "complete",
+        tempo_net::wl2k::Outcome::Stopped => "stopped",
+        tempo_net::wl2k::Outcome::PeerClosed => "peerClosed",
+        tempo_net::wl2k::Outcome::Io(_) => "io",
+    }
+}
+
+/// Normalises and checks the callsign a session will identify with.
+///
+/// Split out of [`winlink_connect`] so it can be tested without calling that command — which, on
+/// a machine that HAS a stored Winlink password, would get past the check and open a real socket
+/// to the public CMS. A unit test must never be able to do that, and the only reliable way to
+/// guarantee it is to give the test something else to call.
+///
+/// Upper-cased because that is what goes into `;FW:`, the SID and the identity line, and the CMS
+/// refuses an unknown callsign.
+fn winlink_callsign(raw: &str) -> Result<String, String> {
+    let call = raw.trim().to_ascii_uppercase();
+    if !is_real_call(&call) {
+        return Err("enter your callsign before connecting to Winlink".into());
+    }
+    Ok(call)
+}
+
+/// Takes the one session slot, or reports that a session is already running.
+///
+/// ⚠️ **The check and the claim are one critical section, and that is the whole point of this
+/// function existing.** Testing the slot, dropping the lock, and filling it in later is a
+/// check-then-act race whose effect is *remote*: two `winlink_connect` calls both find the slot
+/// free, both open a socket to Winlink's own public CMS under one callsign, and the loser's stop
+/// `Arc` is overwritten — so [`winlink_disconnect`] cannot stop the session it can no longer
+/// name, and the operator has no control that reaches it. That is not a local bookkeeping bug and
+/// no amount of "the UI only has one button" makes it one: a Tauri command is reachable from any
+/// front-end code path, and `(async)` puts every call on its own thread.
+///
+/// The feed is built by the caller *before* this is called, so nothing fallible and nothing slow
+/// happens under the lock — the keychain read and the socket come after the claim, and a caller
+/// that fails there must [`winlink_release`] what it took.
+fn winlink_claim(feed: WinlinkFeed) -> Result<(), String> {
+    let mut slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(f) = slot.as_ref() {
+        // A finished session leaves its feed in place so the status pane keeps its last outcome;
+        // only an unfinished one is a session still running.
+        if f.outcome
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none()
+        {
+            return Err("a Winlink session is already running — disconnect it first".into());
+        }
+    }
+    *slot = Some(feed);
+    Ok(())
+}
+
+/// Gives the session slot back after a claim that never became a session.
+///
+/// Safe to clear outright rather than checking whose claim it is: while our claim sits there with
+/// no outcome, [`winlink_claim`] refuses everyone, so the slot cannot have become someone else's.
+fn winlink_release() {
+    *WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// Open one Winlink session to the CMS over telnet.
+///
+/// `password` is the operator's Winlink account password. An **empty** string means "use the one
+/// in the OS keychain" (see [`set_winlink_password`]); anything else is used for this session
+/// only and is not stored. Either way the value is moved into a `ClientConfig` — which derives
+/// neither `Debug` nor `Serialize`, both pinned by tests in `tempo_core::winlink` — and is used
+/// exactly once, by `secure::pr_response`, to answer the CMS's `;PQ:` challenge.
+///
+/// ⚠️ **The password hygiene rules, and they are rules:** it never crosses the telnet pre-login
+/// (that prompt takes a fixed public doorway token, not this); it never reaches `conn_log`,
+/// `applog`, an `eprintln!` or an error string; the capture tap starts recording only after the
+/// pre-login and redacts the `;PR:` digest by default; and [`WinlinkSession`] has no field it
+/// could travel in, pinned by `the_session_dto_cannot_carry_a_password`. **No error message in
+/// this function may echo an argument** — an `io::Error` cannot contain the password, and nothing
+/// here may add a `format!` that could.
+#[tauri::command(async)]
+fn winlink_connect(callsign: String, password: String) -> Result<(), String> {
+    let call = winlink_callsign(&callsign)?;
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let state = Arc::new(tempo_net::wl2k::SessionState::default());
+    let log = Arc::new(Mutex::new(tempo_app::winlink::SessionLog::default()));
+    let outcome: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    // CLAIM FIRST, and everything that can fail after it. The slot is what makes this station one
+    // Winlink client rather than several, so it is taken before the keychain read, the mailbox
+    // restore and the socket — see `winlink_claim` for what two concurrent callers cost when the
+    // check and the claim are separate. Every `?` below this line must give the claim back.
+    winlink_claim(WinlinkFeed {
+        stop: stop.clone(),
+        state: state.clone(),
+        log: log.clone(),
+        outcome: outcome.clone(),
+    })?;
+    let started = winlink_start(&call, password, &stop, &state, &log, &outcome);
+    if let Err(e) = started {
+        winlink_release();
+        return Err(e);
+    }
+    conn_log("Winlink", "info", "connecting to the CMS over telnet");
+    Ok(())
+}
+
+/// Reads the credential, opens the mailbox and puts the session on its own thread.
+///
+/// Split out of [`winlink_connect`] so the claim it runs under has exactly one release path: this
+/// returns `Err` and the caller gives the slot back, rather than four early returns each having
+/// to remember to.
+///
+/// ⚠️ The password hygiene rules are [`winlink_connect`]'s and they apply here — this is where the
+/// value actually lives. **No error message in this function may echo an argument.**
+fn winlink_start(
+    call: &str,
+    password: String,
+    stop: &Arc<std::sync::atomic::AtomicBool>,
+    state: &Arc<tempo_net::wl2k::SessionState>,
+    log: &Arc<Mutex<tempo_app::winlink::SessionLog>>,
+    outcome: &Arc<Mutex<Option<String>>>,
+) -> Result<(), String> {
+    // Empty means "the stored one". The keychain error is reported without ever rendering what it
+    // was looking for.
+    let password = if password.is_empty() {
+        winlink_keychain()?.get_password().map_err(|_| {
+            "no Winlink password is saved — enter one in Settings, or type it to connect once"
+                .to_string()
+        })?
+    } else {
+        password
+    };
+
+    let cfg = tempo_core::winlink::ClientConfig {
+        callsign: call.to_string(),
+        // MOVED, never cloned, and this is its last mention by name.
+        password,
+    };
+    let driver = tempo_app::winlink::Driver::new(&cfg, &winlink_dir(), now_unix)
+        .map_err(|e| format!("could not open the Winlink mailbox: {e}"))?;
+
+    let (t_stop, t_state, t_log, t_outcome) =
+        (stop.clone(), state.clone(), log.clone(), outcome.clone());
+    std::thread::Builder::new()
+        .name("winlink".into())
+        .spawn(move || {
+            let mut sess = LiveDriver {
+                inner: driver,
+                log: t_log.clone(),
+            };
+            let result = tempo_net::wl2k::run(
+                tempo_net::wl2k::CMS_HOST,
+                tempo_net::wl2k::CMS_PORT,
+                tempo_net::wl2k::Login::new(&cfg.callsign, tempo_net::wl2k::CMS_TELNET_PASSWORD),
+                &mut sess,
+                &t_stop,
+                &t_state,
+                // No capture tap by default: a capture is a diagnostic an operator asks for, and
+                // writing session bytes to disk unasked is the wrong default.
+                None,
+            );
+            sess.inner
+                .log()
+                .mirror_into(&mut t_log.lock().unwrap_or_else(|e| e.into_inner()));
+            let token = winlink_outcome_token(&result);
+            if let tempo_net::wl2k::Outcome::Io(why) = &result {
+                // The socket's own words go in the traces, where prose belongs.
+                t_log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .trace(format!("connection ended: {why}"));
+            }
+            conn_log("Winlink", if token == "io" { "err" } else { "ok" }, {
+                // `stored()`, not `received().len()`: the MID list is bounded and the count is
+                // not, so this stays true about mail on disk even for a session whose log filled.
+                let stored = t_log.lock().unwrap_or_else(|e| e.into_inner()).stored();
+                format!("session ended ({token}); {stored} message(s) stored")
+            });
+            *t_outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(token.to_string());
+        })
+        .map_err(|e| format!("could not start the Winlink session thread: {e}"))?;
+    Ok(())
+}
+
+/// Live state of the running session, or the last one's outcome.
+#[tauri::command(async)]
+fn winlink_session_status() -> Result<WinlinkSession, String> {
+    let slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(f) = slot.as_ref() else {
+        return Ok(WinlinkSession::default());
+    };
+    let log = f.log.lock().unwrap_or_else(|e| e.into_inner());
+    let outcome = f.outcome.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Ok(WinlinkSession {
+        connected: f.state.connected.load(std::sync::atomic::Ordering::Relaxed),
+        logged_in: f.state.logged_in.load(std::sync::atomic::Ordering::Relaxed),
+        bytes_in: f.state.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+        bytes_out: f.state.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+        last_byte_unix: f
+            .state
+            .last_byte_unix
+            .load(std::sync::atomic::Ordering::Relaxed),
+        received: log
+            .received()
+            .iter()
+            .map(|m| String::from_utf8_lossy(m).into_owned())
+            .collect(),
+        traces: log.traces().to_vec(),
+        outcome,
+        failed: log.failed().map(str::to_owned),
+    })
+}
+
+/// End the session cleanly. Sets the stop flag and returns; the pump observes it within one read
+/// timeout.
+///
+/// ⚠️ It does **not** join the thread: a Tauri command that blocks for two seconds is a frozen
+/// button. And it is **a clean teardown, NOT a stop control** — there is no transmitter here.
+#[tauri::command(async)]
+fn winlink_disconnect() -> Result<(), String> {
+    let slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(f) = slot.as_ref() {
+        f.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        conn_log("Winlink", "info", "disconnecting");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -25117,4 +25660,240 @@ mod tests {
         assert_eq!(tech.len(), open.len());
     }
 
+    /// A MID from the front end is a FILENAME fragment, so the traversal shapes are refused at
+    /// the boundary the front end actually reaches -- before any path is built.
+    ///
+    /// `mailbox::mid_stem` refuses these too; this asserts it here anyway, because a later
+    /// refactor that routed around the mailbox would otherwise hand an unvalidated fragment to
+    /// the filesystem. Same class as `sstv_delete_image`'s gallery-directory check, and the same
+    /// reason that check exists.
+    #[test]
+    fn a_winlink_mid_that_is_not_filename_safe_is_refused_before_any_path_is_built() {
+        for hostile in [
+            "..",
+            "../../etc/passwd",
+            "a/b",
+            "a\\b",
+            "a.b",
+            "",
+            "with space",
+            "\u{2026}",
+        ] {
+            assert!(
+                super::winlink_mid_bytes(hostile).is_err(),
+                "{hostile:?} was accepted as a Winlink MID"
+            );
+        }
+        // Over the 64-byte ceiling.
+        assert!(super::winlink_mid_bytes(&"A".repeat(65)).is_err());
+    }
+
+    /// THE POSITIVE CONTROL for the guard above. Without it, "refuses `..`" could just as well
+    /// be "refuses everything", and the commands would be dead with the suite still green.
+    #[test]
+    fn a_real_winlink_mid_is_accepted() {
+        for ok in ["ABCDEFGHIJKL", "A", "a-b_C9", &"Z".repeat(64)] {
+            assert_eq!(
+                super::winlink_mid_bytes(ok).ok(),
+                Some(ok.as_bytes().to_vec()),
+                "{ok:?} should be a usable MID"
+            );
+        }
+    }
+
+    /// An error string must not echo the MID back: it is remote-influenced input, and an error
+    /// ends up in logs and toasts. `mailbox::mid_stem` has the same rule for the same reason.
+    #[test]
+    fn refusing_a_mid_does_not_echo_it() {
+        let hostile = "../../SENTINEL_STRING";
+        let err = super::winlink_mid_bytes(hostile).unwrap_err();
+        assert!(
+            !err.contains("SENTINEL"),
+            "the refusal echoed remote input: {err}"
+        );
+    }
+
+    /// The list sorts newest arrival first, with unaccountable arrivals LAST and ties broken by
+    /// MID -- stated once in `winlink_rows_from` and pinned here, because "None last" is the half
+    /// a natural `Option` ordering gets backwards (`None < Some` in Rust's derived order).
+    #[test]
+    fn the_mailbox_list_sorts_newest_first_with_unknown_arrivals_last() {
+        use tempo_core::winlink::mailbox::{Index, IndexEntry};
+        let entry = |mid: &[u8]| IndexEntry {
+            mid: mid.to_vec(),
+            date: Vec::new(),
+            from: Vec::new(),
+            to: Vec::new(),
+            subject: Vec::new(),
+            body_len: 0,
+            attachments: Vec::new(),
+            blob_len: 0,
+            parsed: true,
+        };
+        let state = tempo_core::winlink::restore::MailboxState {
+            index: Index {
+                entries: vec![entry(b"AAA"), entry(b"BBB"), entry(b"CCC"), entry(b"DDD")],
+            },
+            arrived: [
+                (b"AAA".to_vec(), 100i64),
+                (b"BBB".to_vec(), 300),
+                (b"DDD".to_vec(), 300),
+            ]
+            .into_iter()
+            .collect(),
+            unread: [b"BBB".to_vec()].into_iter().collect(),
+            repairs: Default::default(),
+        };
+        let rows = super::winlink_rows_from(&state);
+        let order: Vec<&str> = rows.iter().map(|r| r.mid.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["BBB", "DDD", "AAA", "CCC"],
+            "newest first, ties by MID ascending, unknown arrival last"
+        );
+        assert_eq!(rows[0].arrived_unix, Some(300));
+        assert!(rows[0].unread);
+        assert_eq!(rows[3].arrived_unix, None, "CCC has no accountable arrival");
+        assert!(!rows[3].unread);
+    }
+
+    /// Every outcome the transport can return renders as one of the DTO's declared tokens.
+    ///
+    /// The vocabulary is what the UI switches on; a token this map produced but the vocabulary
+    /// did not name would be a silent dead branch on the TS side. Exhaustive by construction:
+    /// `Outcome` is matched without a wildcard in `winlink_outcome_token`, so a new variant is a
+    /// compile error there, and this checks the values agree.
+    #[test]
+    fn every_winlink_outcome_renders_as_a_declared_token() {
+        use tempo_net::wl2k::Outcome;
+        let all = [
+            Outcome::Complete,
+            Outcome::Stopped,
+            Outcome::PeerClosed,
+            Outcome::Io("connection refused".into()),
+        ];
+        let tokens: Vec<&str> = all.iter().map(super::winlink_outcome_token).collect();
+        assert_eq!(
+            tokens,
+            tempo_app::dto::WINLINK_OUTCOMES.to_vec(),
+            "the outcome map and the declared vocabulary disagree"
+        );
+        // And the Io variant's own prose is NOT smuggled into the token.
+        assert_eq!(
+            super::winlink_outcome_token(&Outcome::Io("connection refused".into())),
+            "io"
+        );
+    }
+
+    /// A session refuses a callsign that is not one, before anything reaches the keychain or a
+    /// socket, so a mistyped field is a message rather than a failed login against a public
+    /// service.
+    ///
+    /// Exercised through `winlink_callsign` and NOT through `winlink_connect`: on a machine with
+    /// a stored Winlink password, the command would get past this check and open a real socket to
+    /// the CMS. That is why the check is a separate function.
+    #[test]
+    fn a_winlink_session_refuses_something_that_is_not_a_callsign() {
+        for bad in ["", "   ", "ABC", "12345", "not a call", "N0CALL!"] {
+            assert!(
+                super::winlink_callsign(bad).is_err(),
+                "{bad:?} was accepted as a callsign"
+            );
+        }
+        let err = super::winlink_callsign("ABC").unwrap_err();
+        assert!(
+            err.contains("callsign"),
+            "the refusal should name the field: {err}"
+        );
+    }
+
+    /// THE POSITIVE CONTROL for the guard above. Without it, "refuses ABC" could just as well be
+    /// "refuses everything", and Winlink would be unusable with the suite still green.
+    #[test]
+    fn a_real_callsign_is_accepted_and_upper_cased() {
+        assert_eq!(super::winlink_callsign(" kd9taw ").as_deref(), Ok("KD9TAW"));
+        assert_eq!(super::winlink_callsign("N0CALL").as_deref(), Ok("N0CALL"));
+        // Upper-casing is not cosmetic: it is what goes into `;FW:`, the SID and the identity
+        // line, and the CMS matches the account on it.
+        assert_eq!(super::winlink_callsign("w1aw/4").as_deref(), Ok("W1AW/4"));
+    }
+
+    /// Two concurrent connects must not both get the session slot.
+    ///
+    /// Exercised through `winlink_claim` and NOT through `winlink_connect`, for the reason that
+    /// function's doc gives: on a machine with a stored password, calling the command would open
+    /// a real socket to the public CMS. What the race costs is exactly that, twice — two live
+    /// sessions to Winlink's own servers under one callsign, and the loser's stop `Arc`
+    /// overwritten so `winlink_disconnect` can no longer reach it.
+    ///
+    /// Eight threads on a barrier, so they are inside the window together rather than one after
+    /// another. With the check and the claim in separate critical sections this fails; the count
+    /// it reports is how many sockets that shape would have opened.
+    ///
+    /// ⚠️ **The release half is the same test, not a second one.** `WINLINK_SESSION` is one
+    /// process-global slot and `cargo test` runs test functions in parallel, so two tests that
+    /// both take it would flake against each other rather than against the code.
+    #[test]
+    fn two_concurrent_connects_cannot_both_claim_the_winlink_session() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier, Mutex};
+
+        fn make(outcome: Option<String>) -> super::WinlinkFeed {
+            super::WinlinkFeed {
+                stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                state: Arc::new(tempo_net::wl2k::SessionState::default()),
+                log: Arc::new(Mutex::new(tempo_app::winlink::SessionLog::default())),
+                // `None` is what "still running" means to the claim.
+                outcome: Arc::new(Mutex::new(outcome)),
+            }
+        }
+        let feed = || make(None);
+
+        super::winlink_release();
+        let threads = 8;
+        let gate = Arc::new(Barrier::new(threads));
+        let claimed = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..threads {
+            let (gate, claimed) = (gate.clone(), claimed.clone());
+            handles.push(std::thread::spawn(move || {
+                gate.wait();
+                if super::winlink_claim(feed()).is_ok() {
+                    claimed.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("claim thread");
+        }
+        let n = claimed.load(Ordering::SeqCst);
+        super::winlink_release();
+        assert_eq!(
+            n, 1,
+            "{n} of {threads} concurrent connects took the session slot — that is {n} sockets to \
+             the public CMS, and all but the last unreachable by winlink_disconnect"
+        );
+
+        // The other direction, so the guard is not "refuses everything": the slot comes back when
+        // a claim never became a session, and a finished session does not block the next connect.
+        assert!(super::winlink_claim(make(None)).is_ok());
+        assert!(
+            super::winlink_claim(make(None)).is_err(),
+            "a running session must refuse a second connect"
+        );
+        // What `winlink_connect` does when the keychain read or the mailbox open fails.
+        super::winlink_release();
+        assert!(
+            super::winlink_claim(make(None)).is_ok(),
+            "a claim that never became a session left the slot stuck"
+        );
+        // And a session that has ended leaves its feed for the status pane without blocking.
+        super::winlink_release();
+        assert!(super::winlink_claim(make(Some("complete".into()))).is_ok());
+        assert!(
+            super::winlink_claim(make(None)).is_ok(),
+            "a finished session blocked the next connect"
+        );
+        super::winlink_release();
+    }
 }

@@ -23,6 +23,15 @@ microfft = "0.6"
 # new to the tree — it promotes serde_json from this crate's dev-deps to real.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# MD5 for the Winlink secure-login challenge-response (src/winlink/secure.rs). Used ONLY as the
+# published Winlink auth primitive — never for integrity, secrecy, or any security decision Nexus
+# makes on its own; MD5 is broken as a hash and this is a protocol requirement, not a choice.
+# MIT OR Apache-2.0, one-way-inbound compatible with GPL-3.0-only; NOTICE entry added. Brings the
+# RustCrypto digest subtree (digest, block-buffer, crypto-common, generic-array, typenum) newly
+# into the tree — all permissive and all already on deny.toml's allow-list.
+# Pinned to the head of the stable 0.10 line (digest 0.10); 0.11 moves to digest 0.11 and is not
+# taken here.
+md-5 = "0.10.6"
 
 [dev-dependencies]
 # (serde_json is a real dependency above since the fd_rules data loader — the
@@ -34,3 +43,8 @@ q65 = { path = "../q65" }
 fst4 = { path = "../fst4" }
 msk144 = { path = "../msk144" }
 jt65 = { path = "../jt65" }
+# Property tests for the Winlink LZHUF round-trip and the FBB framer's lengths/checksums.
+# Already in the workspace lock via tempo-sstv at this version, so naming it here adds NO new
+# code to the tree — it is bookkeeping (tempo-core must declare what it uses), not a new
+# third-party dependency.
+proptest = "1"

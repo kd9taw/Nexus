@@ -25,6 +25,7 @@ pub mod privileges;
 pub mod station;
 pub mod update;
 pub mod window_geometry;
+pub mod winlink;
 
 use std::collections::HashMap;
 

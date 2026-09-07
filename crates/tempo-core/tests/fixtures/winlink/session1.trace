@@ -1,0 +1,88 @@
+# B2F golden transcript — fixture #1.
+#
+# PROVENANCE — read this before trusting a byte of it.
+# This is a CONSTRUCTED transcript, assembled from the published ARSFI B2F grammar
+# (winlink.org/B2F) and the FBB forward protocol (f6fbb.org/fbbdoc/docfwpro.htm). It is NOT a
+# capture of a live CMS session, and it cannot settle any of the wire questions the programme
+# spec calls undecidable (the ;PR: digest derivation, the LZHUF CRC16 coverage, the exact
+# greeting line order). Its job is to pin THIS implementation's behaviour across chunk
+# boundaries and to give the five negative controls something to perturb. The real oracle is
+# fixture #2 — the byte stream captured at the first live CMS connect (spec §6 step 5) — and
+# where the two ever disagree, fixture #2 wins and this file is corrected, never the reverse.
+#
+# Every byte here was produced OUTSIDE the code under test except one: the LZHUF image inside
+# the binary record, which came from crates/tempo-core/src/winlink/lzhuf.rs (there is no other
+# source for a Winlink-compressed body available offline). The ;PR: token, both checksums and
+# all of the framing were computed by an independent implementation, so they are a genuine
+# cross-check rather than a restatement of the engine.
+#
+# ENCODING
+# A line beginning with '#' is a comment, and so is an empty line; neither is part of the
+# transcript. Every other line is one record:
+#
+#     <direction> <hex>
+#
+# <direction> is '<' for a record the peer sent to Nexus (inbound) or '>' for a record Nexus
+# is expected to send to the peer (outbound). <hex> is the record's bytes as lowercase
+# hexadecimal with no separators — hex rather than text because FBB records carry SOH/STX/EOT,
+# length bytes, checksum bytes and an LZHUF body, none of which survive being written as
+# characters. The record split is for legibility only: the replay concatenates each direction,
+# so how the engine batches its writes is not pinned by this file.
+#
+# PARAMETERS the replay must use for the outbound side to match
+#     callsign  N0CALL
+#     password  NEXUSTEST   <- a made-up string that is not a credential for anything; the
+#                              ;PR: line below is what the wl2k-go derivation returns for it
+#                              against the ;PQ: challenge in this transcript.
+#
+# < the CMS announces itself: FBB forwarding (F), B2 message format (B2)
+#   [WL2K-5.0-B2FWIHJM$]<CR>
+< 5b574c324b2d352e302d4232465749484a4d245d0d
+
+# < the secure-login challenge
+#   ;PQ: 41913235<CR>
+< 3b50513a2034313931333233350d
+
+# > the forward-to list: this station's own callsign
+#   ;FW: N0CALL<CR>
+> 3b46573a204e3043414c4c0d
+
+# > our SID
+#   [Nexus-1.0-B2FHM$]<CR>
+> 5b4e657875732d312e302d423246484d245d0d
+
+# > the challenge answered (see the header note on the password)
+#   ;PR: 74706169<CR>
+> 3b50523a2037343730363136390d
+
+# > the identity comment line; the target is the peer SID's product field
+#   ; WL2K DE N0CALL<CR>
+> 3b20574c324b204445204e3043414c4c0d
+
+# > nothing to propose; over to you
+#   FF<CR>
+> 46460d
+
+# < one message offered: 598 bytes uncompressed, 365 compressed
+#   FC EM ABCDEFGHIJKL 598 365 0<CR>
+< 464320454d204142434445464748494a4b4c203539382033363520300d
+
+# < the block checksum: two's complement of the sum of the FC line's bytes, CR included
+#   F> 76<CR>
+< 463e2037360d
+
+# > one answer, in proposal order: send it
+#   FS +<CR>
+> 4653202b0d
+
+# < SOH header, 2 STX data blocks (0x00 length = 256), EOT + checksum
+#   <SOH><0F>ABCDEFGHIJKL<00>0<00><STX><00>sZV<STX><00><00><EC><FD>~<1C>mg7<9D><CF><E8>tz]><A7> ... (388 bytes)
+< 010f4142434445464748494a4b4c0030000200735a56020000ecfd7e1c6d67379dcfe8747a5d3ea757add7ec6672d7bed00f8e160efb795fc2ddd7716b28d6d1ded0a1566b4b3f002ff2302fdcff62014f0825ccbb9cfdfe68d4efe2d0cebbfab0b1f7cb49b984e3f1cc7409652b3f17137525199b818aaf2bda7afb02d6092b2803eefb22c24221049059f7d1c3fefb93ab66cc5afe888fc6a295b165dfa58740d2fc425609a748d82a77f4c999ef384febbc87251de678cab24502842ae092c0482e430d0179859e730c8b7b172d782be7ff459674bf6a3939f7261f9dfc80951f7ef04e3b2ad22816815086593d1513388f93d9a4df4e5e272318f7f7edfded6ec140e6052ecd23c4cd2297c145997cfd09026dc11d496b77e79ed43695e8596c687a13d68397dca6d2af5ec1f1b5bf8c8f029f85bbebb2f79ab8137d87828d67cbbdde3e6b727ec19d320bcd6041fa6fd605b7ebcfb00c92f2ac6d2022c59b452815ca12528aaecd7fc578917aa7b0b353b92ff608fea3a3b269eed6605208a00451
+
+# < the transfer is done and the peer has nothing more
+#   FF<CR>
+< 46460d
+
+# > we have nothing either: end the session
+#   FQ<CR>
+> 46510d

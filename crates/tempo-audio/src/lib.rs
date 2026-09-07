@@ -63,6 +63,7 @@ pub mod monitor;
 pub mod omnirig;
 pub mod port_prober;
 pub mod ports;
+pub mod proc_util;
 /// PSK31 RX decode thread (armed-decoder-on-the-RX-path, the `rttyrx` pattern).
 /// RX side of PSK31 (TX runs in the radio loop — `service.rs`).
 #[cfg(feature = "device")]
