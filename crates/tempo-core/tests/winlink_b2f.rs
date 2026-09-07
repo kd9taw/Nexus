@@ -524,3 +524,63 @@ fn wants_close_only_after_the_session_ends() {
         "the session must close on the last transcript byte and not before"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// The mailbox's storage claim, proved rather than assumed.
+//
+// `mailbox.rs`'s module header says each received message is written "exactly as it went over
+// the wire". The driver that will store received mail is handed a PARSED `Message` by
+// `Action::Received`, not the plaintext, so what it can actually write is `assemble_b2(&msg)` —
+// a re-serialisation. The claim is therefore true only if that round trip is the identity, and
+// these two tests are what makes that a fact instead of a hope.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn a_received_message_re_assembles_to_the_bytes_it_arrived_as() {
+    let recs = records();
+    let actions = replay(std::iter::once(inbound_of(&recs)));
+    let received: Vec<&tempo_core::winlink::message::Message> = actions
+        .iter()
+        .filter_map(|a| match a {
+            b2f::Action::Received(m) => Some(m),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !received.is_empty(),
+        "the fixture delivers no message to test"
+    );
+    for msg in received {
+        let re = tempo_core::winlink::message::assemble_b2(msg).expect("assemble");
+        let back = tempo_core::winlink::message::parse_b2(&re).expect("parse");
+        assert_eq!(&back, msg, "assemble->parse is not the identity");
+    }
+}
+
+#[test]
+fn parsing_and_re_assembling_a_b2_blob_returns_the_same_bytes() {
+    // The stronger claim, and the one the mailbox actually rests on: for a real B2 blob,
+    // assemble_b2(parse_b2(x)) == x, byte for byte. If this is red the mailbox is storing a
+    // NORMALISED copy and the design has to change, not the assertion.
+    //
+    // Note the lengths: `Body: 5` for "hello", and the CRLF after it is the SEPARATOR, not part
+    // of the body (module header, "why every part is followed by CRLF"). A `Body: 7` that
+    // swallowed the separator is `Malformed`, correctly, and was this test's first draft.
+    let blob: &[u8] = b"Mid: ABCDEFGHIJKL\r\n\
+                        Date: 2026/09/07 12:00\r\n\
+                        From: SMTP:someone@example.com\r\n\
+                        To: N0CALL\r\n\
+                        Subject: hello\r\n\
+                        Body: 5\r\n\
+                        File: 4 a.txt\r\n\
+                        \r\n\
+                        hello\r\n\
+                        abcd\r\n";
+    let msg = tempo_core::winlink::message::parse_b2(blob).expect("parse");
+    let re = tempo_core::winlink::message::assemble_b2(&msg).expect("assemble");
+    assert_eq!(
+        String::from_utf8_lossy(&re),
+        String::from_utf8_lossy(blob),
+        "re-assembly is not byte-identical — the mailbox would be storing a normalised copy"
+    );
+}

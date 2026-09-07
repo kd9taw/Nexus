@@ -247,11 +247,18 @@
 //! # What this engine does not do yet
 //!
 //! It **proposes nothing**: its greeting block ends in `FF` and it answers every inbound `FF` with
-//! `FQ`. Outbound mail arrives with the mailbox (Task 2.9) and the composer above it; the seam is
-//! the `have` callback in [`Session::close_proposal_block`], which today answers
-//! [`fbb::HaveState::No`] for every MID because there is no store to ask. That is a stub with a
-//! name, not a silent gap: when the mailbox lands, one closure changes and the `!offset` resume
-//! the `FS` table already implements starts working.
+//! `FQ`. Outbound mail needs our own `FC` lines, our `F>` checksum, the peer's `FS` answer read
+//! back, and a SOH/STX/EOT stream built rather than only parsed; none of that is here.
+//!
+//! What *is* here now is the store seam it was written around: [`Session::set_have`] installs the
+//! callback [`Session::close_proposal_block`] consults, so a station declines mail it already
+//! holds instead of downloading it twice. Unset, it answers [`fbb::HaveState::No`] for every MID,
+//! which is `+` — the offline default every test in this file and the golden replay run under, and
+//! why installing the seam changed no existing behaviour.
+//!
+//! `HaveState::Partial` (the `!offset` resume the `FS` table already implements) is still unused:
+//! it needs a partial-blob store to resume *from*, and answering `Partial(n)` with nothing behind
+//! it would ask the peer to send from an offset we cannot use.
 
 use std::collections::VecDeque;
 
@@ -572,7 +579,21 @@ pub struct Session {
     /// was counted through here — true of the bytes, false of the memory, and false several times
     /// over once the peer chose one-byte blocks. Both are now charged for what they hold.
     binary_bytes: u64,
+    /// What this station already holds, consulted as the peer's proposals are answered.
+    ///
+    /// The seam the module header names. `None` — every MID answered [`fbb::HaveState::No`] — is
+    /// the offline default that every existing test and the golden replay run under, so
+    /// installing this changes nothing until a caller sets it.
+    have: Option<HaveFn>,
 }
+
+/// The store callback [`Session::set_have`] installs: given one of the peer's proposals, say
+/// whether this station already holds that message.
+///
+/// A named type because the boxed-closure spelling is what clippy's `type_complexity` lint is
+/// about, and because naming it puts the contract — `&Proposal` in, [`HaveState`] out, `Send`
+/// because the session runs on a socket thread — in one place instead of three signatures.
+pub type HaveFn = Box<dyn Fn(&Proposal) -> HaveState + Send>;
 
 impl Session {
     /// A session that has not yet seen a byte from the peer.
@@ -597,7 +618,22 @@ impl Session {
             framer: Framer::new(),
             image: Vec::new(),
             binary_bytes: 0,
+            have: None,
         }
+    }
+
+    /// Answers the peer's proposals from this station's own store.
+    ///
+    /// Without this a station re-downloads mail it already holds: [`HaveState::No`] is answered
+    /// `+`, the peer sends the body again, and over an ARQ link that is the whole message a
+    /// second time. `Send` because the session runs on a socket thread.
+    ///
+    /// ⚠️ The callback answers [`HaveState::Yes`] for a message on disk, never
+    /// [`HaveState::Unwanted`]: [`fbb`] is explicit that the two are the same wire byte and
+    /// different decisions, and a mailbox that conflates them says "I have it" about a message it
+    /// does not have.
+    pub fn set_have(&mut self, have: HaveFn) {
+        self.have = Some(have);
     }
 
     /// Feeds received bytes; returns every action the stream has now produced, in wire order.
@@ -726,6 +762,10 @@ impl Session {
             image,
             // Wire bytes against `transfer_ceiling`, not a buffer: see the field.
             binary_bytes: _,
+            // Ours, not the peer's: a closure the caller installed. It holds no peer bytes, and
+            // whatever the mailbox behind it holds is the mailbox's own bound, not this session's.
+            // Charged zero deliberately — see this function's warning about `_`.
+            have: _,
         } = self;
         buf.capacity()
             + peer_sid.as_ref().map_or(0, |sid| {
@@ -1040,8 +1080,9 @@ impl Session {
 
     /// `F> HH` — verify the block, then answer it.
     ///
-    /// The `have` callback is the mailbox seam (module header): today it says "nothing held" for
-    /// every MID, so every readable `FC` proposal is accepted. The answer line is then *read back*
+    /// The `have` callback is the mailbox seam (module header): unset it says "nothing held" for
+    /// every MID, so every readable `FC` proposal is accepted; installed via [`Session::set_have`]
+    /// it declines the ones already on disk. The answer line is then *read back*
     /// to decide how many transfers to expect, rather than re-deriving that from the same
     /// `have` decisions — the peer acts on the bytes we sent, so those bytes are what the count
     /// must come from.
@@ -1080,13 +1121,19 @@ impl Session {
                 )));
             }
         }
-        let answer = fbb::fs_answer(&proposals, |proposal| {
-            if over_ceiling(proposal).is_some() {
-                HaveState::Unwanted
-            } else {
-                HaveState::No
-            }
-        });
+        let answer = {
+            // Borrowed out before the closure so `fs_answer` does not hold `self`.
+            let have = self.have.as_deref();
+            fbb::fs_answer(&proposals, |proposal| {
+                if over_ceiling(proposal).is_some() {
+                    HaveState::Unwanted
+                } else {
+                    // No store installed: answer `No`, which is `+`. That is the offline default
+                    // and the shape every pre-seam test asserts.
+                    have.map_or(HaveState::No, |h| h(proposal))
+                }
+            })
+        };
         let Some(wanted) = read_fs_answer(&answer, proposals.len()) else {
             self.fail(
                 out,
@@ -1483,6 +1530,83 @@ mod tests {
         // Shapes that are not the grammar must degrade, never panic.
         assert_eq!(split_soh_header(b""), (&b""[..], &b""[..]));
         assert_eq!(split_soh_header(b"TITLE"), (&b"TITLE"[..], &b""[..]));
+    }
+
+    /// The `have` seam, end to end through a real proposal block: a station that already holds a
+    /// MID must answer that proposal `-` and accept no transfer for it, while a second proposal in
+    /// the same block is still answered `+`.
+    ///
+    /// Failing-first: before [`Session::set_have`] existed this answered `FS ++`, because
+    /// `close_proposal_block` returned `HaveState::No` for every MID with no store to ask.
+    #[test]
+    fn a_proposal_this_station_already_holds_is_declined_and_its_neighbour_is_not() {
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+        let mut session = Session::new(&cfg, Role::Client);
+        session.set_have(Box::new(|p: &Proposal| {
+            if p.mid == b"HELDMID00001" {
+                HaveState::Yes
+            } else {
+                HaveState::No
+            }
+        }));
+        let block: &[u8] = b"FC EM HELDMID00001 100 200 0\rFC EM NEWMID000001 100 200 0\r";
+        let mut wire = Vec::from(&b"[WL2K-5.0-B2FWIHJM$]\r"[..]);
+        wire.extend_from_slice(block);
+        wire.extend_from_slice(format!("F> {:02X}\r", fbb::fb_checksum(block)).as_bytes());
+        let actions = session.feed(&wire);
+        let sent: Vec<u8> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Send(bytes) => Some(bytes.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let sent = String::from_utf8_lossy(&sent).into_owned();
+        assert!(
+            sent.contains("FS -+"),
+            "the held MID must be declined and its neighbour accepted: {sent:?}"
+        );
+        assert_eq!(
+            session.accepted.len(),
+            1,
+            "only the unheld proposal may be queued for transfer"
+        );
+        assert_eq!(session.accepted[0].mid, b"NEWMID000001".to_vec());
+    }
+
+    /// The control for the test above, and the guarantee that installing the seam changed nothing
+    /// for a caller that does not use it: the identical block with NO `have` installed is answered
+    /// `++`, which is what every pre-existing test and the golden replay run under.
+    #[test]
+    fn with_no_have_installed_every_proposal_is_still_accepted() {
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+        let mut session = Session::new(&cfg, Role::Client);
+        let block: &[u8] = b"FC EM HELDMID00001 100 200 0\rFC EM NEWMID000001 100 200 0\r";
+        let mut wire = Vec::from(&b"[WL2K-5.0-B2FWIHJM$]\r"[..]);
+        wire.extend_from_slice(block);
+        wire.extend_from_slice(format!("F> {:02X}\r", fbb::fb_checksum(block)).as_bytes());
+        let actions = session.feed(&wire);
+        let sent: Vec<u8> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Send(bytes) => Some(bytes.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert!(
+            String::from_utf8_lossy(&sent).contains("FS ++"),
+            "an offline session must answer every proposal +: {:?}",
+            String::from_utf8_lossy(&sent)
+        );
+        assert_eq!(session.accepted.len(), 2);
     }
 
     /// A peer that says `FF` before it has said who it is cannot be answered — the identity line
