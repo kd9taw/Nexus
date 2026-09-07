@@ -22,12 +22,28 @@ serial = ["dep:serialport"]
 # The AI CW decoder thread (DeepCW model via tract). Pure Rust; pulled in by the
 # station build (src-tauri `radio`). The model itself is an app resource, not a dep.
 ai-cw = ["dep:deepcw"]
+# FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge. OFF by default: it links
+# FTDI's closed-source LibFT4222/D2XX, which macOS does not ship and which cannot be
+# redistributed inside a GPL-3.0-only application. An operator who wants the scope installs
+# FTDI's library themselves; everything except the transport compiles and is tested without
+# this feature.
+yaesu-wf = []
 
 # Multi-radio Phase 0 probe: opens every enabled radio profile's codec at once.
 # Needs a real sound card, so it only exists with `device`.
 [[example]]
 name = "audio_probe"
 required-features = ["device"]
+
+# Live proof of the FT-710 waterfall chain. Needs the `yaesu-wf` feature (and therefore FTDI's
+# LibFT4222 on the system) — never built by a default or CI run.
+[[example]]
+name = "yaesu_wf_probe"
+required-features = ["yaesu-wf"]
+
+[[example]]
+name = "yaesu_wf_dump"
+required-features = ["yaesu-wf"]
 
 [dependencies]
 tempo-app = { path = "../tempo-app" }
