@@ -48,6 +48,7 @@ use tauri_plugin_updater::UpdaterExt;
 use tempo_app::dto::{
     AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, MeterReadout,
     SourceKind, Spectrum, Tier, UploadReportDto, WinlinkAttachment, WinlinkMessage, WinlinkRow,
+    WinlinkSession,
 };
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::{Settings, VoiceMessage};
@@ -13553,6 +13554,7 @@ const CLUBLOG_KEYCHAIN_USER: &str = "clublog-password";
 const HRDLOG_KEYCHAIN_USER: &str = "hrdlog-code";
 const WRL_KEYCHAIN_USER: &str = "wrl-key";
 const CLOUDLOG_KEYCHAIN_USER: &str = "cloudlog-key";
+const WINLINK_KEYCHAIN_USER: &str = "winlink-password";
 
 /// Client name Nexus sends to HRDLog.net's `NewEntry.aspx` as `App` (aids their
 /// support / usage stats). Non-secret.
@@ -13986,7 +13988,7 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             id: "hrdlog".into(),
             connector: "HRDLog.net".into(),
             stored: has(hrdlog_keychain()),
-            identity: mycall,
+            identity: mycall.clone(),
             uploads: true,
             enabled: hrdlog_on,
             // Session-only: HRDLog leaves no per-QSO stamp, so after a restart this reads
@@ -14034,6 +14036,26 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             identity: String::new(),
             uploads: false,
             enabled: stored_rb,
+            last_success_unix: None,
+            last_failure_unix: None,
+            last_failure_detail: None,
+            paused: false,
+        },
+        CredStatus {
+            // The Winlink account password, used once per session to answer the CMS's `;PQ:`
+            // challenge. The identity is the callsign — Winlink accounts ARE callsigns.
+            id: "winlink".into(),
+            connector: "Winlink".into(),
+            stored: has(winlink_keychain()),
+            identity: mycall.clone(),
+            // Winlink carries MAIL, not QSO uploads, so "never uploaded anything" is not a fault
+            // and must not be rendered as one — the same reason the two lookup-only rows above
+            // carry `uploads: false`.
+            uploads: false,
+            enabled: has(winlink_keychain()),
+            // ⚠️ Session outcomes are NOT wired to this panel: a failed CMS connect appears in
+            // the connection log and in the session status chip, not here. Flagged rather than
+            // pretended away, exactly as the QRZ callbook row flags its own gap.
             last_success_unix: None,
             last_failure_unix: None,
             last_failure_detail: None,
@@ -20382,6 +20404,11 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             winlink_mailbox_rebuild,
             winlink_mark_read,
             winlink_mailbox_location,
+            winlink_connect,
+            winlink_session_status,
+            winlink_disconnect,
+            set_winlink_password,
+            clear_winlink_password,
             diag_log_location,
             reveal_diag_log,
             recordings_location,
@@ -21045,6 +21072,277 @@ fn winlink_mark_read(mid: String) -> Result<(), String> {
 #[tauri::command(async)]
 fn winlink_mailbox_location() -> Result<String, String> {
     Ok(winlink_dir().to_string_lossy().into_owned())
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Winlink — the session, and the account credential.
+//
+// Still the internet path: TCP to `server.winlink.org:8772`. Nothing below keys a radio, opens
+// an audio device, or touches the transmit path, and `winlink_disconnect` is a CLEAN TEARDOWN,
+// not a stop control — there is no transmitter here to stop. It must never be added to any
+// cockpit's `stopControls`.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// The running Winlink session, if any.
+///
+/// One at a time, and a second `winlink_connect` **refuses rather than replaces**. That is the
+/// opposite of `APRS_IS_FEED`, correctly: replacing a telemetry feed costs a few seconds of
+/// spots, while replacing a mail session drops a socket mid-transfer with mail still outstanding
+/// on the CMS. The operator disconnects first.
+struct WinlinkFeed {
+    /// Set to end the session. The pump observes it within one read timeout (2 s) even on a
+    /// silent socket, which is what `the_stop_flag_ends_a_session_parked_in_read` proves.
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    /// Live byte counters and connection flags, written by the socket thread.
+    state: Arc<tempo_net::wl2k::SessionState>,
+    /// Mirrored out of the driver after every chunk, so the status pane sees traces while the
+    /// session runs rather than only when it ends.
+    log: Arc<Mutex<tempo_app::winlink::SessionLog>>,
+    /// How it ended, as one of `dto::WINLINK_OUTCOMES`. `None` while it is still running.
+    outcome: Arc<Mutex<Option<String>>>,
+}
+
+static WINLINK_SESSION: Mutex<Option<WinlinkFeed>> = Mutex::new(None);
+
+/// The Winlink account password's keychain entry.
+///
+/// Same service as every other connector, its own user slug — the pattern LoTW, QRZ, eQSL,
+/// ClubLog, HRDLog, Cloudlog, WRL and RepeaterBook already ship. Write-only from the UI's point
+/// of view: [`set_winlink_password`] stores it, [`winlink_connect`] reads it, and nothing ever
+/// hands it back to the front end.
+fn winlink_keychain() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, WINLINK_KEYCHAIN_USER)
+        .map_err(|e| format!("keychain unavailable: {e}"))
+}
+
+/// Store (or, if `password` is empty, clear) the Winlink account password in the OS keychain.
+/// Write-only: the password is never read back to the UI.
+#[tauri::command(async)]
+fn set_winlink_password(password: String) -> Result<(), String> {
+    let entry = winlink_keychain()?;
+    if password.is_empty() {
+        clear_keychain_entry(&entry)?;
+        conn_log("Winlink", "info", "password cleared from the OS keychain");
+        return Ok(());
+    }
+    entry
+        .set_password(&password)
+        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+    conn_log("Winlink", "ok", "password saved to the OS keychain");
+    Ok(())
+}
+
+/// Remove the stored Winlink password from the OS keychain (idempotent).
+#[tauri::command(async)]
+fn clear_winlink_password() -> Result<(), String> {
+    let r = clear_keychain_entry(&winlink_keychain()?);
+    if r.is_ok() {
+        conn_log("Winlink", "info", "password cleared from the OS keychain");
+    }
+    r
+}
+
+/// Mirrors the driver's log into a shared slot after every chunk.
+///
+/// The driver owns its [`tempo_app::winlink::SessionLog`] by value and lives on the socket
+/// thread, so without this the status pane would see nothing until the session ended — which is
+/// precisely when an operator has stopped needing to watch it.
+struct LiveDriver {
+    /// The real driver: owns the B2F session and the mailbox.
+    inner: tempo_app::winlink::Driver,
+    /// Where the status command reads from.
+    log: Arc<Mutex<tempo_app::winlink::SessionLog>>,
+}
+
+impl tempo_net::wl2k::ByteSession for LiveDriver {
+    fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
+        let out = self.inner.feed(chunk);
+        *self.log.lock().unwrap_or_else(|e| e.into_inner()) = self.inner.log().clone();
+        out
+    }
+    fn wants_close(&self) -> bool {
+        self.inner.wants_close()
+    }
+}
+
+/// Renders an [`tempo_net::wl2k::Outcome`] as one of `dto::WINLINK_OUTCOMES`.
+///
+/// A token the UI switches on, never prose to render — `AMP_REASONS`' rule. ⚠️ The `Io` variant's
+/// own string is deliberately **dropped** here rather than concatenated into the token: it is an
+/// `io::Error` rendering and belongs in the traces, not in a value a `switch` compares.
+fn winlink_outcome_token(o: &tempo_net::wl2k::Outcome) -> &'static str {
+    match o {
+        tempo_net::wl2k::Outcome::Complete => "complete",
+        tempo_net::wl2k::Outcome::Stopped => "stopped",
+        tempo_net::wl2k::Outcome::PeerClosed => "peerClosed",
+        tempo_net::wl2k::Outcome::Io(_) => "io",
+    }
+}
+
+/// Normalises and checks the callsign a session will identify with.
+///
+/// Split out of [`winlink_connect`] so it can be tested without calling that command — which, on
+/// a machine that HAS a stored Winlink password, would get past the check and open a real socket
+/// to the public CMS. A unit test must never be able to do that, and the only reliable way to
+/// guarantee it is to give the test something else to call.
+///
+/// Upper-cased because that is what goes into `;FW:`, the SID and the identity line, and the CMS
+/// refuses an unknown callsign.
+fn winlink_callsign(raw: &str) -> Result<String, String> {
+    let call = raw.trim().to_ascii_uppercase();
+    if !is_real_call(&call) {
+        return Err("enter your callsign before connecting to Winlink".into());
+    }
+    Ok(call)
+}
+
+/// Open one Winlink session to the CMS over telnet.
+///
+/// `password` is the operator's Winlink account password. An **empty** string means "use the one
+/// in the OS keychain" (see [`set_winlink_password`]); anything else is used for this session
+/// only and is not stored. Either way the value is moved into a `ClientConfig` — which derives
+/// neither `Debug` nor `Serialize`, both pinned by tests in `tempo_core::winlink` — and is used
+/// exactly once, by `secure::pr_response`, to answer the CMS's `;PQ:` challenge.
+///
+/// ⚠️ **The password hygiene rules, and they are rules:** it never crosses the telnet pre-login
+/// (that prompt takes a fixed public doorway token, not this); it never reaches `conn_log`,
+/// `applog`, an `eprintln!` or an error string; the capture tap starts recording only after the
+/// pre-login and redacts the `;PR:` digest by default; and [`WinlinkSession`] has no field it
+/// could travel in, pinned by `the_session_dto_cannot_carry_a_password`. **No error message in
+/// this function may echo an argument** — an `io::Error` cannot contain the password, and nothing
+/// here may add a `format!` that could.
+#[tauri::command(async)]
+fn winlink_connect(callsign: String, password: String) -> Result<(), String> {
+    let call = winlink_callsign(&callsign)?;
+    // Empty means "the stored one". The keychain error is reported without ever rendering what it
+    // was looking for.
+    let password = if password.is_empty() {
+        winlink_keychain()?.get_password().map_err(|_| {
+            "no Winlink password is saved — enter one in Settings, or type it to connect once"
+                .to_string()
+        })?
+    } else {
+        password
+    };
+
+    {
+        let slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(f) = slot.as_ref() {
+            if f.outcome
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none()
+            {
+                return Err("a Winlink session is already running — disconnect it first".into());
+            }
+        }
+    }
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let state = Arc::new(tempo_net::wl2k::SessionState::default());
+    let log = Arc::new(Mutex::new(tempo_app::winlink::SessionLog::default()));
+    let outcome: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    let cfg = tempo_core::winlink::ClientConfig {
+        callsign: call.clone(),
+        // MOVED, never cloned, and this is its last mention by name.
+        password,
+    };
+    let driver = tempo_app::winlink::Driver::new(&cfg, &winlink_dir(), now_unix)
+        .map_err(|e| format!("could not open the Winlink mailbox: {e}"))?;
+
+    let (t_stop, t_state, t_log, t_outcome) =
+        (stop.clone(), state.clone(), log.clone(), outcome.clone());
+    std::thread::Builder::new()
+        .name("winlink".into())
+        .spawn(move || {
+            let mut sess = LiveDriver {
+                inner: driver,
+                log: t_log.clone(),
+            };
+            let result = tempo_net::wl2k::run(
+                tempo_net::wl2k::CMS_HOST,
+                tempo_net::wl2k::CMS_PORT,
+                tempo_net::wl2k::Login::new(&cfg.callsign, tempo_net::wl2k::CMS_TELNET_PASSWORD),
+                &mut sess,
+                &t_stop,
+                &t_state,
+                // No capture tap by default: a capture is a diagnostic an operator asks for, and
+                // writing session bytes to disk unasked is the wrong default.
+                None,
+            );
+            *t_log.lock().unwrap_or_else(|e| e.into_inner()) = sess.inner.log().clone();
+            let token = winlink_outcome_token(&result);
+            if let tempo_net::wl2k::Outcome::Io(why) = &result {
+                // The socket's own words go in the traces, where prose belongs.
+                t_log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .traces
+                    .push(format!("connection ended: {why}"));
+            }
+            conn_log("Winlink", if token == "io" { "err" } else { "ok" }, {
+                let stored = t_log
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .received
+                    .len();
+                format!("session ended ({token}); {stored} message(s) stored")
+            });
+            *t_outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(token.to_string());
+        })
+        .map_err(|e| format!("could not start the Winlink session thread: {e}"))?;
+
+    let mut slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    *slot = Some(WinlinkFeed {
+        stop,
+        state,
+        log,
+        outcome,
+    });
+    conn_log("Winlink", "info", "connecting to the CMS over telnet");
+    Ok(())
+}
+
+/// Live state of the running session, or the last one's outcome.
+#[tauri::command(async)]
+fn winlink_session_status() -> Result<WinlinkSession, String> {
+    let slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(f) = slot.as_ref() else {
+        return Ok(WinlinkSession::default());
+    };
+    let log = f.log.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let outcome = f.outcome.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Ok(WinlinkSession {
+        connected: f.state.connected.load(std::sync::atomic::Ordering::Relaxed),
+        logged_in: f.state.logged_in.load(std::sync::atomic::Ordering::Relaxed),
+        bytes_in: f.state.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+        bytes_out: f.state.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+        last_byte_unix: f.state.last_byte_unix.load(std::sync::atomic::Ordering::Relaxed),
+        received: log
+            .received
+            .iter()
+            .map(|m| String::from_utf8_lossy(m).into_owned())
+            .collect(),
+        traces: log.traces,
+        outcome,
+        failed: log.failed,
+    })
+}
+
+/// End the session cleanly. Sets the stop flag and returns; the pump observes it within one read
+/// timeout.
+///
+/// ⚠️ It does **not** join the thread: a Tauri command that blocks for two seconds is a frozen
+/// button. And it is **a clean teardown, NOT a stop control** — there is no transmitter here.
+#[tauri::command(async)]
+fn winlink_disconnect() -> Result<(), String> {
+    let slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(f) = slot.as_ref() {
+        f.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        conn_log("Winlink", "info", "disconnecting");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -25363,5 +25661,66 @@ mod tests {
         assert!(rows[0].unread);
         assert_eq!(rows[3].arrived_unix, None, "CCC has no accountable arrival");
         assert!(!rows[3].unread);
+    }
+
+    /// Every outcome the transport can return renders as one of the DTO's declared tokens.
+    ///
+    /// The vocabulary is what the UI switches on; a token this map produced but the vocabulary
+    /// did not name would be a silent dead branch on the TS side. Exhaustive by construction:
+    /// `Outcome` is matched without a wildcard in `winlink_outcome_token`, so a new variant is a
+    /// compile error there, and this checks the values agree.
+    #[test]
+    fn every_winlink_outcome_renders_as_a_declared_token() {
+        use tempo_net::wl2k::Outcome;
+        let all = [
+            Outcome::Complete,
+            Outcome::Stopped,
+            Outcome::PeerClosed,
+            Outcome::Io("connection refused".into()),
+        ];
+        let tokens: Vec<&str> = all.iter().map(super::winlink_outcome_token).collect();
+        assert_eq!(
+            tokens,
+            tempo_app::dto::WINLINK_OUTCOMES.to_vec(),
+            "the outcome map and the declared vocabulary disagree"
+        );
+        // And the Io variant's own prose is NOT smuggled into the token.
+        assert_eq!(
+            super::winlink_outcome_token(&Outcome::Io("connection refused".into())),
+            "io"
+        );
+    }
+
+    /// A session refuses a callsign that is not one, before anything reaches the keychain or a
+    /// socket, so a mistyped field is a message rather than a failed login against a public
+    /// service.
+    ///
+    /// Exercised through `winlink_callsign` and NOT through `winlink_connect`: on a machine with
+    /// a stored Winlink password, the command would get past this check and open a real socket to
+    /// the CMS. That is why the check is a separate function.
+    #[test]
+    fn a_winlink_session_refuses_something_that_is_not_a_callsign() {
+        for bad in ["", "   ", "ABC", "12345", "not a call", "N0CALL!"] {
+            assert!(
+                super::winlink_callsign(bad).is_err(),
+                "{bad:?} was accepted as a callsign"
+            );
+        }
+        let err = super::winlink_callsign("ABC").unwrap_err();
+        assert!(
+            err.contains("callsign"),
+            "the refusal should name the field: {err}"
+        );
+    }
+
+    /// THE POSITIVE CONTROL for the guard above. Without it, "refuses ABC" could just as well be
+    /// "refuses everything", and Winlink would be unusable with the suite still green.
+    #[test]
+    fn a_real_callsign_is_accepted_and_upper_cased() {
+        assert_eq!(super::winlink_callsign(" kd9taw ").as_deref(), Ok("KD9TAW"));
+        assert_eq!(super::winlink_callsign("N0CALL").as_deref(), Ok("N0CALL"));
+        // Upper-casing is not cosmetic: it is what goes into `;FW:`, the SID and the identity
+        // line, and the CMS matches the account on it.
+        assert_eq!(super::winlink_callsign("w1aw/4").as_deref(), Ok("W1AW/4"));
     }
 }
