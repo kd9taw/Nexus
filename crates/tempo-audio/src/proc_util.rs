@@ -327,7 +327,7 @@ impl<R: Ord + Copy> StderrRing<R> {
 /// thread teardown). Returns the job HANDLE as an `isize` (0 on any failure, in
 /// which case we just fall back to the Drop-time kill).
 #[cfg(windows)]
-pub fn assign_kill_on_close_job(child: &Child) -> isize {
+pub fn assign_kill_on_close_job(child: &std::process::Child) -> isize {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::JobObjects::{
