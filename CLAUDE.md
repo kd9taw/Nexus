@@ -4,17 +4,41 @@ Nexus is a Rust + Tauri amateur-radio operations center (~200K lines own code, 1
 vendored WSJT-X DSP cores). This file is loaded by AI coding agents and read by humans; it holds
 the invariants that are expensive to rediscover. Architecture map: [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Build & verify — the traps
+## Build & verify
+
+**Do not compose a gate list by hand — run `scripts/gates`.** It reads
+`.github/workflows/ci.yml` and derives the list, so it cannot come out a subset the way a
+transcribed one does. Three failures in one day came from exactly that: a brief that forgot
+`cargo fmt --all --check` (nine tasks "passed" with CI red), a merge gate that omitted the
+Windows cross-compile and the UI suite (main went red on the push), and a fmt sweep that
+silently skipped src-tauri. A memory saying "transcribe the list from ci.yml" already existed
+and was violated anyway; transcription is the defect.
+
+| Command | What it does |
+|---|---|
+| `scripts/gates --list` | every gate CI runs, grouped by job, with the exact command |
+| `scripts/gates` | runs the ones runnable here, bare, printing each real exit code |
+| `scripts/gates --list --unrunnable` | the jobs that **cannot** run here and why — for those, **pushing and reading the CI run IS the gate** |
+| `scripts/gates --job test,ui` | scope a batch; the output states what it did NOT run |
+
+`node --test scripts/gates.test.mjs` holds the derivation property down: it plants a step in a
+scratch copy of the workflow and fails if `--list` misses it. Never pipe a gate into
+`grep`/`tail`/`head` — a pipe discards the exit status, which is how a faked-green gate shipped
+in 1.10.3.
+
+### The traps — the WHY that a command list cannot carry
 
 | Invariant | Detail |
 |---|---|
-| `cargo test --workspace` **excludes src-tauri** | src-tauri is not a workspace member. Also run: `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio` |
+| `cargo test --workspace` **excludes src-tauri** | src-tauri declares its own empty `[workspace]`, so it is not a member. Also run: `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio` |
+| `cargo fmt --all` **also excludes src-tauri** | Same boundary. CI has **no** fmt gate for it (`scripts/gates --list` says so, derived), and it has drifted — 21 regions in `src-tauri/src/lib.rs` as of 2026-09-07. Format the regions you touch; a blanket sweep belongs in its own commit, never inside a feature change. |
 | src-tauri needs `--features radio` | Without it, ~13 phantom `tempo_audio` unresolved-crate errors. They are not real. |
 | tempo-audio full tests | `cargo test -p tempo-audio --features device,serial` — and **clippy needs the same features**: CI lints `cargo clippy tempo-audio --features device,serial`; a plain `--workspace` clippy sweep misses feature-gated code (bit 2026-08-02) |
 | propagation live fetchers | `--features live` |
 | UI typecheck is `tsc -b` | Not `--noEmit` (project references). Build = `tsc -b && vite build`; tests = `npm test` (vitest) in `ui/` |
 | Toolchain pinned 1.93.1 | CI pins exact stable; match it locally for clippy parity |
-| CI is the source of truth | `.github/workflows/ci.yml` — its comments document known traps. Read them before changing build wiring. When you learn a new trap, encode it there (or here), not in session memory. |
+| CI is the source of truth | `.github/workflows/ci.yml` — its comments document known traps, and `scripts/gates` derives the runnable list from it. Read them before changing build wiring. When you learn a new trap, encode it there (or here), not in session memory. |
+| Windows and macOS are only gated by CI | `windows-cross` needs a MinGW FFTW3f build (`crates/tempo-fast-sys/build.rs` prints the configure line; `FFTW_MINGW_PREFIX`, default `/tmp/fftw-mingw`), `macos-check` needs a Mac. A `#[cfg(windows)]` body is type-checked by neither a Linux compile nor a local run. Push and read the run. |
 
 <!-- BEGIN GENERATED operating-rules — DO NOT EDIT INSIDE THIS BLOCK.
      These rules are generated from the maintainer's rule source and re-emitted verbatim;
