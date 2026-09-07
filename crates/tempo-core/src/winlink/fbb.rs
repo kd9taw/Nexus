@@ -12,7 +12,7 @@
 //! Bytes, never `String`: a length byte, a checksum byte and an LZHUF body are all free to be any
 //! value at all, and decoding them as UTF-8 corrupts them inbound and — far worse — outbound.
 //!
-//! The proposal half is implemented below; the binary framer lands beside it.
+//! Both halves are implemented below.
 //!
 //! # The `FC` proposal line
 //!
@@ -93,6 +93,46 @@
 //!    byte zero — so `!1000000` reads as "start over" at the far end while this end waits for a
 //!    resume, which is a desync rather than a slow transfer. `+` says "start over" out loud.
 
+//! # The SOH/STX/EOT framing
+//!
+//! Once an `FS` line has accepted a proposal, the body crosses as a stream of binary records. The
+//! framing is the FBB forward protocol's own (f6fbb.org/fbbdoc/docfwpro.htm), which B2F carries
+//! over unchanged:
+//!
+//! ```text
+//! <SOH> <len> <title> NUL <offset> NUL       one header block, opening a file
+//! <STX> <len> <data ...>                     zero or more data blocks
+//! <EOT> <checksum>                           end of file
+//! ```
+//!
+//! Three facts, and each has an obvious reading that is wrong:
+//!
+//! * **`<len>` is one byte, and `0x00` means 256** — a full block, not an empty one. A block
+//!   carrying no bytes is unrepresentable, which is why `0x00` was free to mean the maximum. An
+//!   implementation that reads it as zero silently splits every full block in the transfer.
+//! * **The checksum covers the STX data bytes and nothing else** — not the SOH header, not the
+//!   markers, not the length bytes. It is the **two's complement** of their sum, so the receiver's
+//!   check is `Σ data + checksum ≡ 0 (mod 256)`. Widening the sum to the whole wire record is the
+//!   easy mistake, and it is invisible against a sender that made the same one.
+//! * **A block whose checksum fails delivers nothing.** Its data blocks parsed cleanly and
+//!   completely before the EOT arrived, so a framer that hands frames on as it parses them looks
+//!   entirely correct until the first corrupt transfer, and then delivers corrupt mail. [`Framer`]
+//!   therefore holds a block back until its own EOT vouches for it — [`Framer::feed`] returns
+//!   nothing before then — which is the spec's second negative control (§5).
+//!
+//! ⚠️ **Write to the implementation, not to the 2017 ARDOP host-interface PDF** (spec §7). That
+//! document disagrees with every shipped implementation on data framing — `D:`/`d:` prefixes
+//! ardopcf does not implement, and a 3-byte tag counted inside the length. The vendor-spec rule
+//! cuts the other way here, and the two rules above are pinned by property tests and by a fixture
+//! whose checksum was derived outside this codebase.
+//!
+//! What the framer deliberately does **not** do: interpret the SOH payload (the title and offset
+//! belong to the session that proposed the message, not to a framer), and bound the size of a
+//! transfer. The wire buffer is self-bounding — a record is at most 258 bytes, so at most 257 can
+//! sit incomplete — but the accumulated block grows with the message. The number that bounds it is
+//! the proposal's `c-size`, which the session holds; duplicating a guess at it here would refuse a
+//! legal transfer on a limit no protocol document states.
+
 /// The proposal code Nexus speaks: `FC`, the B2 compressed proposal.
 ///
 /// Exposed because [`Proposal::kind`] is a public field a consumer has to fill in, and a bare
@@ -146,8 +186,18 @@ pub enum FbbError {
     /// Raised by the session that owns both halves of the comparison — this module supplies the
     /// checksum byte, and the block and its `F>` line are the session's to hold.
     ProposalChecksum,
+    /// The `EOT` checksum does not match the two's complement of the sum of the block's data
+    /// bytes, so the block is corrupt and **none of it may be delivered** — see [`Framer`].
+    ///
+    /// Distinct from [`ProposalChecksum`](FbbError::ProposalChecksum) because the two are
+    /// different negative controls over different bytes (spec §5) and a session answers them
+    /// differently: a bad proposal block is re-proposable, a bad body block failed a transfer.
+    EotChecksum,
     /// A line did not parse: wrong proposal code, wrong field count, a size that is not ASCII
     /// decimal or does not fit `u32`, an empty MID, or a malformed message type.
+    ///
+    /// Also raised by [`Framer`] for a byte that is not one of the three framing markers, which is
+    /// the same fault at the other layer: the stream is not what it claims to be.
     Malformed,
 }
 
@@ -276,6 +326,168 @@ pub fn fs_answer(proposals: &[Proposal], have: impl Fn(&[u8]) -> HaveState) -> V
     }
     line.push(b'\r');
     line
+}
+
+/// The FBB framing markers, as ASCII control codes and under the protocol's own names.
+const SOH: u8 = 0x01;
+const STX: u8 = 0x02;
+const EOT: u8 = 0x04;
+
+/// The largest payload one block can carry — and the size a `0x00` length byte means.
+const MAX_BLOCK: usize = 256;
+
+/// One complete record off the SOH/STX/EOT wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Frame {
+    /// An `SOH` header block: the payload verbatim, `<title> NUL <offset> NUL`.
+    ///
+    /// Handed on **unparsed and uninterpreted**. The title binds the bytes that follow to one of
+    /// the MIDs this station accepted, and the offset is the `!offset` resume the `FS` answer may
+    /// have asked for — both are the session's to read, and a framer that split them here would be
+    /// guessing at a grammar it has no other reason to know. It is carried rather than dropped
+    /// because dropping it is the silent loss: the data blocks alone cannot say which message they
+    /// are, and a receiver that inferred it from proposal order would mis-file mail the first time
+    /// a sender skipped one.
+    Header(Vec<u8>),
+    /// An `STX` data block payload — the bytes the checksum covers, in wire order.
+    Data(Vec<u8>),
+    /// `EOT`, and its checksum verified. Never emitted for a block that failed: see [`Framer`].
+    Eot,
+}
+
+/// Reassembles the SOH/STX/EOT stream from arbitrary chunk boundaries, delivering only what an
+/// `EOT` has vouched for.
+///
+/// The shape is `tempo_net::aprsis::Session`'s — an internal `buf` the caller extends with
+/// whatever bytes arrived, and a `feed` that drains every complete unit the buffer now holds — so
+/// a transfer unit-tests from a `Vec<u8>` with no socket, and the chunk-boundary bug class FlexCat
+/// paid for is a property test rather than a field report.
+///
+/// Two rules make it more than a splitter, and both are the module header's third fact:
+///
+/// 1. **Nothing is delivered before its `EOT`.** Parsed blocks accumulate unpublished; the `EOT`
+///    that verifies moves them, together, into the delivery buffer. There is no window in which a
+///    caller can act on data the checksum has not covered.
+/// 2. **A checksum failure is terminal.** FBB has no resynchronisation marker, so a framer that
+///    has been handed a corrupt transfer cannot honestly claim to know where the next record
+///    begins; it latches the refusal and returns it to every later [`feed`](Framer::feed). What
+///    *did* verify before the failure stays retrievable through
+///    [`take_delivered`](Framer::take_delivered) — that is why the delivery buffer outlives
+///    `feed`'s `Result` instead of being only its return value.
+#[derive(Debug, Default)]
+pub struct Framer {
+    /// Wire bytes not yet consumed by a complete record. Self-bounding: a record is at most
+    /// `2 + MAX_BLOCK` bytes, so at most `2 + MAX_BLOCK - 1` can sit here incomplete.
+    buf: Vec<u8>,
+    /// Blocks parsed since the last `EOT`, held back until one vouches for them.
+    pending: Vec<Frame>,
+    /// Running `Σ` of the data bytes in `pending`, which the `EOT` checksum must complement.
+    sum: u8,
+    /// Verified frames the caller has not collected yet.
+    delivered: Vec<Frame>,
+    /// The latched refusal, if the stream has failed. See rule 2 above.
+    failed: Option<FbbError>,
+}
+
+impl Framer {
+    /// A framer at the start of a stream.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feeds received bytes; returns every frame the stream has now vouched for.
+    ///
+    /// An empty `Ok` is the ordinary answer to a chunk that did not complete a block — including a
+    /// chunk that completed several data blocks whose `EOT` has not arrived. An `Err` is terminal:
+    /// see rule 2 on [`Framer`], and collect anything already verified with
+    /// [`take_delivered`](Framer::take_delivered).
+    pub fn feed(&mut self, chunk: &[u8]) -> Result<Vec<Frame>, FbbError> {
+        if let Some(err) = self.failed {
+            return Err(err);
+        }
+        self.buf.extend_from_slice(chunk);
+        // `?` on purpose: an early return leaves `delivered` holding whatever earlier blocks
+        // verified, for the caller that handles the error to collect.
+        self.drain()?;
+        Ok(self.take_delivered())
+    }
+
+    /// Takes the verified frames collected so far, leaving the buffer empty.
+    ///
+    /// [`feed`](Framer::feed) drains this on its way out, so after a successful feed there is
+    /// nothing here. It is public for the caller that took an `Err`: the frames a *previous* `EOT`
+    /// vouched for are still good, and this is how they are collected.
+    pub fn take_delivered(&mut self) -> Vec<Frame> {
+        std::mem::take(&mut self.delivered)
+    }
+
+    /// Consumes every complete record in `buf`, publishing each verified block.
+    ///
+    /// Returns `Ok(())` when the buffer holds only an incomplete record — a short read is not a
+    /// fault — and stops on the first record that is corrupt or unframeable.
+    fn drain(&mut self) -> Result<(), FbbError> {
+        loop {
+            let Some(&marker) = self.buf.first() else {
+                return Ok(());
+            };
+            match marker {
+                SOH | STX => {
+                    let Some(&len_byte) = self.buf.get(1) else {
+                        return Ok(());
+                    };
+                    // `0x00` is a full block, never an empty one — the module header's first fact.
+                    let len = if len_byte == 0 {
+                        MAX_BLOCK
+                    } else {
+                        usize::from(len_byte)
+                    };
+                    if self.buf.len() < 2 + len {
+                        return Ok(());
+                    }
+                    let payload: Vec<u8> = self.buf.drain(..2 + len).skip(2).collect();
+                    if marker == STX {
+                        // Only these bytes are summed. Widening this to the record, or to the SOH
+                        // header, is the mistake the pinned fixture exists to catch.
+                        for &byte in &payload {
+                            self.sum = self.sum.wrapping_add(byte);
+                        }
+                        self.pending.push(Frame::Data(payload));
+                    } else {
+                        self.pending.push(Frame::Header(payload));
+                    }
+                }
+                EOT => {
+                    let Some(&checksum) = self.buf.get(1) else {
+                        return Ok(());
+                    };
+                    self.buf.drain(..2);
+                    let sum = self.sum;
+                    self.sum = 0;
+                    let block = std::mem::take(&mut self.pending);
+                    // The receiver's form of the rule, verbatim from the FBB document: "the sum of
+                    // the data and the checksum received, modulo 256, shall be equal to zero".
+                    if sum.wrapping_add(checksum) != 0 {
+                        return Err(self.fail(FbbError::EotChecksum));
+                    }
+                    self.delivered.extend(block);
+                    self.delivered.push(Frame::Eot);
+                }
+                // Not a marker: the stream is not FBB framing, or we are no longer aligned to it.
+                _ => return Err(self.fail(FbbError::Malformed)),
+            }
+        }
+    }
+
+    /// Latches `err` and discards everything unverified, so no later call can deliver from a
+    /// stream whose alignment is no longer known. `delivered` is untouched — it holds only frames
+    /// an `EOT` already vouched for.
+    fn fail(&mut self, err: FbbError) -> FbbError {
+        self.failed = Some(err);
+        self.buf.clear();
+        self.pending.clear();
+        self.sum = 0;
+        err
+    }
 }
 
 #[cfg(test)]
@@ -497,5 +709,247 @@ mod tests {
     #[test]
     fn an_empty_block_answers_with_no_characters() {
         assert_eq!(fs_answer(&[], |_| HaveState::No), b"FS \r".to_vec());
+    }
+}
+
+#[cfg(test)]
+mod framer_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// The `SOH` header payload the test framer emits: an FBB title/offset header, NUL-separated.
+    /// Its bytes sum to 586, so a checksum that wrongly folded the header in would come out
+    /// 0xA2 instead of 0xEC on the pinned block below — the header's exclusion is *observable*.
+    const TEST_HEADER: &[u8] = b"TESTMID\x000\x00";
+
+    /// Frames `body` the way an FBB sender does: one `SOH` header block, then `STX` data blocks of
+    /// at most 256 bytes (a full block writes length `0x00`), then `EOT` carrying the
+    /// two's-complement checksum over the **data bytes only**.
+    ///
+    /// ⚠️ This helper folds the checksum with the same arithmetic the shipped [`Framer`] verifies
+    /// with, so every property test built on it is self-consistent by construction. The pinned
+    /// wire bytes in [`pinned_wire_bytes_match_an_independently_derived_checksum`] are what make
+    /// the value itself falsifiable.
+    fn build_stx_block(body: &[u8]) -> Vec<u8> {
+        let mut out = vec![SOH, TEST_HEADER.len() as u8];
+        out.extend_from_slice(TEST_HEADER);
+        for chunk in body.chunks(MAX_BLOCK) {
+            out.push(STX);
+            // The wire has no way to say 256 in one byte, so 0x00 means a full block.
+            out.push(if chunk.len() == MAX_BLOCK {
+                0
+            } else {
+                chunk.len() as u8
+            });
+            out.extend_from_slice(chunk);
+        }
+        let sum = body.iter().fold(0u8, |a, &b| a.wrapping_add(b));
+        out.push(EOT);
+        out.push(0u8.wrapping_sub(sum));
+        out
+    }
+
+    /// Every `Frame::Data` payload in order, which for a single verified block is the message.
+    fn data_of(frames: &[Frame]) -> Vec<u8> {
+        frames
+            .iter()
+            .flat_map(|f| match f {
+                Frame::Data(d) => d.clone(),
+                Frame::Header(_) | Frame::Eot => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// The spec's second negative control (§5): a bad EOT checksum MUST fail and MUST NOT deliver.
+    /// The data blocks parsed cleanly and completely before the EOT arrived, so an implementation
+    /// that handed frames on as it parsed them passes every round-trip test here and fails this.
+    #[test]
+    fn a_bad_eot_checksum_fails_and_delivers_nothing() {
+        let mut framer = Framer::new();
+        let mut stream = build_stx_block(b"hello");
+        let n = stream.len();
+        stream[n - 1] ^= 0x01; // corrupt the EOT checksum byte
+        let out = framer.feed(&stream);
+        assert_eq!(out, Err(FbbError::EotChecksum), "bad EOT checksum must fail");
+        assert!(
+            framer.take_delivered().is_empty(),
+            "a bad EOT must not deliver"
+        );
+    }
+
+    /// Pins the wire bytes against a checksum derived outside this codebase — by hand and again in
+    /// Python from the protocol rule alone (`(-Σ data) mod 256`), never from this module. `hello`
+    /// sums to 532, 532 mod 256 = 20, and 256 - 20 = 236 = 0xEC.
+    ///
+    /// Two facts are pinned at once, and the second is the one that is easy to get wrong: the
+    /// checksum covers the **STX data only**. Folding the `SOH` header's bytes in would give 0xA2,
+    /// which this test proves the framer rejects.
+    #[test]
+    fn pinned_wire_bytes_match_an_independently_derived_checksum() {
+        let good: &[u8] = &[
+            0x01, 0x0A, 0x54, 0x45, 0x53, 0x54, 0x4D, 0x49, 0x44, 0x00, 0x30, 0x00, 0x02, 0x05,
+            0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x04, 0xEC,
+        ];
+        assert_eq!(build_stx_block(b"hello"), good, "the helper drifted");
+
+        let mut framer = Framer::new();
+        let frames = framer.feed(good).expect("0xEC is the checksum over the data");
+        assert_eq!(
+            frames,
+            vec![
+                Frame::Header(TEST_HEADER.to_vec()),
+                Frame::Data(b"hello".to_vec()),
+                Frame::Eot
+            ]
+        );
+
+        // 0xA2 is the checksum this block would carry if the SOH header counted. It must fail.
+        let mut header_folded_in = good.to_vec();
+        *header_folded_in.last_mut().expect("non-empty") = 0xA2;
+        assert_eq!(
+            Framer::new().feed(&header_folded_in),
+            Err(FbbError::EotChecksum),
+            "the SOH header must not count toward the EOT checksum"
+        );
+    }
+
+    /// The length byte's `0x00 == 256` rule and its checksum, both pinned to bytes computed in
+    /// Python: 256 copies of 0xAA sum to 43520, which is 0 mod 256, so the checksum is also 0x00.
+    /// A full block is the one case where the length byte and the checksum are both the value an
+    /// off-by-one implementation reads as "empty".
+    #[test]
+    fn a_full_block_writes_a_zero_length_byte_and_a_zero_checksum() {
+        let body = vec![0xAAu8; 256];
+        let framed = build_stx_block(&body);
+        let tail = &framed[framed.len() - 260..];
+        assert_eq!((tail[0], tail[1]), (STX, 0x00), "256 is written as 0x00");
+        assert_eq!(
+            (framed[framed.len() - 2], framed[framed.len() - 1]),
+            (EOT, 0x00)
+        );
+        let frames = Framer::new().feed(&framed).expect("valid block");
+        assert_eq!(data_of(&frames), body);
+    }
+
+    /// Nothing may be handed on before the EOT that vouches for it. Feeding a complete data block
+    /// with the EOT withheld must deliver nothing at all.
+    #[test]
+    fn nothing_is_delivered_before_the_eot() {
+        let framed = build_stx_block(b"hello");
+        let mut framer = Framer::new();
+        let frames = framer
+            .feed(&framed[..framed.len() - 2])
+            .expect("a truncated stream is incomplete, not corrupt");
+        assert!(frames.is_empty(), "delivered before the EOT: {frames:?}");
+        assert!(framer.take_delivered().is_empty());
+    }
+
+    /// A block already vouched for by its own EOT is not un-delivered by a later corrupt block —
+    /// the caller that took the error can still collect what verified. This is why the delivery
+    /// buffer outlives `feed`'s `Result`.
+    #[test]
+    fn a_verified_block_survives_a_later_bad_checksum() {
+        let mut stream = build_stx_block(b"first");
+        let mut bad = build_stx_block(b"second");
+        let n = bad.len();
+        bad[n - 1] ^= 0x01;
+        stream.extend_from_slice(&bad);
+
+        let mut framer = Framer::new();
+        assert_eq!(framer.feed(&stream), Err(FbbError::EotChecksum));
+        assert_eq!(data_of(&framer.take_delivered()), b"first".to_vec());
+        assert!(framer.take_delivered().is_empty(), "drained twice");
+    }
+
+    /// FBB has no resynchronisation marker, so a framer that has lost the stream stays lost: every
+    /// later feed returns the same refusal rather than pretending the next byte begins a record.
+    #[test]
+    fn a_failed_framer_stays_failed() {
+        let mut framer = Framer::new();
+        let mut stream = build_stx_block(b"hello");
+        let n = stream.len();
+        stream[n - 1] ^= 0x01;
+        assert_eq!(framer.feed(&stream), Err(FbbError::EotChecksum));
+        assert_eq!(
+            framer.feed(&build_stx_block(b"a perfectly good block")),
+            Err(FbbError::EotChecksum)
+        );
+    }
+
+    /// A byte that is not one of the three framing markers is a desync, not data.
+    #[test]
+    fn a_byte_that_is_not_a_framing_marker_is_refused() {
+        let mut framer = Framer::new();
+        assert_eq!(framer.feed(b"FF\r"), Err(FbbError::Malformed));
+        assert_eq!(framer.feed(&build_stx_block(b"x")), Err(FbbError::Malformed));
+    }
+
+    /// The chunk-boundary bug class FlexCat already paid for (spec §5): the same stream fed one
+    /// byte at a time must produce exactly the same frames, in the same order, as fed whole.
+    #[test]
+    fn one_byte_at_a_time_is_the_same_as_whole() {
+        let body: Vec<u8> = (0..600u32).map(|i| (i % 251) as u8).collect();
+        let framed = build_stx_block(&body);
+
+        let whole = Framer::new().feed(&framed).expect("valid");
+        let mut framer = Framer::new();
+        let mut piecemeal = Vec::new();
+        for byte in &framed {
+            piecemeal.extend(framer.feed(&[*byte]).expect("valid"));
+        }
+        assert_eq!(piecemeal, whole);
+        assert_eq!(data_of(&whole), body);
+    }
+
+    proptest! {
+        /// `0x00` means 256, both ways: every length from 1 to 256 must survive framing and
+        /// reframing byte for byte, and 256 is the only value that writes a `0x00` length byte.
+        #[test]
+        fn stx_length_byte_roundtrips_including_256(len in 1usize..=MAX_BLOCK) {
+            let body = vec![0xAAu8; len];
+            let framed = build_stx_block(&body);
+            let mut framer = Framer::new();
+            let frames = framer.feed(&framed).expect("valid block");
+            prop_assert_eq!(data_of(&frames), body);
+        }
+
+        /// The wire fact the receiver checks, stated as the FBB document states it:
+        /// `Σ data + eot_checksum ≡ 0 (mod 256)`, for bodies spanning one, two and three blocks.
+        #[test]
+        fn eot_checksum_is_twos_complement(body in proptest::collection::vec(any::<u8>(), 0..300)) {
+            let sum = body.iter().fold(0u8, |a, &b| a.wrapping_add(b));
+            let framed = build_stx_block(&body);
+            let cksum = *framed.last().expect("non-empty");
+            prop_assert_eq!(sum.wrapping_add(cksum), 0u8);
+            prop_assert_eq!(data_of(&Framer::new().feed(&framed).expect("valid")), body);
+        }
+
+        /// A negative control on the checksum itself: a one-byte change anywhere from the first
+        /// `STX` to the checksum must never deliver the original body. A checksum that ignored
+        /// its input, or that summed the wrong bytes, passes the two properties above and fails
+        /// this one.
+        ///
+        /// The `SOH` header is deliberately outside the range: FBB does not checksum it, so a
+        /// change there IS delivered unchanged, and that is the protocol rather than a defect.
+        #[test]
+        fn any_single_byte_corruption_after_the_header_is_refused(
+            body in proptest::collection::vec(any::<u8>(), 1..80),
+            offset in 0usize..4096,
+            mask in 1u8..=255,
+        ) {
+            let mut framed = build_stx_block(&body);
+            let start = 2 + TEST_HEADER.len();
+            let index = start + offset % (framed.len() - start);
+            framed[index] ^= mask;
+            let mut framer = Framer::new();
+            // A corrupted length or marker byte leaves the record incomplete or unframeable
+            // rather than merely corrupt — an empty delivery or a refusal. Either way the
+            // original body must not come out the other side.
+            let delivered = framer.feed(&framed).unwrap_or_default();
+            prop_assert!(
+                delivered.is_empty() || data_of(&delivered) != body,
+                "a one-byte change at {} delivered the original body", index
+            );
+        }
     }
 }
