@@ -30,7 +30,10 @@
 //!   block. Their field grammars differ from `FC`'s, so [`parse_proposal`] handles `FC` only and
 //!   refuses the others as [`FbbError::Malformed`] rather than mis-slicing them; the code byte
 //!   still survives into [`Proposal::kind`] so that a proposal built elsewhere can be answered
-//!   safely (see the `FS` table below). Nexus proposes and accepts only `FC`.
+//!   safely (see the `FS` table below). Nexus proposes and accepts only `FC` — but it still
+//!   **answers** an `FA`/`FB` line, because the `FS` answer is positional and a refusal here does
+//!   not remove the line from the block. See "the answer is positional" below; that is the one
+//!   obligation this parser's refusals place on its caller.
 //! * **`<type>`** — the message type: one or two alphanumerics. B2F names `EM` (encapsulated
 //!   message) and `CM` (Winlink control message). Validated for shape and then **discarded**:
 //!   nothing in the transfer branches on it (the B2 message carries its own headers), and a
@@ -81,6 +84,28 @@
 //!
 //! [`fs_answer`] emits the four left-hand forms; the right-hand column is what a peer may send
 //! back and belongs to the session that parses an inbound `FS`.
+//!
+//! ## ⚠️ The answer is positional, so a refused proposal line still owns a slot
+//!
+//! **One answer character per proposal line in the block, parsed or not.** This is the caller's
+//! obligation and it is absolute, because the `FS` line carries no MIDs: the peer matches answer
+//! *i* to the proposal it sent *i*th and nothing else identifies which message an answer is about.
+//!
+//! [`parse_proposal`] refuses `FA`, `FB` and anything garbled with [`FbbError::Malformed`], and the
+//! obvious caller shape — map the parser over the lines, keep the `Ok`s — is the damaging one. Drop
+//! one line out of `FA … / FC … / F> XX` and the answer is `FS +\r` where the block needed two
+//! characters: the peer reads that `+` as accepting proposal #1 and sends the `FA` message's body,
+//! this end decodes it as the `FC` message, and the `FC` message is treated as unanswered and never
+//! sent. Every proposal after the dropped one is off by one for the rest of the session, and
+//! nothing on the wire says so — the desync is silent all the way to corrupt mail.
+//!
+//! So a line this module refuses is carried, not dropped: build a [`Proposal`] by hand with its
+//! `kind` set to any byte that is **not** [`PROPOSAL_CODE_FC`] (the line's own code byte for
+//! `FA`/`FB`; any non-`C` byte for a garbled `FC`, since the slot must not be answered `+` when the
+//! sizes behind it are unreadable), an empty `mid` and zero sizes. That selects [`fs_answer`]'s
+//! deferring branch, so the slot is filled with `=`: the count stays right, and rule 1 below keeps
+//! the message queued at the peer instead of answering it away. [`super::b2f::Session`] is the
+//! worked example.
 //!
 //! Two rules in [`fs_answer`] are worth their own sentence, because both are cases where the
 //! obvious answer is the damaging one:
@@ -207,6 +232,16 @@ pub enum FbbError {
 /// splits on CR and one that hands over the CR are both reasonable and this is not the place to
 /// care which. Spaces are single and significant: a doubled space shifts every field, so it is a
 /// refusal rather than something to normalise.
+///
+/// # ⚠️ An `Err` here does not excuse the caller from answering the line
+///
+/// The `FS` answer is strictly positional — answer *i* belongs to the *i*th line of the block, and
+/// nothing else says which message it is about — so a caller that drops a refused line shortens the
+/// answer by one character and slides every answer after it onto the wrong message. Carry the
+/// refused line instead, as a [`Proposal`] whose `kind` is not [`PROPOSAL_CODE_FC`], which makes
+/// [`fs_answer`] fill the slot with `=`. The module header states the obligation in full;
+/// `b2f::Session::handle_proposal` is the worked example, and the two tests named
+/// `..._still_occupies_its_answer_slot` (one here, one in `b2f`) are what pin it.
 pub fn parse_proposal(line: &[u8]) -> Result<Proposal, FbbError> {
     let body = trim_terminator(line);
 
@@ -703,6 +738,62 @@ mod tests {
         ];
         let line = fs_answer(&props, |_| HaveState::No);
         assert_eq!(line, b"FS =+\r".to_vec());
+    }
+
+    /// The caller obligation from the module header, end to end from the wire: a line
+    /// [`parse_proposal`] refuses still owns a slot in the answer.
+    ///
+    /// The test above hand-builds its proposals, so it pins `fs_answer` alone. This one starts
+    /// from the block as it arrives and runs the whole recipe — parse each line, carry each
+    /// refusal as a non-`FC` `Proposal`, answer once — which is the part a caller can get wrong.
+    /// Both halves are asserted because they fail differently: a short answer desynchronises
+    /// every later proposal, and a right-length answer with the `+` in the wrong slot sends the
+    /// wrong message's body under the right message's name.
+    #[test]
+    fn a_refused_proposal_line_still_occupies_its_answer_slot() {
+        // B2F: `FA`/`FB` "may be intermixed" with `FC`. Only the middle line is one this build
+        // can read — the first is a foreign proposal code, the last a garbled `FC` (`five` is not
+        // a size).
+        let block: [&[u8]; 3] = [
+            b"FA EM AAAAAAAAAAAA 100 80 0\r",
+            b"FC EM BBBBBBBBBBBB 200 150 0\r",
+            b"FC EM CCCCCCCCCCCC 7 five 0\r",
+        ];
+        assert_eq!(
+            block
+                .iter()
+                .filter(|line| parse_proposal(line).is_err())
+                .count(),
+            2,
+            "the fixture is only worth anything if the parser really refuses two of these"
+        );
+
+        let proposals: Vec<Proposal> = block
+            .iter()
+            .map(|line| {
+                parse_proposal(line).unwrap_or(Proposal {
+                    // Anything but `PROPOSAL_CODE_FC`, which is what makes the slot defer. The
+                    // garbled `FC` may *not* keep its own `C`: that would answer `+` and commit
+                    // this end to receiving a body whose declared size it could not read.
+                    kind: b'?',
+                    mid: Vec::new(),
+                    u_size: 0,
+                    c_size: 0,
+                })
+            })
+            .collect();
+
+        let answer = fs_answer(&proposals, |_| HaveState::No);
+        assert_eq!(
+            answer.len() - b"FS \r".len(),
+            block.len(),
+            "one answer character per proposal line, parsed or not: {answer:?}"
+        );
+        assert_eq!(
+            answer,
+            b"FS =+=\r".to_vec(),
+            "the readable proposal must be answered in the slot it was proposed in"
+        );
     }
 
     /// Documented degenerate case, pinned so it cannot drift into something that looks like a

@@ -1148,6 +1148,49 @@ mod tests {
         assert!(session.wants_close());
     }
 
+    /// The caller half of the `fbb` module header's positional-answer rule, which is this
+    /// session: a proposal line [`fbb::parse_proposal`] refuses still owns a slot in the `FS`
+    /// answer.
+    ///
+    /// `handle_proposal`'s obvious shape — keep the `Ok`s and drop the rest — answers this
+    /// three-line block `FS +\r`. The peer would read that single `+` as accepting proposal #1
+    /// and send `AAAAAAAAAAAA`'s body, this end would decode it as `BBBBBBBBBBBB`, and
+    /// `BBBBBBBBBBBB` would be treated as answered and never sent. Nothing on the wire reports
+    /// that, which is why the count is asserted here rather than left to the transfer to reveal.
+    #[test]
+    fn an_unparseable_proposal_line_still_occupies_its_answer_slot() {
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+        let mut session = Session::new(&cfg, Role::Client);
+        session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+
+        // B2F allows `FA`/`FB` intermixed with `FC`. The last line is a garbled `FC` — a second
+        // refusal by a different route, so a fix that only special-cased foreign codes is caught
+        // too. The checksum is taken over all three lines exactly as sent, refused or not.
+        let mut block = Vec::new();
+        block.extend_from_slice(b"FA EM AAAAAAAAAAAA 100 80 0\r");
+        block.extend_from_slice(b"FC EM BBBBBBBBBBBB 200 150 0\r");
+        block.extend_from_slice(b"FC EM CCCCCCCCCCCC 7 five 0\r");
+        session.feed(&block);
+        let actions = session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&block)).as_bytes());
+
+        let sent: Vec<Vec<u8>> = actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::Send(bytes) => Some(bytes.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sent,
+            vec![b"FS =+=\r".to_vec()],
+            "three proposal lines must be answered by three characters, with the one readable \
+             proposal in the slot it was proposed in: {actions:?}"
+        );
+    }
+
     /// Nothing is consumed after the session ends — a closed session that kept parsing could
     /// deliver a message from bytes that arrived after a checksum failure.
     #[test]
