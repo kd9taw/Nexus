@@ -446,6 +446,15 @@ fn normalize_rst(t: &str, digits: u8) -> Option<String> {
     let b = out.as_bytes();
     // Readability tops out at 5; no other position may be 0. At `digits == 3`
     // this is exactly the pre-batch-0 `b[1] != b'0' && b[2] != b'0'`.
+    //
+    // The `is_empty` guard is not dead code. Before batch 0 the length was fixed at 3 and `b[0]`
+    // could not fault; generalising to a `digits` parameter moved that guarantee into the caller,
+    // and the promoted `contest::FieldKind::Rst { digits }` carries no non-zero invariant — so a
+    // future ruleset declaring `digits: 0` would index an empty slice here. Refusing an empty
+    // token is the right answer anyway: a report with no digits is not a report.
+    if b.is_empty() {
+        return None;
+    }
     if (b'1'..=b'5').contains(&b[0]) && b[1..].iter().all(|&x| x != b'0') {
         Some(out)
     } else {
@@ -1574,6 +1583,17 @@ mod tests {
         seq.feed_text("W K\n", 10_500);
         assert_eq!(seq.state(), SeqState::ExchangeSent);
         assert_eq!(seq.peer(), Some("W1AW"));
+    }
+
+    /// `digits: 0` must refuse, not panic. Batch 0 generalised `normalize_rst` from a fixed
+    /// length of 3 to a caller-supplied `digits`, which moved the non-empty guarantee out of the
+    /// function and into a `contest::FieldKind::Rst { digits }` that does not carry it. Found by
+    /// the batch-0 review as a latent index-out-of-bounds; unreachable from any shipped ruleset,
+    /// which is exactly why it needs a test rather than a comment.
+    #[test]
+    fn an_rst_of_zero_digits_is_refused_rather_than_panicking() {
+        assert_eq!(normalize_rst("", 0), None);
+        assert_eq!(normalize_rst("599", 0), None);
     }
 
     #[test]
