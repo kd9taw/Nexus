@@ -90,11 +90,16 @@
 /// round-trips perfectly under either choice. It stays behind this one constant so that the
 /// shipping code has exactly one place to change.
 ///
-/// # Flipping it also means editing the tests — five of them
+/// # Flipping it also means editing tests in two files and re-deriving a fixture
 ///
 /// An earlier wording here promised the flip was "a one-line change with no other edit anywhere".
-/// That was false and is worth saying plainly, because the moment it matters is a live bench where
-/// a red suite reads as "the codec broke". Measured, with the constant set to `false`:
+/// The wording that replaced it promised the damage stopped at five tests in this file. Both were
+/// false, and it is worth saying plainly, because the moment it matters is a live bench where a
+/// red suite reads as "the codec broke". **Re-measure before trusting any count below** — the b2f
+/// half grows whenever a session test is added. With the constant set to `false`,
+/// `cargo test -p tempo-core --no-fail-fast` last measured twelve failures across two targets.
+///
+/// **In this file: five, each needing a different repair.**
 ///
 /// * `pinned_image_for_a_fixed_plaintext` and
 ///   `a_body_that_rebuilds_the_tree_round_trips_and_pins_its_image` fail on their pinned images —
@@ -109,9 +114,23 @@
 ///   [`crc_of`], it has to be rethought along with the three tests, or those three have to be
 ///   confined to the compressed-CRC reading.
 ///
-/// Nothing outside this file's tests needs an edit; `compress`/`decompress` both branch on the
-/// constant already, and `wire_header_is_crc_le_then_length_le_then_stream` is written as a branch
-/// so it holds either way.
+/// **In `tests/winlink_b2f.rs`: every session replay whose body reaches [`decompress`]** — seven
+/// when last measured. Six report `Lzhuf(Crc)` where the session should have succeeded or failed
+/// later for its own reason; the seventh asserts on *where* the session stopped consuming, and a
+/// session that fails at the CRC stops before the transcript's last byte. The replays that do not
+/// go red are the ones failing earlier — a bad `EOT` checksum, or a compressed length that
+/// disagrees with its proposal — because [`decompress`] is never reached.
+///
+/// Their single cause lives in a third file that is not Rust at all:
+/// `tests/fixtures/winlink/session1.trace` pins a compressed image sealed under the *current*
+/// setting, so under `false` `decompress` checks crc16(plaintext) against that prefix and rejects
+/// the body. Repairing them means re-deriving the fixture twice over — the image's 2-byte CRC
+/// prefix, and then the record's `EOT` checksum, which covers the STX data bytes that prefix
+/// lives in.
+///
+/// The shipping code needs no edit: `compress`/`decompress` both branch on the constant already,
+/// and `wire_header_is_crc_le_then_length_le_then_stream` is written as a branch so it holds
+/// either way.
 ///
 /// **It is no longer a guess.** Two independent primary sources and three captured images agree
 /// that the CRC covers the compressed image:
@@ -1068,8 +1087,9 @@ mod tests {
         let prefix = u16::from_le_bytes([image[0], image[1]]);
         // The seam, read both ways round: whichever way LZHUF_CRC_OVER_COMPRESSED is set, the
         // prefix must be the CRC of that input and must NOT be the CRC of the other one. Written
-        // as a branch rather than a pin so that *this* test survives the flip untouched. Five
-        // others do not — LZHUF_CRC_OVER_COMPRESSED's own doc lists them and says why.
+        // as a branch rather than a pin so that *this* test survives the flip untouched. Others
+        // do not, here and in tests/winlink_b2f.rs — LZHUF_CRC_OVER_COMPRESSED's own doc says
+        // which and why.
         if LZHUF_CRC_OVER_COMPRESSED {
             assert_eq!(
                 prefix,

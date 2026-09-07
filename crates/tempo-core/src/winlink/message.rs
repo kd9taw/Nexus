@@ -148,8 +148,8 @@ pub enum MessageError {
 pub enum AssembleError {
     /// [`Message::mid`] contains CR or LF, which would end the `Mid:` line inside the MID.
     Mid,
-    /// A [`Message::headers`] name is empty, or contains `:`, CR or LF. The colon is the one
-    /// that matters — see [`assemble_b2`].
+    /// A [`Message::headers`] name is empty, or contains `:`, CR or LF. The colon is the silent
+    /// one — see [`assemble_b2`] for the measured table of what each does.
     HeaderName,
     /// A [`Message::headers`] value contains CR or LF, which would end its line early and leave
     /// the remainder to be read as a header line of its own.
@@ -177,12 +177,39 @@ pub enum AssembleError {
 /// function could do about one except invent an encoding no other implementation reads, and it
 /// refuses instead.
 ///
-/// **Refusing rather than documenting is the colon's doing.** CR, LF and an empty attachment
-/// name all produce bytes [`parse_b2`] rejects, so they were caught by failing their own round
-/// trip, loudly. A colon in a header *name* is not: `a:b: c` parses back as the header `a` with
-/// the value `b: c` — `Ok`, and a **different message than went in**, with nothing anywhere to
-/// signal it. This is email over radio; a loud refusal beats a body the far end cannot know is
-/// wrong, so every unrepresentable field is now refused here and none is left to the round trip.
+/// **Most of these were never caught loudly.** Two earlier wordings here said that CR, LF and an
+/// empty attachment name all produce bytes [`parse_b2`] rejects, and that a colon in a header
+/// name was the only silent case. Measured — each guard deleted in turn, then a round trip — that
+/// is wrong in both directions. What every unrepresentable field actually does with its guard
+/// gone:
+///
+/// | field | CRLF pair | lone CR or lone LF | empty |
+/// |---|---|---|---|
+/// | [`Message::mid`] | **silent** | round-trips unchanged | n/a |
+/// | header name | `Malformed` | round-trips unchanged | `Malformed` |
+/// | header value | **silent** | round-trips unchanged | no guard; an empty value is legal |
+/// | [`Attachment::name`] | **silent** | round-trips unchanged | `Malformed` |
+///
+/// * **Silent** means `Ok` and a **different message than went in**, with nothing anywhere to
+///   signal it. The pair ends the line early, the field comes back truncated to what preceded it,
+///   and the remainder is read as a header line of its own: `mid = "M\r\nX: y"` round-trips to
+///   `mid = "M"` plus a header `X: y`. A colon in a header name is the same class — `a:b: c`
+///   parses back as the header `a` with the value `b: c`. Four fields, one failure mode.
+/// * A **lone CR or lone LF** is not caught anywhere, and does not corrupt here either:
+///   `split_line` cuts on the pair, so the byte rides through this parser and the field comes back
+///   byte-identical. It is refused on interoperability grounds rather than round-trip grounds —
+///   half a terminator is a byte a lenient implementation at the far end may well split on, and
+///   this format has no escape with which to promise otherwise.
+/// * Three cells are **loud**, and for unrelated reasons rather than as a class: a CRLF pair in a
+///   header *name* truncates the line to something with no colon left in it, which is not a header
+///   at all; an empty header name and an empty attachment name each fail a different one of
+///   [`parse_b2`]'s own field checks. Nothing generalises from them to the silent four.
+///
+/// This is email over radio; a loud refusal beats a body the far end cannot know is wrong, so
+/// every unrepresentable field is refused here and none is left to the round trip. Do not read
+/// any of these guards as belt-and-braces over something [`parse_b2`] already rejects: most are
+/// not, and all seven checks below are pinned — deleting any one of them turns exactly one test
+/// in this module red.
 ///
 /// One residual is deliberately not an error, because it is already loud: a
 /// [`headers`](Message::headers) entry named `Mid`, `Body` or `File` is a malformed [`Message`]
@@ -196,8 +223,10 @@ pub fn assemble_b2(msg: &Message) -> Result<Vec<u8>, AssembleError> {
         return Err(AssembleError::Mid);
     }
     for (name, value) in &msg.headers {
-        // The colon check is the one with teeth: without it this function emits `a:b: c`, which
-        // parses back as a header named `a`. The rest would be caught by the round trip.
+        // The colon check is the one whose absence is silent: this function would emit `a:b: c`,
+        // which parses back as a header named `a`. The other two are refused for reasons the
+        // round trip does not supply either — an empty or CRLF-bearing name is `Malformed` on the
+        // way back, not a different message. See this function's doc for the measured table.
         if name.is_empty() || name.contains(&b':') || has_line_break(name) {
             return Err(AssembleError::HeaderName);
         }
@@ -798,9 +827,11 @@ mod tests {
         assert_eq!(parse_b2(&assemble_b2(&ok).unwrap()), Ok(ok));
     }
 
-    /// The other two fields written into a header line. Both were caught by the round trip
-    /// before — loudly, as documented — and are refused up front now for the same reason the
-    /// colon is: the composer owns the field, so the composer gets the error.
+    /// The other two fields written into a header line, refused up front for the same reason the
+    /// colon is: the composer owns the field, so the composer gets the error. Neither CRLF case
+    /// was ever caught loudly by the round trip — a pair in the MID or in an attachment name
+    /// parses back `Ok` as a different message, and a lone CR parses back unchanged. The empty
+    /// attachment name is the one case here [`parse_b2`] refuses on its own.
     #[test]
     fn an_unrepresentable_mid_or_attachment_name_is_refused_by_assemble() {
         let msg = |mid: &[u8], name: &[u8]| Message {
