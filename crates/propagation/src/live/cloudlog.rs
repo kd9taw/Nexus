@@ -17,6 +17,11 @@
 /// comes out at **201 characters** (this bound, the ellipsis, and the longest prefix
 /// `classify` builds). A genuine Cloudlog reason lands well inside it — the reported
 /// station-profile rejection measures 96.
+///
+/// ⚠️ It is a SIZE bound and nothing else. It was once described as a backstop for the API-key
+/// scrub; it never was one, and the arithmetic says so plainly — a Cloudlog key is 33
+/// characters and this is 160, so a key echoed near-verbatim fits with 120 to spare. The
+/// scrub's backstop is [`echoes_key`], which fails closed.
 const REASON_MAX_CHARS: usize = 160;
 
 /// Build the QSO API endpoint from a user-entered base URL. Tolerant of a trailing slash, an
@@ -74,6 +79,101 @@ fn classify_body(text: &str, reason: Option<&str>) -> Result<String, String> {
     Ok(text.to_string())
 }
 
+/// What the operator is told instead of the body when the server echoed our own API key back.
+///
+/// Fixed text: nothing from the body survives. It is still the actionable half — an instance
+/// answering with the request it just received is a debug-mode notice or a proxy page, not
+/// Cloudlog, and that is a thing to go and look at.
+const KEY_ECHOED: &str = "the reply echoed the API key back, so its wording is withheld \
+                          (something is answering with the request it received)";
+
+/// How much of the key has to show through for [`echoes_key`] to suppress the body.
+///
+/// Twelve alphanumeric characters of a random key will not appear in a Cloudlog sentence or a
+/// proxy's error page by chance, and twelve characters of a credential is already more than
+/// belongs in a persisted file. Short enough that encoding one character in the middle cannot
+/// hide the rest, which is the failure this window exists for.
+const KEY_WINDOW: usize = 12;
+
+/// `s` reduced to its alphanumeric characters, lowercased.
+fn alnum_lower(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// `text` with every escape-shaped run deleted — HTML entities (`&#45;`, `&#x2D;`, `&amp;`),
+/// percent escapes (`%2D`) and backslash escapes (`\u002d`, `\x2d`).
+///
+/// Deliberately NOT a decoder: it removes the escape rather than producing the character it
+/// stood for. That is what [`echoes_key`] needs — the comparison drops non-alphanumerics
+/// anyway, so an escape standing for one of the key's separators has to VANISH rather than
+/// turn into the digits of its own code point (`&#45;` decoded is `-`, which then drops out;
+/// `&#45;` half-decoded is `45`, which wedges two digits into the middle of the key and hides
+/// it). Every form is bounded so a bare `&` or `%` in prose is left alone.
+fn strip_escapes(text: &str) -> String {
+    let c: Vec<char> = text.chars().collect();
+    let hex = |from: usize, n: usize| {
+        c.len() >= from + n && c[from..from + n].iter().all(char::is_ascii_hexdigit)
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            // An entity is at most `&#x10FFFF;`; anything longer is not one.
+            '&' => match c[i + 1..].iter().take(10).position(|ch| *ch == ';') {
+                Some(n) => i += n + 2,
+                None => {
+                    out.push(c[i]);
+                    i += 1;
+                }
+            },
+            '%' if hex(i + 1, 2) => i += 3,
+            '\\' if c.len() > i + 1 && c[i + 1] == 'u' && hex(i + 2, 4) => i += 6,
+            '\\' if c.len() > i + 1 && c[i + 1] == 'x' && hex(i + 2, 2) => i += 4,
+            ch => {
+                out.push(ch);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// ⛔ CREDENTIAL. Could a reader recover the API key from `text`?
+///
+/// The literal `str::replace` in [`server_reason`] catches a verbatim echo and nothing else:
+/// **one re-encoded character defeats it**. A server that echoes the request body does not
+/// have to echo it byte for byte — a PHP notice HTML-escapes what it prints, a WAF page
+/// percent-encodes it, a JSON error writes it as `\uXXXX`, and a zero-width character
+/// anywhere inside it leaves something that still reads as the key on screen. And truncation
+/// is not the backstop it was once described as: see [`REASON_MAX_CHARS`].
+///
+/// So this asks a much weaker question than "is the key present". Ignoring every
+/// non-alphanumeric, and again with escape-shaped runs deleted, does **any
+/// [`KEY_WINDOW`]-character stretch** of the key appear? A window rather than the whole key
+/// because encoding a single *letter* (`&#99;l0udl0g…`) drops one character out of the middle
+/// of the projection and whole-key containment then sees nothing — which is the same
+/// one-character defeat as `str::replace`, only better disguised.
+///
+/// Weaker is the point: a false positive costs a sentence, a false negative writes a
+/// credential into a world-readable file that nothing ever cleans up.
+fn echoes_key(text: &str, key: &str) -> bool {
+    let needle: Vec<char> = alnum_lower(key).chars().collect();
+    let win = needle.len().min(KEY_WINDOW);
+    // Below this the shape is not distinctive and ordinary prose would match it. A key this
+    // short is not a working Cloudlog key; the literal scrub still applies to it.
+    if win < 8 {
+        return false;
+    }
+    let views = [alnum_lower(text), alnum_lower(&strip_escapes(text))];
+    needle.windows(win).any(|w| {
+        let stretch: String = w.iter().collect();
+        views.iter().any(|v| v.contains(&stretch))
+    })
+}
+
 /// The server's own explanation of a failure, made safe to show — or `None` when it said
 /// nothing an operator can use.
 ///
@@ -85,20 +185,24 @@ fn classify_body(text: &str, reason: Option<&str>) -> Result<String, String> {
 ///
 /// Two things are done to the body before any of it is shown:
 ///
-/// 1. **The API key is scrubbed.** It rides in the REQUEST body, and a debug-mode PHP notice
-///    or a WAF page can echo a request straight back. This string does not stop at the panel
-///    — `src-tauri/src/lib.rs` keeps it in the connection log and writes it into
-///    `conn-health.json` — so an echoed key would land on disk in cleartext. The scrub is a
-///    literal match and therefore best-effort: a key the server re-encodes (HTML entities,
-///    say) would not be caught, which is the second reason for the bound below.
-/// 2. **It is flattened to one line and cut to [`REASON_MAX_CHARS`].**
+/// 1. **The API key is scrubbed, and the scrub fails closed.** The key rides in the REQUEST
+///    body, and a debug-mode PHP notice or a WAF page can echo a request straight back. This
+///    string does not stop at the panel — `src-tauri/src/lib.rs` keeps it in the connection
+///    log and writes it into `conn-health.json`, which is world-readable and persisted — so an
+///    echoed key would land on disk in cleartext. The literal replacement below catches a
+///    verbatim echo; [`echoes_key`] catches the rest, and when it fires **none of the body is
+///    shown**. There is no safe way to excise a key from a string that has been re-encoded
+///    around it, and a lost sentence is recoverable where a leaked credential is not.
+/// 2. **It is flattened to one line and cut to [`REASON_MAX_CHARS`].** A size bound, not a
+///    security one — see that constant.
 ///
 /// A JSON answer's explanation is read from its named field, because the object as a whole is
 /// machine shape rather than words for an operator. A body that is not JSON at all — a
 /// reverse proxy's HTML page, a PHP notice — IS the message, and a bounded slice of it is
 /// worth showing: knowing a proxy answered instead of Cloudlog is the actionable half.
 fn server_reason(text: &str, key: &str) -> Option<String> {
-    let scrubbed = match key.trim() {
+    let k = key.trim();
+    let scrubbed = match k {
         "" => text.to_string(),
         k => text.replace(k, "[api key]"),
     };
@@ -108,8 +212,14 @@ fn server_reason(text: &str, key: &str) -> Option<String> {
             .find_map(|f| v.get(f).and_then(serde_json::Value::as_str))
             .or_else(|| v.as_str())
             .map(str::to_string)?,
-        Err(_) => scrubbed,
+        Err(_) => scrubbed.clone(),
     };
+    // Fail closed. Both views are checked: `scrubbed` is the body as it arrived, and `words`
+    // is what serde produced from it — by which point any `\uXXXX` the server escaped the key
+    // with has already been decoded back into the key itself.
+    if !k.is_empty() && (echoes_key(&scrubbed, k) || echoes_key(&words, k)) {
+        return Some(KEY_ECHOED.to_string());
+    }
     // Control characters (newlines included) become spaces, then runs of whitespace collapse:
     // an HTML page is otherwise 40 blank lines in a tooltip.
     let flat = words
@@ -257,6 +367,88 @@ mod tests {
             "the reason must be surfaced: {err}"
         );
         assert!(!err.contains(KEY), "API key leaked into the message: {err}");
+    }
+
+    /// The key's own alphanumeric runs of 8 characters or more — here, `cl0udl0g` and
+    /// `abcdef0123456789`.
+    ///
+    /// This is the leak detector, and it is deliberately NOT the implementation's notion of a
+    /// match: re-encoding is something done to a key's *separators* (`-` becomes `&#45;`,
+    /// `%2D`, `\u002d`), so its alphanumeric runs come through every encoder untouched. A
+    /// message carrying one of these is a message a person can read the key out of, whatever
+    /// escaping sits between the runs. Asking the question this way keeps the test from
+    /// re-deriving the answer from the code under test.
+    fn key_runs(key: &str) -> Vec<String> {
+        key.split(|c: char| !c.is_alphanumeric())
+            .filter(|r| r.chars().count() >= 8)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// ⛔ CREDENTIAL. One re-encoded character must not defeat the scrub.
+    ///
+    /// The key rides in the REQUEST body, so a debug-mode PHP notice or a WAF page can echo it
+    /// straight back — and a server that echoes a request does not echo it byte for byte: it
+    /// HTML-escapes what it prints, or percent-encodes it, or escapes it as `\uXXXX` in JSON.
+    /// A literal `str::replace` catches none of those, and truncation is not the backstop it
+    /// was claimed to be: [`REASON_MAX_CHARS`] is 160 and a Cloudlog key is 33, so a
+    /// near-verbatim key fits with 120 characters to spare and lands in `conn-health.json`,
+    /// which is world-readable and persisted.
+    #[test]
+    fn a_re_encoded_api_key_never_reaches_the_message() {
+        let cases = [
+            // Fully HTML-entity encoded separators — a PHP notice printing what it received.
+            ("html entities", KEY.replace('-', "&#45;")),
+            // Hex entities, the other spelling of the same thing.
+            ("hex entities", KEY.replace('-', "&#x2D;")),
+            // Percent-encoded — a WAF page echoing a URL-encoded body.
+            ("percent escapes", KEY.replace('-', "%2D")),
+            // JSON's own escape, which the body is already made of.
+            ("json unicode escapes", KEY.replace('-', r"\u002d")),
+            // PARTIALLY encoded: ONE character. The case the review named, and the one that
+            // shows the defect is not about any particular encoder.
+            ("one separator", KEY.replacen('-', "&#45;", 1)),
+            // …and one encoded LETTER, which breaks a run as well as a separator.
+            ("one letter", KEY.replacen('c', "&#99;", 1)),
+            // A zero-width character wedged in: on screen this still reads as the key.
+            ("a zero-width split", KEY.replacen('-', "-\u{200b}", 1)),
+        ];
+        for (what, encoded) in cases {
+            let body =
+                format!(r#"{{"status":"failed","reason":"denied for key={encoded} (profile 7)"}}"#);
+            let runs = key_runs(&encoded);
+            // The positive control, per case: there IS still readable key material in this
+            // body. Without it an encoding that happened to destroy the key would read as a
+            // pass, and the case would be proving nothing.
+            assert!(
+                !runs.is_empty() && runs.iter().all(|r| body.contains(r)),
+                "control ({what}): no readable key material left in the body to leak"
+            );
+            let err = classify(403, &body, KEY).unwrap_err();
+            for r in &runs {
+                assert!(
+                    !err.contains(r.as_str()),
+                    "API key survived {what} into the message ({r}): {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_body_that_never_carried_the_key_still_says_what_the_server_said() {
+        // The control for the test above: failing closed must not mean failing silent. Same
+        // shape of body, no key in it — the server's words must still reach the operator, or
+        // "the key never leaks" would be satisfied by never showing anything.
+        let err = classify(
+            403,
+            r#"{"status":"failed","reason":"station_profile_id 7 is not linked to this API key"}"#,
+            KEY,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("station_profile_id 7 is not linked"),
+            "the reason was suppressed although the key was never in it: {err}"
+        );
     }
 
     #[test]
