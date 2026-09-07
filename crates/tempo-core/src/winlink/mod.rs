@@ -51,6 +51,43 @@ impl std::fmt::Debug for ClientConfig {
 mod tests {
     use super::*;
 
+    /// Compile-time guard for the *other* half of [`ClientConfig`]'s secret-hygiene invariant:
+    /// the struct must never implement `Serialize`. The `Debug` half is pinned by
+    /// [`debug_redacts_the_password`]; without this the no-`Serialize` half is prose only, and
+    /// a later `#[derive(Serialize)]` added to make some settings round-trip compile would put
+    /// the operator's Winlink password into a settings blob with the whole suite still green.
+    ///
+    /// Stable Rust cannot assert the *absence* of a trait impl directly, so this asks the
+    /// question through coherence instead. The blanket impl below covers every `T: Serialize`;
+    /// the second covers `ClientConfig` alone. The two overlap **if and only if**
+    /// `ClientConfig: Serialize`, and an overlap is a hard error — so the day the derive (or a
+    /// hand-written impl, or a `serde` shim) appears, tempo-core's test build stops with
+    /// `error[E0119]: conflicting implementations of trait
+    /// ClientConfigMustNotImplementSerialize for type ClientConfig`, pointing at both impls.
+    /// `ClientConfig` is local to this crate, so no upstream crate can add the impl behind our
+    /// back and the negative reasoning is sound.
+    ///
+    /// It costs no dependency and no runtime: a `trybuild` compile-fail case would want a new
+    /// dev-dependency and a second compilation to say the same thing. The guard is defeatable
+    /// only by deleting one of these two lines — a deliberate act, not the silent drift the
+    /// invariant exists to catch.
+    trait ClientConfigMustNotImplementSerialize {}
+    impl<T: serde::Serialize> ClientConfigMustNotImplementSerialize for T {}
+    impl ClientConfigMustNotImplementSerialize for ClientConfig {}
+
+    /// Names the guard above so the invariant has a test to fail, not just a build to break, and
+    /// so the guard trait is *used* (an unused private trait is a `dead_code` warning, and
+    /// clippy runs `-D warnings` here — the warning would be "fixed" by deleting the guard).
+    #[test]
+    fn client_config_does_not_implement_serialize() {
+        // Compiles only while `ClientConfig` satisfies the guard trait, which it does via the
+        // concrete impl above — the same impl that collides with the blanket one the moment
+        // `ClientConfig: Serialize`. The assertion is the compile, so there is nothing to check
+        // at run time.
+        fn requires_the_guard<T: ClientConfigMustNotImplementSerialize>() {}
+        requires_the_guard::<ClientConfig>();
+    }
+
     #[test]
     fn debug_redacts_the_password() {
         let cfg = ClientConfig {
