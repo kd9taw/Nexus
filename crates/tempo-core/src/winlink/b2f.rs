@@ -34,7 +34,7 @@
 //! >  FQ                              nor from us: end the session
 //! ```
 //!
-//! # Five readings, not citations
+//! # Six readings, not citations
 //!
 //! B2F's published grammar does not settle everything a state machine has to decide. As in
 //! [`super::sid`] and [`super::fbb`], each decision below is confined to one small function so a
@@ -67,6 +67,34 @@
 //!    product field — `WL2K` for a CMS — rather than from an invented constant, so the line says
 //!    what the peer actually called itself.
 //! 5. **What our SID advertises** ([`SID_FLAGS`]). See that constant.
+//! 6. **What a bracketed line means once the greeting is over** ([`Session::handle_sid`]). Every
+//!    `[`-leading line is a SID candidate, and one that does not parse is fatal **only until our
+//!    own greeting block has gone out**. The two halves are decided differently on purpose.
+//!    *Before* it, a bracketed line is the one place the peer's SID can appear, so refusing there
+//!    is what puts the fault where it is still legible — the lenient alternative leaves the
+//!    session waiting for a SID that already arrived garbled, and it dies later as "FBB command
+//!    before the peer's SID", naming a line that was never the problem. *After* it, the SID has
+//!    been accepted and the peer is a peer: a CMS puts banner and MOTD text on this same stream,
+//!    so a second bracketed line is text, and failing the session over it — with mail still
+//!    outstanding and the transport told to close — is exactly the forward-compatibility trap
+//!    [`super::sid`] documents at length and the `_ =>` arm of [`Session::handle_line`] already
+//!    refuses to fall into. Code and comment disagreed here until this reading was written down.
+//!    ⚠️ A peer that puts a *bracketed banner* line before its SID is still refused by this rule.
+//!    No observed CMS does, and if one does, the fix is one condition in this function: trace the
+//!    unparseable line in both states and let reading 1 close the greeting.
+//!
+//! # The one resource bound
+//!
+//! [`fbb::Framer`] holds every data block back until an `EOT` vouches for it — that is what makes
+//! "a corrupt block delivers nothing" true — so an inbound transfer accumulates in memory with
+//! nothing inside the framer to stop it, and `fbb`'s module header says so out loud and delegates
+//! the limit here: *"The number that bounds it is the proposal's `c-size`, which the session
+//! holds."* [`Session::transfer_ceiling`] takes it. A peer that streams `STX` blocks and never
+//! sends `EOT` is refused the moment it runs past what its own `FC` line proposed, because this
+//! stream is remote-controlled: the transport underneath is a socket to a CMS that may be buggy,
+//! MITM'd or hostile, and an unbounded `Vec` on the far end of one is the whole exposure.
+//! Exceeding it is [`SessionError::Protocol`] — the session ends — and never a truncation: a
+//! truncated body would be a *shorter* message delivered as if it were the whole one.
 //!
 //! # What this engine does not do yet
 //!
@@ -243,6 +271,10 @@ pub struct Session {
     framer: Framer,
     /// The compressed body of the transfer in flight, accumulated across its STX blocks.
     image: Vec<u8>,
+    /// Wire bytes fed to the framer since the transfer in flight opened, against
+    /// [`Session::transfer_ceiling`]. Counted here rather than in [`Framer`] because the number
+    /// that bounds it — the proposal's `c-size` — is held here; see the module header.
+    binary_bytes: u64,
 }
 
 impl Session {
@@ -266,6 +298,7 @@ impl Session {
             accepted: VecDeque::new(),
             framer: Framer::new(),
             image: Vec::new(),
+            binary_bytes: 0,
         }
     }
 
@@ -350,8 +383,18 @@ impl Session {
     /// carry B2 is refused at the handshake, where the reason is still legible, and **before we
     /// have told it our callsign** — a refusal that had already sent `;FW:` and `;PR:` would have
     /// logged in to a peer we then declined to talk to.
+    ///
+    /// **Reading 6** is the other half of that sentence: *at the handshake*. Once our greeting
+    /// block has gone out the peer's SID is behind us, and a `[`-leading line that does not parse
+    /// is banner or MOTD text on the same stream — traced and dropped, exactly as the unbracketed
+    /// text in [`Session::handle_line`]'s last arm is. See the module header for why the boundary
+    /// is `greeted` and not, say, `peer_sid.is_some()`.
     fn handle_sid(&mut self, line: &[u8], out: &mut Vec<Action>) {
         match sid::parse_sid(line) {
+            Err(_) if self.greeted => out.push(Action::Trace(format!(
+                "ignored bracketed line after the greeting: {}",
+                show(line)
+            ))),
             Err(err) => self.fail(out, SessionError::Sid(err)),
             Ok(parsed) => {
                 out.push(Action::Trace(format!(
@@ -588,6 +631,7 @@ impl Session {
         out.push(Action::Send(answer));
         if !self.accepted.is_empty() {
             self.state = State::Binary;
+            self.binary_bytes = 0;
         }
     }
 
@@ -600,8 +644,13 @@ impl Session {
     /// is handed, so a chunk that carried the final `EOT` *and* the `FF` line behind it would
     /// have the `F` refused as an unframeable marker. Nothing else can find that boundary — the
     /// binary phase ends where the accepted-transfer count runs out, and only the framer knows
-    /// when a record is complete. A transfer is bounded by the proposal's `c-size`, so the cost is
-    /// one call per body byte on a path that already ran a Huffman decoder over the same bytes.
+    /// when a record is complete. A transfer is bounded by the proposal's `c-size` — by the count
+    /// below, which is where that bound is taken — so the cost is one call per body byte on a
+    /// path that already ran a Huffman decoder over the same bytes.
+    ///
+    /// The count is checked **before** the byte is handed on, so nothing past the ceiling ever
+    /// reaches the framer's buffer: the peer chooses how much it sends, and this end chooses how
+    /// much of it it is willing to hold. See the module header's resource-bound section.
     fn drain_binary(&mut self, out: &mut Vec<Action>) -> bool {
         if self.buf.is_empty() {
             return false;
@@ -610,6 +659,16 @@ impl Session {
         while consumed < self.buf.len() && self.state == State::Binary {
             let byte = self.buf[consumed];
             consumed += 1;
+            self.binary_bytes += 1;
+            if self.binary_bytes > self.transfer_ceiling() {
+                self.fail(
+                    out,
+                    SessionError::Protocol(
+                        "a transfer ran past the compressed size its FC proposal declared",
+                    ),
+                );
+                break;
+            }
             match self.framer.feed(&[byte]) {
                 Ok(frames) => {
                     for frame in frames {
@@ -630,6 +689,25 @@ impl Session {
             self.buf.drain(..consumed);
         }
         true
+    }
+
+    /// The most wire bytes a **legal** transfer of the proposal now in flight can take.
+    ///
+    /// Worst legal case rather than likely case, on purpose. FBB framing permits a data block as
+    /// short as one byte (`0x00` in the length byte means 256, so an *empty* block is
+    /// unrepresentable, but a one-byte block is not), and each one costs its marker and its
+    /// length byte — three wire bytes per data byte. Around those sit one `SOH` record (marker,
+    /// length, and a payload of at most 256) and the two-byte `EOT`. A peer sending full blocks
+    /// lands near `c_size + 260`, so the slack is real; it is the price of not refusing a legal
+    /// transfer for choosing small blocks, on a limit no protocol document states. What the
+    /// number has to be is *finite and ours*, not tight.
+    ///
+    /// No proposal outstanding yields the framing-only floor. That state should be unreachable —
+    /// [`Session::complete_transfer`] leaves the binary phase when the last accepted proposal is
+    /// retired — and if it ever is reached, the bound holds there too rather than opening.
+    fn transfer_ceiling(&self) -> u64 {
+        let c_size = self.accepted.front().map_or(0, |p| u64::from(p.c_size));
+        3 * c_size + 258 + 2
     }
 
     /// One verified frame. Nothing reaches here that an `EOT` has not already vouched for, which
@@ -677,6 +755,8 @@ impl Session {
             return;
         };
         let image = std::mem::take(&mut self.image);
+        // The next transfer in the block is counted from zero against its own proposal.
+        self.binary_bytes = 0;
         if image.len() as u64 != u64::from(proposal.c_size) {
             self.fail(
                 out,
@@ -946,6 +1026,126 @@ mod tests {
             sent.ends_with(b";PR: 74706169\r"),
             "the late challenge must still produce a ;PR: line: {sent:?}"
         );
+    }
+
+    /// A session greeted, challenged, and holding exactly one accepted proposal of `c_size`
+    /// compressed bytes — the state the binary phase begins in. The `F>` checksum is computed
+    /// here rather than written out, because a wrong one would fail the block before the state
+    /// under test is reached, and the assertion below is what proves it was not.
+    fn session_awaiting_a_body(c_size: u32) -> Session {
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+        let mut session = Session::new(&cfg, Role::Client);
+        session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+        let fc = format!("FC EM AAAAAAAAAAAA 10 {c_size} 0\r").into_bytes();
+        session.feed(&fc);
+        let actions = session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&fc)).as_bytes());
+        assert!(
+            actions.contains(&Action::Send(b"FS +\r".to_vec())),
+            "the proposal must have been accepted for this fixture to mean anything: {actions:?}"
+        );
+        session
+    }
+
+    /// The module header's resource bound, and the reason it is not `fbb`'s to take: a peer that
+    /// streams `STX` blocks and never sends the `EOT` that would let `complete_transfer` compare
+    /// lengths is bounded by nothing else. `Framer` holds every block back until an `EOT` vouches
+    /// for it, so those bytes are live memory, and the transport underneath is a socket to a CMS
+    /// that may be buggy, MITM'd or hostile.
+    ///
+    /// Both directions, because a guard that refuses everything would pass the second half alone:
+    /// the control feeds a body that fits and must be taken quietly, and the golden replay (a
+    /// real 365-byte transfer, ceiling 1355) is the same control at full size.
+    #[test]
+    fn a_transfer_that_runs_past_its_c_size_is_refused() {
+        let mut session = session_awaiting_a_body(5);
+
+        // Control: an `SOH` header and a short data block — 119 wire bytes against a ceiling of
+        // 275 — are inside what the proposal permits, and nothing may object to them.
+        let mut opening = vec![0x01u8, 15];
+        opening.extend_from_slice(b"AAAAAAAAAAAA\x000\x00");
+        opening.push(0x02);
+        opening.push(100);
+        opening.extend(std::iter::repeat_n(b'x', 100));
+        let actions = session.feed(&opening);
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, Action::Failed(_) | Action::Done)),
+            "a body inside its proposal's size must not be refused: {actions:?}"
+        );
+        assert!(!session.wants_close());
+
+        // The finding: full data blocks, no `EOT`, for as long as the peer cares to send them.
+        // The reviewer fed 160,000 of these (40 MB) and the session took every byte; the loop
+        // stops at 4,000 only so that the mutation this test is written for fails fast.
+        let mut full = vec![0x02u8, 0x00];
+        full.extend(std::iter::repeat_n(0xAAu8, 256));
+        let mut fed = 0usize;
+        let mut failure = None;
+        for _ in 0..4_000 {
+            let actions = session.feed(&full);
+            fed += full.len();
+            if let Some(Action::Failed(err)) = actions.last() {
+                failure = Some(*err);
+                break;
+            }
+        }
+        assert_eq!(
+            failure,
+            Some(SessionError::Protocol(
+                "a transfer ran past the compressed size its FC proposal declared"
+            )),
+            "an unbounded transfer must be a protocol failure, not a truncation"
+        );
+        assert!(session.wants_close(), "the transport must be told to close");
+        // The point of the bound is the number, not the refusal: a session that only noticed at
+        // the end of the loop would pass every assertion above and still be the defect.
+        assert!(
+            fed < 1024,
+            "the refusal must land near the proposal's own ceiling, not after {fed} bytes"
+        );
+    }
+
+    /// Reading 6, both directions. Before our greeting goes out a bracketed line is the peer's
+    /// SID and a malformed one is fatal; after it, the SID is behind us and a bracketed line is
+    /// banner text a CMS put on the same stream — ending the session there would drop mail that
+    /// is still outstanding.
+    #[test]
+    fn a_bracketed_line_is_fatal_during_the_greeting_and_ignored_after_it() {
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+
+        let mut session = Session::new(&cfg, Role::Client);
+        session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+        let actions = session.feed(b"[Winlink CMS MOTD]\r");
+        assert!(
+            !actions.iter().any(|a| matches!(a, Action::Failed(_))),
+            "a bracketed line after the greeting must not fail the session: {actions:?}"
+        );
+        assert!(matches!(actions.last(), Some(Action::Trace(_))));
+        assert!(
+            !session.wants_close(),
+            "the transport must stay open for the mail that has not arrived yet"
+        );
+        // And the session is still a session, not merely un-failed.
+        assert_eq!(session.feed(b"FF\r").last(), Some(&Action::Done));
+
+        let mut session = Session::new(&cfg, Role::Client);
+        let actions = session.feed(b"[Winlink CMS MOTD]\r");
+        assert!(
+            matches!(
+                actions.last(),
+                Some(Action::Failed(SessionError::Sid(sid::SidError::Malformed)))
+            ),
+            "the peer's opening bracketed line is its SID, and a malformed one is refused where \
+             the reason is still legible: {actions:?}"
+        );
+        assert!(session.wants_close());
     }
 
     /// Nothing is consumed after the session ends — a closed session that kept parsing could

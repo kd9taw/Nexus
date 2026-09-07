@@ -6,9 +6,10 @@
 //! worth repeating here: `session1.trace` is a **constructed** transcript, not a live capture, so
 //! a green run here says this engine is self-consistent across every chunk boundary and says
 //! nothing about what a CMS will accept. The oracle is fixture #2, captured at the first live
-//! connect. The five controls below are the part that does not depend on the fixture being right:
-//! each one perturbs a byte that a correct engine MUST reject, so a passing control is evidence
-//! about the engine rather than about the transcript.
+//! connect. The seven controls below are the part that does not depend on the fixture being
+//! right: each one perturbs a byte that a correct engine MUST reject, so a passing control is
+//! evidence about the engine rather than about the transcript. (Five shipped with the engine;
+//! controls 6 and 7 pin the two proposal-size cross-checks, which review found untested.)
 
 use tempo_core::winlink::message::{Attachment, Message};
 use tempo_core::winlink::{b2f, fbb, secure, sid, ClientConfig};
@@ -417,6 +418,68 @@ fn pr_token(stream: &[u8]) -> Option<Vec<u8>> {
     let at = stream.windows(5).position(|w| w == b";PR: ")?;
     let from = at + 5;
     Some(stream[from..from + 8].to_vec())
+}
+
+/// The golden transcript with the `FC` line replaced and its `F>` checksum **recomputed over the
+/// new line**, so the proposal block still passes its own integrity check and the only thing
+/// wrong with the session is the pair of numbers `complete_transfer` cross-checks. Without the
+/// recomputation these two controls would be a second copy of control 1 and would say nothing
+/// about the size checks at all.
+fn replay_with_proposal(fc: &[u8]) -> Vec<b2f::Action> {
+    let recs = with_record(&records(), |r| r.bytes.starts_with(b"FC "), fc.to_vec());
+    let recs = with_record(
+        &recs,
+        |r| r.bytes.starts_with(b"F> "),
+        format!("F> {:02X}\r", fbb::fb_checksum(fc)).into_bytes(),
+    );
+    replay(std::iter::once(inbound_of(&recs)))
+}
+
+/// Control 6. The `c-size` the peer proposed is how many body bytes the transfer must actually
+/// carry. The transcript's body is 365 bytes; a proposal claiming 366 must be refused rather than
+/// delivered, because a body that is not the length its own proposal declared is a desync — the
+/// framer verified the bytes it was given, not that they were all of them.
+///
+/// The exact reason string is pinned deliberately: it is what distinguishes this check from the
+/// `u-size` one below, and a test that accepted either would still pass with this one deleted.
+#[test]
+fn a_c_size_that_disagrees_with_the_body_fails_before_delivery() {
+    let actions = replay_with_proposal(b"FC EM ABCDEFGHIJKL 598 366 0\r");
+    assert_eq!(
+        failures(&actions),
+        vec![b2f::SessionError::Protocol(
+            "compressed body length disagrees with its FC proposal"
+        )],
+        "a body that is not its proposal's compressed length must fail the session"
+    );
+    assert!(
+        delivered(&actions).is_empty(),
+        "nothing may be delivered from a transfer whose length disagrees with its proposal"
+    );
+}
+
+/// Control 7 — the outer truncation check `message.rs` delegates here.
+///
+/// That module's header records the one corruption it cannot see from inside a message: "a
+/// declared length that is short by exactly the amount that leaves a CRLF at the cut is
+/// undetectable ... The FBB proposal's `<u-size>` is the outer check for that, and it lives in
+/// the session, not here." This is that check. The transcript decompresses to 598 bytes; a
+/// proposal claiming 599 must be refused, or a silently truncated message is delivered and filed
+/// with nothing anywhere having noticed.
+#[test]
+fn a_u_size_that_disagrees_with_the_decompressed_body_fails_before_delivery() {
+    let actions = replay_with_proposal(b"FC EM ABCDEFGHIJKL 599 365 0\r");
+    assert_eq!(
+        failures(&actions),
+        vec![b2f::SessionError::Protocol(
+            "decompressed body length disagrees with its FC proposal"
+        )],
+        "a body that is not its proposal's uncompressed length must fail the session"
+    );
+    assert!(
+        delivered(&actions).is_empty(),
+        "a message whose size disagrees with its proposal must not be delivered"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
