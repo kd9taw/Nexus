@@ -2093,7 +2093,7 @@ export interface AssistanceEvent {
  *  `null` — declared `| null`, not `?:`. */
 export interface CredStatus {
   /** Stable slug: 'lotw' | 'qrz-xml' | 'qrz-logbook' | 'eqsl' | 'clublog' | 'hrdlog' | 'wrl' |
-   *  'cloudlog' | 'repeaterbook'. Branch on THIS, never on `connector` (a display label). */
+   *  'cloudlog' | 'repeaterbook' | 'winlink'. Branch on THIS, never on `connector` (a display label). */
   id: string
   /** Display label. */
   connector: string
