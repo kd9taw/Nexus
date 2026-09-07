@@ -46,27 +46,6 @@
 //!
 //! 1. **Recording starts at the B2F handover, never before.** The telnet pre-login carries the
 //!    callsign and [`CMS_TELNET_PASSWORD`] in the clear. That token is a shared doorway string
-//!    and not the operator's account password, but a capture file is a thing an operator attaches
-//!    to a bug report, and a transport that writes credentials into a file by default is the
-//!    wrong default.
-//! 2. ⭐ **The `;PR:` response is redacted by default.** The account password never crosses the
-//!    wire, but `;PR:` is `MD5(challenge ++ password ++ salt)` over a *published* salt and a
-//!    challenge carried in the same transcript, which makes a captured `;PR:` an offline-crackable
-//!    derivative of the operator's real Winlink password. **A fixture committed to a public
-//!    repository must not contain one.** The record is kept with its token replaced, because its
-//!    presence and position are part of the transcript and its value is not the evidence: what
-//!    proves the digest is that the CMS *accepted it and proceeded*, which is visible in every
-//!    record after it. [`TraceTap::redact_pr`] is the deliberate opt-out, for a machine-local
-//!    capture that is never committed.
-//!
-//! # The capture tap, and the two hygiene rules it exists under
-//!
-//! [`TraceTap`] writes the session byte stream in the exact encoding the golden-transcript
-//! fixture documents, so a real capture parses with the reader the B2F integration test already
-//! has. Both of its rules are credential-adjacent and neither is optional:
-//!
-//! 1. **Recording starts at the B2F handover, never before.** The telnet pre-login carries the
-//!    callsign and [`CMS_TELNET_PASSWORD`] in the clear. That token is a shared doorway string
 //!    and not the operator's account password — but a capture file is a thing an operator
 //!    attaches to a bug report, and a transport that writes credentials into a file by default is
 //!    the wrong default.
@@ -921,6 +900,11 @@ pub fn connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
 /// ⚠️ **There is no reconnect loop here and there must never be one** — module header, rule 1.
 /// If you are about to add `while !stop.load(...)` around this body because `aprsis::run` has one,
 /// stop: that loop is correct for a telemetry feed and wrong for a mail transaction.
+///
+/// The stop flag is honoured **before the socket is opened**, not only inside [`pump`]. A caller
+/// sets the flag as soon as the operator asks to disconnect, and that can land while this thread
+/// is still being started — checking only inside the pump means a session nobody wants still
+/// makes a TCP connection to the public CMS and then immediately drops it.
 pub fn run(
     host: &str,
     port: u16,
@@ -936,6 +920,9 @@ pub fn run(
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0)
     };
+    if stop.load(Ordering::SeqCst) {
+        return Outcome::Stopped;
+    }
     let stream = match connect(host, port) {
         Ok(s) => s,
         Err(e) => return Outcome::Io(e.to_string()),

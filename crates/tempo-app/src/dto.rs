@@ -2455,9 +2455,19 @@ mod tests {
 mod winlink_dto_tests {
     use super::*;
 
-    /// The assertion that survives a later field being added. A `WinlinkSession` is polled every
-    /// few seconds while a session runs; if the account password ever reached it, it would reach
-    /// the front end, every devtools inspector and every serialized crash report with it.
+    /// The exact field set of the polled session DTO. **Adding a field here is a decision.**
+    ///
+    /// A `WinlinkSession` is polled every few seconds while a session runs; anything on it reaches
+    /// the front end, every devtools inspector and every serialized crash report with it. So the
+    /// check is the whole key set, not a search for the word "password" — a field named `secret`,
+    /// `token` or `pr` would carry the credential past a substring test with the suite still
+    /// green, which is what an earlier version of this test did while claiming otherwise.
+    ///
+    /// ⚠️ **What this pins is the shape, not the values.** It cannot tell whether `failed` was
+    /// built from a string that echoes a credential; that is enforced where the strings are made —
+    /// `winlink_connect`'s rule that no error message may echo an argument, and `ClientConfig`
+    /// deriving neither `Debug` nor `Serialize`. This is the guard for the field a future edit
+    /// adds without thinking about it.
     #[test]
     fn the_session_dto_cannot_carry_a_password() {
         let s = WinlinkSession {
@@ -2466,15 +2476,37 @@ mod winlink_dto_tests {
             traces: vec!["greeted".into()],
             ..WinlinkSession::default()
         };
-        let json = serde_json::to_string(&s).unwrap();
-        assert!(
-            !json.to_ascii_lowercase().contains("password"),
-            "a password-shaped field reached the session DTO: {json}"
+        let json: serde_json::Value = serde_json::to_value(&s).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .expect("the session DTO serializes as an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "bytesIn",
+                "bytesOut",
+                "connected",
+                "failed",
+                "lastByteUnix",
+                "loggedIn",
+                "outcome",
+                "received",
+                "traces",
+            ],
+            "the session DTO's field set changed; every field here is polled to the front end"
         );
-        assert!(
-            !format!("{s:?}").to_ascii_lowercase().contains("password"),
-            "a password-shaped field reached the session DTO's Debug"
-        );
+        // `Debug` travels into panics and logs, and it renders field names the same way.
+        let debug = format!("{s:?}");
+        for key in ["password", "secret", "token", "credential"] {
+            assert!(
+                !debug.to_ascii_lowercase().contains(key),
+                "a {key}-shaped field reached the session DTO's Debug: {debug}"
+            );
+        }
     }
 
     /// `outcome` is switched on, not rendered — same rule as `AMP_REASONS`.

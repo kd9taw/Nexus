@@ -95,16 +95,16 @@ fn the_whole_internet_path_delivers_a_message_into_the_mailbox() {
 
     assert_eq!(outcome, Outcome::Complete, "traces: {:?}", driver.log());
     assert_eq!(
-        driver.log().failed,
+        driver.log().failed(),
         None,
         "traces: {:?}",
-        driver.log().traces
+        driver.log().traces()
     );
     assert_eq!(
-        driver.log().received.len(),
+        driver.log().received().len(),
         1,
         "no message reached the mailbox: {:?}",
-        driver.log().traces
+        driver.log().traces()
     );
 
     let sent = String::from_utf8_lossy(&server.join().expect("server")).into_owned();
@@ -123,7 +123,7 @@ fn the_whole_internet_path_delivers_a_message_into_the_mailbox() {
     );
 
     // The blob is on disk, under its MID, and the journal knows when it arrived.
-    let mid = String::from_utf8_lossy(&driver.log().received[0]).into_owned();
+    let mid = String::from_utf8_lossy(&driver.log().received()[0]).into_owned();
     let blob = root.join("messages").join(format!("{mid}.b2f"));
     assert!(blob.is_file(), "no blob at {}", blob.display());
     let events = journal::open(&root).replay().expect("replay").events;
@@ -131,7 +131,7 @@ fn the_whole_internet_path_delivers_a_message_into_the_mailbox() {
     assert_eq!(
         events[0],
         journal::Event::Received {
-            mid: driver.log().received[0].clone(),
+            mid: driver.log().received()[0].clone(),
             at: 1_700_000_000
         }
     );
@@ -140,7 +140,7 @@ fn the_whole_internet_path_delivers_a_message_into_the_mailbox() {
     let restored = tempo_core::winlink::restore::restore(&root).expect("restore");
     assert_eq!(restored.index.entries.len(), 1);
     assert_eq!(
-        restored.arrived.get(driver.log().received[0].as_slice()),
+        restored.arrived.get(driver.log().received()[0].as_slice()),
         Some(&1_700_000_000)
     );
     assert_eq!(restored.unread.len(), 1);

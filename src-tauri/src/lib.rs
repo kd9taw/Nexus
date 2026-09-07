@@ -21147,6 +21147,12 @@ fn clear_winlink_password() -> Result<(), String> {
 /// The driver owns its [`tempo_app::winlink::SessionLog`] by value and lives on the socket
 /// thread, so without this the status pane would see nothing until the session ended — which is
 /// precisely when an operator has stopped needing to watch it.
+///
+/// ⚠️ **The mirror appends; it must never assign.** This runs once per chunk off the socket, so
+/// `*slot = log.clone()` is O(n²) in the number of chunks — measured at 63 s of CPU for 16 MiB of
+/// banner text a CMS is allowed to send, which is a denial of service in the status pane's own
+/// bookkeeping. `mirror_into` copies the delta and carries the measurements; see its doc for why
+/// the destination's own length is a sound cursor.
 struct LiveDriver {
     /// The real driver: owns the B2F session and the mailbox.
     inner: tempo_app::winlink::Driver,
@@ -21157,7 +21163,9 @@ struct LiveDriver {
 impl tempo_net::wl2k::ByteSession for LiveDriver {
     fn feed(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
         let out = self.inner.feed(chunk);
-        *self.log.lock().unwrap_or_else(|e| e.into_inner()) = self.inner.log().clone();
+        self.inner
+            .log()
+            .mirror_into(&mut self.log.lock().unwrap_or_else(|e| e.into_inner()));
         out
     }
     fn wants_close(&self) -> bool {
@@ -21196,6 +21204,45 @@ fn winlink_callsign(raw: &str) -> Result<String, String> {
     Ok(call)
 }
 
+/// Takes the one session slot, or reports that a session is already running.
+///
+/// ⚠️ **The check and the claim are one critical section, and that is the whole point of this
+/// function existing.** Testing the slot, dropping the lock, and filling it in later is a
+/// check-then-act race whose effect is *remote*: two `winlink_connect` calls both find the slot
+/// free, both open a socket to Winlink's own public CMS under one callsign, and the loser's stop
+/// `Arc` is overwritten — so [`winlink_disconnect`] cannot stop the session it can no longer
+/// name, and the operator has no control that reaches it. That is not a local bookkeeping bug and
+/// no amount of "the UI only has one button" makes it one: a Tauri command is reachable from any
+/// front-end code path, and `(async)` puts every call on its own thread.
+///
+/// The feed is built by the caller *before* this is called, so nothing fallible and nothing slow
+/// happens under the lock — the keychain read and the socket come after the claim, and a caller
+/// that fails there must [`winlink_release`] what it took.
+fn winlink_claim(feed: WinlinkFeed) -> Result<(), String> {
+    let mut slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(f) = slot.as_ref() {
+        // A finished session leaves its feed in place so the status pane keeps its last outcome;
+        // only an unfinished one is a session still running.
+        if f.outcome
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none()
+        {
+            return Err("a Winlink session is already running — disconnect it first".into());
+        }
+    }
+    *slot = Some(feed);
+    Ok(())
+}
+
+/// Gives the session slot back after a claim that never became a session.
+///
+/// Safe to clear outright rather than checking whose claim it is: while our claim sits there with
+/// no outcome, [`winlink_claim`] refuses everyone, so the slot cannot have become someone else's.
+fn winlink_release() {
+    *WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// Open one Winlink session to the CMS over telnet.
 ///
 /// `password` is the operator's Winlink account password. An **empty** string means "use the one
@@ -21214,6 +21261,47 @@ fn winlink_callsign(raw: &str) -> Result<String, String> {
 #[tauri::command(async)]
 fn winlink_connect(callsign: String, password: String) -> Result<(), String> {
     let call = winlink_callsign(&callsign)?;
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let state = Arc::new(tempo_net::wl2k::SessionState::default());
+    let log = Arc::new(Mutex::new(tempo_app::winlink::SessionLog::default()));
+    let outcome: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    // CLAIM FIRST, and everything that can fail after it. The slot is what makes this station one
+    // Winlink client rather than several, so it is taken before the keychain read, the mailbox
+    // restore and the socket — see `winlink_claim` for what two concurrent callers cost when the
+    // check and the claim are separate. Every `?` below this line must give the claim back.
+    winlink_claim(WinlinkFeed {
+        stop: stop.clone(),
+        state: state.clone(),
+        log: log.clone(),
+        outcome: outcome.clone(),
+    })?;
+    let started = winlink_start(&call, password, &stop, &state, &log, &outcome);
+    if let Err(e) = started {
+        winlink_release();
+        return Err(e);
+    }
+    conn_log("Winlink", "info", "connecting to the CMS over telnet");
+    Ok(())
+}
+
+/// Reads the credential, opens the mailbox and puts the session on its own thread.
+///
+/// Split out of [`winlink_connect`] so the claim it runs under has exactly one release path: this
+/// returns `Err` and the caller gives the slot back, rather than four early returns each having
+/// to remember to.
+///
+/// ⚠️ The password hygiene rules are [`winlink_connect`]'s and they apply here — this is where the
+/// value actually lives. **No error message in this function may echo an argument.**
+fn winlink_start(
+    call: &str,
+    password: String,
+    stop: &Arc<std::sync::atomic::AtomicBool>,
+    state: &Arc<tempo_net::wl2k::SessionState>,
+    log: &Arc<Mutex<tempo_app::winlink::SessionLog>>,
+    outcome: &Arc<Mutex<Option<String>>>,
+) -> Result<(), String> {
     // Empty means "the stored one". The keychain error is reported without ever rendering what it
     // was looking for.
     let password = if password.is_empty() {
@@ -21225,26 +21313,8 @@ fn winlink_connect(callsign: String, password: String) -> Result<(), String> {
         password
     };
 
-    {
-        let slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(f) = slot.as_ref() {
-            if f.outcome
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .is_none()
-            {
-                return Err("a Winlink session is already running — disconnect it first".into());
-            }
-        }
-    }
-
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let state = Arc::new(tempo_net::wl2k::SessionState::default());
-    let log = Arc::new(Mutex::new(tempo_app::winlink::SessionLog::default()));
-    let outcome: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-
     let cfg = tempo_core::winlink::ClientConfig {
-        callsign: call.clone(),
+        callsign: call.to_string(),
         // MOVED, never cloned, and this is its last mention by name.
         password,
     };
@@ -21271,36 +21341,26 @@ fn winlink_connect(callsign: String, password: String) -> Result<(), String> {
                 // writing session bytes to disk unasked is the wrong default.
                 None,
             );
-            *t_log.lock().unwrap_or_else(|e| e.into_inner()) = sess.inner.log().clone();
+            sess.inner
+                .log()
+                .mirror_into(&mut t_log.lock().unwrap_or_else(|e| e.into_inner()));
             let token = winlink_outcome_token(&result);
             if let tempo_net::wl2k::Outcome::Io(why) = &result {
                 // The socket's own words go in the traces, where prose belongs.
                 t_log
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .traces
-                    .push(format!("connection ended: {why}"));
+                    .trace(format!("connection ended: {why}"));
             }
             conn_log("Winlink", if token == "io" { "err" } else { "ok" }, {
-                let stored = t_log
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .received
-                    .len();
+                // `stored()`, not `received().len()`: the MID list is bounded and the count is
+                // not, so this stays true about mail on disk even for a session whose log filled.
+                let stored = t_log.lock().unwrap_or_else(|e| e.into_inner()).stored();
                 format!("session ended ({token}); {stored} message(s) stored")
             });
             *t_outcome.lock().unwrap_or_else(|e| e.into_inner()) = Some(token.to_string());
         })
         .map_err(|e| format!("could not start the Winlink session thread: {e}"))?;
-
-    let mut slot = WINLINK_SESSION.lock().unwrap_or_else(|e| e.into_inner());
-    *slot = Some(WinlinkFeed {
-        stop,
-        state,
-        log,
-        outcome,
-    });
-    conn_log("Winlink", "info", "connecting to the CMS over telnet");
     Ok(())
 }
 
@@ -21311,22 +21371,25 @@ fn winlink_session_status() -> Result<WinlinkSession, String> {
     let Some(f) = slot.as_ref() else {
         return Ok(WinlinkSession::default());
     };
-    let log = f.log.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let log = f.log.lock().unwrap_or_else(|e| e.into_inner());
     let outcome = f.outcome.lock().unwrap_or_else(|e| e.into_inner()).clone();
     Ok(WinlinkSession {
         connected: f.state.connected.load(std::sync::atomic::Ordering::Relaxed),
         logged_in: f.state.logged_in.load(std::sync::atomic::Ordering::Relaxed),
         bytes_in: f.state.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
         bytes_out: f.state.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-        last_byte_unix: f.state.last_byte_unix.load(std::sync::atomic::Ordering::Relaxed),
+        last_byte_unix: f
+            .state
+            .last_byte_unix
+            .load(std::sync::atomic::Ordering::Relaxed),
         received: log
-            .received
+            .received()
             .iter()
             .map(|m| String::from_utf8_lossy(m).into_owned())
             .collect(),
-        traces: log.traces,
+        traces: log.traces().to_vec(),
         outcome,
-        failed: log.failed,
+        failed: log.failed().map(str::to_owned),
     })
 }
 
@@ -25722,5 +25785,84 @@ mod tests {
         // Upper-casing is not cosmetic: it is what goes into `;FW:`, the SID and the identity
         // line, and the CMS matches the account on it.
         assert_eq!(super::winlink_callsign("w1aw/4").as_deref(), Ok("W1AW/4"));
+    }
+
+    /// Two concurrent connects must not both get the session slot.
+    ///
+    /// Exercised through `winlink_claim` and NOT through `winlink_connect`, for the reason that
+    /// function's doc gives: on a machine with a stored password, calling the command would open
+    /// a real socket to the public CMS. What the race costs is exactly that, twice — two live
+    /// sessions to Winlink's own servers under one callsign, and the loser's stop `Arc`
+    /// overwritten so `winlink_disconnect` can no longer reach it.
+    ///
+    /// Eight threads on a barrier, so they are inside the window together rather than one after
+    /// another. With the check and the claim in separate critical sections this fails; the count
+    /// it reports is how many sockets that shape would have opened.
+    ///
+    /// ⚠️ **The release half is the same test, not a second one.** `WINLINK_SESSION` is one
+    /// process-global slot and `cargo test` runs test functions in parallel, so two tests that
+    /// both take it would flake against each other rather than against the code.
+    #[test]
+    fn two_concurrent_connects_cannot_both_claim_the_winlink_session() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier, Mutex};
+
+        fn make(outcome: Option<String>) -> super::WinlinkFeed {
+            super::WinlinkFeed {
+                stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                state: Arc::new(tempo_net::wl2k::SessionState::default()),
+                log: Arc::new(Mutex::new(tempo_app::winlink::SessionLog::default())),
+                // `None` is what "still running" means to the claim.
+                outcome: Arc::new(Mutex::new(outcome)),
+            }
+        }
+        let feed = || make(None);
+
+        super::winlink_release();
+        let threads = 8;
+        let gate = Arc::new(Barrier::new(threads));
+        let claimed = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..threads {
+            let (gate, claimed) = (gate.clone(), claimed.clone());
+            handles.push(std::thread::spawn(move || {
+                gate.wait();
+                if super::winlink_claim(feed()).is_ok() {
+                    claimed.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("claim thread");
+        }
+        let n = claimed.load(Ordering::SeqCst);
+        super::winlink_release();
+        assert_eq!(
+            n, 1,
+            "{n} of {threads} concurrent connects took the session slot — that is {n} sockets to \
+             the public CMS, and all but the last unreachable by winlink_disconnect"
+        );
+
+        // The other direction, so the guard is not "refuses everything": the slot comes back when
+        // a claim never became a session, and a finished session does not block the next connect.
+        assert!(super::winlink_claim(make(None)).is_ok());
+        assert!(
+            super::winlink_claim(make(None)).is_err(),
+            "a running session must refuse a second connect"
+        );
+        // What `winlink_connect` does when the keychain read or the mailbox open fails.
+        super::winlink_release();
+        assert!(
+            super::winlink_claim(make(None)).is_ok(),
+            "a claim that never became a session left the slot stuck"
+        );
+        // And a session that has ended leaves its feed for the status pane without blocking.
+        super::winlink_release();
+        assert!(super::winlink_claim(make(Some("complete".into()))).is_ok());
+        assert!(
+            super::winlink_claim(make(None)).is_ok(),
+            "a finished session blocked the next connect"
+        );
+        super::winlink_release();
     }
 }

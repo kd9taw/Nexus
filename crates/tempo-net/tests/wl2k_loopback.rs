@@ -295,3 +295,58 @@ fn a_capture_of_a_whole_session_holds_no_pre_login_byte() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_stop_that_lands_before_the_thread_starts_opens_no_socket() {
+    // `winlink_connect` claims the session slot and then does the keychain read, the mailbox
+    // restore and the spawn, so a Disconnect can reach the stop flag before this function runs at
+    // all. Honouring the flag only inside the pump would still make a TCP connection to the
+    // public CMS for a session nobody wants.
+    //
+    // Proved without a listener: a *reachable* port would prove nothing, since the pump would
+    // stop on its first pass either way and the outcome would look the same. Against a port
+    // nothing is listening on, connecting is `Outcome::Io` and not connecting is
+    // `Outcome::Stopped`, so the two are distinguishable — and the control is the same call with
+    // the flag clear, which must come back `Io`.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    drop(listener); // nothing is listening there now
+    let host = addr.ip().to_string();
+
+    let state = SessionState::default();
+    let mut sess = Pong::new();
+    let outcome = wl2k::run(
+        &host,
+        addr.port(),
+        Login::new("N0CALL", CMS_TELNET_PASSWORD),
+        &mut sess,
+        &AtomicBool::new(true),
+        &state,
+        None,
+    );
+    assert_eq!(
+        outcome,
+        Outcome::Stopped,
+        "a session that was already stopped still opened a socket"
+    );
+    assert!(
+        !state.connected.load(Ordering::Relaxed),
+        "connected was set for a session that never connected"
+    );
+
+    // THE POSITIVE CONTROL: with the flag clear, the same call really does try to connect.
+    let mut sess = Pong::new();
+    let outcome = wl2k::run(
+        &host,
+        addr.port(),
+        Login::new("N0CALL", CMS_TELNET_PASSWORD),
+        &mut sess,
+        &AtomicBool::new(false),
+        &SessionState::default(),
+        None,
+    );
+    assert!(
+        matches!(outcome, Outcome::Io(_)),
+        "the control did not reach the socket, so the test above proves nothing: {outcome:?}"
+    );
+}
