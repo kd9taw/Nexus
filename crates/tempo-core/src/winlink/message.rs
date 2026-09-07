@@ -92,10 +92,11 @@ pub struct Attachment {
     ///
     /// ⚠️ [`assemble_b2`] writes it into a header line unescaped, because B2 has no escape and
     /// inventing one would produce a message no other implementation could read. A name
-    /// containing CR or LF therefore produces an unparseable message, and an empty name is not
-    /// representable at all (nothing would separate it from the space in front of it); spaces
-    /// *are* fine — the length/name split is on the **first** space only, so
-    /// `ICS 213 form.xml` round-trips. Filename policy belongs to the composer, not here.
+    /// containing CR or LF is therefore not representable, and neither is an empty one (nothing
+    /// would separate it from the space in front of it); [`assemble_b2`] refuses both with
+    /// [`AssembleError::AttachmentName`] rather than emit them. Spaces *are* fine — the
+    /// length/name split is on the **first** space only, so `ICS 213 form.xml` round-trips.
+    /// Filename policy belongs to the composer, not here.
     pub name: Vec<u8>,
     /// The payload, bytes. Winlink attachments are routinely binary — images, ICS-213 XML in
     /// whatever encoding the sender used, ZIPs — and nothing here inspects them.
@@ -138,6 +139,25 @@ pub enum MessageError {
     BadFileLength,
 }
 
+/// Why a [`Message`] could not be serialised — a field with no representation in B2.
+///
+/// B2 has no escape, so a byte that would end a header line early, or split it in a different
+/// place, cannot be written at all. Each variant names the field, because the caller that has to
+/// answer for it is a composer with a form on screen, not a parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssembleError {
+    /// [`Message::mid`] contains CR or LF, which would end the `Mid:` line inside the MID.
+    Mid,
+    /// A [`Message::headers`] name is empty, or contains `:`, CR or LF. The colon is the one
+    /// that matters — see [`assemble_b2`].
+    HeaderName,
+    /// A [`Message::headers`] value contains CR or LF, which would end its line early and leave
+    /// the remainder to be read as a header line of its own.
+    HeaderValue,
+    /// An [`Attachment::name`] is empty or contains CR or LF. See [`Attachment::name`].
+    AttachmentName,
+}
+
 /// Serialises a [`Message`] into B2 wire bytes. The inverse of [`parse_b2`].
 ///
 /// Header order is canonical rather than preserved: `Mid:`, then
@@ -146,17 +166,51 @@ pub enum MessageError {
 /// not depend on header order, so a round-trip through this function is value-preserving but not
 /// necessarily byte-identical to the message that came in.
 ///
-/// Infallible by signature, and that is a deliberate narrowing: the lengths it writes are
-/// *computed* from the data, so the one class of corruption this format has cannot originate
-/// here — the length can never disagree with the payload it counts.
+/// The declared lengths cannot be wrong: they are *computed* from the data, so the one class of
+/// corruption this format has cannot originate here — the length can never disagree with the
+/// payload it counts.
 ///
-/// What that signature does **not** cover, and what the caller therefore owns: no field written
-/// into a header line — [`Message::mid`], a [`headers`](Message::headers) name or value, an
-/// [`Attachment::name`] — may contain CR or LF, and an attachment name may not be empty. B2 has
-/// no escape, so there is nothing this function could do about one except invent an encoding no
-/// other implementation reads. [`parse_b2`] refuses the results, which is how such a message is
-/// caught: by failing its own round-trip, loudly.
-pub fn assemble_b2(msg: &Message) -> Vec<u8> {
+/// The error is about **representability**, which is the other half. No field written into a
+/// header line — [`Message::mid`], a [`headers`](Message::headers) name or value, an
+/// [`Attachment::name`] — may contain CR or LF; a header name may not be empty or contain a
+/// colon; an attachment name may not be empty. B2 has no escape, so there is nothing this
+/// function could do about one except invent an encoding no other implementation reads, and it
+/// refuses instead.
+///
+/// **Refusing rather than documenting is the colon's doing.** CR, LF and an empty attachment
+/// name all produce bytes [`parse_b2`] rejects, so they were caught by failing their own round
+/// trip, loudly. A colon in a header *name* is not: `a:b: c` parses back as the header `a` with
+/// the value `b: c` — `Ok`, and a **different message than went in**, with nothing anywhere to
+/// signal it. This is email over radio; a loud refusal beats a body the far end cannot know is
+/// wrong, so every unrepresentable field is now refused here and none is left to the round trip.
+///
+/// One residual is deliberately not an error, because it is already loud: a
+/// [`headers`](Message::headers) entry named `Mid`, `Body` or `File` is a malformed [`Message`]
+/// rather than an unrepresentable field — those three names are structural and live in their own
+/// fields — and [`parse_b2`] answers it with [`MessageError::Malformed`] or
+/// [`MessageError::BadFileLength`], never with a different message. A phantom `File:` header
+/// steals bytes from the front of the attachment region, and since the real lengths are computed
+/// from the real payloads, the last part always comes up short.
+pub fn assemble_b2(msg: &Message) -> Result<Vec<u8>, AssembleError> {
+    if has_line_break(&msg.mid) {
+        return Err(AssembleError::Mid);
+    }
+    for (name, value) in &msg.headers {
+        // The colon check is the one with teeth: without it this function emits `a:b: c`, which
+        // parses back as a header named `a`. The rest would be caught by the round trip.
+        if name.is_empty() || name.contains(&b':') || has_line_break(name) {
+            return Err(AssembleError::HeaderName);
+        }
+        if has_line_break(value) {
+            return Err(AssembleError::HeaderValue);
+        }
+    }
+    for att in &msg.attachments {
+        if att.name.is_empty() || has_line_break(&att.name) {
+            return Err(AssembleError::AttachmentName);
+        }
+    }
+
     let mut out = Vec::new();
     push_header(&mut out, HDR_MID, &msg.mid);
     for (name, value) in &msg.headers {
@@ -176,7 +230,14 @@ pub fn assemble_b2(msg: &Message) -> Vec<u8> {
         out.extend_from_slice(&att.data);
         out.extend_from_slice(CRLF);
     }
-    out
+    Ok(out)
+}
+
+/// True when the field carries a byte that would end its header line somewhere the format does
+/// not expect one. Either half of a CRLF on its own is enough: [`split_line`] cuts on the pair,
+/// so a lone CR in a value leaves a line this parser reads whole and another one would not.
+fn has_line_break(field: &[u8]) -> bool {
+    field.iter().any(|&b| b == b'\r' || b == b'\n')
 }
 
 /// One `Name: value\r\n` line.
@@ -390,7 +451,7 @@ mod tests {
     #[test]
     fn assemble_parse_roundtrip() {
         let msg = sample();
-        let bytes = assemble_b2(&msg);
+        let bytes = assemble_b2(&msg).unwrap();
         let back = parse_b2(&bytes).unwrap();
         assert_eq!(back.body, msg.body);
         assert_eq!(back.attachments.len(), 1);
@@ -410,7 +471,8 @@ mod tests {
                 name: b"a".to_vec(),
                 data: b"12345".to_vec(),
             }],
-        });
+        })
+        .unwrap();
         corrupt_first_file_length(&mut bytes); // helper: change the declared byte length
         assert!(matches!(parse_b2(&bytes), Err(MessageError::BadFileLength)));
     }
@@ -428,7 +490,8 @@ mod tests {
                 name: b"a".to_vec(),
                 data: b"12345".to_vec(),
             }],
-        });
+        })
+        .unwrap();
         // Positive control: uncorrupted, the same bytes parse and keep all five payload bytes.
         assert_eq!(parse_b2(&good).unwrap().attachments[0].data, b"12345");
 
@@ -440,7 +503,7 @@ mod tests {
     /// `Malformed` — the module header's split.
     #[test]
     fn a_wrong_body_length_is_malformed() {
-        let good = assemble_b2(&sample());
+        let good = assemble_b2(&sample()).unwrap();
         let bad = replace_once(&good, b"Body: 11\r\n", b"Body: 10\r\n");
         assert_eq!(parse_b2(&bad), Err(MessageError::Malformed));
         let over = replace_once(&good, b"Body: 11\r\n", b"Body: 99\r\n");
@@ -464,7 +527,7 @@ mod tests {
     /// change to the serialiser that both halves of the round-trip agreed on still fails here.
     #[test]
     fn pinned_wire_bytes() {
-        let wire = assemble_b2(&sample());
+        let wire = assemble_b2(&sample()).unwrap();
         assert_eq!(
             wire,
             b"Mid: ABCDE1234567\r\n\
@@ -482,7 +545,7 @@ mod tests {
     /// both places would have `assemble_b2` emit each of them twice on the way back out.
     #[test]
     fn structural_headers_do_not_leak_into_headers() {
-        let back = parse_b2(&assemble_b2(&sample())).unwrap();
+        let back = parse_b2(&assemble_b2(&sample()).unwrap()).unwrap();
         assert_eq!(back.headers, vec![(b"Subject".to_vec(), b"test".to_vec())]);
         assert_eq!(back.mid, b"ABCDE1234567");
     }
@@ -529,7 +592,7 @@ mod tests {
             body: vec![],
             attachments: vec![],
         };
-        let wire = assemble_b2(&msg);
+        let wire = assemble_b2(&msg).unwrap();
         assert_eq!(wire, b"Mid: M\r\nBody: 0\r\n\r\n\r\n".to_vec());
         assert_eq!(parse_b2(&wire).unwrap(), msg);
     }
@@ -548,7 +611,7 @@ mod tests {
                 data: vec![0x00, 0x0d, 0x0a, 0xff, 0xfe, 0x1a],
             }],
         };
-        assert_eq!(parse_b2(&assemble_b2(&msg)).unwrap(), msg);
+        assert_eq!(parse_b2(&assemble_b2(&msg).unwrap()).unwrap(), msg);
     }
 
     /// An attachment name with a space is fine — the `File:` value splits on the *first* space
@@ -565,12 +628,12 @@ mod tests {
                 data: b"d".to_vec(),
             }],
         };
-        assert_eq!(parse_b2(&assemble_b2(&msg)).unwrap(), msg);
+        assert_eq!(parse_b2(&assemble_b2(&msg).unwrap()).unwrap(), msg);
     }
 
     #[test]
     fn bytes_after_the_last_attachment_are_refused() {
-        let mut wire = assemble_b2(&sample());
+        let mut wire = assemble_b2(&sample()).unwrap();
         wire.extend_from_slice(b"junk");
         assert_eq!(parse_b2(&wire), Err(MessageError::Malformed));
     }
@@ -600,9 +663,28 @@ mod tests {
             ("non-decimal Body", &b"Mid: A\r\nBody: 1x\r\n\r\n\r\n"[..]),
             ("negative Body", &b"Mid: A\r\nBody: -1\r\n\r\n\r\n"[..]),
             ("empty Body", &b"Mid: A\r\nBody: \r\n\r\n\r\n"[..]),
+            // The case `parse_len`'s digit guard was written for, and the only one that needs
+            // it: `usize::from_str` accepts a leading `+`, so `1x` and `-1` above are refused by
+            // the parse whether the guard is there or not, and these two are not.
+            (
+                "plus-signed Body",
+                &b"Mid: A\r\nBody: +4\r\n\r\nabcd\r\n"[..],
+            ),
+            (
+                "plus-signed File length",
+                &b"Mid: A\r\nBody: 0\r\nFile: +1 n\r\n\r\n\r\nx\r\n"[..],
+            ),
             (
                 "File with no name",
                 &b"Mid: A\r\nBody: 0\r\nFile: 1\r\n\r\n\r\nx\r\n"[..],
+            ),
+            // The row above has no space at all, so it is refused one branch earlier — by the
+            // missing `<len> <name>` separator. This one has the space and nothing after it,
+            // which is the only input that reaches `split_file`'s empty-name guard. Without that
+            // guard it parses as an attachment named "", which `assemble_b2` cannot write back.
+            (
+                "File with an empty name",
+                &b"Mid: A\r\nBody: 0\r\nFile: 1 \r\n\r\n\r\nx\r\n"[..],
             ),
             (
                 "File with no length",
@@ -639,11 +721,33 @@ mod tests {
 
     /// A bare LF where the format calls for CRLF is refused, not accepted as a separator — the
     /// leniency the module header rejects, pinned so it cannot be added back by accident.
+    ///
+    /// The first fixture does not pin [`split_line`] on its own, and that is the whole reason
+    /// the second exists: it is refused by [`take_part`] (there is no CRLF after the body) no
+    /// matter what `split_line` does, so a `split_line` that has learned to accept `\n` passes
+    /// it. The second fixture has an LF-terminated **header block** and a correct CRLF after the
+    /// body, so `split_line` is the only thing left that can refuse it — a lenient one parses it
+    /// as `mid = "A"`, `body = "hi"`. The third moves the bare LF to the body separator, where
+    /// `take_part` is the guard.
     #[test]
     fn a_bare_lf_separator_is_not_accepted() {
         assert_eq!(
             parse_b2(b"Mid: A\nBody: 0\n\n\n"),
             Err(MessageError::Malformed)
+        );
+        assert_eq!(
+            parse_b2(b"Mid: A\nBody: 2\n\nhi\r\n"),
+            Err(MessageError::Malformed)
+        );
+        assert_eq!(
+            parse_b2(b"Mid: A\r\nBody: 2\r\n\r\nhi\n"),
+            Err(MessageError::Malformed)
+        );
+        // Positive control: the same message, CRLF throughout, parses — so the three refusals
+        // above are about the separator and nothing else.
+        assert_eq!(
+            parse_b2(b"Mid: A\r\nBody: 2\r\n\r\nhi\r\n").unwrap().body,
+            b"hi"
         );
     }
 
@@ -659,15 +763,135 @@ mod tests {
         );
     }
 
+    /// The finding this file was reopened for: a colon in a header **name** is the one field
+    /// this module could once serialise into a *different message*. `a:b: c` parses back as the
+    /// header `a` with the value `b: c` — `Ok`, no error, corrupt. Now refused before a byte is
+    /// written.
+    #[test]
+    fn an_unrepresentable_header_is_refused_by_assemble() {
+        let with = |name: &[u8], value: &[u8]| Message {
+            mid: b"M".to_vec(),
+            headers: vec![(name.to_vec(), value.to_vec())],
+            body: vec![],
+            attachments: vec![],
+        };
+        assert_eq!(
+            assemble_b2(&with(b"a:b", b"c")),
+            Err(AssembleError::HeaderName),
+            "a colon in a header name has no representation"
+        );
+        assert_eq!(
+            assemble_b2(&with(b"", b"c")),
+            Err(AssembleError::HeaderName)
+        );
+        assert_eq!(
+            assemble_b2(&with(b"a\r\nb", b"c")),
+            Err(AssembleError::HeaderName)
+        );
+        assert_eq!(
+            assemble_b2(&with(b"a", b"c\r\nd")),
+            Err(AssembleError::HeaderValue)
+        );
+        // Positive control: the same header with the colon taken out of the name serialises and
+        // survives the round trip, so the refusals above are the colon, not the shape.
+        let ok = with(b"ab", b"c");
+        assert_eq!(parse_b2(&assemble_b2(&ok).unwrap()), Ok(ok));
+    }
+
+    /// The other two fields written into a header line. Both were caught by the round trip
+    /// before — loudly, as documented — and are refused up front now for the same reason the
+    /// colon is: the composer owns the field, so the composer gets the error.
+    #[test]
+    fn an_unrepresentable_mid_or_attachment_name_is_refused_by_assemble() {
+        let msg = |mid: &[u8], name: &[u8]| Message {
+            mid: mid.to_vec(),
+            headers: vec![],
+            body: vec![],
+            attachments: vec![Attachment {
+                name: name.to_vec(),
+                data: b"d".to_vec(),
+            }],
+        };
+        assert_eq!(assemble_b2(&msg(b"M\rX", b"a")), Err(AssembleError::Mid));
+        assert_eq!(assemble_b2(&msg(b"M\nX", b"a")), Err(AssembleError::Mid));
+        assert_eq!(
+            assemble_b2(&msg(b"M", b"")),
+            Err(AssembleError::AttachmentName),
+            "an empty name has nothing to separate it from the space in front of it"
+        );
+        assert_eq!(
+            assemble_b2(&msg(b"M", b"a\nb")),
+            Err(AssembleError::AttachmentName)
+        );
+        // Positive control.
+        let ok = msg(b"M", b"a");
+        assert_eq!(parse_b2(&assemble_b2(&ok).unwrap()), Ok(ok));
+    }
+
+    /// The residual `assemble_b2` deliberately leaves to the round trip: a `headers` entry
+    /// carrying a structural name is a malformed [`Message`], not an unrepresentable field, and
+    /// the round trip catches it the way the module header says such things are caught —
+    /// loudly, never as a different message.
+    #[test]
+    fn a_structural_name_in_headers_fails_its_round_trip_loudly() {
+        for (name, value, expected) in [
+            (&b"Mid"[..], &b"OTHER"[..], MessageError::Malformed),
+            (&b"Body"[..], &b"0"[..], MessageError::Malformed),
+            // A phantom `File:` eats the front of the attachment region; the real lengths are
+            // computed from the real payloads, so the last part is always short.
+            (&b"File"[..], &b"2 p"[..], MessageError::BadFileLength),
+        ] {
+            let wire = assemble_b2(&Message {
+                mid: b"M".to_vec(),
+                headers: vec![(name.to_vec(), value.to_vec())],
+                body: b"ab".to_vec(),
+                attachments: vec![],
+            })
+            .unwrap();
+            assert_eq!(
+                parse_b2(&wire),
+                Err(expected),
+                "{}",
+                String::from_utf8_lossy(name)
+            );
+        }
+    }
+
     proptest! {
-        /// Round-trip over arbitrary binary bodies and attachments. Names exclude CR and LF only
-        /// — the documented precondition on [`Attachment::name`] — and nothing else is
-        /// constrained, so embedded CRLFs, NULs and invalid UTF-8 are all in range.
+        /// Round-trip over arbitrary binary bodies, headers and attachments. The generators
+        /// exclude exactly what [`assemble_b2`] refuses and nothing more, so embedded CRLFs in a
+        /// body, NULs and invalid UTF-8 everywhere are all in range. The one extra exclusion is
+        /// a structural header name, which is not an unrepresentable field but a malformed
+        /// [`Message`] — pinned by `a_structural_name_in_headers_fails_its_round_trip_loudly`
+        /// instead, because its round trip is an error rather than an equality.
         #[test]
         fn arbitrary_messages_round_trip(
             mid in proptest::collection::vec(
                 any::<u8>().prop_filter("no CR/LF in a MID", |b| *b != b'\r' && *b != b'\n'),
                 1..12,
+            ),
+            headers in proptest::collection::vec(
+                (
+                    proptest::collection::vec(
+                        any::<u8>().prop_filter("no colon/CR/LF in a header name", |b| {
+                            *b != b':' && *b != b'\r' && *b != b'\n'
+                        }),
+                        1..12,
+                    )
+                    .prop_filter("a structural name belongs in its own field", |n: &Vec<u8>| {
+                        ![HDR_MID, HDR_BODY, HDR_FILE]
+                            .iter()
+                            .any(|h| n.eq_ignore_ascii_case(h))
+                    }),
+                    proptest::collection::vec(
+                        any::<u8>()
+                            .prop_filter("no CR/LF in a header value", |b| {
+                                *b != b'\r' && *b != b'\n'
+                            }),
+                        0..24,
+                    ),
+                ),
+                0..4,
             ),
             body in proptest::collection::vec(any::<u8>(), 0..300),
             atts in proptest::collection::vec(
@@ -683,14 +907,14 @@ mod tests {
         ) {
             let msg = Message {
                 mid,
-                headers: vec![],
+                headers,
                 body,
                 attachments: atts
                     .into_iter()
                     .map(|(name, data)| Attachment { name, data })
                     .collect(),
             };
-            prop_assert_eq!(parse_b2(&assemble_b2(&msg)), Ok(msg));
+            prop_assert_eq!(parse_b2(&assemble_b2(&msg).unwrap()), Ok(msg));
         }
     }
 }

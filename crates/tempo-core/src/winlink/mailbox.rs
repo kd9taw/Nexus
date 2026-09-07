@@ -456,6 +456,7 @@ mod tests {
                 data: b"<x/>".to_vec(),
             }],
         })
+        .expect("the fixture's fields are all representable")
     }
 
     /// Store a well-formed message. Every call site wants the blob and the MID to agree.
