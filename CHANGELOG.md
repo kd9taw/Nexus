@@ -80,6 +80,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than from the current setting. Contacts logged by earlier versions carry no station call and
   upload exactly as they did before.
 
+- **The QRZ callbook row in Settings ▸ Connections could never say it was working.** It was
+  wired to nothing, so a paid subscription with a working password and a subscription that had
+  lapsed months ago showed the same grey "not verified yet" row, and the only way anyone found
+  to clear it was to push a QSO through. Every callbook lookup now updates that row, and so
+  does the Test connection button on the QRZ Logbook row — which also could not clear its own
+  dot before. A lapsed subscription reads red with QRZ's own sentence on it, and because the
+  row is a lookup and not an upload it now says "last lookup" rather than "last upload".
+
+- **Cloudlog and Wavelog threw away the reason your upload was rejected.** The instance sends
+  back what it actually refused — a read-only API key, a station profile id not linked to that
+  key, a missing ADIF field — and Nexus replaced all of it with "auth rejected — check the API
+  key", which sent people to check the one thing that was usually fine. The server's own words
+  now lead, and where it said nothing the guess names the station profile id as well as the
+  key. A failure to reach the instance at all is no longer blamed on the URL either: an
+  antivirus or company proxy inspecting HTTPS traffic is named as the likely cause, which is
+  what it usually is.
+
+- **A LoTW report that failed to download said which step failed, not what went wrong.** Every
+  failure reading the response became "could not read the response body", so a request that
+  died after a minute and one that never started looked identical. It now says which happened
+  and how long it waited — and where it genuinely cannot tell (LoTW still assembling the
+  report, or a report too large to arrive inside the deadline) it says both instead of
+  guessing, and tells you to narrow the date range if it keeps happening.
+
+- **An upload code pasted with a stray space or newline made every upload fail, silently.**
+  Copying an HRDLog.net upload code, a QRZ Logbook API key or a World Radio League key out of a
+  web page usually brings a trailing newline with it. Nexus stored it exactly as pasted and
+  sent it that way, so the service rejected every QSO and nothing on screen explained why —
+  the code looked right because it was right, apart from a character you cannot see. Codes are
+  now trimmed when you save them. Existing stored codes are unaffected until you re-enter one.
+
 ## [1.10.3] — 2026-09-04
 
 ### Added
