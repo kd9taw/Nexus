@@ -13790,6 +13790,65 @@ fn conn_health_of(id: &str) -> (Option<i64>, Option<i64>, Option<String>) {
     }
 }
 
+/// One connector's `(last_success, last_failure_when, last_failure_detail)` triple, as the
+/// panel row consumes it.
+type HealthTriple = (Option<i64>, Option<i64>, Option<String>);
+
+/// What one QRZ **callbook** lookup says about the XML subscription's health, as
+/// `note_conn_health`'s `(ok, detail)` pair.
+///
+/// ⚠️ #245, defect 1. Nothing recorded this before, and the panel row's two stamps were
+/// hard-coded `None` — so `connHealth.ts`, which derives the dot from exactly those two
+/// timestamps, pinned the QRZ callbook at amber "not verified yet" for every operator
+/// forever. A paid, working subscription was indistinguishable from an expired one, which is
+/// what M0DHT reported.
+///
+/// The non-obvious half is that `Ok` counts **whether or not QRZ held a record**: an
+/// authoritative "no such callsign" is a completed round trip on a live session, which is
+/// exactly what this row claims to know. Treating a miss as a failure would paint the row red
+/// for looking up a callsign that does not exist.
+fn qrz_xml_stamp<T>(r: &Result<T, String>) -> (bool, String) {
+    match r {
+        Ok(_) => (true, String::new()),
+        // Already redacted by the transport — the lookup URL carries the password, and this
+        // string is persisted to conn-health.json.
+        Err(e) => (false, e.clone()),
+    }
+}
+
+/// The QRZ **Logbook** row's history: the newer of each half across its TWO sources.
+///
+/// ⚠️ #245, defect 2. `logged` is the per-QSO upload stamps read out of `log.adi` (they
+/// survive a restart); `session` is the round-trip stamps `note_conn_health` records, which
+/// now include the Test-connection button. The row used to read `logged` alone, so a
+/// **successful** Test — a real STATUS round trip that validates the key and names the book's
+/// owner — left the dot amber, and only a real QSO upload could clear it. That is precisely
+/// why the community workaround for #245 is "push a QSO through", and it is the symptom, not
+/// a fix.
+///
+/// Neither source is a superset of the other: a Test verifies the key without logging a QSO,
+/// and an upload happens without anyone pressing Test. So each half takes the newer of the
+/// two, independently — and a failure detail travels with the failure timestamp it explains,
+/// never with the other source's.
+///
+/// Pure (both sides passed in) so it is testable without touching the process-global health
+/// store — which persists to the operator's real `conn-health.json` on every write.
+fn qrz_logbook_health(logged: HealthTriple, session: HealthTriple) -> HealthTriple {
+    let newer = |a: Option<i64>, b: Option<i64>| match (a, b) {
+        (Some(x), Some(y)) => Some(x.max(y)),
+        (x, y) => x.or(y),
+    };
+    // Whichever failure is newer keeps ITS reason; a detail pinned to the other one would
+    // explain a failure that is no longer the one being shown.
+    let (fail, detail) = match (logged.1, session.1) {
+        (Some(l), Some(s)) if s > l => (Some(s), session.2),
+        (Some(l), Some(_)) => (Some(l), logged.2),
+        (Some(l), None) => (Some(l), logged.2),
+        (None, s) => (s, session.2),
+    };
+    (newer(logged.0, session.0), fail, detail)
+}
+
 /// Record a connectivity event (and mirror it to stderr for dev logs).
 fn conn_log(connector: &str, level: &str, message: impl Into<String>) {
     let message = message.into();
@@ -13929,6 +13988,19 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
     let (hrdlog_ok, hrdlog_fail, hrdlog_detail) = conn_health_of("hrdlog");
     let (wrl_ok, wrl_fail, wrl_detail) = conn_health_of("wrl");
     let (cloudlog_ok, cloudlog_fail, cloudlog_detail) = conn_health_of("cloudlog");
+    // #245, defect 1: the QRZ callbook row's stamps were hard-coded `None`, so it was amber
+    // forever. `qrz_lookup` now records every completed lookup — see `qrz_xml_stamp`.
+    let qrz_xml = conn_health_of("qrz-xml");
+    // #245, defect 2: the QRZ Logbook row read the per-QSO stamps alone, so a successful
+    // Test connection could not clear the dot.
+    let qrz_book = qrz_logbook_health(
+        (
+            health.qrz.last_success_unix,
+            health.qrz.last_failure_unix,
+            health.qrz.last_failure_detail,
+        ),
+        conn_health_of("qrz-logbook"),
+    );
     let has = |entry: Result<keyring::Entry, String>| {
         entry
             .and_then(|e| e.get_password().map_err(|er| er.to_string()))
@@ -13966,9 +14038,9 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             // still reads as a benign grey row. Flagged rather than pretended away.
             uploads: false,
             enabled: stored_qrz,
-            last_success_unix: None,
-            last_failure_unix: None,
-            last_failure_detail: None,
+            last_success_unix: qrz_xml.0,
+            last_failure_unix: qrz_xml.1,
+            last_failure_detail: qrz_xml.2,
             paused: false,
         },
         CredStatus {
@@ -13978,9 +14050,9 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             identity: qrz_user,
             uploads: true,
             enabled: qrz_book_on,
-            last_success_unix: health.qrz.last_success_unix,
-            last_failure_unix: health.qrz.last_failure_unix,
-            last_failure_detail: health.qrz.last_failure_detail,
+            last_success_unix: qrz_book.0,
+            last_failure_unix: qrz_book.1,
+            last_failure_detail: qrz_book.2,
             paused: false,
         },
         CredStatus {
@@ -15124,9 +15196,13 @@ async fn qrz_lookup(
         if !qrz_username.is_empty() {
             if let Ok(password) = qrz_keychain()?.get_password() {
                 queried_any = true;
-                if let Some(dto) =
-                    qrz_lookup_attempt(cand, &qrz_username, &password, qrz_session.inner())?
-                {
+                let attempt =
+                    qrz_lookup_attempt(cand, &qrz_username, &password, qrz_session.inner());
+                // #245, defect 1. This is the ONLY live evidence the QRZ XML subscription
+                // works, and it was never recorded — see `qrz_xml_stamp` for what counts.
+                let (ok, detail) = qrz_xml_stamp(&attempt);
+                note_conn_health("qrz-xml", ok, detail);
+                if let Some(dto) = attempt? {
                     return Ok(dto);
                 }
             }
@@ -15234,11 +15310,22 @@ async fn qrz_test_connection(state: State<'_, SharedEngine>) -> Result<String, S
         let eng = engine_lock(&state);
         eng.settings().mycall.trim().to_string()
     };
-    conn_logged(
+    let res = conn_logged(
         "QRZ Logbook",
         |s: &String| format!("connection test OK — {s}"),
         qrz_test_connection_impl(&mycall).await,
-    )
+    );
+    // #245, defect 2. `conn_logged` only appends to the rolling connection log, which the
+    // panel's DOT does not read — so before this the operator could press Test, watch it
+    // report the right book owner and QSO count, and still see amber. A real STATUS round
+    // trip is exactly as much evidence as an automatic upload (the HRDLog manual-push rule,
+    // below), so it is recorded the same way. The failure half is stamped too: a Test that
+    // fails is the moment the operator most wants the panel to agree with them.
+    match &res {
+        Ok(_) => note_conn_health("qrz-logbook", true, String::new()),
+        Err(e) => note_conn_health("qrz-logbook", false, e.clone()),
+    }
+    res
 }
 
 /// Wrap QRZ's terse server errors in a plain-language hint (F4MQS: QRZ's "Unable to add
@@ -21446,6 +21533,113 @@ mod tests {
             1,
             "upsert, never append"
         );
+    }
+
+    /// #245, defect 1: the QRZ **callbook** row could never report itself verified. Its two
+    /// stamps were hard-coded `None`, so an operator with a paid subscription and a working
+    /// key read amber "not verified yet" forever, however many lookups had just succeeded.
+    ///
+    /// What is checked here is the decision the (now-present) call site makes, because the
+    /// interesting part is not that a stamp happens but WHICH outcomes count as one.
+    ///
+    /// ⚠️ Deliberately pure. `note_conn_health` persists to the operator's REAL
+    /// `conn-health.json`, so a test that stamped a live connector id would write a false
+    /// "verified today" into their panel — this test did exactly that before it was rewritten.
+    #[test]
+    fn a_completed_qrz_callbook_lookup_is_what_the_row_reports() {
+        use super::qrz_xml_stamp;
+        // A hit is a working subscription.
+        assert_eq!(
+            qrz_xml_stamp(&Ok::<_, String>(Some(()))),
+            (true, String::new())
+        );
+        // So is an authoritative miss: QRZ answered on a live session. Calling this a failure
+        // would paint the row red for looking up a callsign that simply does not exist.
+        assert_eq!(
+            qrz_xml_stamp(&Ok::<_, String>(None::<()>)),
+            (true, String::new())
+        );
+        // A rejected login is the case M0DHT could not see, and QRZ's own words are the
+        // actionable half — an expired subscription must read as an expired subscription.
+        let (ok, detail) =
+            qrz_xml_stamp(&Err::<(), _>("QRZ login failed: Not a subscriber".into()));
+        assert!(!ok);
+        assert_eq!(detail, "QRZ login failed: Not a subscriber");
+    }
+
+    /// …and the stamp has to SURVIVE a restart, or #245 comes back the first time the
+    /// operator relaunches. `conn_health_from_json` drops any id not in `CONN_HEALTH_IDS`,
+    /// so leaving `qrz-xml` out of that list would discard the row on every load — silently,
+    /// and only visible as the panel going amber again after a restart.
+    #[test]
+    fn the_qrz_callbook_row_survives_a_restart() {
+        use super::{conn_health_from_json, conn_health_to_json};
+        let rows = vec![("qrz-xml", Some(1_700_000_000_i64), None)];
+        let back = conn_health_from_json(&conn_health_to_json(&rows));
+        assert_eq!(back, rows, "a qrz-xml row must round-trip through the file");
+        // The control: the loader really does drop what it does not recognise, so the
+        // assertion above is testing the whitelist and not just serde.
+        let junk = vec![("qrz-xml-typo", Some(1_700_000_000_i64), None)];
+        assert!(
+            conn_health_from_json(&conn_health_to_json(&junk)).is_empty(),
+            "control: an unknown id must be dropped, or the check above proves nothing"
+        );
+    }
+
+    /// #245, defect 2: a **successful** QRZ Logbook Test could not clear the amber dot. The
+    /// row read only the per-QSO upload stamps in `log.adi`, so a real STATUS round trip that
+    /// validated the key changed nothing — which is why the community workaround was "push a
+    /// QSO through". Both sources are real evidence and neither is a superset of the other,
+    /// so the row must show the newer of each half. Pure, for the reason above.
+    #[test]
+    fn a_qrz_logbook_test_connection_counts_as_evidence_the_row_can_show() {
+        use super::qrz_logbook_health;
+        // A restart-surviving upload success from an hour ago, and a Test round trip since.
+        let (ok, _, _) = qrz_logbook_health((Some(1_000), None, None), (Some(5_000), None, None));
+        assert_eq!(
+            ok,
+            Some(5_000),
+            "the newer Test round trip must win over the older upload stamp"
+        );
+
+        // …and the reverse: a per-QSO stamp NEWER than anything this session must still win,
+        // or a restart would throw away the history the log file exists to preserve.
+        let (ok2, _, _) = qrz_logbook_health((Some(9_000), None, None), (Some(5_000), None, None));
+        assert_eq!(
+            ok2,
+            Some(9_000),
+            "the newer of the two sources wins in BOTH directions"
+        );
+
+        // Either source alone still reaches the row.
+        assert_eq!(
+            qrz_logbook_health((None, None, None), (Some(5_000), None, None)).0,
+            Some(5_000),
+            "a Test with no upload history behind it is still evidence"
+        );
+
+        // The halves are independent: a failure must not erase the success, and each failure
+        // keeps ITS OWN reason — a detail pinned to the older one would explain a failure
+        // that is not the one being shown.
+        let (ok3, fail3, detail3) = qrz_logbook_health(
+            (Some(9_000), Some(2_000), Some("upload rejected".into())),
+            (Some(5_000), Some(7_000), Some("test rejected".into())),
+        );
+        assert_eq!(ok3, Some(9_000), "a failure must not erase the success");
+        assert_eq!(fail3, Some(7_000), "the newer failure wins");
+        assert_eq!(
+            detail3.as_deref(),
+            Some("test rejected"),
+            "with its own reason"
+        );
+
+        // The same, the other way round — the control for the line above.
+        let (_, fail4, detail4) = qrz_logbook_health(
+            (Some(9_000), Some(8_000), Some("upload rejected".into())),
+            (Some(5_000), Some(7_000), Some("test rejected".into())),
+        );
+        assert_eq!(fail4, Some(8_000));
+        assert_eq!(detail4.as_deref(), Some("upload rejected"));
     }
 
     /// #61: a Test CAT that timed out must say so — each arm names what is known,
