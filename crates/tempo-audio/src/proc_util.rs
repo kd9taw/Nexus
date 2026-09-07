@@ -153,3 +153,105 @@ pub(crate) fn runs_ok_within(bin: &std::ffi::OsStr, budget: std::time::Duration)
         }
     }
 }
+
+/// Every place a **bundled** Hamlib tool can sit, relative to the directory holding the Nexus
+/// executable, most-specific first. `exe_name` is the executable's own file name, which is also
+/// the directory Tauri names on Linux (`usr/lib/<productName>/`).
+///
+/// ⚠️ **THE LINUX AND macOS ENTRIES ARE NOT DECORATION — until 2026-08-24 they were missing and
+/// the AppImage shipped Hamlib's five licence texts and no Hamlib.** The Windows installer has
+/// always carried rigctld, and the entries above covered it because Tauri puts the Windows
+/// resources beside the .exe. Every other platform puts them somewhere else, so the bundled copy
+/// was unreachable even once the build staged it:
+///
+/// | bundle          | executable                  | resources                              |
+/// |-----------------|-----------------------------|----------------------------------------|
+/// | Windows NSIS    | `<root>/Nexus.exe`          | `<root>/resources/`                    |
+/// | Linux deb + App | `usr/bin/Nexus`             | `usr/lib/Nexus/resources/`             |
+/// | macOS .app      | `Contents/MacOS/Nexus`      | `Contents/Resources/`                  |
+///
+/// Kept as ONE list because the three resolvers (`rigctld`, `rotctld`, `rigctl`) held three
+/// verbatim copies of it, which is how the two new entries would have gone into two of them.
+pub fn bundled_candidates(exe_name: &str, tool: &str) -> Vec<String> {
+    vec![
+        format!("hamlib/{tool}.exe"),
+        format!("resources/hamlib/{tool}.exe"),
+        format!("{tool}.exe"),
+        format!("hamlib/{tool}"),
+        format!("resources/hamlib/{tool}"),
+        // Linux .deb and AppImage: usr/bin/<exe> → usr/lib/<exe>/resources/
+        format!("../lib/{exe_name}/resources/hamlib/{tool}"),
+        // macOS .app: Contents/MacOS/<exe> → Contents/Resources/resources/
+        //
+        // ⚠️ THE `resources/` COMPONENT IS NOT OPTIONAL (#190). tauri.conf.json maps
+        // "resources/hamlib/*" → "resources/hamlib/", and that destination is relative to the
+        // bundle's own resource dir, so the tools land at Contents/Resources/resources/hamlib/.
+        // Shipping only the shorter path meant the correctly-staged, correctly-signed Hamlib
+        // inside every .app was never looked at: the resolver fell through to PATH and the
+        // Homebrew/MacPorts dirs, and on a Mac that had never installed Hamlib the spawn
+        // failed with "could not start its own rigctl" — i.e. NO CAT on 100% of fresh macOS
+        // installs, while Windows and Linux (both of which carry the component) were fine.
+        format!("../Resources/resources/hamlib/{tool}"),
+        // The pre-#190 path, kept as a harmless fallback: it costs one stat, and an older or
+        // hand-assembled bundle that really does put them here still resolves.
+        format!("../Resources/hamlib/{tool}"),
+    ]
+}
+
+/// The first bundled candidate for `tool` that exists under `dir`, or `None`.
+///
+/// Split from [`resolve_rigctld`] and its two siblings so the layouts above can be driven by a
+/// fixture directory in tests — `current_exe()` cannot be pointed at one.
+pub fn find_bundled_in(
+    dir: &std::path::Path,
+    exe_name: &str,
+    tool: &str,
+) -> Option<std::ffi::OsString> {
+    for cand in bundled_candidates(exe_name, tool) {
+        let p = dir.join(&cand);
+        if p.is_file() {
+            return Some(p.into_os_string());
+        }
+    }
+    None
+}
+
+/// [`find_bundled_in`] against the running executable's own directory.
+pub fn find_bundled(tool: &str) -> Option<std::ffi::OsString> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let name = exe.file_stem()?.to_str()?.to_string();
+    find_bundled_in(dir, &name, tool)
+}
+
+/// Admit a bundled candidate only if it can actually RUN — existence is not resolution.
+///
+/// ⚠️ WHY — the mac 1.10.0 CAT regression. "Found the bundled copy" SUPPRESSES the
+/// PATH/[`HAMLIB_SEARCH_DIRS`] fallback, so a bundled binary that dies before `main` costs
+/// more than nothing: it silently discards the operator's own working Hamlib. Concretely:
+/// fetch-hamlib-unix.sh repointed the libusb reference in the four TOOLS but not in
+/// libhamlib.4.dylib itself, so the shipped library still named
+/// /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib — present on every CI runner (the #190
+/// release gate ran `rigctld --version` there and stayed green) and absent on a Mac that
+/// never installed Homebrew's libusb, where dyld killed rigctld AND every one-shot rigctl
+/// ladder rung with SIGABRT before `main`. 1.9.2 had worked on the same machine because the
+/// pre-#190 resolver never FOUND the bundled tools and fell through to the operator's
+/// brew/MacPorts copy; #190 made it find them, and existence-only resolution turned a
+/// packaging defect into "the rig never answered at any speed". PATH and search-dir
+/// candidates have cleared [`runs_ok`] since 2026-08-13 for exactly this reason; this closes
+/// the same hole for the bundled branch. (Unix-only by construction, like `runs_ok`: the
+/// failure class — an absolute install-name into a package manager's prefix — does not exist
+/// in PE loading, and Windows keeps its existence-only resolution untouched.)
+#[cfg(unix)]
+pub fn bundled_if_runnable(tool: &str, p: std::ffi::OsString) -> Option<std::ffi::OsString> {
+    if runs_ok(&p) {
+        return Some(p);
+    }
+    crate::civ::diag::note(&format!(
+        "{tool}: the bundled copy at {} cannot run (killed by a signal — typically a library \
+         it needs is missing or unloadable); trying PATH and the package-manager directories \
+         instead",
+        p.to_string_lossy()
+    ));
+    None
+}
