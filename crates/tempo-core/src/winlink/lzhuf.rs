@@ -87,8 +87,31 @@
 ///
 /// This is spec §7's "undecidable from documents" wire fact: Winlink's own paper and the open
 /// reference word the coverage differently, and **a self-round-trip cannot settle it** — the port
-/// round-trips perfectly under either choice. It stays behind this one constant so that flipping
-/// it is a one-line change with no other edit anywhere.
+/// round-trips perfectly under either choice. It stays behind this one constant so that the
+/// shipping code has exactly one place to change.
+///
+/// # Flipping it also means editing the tests — five of them
+///
+/// An earlier wording here promised the flip was "a one-line change with no other edit anywhere".
+/// That was false and is worth saying plainly, because the moment it matters is a live bench where
+/// a red suite reads as "the codec broke". Measured, with the constant set to `false`:
+///
+/// * `pinned_image_for_a_fixed_plaintext` and
+///   `a_body_that_rebuilds_the_tree_round_trips_and_pins_its_image` fail on their pinned images —
+///   both pin the 2-byte prefix as part of the image, and the prefix is exactly what the flip
+///   changes. Both pins must be re-derived from the flipped build.
+/// * `a_corrupted_body_is_reported_as_crc_and_the_intact_one_is_not`,
+///   `a_cut_image_with_a_repaired_crc_is_reported_as_truncated` and
+///   `a_length_header_that_lands_inside_a_match_is_reported_as_malformed` fail because the
+///   `reseal` test helper hard-codes `crc16(body)` to seal a *tampered* body so that the guard
+///   after the CRC is the one under test. Under `false` the checked CRC is over the plaintext, and
+///   a tampered body has no plaintext to seal against — the helper cannot simply route through
+///   [`crc_of`], it has to be rethought along with the three tests, or those three have to be
+///   confined to the compressed-CRC reading.
+///
+/// Nothing outside this file's tests needs an edit; `compress`/`decompress` both branch on the
+/// constant already, and `wire_header_is_crc_le_then_length_le_then_stream` is written as a branch
+/// so it holds either way.
 ///
 /// **It is no longer a guess.** Two independent primary sources and three captured images agree
 /// that the CRC covers the compressed image:
@@ -270,6 +293,18 @@ struct Huffman {
     son: [usize; T + 1],
 }
 
+// A test-only tally of [`Huffman::reconst`] executions on the current thread.
+//
+// The rebuild fires once per `MAX_FREQ / 2` symbols or so, which is far past any small fixture,
+// so a test that has stopped reaching it looks exactly like one that still does. That is how the
+// routine came to be executed by no test at all. Counting it lets the fixture below *assert* that
+// the rebuild ran rather than infer it from a byte count. Each Rust test runs on its own thread,
+// so the tally is per-test and needs no synchronisation.
+#[cfg(test)]
+thread_local! {
+    static RECONST_COUNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 impl Huffman {
     /// ARSFI `StartHuff`: the initial flat tree, every symbol at frequency 1.
     fn new() -> Self {
@@ -302,6 +337,9 @@ impl Huffman {
     /// [`MAX_FREQ`]. This is what keeps the counts bounded, and it must happen at exactly the same
     /// symbol on both sides or the trees diverge.
     fn reconst(&mut self) {
+        #[cfg(test)]
+        RECONST_COUNT.with(|c| c.set(c.get() + 1));
+
         // Collect the leaves into the front of the table with halved counts. The source array is
         // sorted ascending and halving is monotone, so the collected prefix is sorted too — which
         // the insertion below relies on.
@@ -921,6 +959,7 @@ fn decode_stream(stream: &[u8], text_size: usize) -> Result<Vec<u8>, LzhufError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use md5::{Digest, Md5};
     use proptest::prelude::*;
 
     // -----------------------------------------------------------------------------------------
@@ -1029,9 +1068,8 @@ mod tests {
         let prefix = u16::from_le_bytes([image[0], image[1]]);
         // The seam, read both ways round: whichever way LZHUF_CRC_OVER_COMPRESSED is set, the
         // prefix must be the CRC of that input and must NOT be the CRC of the other one. Written
-        // as a branch rather than a pin so that flipping the constant is the one-line change its
-        // documentation promises — a test that hard-coded `true` would make the flip a two-line
-        // change, and the second line is the one someone forgets.
+        // as a branch rather than a pin so that *this* test survives the flip untouched. Five
+        // others do not — LZHUF_CRC_OVER_COMPRESSED's own doc lists them and says why.
         if LZHUF_CRC_OVER_COMPRESSED {
             assert_eq!(
                 prefix,
@@ -1282,5 +1320,109 @@ mod tests {
         ];
         assert_eq!(compress(plain), IMAGE, "the compressed image moved");
         assert_eq!(decompress(&IMAGE).unwrap(), plain);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The adaptive-Huffman tree rebuild.
+    //
+    // Everything above this line runs entirely on the *initial* tree. [`Huffman::reconst`] fires
+    // only when the root count reaches `MAX_FREQ`, i.e. after `MAX_FREQ - N_CHAR` = 32454 encoded
+    // symbols, and nothing above comes within an order of magnitude of that: 64 KB of one byte is
+    // ~1100 symbols, the ring-wrap body ~1200, the golden vector ~90, and the round-trip proptest
+    // caps at 8192 *bytes*. The rebuild is the one routine here that both peers must run at the
+    // identical symbol, so it is also the one whose divergence corrupts every byte after it rather
+    // than one — and it was the one routine no test executed.
+    // -----------------------------------------------------------------------------------------
+
+    /// A deterministic body long enough to rebuild the Huffman tree three times.
+    ///
+    /// Two properties are being bought, and both drive the shape:
+    ///
+    /// * **Low compressibility keeps it small.** A byte the matcher cannot cover costs one symbol,
+    ///   so symbols track bytes about 1:1 and the second rebuild arrives at ~52000 bytes. 80000
+    ///   gives it 50% headroom and buys a third rebuild; the test asserts the count rather than
+    ///   trusting this arithmetic.
+    /// * **A 32-symbol alphabet makes short matches common**, so `insert_node` repeatedly finds
+    ///   two candidates of *equal* length and its closest-match tie-break decides between them.
+    ///   Over a 95-symbol alphabet that branch is effectively never taken, and disabling it does
+    ///   not move the image at any size — an alphabet this narrow is what turns the tie-break into
+    ///   something the pin below can see. It is also realistic: RFC 4648 base32 is the shape of an
+    ///   encoded attachment body.
+    ///
+    /// Generated rather than vendored: a third-party fixture this size would be a NOTICE item, and
+    /// this one is reproducible by anyone from these five lines.
+    fn tree_rebuild_body() -> Vec<u8> {
+        const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        let mut x: u32 = 0x1234_5678;
+        (0..80_000)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                // The top byte, not the low bits: an LCG's low bits have short periods.
+                ALPHABET[((x >> 24) & 31) as usize]
+            })
+            .collect()
+    }
+
+    /// Round-trips a body that crosses [`Huffman::reconst`], and pins the image it produces.
+    ///
+    /// Both halves are load-bearing and neither substitutes for the other:
+    ///
+    /// * The **round trip** proves the two trees stay in step across a rebuild — a rebuild that
+    ///   ran on one side and not the other garbles everything after it. The `RECONST_COUNT`
+    ///   assertions state outright that the rebuild ran, so a later edit that stops reaching it
+    ///   fails here instead of silently restoring the coverage gap this test exists to close.
+    /// * The **pinned image** is what catches a rebuild that is symmetric but wrong. Encoder and
+    ///   decoder share one [`Huffman`], so a change to [`MAX_FREQ`] or to `reconst` itself changes
+    ///   both sides identically: it round-trips perfectly while putting bytes on the air that no
+    ///   Winlink peer can read. That is not hypothetical — `MAX_FREQ` at `0x7FFF` (the rebuild one
+    ///   symbol early) or at `0x4000`, and `insert_node`'s tie-break disabled, all leave every
+    ///   round trip in this file green and all three move this pin.
+    ///
+    /// The pin is a digest because the image is 51 KB. MD5 is a fixture identity here and nothing
+    /// else — never integrity, secrecy, or any security decision (`secure.rs` carries the same
+    /// caveat for the one place Winlink's protocol forces MD5 on us).
+    #[test]
+    fn a_body_that_rebuilds_the_tree_round_trips_and_pins_its_image() {
+        let plain = tree_rebuild_body();
+
+        RECONST_COUNT.with(|c| c.set(0));
+        let image = compress(&plain);
+        let rebuilds_encoding = RECONST_COUNT.with(|c| c.get());
+
+        RECONST_COUNT.with(|c| c.set(0));
+        let back = decompress(&image).unwrap();
+        let rebuilds_decoding = RECONST_COUNT.with(|c| c.get());
+
+        // Reported as a first-difference offset rather than through `assert_eq!`, which would dump
+        // 80 KB of bytes twice on failure and bury the one number that locates the divergence.
+        if back != plain {
+            let at = back.iter().zip(&plain).position(|(a, b)| a != b);
+            panic!(
+                "the round trip across the tree rebuild is not exact: {} bytes out for {} in, \
+                 first difference at {at:?}",
+                back.len(),
+                plain.len()
+            );
+        }
+        assert!(
+            rebuilds_encoding >= 2,
+            "the fixture reached {rebuilds_encoding} tree rebuilds, not at least 2; `reconst` is \
+             back to being executed by nothing"
+        );
+        assert_eq!(
+            rebuilds_decoding, rebuilds_encoding,
+            "the decoder rebuilt its tree a different number of times than the encoder did"
+        );
+
+        let mut md5 = Md5::new();
+        md5.update(&image);
+        let digest: String = md5.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        // The length is the cheap half and it is not sufficient: a 100 KB variant of this fixture
+        // survives the tie-break mutation with its length unchanged and only the digest moving.
+        assert_eq!(image.len(), 51884, "the compressed image moved (length)");
+        assert_eq!(
+            digest, "373b8cd9516ff4937c71fb34508fb749",
+            "the compressed image moved (contents)"
+        );
     }
 }
