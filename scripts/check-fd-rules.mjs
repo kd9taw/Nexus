@@ -43,13 +43,20 @@ for (const r of spec.rulesets) {
   if (seenEvents.has(key)) fail(`${tag}: duplicate event+year`)
   seenEvents.add(key)
   if (!r.contest_id) fail(`${tag}: empty contest_id`)
-  if (!['powered_multiplier', 'objectives'].includes(r.scoring))
-    fail(`${tag}: unknown scoring model ${JSON.stringify(r.scoring)}`)
+  // `scoring` is a BLOCK (schema 2): the model plus the two tables that were
+  // always part of it. Required, never defaulted — mirrors ScoringSpec.
+  const sc = r.scoring
+  if (!sc || typeof sc !== 'object') fail(`${tag}: missing the \`scoring\` block`)
+  if (!['powered_multiplier', 'objectives'].includes(sc.model))
+    fail(`${tag}: unknown scoring model ${JSON.stringify(sc.model)}`)
+  if (!sc.points_by_mode_class || typeof sc.points_by_mode_class !== 'object')
+    fail(`${tag}: scoring misses points_by_mode_class`)
   for (const k of ['PH', 'CW', 'DIG'])
-    if (!(k in r.points_by_mode_class)) fail(`${tag}: points_by_mode_class misses ${k}`)
-  if (!r.power_tiers.length) fail(`${tag}: empty power_tiers`)
-  for (let i = 1; i < r.power_tiers.length; i++)
-    if (r.power_tiers[i - 1] >= r.power_tiers[i]) fail(`${tag}: power_tiers not strictly ascending`)
+    if (!(k in sc.points_by_mode_class)) fail(`${tag}: points_by_mode_class misses ${k}`)
+  if (!Array.isArray(sc.power_tiers) || !sc.power_tiers.length)
+    fail(`${tag}: empty power_tiers`)
+  for (let i = 1; i < sc.power_tiers.length; i++)
+    if (sc.power_tiers[i - 1] >= sc.power_tiers[i]) fail(`${tag}: power_tiers not strictly ascending`)
   const ids = new Set()
   for (const b of [...r.bonuses, ...(r.objectives || [])]) {
     if (!b.id) fail(`${tag}: empty bonus id`)

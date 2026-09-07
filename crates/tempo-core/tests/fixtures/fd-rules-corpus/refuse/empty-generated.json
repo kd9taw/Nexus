@@ -22,17 +22,19 @@
         "duration_hours": 27,
         "overrides": {}
       },
-      "scoring": "powered_multiplier",
-      "points_by_mode_class": {
-        "PH": 1,
-        "CW": 2,
-        "DIG": 2
+      "scoring": {
+        "model": "powered_multiplier",
+        "points_by_mode_class": {
+          "PH": 1,
+          "CW": 2,
+          "DIG": 2
+        },
+        "power_tiers": [
+          1,
+          2,
+          5
+        ]
       },
-      "power_tiers": [
-        1,
-        2,
-        5
-      ],
       "bonuses": [
         {
           "id": "emergency-power",
@@ -131,17 +133,19 @@
         "duration_hours": 30,
         "overrides": {}
       },
-      "scoring": "objectives",
-      "points_by_mode_class": {
-        "PH": 1,
-        "CW": 2,
-        "DIG": 2
+      "scoring": {
+        "model": "objectives",
+        "points_by_mode_class": {
+          "PH": 1,
+          "CW": 2,
+          "DIG": 2
+        },
+        "power_tiers": [
+          1,
+          2,
+          5
+        ]
       },
-      "power_tiers": [
-        1,
-        2,
-        5
-      ],
       "bonuses": [
         {
           "id": "emergency-power",

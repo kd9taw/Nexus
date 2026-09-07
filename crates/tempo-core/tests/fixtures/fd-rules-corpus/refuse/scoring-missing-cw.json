@@ -26,7 +26,6 @@
         "model": "powered_multiplier",
         "points_by_mode_class": {
           "PH": 1,
-          "CW": 2,
           "DIG": 2
         },
         "power_tiers": [
@@ -655,6 +654,11 @@
     {
       "code": "BC",
       "name": "British Columbia",
+      "division": "RAC"
+    },
+    {
+      "code": "NT",
+      "name": "Northern Territories",
       "division": "RAC"
     }
   ]

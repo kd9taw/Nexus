@@ -572,9 +572,7 @@ struct RulesetSpec {
     rules_year: u16,
     contest_id: String,
     window: WindowSpec,
-    scoring: String,
-    points_by_mode_class: BTreeMap<String, u32>,
-    power_tiers: Vec<u32>,
+    scoring: ScoringSpec,
     bonuses: Vec<BonusSpec>,
     banned_modes: Vec<String>,
     tempo_fd: bool,
@@ -582,6 +580,30 @@ struct RulesetSpec {
     enforcement: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
+}
+
+/// The whole scoring model for one ruleset, as one block.
+///
+/// `model` used to sit beside two flat siblings (`points_by_mode_class` and
+/// `power_tiers`) that were just as much part of "how this event scores".
+/// JSON cannot hold both `"scoring": "powered_multiplier"` and
+/// `"scoring": { … }`, and a block containing only the model string beside two
+/// flat siblings is a rename dressed as a block — so the block takes all three.
+///
+/// ⚠️ No `#[serde(default)]` and no `Option` anywhere in here, and that is not
+/// stylistic: serde silently fills a missing `Option` field with `None` even
+/// with no attribute at all, so an optional block would let a rules file that
+/// forgot how an event scores load and score as though its author had decided
+/// something (spec §8c). Absent must be loud, and the schema number is what
+/// makes it loud.
+#[derive(Debug, serde::Deserialize)]
+struct ScoringSpec {
+    /// `"powered_multiplier"` (ARRL FD) or `"objectives"` (WFD).
+    model: String,
+    /// Per-mode-class QSO points. `PH`, `CW` and `DIG` are all required.
+    points_by_mode_class: BTreeMap<String, u32>,
+    /// Legal power multipliers, strictly ascending.
+    power_tiers: Vec<u32>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -679,18 +701,27 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
         if r.contest_id.is_empty() {
             return Err(format!("{tag}: empty contest_id"));
         }
-        if !matches!(r.scoring.as_str(), "powered_multiplier" | "objectives") {
-            return Err(format!("{tag}: unknown scoring model {:?}", r.scoring));
+        // The same four checks as before the block landed, on the block's own
+        // paths. Messages are deliberately unchanged: they are what the corpus
+        // fixtures and the node validator match on.
+        if !matches!(
+            r.scoring.model.as_str(),
+            "powered_multiplier" | "objectives"
+        ) {
+            return Err(format!(
+                "{tag}: unknown scoring model {:?}",
+                r.scoring.model
+            ));
         }
         for k in ["PH", "CW", "DIG"] {
-            if !r.points_by_mode_class.contains_key(k) {
+            if !r.scoring.points_by_mode_class.contains_key(k) {
                 return Err(format!("{tag}: points_by_mode_class misses {k}"));
             }
         }
-        if r.power_tiers.is_empty() {
+        if r.scoring.power_tiers.is_empty() {
             return Err(format!("{tag}: empty power_tiers"));
         }
-        if !r.power_tiers.windows(2).all(|w| w[0] < w[1]) {
+        if !r.scoring.power_tiers.windows(2).all(|w| w[0] < w[1]) {
             return Err(format!("{tag}: power_tiers not strictly ascending"));
         }
         let mut ids: Vec<&str> = Vec::new();
@@ -787,12 +818,12 @@ fn build(spec: FileSpec) -> RulesTable {
         .into_iter()
         .map(|r| {
             let points = ModePoints {
-                ph: r.points_by_mode_class["PH"],
-                cw: r.points_by_mode_class["CW"],
-                dig: r.points_by_mode_class["DIG"],
+                ph: r.scoring.points_by_mode_class["PH"],
+                cw: r.scoring.points_by_mode_class["CW"],
+                dig: r.scoring.points_by_mode_class["DIG"],
             };
-            let power_tiers: &'static [u32] = Box::leak(r.power_tiers.into_boxed_slice());
-            let scoring = match r.scoring.as_str() {
+            let power_tiers: &'static [u32] = Box::leak(r.scoring.power_tiers.into_boxed_slice());
+            let scoring = match r.scoring.model.as_str() {
                 "powered_multiplier" => ScoringModel::PoweredMultiplier {
                     power_tiers,
                     points,
@@ -1407,7 +1438,7 @@ mod tests {
                 .contains("duplicate bonus id"),
         );
         assert!(
-            corrupt(&|v| v["rulesets"][0]["power_tiers"] = serde_json::json!([]))
+            corrupt(&|v| v["rulesets"][0]["scoring"]["power_tiers"] = serde_json::json!([]))
                 .unwrap_err()
                 .contains("power_tiers"),
         );
@@ -1428,7 +1459,7 @@ mod tests {
             "this build only warns"
         );
         assert!(corrupt(
-            &|v| v["rulesets"][0]["points_by_mode_class"] = serde_json::json!({"PH": 1})
+            &|v| v["rulesets"][0]["scoring"]["points_by_mode_class"] = serde_json::json!({"PH": 1})
         )
         .unwrap_err()
         .contains("points_by_mode_class"),);
@@ -1472,6 +1503,94 @@ mod tests {
     #[test]
     fn seed_events_are_read_from_the_bundled_seed() {
         assert_eq!(seed_events(), ["arrlfd", "wfd"]);
+    }
+
+    /// §11.1: the seed gains CONTENT, not behaviour. `scoring` absorbs the two
+    /// sibling keys that were always part of "today's model" (Ruling B1-B), and
+    /// the numbers inside are the same numbers they were when they were flat.
+    #[test]
+    fn the_scoring_block_carries_todays_model_unchanged() {
+        let arrl = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR);
+        assert!(
+            matches!(
+                arrl.scoring,
+                ScoringModel::PoweredMultiplier {
+                    power_tiers: &[1, 2, 5],
+                    points: ModePoints {
+                        ph: 1,
+                        cw: 2,
+                        dig: 2
+                    },
+                }
+            ),
+            "{:?}",
+            arrl.scoring
+        );
+        let wfd = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR);
+        assert!(
+            matches!(
+                wfd.scoring,
+                ScoringModel::Objectives {
+                    multipliers_at_submission: true,
+                    points: ModePoints {
+                        ph: 1,
+                        cw: 2,
+                        dig: 2
+                    },
+                }
+            ),
+            "{:?}",
+            wfd.scoring
+        );
+    }
+
+    /// §8(c): a missing block must be a LOUD failure. serde defaults a missing
+    /// `Option` field silently even with no `#[serde(default)]` attribute, which
+    /// is exactly why nothing in the new blocks is optional.
+    #[test]
+    fn a_ruleset_with_no_scoring_block_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0].as_object_mut().unwrap().remove("scoring");
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(e.contains("scoring"), "{e}");
+        // POSITIVE CONTROL: the same file with the block present loads.
+        assert!(parse_spec(SEED).is_ok());
+    }
+
+    /// The three checks that used to sit on flat sibling keys must still fire,
+    /// now that they read `scoring.*` — each with the control that the seed's
+    /// own value in that slot loads.
+    #[test]
+    fn the_moved_scoring_checks_still_fire_on_their_new_path() {
+        let corrupt = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            f(&mut v);
+            parse_spec(&v.to_string())
+        };
+        assert!(
+            corrupt(&|v| v["rulesets"][0]["scoring"]["model"] = "made_up".into())
+                .unwrap_err()
+                .contains("unknown scoring model"),
+        );
+        assert!(corrupt(&|v| {
+            v["rulesets"][0]["scoring"]["points_by_mode_class"] = serde_json::json!({"PH": 1});
+        })
+        .unwrap_err()
+        .contains("points_by_mode_class"),);
+        assert!(corrupt(
+            &|v| v["rulesets"][0]["scoring"]["power_tiers"] = serde_json::json!([5, 2, 1])
+        )
+        .unwrap_err()
+        .contains("power_tiers"),);
+        assert!(
+            corrupt(&|v| v["rulesets"][0]["scoring"]["power_tiers"] = serde_json::json!([]))
+                .unwrap_err()
+                .contains("power_tiers"),
+        );
+        assert!(
+            parse_spec(SEED).is_ok(),
+            "control: the seed's own values load"
+        );
     }
 
     #[test]

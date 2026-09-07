@@ -73,10 +73,10 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
     let mut spec: serde_json::Value = serde_json::from_str(SEED).unwrap();
     assert_eq!(spec["rulesets"][0]["event"], "arrlfd", "fixture anchor");
     assert_eq!(
-        spec["rulesets"][0]["points_by_mode_class"]["PH"], 1,
+        spec["rulesets"][0]["scoring"]["points_by_mode_class"]["PH"], 1,
         "the seed's phone points are 1 — the edit below is a real change"
     );
-    spec["rulesets"][0]["points_by_mode_class"]["PH"] = 3.into();
+    spec["rulesets"][0]["scoring"]["points_by_mode_class"]["PH"] = 3.into();
     spec["generated"] = "2026-12-31T00:00:00Z".into();
     let stats = fd_rules::install_from(&spec.to_string()).expect("valid file installs");
     assert_eq!(stats.generated, "2026-12-31T00:00:00Z");

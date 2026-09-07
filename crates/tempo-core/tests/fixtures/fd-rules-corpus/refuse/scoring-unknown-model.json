@@ -23,7 +23,7 @@
         "overrides": {}
       },
       "scoring": {
-        "model": "powered_multiplier",
+        "model": "made_up",
         "points_by_mode_class": {
           "PH": 1,
           "CW": 2,
@@ -655,6 +655,11 @@
     {
       "code": "BC",
       "name": "British Columbia",
+      "division": "RAC"
+    },
+    {
+      "code": "NT",
+      "name": "Northern Territories",
       "division": "RAC"
     }
   ]
