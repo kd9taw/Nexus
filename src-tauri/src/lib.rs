@@ -47,7 +47,7 @@ use tauri::State;
 use tauri_plugin_updater::UpdaterExt;
 use tempo_app::dto::{
     AppSnapshot, DiagnosticsReportDto, ImportStats, LoggedQso, LotwSyncResult, MeterReadout,
-    SourceKind, Spectrum, Tier, UploadReportDto,
+    SourceKind, Spectrum, Tier, UploadReportDto, WinlinkAttachment, WinlinkMessage, WinlinkRow,
 };
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::{Settings, VoiceMessage};
@@ -20377,6 +20377,11 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             save_png_to_downloads,
             civ_diagnostic_log,
             all_txt_location,
+            winlink_mailbox_list,
+            winlink_message,
+            winlink_mailbox_rebuild,
+            winlink_mark_read,
+            winlink_mailbox_location,
             diag_log_location,
             reveal_diag_log,
             recordings_location,
@@ -20863,6 +20868,183 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             }
         })
         .build(tauri::generate_context!())
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Winlink — the mailbox commands.
+//
+// The read side of the Winlink internet path. Nothing here keys a radio, opens an audio device
+// or touches the transmit path: the transport underneath is TCP to `server.winlink.org:8772`,
+// and none of the programme's TX-safety invariants is exercised by any line below.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+/// The Winlink mailbox root: `<shared data dir>/winlink`.
+///
+/// Beside `log.adi` in [`shared_data_dir`] rather than in the per-profile config dir, for the
+/// logbook's reason: mail is the operator's data, not this instance's settings, and a second
+/// profile must see the same mailbox. `NEXUS_DATA_DIR` therefore relocates it too.
+///
+/// ⚠️ `mailbox.rs`'s concurrency note applies: its lock is PROCESS-local, so two Nexus instances
+/// on one `NEXUS_DATA_DIR` can still lose an index row. That is already true of the logbook and
+/// is not this batch's to fix — but nothing here adds a second instance path, and no lock file is
+/// taken (a crash leaves one held, which is worse than the race).
+fn winlink_dir() -> PathBuf {
+    shared_data_dir().join("winlink")
+}
+
+/// Validates a MID arriving from the front end and returns its bytes.
+///
+/// The front end sends a `String`; the store keys on bytes and uses the MID as a **filename**.
+/// So this enforces the same alphabet `mailbox::mid_stem` does — ASCII alphanumerics, `-`, `_`,
+/// 1..=64 bytes — before any path is built. That makes the String→bytes round trip exact by
+/// construction (no lossy conversion can survive it) and it refuses `..` and `/` at the boundary
+/// the front end actually reaches, which is the class of check `sstv_delete_image`'s
+/// gallery-directory guard exists for.
+///
+/// The mailbox refuses these too. This is deliberate belt and braces: a later refactor that
+/// routed around the mailbox would otherwise hand an unvalidated path fragment to the
+/// filesystem.
+fn winlink_mid_bytes(mid: &str) -> Result<Vec<u8>, String> {
+    let bytes = mid.as_bytes();
+    let ok = !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_');
+    if !ok {
+        // The offending MID is NOT echoed: it is remote-influenced input and an error string
+        // ends up in logs and toasts. Same rule as `mailbox::mid_stem`.
+        return Err("that is not a usable Winlink message id".into());
+    }
+    Ok(bytes.to_vec())
+}
+
+/// Bytes → `String` for display. **Lossy on purpose** — see the DTO section's note in
+/// `tempo_app::dto`: this is the display boundary, nothing here goes back toward the wire, and a
+/// replacement character in a subject beats refusing to list a message that is on disk.
+fn wl_text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Builds the mailbox list from a restored state.
+///
+/// Sorting, stated once so it is not re-invented per call site: **descending by `arrivedUnix`,
+/// with `None` LAST, ties broken by MID ascending.** `None` last because an arrival this station
+/// cannot account for is not "oldest" and not "newest" — it is unknown, and putting it at the end
+/// says that without inventing a timestamp to say it with.
+///
+/// The one-line comparison is enough, and that was MEASURED rather than reasoned: `None < Some`
+/// in `Option`'s derived order, so reversing the operands to sort descending already sends every
+/// `None` to the back. An explicit four-arm `match` was written first, on the assumption that the
+/// derived order got this backwards; mutating it away left the test green, which is what showed
+/// the assumption false. The test below still pins the behaviour, because a later change to
+/// ascending order would silently move the unknowns to the front.
+fn winlink_rows_from(state: &tempo_core::winlink::restore::MailboxState) -> Vec<WinlinkRow> {
+    let mut rows: Vec<WinlinkRow> = state
+        .index
+        .entries
+        .iter()
+        .map(|e| WinlinkRow {
+            mid: wl_text(&e.mid),
+            from: wl_text(&e.from),
+            to: e.to.iter().map(|t| wl_text(t)).collect(),
+            subject: wl_text(&e.subject),
+            date: wl_text(&e.date),
+            body_len: e.body_len,
+            attachments: e.attachments.iter().map(|a| wl_text(a)).collect(),
+            blob_len: e.blob_len,
+            parsed: e.parsed,
+            arrived_unix: state.arrived.get(&e.mid).copied(),
+            unread: state.unread.contains(&e.mid),
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.arrived_unix
+            .cmp(&a.arrived_unix)
+            .then_with(|| a.mid.cmp(&b.mid))
+    });
+    rows
+}
+
+/// The mailbox list, newest arrival first, with unaccountable arrivals last.
+///
+/// ⚠️ **`(async)` here is correct-for-I/O, NOT gate-enforced, and that was measured.** The
+/// `no_engine_locking_command_runs_on_the_ui_thread` scan finds a bare `#[tauri::command]` whose
+/// body mentions `State<'_, SharedEngine>` or `engine_lock`; none of the five Winlink mailbox
+/// commands touches the engine, so making this one bare leaves that test GREEN — checked. The
+/// attribute is still required: every one of them reads a directory and parses JSON, and on
+/// Windows a bare command runs on the UI thread, so a slow disk would stall the whole window.
+///
+/// Runs the full ordered restore on every call rather than caching state in the engine. That is a
+/// directory read and a JSON parse over a mailbox measured in hundreds of messages, and it buys
+/// the property that matters here: the pane and the session task can never disagree about what is
+/// on disk, because neither of them is holding a copy. Revisit only with a measurement.
+#[tauri::command(async)]
+fn winlink_mailbox_list() -> Result<Vec<WinlinkRow>, String> {
+    let state = tempo_core::winlink::restore::restore(&winlink_dir())
+        .map_err(|e| format!("could not read the Winlink mailbox: {e}"))?;
+    Ok(winlink_rows_from(&state))
+}
+
+/// One message, parsed for display. Errors if the MID is not filename-safe or the blob is gone.
+#[tauri::command(async)]
+fn winlink_message(mid: String) -> Result<WinlinkMessage, String> {
+    let mid = winlink_mid_bytes(&mid)?;
+    let mb = tempo_core::winlink::mailbox::open(&winlink_dir());
+    let blob = mb
+        .read(&mid)
+        .map_err(|e| format!("could not read that message: {e}"))?;
+    let msg = tempo_core::winlink::message::parse_b2(&blob)
+        .map_err(|e| format!("that message is on disk but is not readable B2: {e:?}"))?;
+    Ok(WinlinkMessage {
+        mid: wl_text(&msg.mid),
+        headers: msg
+            .headers
+            .iter()
+            .map(|(n, v)| (wl_text(n), wl_text(v)))
+            .collect(),
+        body: wl_text(&msg.body),
+        attachments: msg
+            .attachments
+            .iter()
+            .map(|a| WinlinkAttachment {
+                name: wl_text(&a.name),
+                len: a.data.len(),
+            })
+            .collect(),
+    })
+}
+
+/// Re-derives `index.json` from the blobs and returns the fresh list. The recovery path the
+/// mailbox module is designed around, surfaced as a button.
+#[tauri::command(async)]
+fn winlink_mailbox_rebuild() -> Result<Vec<WinlinkRow>, String> {
+    let root = winlink_dir();
+    tempo_core::winlink::mailbox::open(&root)
+        .rebuild_index()
+        .map_err(|e| format!("could not rebuild the Winlink index: {e}"))?;
+    let state = tempo_core::winlink::restore::restore(&root)
+        .map_err(|e| format!("could not read the Winlink mailbox: {e}"))?;
+    Ok(winlink_rows_from(&state))
+}
+
+/// Records that the operator has read this message. Appends one journal row; idempotent in
+/// effect (a second row supersedes the first, and compaction keeps the last).
+#[tauri::command(async)]
+fn winlink_mark_read(mid: String) -> Result<(), String> {
+    let mid = winlink_mid_bytes(&mid)?;
+    tempo_core::winlink::journal::open(&winlink_dir())
+        .append(&tempo_core::winlink::journal::Event::Read {
+            mid,
+            at: now_unix(),
+        })
+        .map_err(|e| format!("could not record that as read: {e}"))
+}
+
+/// The mailbox folder, for a Settings "Reveal" button. Matches `all_txt_location`'s shape.
+#[tauri::command(async)]
+fn winlink_mailbox_location() -> Result<String, String> {
+    Ok(winlink_dir().to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -25086,4 +25268,100 @@ mod tests {
         assert_eq!(tech.len(), open.len());
     }
 
+    /// A MID from the front end is a FILENAME fragment, so the traversal shapes are refused at
+    /// the boundary the front end actually reaches -- before any path is built.
+    ///
+    /// `mailbox::mid_stem` refuses these too; this asserts it here anyway, because a later
+    /// refactor that routed around the mailbox would otherwise hand an unvalidated fragment to
+    /// the filesystem. Same class as `sstv_delete_image`'s gallery-directory check, and the same
+    /// reason that check exists.
+    #[test]
+    fn a_winlink_mid_that_is_not_filename_safe_is_refused_before_any_path_is_built() {
+        for hostile in [
+            "..",
+            "../../etc/passwd",
+            "a/b",
+            "a\\b",
+            "a.b",
+            "",
+            "with space",
+            "\u{2026}",
+        ] {
+            assert!(
+                super::winlink_mid_bytes(hostile).is_err(),
+                "{hostile:?} was accepted as a Winlink MID"
+            );
+        }
+        // Over the 64-byte ceiling.
+        assert!(super::winlink_mid_bytes(&"A".repeat(65)).is_err());
+    }
+
+    /// THE POSITIVE CONTROL for the guard above. Without it, "refuses `..`" could just as well
+    /// be "refuses everything", and the commands would be dead with the suite still green.
+    #[test]
+    fn a_real_winlink_mid_is_accepted() {
+        for ok in ["ABCDEFGHIJKL", "A", "a-b_C9", &"Z".repeat(64)] {
+            assert_eq!(
+                super::winlink_mid_bytes(ok).ok(),
+                Some(ok.as_bytes().to_vec()),
+                "{ok:?} should be a usable MID"
+            );
+        }
+    }
+
+    /// An error string must not echo the MID back: it is remote-influenced input, and an error
+    /// ends up in logs and toasts. `mailbox::mid_stem` has the same rule for the same reason.
+    #[test]
+    fn refusing_a_mid_does_not_echo_it() {
+        let hostile = "../../SENTINEL_STRING";
+        let err = super::winlink_mid_bytes(hostile).unwrap_err();
+        assert!(
+            !err.contains("SENTINEL"),
+            "the refusal echoed remote input: {err}"
+        );
+    }
+
+    /// The list sorts newest arrival first, with unaccountable arrivals LAST and ties broken by
+    /// MID -- stated once in `winlink_rows_from` and pinned here, because "None last" is the half
+    /// a natural `Option` ordering gets backwards (`None < Some` in Rust's derived order).
+    #[test]
+    fn the_mailbox_list_sorts_newest_first_with_unknown_arrivals_last() {
+        use tempo_core::winlink::mailbox::{Index, IndexEntry};
+        let entry = |mid: &[u8]| IndexEntry {
+            mid: mid.to_vec(),
+            date: Vec::new(),
+            from: Vec::new(),
+            to: Vec::new(),
+            subject: Vec::new(),
+            body_len: 0,
+            attachments: Vec::new(),
+            blob_len: 0,
+            parsed: true,
+        };
+        let state = tempo_core::winlink::restore::MailboxState {
+            index: Index {
+                entries: vec![entry(b"AAA"), entry(b"BBB"), entry(b"CCC"), entry(b"DDD")],
+            },
+            arrived: [
+                (b"AAA".to_vec(), 100i64),
+                (b"BBB".to_vec(), 300),
+                (b"DDD".to_vec(), 300),
+            ]
+            .into_iter()
+            .collect(),
+            unread: [b"BBB".to_vec()].into_iter().collect(),
+            repairs: Default::default(),
+        };
+        let rows = super::winlink_rows_from(&state);
+        let order: Vec<&str> = rows.iter().map(|r| r.mid.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["BBB", "DDD", "AAA", "CCC"],
+            "newest first, ties by MID ascending, unknown arrival last"
+        );
+        assert_eq!(rows[0].arrived_unix, Some(300));
+        assert!(rows[0].unread);
+        assert_eq!(rows[3].arrived_unix, None, "CCC has no accountable arrival");
+        assert!(!rows[3].unread);
+    }
 }

@@ -2219,6 +2219,110 @@ pub struct AppSnapshot {
     pub upload_tick: u32,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Winlink — the mailbox, as the pane reads it.
+//
+// Every mailbox field is `Vec<u8>` in whatever encoding the sender used, and these DTOs are
+// JSON, so the boundary is where bytes become `String`. That conversion is LOSSY and deliberately
+// so: this is the display side, nothing here is written back toward the wire, and a replacement
+// character in a subject is strictly better than refusing to list a message that is sitting on
+// disk. ⚠️ Nothing lossy may go the other way — a MID travelling from the front end back toward
+// the store is matched against the filename alphabet the mailbox enforces, so the round trip is
+// exact by construction.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// One row of the Winlink mailbox list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinlinkRow {
+    /// The message identifier, and the key every other Winlink command takes.
+    pub mid: String,
+    /// The `From:` header, or empty.
+    pub from: String,
+    /// Every `To:` header, in wire order. Winlink messages routinely carry several.
+    pub to: Vec<String>,
+    /// The `Subject:` header, or empty.
+    pub subject: String,
+    /// The `Date:` header verbatim — the SENDER's clock, not ours. See `arrived_unix`.
+    pub date: String,
+    /// The body's length in bytes.
+    pub body_len: usize,
+    /// Attachment filenames in `File:` order, so a row can show a paperclip without reading
+    /// the payloads.
+    pub attachments: Vec<String>,
+    /// The blob's size on disk, bytes.
+    pub blob_len: usize,
+    /// False when the blob on disk is not a readable B2 message. Such a row is still listed —
+    /// telling the operator the mailbox is empty when it is not is the failure the mailbox's
+    /// whole design avoids.
+    pub parsed: bool,
+    /// Unix seconds THIS station received it. `None` means the arrival is not accountable (no
+    /// journal row), which the UI renders as unknown. **It is never a fabricated value**: see
+    /// `tempo_core::winlink::restore`.
+    pub arrived_unix: Option<i64>,
+    /// Whether the message has an accountable arrival and has never been opened.
+    pub unread: bool,
+}
+
+/// One attachment, as the reader pane shows it. The payload is NOT carried — a Winlink message's
+/// attachments are its large part, and a list of names is what a pane needs to draw.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinlinkAttachment {
+    /// The filename from the `File:` header.
+    pub name: String,
+    /// The payload's length in bytes.
+    pub len: usize,
+}
+
+/// One message, parsed for display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinlinkMessage {
+    /// The message identifier.
+    pub mid: String,
+    /// Every non-structural header, `(name, value)`, in wire order.
+    pub headers: Vec<(String, String)>,
+    /// The readable body. Always plain text on the wire; lossily decoded for display.
+    pub body: String,
+    /// The attachments, names and sizes only.
+    pub attachments: Vec<WinlinkAttachment>,
+}
+
+/// Live state of the Winlink session, for the status chip.
+///
+/// ⚠️ **There is no password field here and there must never be one.** Pinned by
+/// `the_session_dto_cannot_carry_a_password` below, so a field added later fails a test rather
+/// than shipping the operator's account secret into every status poll.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinlinkSession {
+    /// The TCP connection to the CMS is up.
+    pub connected: bool,
+    /// The telnet pre-login finished — the B2F session has begun.
+    pub logged_in: bool,
+    /// Bytes received this session.
+    pub bytes_in: u64,
+    /// Bytes written this session.
+    pub bytes_out: u64,
+    /// Unix seconds of the most recent byte in either direction, or 0.
+    pub last_byte_unix: i64,
+    /// MIDs stored this session, in arrival order.
+    pub received: Vec<String>,
+    /// Protocol traces, display only.
+    pub traces: Vec<String>,
+    /// How the last session ended, once it has: "complete" | "stopped" | "peerClosed" | "io".
+    pub outcome: Option<String>,
+    /// The first thing that went irrecoverably wrong, rendered.
+    pub failed: Option<String>,
+}
+
+/// The `outcome` vocabulary — a TOKEN the UI switches on, never prose to render.
+///
+/// Named here for the same reason `AMP_REASONS` is: a UI switch can be exhaustive, and a
+/// Rust-authored English sentence can never reach the screen untranslated.
+pub const WINLINK_OUTCOMES: [&str; 4] = ["complete", "stopped", "peerClosed", "io"];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2343,6 +2447,48 @@ mod tests {
         assert_eq!(
             AMP_REASONS,
             ["portBusy", "noAnswer", "wrongModel", "malformed"]
+        );
+    }
+}
+
+#[cfg(test)]
+mod winlink_dto_tests {
+    use super::*;
+
+    /// The assertion that survives a later field being added. A `WinlinkSession` is polled every
+    /// few seconds while a session runs; if the account password ever reached it, it would reach
+    /// the front end, every devtools inspector and every serialized crash report with it.
+    #[test]
+    fn the_session_dto_cannot_carry_a_password() {
+        let s = WinlinkSession {
+            connected: true,
+            logged_in: true,
+            traces: vec!["greeted".into()],
+            ..WinlinkSession::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            !json.to_ascii_lowercase().contains("password"),
+            "a password-shaped field reached the session DTO: {json}"
+        );
+        assert!(
+            !format!("{s:?}").to_ascii_lowercase().contains("password"),
+            "a password-shaped field reached the session DTO's Debug"
+        );
+    }
+
+    /// `outcome` is switched on, not rendered — same rule as `AMP_REASONS`.
+    #[test]
+    fn the_outcome_vocabulary_is_four_camel_case_tokens() {
+        for token in WINLINK_OUTCOMES {
+            assert!(
+                !token.contains(' ') && token.is_ascii(),
+                "{token} looks like prose; `outcome` is switched on by the UI, not rendered"
+            );
+        }
+        assert_eq!(
+            WINLINK_OUTCOMES,
+            ["complete", "stopped", "peerClosed", "io"]
         );
     }
 }
