@@ -317,6 +317,41 @@ pub fn valid_section(code: &str) -> bool {
     sections().iter().any(|s| s.code == up)
 }
 
+/// The Field Day SECTION slot's domain: the 83 ARRL/RAC section codes plus the `MX`
+/// and `DX` extensions DX stations send — exactly the set the RTTY parser accepted
+/// inline as `valid_section(t) || t == "MX" || t == "DX"`. Derived from the same
+/// validated [`sections`] table, so the two can never disagree; nothing here
+/// duplicates a code list a human would have to keep in step.
+///
+/// ⚠️ Same ordering rule as [`ruleset`]: calling this LOADS the rules table, so it
+/// must never run before the startup [`install_from`] or the bundled seed is locked in
+/// for the session (see `tests/fd_rules_too_late.rs`). Its only caller is
+/// `contest::field_day()`, reached from `Engine::set_rtty_auto` — an operator action.
+///
+/// `MX`/`DX` carry their own code as their label: they are not sections and have no
+/// section name, and inventing a display name would be inventing data.
+pub fn fd_sections_domain() -> &'static crate::contest::Domain {
+    static D: OnceLock<crate::contest::Domain> = OnceLock::new();
+    D.get_or_init(|| {
+        let mut values: Vec<(&'static str, &'static str)> =
+            sections().iter().map(|s| (s.code, s.name)).collect();
+        values.push(("MX", "MX"));
+        values.push(("DX", "DX"));
+        crate::contest::Domain {
+            id: "fd_sections",
+            // Received: <ARRL_SECT>, which the Field Day ADIF exporter already writes.
+            // Sent: absent — MY_ARRL_SECT is not corroborated anywhere in this tree
+            // (§2.1.1), and batch 6 checks the name against adif.org's field list
+            // before any writer emits it.
+            adif: crate::contest::AdifTags {
+                rcvd: Some("ARRL_SECT"),
+                sent: None,
+            },
+            values: Box::leak(values.into_boxed_slice()),
+        }
+    })
+}
+
 /// Snap a stored power multiplier to the highest legal tier ≤ `v` (or the
 /// smallest tier). Replaces the engine's old `legal_fd_power` for the ARRL
 /// `{1, 2, 5}` tiers — a hand-edited settings file must never score with a
@@ -852,6 +887,39 @@ fn civil_year_of_unix(unix: u64) -> u16 {
 mod tests {
     use super::*;
     use crate::fieldday::{Exchange, FieldDayLog};
+
+    /// The RTTY parser accepted `valid_section(t) || t == "MX" || t == "DX"`
+    /// (rtty/seq.rs at 82eb3112). Batch 0 replaces that inline test with a domain
+    /// membership test, so the domain must be EXACTLY that set — 83 sections plus
+    /// the two literals a DX station sends — or a legal contact stops being loggable.
+    #[test]
+    fn the_fd_section_domain_is_the_83_sections_plus_mx_and_dx() {
+        let d = fd_sections_domain();
+        assert_eq!(d.id, "fd_sections");
+        assert_eq!(d.values.len(), 85, "83 ARRL/RAC sections + MX + DX");
+        for s in sections() {
+            assert!(
+                d.contains(s.code),
+                "section {} missing from the domain",
+                s.code
+            );
+        }
+        assert!(d.contains("MX"));
+        assert!(d.contains("DX"));
+        // Same normalisation as valid_section, both directions.
+        assert!(d.contains(" wi "));
+        assert!(!d.contains("ZZ"));
+        assert!(
+            !valid_section("MX"),
+            "MX is NOT a section — it is an FD extension"
+        );
+        // The received-side ADIF tag is corroborated in-tree (fieldday.rs writes
+        // <ARRL_SECT>); the sent-side MY_ARRL_SECT is NOT (grepped: zero hits, with
+        // MY_GRIDSQUARE's seven as the positive control), so it ships absent per §2.1.1
+        // and batch 6 checks the name against adif.org before any writer uses it.
+        assert_eq!(d.adif.rcvd, Some("ARRL_SECT"));
+        assert_eq!(d.adif.sent, None);
+    }
 
     /// Build a log from `(call, mode-class)` pairs — distinct calls so nothing
     /// dupes; class/section are constant (irrelevant to the point math).
