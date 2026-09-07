@@ -6,3 +6,8 @@
 # (the commit that introduced rustfmt.toml + reformatted ~150 files). It is
 # whitespace-only, so ignoring it keeps `git blame` pointing at real authorship.
 # <cargo-fmt-sweep-commit-sha>
+
+# `cargo fmt` sweep of src-tauri/src/lib.rs, 2026-09-07. src-tauri is its own
+# workspace root, so the repo-root fmt gate had never reached it; formatting
+# only (trailing commas, line breaks, one redundant match-arm brace pair).
+50b366f335a2d2ab7b5fb25710e5e89551acc997
