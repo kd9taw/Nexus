@@ -58,6 +58,19 @@
 //! [`Mailbox::read`] and [`Mailbox::load_index`] are never blocked by a store, and concurrent
 //! stores are serialised through each other's `sync_all`, which is what a mail store does anyway.
 //!
+//! Each of those three claims has its own gate, because for a while only the first did and the
+//! other two were assertions nothing checked: `concurrent_stores_do_not_lose_an_index_row` for the
+//! interleaved read-modify-write, `concurrent_stores_of_one_mid_publish_a_whole_blob` for the
+//! shared blob scratch, and `a_rebuild_overlapping_a_store_does_not_lose_a_row` for
+//! [`Mailbox::rebuild_index`]'s own acquisition. Each was written by moving or deleting the lock
+//! it describes and watching it go red, and two of the three mutations discriminate cleanly:
+//! narrowing `store`'s guard to the index update alone turns the blob test red and nothing else,
+//! and deleting [`Mailbox::rebuild_index`]'s acquisition turns the rebuild test red and nothing
+//! else. The third does not, and the claim is weaker for it: unguarding the index
+//! read-modify-write turns the index-row test red on every run and usually the other two with it,
+//! because both of those read the cache back afterwards. That half has a gate; it does not have
+//! an exclusive one.
+//!
 //! ⚠️ **What it does not cover: a second Nexus process on the same mailbox.** Two processes can
 //! still interleave the read-modify-write and lose an index row, and nothing here detects it. No
 //! file lock is taken, deliberately — a lock file carries its own failure mode (a crash leaves it
@@ -234,9 +247,19 @@ impl Mailbox {
     pub fn store(&self, mid: &[u8], b2f_blob: &[u8]) -> io::Result<()> {
         let path = self.blob_path(mid)?;
         // Validation is above the lock (it touches no disk); everything that writes is below it.
-        // The blob write is inside deliberately, not just the index update: two stores of the same
-        // MID would otherwise interleave into one `<MID>.tmp.<pid>` scratch and rename the splice
-        // over the message. Readers hold nothing, so this never blocks the mailbox pane.
+        // The blob write is inside deliberately, not just the index update: `write_atomic` derives
+        // its scratch path from the destination, so two stores of the same MID share one
+        // `<MID>.tmp.<pid>` and collide inside it. Measured, with the guard moved below this line:
+        // seven of eight concurrent stores of one MID return ENOENT from the rename, because the
+        // eighth had already renamed the scratch away — `store` reporting failure for a message
+        // the caller has every reason to believe it wrote. That is what the gate below actually
+        // catches, on every run. The scratch also admits a spliced blob, since the losers keep
+        // writing into a handle that now points at the published file; the test asserts against
+        // that too, but with equal-length bodies it did not fire in five runs, so treat it as the
+        // hazard the shared path permits rather than as a measured outcome.
+        // `concurrent_stores_of_one_mid_publish_a_whole_blob` is that mutation's gate; the MIDs in
+        // `concurrent_stores_do_not_lose_an_index_row` are all distinct, so it cannot see this at
+        // all. Readers hold nothing, so none of it blocks the mailbox pane.
         let _guard = lock_index();
         std::fs::create_dir_all(self.messages_dir())?;
         write_atomic(&path, b2f_blob)?;
@@ -280,6 +303,12 @@ impl Mailbox {
     /// Reads no existing index, by construction — that is the whole point, and a change here that
     /// consulted the cache would make the control in `rebuild_index_reconstructs_from_blobs_alone`
     /// pass for the wrong reason.
+    ///
+    /// Takes [`INDEX_LOCK`] because this is the **public** entry point — the one a mailbox pane's
+    /// "rebuild" button reaches while a session is storing received mail. Without it a rebuild
+    /// straddles a store and publishes a cache that predates it, losing a row whose blob is on
+    /// disk; the two also share `index.tmp.<pid>`. Gated by
+    /// `a_rebuild_overlapping_a_store_does_not_lose_a_row`.
     ///
     /// Files in `messages/` that are not `<valid-MID>.b2f` are skipped: a leftover
     /// `<MID>.tmp.<pid>` from a write that crashed before its rename is a half message and must
@@ -878,6 +907,136 @@ mod tests {
         // And the cache must still equal the re-derivation — the property the whole module rests
         // on, not just a row count that happens to come out right.
         assert_eq!(loaded.entries, mb.rebuild_index().unwrap().entries);
+    }
+
+    /// The *other* half of what [`INDEX_LOCK`] covers in [`Mailbox::store`]: the blob write, not
+    /// just the index read-modify-write.
+    ///
+    /// `write_atomic` derives its scratch path from the destination — `<MID>.tmp.<pid>` — so two
+    /// stores of the **same** MID in one process share one temp file. Narrow the guard to the
+    /// index update alone and they collide inside it. `concurrent_stores_do_not_lose_an_index_row`
+    /// cannot see any of that — every MID it stores is distinct, so no two of its threads ever
+    /// share a scratch path.
+    ///
+    /// Two assertions, and they are not equal partners. **The one that fires** is that no store
+    /// may fail: with the guard narrowed, seven of eight threads get ENOENT from the rename
+    /// because the eighth renamed the scratch away first, so `store` reports failure for a message
+    /// the caller believes it wrote. That was seven of eight on every one of five runs, and it is
+    /// structural rather than lucky — one scratch file, one rename that can find it. **The other**
+    /// is that the published blob is one candidate **entire**, never a mixture: the losers go on
+    /// writing into a handle that now points at the published file, so the scratch admits a
+    /// splice. Probed with the failures tolerated so the assertion could be reached, it did not
+    /// fire in five runs — equal-length bodies each written from offset zero leave a whole
+    /// candidate behind. It is kept because it costs nothing and the sizes are not guaranteed
+    /// equal outside this test, not because it has been seen to catch anything.
+    ///
+    /// Same MID, different bodies, blobs large enough that one `write_all` is not one syscall.
+    #[test]
+    fn concurrent_stores_of_one_mid_publish_a_whole_blob() {
+        const THREADS: usize = 8;
+        const BODY: usize = 256 * 1024;
+
+        let dir = scratch("concurrent-same-mid");
+        let mb = open(&dir);
+        let mid = b"MID000000042";
+        // One candidate per thread, distinguishable byte for byte and all the same length, so a
+        // splice cannot pass by accident.
+        let candidates: Vec<Vec<u8>> = (0..THREADS)
+            .map(|t| blob(mid, b"W1AW", b"s", &vec![b'a' + t as u8; BODY]))
+            .collect();
+        let start = std::sync::Barrier::new(THREADS);
+
+        std::thread::scope(|s| {
+            for candidate in &candidates {
+                let mb = mb.clone();
+                let start = &start;
+                s.spawn(move || {
+                    start.wait();
+                    mb.store(mid, candidate)
+                        .expect("a concurrent store must not fail on a shared temp file");
+                });
+            }
+        });
+
+        let landed = mb.read(mid).expect("the message must be on disk");
+        assert!(
+            candidates.contains(&landed),
+            "the published blob is {} bytes and matches none of the {THREADS} stores that wrote \
+             it: two writes spliced through one scratch file",
+            landed.len()
+        );
+        // And the cache must describe what actually landed, not one of the losers.
+        let loaded = mb.load_index().expect("the cache must still parse");
+        assert_eq!(loaded.entries, mb.rebuild_index().unwrap().entries);
+    }
+
+    /// [`Mailbox::rebuild_index`]'s own lock acquisition — the public entry point a mailbox pane's
+    /// "rebuild" button reaches, concurrently with a session storing received mail.
+    ///
+    /// Unguarded, a rebuild straddles a store: it `read_dir`s and sees *n* blobs, the store then
+    /// writes blob *n+1* and publishes an *n+1*-row cache, and the rebuild publishes its stale
+    /// *n*-row cache over the top. The row is gone from the list while its blob sits on disk —
+    /// the module header's opening failure, arriving by the one path
+    /// `concurrent_stores_do_not_lose_an_index_row` does not take, because that test only calls
+    /// `rebuild_index` after `thread::scope` has joined every thread. The two also share
+    /// `index.tmp.<pid>`, so the same window splices the cache itself.
+    ///
+    /// Enough pre-existing blobs that a rebuild is not instantaneous, or the window closes before
+    /// a store can fall into it.
+    #[test]
+    fn a_rebuild_overlapping_a_store_does_not_lose_a_row() {
+        const EXISTING: usize = 200;
+        const NEW: usize = 40;
+        const REBUILDS: usize = 40;
+
+        let dir = scratch("rebuild-vs-store");
+        let mb = open(&dir);
+        for i in 0..EXISTING {
+            put(&mb, format!("OLD{i:09}").as_bytes(), b"W1AW", b"old", b"x");
+        }
+
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|s| {
+            let storer = mb.clone();
+            let start_ref = &start;
+            s.spawn(move || {
+                start_ref.wait();
+                for i in 0..NEW {
+                    let mid = format!("NEW{i:09}").into_bytes();
+                    storer
+                        .store(&mid, &blob(&mid, b"K2ABC", b"new", b"y"))
+                        .expect("a store overlapping a rebuild must not fail");
+                }
+            });
+            let rebuilder = mb.clone();
+            let start_ref = &start;
+            s.spawn(move || {
+                start_ref.wait();
+                for _ in 0..REBUILDS {
+                    rebuilder
+                        .rebuild_index()
+                        .expect("a rebuild overlapping a store must not fail");
+                }
+            });
+        });
+
+        // Control: every blob is on disk, so a missing row below is the cache losing a message.
+        for i in 0..NEW {
+            let mid = format!("NEW{i:09}").into_bytes();
+            assert!(
+                mb.read(&mid).is_ok(),
+                "control: every store must have written its blob"
+            );
+        }
+        let loaded = mb
+            .load_index()
+            .expect("the cache must still parse after a rebuild overlapped a store");
+        assert_eq!(
+            loaded.entries.len(),
+            EXISTING + NEW,
+            "a rebuild published a cache that predates a store: the blob is on disk and the \
+             mailbox list cannot see it"
+        );
     }
 
     /// A leftover temp file from a crashed write must not become a phantom message.
