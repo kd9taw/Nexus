@@ -13702,8 +13702,38 @@ struct ConnHealthRow {
     last_fail_detail: Option<String>,
 }
 
+/// Where the health rows live.
+///
+/// ⛔ **Under `cfg(test)` this is a process-private temp file, never the operator's.**
+/// [`note_conn_health`] persists on EVERY change, so with the real path compiled into test
+/// builds a `cargo test` of this crate rewrote `~/.config/tempo/conn-health.json` on every
+/// run — and a test using a real connector id would stamp a false "verified today" into the
+/// operator's own panel, which is the exact lie #245 was reported for. That is not
+/// hypothetical: it happened while #245 was being written, and
+/// `a_failure_does_not_erase_the_last_success_or_the_other_way_round` had been rewriting the
+/// file since long before, saved from visible damage only by the accident that its id is not
+/// in [`CONN_HEALTH_IDS`].
+///
+/// Redirected here rather than injected per test on purpose: an injection point is something
+/// a future test has to remember, and forgetting it is silent.
+#[cfg(not(test))]
 fn conn_health_path() -> PathBuf {
     config_dir().join("conn-health.json")
+}
+
+/// The test twin of [`conn_health_path`] — see its note. One path per process (the store is
+/// a process-global), under the temp dir, keyed by pid so concurrent test binaries cannot
+/// share a file.
+#[cfg(test)]
+fn conn_health_path() -> PathBuf {
+    static P: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    P.get_or_init(|| {
+        std::env::temp_dir().join(format!(
+            "nexus-test-conn-health-{}.json",
+            std::process::id()
+        ))
+    })
+    .clone()
 }
 
 /// Parse `conn-health.json`. Malformed = nothing (never a startup failure over a status
@@ -21532,6 +21562,45 @@ mod tests {
             m.iter().filter(|(k, _, _)| *k == ID).count(),
             1,
             "upsert, never append"
+        );
+    }
+
+    /// ⛔ NO TEST MAY WRITE THE OPERATOR'S `conn-health.json`.
+    ///
+    /// `note_conn_health` persists on every change, and the store's path used to be the live
+    /// `~/.config/tempo/conn-health.json` in test builds as well — so `cargo test` of this
+    /// crate rewrote the operator's real panel data on every run. The test above has been
+    /// doing exactly that, saved from doing visible damage only by the accident that its id is
+    /// not in `CONN_HEALTH_IDS` and is therefore dropped on load; a test that used a REAL
+    /// connector id would stamp a false "verified today" into the panel, which is the very lie
+    /// #245 was reported for. One did, while #245 was being written.
+    ///
+    /// Redirected at the path rather than injected per test, so there is nothing for a future
+    /// test to remember.
+    #[test]
+    fn no_test_can_write_the_operators_conn_health_file() {
+        use super::{config_dir, conn_health_path, note_conn_health};
+        // The store writes on every change, so stamping one is how we find out where the
+        // bytes actually land — asking the path function alone would only test itself.
+        const ID: &str = "hrdlog-test-where-do-the-bytes-land";
+        note_conn_health(ID, true, String::new());
+        let written = conn_health_path();
+        // Two controls. Without them a path that is merely never written would pass.
+        assert!(
+            written.exists(),
+            "control: the stamp must have produced a file, or this proves nothing about where"
+        );
+        assert!(
+            std::fs::read_to_string(&written)
+                .unwrap_or_default()
+                .contains(ID),
+            "control: and that file must be THIS store's: {}",
+            written.display()
+        );
+        assert!(
+            !written.starts_with(config_dir()),
+            "a test wrote the operator's config directory: {}",
+            written.display()
         );
     }
 
