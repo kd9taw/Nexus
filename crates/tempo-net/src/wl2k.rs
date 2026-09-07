@@ -37,6 +37,48 @@
 //! same is true of every wire reading in `b2f.rs` itself, because its golden transcript is a
 //! constructed one that agrees with whatever that implementation does. Nothing in this crate may
 //! be cited as evidence about a real CMS until that capture lands.
+//!
+//! # The capture tap, and the two hygiene rules it exists under
+//!
+//! [`TraceTap`] writes the session byte stream in the exact encoding the golden-transcript
+//! fixture documents, so a real capture parses with the reader the B2F integration test already
+//! has. Both of its rules are credential-adjacent and neither is optional:
+//!
+//! 1. **Recording starts at the B2F handover, never before.** The telnet pre-login carries the
+//!    callsign and [`CMS_TELNET_PASSWORD`] in the clear. That token is a shared doorway string
+//!    and not the operator's account password, but a capture file is a thing an operator attaches
+//!    to a bug report, and a transport that writes credentials into a file by default is the
+//!    wrong default.
+//! 2. ⭐ **The `;PR:` response is redacted by default.** The account password never crosses the
+//!    wire, but `;PR:` is `MD5(challenge ++ password ++ salt)` over a *published* salt and a
+//!    challenge carried in the same transcript, which makes a captured `;PR:` an offline-crackable
+//!    derivative of the operator's real Winlink password. **A fixture committed to a public
+//!    repository must not contain one.** The record is kept with its token replaced, because its
+//!    presence and position are part of the transcript and its value is not the evidence: what
+//!    proves the digest is that the CMS *accepted it and proceeded*, which is visible in every
+//!    record after it. [`TraceTap::redact_pr`] is the deliberate opt-out, for a machine-local
+//!    capture that is never committed.
+//!
+//! # The capture tap, and the two hygiene rules it exists under
+//!
+//! [`TraceTap`] writes the session byte stream in the exact encoding the golden-transcript
+//! fixture documents, so a real capture parses with the reader the B2F integration test already
+//! has. Both of its rules are credential-adjacent and neither is optional:
+//!
+//! 1. **Recording starts at the B2F handover, never before.** The telnet pre-login carries the
+//!    callsign and [`CMS_TELNET_PASSWORD`] in the clear. That token is a shared doorway string
+//!    and not the operator's account password — but a capture file is a thing an operator
+//!    attaches to a bug report, and a transport that writes credentials into a file by default is
+//!    the wrong default.
+//! 2. ⭐ **The `;PR:` response is redacted by default.** The account password never crosses the
+//!    wire, but `;PR:` is `MD5(challenge ++ password ++ salt)` over a *published* salt and a
+//!    challenge carried in the same transcript, which makes a captured `;PR:` an offline-crackable
+//!    derivative of the operator's real Winlink password. **A fixture committed to a public
+//!    repository must not contain one.** The record is kept with its token replaced, because its
+//!    presence and position are part of the transcript and its value is not the evidence: what
+//!    proves the digest is that the CMS *accepted it and proceeded*, which is visible in every
+//!    record after it. [`TraceTap::redact_pr`] is the deliberate opt-out, for a machine-local
+//!    capture that is never committed.
 
 /// The public CMS telnet host. Named rather than inlined so a task that wants to point at a test
 /// server changes one constant.
@@ -250,6 +292,119 @@ fn prompt_tail(buf: &[u8]) -> String {
         .to_ascii_lowercase()
 }
 
+/// A sink for the raw session byte stream, direction-marked.
+///
+/// One trait so a test can assert on records in memory while the operator's capture goes to a
+/// file, and so the tap costs nothing when there is none (`Option<&mut dyn Tap>`).
+pub trait Tap {
+    /// One record. `inbound` is true for bytes the peer sent us.
+    fn record(&mut self, inbound: bool, bytes: &[u8]);
+}
+
+/// Writes the byte stream in the exact encoding
+/// `crates/tempo-core/tests/fixtures/winlink/session1.trace` documents, so a capture parses with
+/// the reader `crates/tempo-core/tests/winlink_b2f.rs` already has: `#` and blank lines are
+/// comments, every other line is `<` or `>`, a space, then the record's bytes as lowercase hex
+/// with no separators.
+///
+/// **Hex rather than text** because a B2F record carries SOH/STX/EOT, length bytes, checksum bytes
+/// and an LZHUF body, none of which survive being written as characters.
+///
+/// ⭐ **`;PR:` is redacted by default** — see the module header's capture section for why.
+pub struct TraceTap {
+    /// The open trace file. Buffered, and flushed after every record: a capture whose tail is
+    /// lost to a crash is missing exactly the part of the session that was interesting.
+    out: std::io::BufWriter<std::fs::File>,
+    /// Whether to replace the `;PR:` token. On by default; see [`TraceTap::redact_pr`].
+    redact_pr: bool,
+}
+
+/// What a redacted `;PR:` line is replaced with. Fixed, so a fixture diff is stable.
+const PR_REDACTED: &[u8] = b";PR: REDACTED";
+
+/// The line prefix that marks a secure-login response.
+const PR_PREFIX: &[u8] = b";PR:";
+
+impl TraceTap {
+    /// Creates (or truncates) the trace at `path` and writes `header` verbatim first. The header
+    /// must be `#`-commented; it is where the capture's provenance goes, and a capture with no
+    /// provenance is what fixture #1 had to spend a review round explaining.
+    pub fn create(path: &std::path::Path, header: &str) -> std::io::Result<TraceTap> {
+        let file = std::fs::File::create(path)?;
+        let mut out = std::io::BufWriter::new(file);
+        out.write_all(header.as_bytes())?;
+        Ok(TraceTap {
+            out,
+            redact_pr: true,
+        })
+    }
+
+    /// Turns `;PR:` redaction on or off. **Off is only for a machine-local capture that will
+    /// never be committed** — see the type's own note.
+    pub fn redact_pr(&mut self, on: bool) {
+        self.redact_pr = on;
+    }
+}
+
+/// Replaces the body of every `;PR:` LINE in `bytes` with [`PR_REDACTED`], leaving everything
+/// else — including the line terminators and the neighbouring records — byte-identical.
+///
+/// ⚠️ **Per line, not per record, and that is the whole point.** `b2f::Session` emits its greeting
+/// block as several `Action::Send`s, and whether `;PR:` arrives here as its own write depends on
+/// how the driver batches them. A predicate that only matched a record *starting* with `;PR:`
+/// would leak the token the day a driver concatenated its sends, with the unit test still green
+/// because the unit test fed it one line. So this scans for `;PR:` at every line start.
+fn redact_pr_lines(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    // Line starts are the start of the record and every byte after a CR or LF.
+    let starts_line = |at: usize| at == 0 || bytes[at - 1] == b'\r' || bytes[at - 1] == b'\n';
+    let hits: Vec<usize> = (0..bytes.len())
+        .filter(|&at| starts_line(at) && bytes[at..].starts_with(PR_PREFIX))
+        .collect();
+    if hits.is_empty() {
+        return std::borrow::Cow::Borrowed(bytes);
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut cursor = 0usize;
+    for at in hits {
+        if at < cursor {
+            // A `;PR:` inside a line we have already rewritten; nothing left to do for it.
+            continue;
+        }
+        out.extend_from_slice(&bytes[cursor..at]);
+        out.extend_from_slice(PR_REDACTED);
+        // Skip to the line terminator, which is kept verbatim so the framing is unchanged.
+        let end = bytes[at..]
+            .iter()
+            .position(|&b| b == b'\r' || b == b'\n')
+            .map_or(bytes.len(), |off| at + off);
+        cursor = end;
+    }
+    out.extend_from_slice(&bytes[cursor..]);
+    std::borrow::Cow::Owned(out)
+}
+
+impl Tap for TraceTap {
+    fn record(&mut self, inbound: bool, bytes: &[u8]) {
+        let bytes = if !inbound && self.redact_pr {
+            redact_pr_lines(bytes)
+        } else {
+            std::borrow::Cow::Borrowed(bytes)
+        };
+        let mut line = String::with_capacity(2 + bytes.len() * 2 + 1);
+        line.push(if inbound { '<' } else { '>' });
+        line.push(' ');
+        for b in bytes.iter() {
+            use std::fmt::Write as _;
+            let _ = write!(line, "{b:02x}");
+        }
+        line.push('\n');
+        // A capture that cannot be written must not take the session down with it: the session is
+        // the operator's mail, the capture is a diagnostic.
+        let _ = self.out.write_all(line.as_bytes());
+        let _ = self.out.flush();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,6 +579,7 @@ mod tests {
             &stop,
             &state,
             &|| 1_700_000_000,
+            None,
         );
         assert_eq!(outcome, Outcome::Complete, "written: {written:?}");
         assert!(
@@ -448,6 +604,90 @@ mod tests {
             1_700_000_000,
             "the clock the caller supplied is the one recorded"
         );
+    }
+
+    /// Lowercase hex, no separators — the fixture encoding, so a test can say what it expects to
+    /// find in the file in the form the file actually holds it.
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn the_tap_writes_the_fixture_format_and_redacts_the_pr_token() {
+        let dir = std::env::temp_dir().join(format!(
+            "wl2k-tap-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cap.trace");
+        {
+            let mut tap = TraceTap::create(&path, "# test capture\n").unwrap();
+            tap.record(true, b"[WL2K-5.0-B2FWIHJM$]\r");
+            tap.record(false, b";PR: 74706169\r");
+            tap.record(false, b"FF\r");
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        // The encoding session1.trace documents: '#' comments, then `<`/`>` space lowercase hex.
+        assert!(text.starts_with("# test capture\n"), "{text}");
+        assert!(
+            text.contains("< 5b574c324b2d352e302d4232465749484a4d245d0d\n"),
+            "inbound record not in fixture form:\n{text}"
+        );
+        // ⚠️ The token must be looked for in HEX. The trace holds bytes as hex, so grepping the
+        // file for the ASCII token would pass whether or not redaction happened — a vacuous
+        // check, and the class of check this project has a rule about.
+        assert!(
+            !text.contains(&hex(b"74706169")),
+            "the ;PR: token reached the trace — it is a crackable derivative of the account \
+             password:\n{text}"
+        );
+        assert!(
+            text.contains(&format!("> {}\n", hex(b";PR: REDACTED\r"))),
+            "the ;PR: record must still be present, with its token replaced:\n{text}"
+        );
+        assert!(
+            text.contains(&format!("> {}\n", hex(b"FF\r"))),
+            "outbound FF record missing:\n{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pr_line_inside_a_batched_write_is_redacted_too() {
+        // The greeting block is emitted by b2f::Session as several Action::Sends, and whether
+        // `;PR:` arrives as its own write depends on how the driver batches. A predicate that
+        // only matched a record STARTING with `;PR:` would silently leak the token the day the
+        // driver concatenated its sends — so the redaction is per LINE, not per record.
+        let dir = std::env::temp_dir().join(format!(
+            "wl2k-tap-batched-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cap.trace");
+        {
+            let mut tap = TraceTap::create(&path, "#\n").unwrap();
+            tap.record(
+                false,
+                b";FW: N0CALL\r[Nexus-1.0-B2FHM$]\r;PR: 74706169\rFF\r",
+            );
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains(&hex(b"74706169")),
+            "the token survived inside a batched write:\n{text}"
+        );
+        assert!(
+            text.contains(&hex(b";PR: REDACTED\r")),
+            "the redacted marker is missing:\n{text}"
+        );
+        // Everything either side of it is untouched — a redaction that ate the neighbours would
+        // make the capture useless as a transcript.
+        assert!(text.contains(&hex(b";FW: N0CALL\r")), "{text}");
+        assert!(text.contains(&hex(b"[Nexus-1.0-B2FHM$]\r")), "{text}");
+        assert!(text.contains(&hex(b"FF\r")), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -516,6 +756,17 @@ pub enum Outcome {
 /// finished, the peer closes, or `stop` is set.
 ///
 /// Pure over any `Read`/`Write`, so the whole path is testable from a pair of buffers.
+///
+/// `tap`, when present, records the session byte stream, **only from the B2F handover onward**;
+/// see the module header's capture rules. There are exactly three sites that record, and they are
+/// the three that carry post-handover bytes: the leftover the pre-login handed back, every later
+/// inbound read, and every write made once `login.done()`.
+///
+/// Eight parameters, and each is a distinct axis of one session: the two socket halves, the
+/// pre-login, the protocol, the stop flag, the status counters, the clock and the capture.
+/// Bundling them into a context struct would hide that `pump` is pure over all of them, which is
+/// the property that makes the whole transport testable from a pair of buffers.
+#[allow(clippy::too_many_arguments)]
 pub fn pump<R: Read, W: Write>(
     mut reader: R,
     mut writer: W,
@@ -524,7 +775,14 @@ pub fn pump<R: Read, W: Write>(
     stop: &AtomicBool,
     state: &SessionState,
     now_unix: &dyn Fn() -> i64,
+    tap: Option<&mut dyn Tap>,
 ) -> Outcome {
+    // `&mut Option<&mut dyn Tap>` from here down, not `Option<&mut dyn Tap>`: a bare
+    // `Option<&mut _>` cannot be handed to a call twice in a loop (it moves), and `as_deref_mut`
+    // reborrows for the whole enclosing borrow rather than the call. Taking a reference to the
+    // Option lets each site reborrow just for its own call.
+    let mut tap = tap;
+    let tap = &mut tap;
     let mut buf = [0u8; 4096];
     // Bytes that arrived with the last prompt and belong to the session, not the pre-login.
     let mut carry: Vec<u8> = Vec::new();
@@ -538,7 +796,7 @@ pub fn pump<R: Read, W: Write>(
         if !carry.is_empty() {
             let chunk = std::mem::take(&mut carry);
             for out in session.feed(&chunk) {
-                if let Err(e) = write_all(&mut writer, &out, state) {
+                if let Err(e) = write_all(&mut writer, &out, state, tap) {
                     return Outcome::Io(e.to_string());
                 }
             }
@@ -567,17 +825,31 @@ pub fn pump<R: Read, W: Write>(
         let chunk = &buf[..n];
         state.bytes_in.fetch_add(n as u64, Ordering::Relaxed);
         state.last_byte_unix.store(now_unix(), Ordering::Relaxed);
+        if login.done() {
+            // Post-handover inbound. The pre-login's own reads are NOT recorded (hygiene rule 1),
+            // and the one inbound chunk that straddles the handover is recorded below, as the
+            // leftover, so no byte is either lost or double-counted.
+            tap_record(tap, true, chunk);
+        }
 
         if !login.done() {
             for step in login.feed(chunk) {
                 match step {
                     Step::Send(bytes) => {
-                        if let Err(e) = write_all(&mut writer, &bytes, state) {
+                        // `None`: this is the callsign or the telnet password. Hygiene rule 1 --
+                        // no pre-login byte reaches a capture file.
+                        if let Err(e) = write_all(&mut writer, &bytes, state, &mut None) {
                             return Outcome::Io(e.to_string());
                         }
                     }
                     Step::Ready(rest) => {
                         state.logged_in.store(true, Ordering::Relaxed);
+                        // The first post-handover inbound bytes: routinely the CMS's SID, which
+                        // shares the password prompt's read. Recorded here because the read that
+                        // carried them happened while `login.done()` was still false.
+                        if !rest.is_empty() {
+                            tap_record(tap, true, &rest);
+                        }
                         carry = rest;
                     }
                 }
@@ -585,21 +857,40 @@ pub fn pump<R: Read, W: Write>(
             continue;
         }
         for out in session.feed(chunk) {
-            if let Err(e) = write_all(&mut writer, &out, state) {
+            if let Err(e) = write_all(&mut writer, &out, state, tap) {
                 return Outcome::Io(e.to_string());
             }
         }
     }
 }
 
-/// Writes and counts. One function so the counter cannot drift from the write.
-fn write_all<W: Write>(w: &mut W, bytes: &[u8], state: &SessionState) -> std::io::Result<()> {
+/// Writes, counts, and -- when a tap is passed -- records. One function so the counter and the
+/// capture cannot drift from the write.
+///
+/// The caller passes `None` for a write that must never be captured (the pre-login's answers).
+fn write_all<W: Write>(
+    w: &mut W,
+    bytes: &[u8],
+    state: &SessionState,
+    tap: &mut Option<&mut dyn Tap>,
+) -> std::io::Result<()> {
     w.write_all(bytes)?;
     w.flush()?;
     state
         .bytes_out
         .fetch_add(bytes.len() as u64, Ordering::Relaxed);
+    tap_record(tap, false, bytes);
     Ok(())
+}
+
+/// Records one direction-marked record if a tap is installed, and does nothing if not.
+///
+/// A free function rather than a method so every recording site reads the same and so the
+/// "is there a tap?" question is answered in exactly one place.
+fn tap_record(tap: &mut Option<&mut dyn Tap>, inbound: bool, bytes: &[u8]) {
+    if let Some(t) = tap {
+        t.record(inbound, bytes);
+    }
 }
 
 /// Connect to `host:port`, bounded by [`CONNECT_TIMEOUT`], with [`READ_TIMEOUT`] set.
@@ -637,6 +928,7 @@ pub fn run(
     session: &mut dyn ByteSession,
     stop: &AtomicBool,
     state: &SessionState,
+    tap: Option<&mut dyn Tap>,
 ) -> Outcome {
     let now = || {
         std::time::SystemTime::now()
@@ -653,7 +945,7 @@ pub fn run(
         Err(e) => return Outcome::Io(e.to_string()),
     };
     state.connected.store(true, Ordering::Relaxed);
-    let outcome = pump(reader, stream, login, session, stop, state, &now);
+    let outcome = pump(reader, stream, login, session, stop, state, &now, tap);
     state.connected.store(false, Ordering::Relaxed);
     state.logged_in.store(false, Ordering::Relaxed);
     outcome

@@ -91,6 +91,7 @@ fn a_whole_session_runs_end_to_end_over_a_real_socket() {
         &mut sess,
         &stop,
         &state,
+        None,
     );
     assert_eq!(outcome, Outcome::Complete, "session should finish cleanly");
     let sent = server.join().expect("server thread");
@@ -161,6 +162,7 @@ fn the_stop_flag_ends_a_session_parked_in_read() {
             &mut sess,
             &stop,
             &state,
+            None,
         );
         let _ = tx.send(outcome);
     });
@@ -191,6 +193,7 @@ fn a_refused_connect_is_an_io_outcome_and_not_a_retry_loop() {
         &mut sess,
         &stop,
         &state,
+        None,
     );
     assert!(
         matches!(outcome, Outcome::Io(_)),
@@ -226,6 +229,69 @@ fn a_peer_that_closes_mid_session_is_reported_not_retried() {
         &mut sess,
         &stop,
         &state,
+        None,
     );
     assert_eq!(outcome, Outcome::PeerClosed, "got {outcome:?}");
+}
+
+/// Hex, lowercase, no separators — the trace encoding, so an assertion can name what it expects
+/// in the form the file holds it.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn a_capture_of_a_whole_session_holds_no_pre_login_byte() {
+    // HYGIENE RULE 1, over a real socket rather than a unit fixture. The pre-login carries the
+    // callsign and the telnet doorway token in the clear, and a capture file is a thing an
+    // operator attaches to a bug report. Recording starts at the B2F handover, so the capture
+    // opens with the peer's first post-handover bytes and holds neither prompt nor answer.
+    let (addr, server) = fake_cms();
+    let dir = std::env::temp_dir().join(format!("wl2k-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.join("session.trace");
+    let stop = AtomicBool::new(false);
+    let state = SessionState::default();
+    let mut sess = Pong::new();
+    let outcome = {
+        let mut tap = wl2k::TraceTap::create(&path, "# loopback capture\n").expect("create");
+        wl2k::run(
+            &addr.ip().to_string(),
+            addr.port(),
+            Login::new("N0CALL", CMS_TELNET_PASSWORD),
+            &mut sess,
+            &stop,
+            &state,
+            Some(&mut tap),
+        )
+    };
+    assert_eq!(outcome, Outcome::Complete);
+    let _ = server.join();
+    let text = std::fs::read_to_string(&path).expect("read trace");
+
+    // Nothing from before the handover. Checked in HEX, because the file holds hex: grepping it
+    // for the ASCII strings would pass whether or not the rule held.
+    for forbidden in [
+        &b"Callsign :"[..],
+        b"N0CALL\r",
+        CMS_TELNET_PASSWORD.as_bytes(),
+        b"[WL2K Central CMS]",
+    ] {
+        assert!(
+            !text.contains(&hex(forbidden)),
+            "a pre-login byte string reached the capture ({:?}):\n{text}",
+            String::from_utf8_lossy(forbidden)
+        );
+    }
+    // And the session's own traffic IS there, both directions — otherwise the assertions above
+    // would pass on an empty file.
+    assert!(
+        text.contains(&format!("< {}\n", hex(b"PING\r"))),
+        "the peer's post-handover bytes are missing:\n{text}"
+    );
+    assert!(
+        text.contains(&format!("> {}\n", hex(b"PONG\r"))),
+        "our post-handover bytes are missing:\n{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
