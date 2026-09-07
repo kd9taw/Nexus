@@ -18,6 +18,8 @@ const ARRLFD_CBR: &str = include_str!("fixtures/fd-goldens/arrlfd.cbr");
 const ARRLFD_ADI: &str = include_str!("fixtures/fd-goldens/arrlfd.adi");
 const WFD_CBR: &str = include_str!("fixtures/fd-goldens/wfd.cbr");
 const WFD_ADI: &str = include_str!("fixtures/fd-goldens/wfd.adi");
+const WFD_CLASSES_CBR: &str = include_str!("fixtures/fd-goldens/wfd-classes.cbr");
+const WFD_CLASSES_ADI: &str = include_str!("fixtures/fd-goldens/wfd-classes.adi");
 
 #[test]
 fn arrl_field_day_cabrillo_and_adif_are_byte_identical() {
@@ -31,6 +33,46 @@ fn winter_field_day_cabrillo_and_adif_are_byte_identical() {
     let log = capture::golden_log(FdEvent::WinterFd);
     assert_eq!(log.cabrillo(14_074), WFD_CBR, "Winter FD Cabrillo moved");
     assert_eq!(log.adif(), WFD_ADI, "Winter FD ADIF moved");
+}
+
+/// The Winter class path, which `wfd.cbr`/`wfd.adi` cannot cover: every row in the
+/// §8(a) fixture carries an ARRL class (`2A`/`4A`/`1D`/`3A`/`1E`) for BOTH events, so
+/// those two files hold no legal Winter class and could not have moved when the
+/// `ABCDEF`-for-WFD bug was fixed on 2026-09-07. This log is legal Winter Field Day on
+/// both sides — `2O` sent, all four sponsor classes received — and its bytes are what
+/// a regression in the class path would move.
+#[test]
+fn the_winter_class_log_exports_byte_identically() {
+    let log = capture::wfd_class_log();
+    assert_eq!(
+        log.cabrillo(3_570),
+        WFD_CLASSES_CBR,
+        "WFD class Cabrillo moved"
+    );
+    assert_eq!(log.adif(), WFD_CLASSES_ADI, "WFD class ADIF moved");
+}
+
+/// …and the classes in it are really there. A golden whose class column had been
+/// blanked or normalised would still be byte-identical to a golden captured from the
+/// same broken code, so the letters are asserted against the file directly.
+#[test]
+fn the_winter_class_goldens_carry_all_four_sponsor_classes() {
+    for (cls, sect) in [("1H", "MO"), ("3I", "OH"), ("2O", "AZ"), ("1M", "ONS")] {
+        assert!(
+            WFD_CLASSES_CBR.contains(&format!(" {cls} {sect}")),
+            "Cabrillo golden is missing the {cls} row"
+        );
+        assert!(
+            WFD_CLASSES_ADI.contains(&format!("<CLASS:2>{cls} ")),
+            "ADIF golden is missing the {cls} row"
+        );
+    }
+    // The sent side is a legal Winter class too, which the §8(a) fixture's frozen
+    // `3A` header cannot be.
+    assert!(
+        WFD_CLASSES_CBR.contains("W9XYZ 2O WI"),
+        "sent class is not Winter-legal"
+    );
 }
 
 #[test]
@@ -58,7 +100,7 @@ fn both_events_score_exactly_what_head_scored() {
 }
 
 /// POSITIVE CONTROL — a byte comparison that cannot fail is not evidence. Dropping the
-/// last fixture row MUST change all four artifacts; if it does not, the assertions above
+/// last fixture row MUST change all six artifacts; if it does not, the assertions above
 /// are passing vacuously (wrong fixture, empty file, a golden of the empty string).
 #[test]
 fn the_goldens_discriminate() {
@@ -78,4 +120,19 @@ fn the_goldens_discriminate() {
             "{event:?}: empty golden file"
         );
     }
+    let short = capture::wfd_class_log_n(capture::wfd_class_row_count() - 1);
+    assert_ne!(
+        short.cabrillo(3_570),
+        WFD_CLASSES_CBR,
+        "WFD class Cabrillo golden is vacuous"
+    );
+    assert_ne!(
+        short.adif(),
+        WFD_CLASSES_ADI,
+        "WFD class ADIF golden is vacuous"
+    );
+    assert!(
+        !WFD_CLASSES_CBR.is_empty() && !WFD_CLASSES_ADI.is_empty(),
+        "empty WFD class golden file"
+    );
 }

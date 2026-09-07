@@ -13,6 +13,7 @@
 //! nothing. Re-running it after a behaviour change is how a migration bug gets
 //! blessed — if the goldens move, the change is what is wrong, not the fixture.
 use std::path::Path;
+use tempo_core::contest::{field_day, FieldKind};
 use tempo_core::fd_rules::{ruleset, CURRENT_RULES_YEAR};
 use tempo_core::fieldday::{Exchange, FdEvent, FieldDayLog};
 
@@ -31,6 +32,75 @@ const ROWS: &[(&str, &str, &str, &str, &str, u64, &str)] = &[
     // placeholder and ADIF omits QSO_DATE/TIME_ON rather than inventing a date.
     ("W9LEG", "2A", "WI", "PH", "", 0, "15m"),
 ];
+
+/// A SECOND Winter Field Day fixture, and the reason it exists: every row in [`ROWS`]
+/// carries an ARRL class (`2A`/`4A`/`1D`/`3A`/`1E`), for BOTH events, so `wfd.cbr` and
+/// `wfd.adi` hold no legal Winter class at all. They therefore cannot catch a
+/// regression on the class path — the 2026-09-07 `ABCDEF`-for-WFD fix moving neither
+/// of them was not the evidence it looked like.
+///
+/// These rows are legal Winter Field Day end to end: all four sponsor classes
+/// (`H` home, `I` indoor, `O` outdoor, `M` mobile — `downloads/2026-rules-v3.pdf`,
+/// "V3 9.8.25"), real ARRL/RAC sections, and a legal `2O` on the SENT side too, which
+/// [`ROWS`] cannot have without moving frozen bytes.
+///
+/// `(call, class, section, mode, submode, when_unix, band)`
+const WFD_CLASS_ROWS: &[(&str, &str, &str, &str, &str, u64, &str)] = &[
+    ("W0WFD", "1H", "MO", "PH", "", 1_782_000_360, "80m"),
+    ("K8IND", "3I", "OH", "CW", "", 1_782_000_420, "80m"),
+    ("N7OUT", "2O", "AZ", "DIG", "FT8", 1_782_000_480, "40m"),
+    ("VA3MOB", "1M", "ONS", "PH", "", 1_782_000_540, "20m"),
+];
+
+/// The class letters above are the SHIPPED spec's, not a second copy of the rules.
+///
+/// `contest::field_day(WinterFd)`'s CLASS pattern is the one place Nexus decides what
+/// a Winter class may be; if it ever goes back to ARRL's `ABCDEF` — the shipped bug —
+/// none of H/I/O/M appears in it and this panics, so the fixture cannot quietly become
+/// a log of classes the sequencer would refuse. (A plain `contains` is enough because
+/// none of the four letters occurs anywhere else in either pattern.)
+fn assert_classes_are_the_shipped_winter_set() {
+    let class = field_day(FdEvent::WinterFd).field("CLASS").expect("CLASS");
+    let FieldKind::Pattern { re } = class.kind else {
+        panic!("the Winter Field Day CLASS slot is no longer a pattern: {class:?}");
+    };
+    for (_, c, ..) in WFD_CLASS_ROWS {
+        let letter = c.chars().next_back().expect("a class letter");
+        assert!(
+            re.contains(letter),
+            "fixture class {c} is not legal under the shipped Winter pattern {re}"
+        );
+    }
+}
+
+/// The all-four-classes Winter log. `rows` is `WFD_CLASS_ROWS.len()` for the golden
+/// itself and one fewer for the discrimination control, exactly like [`golden_log_n`].
+pub fn wfd_class_log_n(rows: usize) -> FieldDayLog {
+    assert_classes_are_the_shipped_winter_set();
+    let mut log = FieldDayLog::new("W9XYZ", Exchange::new("2O", "WI"), "80m");
+    log.event = FdEvent::WinterFd;
+    for (i, (call, class, sect, mode, submode, when, band)) in
+        WFD_CLASS_ROWS.iter().take(rows).enumerate()
+    {
+        log.band = (*band).to_string();
+        assert!(
+            log.log_submode_at(call, class, sect, mode, submode, i as u64, *when),
+            "fixture row {call} must log — a refused row would silently shorten the golden"
+        );
+    }
+    assert_eq!(log.qso_count(), rows, "every fixture row landed");
+    log
+}
+
+/// The whole [`WFD_CLASS_ROWS`] table as a log.
+pub fn wfd_class_log() -> FieldDayLog {
+    wfd_class_log_n(WFD_CLASS_ROWS.len())
+}
+
+/// How many rows [`wfd_class_log`] holds — the discrimination control subtracts one.
+pub fn wfd_class_row_count() -> usize {
+    WFD_CLASS_ROWS.len()
+}
 
 /// The fixed synthetic log, identical for both events (only `event` differs).
 pub fn golden_log(event: FdEvent) -> FieldDayLog {
@@ -70,4 +140,10 @@ fn main() {
         // so a later batch cannot regenerate its own expectation by re-running this.
         println!("{stem}: qso={qso} powered={powered} bonus={bonus}");
     }
+    // The Winter class fixture (2026-09-07). Captured LATER than the four above, from
+    // a tree whose §8(a) goldens were already green — which is what makes it a
+    // capture and not a re-bless: writing it moved none of their bytes.
+    let wfd = wfd_class_log();
+    std::fs::write(dir.join("wfd-classes.cbr"), wfd.cabrillo(3_570)).unwrap();
+    std::fs::write(dir.join("wfd-classes.adi"), wfd.adif()).unwrap();
 }
