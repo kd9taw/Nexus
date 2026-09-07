@@ -17,6 +17,7 @@ pub mod journal;
 pub mod lzhuf;
 pub mod mailbox;
 pub mod message;
+pub mod restore;
 pub mod secure;
 pub mod sid;
 
