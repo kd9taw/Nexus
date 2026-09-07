@@ -13971,14 +13971,14 @@ impl Engine {
                     ("CLASS", self.settings.fd_class.trim()),
                     ("SECTION", self.settings.fd_section.trim()),
                 ];
-                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::rtty::seq::FIELD_DAY, &exch)
+                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::contest::field_day(), &exch)
             } else {
                 let exch = [
                     ("RST", "599"),
                     ("NAME", self.settings.op_name.trim()),
                     ("QTH", self.settings.op_state.trim()),
                 ];
-                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::rtty::seq::CASUAL, &exch)
+                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::contest::casual(), &exch)
             };
             self.rtty_seq = Some(seq);
         } else {
@@ -14135,8 +14135,9 @@ impl Engine {
     }
 
     /// The Field Day pair out of a sequencer exchange: `Some((class, section))`
-    /// only when BOTH arrived non-blank. The FIELD_DAY schema marks both
-    /// required, so a completed FD QSO always has them and a CASUAL one
+    /// only when BOTH arrived non-blank. The `contest::field_day()` exchange
+    /// marks both required, so a completed FD QSO always has them and a
+    /// `contest::casual()` one
     /// (RST/NAME/QTH) never does — which is what keeps the contest route off
     /// the ordinary RTTY path without re-reading a settings flag.
     fn fd_exchange(exchange: &[(String, String)]) -> Option<(String, String)> {
@@ -19927,7 +19928,7 @@ mod tests {
     }
 
     /// As [`rtty_auto_engine`], with the Field Day master switch on — which is
-    /// what makes `set_rtty_auto` build the FIELD_DAY exchange (class/section)
+    /// what makes `set_rtty_auto` build the `contest::field_day()` exchange
     /// AND puts the engine in `Mode::FieldDay`, so the contest log exists.
     fn rtty_auto_fd_engine() -> Engine {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
