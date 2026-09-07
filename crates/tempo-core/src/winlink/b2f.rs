@@ -83,18 +83,32 @@
 //!    No observed CMS does, and if one does, the fix is one condition in this function: trace the
 //!    unparseable line in both states and let reading 1 close the greeting.
 //!
-//! # The one resource bound
+//! # The resource bound, in two halves
 //!
 //! [`fbb::Framer`] holds every data block back until an `EOT` vouches for it — that is what makes
 //! "a corrupt block delivers nothing" true — so an inbound transfer accumulates in memory with
 //! nothing inside the framer to stop it, and `fbb`'s module header says so out loud and delegates
 //! the limit here: *"The number that bounds it is the proposal's `c-size`, which the session
-//! holds."* [`Session::transfer_ceiling`] takes it. A peer that streams `STX` blocks and never
-//! sends `EOT` is refused the moment it runs past what its own `FC` line proposed, because this
-//! stream is remote-controlled: the transport underneath is a socket to a CMS that may be buggy,
-//! MITM'd or hostile, and an unbounded `Vec` on the far end of one is the whole exposure.
-//! Exceeding it is [`SessionError::Protocol`] — the session ends — and never a truncation: a
-//! truncated body would be a *shorter* message delivered as if it were the whole one.
+//! holds."* This stream is remote-controlled — the transport underneath is a socket to a CMS that
+//! may be buggy, MITM'd or hostile — so an unbounded `Vec` on the far end of one is the exposure,
+//! and it takes two bounds to close, not one.
+//!
+//! 1. **A transfer may not run past what its own proposal declared.**
+//!    [`Session::transfer_ceiling`] is that number, and [`Session::drain_binary`] checks it before
+//!    each byte reaches the framer. A peer that streams `STX` blocks and never sends `EOT` is
+//!    refused the moment it exceeds its own `FC` line. Exceeding it is [`SessionError::Protocol`]
+//!    — the session ends — and never a truncation: a truncated body would be a *shorter* message
+//!    delivered as if it were the whole one.
+//! 2. **A proposal may not declare more than [`MAX_PROPOSAL_C_SIZE`].** Bound 1 on its own is
+//!    peer-declared and therefore not a bound at all: `c-size` is a `u32` that costs the peer
+//!    nothing to inflate, so `FC EM <mid> 4294967295 4294967295 0` sets bound 1 at
+//!    `3 * 4294967295 + 260` — 12 GiB of wire bytes it may stream, accumulating, before bound 1
+//!    can fire. The absolute cap is what no peer-supplied number can raise, and it is applied at
+//!    **proposal** time — the slot is answered `-` and the body never starts — so the outcome is
+//!    a legible refusal in the trace rather than a session killed mid-stream.
+//!
+//! Together they are what makes bound 1's ceiling finite: [`Session::transfer_ceiling`] reads a
+//! `c-size` that acceptance has already capped.
 //!
 //! # What this engine does not do yet
 //!
@@ -143,6 +157,27 @@ pub const SID_FLAGS: &[u8] = b"B2FHM";
 /// long line is in flight. Matching `aprsis`'s bound, and unlike `aprsis` this is a refusal
 /// rather than a silent buffer reset: there is no packet stream here to resynchronise into.
 const MAX_LINE: usize = 512;
+
+/// The largest compressed message size this station will accept a proposal for, in bytes.
+///
+/// **An absolute ceiling that no peer-supplied number can raise**, and the reason
+/// [`Session::transfer_ceiling`] is a bound rather than an echo — see the module header's
+/// resource-bound section for why one without the other closes nothing.
+///
+/// Winlink's own limit is **120,000 bytes compressed**: the per-account `MAX SIZE` option is
+/// documented, verbatim, as "a numerical value setting the size in bytes (compressed) of the
+/// largest message you will accept. 120000 Bytes is maximum, and the default."
+/// (<https://winlink.org/content/how_change_your_account_settings_option_message_useroptions>,
+/// read 2026-09-07). A message larger than that cannot reach a CMS mailbox, so it cannot
+/// legitimately be proposed to us either.
+///
+/// This constant is **1 MiB, roughly nine times that**, and the headroom is deliberate. The cost
+/// of being generous is bounded and small — bound 1 then sits at `3 * 1048576 + 260`, 3.0 MiB,
+/// on a machine already running a waterfall — while the cost of being tight is refusing real
+/// mail, which is the one outcome an email transport may not have. Winlink raising its own limit
+/// must not turn into Nexus silently dropping messages, so this is sized to absorb that without a
+/// release.
+pub const MAX_PROPOSAL_C_SIZE: u32 = 1024 * 1024;
 
 /// The `kind` given to a proposal line that could not be read at all.
 ///
@@ -610,7 +645,21 @@ impl Session {
 
         let proposals = std::mem::take(&mut self.proposals);
         self.block.clear();
-        let answer = fbb::fs_answer(&proposals, |_mid| HaveState::No);
+        for proposal in proposals.iter().filter(|p| over_ceiling(p)) {
+            out.push(Action::Trace(format!(
+                "refusing {}: its FC line declares {} compressed bytes, over the {}-byte ceiling",
+                show(&proposal.mid),
+                proposal.c_size,
+                MAX_PROPOSAL_C_SIZE
+            )));
+        }
+        let answer = fbb::fs_answer(&proposals, |proposal| {
+            if over_ceiling(proposal) {
+                HaveState::Unwanted
+            } else {
+                HaveState::No
+            }
+        });
         let Some(wanted) = read_fs_answer(&answer, proposals.len()) else {
             self.fail(
                 out,
@@ -631,6 +680,13 @@ impl Session {
         out.push(Action::Send(answer));
         if !self.accepted.is_empty() {
             self.state = State::Binary;
+            // Belt and braces, and **no test covers it**: measured, deleting this line leaves the
+            // whole crate green. Every path that reaches here has `binary_bytes` already at zero —
+            // it starts there and `complete_transfer` puts it back — and the only way it would not
+            // is a failed transfer, which ends the session. Kept because entering the binary phase
+            // is the natural place to say the count starts at zero, not because it is load-bearing.
+            // The reset that *is* load-bearing is `complete_transfer`'s, gated by
+            // `two_transfers_in_one_block_are_each_counted_against_their_own_proposal`.
             self.binary_bytes = 0;
         }
     }
@@ -705,6 +761,13 @@ impl Session {
     /// No proposal outstanding yields the framing-only floor. That state should be unreachable —
     /// [`Session::complete_transfer`] leaves the binary phase when the last accepted proposal is
     /// retired — and if it ever is reached, the bound holds there too rather than opening.
+    ///
+    /// **This number is finite because acceptance made it so, not because of anything here.**
+    /// `c_size` is a peer-supplied `u32`; what keeps `3 * c_size` from reaching 12 GiB is that
+    /// [`Session::close_proposal_block`] answers `-` to any proposal declaring more than
+    /// [`MAX_PROPOSAL_C_SIZE`], so nothing above the cap ever enters `accepted` to be read here.
+    /// A future change that accepts a proposal without that test re-opens the exposure, and this
+    /// function will not notice.
     fn transfer_ceiling(&self) -> u64 {
         let c_size = self.accepted.front().map_or(0, |p| u64::from(p.c_size));
         3 * c_size + 258 + 2
@@ -842,6 +905,16 @@ fn trim_line(raw: &[u8]) -> &[u8] {
 fn pq_challenge(line: &[u8]) -> Option<Vec<u8>> {
     let value = line.strip_prefix(b";PQ:")?;
     Some(value.trim_ascii().to_vec())
+}
+
+/// Whether a proposal declares more compressed bytes than this station will accept.
+///
+/// One function rather than the condition written twice, because the trace and the `FS` answer
+/// are two consumers of one decision: written out at both sites, a later edit that relaxed the
+/// comparison in the answer alone would leave the session tracing "refusing" and then answering
+/// `+`. See [`MAX_PROPOSAL_C_SIZE`].
+fn over_ceiling(proposal: &Proposal) -> bool {
+    proposal.c_size > MAX_PROPOSAL_C_SIZE
 }
 
 /// Two ASCII hex digits to a byte. Upper and lower case both accepted: the FBB document writes
@@ -1189,6 +1262,197 @@ mod tests {
             "three proposal lines must be answered by three characters, with the one readable \
              proposal in the slot it was proposed in: {actions:?}"
         );
+    }
+
+    /// One `SOH`/`STX`/`EOT` transfer on the wire: header record, then the image in 256-byte data
+    /// blocks, then the `EOT` and its checksum over the data bytes alone.
+    fn transfer_records(mid: &[u8], image: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut header = mid.to_vec();
+        header.push(0);
+        header.push(b'0');
+        header.push(0);
+        out.push(0x01);
+        out.push(header.len() as u8);
+        out.extend_from_slice(&header);
+        let mut sum = 0u8;
+        for chunk in image.chunks(256) {
+            out.push(0x02);
+            // `0x00` in the length byte means 256, which is why a full block is not 0x100.
+            out.push(if chunk.len() == 256 {
+                0
+            } else {
+                chunk.len() as u8
+            });
+            out.extend_from_slice(chunk);
+            for &byte in chunk {
+                sum = sum.wrapping_add(byte);
+            }
+        }
+        out.push(0x04);
+        out.push(0u8.wrapping_sub(sum));
+        out
+    }
+
+    /// A B2 message with `mid` and `body`, as the plaintext and the LZHUF image a proposal for it
+    /// would declare.
+    fn body_and_image(mid: &[u8], body: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let plain = message::assemble_b2(&Message {
+            mid: mid.to_vec(),
+            headers: vec![],
+            body: body.to_vec(),
+            attachments: vec![],
+        })
+        .expect("the fixture message must be representable");
+        let image = lzhuf::compress(&plain);
+        (plain, image)
+    }
+
+    /// **Two accepted proposals in one block** — a CMS holding two messages, which is the ordinary
+    /// case and the one no other test in this crate covers: every fixture and every control above
+    /// carries exactly one proposal per block.
+    ///
+    /// It exists for one line. [`Session::complete_transfer`] resets `binary_bytes` to zero so the
+    /// next transfer is counted against *its own* proposal; with that line gone the second
+    /// transfer inherits the first one's total, and a perfectly legal message is refused with
+    /// `"a transfer ran past the compressed size its FC proposal declared"` — a false refusal that
+    /// ends the session with mail dropped, which is exactly the failure
+    /// [`Session::transfer_ceiling`]'s slack is written to avoid. The whole suite stayed green
+    /// against that mutation before this test existed.
+    ///
+    /// The two messages are deliberately lopsided, and the assertion below pins why: the mutation
+    /// is only observable when the first transfer's wire bytes exceed the *second* proposal's
+    /// entire ceiling, so a future change to the codec that evened the sizes out would quietly
+    /// stop this test from discriminating anything.
+    #[test]
+    fn two_transfers_in_one_block_are_each_counted_against_their_own_proposal() {
+        // Deliberately incompressible (xorshift64, fixed seed): prose of this length collapses to
+        // an image far too small for the first transfer to overrun the second proposal's ceiling,
+        // and the assertion below is what caught that.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let long: Vec<u8> = std::iter::repeat_with(|| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 24) as u8
+        })
+        .take(1500)
+        .collect();
+        let (plain_a, image_a) = body_and_image(b"AAAAAAAAAAAA", &long);
+        let (plain_b, image_b) = body_and_image(b"BBBBBBBBBBBB", b"ok");
+
+        let wire_a = transfer_records(b"AAAAAAAAAAAA", &image_a);
+        let ceiling_b = 3 * image_b.len() + 258 + 2;
+        assert!(
+            wire_a.len() > ceiling_b,
+            "this control only discriminates the reset while the first transfer's {} wire bytes \
+             exceed the second proposal's whole ceiling of {}",
+            wire_a.len(),
+            ceiling_b
+        );
+
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+        let mut session = Session::new(&cfg, Role::Client);
+        session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+
+        let mut block =
+            format!("FC EM AAAAAAAAAAAA {} {} 0\r", plain_a.len(), image_a.len()).into_bytes();
+        block.extend_from_slice(
+            format!("FC EM BBBBBBBBBBBB {} {} 0\r", plain_b.len(), image_b.len()).as_bytes(),
+        );
+        session.feed(&block);
+        let actions = session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&block)).as_bytes());
+        assert!(
+            actions.contains(&Action::Send(b"FS ++\r".to_vec())),
+            "both proposals must be accepted for this test to mean anything: {actions:?}"
+        );
+
+        let mut actions = session.feed(&wire_a);
+        actions.extend(session.feed(&transfer_records(b"BBBBBBBBBBBB", &image_b)));
+
+        let failures: Vec<_> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Failed(err) => Some(*err),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "two legal transfers in one block must both be taken: {failures:?}"
+        );
+        let delivered: Vec<Vec<u8>> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Received(msg) => Some(msg.mid.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            delivered,
+            vec![b"AAAAAAAAAAAA".to_vec(), b"BBBBBBBBBBBB".to_vec()],
+            "both messages must be delivered, in the order they were proposed"
+        );
+    }
+
+    /// A proposal is answered against `FC` line for `c_size` compressed bytes, greeted and
+    /// challenged, returning the actions the `F>` produced.
+    fn answer_a_proposal_of(c_size: u64) -> (Session, Vec<Action>) {
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+        let mut session = Session::new(&cfg, Role::Client);
+        session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+        let fc = format!("FC EM AAAAAAAAAAAA 10 {c_size} 0\r").into_bytes();
+        session.feed(&fc);
+        let actions = session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&fc)).as_bytes());
+        (session, actions)
+    }
+
+    /// [`MAX_PROPOSAL_C_SIZE`], both sides of it — bound 2 from the module header.
+    ///
+    /// Bound 1 ([`Session::transfer_ceiling`]) is `3 * c_size + 260`, and `c_size` is a `u32` the
+    /// **peer** writes: `FC EM <mid> 4294967295 4294967295 0` costs a hostile or buggy CMS one
+    /// line and sets bound 1 at 12 GiB of wire bytes. So the cap is what makes
+    /// bound 1 a bound, and it has to be refused where the exposure is cheap — at the proposal,
+    /// answered `-`, before a byte of body is asked for.
+    ///
+    /// Both directions, because a cap that refused everything would pass the second half alone:
+    /// a proposal at exactly the ceiling is legal and must be accepted.
+    #[test]
+    fn a_proposal_over_the_absolute_ceiling_is_refused_at_proposal_time() {
+        // Control: exactly at the cap is a legal message and is accepted.
+        let (_, actions) = answer_a_proposal_of(u64::from(MAX_PROPOSAL_C_SIZE));
+        assert!(
+            actions.contains(&Action::Send(b"FS +\r".to_vec())),
+            "a proposal at exactly the ceiling must be accepted: {actions:?}"
+        );
+
+        // The finding: one byte over, and a `u32::MAX` liar, are both answered `-`.
+        for c_size in [u64::from(MAX_PROPOSAL_C_SIZE) + 1, u64::from(u32::MAX)] {
+            let (mut session, actions) = answer_a_proposal_of(c_size);
+            assert!(
+                actions.contains(&Action::Send(b"FS -\r".to_vec())),
+                "a proposal declaring {c_size} compressed bytes must be answered `-`: {actions:?}"
+            );
+            assert!(
+                session.accepted.is_empty() && session.state != State::Binary,
+                "a refused proposal must not open the binary phase: {:?}",
+                session.state
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::Trace(t) if t.contains("ceiling"))),
+                "the refusal must be legible in the trace, not silent: {actions:?}"
+            );
+            // Still a session: the refusal answers one message, it does not fail the peer.
+            assert_eq!(session.feed(b"FF\r").last(), Some(&Action::Done));
+        }
     }
 
     /// Nothing is consumed after the session ends — a closed session that kept parsing could

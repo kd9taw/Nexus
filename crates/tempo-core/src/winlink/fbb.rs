@@ -83,7 +83,10 @@
 //! | `!n` | `A` `a`              | Accept, resuming at byte offset `n` — send from `n` onward. |
 //!
 //! [`fs_answer`] emits the four left-hand forms; the right-hand column is what a peer may send
-//! back and belongs to the session that parses an inbound `FS`.
+//! back and belongs to the session that parses an inbound `FS`. Two different decisions produce
+//! `-`: this station already holds the message ([`HaveState::Yes`]) or it will not take it at all
+//! ([`HaveState::Unwanted`], which is how a size cap is expressed). The wire cannot tell them
+//! apart, and neither can the peer.
 //!
 //! ## ⚠️ The answer is positional, so a refused proposal line still owns a slot
 //!
@@ -186,7 +189,7 @@ pub struct Proposal {
     pub c_size: u32,
 }
 
-/// What this station already holds of a proposed message, as [`fs_answer`] needs to know it.
+/// What this station wants done with a proposed message, as [`fs_answer`] needs to know it.
 ///
 /// Deliberately *not* an answer character: the caller answers "what do I have", and the mapping
 /// from that to `+`/`-`/`!n` — including the two traps in the module header — stays in one place
@@ -200,6 +203,15 @@ pub enum HaveState {
     /// Held in part, this many bytes of the **compressed** body. Answered `!n`, subject to the
     /// six-digit ceiling.
     Partial(u32),
+    /// Not held, and not wanted: this station refuses the message for a reason of its own — a
+    /// size cap, a filter — rather than because it already has it. Answered `-`, the same byte as
+    /// [`Yes`](HaveState::Yes), because FBB has exactly one "do not send it, it is answered"
+    /// character and no field in which to say why.
+    ///
+    /// Distinct from [`Yes`](HaveState::Yes) in the type even though the wire cannot tell them
+    /// apart, because the two are different decisions and a mailbox that conflates them answers
+    /// "I have it" about a message it does not have.
+    Unwanted,
 }
 
 /// Why an FBB proposal exchange was refused.
@@ -330,12 +342,17 @@ pub fn fb_checksum(proposals: &[u8]) -> u8 {
 
 /// Builds the `FS` answer line for a block of proposals, in order, terminated by CR.
 ///
-/// `have` is asked, per proposal, what this station already holds of that MID; the answer table
-/// and its two traps are in the module header. The returned line is complete and ready to write.
+/// `have` is asked, per proposal, what this station wants done with it; the answer table and its
+/// two traps are in the module header. The returned line is complete and ready to write.
+///
+/// It is handed the whole [`Proposal`] rather than just its MID because the answer is not always
+/// a mailbox lookup: the sizes on the line are the only thing this end knows about a message
+/// before it arrives, and a station that caps what it will accept has to decide from them. See
+/// [`HaveState::Unwanted`] and [`super::b2f::MAX_PROPOSAL_C_SIZE`].
 ///
 /// An empty `proposals` slice yields `FS \r`. The protocol never sends that — a peer with nothing
 /// to offer sends `FF` and no block at all — so the session is responsible for not asking.
-pub fn fs_answer(proposals: &[Proposal], have: impl Fn(&[u8]) -> HaveState) -> Vec<u8> {
+pub fn fs_answer(proposals: &[Proposal], have: impl Fn(&Proposal) -> HaveState) -> Vec<u8> {
     let mut line = Vec::with_capacity(b"FS \r".len() + proposals.len());
     line.extend_from_slice(b"FS ");
     for proposal in proposals {
@@ -344,8 +361,8 @@ pub fn fs_answer(proposals: &[Proposal], have: impl Fn(&[u8]) -> HaveState) -> V
             line.push(b'=');
             continue;
         }
-        match have(&proposal.mid) {
-            HaveState::Yes => line.push(b'-'),
+        match have(proposal) {
+            HaveState::Yes | HaveState::Unwanted => line.push(b'-'),
             HaveState::No => line.push(b'+'),
             // Trap 2: nothing held, and an offset the six-digit field cannot carry, both mean
             // "send it from the start" — and `+` is the only way to say that without a desync.
@@ -679,7 +696,7 @@ mod tests {
     #[test]
     fn answers_each_proposal_in_order() {
         let props = [fc(b"NEW"), fc(b"HELD"), fc(b"PART"), fc(b"ALSONEW")];
-        let line = fs_answer(&props, |mid| match mid {
+        let line = fs_answer(&props, |p| match p.mid.as_slice() {
             b"HELD" => HaveState::Yes,
             b"PART" => HaveState::Partial(1234),
             _ => HaveState::No,
@@ -694,9 +711,9 @@ mod tests {
     fn have_is_asked_about_every_mid() {
         let props = [fc(b"AAA"), fc(b"BBB"), fc(b"CCC")];
         let seen = std::cell::RefCell::new(Vec::new());
-        let line = fs_answer(&props, |mid| {
-            seen.borrow_mut().push(mid.to_vec());
-            if mid == b"BBB" {
+        let line = fs_answer(&props, |p| {
+            seen.borrow_mut().push(p.mid.clone());
+            if p.mid == b"BBB" {
                 HaveState::Yes
             } else {
                 HaveState::No
@@ -714,7 +731,7 @@ mod tests {
     #[test]
     fn offsets_the_wire_cannot_carry_fall_back_to_accept() {
         let props = [fc(b"A"), fc(b"B"), fc(b"C"), fc(b"D")];
-        let line = fs_answer(&props, |mid| match mid {
+        let line = fs_answer(&props, |p| match p.mid.as_slice() {
             b"A" => HaveState::Partial(0),
             b"B" => HaveState::Partial(1),
             b"C" => HaveState::Partial(MAX_FS_OFFSET),
