@@ -22,8 +22,14 @@
 //! `domains`, `dupe` and `scoring` as REQUIRED blocks, and the only other way
 //! to express that would be to serde-default them — which would let a rules
 //! file that forgot a block load and score as though its author had decided
-//! something (spec §8c). A schema-1 file is therefore refused by name, and an
-//! older build refuses this one the same way and keeps its own bundled seed.
+//! something (spec §8c). A schema-1 file is therefore refused by name here.
+//!
+//! An older build refuses THIS file too, and keeps its own bundled seed — but
+//! not by name: `parse_spec` opens with `serde_json::from_str`, and a 1.x
+//! `RulesetSpec` declares `scoring: String` where schema 2 writes a block, so
+//! serde fails first with `bad JSON: invalid type: map, expected a string` and
+//! the schema check never runs. Same refusal, different message; do not credit
+//! the version check with it.
 //!
 //! `rules_year` stamps each ruleset; the pinned per-event score fixtures in the
 //! tests below run against [`ruleset`] = the BUNDLED SEED (an installed file is
