@@ -57,9 +57,10 @@ pub fn fetch_report(url: &str) -> Result<String, String> {
 /// body", which named the *step* and threw away the *category* — the one thing the
 /// operator could have acted on. Reaching this point already proves the request got
 /// through and LoTW answered 2xx, so the categories mean something different than they do
-/// around [`fetch_report`]'s `send()`: a timeout here is LoTW still assembling the report
-/// after [`TIMEOUT_SECS`], not an unreachable server, and telling the operator to "check
-/// your network" would send them after something that demonstrably works.
+/// around [`fetch_report`]'s `send()`: a timeout here is not an unreachable server, and
+/// telling the operator to "check your network" would send them after something that
+/// demonstrably works. What it IS, this code cannot tell — see
+/// [`download_timeout_message`], which says so rather than guessing.
 ///
 /// Same redaction discipline as [`redact`] and for the same reason — `reqwest::Error`'s
 /// `Display`/`source` can echo the password-bearing URL, so this classifies by boolean
@@ -70,11 +71,7 @@ pub fn fetch_report(url: &str) -> Result<String, String> {
 fn body_text(resp: reqwest::blocking::Response) -> Result<String, String> {
     resp.text().map_err(|e| {
         if e.is_timeout() {
-            format!(
-                "LoTW: timed out after {TIMEOUT_SECS}s while downloading the report — LoTW \
-                 accepted the request and then took too long to send it, which is LoTW \
-                 queueing the report at its end. Try again shortly."
-            )
+            download_timeout_message()
         } else {
             format!(
                 "{} while downloading the report",
@@ -82,6 +79,31 @@ fn body_text(resp: reqwest::blocking::Response) -> Result<String, String> {
             )
         }
     })
+}
+
+/// What the operator is told when the report did not finish downloading in time.
+///
+/// ⚠️ It names **two** possibilities and asserts neither, and that is deliberate. The first
+/// wording said the cause was "LoTW queueing the report at its end. Try again shortly." — but
+/// [`TIMEOUT_SECS`] is a whole-request deadline, so a report that is arriving steadily and is
+/// simply too big to finish inside it busts exactly the same deadline and arrives as exactly
+/// the same error, and for that operator trying again shortly is the one thing that never
+/// helps. Nothing at this point can tell the two apart: `blocking::Response::text` wraps the
+/// entire body read in ONE `wait::timeout`, so all that comes back is "the budget ran out"
+/// (`reqwest-0.12.28/src/blocking/response.rs:296`).
+///
+/// Nor is reading the body by hand a way to find out, though it looks like one: `impl Read for
+/// Response` re-applies `self.timeout` to EVERY `read` call (same file, :439), so counting
+/// bytes as they arrive would replace the whole-request deadline with a per-chunk one and
+/// leave a credential-bearing fetch with no overall bound at all. Diagnosing this properly
+/// costs the deadline; saying honestly what is known costs nothing.
+fn download_timeout_message() -> String {
+    format!(
+        "LoTW: timed out after {TIMEOUT_SECS}s while downloading the report — LoTW accepted \
+         the request and answered, so the connection is fine. Either it is still assembling \
+         the report at its end, or the report is too large to finish arriving inside the \
+         deadline. Try again; if it keeps timing out, ask for a shorter date range."
+    )
 }
 
 /// Map a transport error to a safe, category-only message. Uses ONLY boolean
@@ -136,6 +158,45 @@ mod tests {
             }
         });
         port
+    }
+
+    /// #266 follow-up. The message must not name a cause it cannot tell apart.
+    ///
+    /// A report LoTW has not begun sending and a report that is arriving too slowly bust the
+    /// SAME whole-request deadline and arrive as the same `reqwest` error class, so the arm
+    /// cannot know which it has. The first wording asserted the first one — "which is LoTW
+    /// queueing the report at its end. Try again shortly." — and for the second, retrying is
+    /// exactly what does not help.
+    ///
+    /// Coupled to the wording on purpose: the wording IS the defect here, so this is what
+    /// stops it regressing quietly.
+    #[test]
+    fn the_download_timeout_does_not_diagnose_a_cause_it_cannot_see() {
+        let m = download_timeout_message();
+        // Controls: it must still say what happened and how long it waited, or "stop naming a
+        // cause" would be satisfied by saying nothing.
+        assert!(
+            m.contains("timed out"),
+            "it must still name the failure: {m}"
+        );
+        assert!(
+            m.contains(&TIMEOUT_SECS.to_string()),
+            "it must still name the deadline: {m}"
+        );
+        // Both possibilities named, neither asserted.
+        assert!(
+            m.contains("still assembling"),
+            "the queued-report case must still be offered: {m}"
+        );
+        assert!(
+            m.contains("too large"),
+            "the slow-download case is the one the old wording denied: {m}"
+        );
+        // …and an action for the case where trying again never helps.
+        assert!(
+            m.contains("date range"),
+            "an operator whose pull is simply too big is told nothing to do: {m}"
+        );
     }
 
     #[test]
