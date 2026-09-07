@@ -255,3 +255,69 @@ pub fn bundled_if_runnable(tool: &str, p: std::ffi::OsString) -> Option<std::ffi
     ));
     None
 }
+
+/// One stderr line as the ring keeps it — trimmed, `None` if there is nothing left.
+///
+/// **Bytes, not `&str`, and that signature is the fix.** The drain used
+/// `BufRead::lines().map_while(Result::ok)`, and `lines()` yields `Err(InvalidData)` for a line
+/// that is not UTF-8. `map_while` STOPS at the first `Err` — so such a line did not merely go
+/// missing, it ended the drain thread and every line after it for the life of the daemon.
+///
+/// Hamlib emits exactly that line in the one case where it diagnoses a **wrong baud**: it
+/// quotes the rig's own bytes back. Observed against the bundled rigctld 4.7.1 with mis-framed
+/// replies — `newcat_get_cmd: Command is not correctly terminated '…'` followed by ~200 bytes
+/// of the rig's garbage, which is arbitrary and very rarely valid UTF-8 (the capture is
+/// `tests/fixtures/rigctld/wrong_baud.log`, and it is not a UTF-8 file). So the fault Nexus
+/// most needed explaining was the fault that silenced the whole mechanism. `from_utf8_lossy`
+/// keeps the sentence and marks the garbage; the marks are themselves the diagnosis — bytes
+/// came back and they were rubbish, which is what a baud mismatch looks like from here.
+pub fn said_line(raw: &[u8]) -> Option<String> {
+    let line = String::from_utf8_lossy(raw).trim().to_string();
+    (!line.is_empty()).then_some(line)
+}
+
+use std::collections::VecDeque;
+
+/// A bounded window of the newest stderr lines, plus — kept out of that window's reach —
+/// the single best-ranked line of the whole session. Generic over the rank type so a caller
+/// supplies its own "what does this line explain" ordering; see `rigctld_proc::explains` for
+/// the rig-error ranking and the long rationale on why one buffer cannot answer both
+/// "what is happening now" and "what went wrong".
+pub struct StderrRing<R: Ord + Copy> {
+    window: VecDeque<String>,
+    best: Option<(R, String)>,
+    cap: usize,
+    rank: fn(&str) -> R,
+}
+
+impl<R: Ord + Copy> StderrRing<R> {
+    pub fn new(cap: usize, rank: fn(&str) -> R) -> Self {
+        StderrRing {
+            window: VecDeque::new(),
+            best: None,
+            cap,
+            rank,
+        }
+    }
+
+    pub fn push(&mut self, line: String) {
+        let rank = (self.rank)(&line);
+        if self.best.as_ref().is_none_or(|(best, _)| rank > *best) {
+            self.best = Some((rank, line.clone()));
+        }
+        if self.window.len() == self.cap {
+            self.window.pop_front();
+        }
+        self.window.push_back(line);
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        self.best
+            .iter()
+            .map(|(_, l)| l)
+            .filter(|l| !self.window.contains(l))
+            .chain(self.window.iter())
+            .cloned()
+            .collect()
+    }
+}

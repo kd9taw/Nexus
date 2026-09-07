@@ -6,12 +6,11 @@
 //! unit-tested; [`spawn_rigctld`] launches it and returns a kill-on-drop
 //! [`Child`] so the daemon dies with Tempo.
 
-use std::collections::VecDeque;
 use std::io::BufRead;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crate::proc_util::find_bundled;
+use crate::proc_util::{find_bundled, said_line};
 // `bundled_candidates`/`find_bundled_in` have no production caller here — `find_bundled` (the
 // only one the resolvers call) reaches them internally within `proc_util`. Only the tests below
 // drive them directly, to pin the per-platform layout table without going through `current_exe()`.
@@ -691,26 +690,6 @@ pub(crate) fn explains(line: &str) -> Explains {
     Explains::Plain
 }
 
-/// One stderr line as the ring keeps it — trimmed, `None` if there is nothing left.
-///
-/// **Bytes, not `&str`, and that signature is the fix.** The drain used
-/// `BufRead::lines().map_while(Result::ok)`, and `lines()` yields `Err(InvalidData)` for a line
-/// that is not UTF-8. `map_while` STOPS at the first `Err` — so such a line did not merely go
-/// missing, it ended the drain thread and every line after it for the life of the daemon.
-///
-/// Hamlib emits exactly that line in the one case where it diagnoses a **wrong baud**: it
-/// quotes the rig's own bytes back. Observed against the bundled rigctld 4.7.1 with mis-framed
-/// replies — `newcat_get_cmd: Command is not correctly terminated '…'` followed by ~200 bytes
-/// of the rig's garbage, which is arbitrary and very rarely valid UTF-8 (the capture is
-/// `tests/fixtures/rigctld/wrong_baud.log`, and it is not a UTF-8 file). So the fault Nexus
-/// most needed explaining was the fault that silenced the whole mechanism. `from_utf8_lossy`
-/// keeps the sentence and marks the garbage; the marks are themselves the diagnosis — bytes
-/// came back and they were rubbish, which is what a baud mismatch looks like from here.
-fn said_line(raw: &[u8]) -> Option<String> {
-    let line = String::from_utf8_lossy(raw).trim().to_string();
-    (!line.is_empty()).then_some(line)
-}
-
 /// What the daemon has said about THIS connection attempt: a bounded window of the newest lines,
 /// and — kept out of that window's reach — the best-ranked line of the whole attempt.
 ///
@@ -728,35 +707,28 @@ fn said_line(raw: &[u8]) -> Option<String> {
 /// fallback rather than the answer: `service::with_daemon_error` scans newest-first within a
 /// rank, so while the window still holds a line as good, the LIVE one is what the operator sees
 /// and this slot only speaks when the window has nothing left to say.
-#[derive(Default)]
-pub(crate) struct Said {
-    window: VecDeque<String>,
-    best: Option<(Explains, String)>,
+///
+/// The Hamlib-ranked stderr ring: a [`proc_util::StderrRing`](crate::proc_util::StderrRing)
+/// parameterised by [`explains`], bounded at [`SAID_KEPT`]. The mechanism lives in `proc_util`;
+/// the ranking is ours.
+pub(crate) struct Said(crate::proc_util::StderrRing<Explains>);
+
+impl Default for Said {
+    fn default() -> Self {
+        Said(crate::proc_util::StderrRing::new(SAID_KEPT, explains))
+    }
 }
 
 impl Said {
     fn push(&mut self, line: String) {
-        let rank = explains(&line);
-        if self.best.as_ref().is_none_or(|(best, _)| rank > *best) {
-            self.best = Some((rank, line.clone()));
-        }
-        if self.window.len() == SAID_KEPT {
-            self.window.pop_front();
-        }
-        self.window.push_back(line);
+        self.0.push(line);
     }
 
     /// Everything retained, oldest first — the kept diagnosis, then the window. The retained
     /// line is omitted when the window still holds it, so a short-lived daemon reads exactly as
     /// it did before there was a second half.
     fn lines(&self) -> Vec<String> {
-        self.best
-            .iter()
-            .map(|(_, l)| l)
-            .filter(|l| !self.window.contains(l))
-            .chain(self.window.iter())
-            .cloned()
-            .collect()
+        self.0.lines()
     }
 }
 
@@ -772,7 +744,7 @@ pub fn said_window_len() -> usize {
 pub fn said_ring(raw: &[u8]) -> Vec<String> {
     let mut said = Said::default();
     for line in raw.split_inclusive(|b| *b == b'\n') {
-        if let Some(l) = said_line(line) {
+        if let Some(l) = crate::proc_util::said_line(line) {
             said.push(l);
         }
     }
