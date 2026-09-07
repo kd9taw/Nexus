@@ -81,14 +81,14 @@
               "type": "always"
             },
             "sends": [
-              "CLASS",
-              "SECTION"
+              "CLASS"
             ],
             "receives": [
-              "CLASS",
-              "SECTION"
+              "CLASS"
             ],
-            "constant_sent": []
+            "constant_sent": [
+              "SECTION"
+            ]
           }
         ]
       },
@@ -176,7 +176,7 @@
         "cluster_allowed": true,
         "assistance_note_key": ""
       },
-      "enforcement": "block",
+      "enforcement": "warn",
       "objectives": []
     },
     {

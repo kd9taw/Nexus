@@ -54,14 +54,6 @@ pub struct Bonus {
     pub points: u32,
 }
 
-/// The exchange both events use today: a transmitter Class (e.g. `3A`) and an
-/// ARRL/RAC Section (e.g. `WI`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExchangeSpec {
-    pub class_label: &'static str,
-    pub section_label: &'static str,
-}
-
 /// One ARRL/RAC Field Day section: the exchange abbreviation sent on the air
 /// (e.g. `WI`), its full name, and the ARRL division it sits in (so the
 /// worked-sections board can lay the cells out division-by-division).
@@ -203,7 +195,14 @@ pub struct FdRuleset {
     pub event: FdEvent,
     pub rules_year: u16,
     pub contest_id: &'static str,
-    pub exchange: ExchangeSpec,
+    /// The exchange this event runs, as data. Byte-for-byte the exchange
+    /// `contest::field_day` ships (cross-checked in the tests below).
+    ///
+    /// ⚠️ Nothing CONSUMES this yet — `contest::field_day()` is still the
+    /// definition the RTTY sequencer copies against. Wiring the loaded block
+    /// through the parser is a later batch; doing it here would have made this
+    /// batch a behaviour change.
+    pub exchange: &'static crate::contest::ExchangeSpec,
     pub scoring: ScoringModel,
     pub bonuses: &'static [Bonus],
     pub dupe_rule: DupeRule,
@@ -346,9 +345,22 @@ pub fn valid_section(code: &str) -> bool {
 /// section name, and inventing a display name would be inventing data.
 pub fn fd_sections_domain() -> &'static crate::contest::Domain {
     static D: OnceLock<crate::contest::Domain> = OnceLock::new();
-    D.get_or_init(|| {
+    D.get_or_init(|| derive_fd_sections(sections()))
+}
+
+/// [`fd_sections_domain`]'s body, over an EXPLICIT section slice.
+///
+/// ⚠️ It exists split out because [`build`] runs INSIDE `TABLE.get_or_init`, so
+/// anything there that reached for the accessor — which goes through
+/// [`sections`] → `table()` → the same `OnceLock` — would re-enter it and
+/// DEADLOCK. (It did: the exchange block's `enum` slots resolve `fd_sections`,
+/// and the first version of that resolution hung the whole test binary.) So
+/// `build` derives from the slice it is already holding, and only callers
+/// OUTSIDE the initialiser use the accessor.
+fn derive_fd_sections(secs: &'static [Section]) -> crate::contest::Domain {
+    {
         let mut values: Vec<(&'static str, &'static str)> =
-            sections().iter().map(|s| (s.code, s.name)).collect();
+            secs.iter().map(|s| (s.code, s.name)).collect();
         values.push(("MX", "MX"));
         values.push(("DX", "DX"));
         crate::contest::Domain {
@@ -363,7 +375,7 @@ pub fn fd_sections_domain() -> &'static crate::contest::Domain {
             },
             values: Box::leak(values.into_boxed_slice()),
         }
-    })
+    }
 }
 
 /// The 83 ARRL/RAC section codes as a [`contest::Domain`](crate::contest::Domain)
@@ -385,9 +397,15 @@ pub fn fd_sections_domain() -> &'static crate::contest::Domain {
 /// Same ordering rule as [`ruleset`]: this LOADS the rules table.
 pub fn arrl_sections_domain() -> &'static crate::contest::Domain {
     static D: OnceLock<crate::contest::Domain> = OnceLock::new();
-    D.get_or_init(|| {
+    D.get_or_init(|| derive_arrl_sections(sections()))
+}
+
+/// [`arrl_sections_domain`]'s body over an explicit slice — same re-entrancy
+/// reason as [`derive_fd_sections`].
+fn derive_arrl_sections(secs: &'static [Section]) -> crate::contest::Domain {
+    {
         let values: Vec<(&'static str, &'static str)> =
-            sections().iter().map(|s| (s.code, s.name)).collect();
+            secs.iter().map(|s| (s.code, s.name)).collect();
         crate::contest::Domain {
             id: "arrl_sections",
             // Received: <ARRL_SECT>. Sent: absent — MY_ARRL_SECT is not
@@ -399,7 +417,7 @@ pub fn arrl_sections_domain() -> &'static crate::contest::Domain {
             },
             values: Box::leak(values.into_boxed_slice()),
         }
-    })
+    }
 }
 
 /// Domain ids the loader DERIVES from the top-level `sections` list. A rules
@@ -420,11 +438,6 @@ fn legal_power(tiers: &[u32], v: u32) -> u32 {
         .find(|&t| v >= t)
         .unwrap_or_else(|| tiers.first().copied().unwrap_or(1))
 }
-
-const EXCHANGE_CLASS_SECTION: ExchangeSpec = ExchangeSpec {
-    class_label: "Class",
-    section_label: "Section",
-};
 
 // ---------------------------------------------------------------------------
 // The rules table: parse + validate + leak — and the startup-only install seam
@@ -617,6 +630,7 @@ struct RulesetSpec {
     scoring: ScoringSpec,
     dupe: DupeSpec,
     domains: Vec<DomainSpec>,
+    exchange: ExchangeBlockSpec,
     bonuses: Vec<BonusSpec>,
     banned_modes: Vec<String>,
     tempo_fd: bool,
@@ -659,6 +673,66 @@ struct DomainSpec {
     id: String,
     adif: AdifTagsSpec,
     values: Vec<DomainValueSpec>,
+}
+
+/// What kind of value an exchange slot holds, in the rules file.
+///
+/// Internally tagged on `type`, so a slot reads
+/// `{ "type": "pattern", "re": "^[0-9]{1,2}[ABCDEF]$" }`. The arms are exactly
+/// [`contest::FieldKind`](crate::contest::FieldKind)'s nine — a tenth would
+/// mean a contest the model does not cover, not a special case to bolt on.
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum KindSpec {
+    Rst { digits: u8 },
+    Serial { scope: String },
+    Enum { domain: String },
+    Pattern { re: String },
+    Number { min: u32, max: u32 },
+    Grid { chars: u8 },
+    Text { max_len: u8 },
+    Call,
+    OneOf { of: Vec<KindSpec> },
+}
+
+/// One exchange slot in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct FieldBlockSpec {
+    /// SLOT ID, not an export tag: uppercase, unique, named by the roles.
+    key: String,
+    /// The on-air label that introduces the field. `""` = positional.
+    label: String,
+    required: bool,
+    adif: AdifTagsSpec,
+    kind: KindSpec,
+}
+
+/// How a role is matched against the operator.
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SelectorSpec {
+    MyLocationIn { locations: Vec<String> },
+    MyCategoryIs { category: String },
+    Always,
+}
+
+/// One side of an asymmetric contest, in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct RoleBlockSpec {
+    /// `""` for the single role of a symmetric contest.
+    id: String,
+    selector: SelectorSpec,
+    sends: Vec<String>,
+    receives: Vec<String>,
+    constant_sent: Vec<String>,
+}
+
+/// A whole exchange, in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct ExchangeBlockSpec {
+    name: String,
+    fields: Vec<FieldBlockSpec>,
+    roles: Vec<RoleBlockSpec>,
 }
 
 /// The dupe key for one ruleset, as data.
@@ -776,6 +850,78 @@ fn is_adif_tag(t: &str) -> bool {
     let mut cs = t.chars();
     matches!(cs.next(), Some(c) if c.is_ascii_uppercase())
         && cs.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Does `id` name a domain this ruleset can resolve — one it declares itself,
+/// or one of the reserved ids the loader derives from the section list? The one
+/// resolution path, so the file and the loader can never disagree about which
+/// domains exist.
+fn resolve_domain(r: &RulesetSpec, id: &str) -> bool {
+    RESERVED_DOMAIN_IDS.contains(&id) || r.domains.iter().any(|d| d.id == id)
+}
+
+/// Validate one [`KindSpec`], recursing into `one_of` arms. `tag`/`key` are
+/// only for the message.
+fn check_kind(r: &RulesetSpec, tag: &str, key: &str, k: &KindSpec) -> Result<(), String> {
+    match k {
+        KindSpec::Rst { digits } => {
+            // 2 on phone, 3 on CW/digital. Zero would index an empty slice
+            // downstream; anything above 3 is not an RST.
+            if !(2..=3).contains(digits) {
+                return Err(format!(
+                    "{tag}: {key} rst digits {digits} (expected 2 or 3)"
+                ));
+            }
+        }
+        KindSpec::Serial { scope } => match scope.as_str() {
+            "per_contest" => {}
+            "per_band" => {
+                return Err(format!(
+                    "{tag}: {key} serial scope per_band is not supported \
+                     (this build allocates one series per contest)"
+                ))
+            }
+            other => return Err(format!("{tag}: {key} unknown serial scope {other:?}")),
+        },
+        KindSpec::Enum { domain } => {
+            if !resolve_domain(r, domain) {
+                return Err(format!("{tag}: {key} names unknown domain {domain:?}"));
+            }
+        }
+        KindSpec::Pattern { re } => {
+            // Anchored on both ends or it is not the pattern it claims: an
+            // unanchored `[0-9]{1,2}[ABCDEF]` matches inside any longer token.
+            if re.is_empty() || !re.starts_with('^') || !re.ends_with('$') {
+                return Err(format!("{tag}: {key} pattern {re:?} is not ^…$-anchored"));
+            }
+        }
+        KindSpec::Number { min, max } => {
+            if min > max {
+                return Err(format!("{tag}: {key} number min {min} > max {max}"));
+            }
+        }
+        KindSpec::Grid { chars } => {
+            if !matches!(chars, 4 | 6) {
+                return Err(format!("{tag}: {key} grid chars {chars} (expected 4 or 6)"));
+            }
+        }
+        KindSpec::Text { max_len } => {
+            if *max_len == 0 {
+                return Err(format!("{tag}: {key} text max_len 0"));
+            }
+        }
+        KindSpec::Call => {}
+        KindSpec::OneOf { of } => {
+            // One arm is not a choice; zero is not a slot.
+            if of.len() < 2 {
+                return Err(format!("{tag}: {key} one_of needs at least 2 arms"));
+            }
+            for arm in of {
+                check_kind(r, tag, key, arm)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Parse + the structural validation both the loader and the download client
@@ -904,6 +1050,86 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 }
             }
         }
+        // The exchange block (§2.5). Every rule here is a rules bug that must
+        // be a REFUSAL rather than a runtime lookup miss on the air.
+        let x = &r.exchange;
+        if x.name.is_empty() {
+            return Err(format!("{tag}: exchange has no name"));
+        }
+        let mut keys: Vec<&str> = Vec::new();
+        for f in &x.fields {
+            if f.key.is_empty() || f.key != f.key.to_ascii_uppercase() {
+                return Err(format!("{tag}: exchange slot {:?} not uppercase", f.key));
+            }
+            if keys.contains(&f.key.as_str()) {
+                return Err(format!("{tag}: duplicate exchange slot {:?}", f.key));
+            }
+            keys.push(&f.key);
+            if !is_adif_tag(&f.adif.rcvd) || !is_adif_tag(&f.adif.sent) {
+                return Err(format!("{tag}: slot {} has a malformed adif tag", f.key));
+            }
+            check_kind(r, &tag, &f.key, &f.kind)?;
+        }
+        if x.roles.is_empty() {
+            return Err(format!("{tag}: exchange has no roles"));
+        }
+        let mut role_ids: Vec<&str> = Vec::new();
+        for role in &x.roles {
+            if role_ids.contains(&role.id.as_str()) {
+                return Err(format!("{tag}: duplicate role id {:?}", role.id));
+            }
+            role_ids.push(&role.id);
+            for key in role
+                .sends
+                .iter()
+                .chain(&role.receives)
+                .chain(&role.constant_sent)
+            {
+                if !keys.contains(&key.as_str()) {
+                    return Err(format!(
+                        "{tag}: role {:?} names undeclared slot {key:?}",
+                        role.id
+                    ));
+                }
+            }
+            // constant_sent constrains something I actually transmit. Read the
+            // other way round it would refuse legal contacts, because every
+            // station I work legitimately sends a different value.
+            for key in &role.constant_sent {
+                if !role.sends.contains(key) {
+                    return Err(format!(
+                        "{tag}: role {:?} constant_sent {key:?} is not in sends",
+                        role.id
+                    ));
+                }
+            }
+            // Five is the layout budget at the 1024 px supported floor. A limit
+            // the layout cannot honour is not a limit.
+            if role.receives.len() > 5 {
+                return Err(format!(
+                    "{tag}: role {:?} receives {} fields (max 5)",
+                    role.id,
+                    role.receives.len()
+                ));
+            }
+            if matches!(role.selector, SelectorSpec::Always) && x.roles.len() != 1 {
+                return Err(format!(
+                    "{tag}: role {:?} selector `always` must be the only role \
+                     (a role after it could never be reached)",
+                    role.id
+                ));
+            }
+            if let SelectorSpec::MyLocationIn { locations } = &role.selector {
+                if locations.is_empty() {
+                    return Err(format!("{tag}: role {:?} my_location_in is empty", role.id));
+                }
+            }
+            if let SelectorSpec::MyCategoryIs { category } = &role.selector {
+                if category.is_empty() {
+                    return Err(format!("{tag}: role {:?} my_category_is is empty", role.id));
+                }
+            }
+        }
         let mut ids: Vec<&str> = Vec::new();
         for b in r.bonuses.iter().chain(&r.objectives) {
             if b.id.is_empty() {
@@ -1003,9 +1229,143 @@ fn leak_bonuses(v: Vec<BonusSpec>) -> &'static [Bonus] {
     )
 }
 
+/// The two DERIVED domains, built from the table's own section slice and
+/// handed down through `build` — never fetched from the public accessors,
+/// which would re-enter `TABLE.get_or_init` and deadlock (see
+/// [`derive_fd_sections`]).
+struct Reserved {
+    arrl_sections: &'static crate::contest::Domain,
+    fd_sections: &'static crate::contest::Domain,
+}
+
+/// A validated [`KindSpec`] as the neutral [`contest::FieldKind`]. `domains` is
+/// the ruleset's already-built domain list; a reserved id resolves to the
+/// derived domain instead. Every lookup here is infallible because
+/// `check_kind` already refused anything that would miss.
+fn build_kind(
+    k: KindSpec,
+    domains: &[&'static crate::contest::Domain],
+    reserved: &Reserved,
+) -> crate::contest::FieldKind {
+    use crate::contest::FieldKind as K;
+    match k {
+        KindSpec::Rst { digits } => K::Rst { digits },
+        // `check_kind` refuses every scope but per_contest, so this build never
+        // constructs a PerBand — the variant exists so a file asking for it is
+        // refused by name rather than silently scored as per-contest.
+        KindSpec::Serial { .. } => K::Serial {
+            scope: crate::contest::SerialScope::PerContest,
+        },
+        KindSpec::Enum { domain } => K::Enum {
+            domain: match domain.as_str() {
+                "arrl_sections" => reserved.arrl_sections,
+                "fd_sections" => reserved.fd_sections,
+                other => domains
+                    .iter()
+                    .copied()
+                    .find(|d| d.id == other)
+                    .expect("validated by resolve_domain"),
+            },
+        },
+        KindSpec::Pattern { re } => K::Pattern { re: leak_str(re) },
+        KindSpec::Number { min, max } => K::Number { min, max },
+        KindSpec::Grid { chars } => K::Grid { chars },
+        KindSpec::Text { max_len } => K::Text { max_len },
+        KindSpec::Call => K::Call,
+        KindSpec::OneOf { of } => K::OneOf(Box::leak(
+            of.into_iter()
+                .map(|a| build_kind(a, domains, reserved))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
+    }
+}
+
+/// Leak a list of slot ids as `&'static [&'static str]`.
+fn leak_keys(v: Vec<String>) -> &'static [&'static str] {
+    Box::leak(
+        v.into_iter()
+            .map(leak_str)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    )
+}
+
+/// A validated [`ExchangeBlockSpec`] as the neutral [`contest::ExchangeSpec`].
+fn build_exchange(
+    x: ExchangeBlockSpec,
+    domains: &[&'static crate::contest::Domain],
+    reserved: &Reserved,
+) -> &'static crate::contest::ExchangeSpec {
+    let fields: Vec<crate::contest::FieldSpec> = x
+        .fields
+        .into_iter()
+        .map(|f| crate::contest::FieldSpec {
+            key: leak_str(f.key),
+            adif: crate::contest::AdifTags {
+                rcvd: leak_opt_tag(f.adif.rcvd),
+                sent: leak_opt_tag(f.adif.sent),
+            },
+            // `""` in the file means positional — the same statement `None`
+            // makes in the type.
+            label: if f.label.is_empty() {
+                None
+            } else {
+                Some(leak_str(f.label))
+            },
+            required: f.required,
+            kind: build_kind(f.kind, domains, reserved),
+        })
+        .collect();
+    let roles: Vec<crate::contest::RoleSpec> = x
+        .roles
+        .into_iter()
+        .map(|r| crate::contest::RoleSpec {
+            id: leak_str(r.id),
+            selector: match r.selector {
+                SelectorSpec::MyLocationIn { locations } => {
+                    crate::contest::RoleSelector::MyLocationIn(leak_keys(locations))
+                }
+                SelectorSpec::MyCategoryIs { category } => {
+                    crate::contest::RoleSelector::MyCategoryIs(leak_str(category))
+                }
+                SelectorSpec::Always => crate::contest::RoleSelector::Always,
+            },
+            sends: leak_keys(r.sends),
+            receives: leak_keys(r.receives),
+            constant_sent: leak_keys(r.constant_sent),
+        })
+        .collect();
+    Box::leak(Box::new(crate::contest::ExchangeSpec {
+        name: leak_str(x.name),
+        fields: Box::leak(fields.into_boxed_slice()),
+        roles: Box::leak(roles.into_boxed_slice()),
+    }))
+}
+
 /// One-time at load (validated spec in, `&'static` table out) — the leak IS
 /// the lifetime strategy: every consumer keeps its `&'static` field types.
 fn build(spec: FileSpec) -> RulesTable {
+    // Sections FIRST. The exchange blocks' `enum` slots resolve the reserved
+    // `fd_sections` / `arrl_sections` ids, which are derived from this list —
+    // and they must be derived from the slice rather than fetched through the
+    // public accessors, because `build` runs inside `TABLE.get_or_init` and
+    // those accessors would re-enter it.
+    let sections_static: &'static [Section] = Box::leak(
+        spec.sections
+            .into_iter()
+            .map(|s| Section {
+                code: leak_str(s.code),
+                name: leak_str(s.name),
+                division: leak_str(s.division),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let reserved = Reserved {
+        arrl_sections: Box::leak(Box::new(derive_arrl_sections(sections_static))),
+        fd_sections: Box::leak(Box::new(derive_fd_sections(sections_static))),
+    };
     let rulesets: Vec<&'static FdRuleset> = spec
         .rulesets
         .into_iter()
@@ -1041,37 +1401,41 @@ fn build(spec: FileSpec) -> RulesTable {
                 })
                 .collect();
             overrides.sort_unstable_by_key(|(y, _)| *y);
+            // Domains FIRST: the exchange's `enum` slots resolve against them,
+            // and a reserved id resolves to the derived domain instead.
+            let domains_built: &'static [&'static crate::contest::Domain] = Box::leak(
+                r.domains
+                    .into_iter()
+                    .map(|d| {
+                        let values: Vec<(&'static str, &'static str)> = d
+                            .values
+                            .into_iter()
+                            .map(|v| (leak_str(v.code) as &'static str, leak_str(v.label) as _))
+                            .collect();
+                        &*Box::leak(Box::new(crate::contest::Domain {
+                            id: leak_str(d.id),
+                            adif: crate::contest::AdifTags {
+                                // "" in the file means "no standard column this
+                                // direction" — it becomes None here, which is
+                                // the same statement in the type.
+                                rcvd: leak_opt_tag(d.adif.rcvd),
+                                sent: leak_opt_tag(d.adif.sent),
+                            },
+                            values: Box::leak(values.into_boxed_slice()),
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
+            let exchange_built = build_exchange(r.exchange, domains_built, &reserved);
             &*Box::leak(Box::new(FdRuleset {
                 event: event_of(&r.event).expect("validated"),
                 rules_year: r.rules_year,
                 contest_id: leak_str(r.contest_id),
-                exchange: EXCHANGE_CLASS_SECTION,
                 scoring,
                 bonuses: leak_bonuses(r.bonuses),
-                domains: Box::leak(
-                    r.domains
-                        .into_iter()
-                        .map(|d| {
-                            let values: Vec<(&'static str, &'static str)> = d
-                                .values
-                                .into_iter()
-                                .map(|v| (leak_str(v.code) as &'static str, leak_str(v.label) as _))
-                                .collect();
-                            &*Box::leak(Box::new(crate::contest::Domain {
-                                id: leak_str(d.id),
-                                adif: crate::contest::AdifTags {
-                                    // "" in the file means "no standard column
-                                    // this direction" — it becomes None here,
-                                    // which is the same statement in the type.
-                                    rcvd: leak_opt_tag(d.adif.rcvd),
-                                    sent: leak_opt_tag(d.adif.sent),
-                                },
-                                values: Box::leak(values.into_boxed_slice()),
-                            }))
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                ),
+                domains: domains_built,
+                exchange: exchange_built,
                 dupe_rule: DupeRule {
                     by_call: r.dupe.by_call,
                     by_band: r.dupe.by_band,
@@ -1108,17 +1472,7 @@ fn build(spec: FileSpec) -> RulesTable {
     RulesTable {
         generated: leak_str(spec.generated),
         rulesets: Box::leak(rulesets.into_boxed_slice()),
-        sections: Box::leak(
-            spec.sections
-                .into_iter()
-                .map(|s| Section {
-                    code: leak_str(s.code),
-                    name: leak_str(s.name),
-                    division: leak_str(s.division),
-                })
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        ),
+        sections: sections_static,
     }
 }
 
@@ -1975,6 +2329,161 @@ mod tests {
         for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
             assert!(ruleset(e, CURRENT_RULES_YEAR).domains.is_empty());
         }
+    }
+
+    /// Every §2.5 structural rule this batch lands, each paired with the
+    /// positive control that the same file with that one property corrected
+    /// loads. Without the control a refusal proves only that SOMETHING was
+    /// wrong, not that the named rule is what caught it.
+    #[test]
+    fn the_exchange_structural_rules_each_fire_with_their_control() {
+        let at = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            f(&mut v);
+            parse_spec(&v.to_string())
+        };
+        assert!(
+            parse_spec(SEED).is_ok(),
+            "control: the seed's own block loads"
+        );
+
+        // A role naming a slot the file does not declare.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["roles"][0]["receives"] =
+                serde_json::json!(["CLASS", "NOPE"]);
+        })
+        .unwrap_err()
+        .contains("NOPE"));
+
+        // An `enum` slot naming a domain nothing resolves.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"][1]["kind"] =
+                serde_json::json!({ "type": "enum", "domain": "no_such_domain" });
+        })
+        .unwrap_err()
+        .contains("no_such_domain"));
+
+        // §2.6: per-band serials are refused BY NAME rather than silently
+        // scored as per-contest.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"][0]["kind"] =
+                serde_json::json!({ "type": "serial", "scope": "per_band" });
+        })
+        .unwrap_err()
+        .contains("per_band"));
+        // …and the control: per_contest is accepted.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"][0]["kind"] =
+                serde_json::json!({ "type": "serial", "scope": "per_contest" });
+        })
+        .is_ok());
+
+        // `always` is only legal as the ONLY role — a second role after it
+        // could never be reached.
+        assert!(at(&|v| {
+            let extra = serde_json::json!({
+                "id": "second", "selector": { "type": "always" },
+                "sends": ["CLASS"], "receives": ["CLASS"], "constant_sent": []
+            });
+            v["rulesets"][0]["exchange"]["roles"]
+                .as_array_mut()
+                .unwrap()
+                .push(extra);
+        })
+        .unwrap_err()
+        .contains("always"));
+
+        // §2.5: five received fields is the layout budget at the 1024 px
+        // supported floor. A limit the layout cannot honour is not a limit.
+        let six = serde_json::json!(["A", "B", "C", "D", "E", "F"]);
+        let five = serde_json::json!(["A", "B", "C", "D", "E"]);
+        let slots = |n: usize| {
+            let mut out = vec![];
+            for k in ["A", "B", "C", "D", "E", "F"].iter().take(n) {
+                out.push(serde_json::json!({
+                    "key": k, "label": "", "required": false,
+                    "adif": { "rcvd": "", "sent": "" },
+                    "kind": { "type": "text", "max_len": 8 }
+                }));
+            }
+            serde_json::Value::Array(out)
+        };
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"] = slots(6);
+            v["rulesets"][0]["exchange"]["roles"][0]["sends"] = six.clone();
+            v["rulesets"][0]["exchange"]["roles"][0]["receives"] = six.clone();
+        })
+        .unwrap_err()
+        .contains("receives"));
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"] = slots(5);
+            v["rulesets"][0]["exchange"]["roles"][0]["sends"] = five.clone();
+            v["rulesets"][0]["exchange"]["roles"][0]["receives"] = five.clone();
+        })
+        .is_ok());
+
+        // `constant_sent` must be a subset of `sends`: it constrains something
+        // I actually transmit.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["roles"][0]["constant_sent"] =
+                serde_json::json!(["SECTION"]);
+            v["rulesets"][0]["exchange"]["roles"][0]["sends"] = serde_json::json!(["CLASS"]);
+        })
+        .unwrap_err()
+        .contains("constant_sent"));
+
+        // §2.1.1: `adif.sent` must be WRITTEN. An absent key is the
+        // direction-blind shape that rule exists to kill.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"][0]["adif"]
+                .as_object_mut()
+                .unwrap()
+                .remove("sent");
+        })
+        .unwrap_err()
+        .contains("sent"));
+    }
+
+    /// §8(c) on the last of the four blocks.
+    #[test]
+    fn a_ruleset_with_no_exchange_block_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0].as_object_mut().unwrap().remove("exchange");
+        assert!(parse_spec(&v.to_string()).unwrap_err().contains("exchange"));
+        assert!(parse_spec(SEED).is_ok(), "control");
+    }
+
+    /// The seed's exchange block SPELLS OUT today's behaviour (§11.1). Nothing
+    /// reads it yet, so this cross-check is the only thing that stops it
+    /// drifting from the shipped `contest::field_day()` before the batch that
+    /// wires it through — including the per-event class letters, which are the
+    /// one place the two events genuinely differ.
+    #[test]
+    fn the_seeded_exchange_block_matches_the_shipped_field_day_exchange() {
+        for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+            let shipped = crate::contest::field_day(e);
+            let loaded = ruleset(e, CURRENT_RULES_YEAR).exchange;
+            assert_eq!(loaded.name, shipped.name, "{e:?}");
+            assert_eq!(loaded.fields.len(), shipped.fields.len(), "{e:?}");
+            for (a, b) in loaded.fields.iter().zip(shipped.fields) {
+                assert_eq!(a.key, b.key, "{e:?}");
+                assert_eq!(a.label, b.label, "{e:?} {}", a.key);
+                assert_eq!(a.required, b.required, "{e:?} {}", a.key);
+                assert_eq!(a.kind, b.kind, "{e:?} {}", a.key);
+                assert_eq!(a.adif, b.adif, "{e:?} {}", a.key);
+            }
+            assert_eq!(loaded.roles.len(), 1, "{e:?}");
+            assert_eq!(loaded.roles[0].sends, shipped.roles[0].sends, "{e:?}");
+            assert_eq!(loaded.roles[0].receives, shipped.roles[0].receives, "{e:?}");
+        }
+        // The two events must NOT be the same block: the class letters differ.
+        let arrl = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR).exchange;
+        let wfd = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR).exchange;
+        assert_ne!(
+            arrl.field("CLASS").unwrap().kind,
+            wfd.field("CLASS").unwrap().kind,
+            "the seed must carry each sponsor's own class letters"
+        );
     }
 
     #[test]

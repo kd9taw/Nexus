@@ -52,8 +52,7 @@
             "label": "",
             "required": true,
             "adif": {
-              "rcvd": "CLASS",
-              "sent": ""
+              "rcvd": "CLASS"
             },
             "kind": {
               "type": "pattern",
@@ -176,7 +175,7 @@
         "cluster_allowed": true,
         "assistance_note_key": ""
       },
-      "enforcement": "block",
+      "enforcement": "warn",
       "objectives": []
     },
     {

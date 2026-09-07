@@ -44,54 +44,6 @@
         "by_mode_class": true
       },
       "domains": [],
-      "exchange": {
-        "name": "fieldday",
-        "fields": [
-          {
-            "key": "CLASS",
-            "label": "",
-            "required": true,
-            "adif": {
-              "rcvd": "CLASS",
-              "sent": ""
-            },
-            "kind": {
-              "type": "pattern",
-              "re": "^[0-9]{1,2}[ABCDEF]$"
-            }
-          },
-          {
-            "key": "SECTION",
-            "label": "",
-            "required": true,
-            "adif": {
-              "rcvd": "ARRL_SECT",
-              "sent": ""
-            },
-            "kind": {
-              "type": "enum",
-              "domain": "fd_sections"
-            }
-          }
-        ],
-        "roles": [
-          {
-            "id": "",
-            "selector": {
-              "type": "always"
-            },
-            "sends": [
-              "CLASS",
-              "SECTION"
-            ],
-            "receives": [
-              "CLASS",
-              "SECTION"
-            ],
-            "constant_sent": []
-          }
-        ]
-      },
       "bonuses": [
         {
           "id": "emergency-power",
@@ -176,7 +128,7 @@
         "cluster_allowed": true,
         "assistance_note_key": ""
       },
-      "enforcement": "block",
+      "enforcement": "warn",
       "objectives": []
     },
     {

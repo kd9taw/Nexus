@@ -70,7 +70,7 @@
             },
             "kind": {
               "type": "enum",
-              "domain": "fd_sections"
+              "domain": "no_such_domain"
             }
           }
         ],
@@ -176,7 +176,7 @@
         "cluster_allowed": true,
         "assistance_note_key": ""
       },
-      "enforcement": "block",
+      "enforcement": "warn",
       "objectives": []
     },
     {

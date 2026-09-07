@@ -89,6 +89,19 @@
               "SECTION"
             ],
             "constant_sent": []
+          },
+          {
+            "id": "second",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "CLASS"
+            ],
+            "receives": [
+              "CLASS"
+            ],
+            "constant_sent": []
           }
         ]
       },
@@ -176,7 +189,7 @@
         "cluster_allowed": true,
         "assistance_note_key": ""
       },
-      "enforcement": "block",
+      "enforcement": "warn",
       "objectives": []
     },
     {

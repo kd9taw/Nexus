@@ -102,6 +102,108 @@ for (const r of spec.rulesets) {
     }
   }
 
+  // The exchange block (§2.5). Mirrors ExchangeBlockSpec + check_kind exactly:
+  // every rule here is a rules bug that must be a REFUSAL rather than a runtime
+  // lookup miss on the air.
+  const x = r.exchange
+  if (!x || typeof x !== 'object') fail(`${tag}: missing the \`exchange\` block`)
+  if (!x.name) fail(`${tag}: exchange has no name`)
+  const resolvesDomain = (id) =>
+    RESERVED_DOMAIN_IDS.includes(id) || r.domains.some((d) => d.id === id)
+
+  const checkKind = (key, k) => {
+    switch (k && k.type) {
+      case 'rst':
+        if (!(k.digits === 2 || k.digits === 3))
+          fail(`${tag}: ${key} rst digits ${k.digits} (expected 2 or 3)`)
+        break
+      case 'serial':
+        if (k.scope === 'per_band')
+          fail(
+            `${tag}: ${key} serial scope per_band is not supported ` +
+              `(this build allocates one series per contest)`,
+          )
+        else if (k.scope !== 'per_contest')
+          fail(`${tag}: ${key} unknown serial scope ${JSON.stringify(k.scope)}`)
+        break
+      case 'enum':
+        if (!resolvesDomain(k.domain))
+          fail(`${tag}: ${key} names unknown domain ${JSON.stringify(k.domain)}`)
+        break
+      case 'pattern':
+        // Anchored both ends or it is not the pattern it claims.
+        if (!k.re || !k.re.startsWith('^') || !k.re.endsWith('$'))
+          fail(`${tag}: ${key} pattern ${JSON.stringify(k.re)} is not ^…$-anchored`)
+        break
+      case 'number':
+        if (!(k.min <= k.max)) fail(`${tag}: ${key} number min ${k.min} > max ${k.max}`)
+        break
+      case 'grid':
+        if (!(k.chars === 4 || k.chars === 6))
+          fail(`${tag}: ${key} grid chars ${k.chars} (expected 4 or 6)`)
+        break
+      case 'text':
+        if (!(k.max_len >= 1)) fail(`${tag}: ${key} text max_len ${k.max_len}`)
+        break
+      case 'call':
+        break
+      case 'one_of':
+        if (!Array.isArray(k.of) || k.of.length < 2)
+          fail(`${tag}: ${key} one_of needs at least 2 arms`)
+        for (const arm of k.of) checkKind(key, arm)
+        break
+      default:
+        fail(`${tag}: ${key} unknown kind ${JSON.stringify(k && k.type)}`)
+    }
+  }
+
+  const slots = new Set()
+  for (const f of x.fields) {
+    if (!f.key || f.key !== f.key.toUpperCase())
+      fail(`${tag}: exchange slot ${JSON.stringify(f.key)} not uppercase`)
+    if (slots.has(f.key)) fail(`${tag}: duplicate exchange slot ${JSON.stringify(f.key)}`)
+    slots.add(f.key)
+    // §2.1.1: BOTH adif halves must be WRITTEN. An absent key is the
+    // direction-blind shape that rule exists to kill; `''` is the explicit
+    // "no standard column this direction" marker.
+    if (!f.adif || typeof f.adif.rcvd !== 'string' || typeof f.adif.sent !== 'string')
+      fail(`${tag}: slot ${f.key} must write both adif.rcvd and adif.sent`)
+    if (!isAdifTag(f.adif.rcvd) || !isAdifTag(f.adif.sent))
+      fail(`${tag}: slot ${f.key} has a malformed adif tag`)
+    if (typeof f.label !== 'string') fail(`${tag}: slot ${f.key} must write a label ('' = positional)`)
+    if (typeof f.required !== 'boolean') fail(`${tag}: slot ${f.key} must write required`)
+    checkKind(f.key, f.kind)
+  }
+  if (!Array.isArray(x.roles) || !x.roles.length) fail(`${tag}: exchange has no roles`)
+  const roleIds = new Set()
+  for (const role of x.roles) {
+    if (roleIds.has(role.id)) fail(`${tag}: duplicate role id ${JSON.stringify(role.id)}`)
+    roleIds.add(role.id)
+    for (const key of [...role.sends, ...role.receives, ...role.constant_sent])
+      if (!slots.has(key))
+        fail(`${tag}: role ${JSON.stringify(role.id)} names undeclared slot ${JSON.stringify(key)}`)
+    for (const key of role.constant_sent)
+      if (!role.sends.includes(key))
+        fail(
+          `${tag}: role ${JSON.stringify(role.id)} constant_sent ` +
+            `${JSON.stringify(key)} is not in sends`,
+        )
+    // Five is the layout budget at the 1024 px supported floor.
+    if (role.receives.length > 5)
+      fail(
+        `${tag}: role ${JSON.stringify(role.id)} receives ${role.receives.length} fields (max 5)`,
+      )
+    if (role.selector && role.selector.type === 'always' && x.roles.length !== 1)
+      fail(
+        `${tag}: role ${JSON.stringify(role.id)} selector \`always\` must be the only role ` +
+          `(a role after it could never be reached)`,
+      )
+    if (role.selector && role.selector.type === 'my_location_in' && !role.selector.locations?.length)
+      fail(`${tag}: role ${JSON.stringify(role.id)} my_location_in is empty`)
+    if (role.selector && role.selector.type === 'my_category_is' && !role.selector.category)
+      fail(`${tag}: role ${JSON.stringify(role.id)} my_category_is is empty`)
+  }
+
   const ids = new Set()
   for (const b of [...r.bonuses, ...(r.objectives || [])]) {
     if (!b.id) fail(`${tag}: empty bonus id`)

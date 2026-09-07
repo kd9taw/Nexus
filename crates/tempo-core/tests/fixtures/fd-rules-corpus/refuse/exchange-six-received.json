@@ -48,29 +48,81 @@
         "name": "fieldday",
         "fields": [
           {
-            "key": "CLASS",
+            "key": "A",
             "label": "",
-            "required": true,
+            "required": false,
             "adif": {
-              "rcvd": "CLASS",
+              "rcvd": "",
               "sent": ""
             },
             "kind": {
-              "type": "pattern",
-              "re": "^[0-9]{1,2}[ABCDEF]$"
+              "type": "text",
+              "max_len": 8
             }
           },
           {
-            "key": "SECTION",
+            "key": "B",
             "label": "",
-            "required": true,
+            "required": false,
             "adif": {
-              "rcvd": "ARRL_SECT",
+              "rcvd": "",
               "sent": ""
             },
             "kind": {
-              "type": "enum",
-              "domain": "fd_sections"
+              "type": "text",
+              "max_len": 8
+            }
+          },
+          {
+            "key": "C",
+            "label": "",
+            "required": false,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "kind": {
+              "type": "text",
+              "max_len": 8
+            }
+          },
+          {
+            "key": "D",
+            "label": "",
+            "required": false,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "kind": {
+              "type": "text",
+              "max_len": 8
+            }
+          },
+          {
+            "key": "E",
+            "label": "",
+            "required": false,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "kind": {
+              "type": "text",
+              "max_len": 8
+            }
+          },
+          {
+            "key": "F",
+            "label": "",
+            "required": false,
+            "adif": {
+              "rcvd": "",
+              "sent": ""
+            },
+            "kind": {
+              "type": "text",
+              "max_len": 8
             }
           }
         ],
@@ -81,12 +133,20 @@
               "type": "always"
             },
             "sends": [
-              "CLASS",
-              "SECTION"
+              "A",
+              "B",
+              "C",
+              "D",
+              "E",
+              "F"
             ],
             "receives": [
-              "CLASS",
-              "SECTION"
+              "A",
+              "B",
+              "C",
+              "D",
+              "E",
+              "F"
             ],
             "constant_sent": []
           }
@@ -176,7 +236,7 @@
         "cluster_allowed": true,
         "assistance_note_key": ""
       },
-      "enforcement": "block",
+      "enforcement": "warn",
       "objectives": []
     },
     {

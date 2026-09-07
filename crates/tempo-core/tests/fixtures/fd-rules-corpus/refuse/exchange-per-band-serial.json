@@ -56,8 +56,8 @@
               "sent": ""
             },
             "kind": {
-              "type": "pattern",
-              "re": "^[0-9]{1,2}[ABCDEF]$"
+              "type": "serial",
+              "scope": "per_band"
             }
           },
           {
@@ -176,7 +176,7 @@
         "cluster_allowed": true,
         "assistance_note_key": ""
       },
-      "enforcement": "block",
+      "enforcement": "warn",
       "objectives": []
     },
     {

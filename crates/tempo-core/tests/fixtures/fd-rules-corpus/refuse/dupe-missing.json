@@ -7,7 +7,10 @@
       "wfd": "winterfieldday.org rules text (sop.php) unreachable on 2026-08-29 (page serves navigation only to a fetcher) — NOT verified; shipped dormant (allowed) until the real rules text is read. Do not flip these flags without a verbatim quote + URL recorded here."
     },
     "banned_modes": "WFD 2026 WSJT-suite ban carried over verbatim from the fd_rules.rs consts landed in c76f5242 (RTTY and SSTV explicitly legal as Digital).",
-    "objectives": "WFD reuses the ARRL bonus menu today (the pre-data modelling); a real WFD objectives table flows through this field later."
+    "objectives": "WFD reuses the ARRL bonus menu today (the pre-data modelling); a real WFD objectives table flows through this field later.",
+    "exchange": "Class letters are PER EVENT and the two sets are disjoint. arrlfd uses ^[0-9]{1,2}[ABCDEF]$ (ARRL Field Day classes A-F). wfd uses ^[0-9]{1,2}[HIOM]$, from winterfieldday.org/downloads/2026-rules-v3.pdf (the sponsor's own 2026 rules, stamped \"V3 9.8.25\"), read in full 2026-09-07: \"Class Options: H - Home station... I - Indoor station... O - Outdoor station... M - Mobile / Mobile Stationary\", with the worked example \"If you have two stations and you are mobile in East Pennsylvania, you are 2M EPA.\" This CORRECTS a real shipped bug: both events previously used ABCDEF, so no legal WFD class satisfied the required CLASS slot and the RTTY auto-sequencer could not complete a single Winter Field Day contact. The earlier guess of HIOM lived only in a code comment, which is not a source; the sponsor page was unreachable on 2026-08-29 (see the assistance entry) and the PDF is the first-party text that was missing then. Do not change these letters without a verbatim quote + URL + read-date recorded here.",
+    "exchange_section_domain": "Both events' SECTION slot uses the derived `fd_sections` domain (the 83 ARRL/RAC sections plus MX and DX). Corroborated for WFD by the same PDF, \"Location Identifier\": \"US and Canadian stations will use the ARRL / RAC Section as designated by those organizations. Mexico stations will use MX, and all other stations outside of the US will use DX.\"",
+    "adif_sent_tags": "Every exchange field's adif.sent is \"\" (no standard column that direction; the value rides the private carrier, spec §3.5). MY_CNTY / MY_STATE / MY_ARRL_SECT / STX_STRING / SRX_STRING appear NOWHERE in crates/, src-tauri/ or ui/src (positive control: MY_GRIDSQUARE returns hits, so the grep works and the zeros are real). Batch 6 checks each name against adif.org's own field-list document before any writer emits it; a name that does not check out stays \"\"."
   },
   "rulesets": [
     {
@@ -36,6 +39,54 @@
         ]
       },
       "domains": [],
+      "exchange": {
+        "name": "fieldday",
+        "fields": [
+          {
+            "key": "CLASS",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "CLASS",
+              "sent": ""
+            },
+            "kind": {
+              "type": "pattern",
+              "re": "^[0-9]{1,2}[ABCDEF]$"
+            }
+          },
+          {
+            "key": "SECTION",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "ARRL_SECT",
+              "sent": ""
+            },
+            "kind": {
+              "type": "enum",
+              "domain": "fd_sections"
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "CLASS",
+              "SECTION"
+            ],
+            "receives": [
+              "CLASS",
+              "SECTION"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
       "bonuses": [
         {
           "id": "emergency-power",
@@ -153,6 +204,54 @@
         "by_mode_class": true
       },
       "domains": [],
+      "exchange": {
+        "name": "fieldday",
+        "fields": [
+          {
+            "key": "CLASS",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "CLASS",
+              "sent": ""
+            },
+            "kind": {
+              "type": "pattern",
+              "re": "^[0-9]{1,2}[HIOM]$"
+            }
+          },
+          {
+            "key": "SECTION",
+            "label": "",
+            "required": true,
+            "adif": {
+              "rcvd": "ARRL_SECT",
+              "sent": ""
+            },
+            "kind": {
+              "type": "enum",
+              "domain": "fd_sections"
+            }
+          }
+        ],
+        "roles": [
+          {
+            "id": "",
+            "selector": {
+              "type": "always"
+            },
+            "sends": [
+              "CLASS",
+              "SECTION"
+            ],
+            "receives": [
+              "CLASS",
+              "SECTION"
+            ],
+            "constant_sent": []
+          }
+        ]
+      },
       "bonuses": [
         {
           "id": "emergency-power",

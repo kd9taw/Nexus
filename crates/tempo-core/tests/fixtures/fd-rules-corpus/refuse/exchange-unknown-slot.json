@@ -86,7 +86,7 @@
             ],
             "receives": [
               "CLASS",
-              "SECTION"
+              "NOPE"
             ],
             "constant_sent": []
           }
@@ -176,7 +176,7 @@
         "cluster_allowed": true,
         "assistance_note_key": ""
       },
-      "enforcement": "block",
+      "enforcement": "warn",
       "objectives": []
     },
     {
