@@ -1309,8 +1309,9 @@ mod tests {
     ///
     /// This is the guard's whole value: a compressed image is small and its plaintext is not, so
     /// "decompress it and check the size afterwards" is an allocation followed by an opinion about
-    /// it. Measured on the shape that motivated it, a body of one repeated byte: the ratio below is
-    /// what a peer gets for one megabyte of wire.
+    /// it. The shape is the one that motivated the guard, a body of one repeated byte, and the
+    /// first assertion is what keeps this honest: an image that did not actually expand would let
+    /// a bound that never fires pass everything below.
     ///
     /// Both directions — the exact size must still decode, or a bound that refused everything
     /// would pass the first half.

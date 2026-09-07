@@ -114,8 +114,8 @@
 //!   and never a `len()` — a drained `Vec` still owns its buffer — and every collection is charged
 //!   its per-element overhead as well as its elements' own heap.
 //! * **A check after an allocation is not a bound.** The peer chooses `u-size`, and LZHUF expands
-//!   by up to `F` bytes per symbol, so decompressing first and comparing after is a 95 MiB
-//!   allocation followed by an opinion about it. Every peer-chosen size is judged before the
+//!   by up to `F` bytes per symbol, so decompressing first and comparing after peaked at 95.3 MiB
+//!   of live heap before the comparison it was waiting for. Every peer-chosen size is judged before the
 //!   memory exists: [`MAX_PROPOSAL_U_SIZE`] at proposal time, and
 //!   [`lzhuf::decompress_bounded`] refusing an image whose own header declares more than the
 //!   proposal did.
