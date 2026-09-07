@@ -13833,13 +13833,25 @@ type HealthTriple = (Option<i64>, Option<i64>, Option<String>);
 /// forever. A paid, working subscription was indistinguishable from an expired one, which is
 /// what M0DHT reported.
 ///
-/// The non-obvious half is that `Ok` counts **whether or not QRZ held a record**: an
-/// authoritative "no such callsign" is a completed round trip on a live session, which is
-/// exactly what this row claims to know. Treating a miss as a failure would paint the row red
-/// for looking up a callsign that does not exist.
-fn qrz_xml_stamp<T>(r: &Result<T, String>) -> (bool, String) {
+/// The non-obvious half is that a **miss** counts: an authoritative "no such callsign" is a
+/// completed round trip on a live session, which is exactly what this row claims to know.
+/// Treating a miss as a failure would paint the row red for looking up a callsign that does
+/// not exist.
+///
+/// ⚠️ And the half that got this wrong once. [`QrzOutcome::NeedLogin`] here means QRZ refused
+/// a session key it had just issued, so the lookup never completed — the opposite evidence
+/// from a miss, and for one release of this function they were the same value (`Ok(None)`)
+/// and both painted the row GREEN. A row that says a connector is working while QRZ is
+/// refusing it is the defect #245 was reported for, wearing the fix's clothes.
+fn qrz_xml_stamp(r: &Result<QrzOutcome, String>) -> (bool, String) {
     match r {
-        Ok(_) => (true, String::new()),
+        Ok(QrzOutcome::Found(_) | QrzOutcome::NotFound) => (true, String::new()),
+        Ok(QrzOutcome::NeedLogin) => (
+            false,
+            "QRZ would not accept a session key it had just issued, so the lookup never \
+             completed — check the XML subscription and the QRZ username/password."
+                .to_string(),
+        ),
         // Already redacted by the transport — the lookup URL carries the password, and this
         // string is persisted to conn-health.json.
         Err(e) => (false, e.clone()),
@@ -15092,22 +15104,30 @@ fn hamqth_login(username: &str, password: &str) -> Result<String, String> {
 }
 
 /// One complete QRZ lookup pass: try the cached session key, and on expiry log in
-/// **once** and retry (bounded — never loops). `Ok(Some(dto))` = a hit; `Ok(None)` =
-/// QRZ has no record (so the caller can fall through to the HamQTH fallback); `Err` =
-/// a transport/login error. Network runs without any lock held.
+/// **once** and retry (bounded — never loops). Network runs without any lock held.
+///
+/// ⚠️ **Returns the outcome, not an `Option`.** It used to flatten to
+/// `Result<Option<dto>, String>`, and that made `Ok(None)` carry two unrelated meanings: QRZ
+/// answered on a live session and holds no such record, and QRZ *refused* the lookup with a
+/// key it had just issued. Both mean "fall through to HamQTH" to this function's only
+/// caller — but they are opposite evidence about the XML subscription, and the health stamp
+/// added for #245 could not tell them apart, so it painted a refused lookup GREEN. A sentinel
+/// two readers have to interpret is how that happened; [`QrzOutcome`] already draws the
+/// distinction, so the fix is to stop throwing it away here.
 fn qrz_lookup_attempt(
     call: &str,
     username: &str,
     password: &str,
     qrz_session: &SharedQrzSession,
-) -> Result<Option<tempo_app::dto::QrzLookupDto>, String> {
+) -> Result<QrzOutcome, String> {
     // 1) Try the cached key, if any.
     let cached = qrz_session.lock().ok().and_then(|g| g.clone());
     if let Some(key) = cached {
         match qrz_try_lookup(&key, call)? {
-            QrzOutcome::Found(dto) => return Ok(Some(*dto)),
-            QrzOutcome::NotFound => return Ok(None), // authoritative miss — don't re-login
-            QrzOutcome::NeedLogin => {}              // fall through to a single re-login
+            // Only an expired key is worth a re-login; a hit and an authoritative miss are
+            // both final answers from a live session.
+            QrzOutcome::NeedLogin => {}
+            done => return Ok(done),
         }
     }
     // 2) Log in once, cache the new key, retry the lookup once (bounded).
@@ -15115,17 +15135,21 @@ fn qrz_lookup_attempt(
     if let Ok(mut g) = qrz_session.lock() {
         *g = Some(key.clone());
     }
-    match qrz_try_lookup(&key, call)? {
-        QrzOutcome::Found(dto) => Ok(Some(*dto)),
-        QrzOutcome::NotFound => Ok(None),
-        // A fresh key still reporting expiry is anomalous — give up (→ HamQTH fallback).
-        QrzOutcome::NeedLogin => Ok(None),
-    }
+    // A fresh key STILL reporting expiry is anomalous: QRZ refused a session it had just
+    // issued. Passed straight back — the caller falls through to HamQTH either way, and the
+    // health stamp needs to know which it was.
+    qrz_try_lookup(&key, call)
 }
 
-/// One complete HamQTH lookup pass — the free fallback, structurally identical to
-/// [`qrz_lookup_attempt`]. `Ok(Some(dto))` = a hit; `Ok(None)` = no record; `Err` =
-/// a transport/login error. Bounded (one login, no loop); no lock held over network.
+/// One complete HamQTH lookup pass — the free fallback. `Ok(Some(dto))` = a hit;
+/// `Ok(None)` = no record; `Err` = a transport/login error. Bounded (one login, no loop);
+/// no lock held over network.
+///
+/// Still flattens to an `Option` where [`qrz_lookup_attempt`] no longer does, and carries the
+/// same `Ok(None)` ambiguity: a HamQTH refusal after a fresh login is reported to the operator
+/// as "not in the callbook". Deliberately left — HamQTH has no row in the Connections panel,
+/// so nothing here is claiming to be verified, and changing it would change what the LOOKUP
+/// tells the operator rather than what the panel does.
 fn hamqth_lookup_attempt(
     call: &str,
     username: &str,
@@ -15232,8 +15256,8 @@ async fn qrz_lookup(
                 // works, and it was never recorded — see `qrz_xml_stamp` for what counts.
                 let (ok, detail) = qrz_xml_stamp(&attempt);
                 note_conn_health("qrz-xml", ok, detail);
-                if let Some(dto) = attempt? {
-                    return Ok(dto);
+                if let QrzOutcome::Found(dto) = attempt? {
+                    return Ok(*dto);
                 }
             }
         }
@@ -21616,24 +21640,54 @@ mod tests {
     /// "verified today" into their panel — this test did exactly that before it was rewritten.
     #[test]
     fn a_completed_qrz_callbook_lookup_is_what_the_row_reports() {
-        use super::qrz_xml_stamp;
+        use super::{qrz_xml_stamp, QrzOutcome};
         // A hit is a working subscription.
-        assert_eq!(
-            qrz_xml_stamp(&Ok::<_, String>(Some(()))),
-            (true, String::new())
-        );
+        let found = QrzOutcome::Found(Box::new(tempo_core::qrz::QrzLookup::default().into()));
+        assert_eq!(qrz_xml_stamp(&Ok(found)), (true, String::new()));
         // So is an authoritative miss: QRZ answered on a live session. Calling this a failure
         // would paint the row red for looking up a callsign that simply does not exist.
         assert_eq!(
-            qrz_xml_stamp(&Ok::<_, String>(None::<()>)),
+            qrz_xml_stamp(&Ok(QrzOutcome::NotFound)),
             (true, String::new())
         );
         // A rejected login is the case M0DHT could not see, and QRZ's own words are the
         // actionable half — an expired subscription must read as an expired subscription.
-        let (ok, detail) =
-            qrz_xml_stamp(&Err::<(), _>("QRZ login failed: Not a subscriber".into()));
+        let (ok, detail) = qrz_xml_stamp(&Err("QRZ login failed: Not a subscriber".into()));
         assert!(!ok);
         assert_eq!(detail, "QRZ login failed: Not a subscriber");
+    }
+
+    /// ⛔ A LOOKUP QRZ REFUSED IS NOT A VERIFIED LOOKUP.
+    ///
+    /// The #245 stamp read `qrz_lookup_attempt`'s old `Result<Option<dto>, String>`, in which
+    /// `Ok(None)` meant BOTH "QRZ answered on a live session and holds no such record" and
+    /// "QRZ refused a session key it had just issued". Counting every `Ok` as evidence turned
+    /// the second one GREEN — a connector claiming to work at the moment it does not, which is
+    /// worse than the amber row #245 was reported about and the same defect in a new costume.
+    ///
+    /// Fixed at the source rather than guessed at the call site: the attempt returns
+    /// [`QrzOutcome`], so the two outcomes are no longer the same value.
+    #[test]
+    fn a_lookup_qrz_refused_never_reports_the_subscription_verified() {
+        use super::{qrz_xml_stamp, QrzOutcome};
+        // The control, and the pairing is the point: these two arrived as the SAME value
+        // before the fix, so a test that checked only the refusal would also pass against a
+        // stamp that had simply been flipped to call every Ok a failure.
+        let (miss_ok, _) = qrz_xml_stamp(&Ok(QrzOutcome::NotFound));
+        assert!(
+            miss_ok,
+            "control: an authoritative miss is still a live session"
+        );
+
+        let (refused_ok, detail) = qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin));
+        assert!(
+            !refused_ok,
+            "a lookup QRZ refused must not report the XML subscription verified"
+        );
+        assert!(
+            !detail.trim().is_empty(),
+            "and the row has to say what happened, or it is red with no reason"
+        );
     }
 
     /// …and the stamp has to SURVIVE a restart, or #245 comes back the first time the
