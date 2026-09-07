@@ -36,7 +36,7 @@
         ]
       },
       "dupe": {
-        "by_call": true,
+        "by_call": false,
         "by_band": true,
         "by_mode_class": true
       },
@@ -665,6 +665,11 @@
     {
       "code": "BC",
       "name": "British Columbia",
+      "division": "RAC"
+    },
+    {
+      "code": "NT",
+      "name": "Northern Territories",
       "division": "RAC"
     }
   ]

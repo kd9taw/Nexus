@@ -35,11 +35,6 @@
           5
         ]
       },
-      "dupe": {
-        "by_call": true,
-        "by_band": true,
-        "by_mode_class": true
-      },
       "bonuses": [
         {
           "id": "emergency-power",
@@ -665,6 +660,11 @@
     {
       "code": "BC",
       "name": "British Columbia",
+      "division": "RAC"
+    },
+    {
+      "code": "NT",
+      "name": "Northern Territories",
       "division": "RAC"
     }
   ]

@@ -57,6 +57,17 @@ for (const r of spec.rulesets) {
     fail(`${tag}: empty power_tiers`)
   for (let i = 1; i < sc.power_tiers.length; i++)
     if (sc.power_tiers[i - 1] >= sc.power_tiers[i]) fail(`${tag}: power_tiers not strictly ascending`)
+  // The dupe key, as data (schema 2) rather than a shared const. Required, and
+  // by_call must be true: a rule that does not key on the callsign is a mistake
+  // far more often than a new contest shape, and the cost of being wrong is a
+  // log full of contacts that should have been refused as dupes.
+  const dupe = r.dupe
+  if (!dupe || typeof dupe !== 'object') fail(`${tag}: missing the \`dupe\` block`)
+  for (const k of ['by_call', 'by_band', 'by_mode_class'])
+    if (typeof dupe[k] !== 'boolean') fail(`${tag}: dupe.${k} must be a boolean`)
+  if (!dupe.by_call)
+    fail(`${tag}: dupe.by_call is false (a dupe rule must key on the callsign)`)
+
   const ids = new Set()
   for (const b of [...r.bonuses, ...(r.objectives || [])]) {
     if (!b.id) fail(`${tag}: empty bonus id`)

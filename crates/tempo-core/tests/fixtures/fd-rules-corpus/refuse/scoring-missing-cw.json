@@ -34,6 +34,11 @@
           5
         ]
       },
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": true
+      },
       "bonuses": [
         {
           "id": "emergency-power",
@@ -144,6 +149,11 @@
           2,
           5
         ]
+      },
+      "dupe": {
+        "by_call": true,
+        "by_band": true,
+        "by_mode_class": true
       },
       "bonuses": [
         {

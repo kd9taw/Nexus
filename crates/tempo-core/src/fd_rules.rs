@@ -378,12 +378,6 @@ const EXCHANGE_CLASS_SECTION: ExchangeSpec = ExchangeSpec {
     section_label: "Section",
 };
 
-const DUPE_CALL_BAND_MODE: DupeRule = DupeRule {
-    by_call: true,
-    by_band: true,
-    by_mode_class: true,
-};
-
 // ---------------------------------------------------------------------------
 // The rules table: parse + validate + leak — and the startup-only install seam
 // (the dxcc::init_from pattern).
@@ -573,6 +567,7 @@ struct RulesetSpec {
     contest_id: String,
     window: WindowSpec,
     scoring: ScoringSpec,
+    dupe: DupeSpec,
     bonuses: Vec<BonusSpec>,
     banned_modes: Vec<String>,
     tempo_fd: bool,
@@ -580,6 +575,26 @@ struct RulesetSpec {
     enforcement: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
+}
+
+/// The dupe key for one ruleset, as data.
+///
+/// Replaces the `DUPE_CALL_BAND_MODE` const every ruleset used to share. The
+/// SHAPE is unchanged and so is the enforcement — the check itself still lives
+/// in [`FieldDayLog`](crate::fieldday::FieldDayLog); this is what an event
+/// DECLARES its key to be.
+///
+/// §11.3 generalises this to `by_fields` / `by_sent_fields` naming exchange
+/// slots, and the validator cross-checks that go with it; that is batch 3.
+#[derive(Debug, serde::Deserialize)]
+struct DupeSpec {
+    /// A station counts once per callsign. Required to be `true` — see
+    /// `parse_spec`.
+    by_call: bool,
+    /// …and separately per band.
+    by_band: bool,
+    /// …and separately per mode class (PH / CW / DIG).
+    by_mode_class: bool,
 }
 
 /// The whole scoring model for one ruleset, as one block.
@@ -724,6 +739,16 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
         if !r.scoring.power_tiers.windows(2).all(|w| w[0] < w[1]) {
             return Err(format!("{tag}: power_tiers not strictly ascending"));
         }
+        // A dupe rule that does not key on the callsign is not a dupe rule.
+        // Every contest in the researched set keys on it, so a file saying
+        // otherwise is a mistake far more often than it is a new contest shape
+        // — and the failure mode if it is wrong is a log full of contacts that
+        // should have been refused as dupes.
+        if !r.dupe.by_call {
+            return Err(format!(
+                "{tag}: dupe.by_call is false (a dupe rule must key on the callsign)"
+            ));
+        }
         let mut ids: Vec<&str> = Vec::new();
         for b in r.bonuses.iter().chain(&r.objectives) {
             if b.id.is_empty() {
@@ -855,7 +880,11 @@ fn build(spec: FileSpec) -> RulesTable {
                 exchange: EXCHANGE_CLASS_SECTION,
                 scoring,
                 bonuses: leak_bonuses(r.bonuses),
-                dupe_rule: DUPE_CALL_BAND_MODE,
+                dupe_rule: DupeRule {
+                    by_call: r.dupe.by_call,
+                    by_band: r.dupe.by_band,
+                    by_mode_class: r.dupe.by_mode_class,
+                },
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(
                     r.banned_modes
@@ -1591,6 +1620,46 @@ mod tests {
             parse_spec(SEED).is_ok(),
             "control: the seed's own values load"
         );
+    }
+
+    /// The dupe key is now DATA rather than the `DUPE_CALL_BAND_MODE` const,
+    /// and it must still be today's key for both events: a station counts once
+    /// per (call, band, mode class).
+    #[test]
+    fn the_dupe_block_reaches_the_ruleset_and_is_todays_key() {
+        for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+            let d = ruleset(e, CURRENT_RULES_YEAR).dupe_rule;
+            assert!(
+                d.by_call && d.by_band && d.by_mode_class,
+                "{e:?}: (call, band, mode class)"
+            );
+        }
+    }
+
+    /// A dupe rule that does not key on the callsign is not a dupe rule — every
+    /// contest in the researched set keys on it, and a file saying otherwise is
+    /// far more likely to be a mistake than a new contest shape. Refused by
+    /// name, with the positive control that the same file with `by_call` true
+    /// loads.
+    #[test]
+    fn a_dupe_rule_that_ignores_the_callsign_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["dupe"]["by_call"] = false.into();
+        assert!(parse_spec(&v.to_string()).unwrap_err().contains("by_call"));
+        v["rulesets"][0]["dupe"]["by_call"] = true.into();
+        assert!(
+            parse_spec(&v.to_string()).is_ok(),
+            "control: by_call true loads"
+        );
+    }
+
+    /// §8(c) again, on this block: absent is loud, never a silent default.
+    #[test]
+    fn a_ruleset_with_no_dupe_block_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0].as_object_mut().unwrap().remove("dupe");
+        assert!(parse_spec(&v.to_string()).unwrap_err().contains("dupe"));
+        assert!(parse_spec(SEED).is_ok(), "control");
     }
 
     #[test]
