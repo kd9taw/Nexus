@@ -488,7 +488,11 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Latin-1 codec for one byte-string index field — see the module header for why it is not UTF-8
 /// and not an integer array.
-mod byte_str {
+///
+/// `pub(super)` so [`super::journal`] encodes a MID the same way this file does. One codec, not
+/// two: a journal that spelled a MID differently from the index would compare unequal to the
+/// index row it names, and the reconcile in [`super::restore`] is exactly that comparison.
+pub(super) mod byte_str {
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub(super) fn encode(bytes: &[u8]) -> String {

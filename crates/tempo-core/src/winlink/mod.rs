@@ -13,6 +13,7 @@
 
 pub mod b2f;
 pub mod fbb;
+pub mod journal;
 pub mod lzhuf;
 pub mod mailbox;
 pub mod message;
