@@ -14440,12 +14440,30 @@ fn clear_hamqth_password() -> Result<(), String> {
     r
 }
 
+/// An upload code or API key as the operator pasted it, normalised for storage.
+///
+/// ⚠️ #224, and this is a CREDENTIAL PATH: it trims and does nothing else. Nothing here
+/// stores, logs, transmits or transforms the value — the callers do exactly what they did
+/// before, with the whitespace gone.
+///
+/// HRDLog, QRZ Logbook and WRL all took the entered string verbatim, and the wire builders
+/// percent-encode what they are given, so a code copied out of a web page with its trailing
+/// newline went out as `Code=ABC123%0A` and every upload failed with nothing on screen to
+/// explain why. Cloudlog already trimmed; these three are the rest of the shape.
+///
+/// A paste that is only whitespace is EMPTY, so it CLEARS the credential instead of storing a
+/// space that can never work and reads as "stored" in the Connections panel.
+fn entered_credential(raw: &str) -> &str {
+    raw.trim()
+}
+
 /// Store (or, if empty, clear) the QRZ **Logbook API key** (distinct from the XML
 /// password) in the OS keychain. Write-only. Saving a key also switches QRZ
 /// auto-upload ON: entering the key IS the intent ("upload my QSOs to QRZ") —
 /// previously the separate toggle silently stayed off and nothing uploaded.
 #[tauri::command(async)]
 fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+    let key = entered_credential(&key); // #224
     let entry = qrz_logbook_keychain()?;
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
@@ -14458,7 +14476,7 @@ fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<()
         return Ok(());
     }
     entry
-        .set_password(&key)
+        .set_password(key)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("QRZ Logbook", "ok", "API key saved to the OS keychain");
     set_upload_toggle(&state, UploadToggle::Qrz, true);
@@ -15613,6 +15631,7 @@ fn clear_clublog_password(state: State<'_, SharedEngine>) -> Result<(), String> 
 /// HRDLog.net auto-upload ON (entering the credential is the intent).
 #[tauri::command(async)]
 fn set_hrdlog_code(code: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+    let code = entered_credential(&code); // #224
     let entry = hrdlog_keychain()?;
     if code.is_empty() {
         clear_keychain_entry(&entry)?;
@@ -15625,7 +15644,7 @@ fn set_hrdlog_code(code: String, state: State<'_, SharedEngine>) -> Result<(), S
         return Ok(());
     }
     entry
-        .set_password(&code)
+        .set_password(code)
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("HRDLog.net", "ok", "upload code saved to the OS keychain");
     set_upload_toggle(&state, UploadToggle::Hrdlog, true);
@@ -15658,6 +15677,7 @@ fn clear_hrdlog_code(state: State<'_, SharedEngine>) -> Result<(), String> {
 /// ambiguity the operator resolves on the WRL site (we say so and refuse to guess).
 #[tauri::command]
 async fn set_wrl_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+    let key = entered_credential(&key).to_string(); // #224
     let entry = wrl_keychain()?;
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
@@ -21644,6 +21664,43 @@ mod tests {
             1,
             "upsert, never append"
         );
+    }
+
+    /// #224: a pasted upload code went out with its whitespace still on it.
+    ///
+    /// `set_hrdlog_code` tested `code.is_empty()` and stored `&code` untouched, and
+    /// `tempo_core::hrdlog::build_upload_body` percent-encodes whatever it is handed — so a
+    /// code copied out of a web page with its trailing newline left as `Code=ABC123%0A` and
+    /// every upload failed, with nothing anywhere saying why. QRZ Logbook and WRL share the
+    /// shape. Asserted on the WIRE BODY, because that is where the defect was visible.
+    #[test]
+    fn a_pasted_upload_code_is_trimmed_before_it_goes_on_the_wire() {
+        use super::entered_credential;
+        let q = |code: &str| tempo_core::hrdlog::HrdLogQuery {
+            callsign: "KD9TAW".into(),
+            code: code.into(),
+            app: "Nexus".into(),
+            adif: "<eor>".into(),
+        };
+        let pasted = "  ABC123\n";
+        // The control first: the encoder really does carry the whitespace through, so the
+        // assertion below is about the trim and not about the encoder having eaten it.
+        let raw = tempo_core::hrdlog::build_upload_body(&q(pasted));
+        assert!(
+            raw.contains("%0A"),
+            "control: the encoder must be able to carry the whitespace: {raw}"
+        );
+
+        let body = tempo_core::hrdlog::build_upload_body(&q(entered_credential(pasted)));
+        assert!(
+            body.contains("Code=ABC123&"),
+            "the code went on the wire with whitespace on it: {body}"
+        );
+
+        // A paste that is only whitespace is EMPTY — it clears the credential rather than
+        // storing a space that can never work and reads as "stored" in the panel.
+        assert!(entered_credential(" \t\n").is_empty());
+        assert!(!entered_credential(" k ").is_empty());
     }
 
     /// ⛔ A SERVICE'S OWN WORDS MUST NOT REWRITE WHAT THE OPERATOR READS.
