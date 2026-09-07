@@ -47,14 +47,16 @@ fn an_installed_file_with_changed_points_changes_the_computed_score() {
         ),
         "garbage is refused"
     );
+    // A schema-1 file is one a PREVIOUS build published; this build reads
+    // schema 2 and refuses it without touching the global table.
     let mut wrong_schema: serde_json::Value = serde_json::from_str(SEED).unwrap();
-    wrong_schema["schema"] = 2.into();
+    wrong_schema["schema"] = 1.into();
     assert!(
         matches!(
             fd_rules::install_from(&wrong_schema.to_string()),
             Err(RulesInitError::Invalid(_))
         ),
-        "schema 2 is refused"
+        "schema 1 is refused"
     );
     // Seed floor: a valid file OLDER than the bundled seed loses to it.
     let mut older: serde_json::Value = serde_json::from_str(SEED).unwrap();

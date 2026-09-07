@@ -10,6 +10,7 @@
 // Exits 1 with a specific reason on any miss.
 
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const path = process.argv[2] || 'crates/tempo-core/src/fd_rules.seed.json'
 const spec = JSON.parse(readFileSync(path, 'utf8'))
@@ -19,9 +20,19 @@ function fail(msg) {
   process.exit(1)
 }
 
-if (spec.schema !== 1) fail(`schema ${spec.schema} (the app reads schema 1)`)
+if (spec.schema !== 2) fail(`schema ${spec.schema} (the app reads schema 2)`)
 if (!spec.generated) fail('empty `generated` stamp')
-for (const want of ['arrlfd', 'wfd'])
+
+// §8(d)'s inversion, mirroring tempo_core::fd_rules::seed_events(): a candidate
+// file must carry every ruleset the BUNDLED seed carries — a download may ADD a
+// contest, never REMOVE one this build ships with. When we are validating the
+// seed ITSELF that list is its own, which is why the seed path is compared
+// before deciding whether to re-read it from disk.
+const SEED_PATH = 'crates/tempo-core/src/fd_rules.seed.json'
+const seedEvents = (
+  resolve(path) === resolve(SEED_PATH) ? spec : JSON.parse(readFileSync(SEED_PATH, 'utf8'))
+).rulesets.map((r) => r.event)
+for (const want of seedEvents)
   if (!spec.rulesets.some((r) => r.event === want)) fail(`missing the \`${want}\` ruleset`)
 
 const seenEvents = new Set()

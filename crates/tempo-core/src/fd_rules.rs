@@ -17,6 +17,14 @@
 //! [`RulesInitError::AlreadyInitialized`] when something read the ruleset
 //! before the startup install (a code-ordering regression, not a state).
 //!
+//! The file carries a `schema` number and this build reads **schema 2**. It is
+//! a hard refusal, not a best effort: [`RulesetSpec`] gained `exchange`,
+//! `domains`, `dupe` and `scoring` as REQUIRED blocks, and the only other way
+//! to express that would be to serde-default them — which would let a rules
+//! file that forgot a block load and score as though its author had decided
+//! something (spec §8c). A schema-1 file is therefore refused by name, and an
+//! older build refuses this one the same way and keeps its own bundled seed.
+//!
 //! `rules_year` stamps each ruleset; the pinned per-event score fixtures in the
 //! tests below run against [`ruleset`] = the BUNDLED SEED (an installed file is
 //! invisible to them by design — its visibility to the operator is the status
@@ -499,6 +507,30 @@ pub fn seed_generated() -> &'static str {
     })
 }
 
+/// The BUNDLED seed's ruleset event ids — the floor a downloaded file must
+/// contain (§8d's inversion: a download may ADD contests, never REMOVE one this
+/// build ships with).
+///
+/// Deliberately parsed with its own minimal struct, exactly like
+/// [`seed_generated`]: calling [`parse_spec`] here would recurse, because
+/// `parse_spec` is the very function that consults this list.
+fn seed_events() -> &'static [String] {
+    static E: OnceLock<Vec<String>> = OnceLock::new();
+    E.get_or_init(|| {
+        #[derive(serde::Deserialize)]
+        struct EventsOnly {
+            rulesets: Vec<EventOnly>,
+        }
+        #[derive(serde::Deserialize)]
+        struct EventOnly {
+            event: String,
+        }
+        serde_json::from_str::<EventsOnly>(SEED)
+            .map(|e| e.rulesets.into_iter().map(|r| r.event).collect())
+            .unwrap_or_default()
+    })
+}
+
 /// The ACTIVE rules data's `generated` stamp — whichever file won at startup.
 /// NB this loads the table (with the seed) if nothing has yet, exactly like
 /// [`ruleset`].
@@ -610,17 +642,27 @@ fn stats_of(spec: &FileSpec) -> RulesStats {
 /// run (and the publish workflow re-runs in node — keep the two in step).
 fn parse_spec(text: &str) -> Result<FileSpec, String> {
     let spec: FileSpec = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
-    if spec.schema != 1 {
+    // §8(d). A widened RulesetSpec has exactly two expressible forms: bump the
+    // schema, or serde-default every new block. §8(c) rules the second out — a
+    // defaulted `exchange` means a rules file that forgot one loads and scores
+    // as though the contest had no exchange. So the version number is the loud
+    // failure, and it names BOTH numbers so a refusal says which side is stale.
+    if spec.schema != 2 {
         return Err(format!(
-            "schema {} (this build reads schema 1)",
+            "schema {} (this build reads schema 2)",
             spec.schema
         ));
     }
     if spec.generated.is_empty() {
         return Err("empty `generated` stamp".into());
     }
-    for want in ["arrlfd", "wfd"] {
-        if !spec.rulesets.iter().any(|r| r.event == want) {
+    // The inversion (§8d): a download may ADD contests, never REMOVE one the
+    // BUNDLED seed carries. Strictly stronger than the hardcoded pair this
+    // replaces — it grows with the seed instead of having to be re-edited
+    // alongside it, which is exactly the drift that would otherwise appear the
+    // first time a contest is added.
+    for want in seed_events() {
+        if !spec.rulesets.iter().any(|r| &r.event == want) {
             return Err(format!("missing the `{want}` ruleset"));
         }
     }
@@ -1339,11 +1381,19 @@ mod tests {
             f(&mut v);
             parse_spec(&v.to_string())
         };
+        // A schema-1 file is a file from an OLDER build; schema 3 is one from a
+        // NEWER build. Both are refused, and the message names both numbers.
         assert!(
-            corrupt(&|v| v["schema"] = 2.into())
+            corrupt(&|v| v["schema"] = 1.into())
                 .unwrap_err()
-                .contains("schema"),
-            "wrong schema version"
+                .contains("schema 1"),
+            "a schema-1 file is refused by name"
+        );
+        assert!(
+            corrupt(&|v| v["schema"] = 3.into())
+                .unwrap_err()
+                .contains("schema 3"),
+            "a file from a future build is refused by name"
         );
         assert!(
             corrupt(&|v| v["rulesets"][1]["event"] = "arrlfd".into())
@@ -1383,6 +1433,45 @@ mod tests {
         .unwrap_err()
         .contains("points_by_mode_class"),);
         assert!(validate("not json").is_err(), "garbage is refused");
+    }
+
+    /// §8(d): the schema number is the LOUD failure. A schema-1 file must be
+    /// refused by a schema-2 build with a message that names both numbers, and
+    /// the seed — now schema 2 — must load. The pair is the point: a validator
+    /// that refused everything would "pass" the first assertion alone.
+    #[test]
+    fn schema_2_is_this_builds_number_and_schema_1_is_refused_by_name() {
+        assert!(parse_spec(SEED).is_ok(), "the bundled schema-2 seed loads");
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["schema"] = 1.into();
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(e.contains("schema 1"), "names what it got: {e}");
+        assert!(e.contains("schema 2"), "names what it reads: {e}");
+    }
+
+    /// §8(d)'s inversion: a downloaded file may ADD contests but never REMOVE
+    /// one the bundled seed carries — strictly stronger than the hardcoded
+    /// `["arrlfd", "wfd"]` pair it replaces, because it grows with the seed
+    /// instead of having to be re-edited alongside it.
+    #[test]
+    fn a_file_missing_a_seeded_ruleset_is_refused_and_the_same_file_with_it_loads() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        let dropped = v["rulesets"].as_array_mut().unwrap().pop().expect("wfd");
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(e.contains("wfd"), "names the missing ruleset: {e}");
+        // POSITIVE CONTROL: put it back and the very same file must load.
+        v["rulesets"].as_array_mut().unwrap().push(dropped);
+        assert!(
+            parse_spec(&v.to_string()).is_ok(),
+            "the control file must load"
+        );
+    }
+
+    /// `seed_events` must read the SEED, not a hardcoded pair — otherwise the
+    /// inversion above is the old rule wearing a new name.
+    #[test]
+    fn seed_events_are_read_from_the_bundled_seed() {
+        assert_eq!(seed_events(), ["arrlfd", "wfd"]);
     }
 
     #[test]
