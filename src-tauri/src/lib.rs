@@ -13780,9 +13780,63 @@ fn conn_health_lock() -> std::sync::MutexGuard<'static, ConnHealthRows> {
     m
 }
 
+/// Unicode **Cf** (format) characters, which [`char::is_control`] does not cover.
+///
+/// ⚠️ U+202E RIGHT-TO-LEFT OVERRIDE visually reverses everything after it, so a service's own
+/// words carrying one rewrite the rest of the panel row. U+200B, U+FEFF and U+00AD are simply
+/// invisible. Listed rather than derived: `std` carries no general-category table, and the
+/// alternative (keep only what looks safe) throws away every non-Latin script a service might
+/// answer in. The twin of this list guards the other end of the Cloudlog string, in
+/// `crates/propagation/src/live/cloudlog.rs` — deliberately duplicated across the crate
+/// boundary rather than made public API for one predicate.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00AD                  // SOFT HYPHEN
+        | 0x0600..=0x0605       // Arabic number signs
+        | 0x061C                // ARABIC LETTER MARK
+        | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2
+        | 0x180E                // MONGOLIAN VOWEL SEPARATOR
+        | 0x200B..=0x200F       // ZWSP, ZWNJ, ZWJ, LRM, RLM
+        | 0x202A..=0x202E       // bidi embedding/override — U+202E is the dangerous one
+        | 0x2060..=0x2064       // WORD JOINER, invisible operators
+        | 0x2066..=0x206F       // bidi isolates, deprecated format characters
+        | 0xFEFF                // ZWNBSP / byte-order mark
+        | 0xFFF9..=0xFFFB       // interlinear annotation
+        | 0xE0000..=0xE007F     // TAGS — invisible by construction
+    )
+}
+
+/// One connector's failure detail, made safe to show and to store.
+///
+/// ⚠️ EVERY detail written here is server-supplied text — HRDLog's `r.message`, Cloudlog's
+/// response body, QRZ's `<Error>` — and it goes to the panel row and into `conn-health.json`.
+/// Filtered at this sink rather than at each caller: nine connectors write here, exactly one
+/// of them filtered anything, and a tenth would arrive unfiltered by default.
+///
+/// Control characters and invisible format characters become spaces and whitespace runs
+/// collapse, so the row is one line of visible words. Nothing is truncated: the callers that
+/// carry an unbounded body bound it themselves (see Cloudlog's `REASON_MAX_CHARS`).
+fn clean_conn_detail(detail: &str) -> String {
+    detail
+        .chars()
+        .map(|c| {
+            if c.is_control() || is_invisible_format(c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Record a real round trip for a session-only connector. `ok` picks the half; the other
-/// half is left exactly as it was.
+/// half is left exactly as it was. The detail is cleaned first — see [`clean_conn_detail`].
 fn note_conn_health(id: &'static str, ok: bool, detail: String) {
+    let detail = clean_conn_detail(&detail);
     let now = now_unix();
     // Poisoned-lock recovery, the conn_log pattern: a panicked command holding this must
     // not silently freeze the health panel for the rest of the session.
@@ -21586,6 +21640,46 @@ mod tests {
             m.iter().filter(|(k, _, _)| *k == ID).count(),
             1,
             "upsert, never append"
+        );
+    }
+
+    /// ⛔ A SERVICE'S OWN WORDS MUST NOT REWRITE WHAT THE OPERATOR READS.
+    ///
+    /// Every connector's failure detail is server-supplied text: HRDLog's `r.message`,
+    /// Cloudlog's response body, QRZ's `<Error>`. It goes straight to the panel row and into
+    /// `conn-health.json`. `char::is_control` — which is as far as the one connector that
+    /// filtered at all went — covers C0/C1 and DEL and stops there; it does not cover Unicode
+    /// **Cf**, and U+202E RIGHT-TO-LEFT OVERRIDE visually reverses everything after it, so a
+    /// hostile or merely broken service can rewrite the rest of the row.
+    ///
+    /// Filtered at this sink rather than at each caller: nine connectors write here, only one
+    /// of them was filtering anything, and a tenth would arrive unfiltered by default.
+    #[test]
+    fn a_services_own_words_cannot_rewrite_the_panel_row() {
+        use super::{conn_health_of, note_conn_health};
+        const ID: &str = "hrdlog-test-hostile-detail";
+        let hostile = "HRDLog \u{202e}rejected\u{200b}\u{feff} the\ttwo\nline code";
+        note_conn_health(ID, false, hostile.to_string());
+        let detail = conn_health_of(ID).2.unwrap_or_default();
+        for (name, c) in [
+            ("U+202E right-to-left override", '\u{202e}'),
+            ("U+200B zero-width space", '\u{200b}'),
+            ("U+FEFF byte-order mark", '\u{feff}'),
+            ("a newline", '\n'),
+            ("a tab", '\t'),
+        ] {
+            // The control: the character really is in what the connector handed us, so a
+            // filter that did nothing could not pass by accident.
+            assert!(hostile.contains(c), "control: {name} was not in the detail");
+            assert!(
+                !detail.contains(c),
+                "{name} reached the panel row: {detail:?}"
+            );
+        }
+        // …and the words survive. Stripping everything would satisfy the loop above.
+        assert_eq!(
+            detail, "HRDLog rejected the two line code",
+            "the reason was destroyed rather than cleaned"
         );
     }
 

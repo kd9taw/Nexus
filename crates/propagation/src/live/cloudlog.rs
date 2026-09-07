@@ -79,6 +79,36 @@ fn classify_body(text: &str, reason: Option<&str>) -> Result<String, String> {
     Ok(text.to_string())
 }
 
+/// Unicode **Cf** (format) characters, which [`char::is_control`] does not cover.
+///
+/// ⚠️ U+202E RIGHT-TO-LEFT OVERRIDE visually reverses everything after it, so a server-supplied
+/// string carrying one rewrites the rest of the failure detail on the panel row and in
+/// `conn-health.json`. U+200B, U+FEFF and U+00AD are simply invisible — they pad a message
+/// with characters nobody can see or delete. C0/C1, DEL, ESC and BEL were already stripped by
+/// the `is_control` filter below; these are the rest of the class.
+///
+/// Listed rather than derived: `std` carries no general-category table, and the alternative
+/// (keep only what looks safe) throws away every non-Latin script a service might answer in.
+/// The same filter guards the other end of this string — `note_conn_health` in
+/// `src-tauri/src/lib.rs`, which is where every connector's detail is persisted.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00AD                  // SOFT HYPHEN
+        | 0x0600..=0x0605       // Arabic number signs
+        | 0x061C                // ARABIC LETTER MARK
+        | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2
+        | 0x180E                // MONGOLIAN VOWEL SEPARATOR
+        | 0x200B..=0x200F       // ZWSP, ZWNJ, ZWJ, LRM, RLM
+        | 0x202A..=0x202E       // bidi embedding/override — U+202E is the dangerous one
+        | 0x2060..=0x2064       // WORD JOINER, invisible operators
+        | 0x2066..=0x206F       // bidi isolates, deprecated format characters
+        | 0xFEFF                // ZWNBSP / byte-order mark
+        | 0xFFF9..=0xFFFB       // interlinear annotation
+        | 0xE0000..=0xE007F     // TAGS — invisible by construction
+    )
+}
+
 /// What the operator is told instead of the body when the server echoed our own API key back.
 ///
 /// Fixed text: nothing from the body survives. It is still the actionable half — an instance
@@ -220,11 +250,18 @@ fn server_reason(text: &str, key: &str) -> Option<String> {
     if !k.is_empty() && (echoes_key(&scrubbed, k) || echoes_key(&words, k)) {
         return Some(KEY_ECHOED.to_string());
     }
-    // Control characters (newlines included) become spaces, then runs of whitespace collapse:
-    // an HTML page is otherwise 40 blank lines in a tooltip.
+    // Control characters (newlines included) and invisible format characters become spaces,
+    // then runs of whitespace collapse: an HTML page is otherwise 40 blank lines in a tooltip,
+    // and a U+202E reverses the rest of the row on screen.
     let flat = words
         .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if c.is_control() || is_invisible_format(c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect::<String>();
     let mut out: String = flat.split_whitespace().collect::<Vec<_>>().join(" ");
     if out.is_empty() {
@@ -476,6 +513,35 @@ mod tests {
         assert!(
             !err.contains('\n') && !err.contains('\r'),
             "the message must stay one line: {err}"
+        );
+    }
+
+    #[test]
+    fn an_invisible_character_cannot_rewrite_what_the_operator_reads() {
+        // `char::is_control` covers C0/C1 and DEL and stops there — it does not cover Unicode
+        // Cf. U+202E RIGHT-TO-LEFT OVERRIDE visually reverses everything after it, so a
+        // server-supplied string can rewrite the rest of the failure detail on the panel row;
+        // U+200B and U+FEFF are simply invisible. All three reached the row and the persisted
+        // conn-health.json.
+        let hostile = "profile 7 \u{202e}denied\u{200b} for \u{feff}this key\u{00ad}";
+        let body = format!(r#"{{"status":"failed","reason":"{hostile}"}}"#);
+        let err = classify(403, &body, KEY).unwrap_err();
+        for (name, c) in [
+            ("U+202E right-to-left override", '\u{202e}'),
+            ("U+200B zero-width space", '\u{200b}'),
+            ("U+FEFF byte-order mark", '\u{feff}'),
+            ("U+00AD soft hyphen", '\u{00ad}'),
+        ] {
+            // The control: the character really is in the body, so a filter that did nothing
+            // could not pass by accident.
+            assert!(body.contains(c), "control: {name} is not in the body");
+            assert!(!err.contains(c), "{name} reached the operator: {err:?}");
+        }
+        // …and the words the operator needs are still there. Stripping everything would
+        // satisfy the assertions above and tell them nothing.
+        assert!(
+            err.contains("profile 7") && err.contains("denied"),
+            "the reason was destroyed rather than cleaned: {err}"
         );
     }
 
