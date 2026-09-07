@@ -28444,6 +28444,55 @@ mod tests {
         assert!(!fd.rules_generated.is_empty());
     }
 
+    /// The same gate, on the OTHER event. §8(a) asks for this shape "four times
+    /// over — extend it rather than inventing a new one", and Winter Field Day
+    /// is the leg that was missing: every rules-as-data change since has been
+    /// proved against ARRL Field Day alone.
+    ///
+    /// WFD scores on the `Objectives` model, so `powered == qso_pts` — there is
+    /// no on-air power multiplier — while the bonus menu is the one it shares
+    /// with ARRL FD today. Classes here are WFD's own (H/I/O/M), which is what
+    /// a real WFD log contains.
+    #[test]
+    fn wfd_score_is_byte_identical_after_the_ruleset_refactor() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "wfd".into();
+            s.fd_class = "3O".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 5; // ignored by the Objectives model
+            s.fd_bonuses = vec!["w1aw-bulletin".into(), "web-submission".into()]; // 100 + 50
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        // 6 QSO points: CW 2 + CW 2 + PH 1 + PH 1 — the same shape as the ARRL
+        // leg, so a divergence is about the MODEL and not about the log.
+        assert!(e.fd_log_manual("K1ABC", "2H", "EMA", "CW").unwrap());
+        assert!(e.fd_log_manual("N0XYZ", "4I", "MN", "CW").unwrap());
+        assert!(e.fd_log_manual("W1AW", "1M", "CT", "PH").unwrap());
+        assert!(e.fd_log_manual("K5ABC", "3O", "STX", "PH").unwrap());
+
+        // Objectives: powered == qso_pts, and the power tier does NOT multiply.
+        assert_eq!(
+            e.fd_score(),
+            Some((6, 6, 150)),
+            "WFD scores raw QSO points — the ×5 tier must not apply"
+        );
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(fd.points, 6);
+        assert_eq!(fd.powered_points, 6);
+        assert_eq!(fd.bonus_points, 150);
+        assert_eq!(fd.total_score, 156);
+        // WFD's window is 30 h (the ARRL leg pins 27 h) — the two events read
+        // genuinely different window data through the same path.
+        assert_eq!(fd.event_end_unix - fd.event_start_unix, 30 * 3600);
+        assert!(fd.event_start_unix > 0);
+        assert_eq!(fd.rules_year, 2026);
+        assert!(!fd.rules_generated.is_empty());
+    }
+
     /// PLANNING IS NOT SCORING. A club knows on Friday which bonuses it expects
     /// (media publicity, a safety officer, a youth op) and wants them tracked —
     /// but an intention is worth nothing on a submitted entry. `fd_bonuses` is
