@@ -168,6 +168,15 @@ pub enum LzhufError {
     /// length in the header. An overrun therefore means the stream and its header disagree, and
     /// returning the extra bytes would hand a caller a message a byte longer than the sender sent.
     Malformed,
+    /// The image's own length header declares more plaintext than the caller said it would accept.
+    ///
+    /// Distinct from [`Malformed`](LzhufError::Malformed): the image may be perfectly consistent,
+    /// and this says only that the caller is not willing to hold what it unpacks to. It is
+    /// returned by [`decompress_bounded`] **before any output is allocated**, which is the whole
+    /// point of it — an image is a compressed thing, so "decompress it and then check the size" is
+    /// a check performed after the allocation it was supposed to prevent, and this format expands
+    /// by up to `F` (60) bytes per symbol.
+    TooLarge,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -895,10 +904,27 @@ impl Decoder {
 
 /// Decompress an FBB B2 image produced by [`compress`] or by a Winlink peer.
 ///
+/// **For a trusted image only.** The output size is the image's to choose, and this format expands
+/// by up to `F` bytes per symbol — a megabyte off a socket unpacks to tens of megabytes. Anything
+/// holding an image a peer sent must say how much plaintext it will accept, which is
+/// [`decompress_bounded`]. This entry point is `decompress_bounded(image, usize::MAX)` and is for
+/// images this station produced.
+pub fn decompress(image: &[u8]) -> Result<Vec<u8>, LzhufError> {
+    decompress_bounded(image, usize::MAX)
+}
+
+/// Decompress an image, refusing one that declares more than `max_plain` bytes of plaintext.
+///
 /// Returns [`LzhufError::Crc`] before doing any work when the prefix does not match — the CRC
 /// covers the compressed image, so it can be checked up front, and checking it first means the
 /// structural errors below only ever describe an image that is intact but self-contradictory.
-pub fn decompress(image: &[u8]) -> Result<Vec<u8>, LzhufError> {
+///
+/// The size refusal is [`LzhufError::TooLarge`] and lands in the same place, **before the output
+/// buffer exists**: the declared length is four bytes of the header, so an image that would unpack
+/// past the caller's bound is refused for what it says about itself rather than for what it turned
+/// out to produce. `max_plain` then bounds the output exactly, because a stream that decoded past
+/// its own header length is [`LzhufError::Malformed`] already.
+pub fn decompress_bounded(image: &[u8], max_plain: usize) -> Result<Vec<u8>, LzhufError> {
     // ARSFI's `Encode` returns a zero-length buffer for empty input — it takes an early exit that
     // drops the 4-byte length header it had already written, and the CRC prefix with it. This port
     // does not reproduce that (see `compress`: an empty message still gets a well-formed image),
@@ -918,6 +944,9 @@ pub fn decompress(image: &[u8]) -> Result<Vec<u8>, LzhufError> {
     }
 
     let text_size = u32::from_le_bytes([body[0], body[1], body[2], body[3]]) as usize;
+    if text_size > max_plain {
+        return Err(LzhufError::TooLarge);
+    }
     let stream = &body[4..];
     let plain = decode_stream(stream, text_size)?;
 
@@ -1274,6 +1303,43 @@ mod tests {
 
         // Positive control: the true length still decodes.
         assert_eq!(decompress(&image).unwrap(), plain);
+    }
+
+    /// [`decompress_bounded`] refuses on the header, before the output buffer exists.
+    ///
+    /// This is the guard's whole value: a compressed image is small and its plaintext is not, so
+    /// "decompress it and check the size afterwards" is an allocation followed by an opinion about
+    /// it. Measured on the shape that motivated it, a body of one repeated byte: the ratio below is
+    /// what a peer gets for one megabyte of wire.
+    ///
+    /// Both directions — the exact size must still decode, or a bound that refused everything
+    /// would pass the first half.
+    ///
+    /// Measured discrimination: delete the `text_size > max_plain` test in [`decompress_bounded`]
+    /// and this test goes red; restore it and it goes green.
+    #[test]
+    fn a_bound_refuses_an_expanding_image_on_its_header_and_not_on_its_output() {
+        let plain = vec![b'Z'; 4 * 1024 * 1024];
+        let image = compress(&plain);
+        assert!(
+            plain.len() / image.len() > 20,
+            "the probe needs an image that expands: {} into {}",
+            image.len(),
+            plain.len()
+        );
+
+        // Control: the exact declared length, and anything above it, decodes as before.
+        assert_eq!(decompress_bounded(&image, plain.len()).unwrap(), plain);
+        assert_eq!(decompress_bounded(&image, usize::MAX).unwrap(), plain);
+        assert_eq!(decompress(&image).unwrap(), plain);
+
+        // The finding: one byte under what the header declares is refused, and refused as a size
+        // rather than as corruption — the image is intact and says so.
+        assert_eq!(
+            decompress_bounded(&image, plain.len() - 1),
+            Err(LzhufError::TooLarge)
+        );
+        assert_eq!(decompress_bounded(&image, 0), Err(LzhufError::TooLarge));
     }
 
     /// A declared length larger than the stream can supply must be refused, not padded out with

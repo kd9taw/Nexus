@@ -68,12 +68,21 @@
 //! and deleting [`Mailbox::rebuild_index`]'s acquisition turns the rebuild test red and nothing
 //! else. The third does not, and the claim is weaker for it — and "unguarding the index
 //! read-modify-write" has two readings, which is why an earlier wording here said "usually the
-//! other two with it" and named no count. Both were measured, five runs each, and neither is
-//! "usually": narrowing the guard to the blob write alone — the mirror image of the mutation
-//! above, leaving the read-modify-write outside it — turns **two** red every run, the index-row
-//! test and the rebuild test, with the blob test green; and removing the guard from
-//! [`Mailbox::store`] altogether turns **all three** red every run. Either way the read-modify-write has a gate and not an exclusive one,
-//! because the other two read the cache back afterwards.
+//! other two with it" and named no count. Removing the guard from [`Mailbox::store`] altogether
+//! turns **all three** red every run.
+//!
+//! Narrowing the guard to the blob write alone — the mirror image of the mutation above, leaving
+//! the read-modify-write outside it — turns the index-row test and the rebuild test red on every
+//! run, and **the blob test is not green with them.** Measured over 30 runs: 30/30, 30/30, and
+//! **6/30** for the blob test (1 of 15 plain, 5 of 15 under `--nocapture`), against 0/30 for all
+//! three unmutated. An earlier five-run measurement saw the blob test green every time and this
+//! header said so; five runs cannot see a one-in-five interleaving, and a separate 15-run
+//! measurement got 4/15. So the honest claim is the shape and not a count: two red deterministically,
+//! the third **intermittently** with them, because with the read-modify-write unguarded
+//! `write_index_locked` runs unlocked and *its* `write_atomic` scratch — `index.json.tmp.<pid>` —
+//! is shared between concurrent stores, the same ENOENT class as the blob scratch one level up.
+//! Either way the read-modify-write has a gate and not an exclusive one, because the other two
+//! read the cache back afterwards.
 //!
 //! ⚠️ **What it does not cover: a second Nexus process on the same mailbox.** Two processes can
 //! still interleave the read-modify-write and lose an index row, and nothing here detects it. No

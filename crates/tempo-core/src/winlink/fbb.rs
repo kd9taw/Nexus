@@ -160,6 +160,12 @@
 //! sit incomplete — but the accumulated block grows with the message. The number that bounds it is
 //! the proposal's `c-size`, which the session holds; duplicating a guess at it here would refuse a
 //! legal transfer on a limit no protocol document states.
+//!
+//! What it does instead is **say what it is holding**: [`Framer::held_bytes`] reports the heap
+//! this framer owns, so the caller that has the bound can apply it to the real cost rather than to
+//! the wire. Those are not the same number — a transfer's per-block overhead is the peer's to
+//! choose and is the larger half at small block sizes — and a caller that counted wire bytes was
+//! measuring the wrong thing.
 
 /// The proposal code Nexus speaks: `FC`, the B2 compressed proposal.
 ///
@@ -430,6 +436,11 @@ pub struct Framer {
     /// `2 + MAX_BLOCK` bytes, so at most `2 + MAX_BLOCK - 1` can sit here incomplete.
     buf: Vec<u8>,
     /// Blocks parsed since the last `EOT`, held back until one vouches for them.
+    ///
+    /// **Not self-bounding, and the expensive half of [`Framer::held_bytes`].** The peer chooses
+    /// how many blocks a transfer takes, and a one-byte block costs three wire bytes and one whole
+    /// `Frame` — a `Vec<u8>` header in this vector plus its own allocation. Nothing here refuses
+    /// it; the caller holding the number that bounds a transfer is the one that can.
     pending: Vec<Frame>,
     /// Running `Σ` of the data bytes in `pending`, which the `EOT` checksum must complement.
     sum: u8,
@@ -437,12 +448,40 @@ pub struct Framer {
     delivered: Vec<Frame>,
     /// The latched refusal, if the stream has failed. See rule 2 above.
     failed: Option<FbbError>,
+    /// Running `Σ` of `capacity()` over the payloads in `pending`. See [`Framer::held_bytes`].
+    pending_payload: usize,
+    /// Running `Σ` of `capacity()` over the payloads in `delivered`.
+    delivered_payload: usize,
 }
 
 impl Framer {
     /// A framer at the start of a stream.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The heap this framer is holding on the peer's behalf, in bytes, in `O(1)`.
+    ///
+    /// **Retained memory, not wire bytes** — the two differ by up to 20×, and a caller that
+    /// bounded the second thought it had bounded the first. A transfer's payload bytes are the
+    /// small half of what a peer can make a framer hold: every block, however short, also costs a
+    /// slot in `pending` and an allocation of its own, and the peer picks the block size. Measured
+    /// end to end on one 1,048,044-byte image: a session carrying it in 256-byte blocks is charged
+    /// 1,180,694 bytes and in 8-byte blocks 5,244,246, for the same megabyte of payload.
+    ///
+    /// `capacity()` throughout, never `len()`: a `Vec` that grew to a megabyte and was drained
+    /// still owns the megabyte. The two payload sums are running counters rather than a walk over
+    /// the frames, because this is called once per drained unit and a walk would make a transfer
+    /// quadratic in a block count the peer chooses — memory exhaustion traded for CPU exhaustion.
+    ///
+    /// What it does **not** charge is the allocator's own per-chunk overhead: glibc rounds a
+    /// one-byte payload up to a 32-byte chunk, so the resident cost of a pathological block size
+    /// is higher than this number, never lower.
+    pub fn held_bytes(&self) -> usize {
+        self.buf.capacity()
+            + (self.pending.capacity() + self.delivered.capacity()) * size_of::<Frame>()
+            + self.pending_payload
+            + self.delivered_payload
     }
 
     /// Feeds received bytes; returns every frame the stream has now vouched for.
@@ -468,6 +507,7 @@ impl Framer {
     /// nothing here. It is public for the caller that took an `Err`: the frames a *previous* `EOT`
     /// vouched for are still good, and this is how they are collected.
     pub fn take_delivered(&mut self) -> Vec<Frame> {
+        self.delivered_payload = 0;
         std::mem::take(&mut self.delivered)
     }
 
@@ -495,6 +535,7 @@ impl Framer {
                         return Ok(());
                     }
                     let payload: Vec<u8> = self.buf.drain(..2 + len).skip(2).collect();
+                    self.pending_payload += payload.capacity();
                     if marker == STX {
                         // Only these bytes are summed. Widening this to the record, or to the SOH
                         // header, is the mistake the pinned fixture exists to catch.
@@ -517,10 +558,16 @@ impl Framer {
                     // The receiver's form of the rule, verbatim from the FBB document: "the sum of
                     // the data and the checksum received, modulo 256, shall be equal to zero".
                     if sum.wrapping_add(checksum) != 0 {
+                        // `block` is dropped with this return, and `fail` zeroes the counter that
+                        // was charging its payloads.
                         return Err(self.fail(FbbError::EotChecksum));
                     }
                     self.delivered.extend(block);
                     self.delivered.push(Frame::Eot);
+                    // The payloads moved from `pending` to `delivered`; the framer still holds
+                    // them, and holds them until the caller collects.
+                    self.delivered_payload += self.pending_payload;
+                    self.pending_payload = 0;
                 }
                 // Not a marker: the stream is not FBB framing, or we are no longer aligned to it.
                 _ => return Err(self.fail(FbbError::Malformed)),
@@ -533,8 +580,13 @@ impl Framer {
     /// an `EOT` already vouched for.
     fn fail(&mut self, err: FbbError) -> FbbError {
         self.failed = Some(err);
-        self.buf.clear();
-        self.pending.clear();
+        // Fresh vectors rather than `clear()`: a cleared `Vec` keeps its capacity, and a framer
+        // that has latched a refusal will never use it again. `delivered` is untouched — it holds
+        // only frames an `EOT` already vouched for, and rule 2 above is why they outlive the
+        // failure.
+        self.buf = Vec::new();
+        self.pending = Vec::new();
+        self.pending_payload = 0;
         self.sum = 0;
         err
     }
