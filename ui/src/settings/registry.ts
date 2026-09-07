@@ -142,6 +142,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['rigctld port', 'cat broker', 'sharing port', 'native ci-v', 'flex ip',
       'panadapter', 'dax', 'diagnostic log', 'plain ssb', 'data modes', 'no rf', 'red light',
       'rigblaster', 'mic jack', 'pktusb', 'data-u', 'usb-d',
+      // #130: the words the reporter used were the RIG's, not ours — "FM-D", "reverts to FM".
+      'fm-d', 'fmd', 'data-fm', 'pktfm', 'fm data', 'data submode', 'sstv fm', 'hold mode',
       // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
       // operator whose rig keys the moment Nexus opens does not search for "handshake".
       'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',

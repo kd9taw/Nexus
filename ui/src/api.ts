@@ -1662,6 +1662,10 @@ export interface RadioProfilePatch {
   rigctldPort: number
   icomNativeCat: boolean
   dataModesPlainSsb: boolean
+  /** Hold the FM DATA submode (FM-D / PKTFM) for as long as the SSTV receiver is running,
+   * instead of only around a send (#130). Per radio, so it must ride the patch — a per-radio
+   * field missing here is silently dropped on Save (the 2026-08-17 Flex-three data loss). */
+  sstvHoldDataSubmode: boolean
   audioIn: string
   audioOut: string
   txLevel: number

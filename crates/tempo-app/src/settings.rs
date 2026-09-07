@@ -922,6 +922,10 @@ pub struct Settings {
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// Hold the FM DATA submode for as long as the SSTV receiver is running, for the active
+    /// radio (flat mirror — see [`RadioProfile::sstv_hold_data_submode`]). Default off.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -2555,6 +2559,30 @@ pub struct RadioProfile {
     /// a DATA submode nor SSB.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// **Hold the FM DATA submode while the SSTV receiver is running** (#130, PA3GYQ).
+    ///
+    /// Default OFF, which is today's behaviour: [`Engine::fm_mode_word`] commands `PKTFM`
+    /// only while an image is QUEUED OR IN FLIGHT and plain `FM` the rest of the time, so a
+    /// rig parked on an FM SSTV channel drops out of FM-D between pictures. That revert is
+    /// deliberate — an SSTV send once keyed a data mode into an FM repeater input — but it is
+    /// wrong for the operator who sits on an FM SSTV calling channel all evening.
+    ///
+    /// ON, the DATA submode is held for as long as `Engine::sstv_armed` is true, i.e. from the
+    /// moment the SSTV view starts the receiver until the operator stops it.
+    ///
+    /// ⚠️ THE COST, AND IT IS THE REASON THIS IS OPT-IN. The receiver stays armed after the
+    /// operator leaves the SSTV view (only an explicit Stop, or the ISS LOS unwind, disarms
+    /// it). So with this on, an FM VOICE call made without stopping the receiver first is
+    /// commanded in the FM data submode, where a normally-wired rig takes transmit audio from
+    /// the data port and the microphone modulates nothing — the same "red light, no RF"
+    /// failure `data_modes_plain_ssb` exists for, one mode along. Stop the receiver before
+    /// going back to voice; the hint on the switch says so.
+    ///
+    /// PER RADIO, not global, for `data_modes_plain_ssb`'s reason: it is a property of how
+    /// THAT rig is cabled and operated. A station can run SSTV on the 9700 and voice on the HF
+    /// rig, and only one of them should be held.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -2666,6 +2694,11 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// See `RadioProfile::sstv_hold_data_submode` — hold FM-D while the SSTV receiver runs.
+    /// `#[serde(default)]` like its neighbour: a patch written before the field existed still
+    /// deserializes, as OFF, which is the pre-field behaviour.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -2739,6 +2772,7 @@ impl RadioProfilePatch {
         p.icom_native_cat = self.icom_native_cat;
         p.icom_data_mode = self.icom_data_mode;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
+        p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
@@ -2836,6 +2870,7 @@ impl Default for RadioProfile {
             icom_native_cat: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -3246,6 +3281,7 @@ impl Default for Settings {
             yaesu_rf_scope: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
@@ -3551,6 +3587,7 @@ impl Settings {
             icom_native_cat: self.icom_native_cat,
             icom_data_mode: self.icom_data_mode,
             data_modes_plain_ssb: self.data_modes_plain_ssb,
+            sstv_hold_data_submode: self.sstv_hold_data_submode,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -3921,6 +3958,7 @@ impl Settings {
         self.icom_native_cat = p.icom_native_cat;
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
+        self.sstv_hold_data_submode = p.sstv_hold_data_submode;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
@@ -3960,6 +3998,7 @@ impl Settings {
             icom_native_cat,
             yaesu_rf_scope,
             data_modes_plain_ssb,
+            sstv_hold_data_submode,
             audio_in,
             audio_out,
             tx_level,
@@ -3987,6 +4026,7 @@ impl Settings {
             self.icom_native_cat,
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
+            self.sstv_hold_data_submode,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -4015,6 +4055,7 @@ impl Settings {
             p.icom_native_cat = icom_native_cat;
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
+            p.sstv_hold_data_submode = sstv_hold_data_submode;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -4535,6 +4576,7 @@ mod tests {
             icom_native_cat: true,
             icom_data_mode: 2,
             data_modes_plain_ssb: true,
+            sstv_hold_data_submode: true,
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -4674,6 +4716,7 @@ mod tests {
             icom_native_cat: false,
             icom_data_mode: 3,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -4822,6 +4865,7 @@ mod tests {
             icom_native_cat: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -4897,7 +4941,7 @@ mod tests {
             "pttMethod": "cat", "rigModel": 1049, "rigModelName": "Yaesu FT-710",
             "serialPort": "/dev/cu.usbserial-01AF7FED0", "pttSerialPort": "", "baud": 38400,
             "rigConn": "serial", "rigAddr": "", "omnirigSlot": 0, "rigctldPort": 4533,
-            "icomNativeCat": false, "dataModesPlainSsb": false,
+            "icomNativeCat": false, "dataModesPlainSsb": false, "sstvHoldDataSubmode": false,
             "audioIn": "USB Audio Device", "audioOut": "USB Audio Device",
             "txLevel": 0.9, "rxGain": 1.0,
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
@@ -5069,6 +5113,7 @@ mod tests {
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: 1,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
+            sstv_hold_data_submode: p.sstv_hold_data_submode,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,

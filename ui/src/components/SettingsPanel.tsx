@@ -647,6 +647,10 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rigctldPort: s.rigctldPort ?? 4532,
     icomNativeCat: s.icomNativeCat ?? false,
     dataModesPlainSsb: s.dataModesPlainSsb ?? false,
+    // ⚠️ PER-RADIO, so it MUST be seeded here for the same reason `omnirigSlot` is: the Save
+    // path builds a RadioProfilePatch from this form, and a field the form drops is a field
+    // the patch blanks on the profile it touches.
+    sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
     audioIn: s.audioIn ?? '',
     audioOut: s.audioOut ?? '',
     txLevel: s.txLevel ?? 1,
@@ -4393,6 +4397,27 @@ export function SettingsPanel({
                 </button>
                 <span className="settings-hint">
                   <T k="settings.rigControl.plainSsb.hint" tags={{ b: <strong /> }} />
+                </span>
+              </label>
+
+              {/* #130 (PA3GYQ). Beside the plain-SSB switch on purpose: both decide which MODE
+                  WORD this radio is commanded for soundcard audio, and this one inherits the
+                  other's mapping (`plain_ssb_if_configured` sends PKTFM back to plain FM). */}
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.rigControl.sstvHoldData.label')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.sstvHoldDataSubmode ?? false}
+                  className={`toggle${form.sstvHoldDataSubmode ? ' on' : ''}`}
+                  onClick={() => updateBool('sstvHoldDataSubmode', !form.sstvHoldDataSubmode)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">
+                  <T k="settings.rigControl.sstvHoldData.hint" tags={{ b: <strong /> }} />
                 </span>
               </label>
 
