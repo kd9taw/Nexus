@@ -959,6 +959,8 @@ mod tests {
         let mut session = Session::new(&cfg, Role::Client);
         session.feed(b"[WL2K-5.0-B2FWIHJM$]\rFQ\r");
         assert!(session.wants_close());
-        assert!(session.feed(b"FC EM AAAAAAAAAAAA 1 1 0\rF> 00\r").is_empty());
+        assert!(session
+            .feed(b"FC EM AAAAAAAAAAAA 1 1 0\rF> 00\r")
+            .is_empty());
     }
 }

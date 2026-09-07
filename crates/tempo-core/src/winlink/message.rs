@@ -496,7 +496,13 @@ mod tests {
         let m = parse_b2(wire).unwrap();
         assert_eq!(m.mid, b"X");
         assert_eq!(m.body, b"hi");
-        assert_eq!(m.attachments, vec![Attachment { name: b"f".to_vec(), data: b"z".to_vec() }]);
+        assert_eq!(
+            m.attachments,
+            vec![Attachment {
+                name: b"f".to_vec(),
+                data: b"z".to_vec()
+            }]
+        );
         assert!(m.headers.is_empty());
     }
 
@@ -580,18 +586,36 @@ mod tests {
     #[test]
     fn every_structural_defect_in_the_header_block_is_malformed() {
         for (why, wire) in [
-            ("no colon", &b"Mid: M\r\nnot a header\r\nBody: 0\r\n\r\n\r\n"[..]),
+            (
+                "no colon",
+                &b"Mid: M\r\nnot a header\r\nBody: 0\r\n\r\n\r\n"[..],
+            ),
             ("no Mid", &b"Body: 0\r\n\r\n\r\n"[..]),
             ("no Body", &b"Mid: M\r\n\r\n\r\n"[..]),
             ("two Mids", &b"Mid: A\r\nMid: B\r\nBody: 0\r\n\r\n\r\n"[..]),
-            ("two Bodies", &b"Mid: A\r\nBody: 0\r\nBody: 0\r\n\r\n\r\n"[..]),
+            (
+                "two Bodies",
+                &b"Mid: A\r\nBody: 0\r\nBody: 0\r\n\r\n\r\n"[..],
+            ),
             ("non-decimal Body", &b"Mid: A\r\nBody: 1x\r\n\r\n\r\n"[..]),
             ("negative Body", &b"Mid: A\r\nBody: -1\r\n\r\n\r\n"[..]),
             ("empty Body", &b"Mid: A\r\nBody: \r\n\r\n\r\n"[..]),
-            ("File with no name", &b"Mid: A\r\nBody: 0\r\nFile: 1\r\n\r\n\r\nx\r\n"[..]),
-            ("File with no length", &b"Mid: A\r\nBody: 0\r\nFile:  x\r\n\r\n\r\nx\r\n"[..]),
-            ("non-decimal File", &b"Mid: A\r\nBody: 0\r\nFile: 1x n\r\n\r\n\r\nx\r\n"[..]),
-            ("empty header name", &b"Mid: A\r\n: v\r\nBody: 0\r\n\r\n\r\n"[..]),
+            (
+                "File with no name",
+                &b"Mid: A\r\nBody: 0\r\nFile: 1\r\n\r\n\r\nx\r\n"[..],
+            ),
+            (
+                "File with no length",
+                &b"Mid: A\r\nBody: 0\r\nFile:  x\r\n\r\n\r\nx\r\n"[..],
+            ),
+            (
+                "non-decimal File",
+                &b"Mid: A\r\nBody: 0\r\nFile: 1x n\r\n\r\n\r\nx\r\n"[..],
+            ),
+            (
+                "empty header name",
+                &b"Mid: A\r\n: v\r\nBody: 0\r\n\r\n\r\n"[..],
+            ),
             ("truncated after headers", &b"Mid: A\r\nBody: 0\r\n\r\n"[..]),
         ] {
             assert_eq!(parse_b2(wire), Err(MessageError::Malformed), "{why}");

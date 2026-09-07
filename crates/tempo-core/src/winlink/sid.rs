@@ -209,7 +209,10 @@ mod tests {
     fn sid_with_invented_flags_still_proceeds() {
         let sid = parse_sid(b"[TestGW-1.0-B2FHMQ9Z$]").expect("F and B2 present -> must parse");
         assert!(sid.fbb && sid.b2);
-        assert_eq!(sid.flags, b"B2FHMQ9Z", "unknown flags must be kept verbatim");
+        assert_eq!(
+            sid.flags, b"B2FHMQ9Z",
+            "unknown flags must be kept verbatim"
+        );
     }
 
     // ---- the shapes real peers actually send --------------------------------------------
@@ -262,7 +265,10 @@ mod tests {
     fn b_level_is_a_token_not_a_substring() {
         assert_eq!(parse_sid(b"[TestGW-1.0-B23FHM$]"), Err(SidError::MissingB2));
         assert_eq!(parse_sid(b"[TestGW-1.0-B12FHM$]"), Err(SidError::MissingB2));
-        assert!(parse_sid(b"[TestGW-1.0-FHMB2$]").is_ok(), "B2 last is still B2");
+        assert!(
+            parse_sid(b"[TestGW-1.0-FHMB2$]").is_ok(),
+            "B2 last is still B2"
+        );
     }
 
     /// Flags are uppercase everywhere they are documented; lowercase is an unknown flag, not a
@@ -279,15 +285,15 @@ mod tests {
         for line in [
             &b""[..],
             &b"   "[..],
-            &b"WL2K-5.0-B2FHM"[..],        // no brackets at all
-            &b"[WL2K-5.0-B2FHM]"[..],      // no `$` before the `]`
-            &b"[WL2K-5.0-B2FHM$"[..],      // no closing bracket
-            &b"WL2K-5.0-B2FHM$]"[..],      // no opening bracket
-            &b"[$]"[..],                   // empty body
-            &b"[WL2K-B2FHM$]"[..],         // only one `-`: no version field
-            &b"[-1.0-B2FHM$]"[..],         // empty product
-            &b"[WL2K--B2FHM$]"[..],        // empty version
-            &b"[WL2K-5.0-$]"[..],          // empty flags
+            &b"WL2K-5.0-B2FHM"[..],              // no brackets at all
+            &b"[WL2K-5.0-B2FHM]"[..],            // no `$` before the `]`
+            &b"[WL2K-5.0-B2FHM$"[..],            // no closing bracket
+            &b"WL2K-5.0-B2FHM$]"[..],            // no opening bracket
+            &b"[$]"[..],                         // empty body
+            &b"[WL2K-B2FHM$]"[..],               // only one `-`: no version field
+            &b"[-1.0-B2FHM$]"[..],               // empty product
+            &b"[WL2K--B2FHM$]"[..],              // empty version
+            &b"[WL2K-5.0-$]"[..],                // empty flags
             &b"[WL2K-5.0-B2FHM$] ;PQ:12345"[..], // more than the SID on the line
         ] {
             assert_eq!(parse_sid(line), Err(SidError::Malformed), "{line:?}");

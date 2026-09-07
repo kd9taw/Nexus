@@ -228,9 +228,7 @@ pub fn parse_proposal(line: &[u8]) -> Result<Proposal, FbbError> {
 
     // The message type: shape-checked, then dropped. See the module header.
     let msg_type = fields[0];
-    if msg_type.is_empty()
-        || msg_type.len() > 2
-        || !msg_type.iter().all(u8::is_ascii_alphanumeric)
+    if msg_type.is_empty() || msg_type.len() > 2 || !msg_type.iter().all(u8::is_ascii_alphanumeric)
     {
         return Err(FbbError::Malformed);
     }
@@ -610,7 +608,10 @@ mod tests {
             (b"FC EM  7 5 0", "empty MID from a doubled space"),
             (b"FC EMM ABC 7 5 0", "three-character message type"),
             (b"FC EM ABC 7 five 0", "non-decimal compressed size"),
-            (b"FC EM ABC 4294967296 5 0", "uncompressed size overflows u32"),
+            (
+                b"FC EM ABC 4294967296 5 0",
+                "uncompressed size overflows u32",
+            ),
         ];
         for (line, why) in cases {
             assert_eq!(
@@ -770,7 +771,11 @@ mod framer_tests {
         let n = stream.len();
         stream[n - 1] ^= 0x01; // corrupt the EOT checksum byte
         let out = framer.feed(&stream);
-        assert_eq!(out, Err(FbbError::EotChecksum), "bad EOT checksum must fail");
+        assert_eq!(
+            out,
+            Err(FbbError::EotChecksum),
+            "bad EOT checksum must fail"
+        );
         assert!(
             framer.take_delivered().is_empty(),
             "a bad EOT must not deliver"
@@ -793,7 +798,9 @@ mod framer_tests {
         assert_eq!(build_stx_block(b"hello"), good, "the helper drifted");
 
         let mut framer = Framer::new();
-        let frames = framer.feed(good).expect("0xEC is the checksum over the data");
+        let frames = framer
+            .feed(good)
+            .expect("0xEC is the checksum over the data");
         assert_eq!(
             frames,
             vec![
@@ -881,7 +888,10 @@ mod framer_tests {
     fn a_byte_that_is_not_a_framing_marker_is_refused() {
         let mut framer = Framer::new();
         assert_eq!(framer.feed(b"FF\r"), Err(FbbError::Malformed));
-        assert_eq!(framer.feed(&build_stx_block(b"x")), Err(FbbError::Malformed));
+        assert_eq!(
+            framer.feed(&build_stx_block(b"x")),
+            Err(FbbError::Malformed)
+        );
     }
 
     /// The chunk-boundary bug class FlexCat already paid for (spec §5): the same stream fed one

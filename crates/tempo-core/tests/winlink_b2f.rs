@@ -112,10 +112,7 @@ fn replay(chunks: impl Iterator<Item = Vec<u8>>) -> Vec<b2f::Action> {
 }
 
 /// [`replay`], plus the password to log in with and the session's final `wants_close()`.
-fn replay_with(
-    password: &str,
-    chunks: impl Iterator<Item = Vec<u8>>,
-) -> (Vec<b2f::Action>, bool) {
+fn replay_with(password: &str, chunks: impl Iterator<Item = Vec<u8>>) -> (Vec<b2f::Action>, bool) {
     let cfg = ClientConfig {
         callsign: CALLSIGN.to_string(),
         password: password.to_string(),
@@ -417,9 +414,7 @@ fn one_byte_salt_change_changes_pr() {
 
 /// The eight bytes after `;PR: ` in an outbound stream.
 fn pr_token(stream: &[u8]) -> Option<Vec<u8>> {
-    let at = stream
-        .windows(5)
-        .position(|w| w == b";PR: ")?;
+    let at = stream.windows(5).position(|w| w == b";PR: ")?;
     let from = at + 5;
     Some(stream[from..from + 8].to_vec())
 }
