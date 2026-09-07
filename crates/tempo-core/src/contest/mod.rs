@@ -17,9 +17,14 @@
 //! `rtty::seq`, which is the only place they are true. `rtty::seq` is this module's
 //! first consumer and, at this batch, its only one.
 //!
-//! ⚠️ Nothing in [`spec`] reads a clock, a setting, or the rules table.
+//! ⚠️ Nothing in [`spec`] reads a clock, a setting, or the rules table. The
+//! [`exchanges`] submodule's [`field_day`] DOES load the rules table (for the section
+//! domain) and therefore carries `fd_rules::ruleset`'s ordering rule — see its docs.
 
+pub mod exchanges;
 pub mod spec;
+
+pub use exchanges::{casual, field_day};
 
 pub use spec::{
     AdifTags, Domain, ExchangeSpec, FieldKind, FieldSpec, FieldValue, RoleSelector, RoleSpec,
