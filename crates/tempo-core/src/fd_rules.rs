@@ -218,6 +218,12 @@ pub struct FdRuleset {
     /// Display-only objectives menu (WFD; empty today — WFD reuses the bonus
     /// menu, and a real WFD objectives table flows through this field later).
     pub objectives: &'static [Bonus],
+    /// Domains this ruleset DECLARES in the rules file. The reserved derived
+    /// ids ([`arrl_sections_domain`], [`fd_sections_domain`]) are NOT in here —
+    /// they are computed from the top-level section list, and a file that tries
+    /// to declare one is refused. Empty for both Field Day events: neither
+    /// needs a domain the loader does not already derive.
+    pub domains: &'static [&'static crate::contest::Domain],
     pub assistance: AssistancePolicy,
     /// Advisory posture — `"warn"` only today (warn, never remove or disable a
     /// surface — operator ruling).
@@ -359,6 +365,48 @@ pub fn fd_sections_domain() -> &'static crate::contest::Domain {
         }
     })
 }
+
+/// The 83 ARRL/RAC section codes as a [`contest::Domain`](crate::contest::Domain)
+/// — the plain section universe, with none of Field Day's `MX`/`DX`
+/// extensions.
+///
+/// This is where §8(d)'s "exactly 83" assertion now lives as a property of a
+/// DOMAIN rather than of the file. Derived from the same validated [`sections`]
+/// table as [`fd_sections_domain`], so the two can never disagree and neither
+/// can drift from the list the worked-sections board renders.
+///
+/// ⚠️ The codes deliberately do NOT move into the rules file's own `domains`
+/// array. A [`Section`] carries three attributes (`code`, `name`, `division`)
+/// and a `Domain` value is a `(code, label)` PAIR — `division` is what the
+/// board groups by and what the TypeScript mirror guard pins, and it would have
+/// nowhere to live. So `arrl_sections` and `fd_sections` are RESERVED ids the
+/// loader derives, and a file that declares either is refused.
+///
+/// Same ordering rule as [`ruleset`]: this LOADS the rules table.
+pub fn arrl_sections_domain() -> &'static crate::contest::Domain {
+    static D: OnceLock<crate::contest::Domain> = OnceLock::new();
+    D.get_or_init(|| {
+        let values: Vec<(&'static str, &'static str)> =
+            sections().iter().map(|s| (s.code, s.name)).collect();
+        crate::contest::Domain {
+            id: "arrl_sections",
+            // Received: <ARRL_SECT>. Sent: absent — MY_ARRL_SECT is not
+            // corroborated anywhere in this tree (§2.1.1), and batch 6 checks
+            // the name against adif.org's field list before any writer emits it.
+            adif: crate::contest::AdifTags {
+                rcvd: Some("ARRL_SECT"),
+                sent: None,
+            },
+            values: Box::leak(values.into_boxed_slice()),
+        }
+    })
+}
+
+/// Domain ids the loader DERIVES from the top-level `sections` list. A rules
+/// file that declares one of these in its own `domains` array is refused: it
+/// would be a second copy of a list that already exists, free to drift from it,
+/// and unable to carry `division` at all.
+const RESERVED_DOMAIN_IDS: [&str; 2] = ["arrl_sections", "fd_sections"];
 
 /// Snap a stored power multiplier to the highest legal tier ≤ `v` (or the
 /// smallest tier). Replaces the engine's old `legal_fd_power` for the ARRL
@@ -568,6 +616,7 @@ struct RulesetSpec {
     window: WindowSpec,
     scoring: ScoringSpec,
     dupe: DupeSpec,
+    domains: Vec<DomainSpec>,
     bonuses: Vec<BonusSpec>,
     banned_modes: Vec<String>,
     tempo_fd: bool,
@@ -575,6 +624,41 @@ struct RulesetSpec {
     enforcement: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
+}
+
+/// One ADIF tag pair in the rules FILE, one tag per direction.
+///
+/// Both halves are required `String`s and `""` is the explicit "no standard
+/// ADIF column this direction; the value rides the private carrier (§3.5)"
+/// marker. NOT `Option<String>`: serde fills a missing `Option` with `None`
+/// with no attribute at all, so an optional tag would let a file that simply
+/// forgot the sent side load as though its author had decided there was no
+/// sent-side column. Absent must be a refusal; empty must be a decision.
+#[derive(Debug, serde::Deserialize)]
+struct AdifTagsSpec {
+    /// What THEY sent me. `""` = no standard column that way round.
+    rcvd: String,
+    /// What I sent them. `""` = no standard column that way round.
+    sent: String,
+}
+
+/// One legal value of a file-declared domain: the code that goes on the air and
+/// the name a human reads.
+#[derive(Debug, serde::Deserialize)]
+struct DomainValueSpec {
+    code: String,
+    label: String,
+}
+
+/// A named set of legal values a rules file declares for itself — a QSO party's
+/// county list, a state list, a precedence set.
+#[derive(Debug, serde::Deserialize)]
+struct DomainSpec {
+    /// Stable id, `^[a-z][a-z0-9_]*$`, unique within the ruleset and never one
+    /// of [`RESERVED_DOMAIN_IDS`].
+    id: String,
+    adif: AdifTagsSpec,
+    values: Vec<DomainValueSpec>,
 }
 
 /// The dupe key for one ruleset, as data.
@@ -675,6 +759,25 @@ fn stats_of(spec: &FileSpec) -> RulesStats {
     }
 }
 
+/// Is `id` a well-formed domain id — `^[a-z][a-z0-9_]*$`? Lowercase snake so a
+/// domain id is never confused with an exchange SLOT id, which is uppercase.
+fn is_domain_id(id: &str) -> bool {
+    let mut cs = id.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_lowercase())
+        && cs.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Is `t` a usable ADIF tag name — `""` (the explicit "no column this
+/// direction" marker) or `^[A-Z][A-Z0-9_]*$`?
+fn is_adif_tag(t: &str) -> bool {
+    if t.is_empty() {
+        return true;
+    }
+    let mut cs = t.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_uppercase())
+        && cs.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// Parse + the structural validation both the loader and the download client
 /// run (and the publish workflow re-runs in node — keep the two in step).
 fn parse_spec(text: &str) -> Result<FileSpec, String> {
@@ -749,6 +852,58 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
                 "{tag}: dupe.by_call is false (a dupe rule must key on the callsign)"
             ));
         }
+        // File-declared domains. `arrl_sections` / `fd_sections` are DERIVED
+        // from the top-level section list (Ruling B0-C) — a file declaring one
+        // would be a second copy of a list it cannot fully represent, since a
+        // Domain value is a (code, label) pair and a Section also carries a
+        // division.
+        let mut domain_ids: Vec<&str> = Vec::new();
+        for d in &r.domains {
+            if !is_domain_id(&d.id) {
+                return Err(format!(
+                    "{tag}: domain id {:?} is not ^[a-z][a-z0-9_]*$",
+                    d.id
+                ));
+            }
+            if RESERVED_DOMAIN_IDS.contains(&d.id.as_str()) {
+                return Err(format!(
+                    "{tag}: domain id {:?} is reserved (derived from the section list)",
+                    d.id
+                ));
+            }
+            if domain_ids.contains(&d.id.as_str()) {
+                return Err(format!("{tag}: duplicate domain id {:?}", d.id));
+            }
+            domain_ids.push(&d.id);
+            if !is_adif_tag(&d.adif.rcvd) || !is_adif_tag(&d.adif.sent) {
+                return Err(format!("{tag}: domain {} has a malformed adif tag", d.id));
+            }
+            if d.values.is_empty() {
+                return Err(format!("{tag}: domain {} has no values", d.id));
+            }
+            let mut codes: Vec<&str> = Vec::new();
+            for v in &d.values {
+                if v.code.is_empty() || v.code != v.code.to_ascii_uppercase() {
+                    return Err(format!(
+                        "{tag}: domain {} code {:?} not uppercase",
+                        d.id, v.code
+                    ));
+                }
+                if codes.contains(&v.code.as_str()) {
+                    return Err(format!(
+                        "{tag}: domain {} duplicate code {:?}",
+                        d.id, v.code
+                    ));
+                }
+                codes.push(&v.code);
+                if v.label.is_empty() {
+                    return Err(format!(
+                        "{tag}: domain {} code {} has no label",
+                        d.id, v.code
+                    ));
+                }
+            }
+        }
         let mut ids: Vec<&str> = Vec::new();
         for b in r.bonuses.iter().chain(&r.objectives) {
             if b.id.is_empty() {
@@ -822,6 +977,19 @@ fn leak_str(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
+/// A rules-file ADIF tag (`""` = no standard column this direction) as the
+/// `Option` the `contest` types use. The file says it with an empty string
+/// because serde must be able to tell "absent" from "deliberately none"; the
+/// Rust side says it with `None` because there is nothing to tell apart once
+/// the file has been validated.
+fn leak_opt_tag(t: String) -> Option<&'static str> {
+    if t.is_empty() {
+        None
+    } else {
+        Some(leak_str(t))
+    }
+}
+
 fn leak_bonuses(v: Vec<BonusSpec>) -> &'static [Bonus] {
     Box::leak(
         v.into_iter()
@@ -880,6 +1048,30 @@ fn build(spec: FileSpec) -> RulesTable {
                 exchange: EXCHANGE_CLASS_SECTION,
                 scoring,
                 bonuses: leak_bonuses(r.bonuses),
+                domains: Box::leak(
+                    r.domains
+                        .into_iter()
+                        .map(|d| {
+                            let values: Vec<(&'static str, &'static str)> = d
+                                .values
+                                .into_iter()
+                                .map(|v| (leak_str(v.code) as &'static str, leak_str(v.label) as _))
+                                .collect();
+                            &*Box::leak(Box::new(crate::contest::Domain {
+                                id: leak_str(d.id),
+                                adif: crate::contest::AdifTags {
+                                    // "" in the file means "no standard column
+                                    // this direction" — it becomes None here,
+                                    // which is the same statement in the type.
+                                    rcvd: leak_opt_tag(d.adif.rcvd),
+                                    sent: leak_opt_tag(d.adif.sent),
+                                },
+                                values: Box::leak(values.into_boxed_slice()),
+                            }))
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                ),
                 dupe_rule: DupeRule {
                     by_call: r.dupe.by_call,
                     by_band: r.dupe.by_band,
@@ -1660,6 +1852,129 @@ mod tests {
         v["rulesets"][0].as_object_mut().unwrap().remove("dupe");
         assert!(parse_spec(&v.to_string()).unwrap_err().contains("dupe"));
         assert!(parse_spec(SEED).is_ok(), "control");
+    }
+
+    /// Ruling B0-C: the section codes are DERIVED, never duplicated into the
+    /// file. A rules file that declared a reserved id would create a second,
+    /// drifting copy of a list whose third attribute (`division`) a `Domain`
+    /// cannot even hold.
+    #[test]
+    fn a_file_may_not_redefine_a_reserved_domain_id() {
+        for id in ["arrl_sections", "fd_sections"] {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["domains"] = serde_json::json!([{
+                "id": id,
+                "adif": { "rcvd": "ARRL_SECT", "sent": "" },
+                "values": [{ "code": "WI", "label": "Wisconsin" }]
+            }]);
+            let e = parse_spec(&v.to_string()).unwrap_err();
+            assert!(e.contains(id) && e.contains("reserved"), "{id}: {e}");
+        }
+        // POSITIVE CONTROL: a NON-reserved domain with the same shape loads, so
+        // the refusal is about the id and not about domains being rejected
+        // wholesale.
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["domains"] = serde_json::json!([{
+            "id": "us_ca",
+            "adif": { "rcvd": "STATE", "sent": "" },
+            "values": [{ "code": "WI", "label": "Wisconsin" }]
+        }]);
+        assert!(
+            parse_spec(&v.to_string()).is_ok(),
+            "a real domain must load"
+        );
+    }
+
+    /// §8(d): the 83-section assertion, expressed on the domain (Ruling B0-C).
+    #[test]
+    fn the_arrl_sections_domain_is_exactly_the_83() {
+        let d = arrl_sections_domain();
+        assert_eq!(d.id, "arrl_sections");
+        assert_eq!(d.values.len(), 83);
+        assert_eq!(d.adif.rcvd, Some("ARRL_SECT"));
+        // MY_ARRL_SECT is uncorroborated in this tree (§2.1.1); batch 6 checks
+        // the name against adif.org before any writer emits it.
+        assert_eq!(d.adif.sent, None);
+        assert!(!d.contains("MX"), "MX is an FD extension, not a section");
+        assert!(!d.contains("DX"), "…and so is DX");
+        assert!(d.contains("WI") && d.contains(" wi "));
+        assert_eq!(
+            fd_sections_domain().values.len(),
+            85,
+            "…which fd_sections carries, being the 83 plus MX and DX"
+        );
+    }
+
+    /// The per-domain structural rules, each with the control that the same
+    /// file with that one property corrected loads.
+    #[test]
+    fn a_malformed_domain_is_refused_by_the_property_that_is_wrong() {
+        let with = |doms: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["domains"] = doms;
+            parse_spec(&v.to_string())
+        };
+        let good = serde_json::json!([{
+            "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" },
+            "values": [{ "code": "WI", "label": "Wisconsin" }]
+        }]);
+        assert!(with(good.clone()).is_ok(), "control: the good shape loads");
+
+        // Duplicate id within one ruleset.
+        assert!(with(serde_json::json!([
+            { "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" },
+              "values": [{ "code": "WI", "label": "Wisconsin" }] },
+            { "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" },
+              "values": [{ "code": "IL", "label": "Illinois" }] }
+        ]))
+        .unwrap_err()
+        .contains("duplicate domain id"));
+
+        // Empty values.
+        assert!(with(serde_json::json!([
+            { "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" }, "values": [] }
+        ]))
+        .unwrap_err()
+        .contains("no values"));
+
+        // A code that is not already uppercase.
+        assert!(with(serde_json::json!([
+            { "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" },
+              "values": [{ "code": "wi", "label": "Wisconsin" }] }
+        ]))
+        .unwrap_err()
+        .contains("not uppercase"));
+
+        // A malformed ADIF tag name.
+        assert!(with(serde_json::json!([
+            { "id": "us_ca", "adif": { "rcvd": "state name", "sent": "" },
+              "values": [{ "code": "WI", "label": "Wisconsin" }] }
+        ]))
+        .unwrap_err()
+        .contains("adif"));
+
+        // A malformed domain id.
+        assert!(with(serde_json::json!([
+            { "id": "US-CA", "adif": { "rcvd": "STATE", "sent": "" },
+              "values": [{ "code": "WI", "label": "Wisconsin" }] }
+        ]))
+        .unwrap_err()
+        .contains("domain id"));
+    }
+
+    /// §8(c): absent is loud. The seed writes `"domains": []` EXPLICITLY —
+    /// Field Day needs no file-declared domain, and saying so in the file is
+    /// the point, because a missing key must be a load failure rather than an
+    /// empty list nobody chose.
+    #[test]
+    fn a_ruleset_with_no_domains_key_is_refused_but_an_empty_list_loads() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0].as_object_mut().unwrap().remove("domains");
+        assert!(parse_spec(&v.to_string()).unwrap_err().contains("domains"));
+        assert!(parse_spec(SEED).is_ok(), "control: the seed's [] loads");
+        for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+            assert!(ruleset(e, CURRENT_RULES_YEAR).domains.is_empty());
+        }
     }
 
     #[test]

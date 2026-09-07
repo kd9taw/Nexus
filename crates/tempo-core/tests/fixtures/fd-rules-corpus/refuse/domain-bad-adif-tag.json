@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 2,
   "generated": "2026-08-29T00:00:00Z",
   "_provenance": {
     "assistance": {
@@ -40,7 +40,21 @@
         "by_band": true,
         "by_mode_class": true
       },
-      "domains": [],
+      "domains": [
+        {
+          "id": "us_ca",
+          "adif": {
+            "rcvd": "state name",
+            "sent": ""
+          },
+          "values": [
+            {
+              "code": "WI",
+              "label": "Wisconsin"
+            }
+          ]
+        }
+      ],
       "bonuses": [
         {
           "id": "emergency-power",

@@ -39,6 +39,7 @@
         "by_band": true,
         "by_mode_class": true
       },
+      "domains": [],
       "bonuses": [
         {
           "id": "emergency-power",
@@ -155,6 +156,7 @@
         "by_band": true,
         "by_mode_class": true
       },
+      "domains": [],
       "bonuses": [
         {
           "id": "emergency-power",
