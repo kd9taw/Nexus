@@ -3,6 +3,8 @@
 //! API key + station-profile id + one ADIF record. The URL + JSON builders are pure (unit-
 //! tested); [`upload`] does the blocking POST.
 
+use super::neterr;
+
 /// How much of the server's own words to show, in characters.
 ///
 /// A Cloudlog/Wavelog `reason` is a short sentence; what else can arrive on this socket is a
@@ -297,8 +299,24 @@ pub fn upload(base_url: &str, key: &str, station_id: &str, adif: &str) -> Result
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(body)
         .send()
-        .map_err(|_| {
-            "Cloudlog/Wavelog unreachable — check the URL (must be https://)".to_string()
+        // #226's defect on the transport arm: this flattened every way of failing to reach
+        // the instance into one sentence blaming the URL. `is_connect()` is true for a DNS
+        // failure, a refused connect, an unreachable proxy AND a rejected TLS handshake, and
+        // it is the handshake that matters — an HTTPS-inspecting antivirus re-signs with a CA
+        // Nexus does not carry (D#181), so "check the URL" sends that operator after the one
+        // thing that is right. `neterr` splits them and never stringifies the error, which
+        // this request needs anyway: the API key is in its body.
+        .map_err(|e| {
+            if e.is_builder() {
+                // The one case the old sentence WAS right about: `https_only` rejects an
+                // http:// URL here, before any I/O (reqwest async_impl/client.rs:2582).
+                "Cloudlog/Wavelog: the instance URL must be https:// — an upload carrying the \
+                 API key is never sent in the clear"
+                    .to_string()
+            } else {
+                // Policy::none, so `redact`'s redirect wording is the right one.
+                neterr::redact("Cloudlog", &e)
+            }
         })?;
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
@@ -335,6 +353,57 @@ fn classify(status: u16, text: &str, key: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    /// #226's defect on the transport arm: every way of failing to reach the instance was
+    /// flattened into one sentence blaming the URL.
+    ///
+    /// `neterr` exists because `is_connect()` is true for a DNS failure, a refused connect, an
+    /// unreachable proxy AND a rejected TLS handshake — and the handshake case is the one that
+    /// matters, since an HTTPS-inspecting antivirus re-signs with a CA Nexus does not carry
+    /// (D#181). Telling that operator to check their URL sends them after the one thing that
+    /// is right.
+    #[test]
+    fn a_transport_failure_says_what_actually_failed() {
+        // A refused connect: bind a port, drop it, connect to nothing.
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        drop(l);
+        let err = upload(&format!("https://127.0.0.1:{port}"), KEY, "3", "<eor>").unwrap_err();
+        assert!(
+            err.contains("could not connect"),
+            "an unreachable instance was blamed on the URL: {err}"
+        );
+
+        // A rejected TLS handshake: something answers the TCP connect but is not a peer we
+        // accept. On the operator's machine that something is the antivirus's certificate.
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = l.accept() {
+                let _ = sock.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n");
+                let _ = sock.flush();
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+        let err = upload(&format!("https://127.0.0.1:{port}"), KEY, "3", "<eor>").unwrap_err();
+        assert!(
+            err.contains("antivirus"),
+            "a rejected handshake was blamed on the URL: {err}"
+        );
+        // The classification is by type, so the message can never carry the request.
+        assert!(!err.contains(KEY), "API key leaked into the message: {err}");
+
+        // The control: the one case the old sentence was right about must keep its answer.
+        // `https_only` rejects an http:// URL before any I/O.
+        let err = upload("http://log.example.invalid", KEY, "3", "<eor>").unwrap_err();
+        assert!(
+            err.contains("https://"),
+            "control: an http:// URL must still be told to use https: {err}"
+        );
+    }
 
     #[test]
     fn api_url_tolerates_url_variants() {
