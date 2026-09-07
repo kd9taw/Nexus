@@ -8542,6 +8542,17 @@ impl Engine {
         is_designator(name).then(|| name.to_string())
     }
 
+    /// The station callsign to stamp on a contact: the operator's current `mycall`, ADIF-cased
+    /// like the `OPERATOR` stamp beside it, or `None` when it is blank — a record carrying no
+    /// station call is honest, one claiming an empty station is not.
+    ///
+    /// Shared by [`Self::log_qso`] and the two mode record builders so the three can never
+    /// disagree about what "the station's call" means.
+    fn station_callsign_now(&self) -> Option<String> {
+        let call = self.settings.mycall.trim();
+        (!call.is_empty()).then(|| call.to_ascii_uppercase())
+    }
+
     pub fn log_qso(&mut self, mut rec: QsoRecord) {
         // Every log path funnels through here, so this is the one place that can tell the UI a
         // contact was written — including a backend auto-log the frontend never initiated.
@@ -8648,7 +8659,7 @@ impl Engine {
         // station that is every other operator, `OPERATOR` equal to `STATION_CALLSIGN` is
         // noise in every exported record, and worse it would make a field that means "someone
         // chose this" indistinguishable from one nothing ever set. STATION_CALLSIGN is the
-        // station's call and export already inserts it; this is the person, and it is present
+        // station's call, stamped immediately below; this is the person, and it is present
         // only when a person was actually named.
         //
         // A record that arrives carrying its own operator — an imported multi-op log, or a
@@ -8658,6 +8669,34 @@ impl Engine {
             if !op.is_empty() {
                 rec.operator = Some(op.to_ascii_uppercase());
             }
+        }
+        // WHICH STATION MADE IT. `station_callsign` has been modelled, parsed on import,
+        // emitted on write and carried through the DTO since the logbook was written — and was
+        // hardcoded `None` at every construction site, so neither the on-disk log nor any
+        // export could say which call worked a contact. Invisible for the single-op station
+        // whose call never changes; wrong for the operator this exists for. A special event or
+        // club station signs `W6R` for a weekend, sets their own call back on Monday, and the
+        // upload path then signed the whole weekend under the home call — a confirmation the
+        // partner will never get and cannot diagnose. The record is the only place that can
+        // hold the answer, so it is stamped here and both upload paths read it.
+        //
+        // ⚠️ THE CALL IN FORCE WHEN IT WAS LOGGED, not when the contact started, and that is a
+        // deliberate choice. This funnel serves every log path — FT auto-log, the cockpit Log
+        // button, RTTY, satellites, the manual Logbook form, the companion — and exactly one of
+        // them has a start-of-QSO identity snapshot to read (`Station::mycall`,
+        // crates/tempo-core/src/qso.rs). Reading that here would leave every other path
+        // unstamped, which is most contacts. The two can only disagree when the operator
+        // changes callsign mid-contact, and in that window the WIRE is already wrong — the
+        // sequencer keeps transmitting from its start-of-QSO snapshot while the identity gate
+        // validates the new call — which is a separate transmit-path defect this change
+        // deliberately does not reach into. The mode builders that CAN be delayed (a
+        // `prompt_to_log` record waits in `pending_log`, and on disk, for the operator's
+        // confirm) stamp it at contact time instead, and this fill leaves theirs alone.
+        //
+        // A record arriving with its own station call — an imported club log, or a row the
+        // operator repaired by hand — is left alone. Same rule as `operator` above.
+        if rec.station_callsign.is_none() {
+            rec.station_callsign = self.station_callsign_now();
         }
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs.
@@ -8778,7 +8817,17 @@ impl Engine {
         };
         let station = format!(
             "{}{}",
-            tag("STATION_CALLSIGN", &self.settings.mycall),
+            // PREFER THE RECORD'S OWN CALL. `adif_record` above already emitted it when the
+            // record carries one, so appending a second copy from the live setting would hand
+            // HRD two conflicting STATION_CALLSIGN fields for one contact — and the live one is
+            // wrong the moment a queued record is drained after a callsign change. The live
+            // setting stays the fallback for records logged before the stamp existed. Same
+            // guard, same reason, as `logbook::adif_record_with_station`.
+            if rec.station_callsign.is_some() {
+                String::new()
+            } else {
+                tag("STATION_CALLSIGN", &self.settings.mycall)
+            },
             tag("MY_GRIDSQUARE", &self.settings.mygrid),
         );
         if let Some(pos) = adif.find("<EOR>") {
@@ -8847,6 +8896,12 @@ impl Engine {
         // In ADIF-location mode, stamp each record with STATION_CALLSIGN + MY_GRIDSQUARE so TQSL
         // can sign from the ADIF (no named `-l` location). Named-location mode is byte-identical
         // to before (no MY_ fields), so existing uploads are unchanged.
+        //
+        // `call` is the FALLBACK, not the answer: `adif_record_with_station` skips its own stamp
+        // when the record carries a STATION_CALLSIGN of its own (which `adif_record` has already
+        // emitted), so a batch uploaded after the operator sets their home call back still signs
+        // each contact under the call that made it. Records written before that stamp existed
+        // carry none and sign from the live setting, exactly as they always did.
         let adif_loc = self.settings.lotw_use_adif_location;
         let call = self.settings.mycall.clone();
         let grid = self.settings.mygrid.clone();
@@ -14210,7 +14265,10 @@ impl Engine {
             prop_mode: None,
             sat_name: None,
             operator: None,
-            station_callsign: None,
+            // Stamped at CONTACT time, not left for the funnel: with `prompt_to_log` on, this
+            // record waits in `pending_log` (and on disk) until the operator confirms, so a
+            // later read would be the call in force at the click, not at the contact.
+            station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
         }
     }
@@ -17852,7 +17910,9 @@ impl Engine {
             prop_mode: None,
             sat_name: None,
             operator: None,
-            station_callsign: None,
+            // Same reason as the RTTY builder: `prompt_to_log` can park this record for as long
+            // as the operator takes to confirm, so the call is captured now.
+            station_callsign: self.station_callsign_now(),
             extra: Vec::new(),
         }
     }
@@ -26750,6 +26810,123 @@ mod tests {
         e.log_qso(rec);
 
         assert_eq!(e.get_log()[0].operator.as_deref(), Some("G0PQR"));
+    }
+
+    // ---- STATION_CALLSIGN provenance (special event / club call) --------------------------
+    //
+    // Nexus transmits happily under a special event call — a 1×1 like `W6R` is fully standard
+    // in the 77-bit encoding — but nothing recorded WHICH call made a contact, so an export or
+    // an upload could not say. These five pin the whole path: the stamp, that it never relabels
+    // a record that arrived with its own, the two consumers that must prefer the record over the
+    // live setting, and the fallback for records logged before the stamp existed.
+
+    /// The stamp itself, end to end: log under an event call and the exported ADIF says so.
+    #[test]
+    fn log_qso_stamps_the_station_callsign_the_contact_was_made_under() {
+        let mut e = Engine::new("W6R", "CM87", 0);
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+
+        assert_eq!(
+            e.get_log()[0].station_callsign.as_deref(),
+            Some("W6R"),
+            "the call the contact was made under must reach the record"
+        );
+        let adif = e.export_logbook("adif", None, None);
+        assert!(
+            adif.contains("<STATION_CALLSIGN:3>W6R"),
+            "the export is the only artifact that can answer 'which call worked this?': {adif}"
+        );
+    }
+
+    /// A record that arrives carrying its own station call — an imported club log, or a row the
+    /// operator repaired by hand — is left alone. Same rule as `operator` and `country`; on an
+    /// import the alternative relabels a whole club log in one pass.
+    #[test]
+    fn log_qso_never_overwrites_a_station_callsign_the_record_arrived_with() {
+        let mut e = Engine::new("W6R", "CM87", 0);
+
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.station_callsign = Some("GB100RSGB".into());
+        e.log_qso(rec);
+
+        assert_eq!(
+            e.get_log()[0].station_callsign.as_deref(),
+            Some("GB100RSGB")
+        );
+    }
+
+    /// THE DEFECT WITH ON-AIR CONSEQUENCES. The operator works a special event weekend as `W6R`,
+    /// sets their home call back on Monday, then uploads. The batch must still be signed `W6R`:
+    /// LoTW matches the other station's log on the call that was actually on the air, so a
+    /// home-call signature is a confirmation the partner will never get and cannot diagnose.
+    #[test]
+    fn lotw_upload_signs_each_contact_under_the_call_that_made_it() {
+        let mut e = Engine::new("W6R", "CM87", 0);
+        e.settings.lotw_use_adif_location = true;
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+
+        // The event is over and the operator is back on their own call.
+        e.settings.mycall = "K2DEF".into();
+        let adif = e.lotw_upload_adif(&[0]);
+
+        assert!(
+            adif.contains("<STATION_CALLSIGN:3>W6R"),
+            "the upload must sign from the RECORD, not from wherever the operator is now: {adif}"
+        );
+        assert!(
+            !adif.contains("K2DEF"),
+            "the home call must never sign an event contact: {adif}"
+        );
+    }
+
+    /// The other half of that guard, and the one that keeps old logs working: a record written
+    /// before the stamp existed carries no station call, so the upload must still fall back to
+    /// the live setting rather than signing nothing.
+    #[test]
+    fn lotw_upload_falls_back_to_the_live_call_for_a_record_with_none() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.lotw_use_adif_location = true;
+
+        // Straight into the logbook, bypassing the funnel — this is what an ADIF written by an
+        // older build looks like after it is read back in.
+        let mut rec = e.qso_record("W9XYZ".into(), None, None);
+        rec.station_callsign = None;
+        e.station.logbook.add(rec);
+
+        let adif = e.lotw_upload_adif(&[0]);
+        assert!(
+            adif.contains("<STATION_CALLSIGN:5>K2DEF"),
+            "a record with no station call of its own still signs from the live setting: {adif}"
+        );
+    }
+
+    /// HRD attributes a contact from the datagram's own station fields. Once the record carries
+    /// its own `STATION_CALLSIGN` — emitted by `adif_record` — appending a second one from the
+    /// live setting would put two conflicting copies of the field in one record.
+    #[test]
+    fn hrd_datagram_carries_exactly_one_station_callsign_and_it_is_the_records() {
+        let mut e = Engine::new("W6R", "CM87", 0);
+
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        e.log_qso(rec);
+        let logged = e.get_log()[0].clone();
+
+        e.settings.mycall = "K2DEF".into();
+        let dg = e.hrd_datagram(&logged);
+
+        assert_eq!(
+            dg.matches("<STATION_CALLSIGN:").count(),
+            1,
+            "one record, one station call: {dg}"
+        );
+        assert!(
+            dg.contains("<STATION_CALLSIGN:3>W6R"),
+            "and it is the call that made the contact: {dg}"
+        );
     }
 
     /// The funnel itself, mode-independent: every path (auto-log, cockpit Log button, manual

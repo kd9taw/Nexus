@@ -41,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs are still hidden exactly as before, and a park activator who also happens to be a new
   entity shows as a park, not as a CW award row at the top of a digital-only board.
 
+- **Your log never recorded which callsign made a contact, so a special event batch uploaded
+  afterwards was signed under the wrong call.** Nexus has always transmitted correctly under a
+  special event or club call — a 1×1 like `W6R` is an entirely ordinary callsign to FT8 — but
+  nothing wrote down which call was in force, and the LoTW and HRD Logbook upload paths filled
+  that in from whatever callsign happened to be set at the moment you pressed upload. Work a
+  weekend as `W6R`, put your own call back on Monday, then upload, and every contact from the
+  event reached ARRL under your home call: a confirmation the other operator will never get and
+  cannot diagnose. Every contact now carries `STATION_CALLSIGN` in the log and in every ADIF
+  export, stamped with the call that made it, and both upload paths sign from the record rather
+  than from the current setting. Contacts logged by earlier versions carry no station call and
+  upload exactly as they did before.
+
 ## [1.10.3] — 2026-09-04
 
 ### Added
