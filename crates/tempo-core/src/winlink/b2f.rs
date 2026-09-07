@@ -103,20 +103,26 @@
 //!
 //! ## The number is retained heap, not bytes off the wire
 //!
-//! Those two differ by up to 20×, and a round that bounded the second believed it had bounded the
-//! first. The peer's cost to this process is the memory this process keeps, and three things put
-//! memory outside a count of peer data bytes:
+//! Those two are different numbers, and a round that bounded the second believed it had bounded
+//! the first. The peer's cost to this process is the memory this process keeps, and three things
+//! put memory outside a count of peer data bytes:
 //!
 //! * **Containers cost more than their contents.** A [`fbb::Frame`] holding one payload byte costs
 //!   `size_of::<Frame>()` in the framer's vector plus an allocation of its own, and the peer picks
-//!   the block size that decides how many there are. One mebibyte in one-byte blocks cost 75.0 MiB
-//!   of live heap while a counter of data bytes read 3.1 MB. So every term here is a `capacity()`
-//!   and never a `len()` — a drained `Vec` still owns its buffer — and every collection is charged
-//!   its per-element overhead as well as its elements' own heap.
-//! * **A check after an allocation is not a bound.** The peer chooses `u-size`, and LZHUF expands
-//!   by up to `F` bytes per symbol, so decompressing first and comparing after peaked at 95.3 MiB
-//!   of live heap before the comparison it was waiting for. Every peer-chosen size is judged before the
-//!   memory exists: [`MAX_PROPOSAL_U_SIZE`] at proposal time, and
+//!   the block size that decides how many there are. A transfer at [`MAX_PROPOSAL_C_SIZE`] framed
+//!   in 8-byte blocks is 1,310,785 wire bytes and charges 5,245,207 — four times its own volume
+//!   (measured 2026-09-07). The *factor* is asserted rather than left to prose:
+//!   `the_door_charges_the_frames_a_peer_makes_us_hold_not_its_data_bytes` requires the door to
+//!   refuse a one-byte-block flood before a quarter of the ceiling has arrived on the wire, which
+//!   is a charge over 4× the volume. So every term here is a `capacity()` and never a `len()` — a
+//!   drained `Vec` still owns its buffer — and every collection is charged its per-element
+//!   overhead as well as its elements' own heap.
+//! * **A check after an allocation is not a bound.** The peer chooses `u-size`, and this coder
+//!   expands by up to `F` bytes per symbol: measured, its best case is 47.9× and a 120,000-byte
+//!   image of a long run unpacks to 5,751,076 bytes. So a proposal well inside the compressed cap
+//!   can name tens of megabytes of plaintext, and decompressing first hands that allocation over
+//!   before the comparison that would have refused it. Every peer-chosen size is judged before the
+//!   memory exists instead: [`MAX_PROPOSAL_U_SIZE`] at proposal time, and
 //!   [`lzhuf::decompress_bounded`] refusing an image whose own header declares more than the
 //!   proposal did.
 //! * **Giving up has to release.** A session that has failed still owns every buffer it filled
@@ -129,16 +135,25 @@
 //! chooses, which turns a memory bound into a CPU one. [`fbb::Framer`] keeps running counters for
 //! the same reason.
 //!
-//! ⚠️ **What the number bounds is what the session *retains* when the check next runs, and
-//! delivering a message costs more than that for as long as it takes.** At the instant a transfer
-//! completes, the compressed `image`, the `plain` it unpacks to and the parsed [`Message`] are all
-//! live at once, and the check does not run between them. Measured, on one 1,040,732-byte image
-//! carried end to end: 3,393,984 bytes of live heap at 256-byte blocks and 4,665,664 at 125 —
-//! about **3× the message**, against a charge that had fallen back to the megabyte of `image`.
-//! What bounds *that* is [`MAX_PROPOSAL_C_SIZE`] plus twice [`MAX_PROPOSAL_U_SIZE`], which is the
-//! reason the second is a constant of its own and is checked at proposal time. Both numbers are
-//! finite and both are ours; they are not the same number, and saying they were is the claim this
-//! section was rewritten to stop making.
+//! ⚠️ **What the number bounds is what the session *retains* when the check next runs. The
+//! transient of delivering a message is larger, and nothing in this file bounds it.** At the
+//! instant a transfer completes, the compressed `image`, the `plain` it unpacks to and the parsed
+//! [`Message`] are all live at once, and the check does not run between them. Two revisions of
+//! this paragraph gave that transient an arithmetic bound — [`MAX_PROPOSAL_C_SIZE`] plus twice
+//! [`MAX_PROPOSAL_U_SIZE`], 17.0 MiB — and both were one message *shape* generalised. Measured
+//! 2026-09-07, requested bytes, a counting allocator on the current code:
+//!
+//! * 8,388,608 plaintext bytes as one flat body peak at 17,086,031 (16.3 MiB), **2.04×** the
+//!   plaintext. That is the shape the 17 MiB arithmetic was read off.
+//! * 8,304,746 plaintext bytes as 1,384,119 header lines — image 173,091, inside every ceiling
+//!   here, and `FS +` is the right answer to it — peak at 161,707,585 (154.2 MiB), **19.5×** the
+//!   plaintext and **9.1× the bound this paragraph used to state**.
+//!
+//! The term that scales is the parsed [`Message`], not the session: `A: B\r\n` is six plaintext
+//! bytes and becomes a `(Vec<u8>, Vec<u8>)` in a vector, with two allocations of its own. **That
+//! is [`super::message`]'s to bound and it is being tracked as its own piece of work** — the
+//! numbers here exist so that nobody re-derives the 17 MiB and believes it. What this file
+//! guarantees is the *retained* figure, and the ceiling covers that.
 //!
 //! **The per-site limits that remain are protocol correctness, not the memory story.** Both would
 //! still be here if memory were free, and neither is what keeps this session finite:
@@ -182,32 +197,52 @@
 //! offering. So the number sizes the budget instead of becoming a limit.
 //!
 //! The largest thing a legitimate session holds is one transfer in flight, and what that costs
-//! depends on how the sender frames it. Measured, on a message whose image is 1,048,044 bytes —
-//! one byte-count under [`MAX_PROPOSAL_C_SIZE`], delivered end to end:
+//! depends on how the sender frames it. Measured 2026-09-07, on a message whose image is exactly
+//! [`MAX_PROPOSAL_C_SIZE`] — 1,048,576 bytes — delivered end to end:
 //!
 //! | block size | charged at the peak | of the ceiling |
 //! |---|---|---|
-//! | 256 ([`super::fbb`]'s maximum) | 1,180,694 | 14.1 % |
-//! | 125 (`wl2k-go`'s sender) | 1,573,171 | 18.8 % |
-//! | 16 | 3,146,726 | 37.5 % |
-//! | 8 | 5,244,246 | 62.5 % |
-//! | 4 | refused at the door | — |
+//! | 256 ([`super::fbb`]'s maximum) | 1,182,003 | 14.1 % |
+//! | 125 (`wl2k-go`'s sender) | 1,574,994 | 18.8 % |
+//! | 16 | 3,147,867 | 37.5 % |
+//! | 8 | 5,245,207 | 62.5 % |
+//! | 7 | refused at the door | — |
 //!
-//! Beside that sits the block's bookkeeping: five accepted proposals are 520 charged bytes, and an
-//! open FBB-legal block of five is measured at 1,278 by
-//! `the_session_ceiling_bounds_every_buffer_at_the_door`. So the worst *legitimate* total is
-//! 1,573,691 charged bytes and [`MAX_SESSION_HELD_BYTES`] is 8 MiB against it — **5.33× headroom**
-//! on the smallest block size any real implementation sends, 7.10× on the largest. Erring generous
-//! is deliberate: a few unnecessary MiB cost the operator nothing they can see, and refusing
-//! legitimate mail is the one outcome an email transport may not have.
+//! Beside that sits the block's bookkeeping: five proposals are **832** charged bytes — the
+//! vector's `capacity()` of 8 times [`PROPOSAL_HELD_BYTES`], not its `len()` of 5, which is this
+//! section's own rule applied to itself — and an open FBB-legal block of five charges 1,278 all
+//! told. Both are asserted by `the_session_ceiling_bounds_every_buffer_at_the_door`. The worst
+//! *legitimate* session measured is five cap-sized messages at `wl2k-go`'s framing through a
+//! 64 KiB reader: **1,703,188 charged bytes, 20.3 % of the ceiling, 4.93× headroom**. Erring
+//! generous is deliberate: a few unnecessary MiB cost the operator nothing they can see, and
+//! refusing legitimate mail is the one outcome an email transport may not have.
 //!
-//! ⚠️ **The one thing this ceiling now refuses that it used to carry** is a transfer framed in
-//! blocks of four bytes or fewer, because that framing costs more `Frame` slots than the message
-//! has payload. Nothing sends that: `wl2k-go` sends 125-byte blocks, `super::fbb` permits 256, and
-//! the smallest block size that still delivers a message at the cap is **8 bytes** (measured, the
-//! table above) — fifteen times smaller than the smallest any implementation uses. Three wire
-//! bytes per data byte is a sender wasting two thirds of a 1200-baud link, and the refusal is
-//! traced.
+//! ⚠️ **What this ceiling refuses that it used to carry** is a transfer *at the compressed cap*
+//! framed in blocks of seven bytes or fewer, because that framing costs more `Frame` slots than
+//! the message has payload. Eight bytes is the smallest that still delivers there, and
+//! `a_transfer_at_the_compressed_ceiling_is_carried_down_to_eight_byte_blocks` asserts both sides
+//! of that boundary so it cannot drift in prose again. **It is a property of the transfer and not
+//! of the framing alone**: the charge scales with the message, so at Winlink's own published
+//! 120,000-byte maximum — the largest that can actually reach a CMS mailbox — every legal block
+//! size **down to one byte** delivers, charging 5,156,288 (61.5 %). That is
+//! `a_message_at_winlinks_published_maximum_is_carried_at_every_legal_block_size`, and it is why
+//! no real mail is at stake in the paragraph above: the refusal band lives entirely inside the
+//! 8.7× of compressed headroom [`MAX_PROPOSAL_C_SIZE`] holds against a future Winlink limit, at
+//! block sizes fifteen times smaller than the smallest any implementation sends.
+//!
+//! ## Which numbers here are test-backed
+//!
+//! Everything above is either asserted by a named test or labelled as a dated measurement, and
+//! the distinction is the point: four review rounds each corrected a figure in this header and
+//! wrote a new one, so a figure worth stating precisely is now worth an assertion. **Asserted**,
+//! and therefore red if it stops being true: 832 and 1,278; the 4× charge-to-wire factor;
+//! delivery at 8-byte blocks and refusal at 7 at the compressed cap; delivery at every block size
+//! down to one byte at Winlink's 120,000; acceptance at 120,000 compressed and at 5,751,076
+//! uncompressed; that a closed session holds zero. **Measured on 2026-09-07 and not asserted**
+//! (reproduce before relying on one): every charged-byte figure quoted above, including the table
+//! and the 1,703,188 worst legitimate session; the 47.9× best compression ratio, which is where
+//! the 5,751,076 comes from; and the two live-heap transients. Each was taken in a debug build on
+//! this machine with a private `CARGO_TARGET_DIR`, which is the second half of reproducing one.
 //!
 //! # What this engine does not do yet
 //!
@@ -250,19 +285,36 @@ pub const SID_VERSION: &[u8] = b"1.0";
 /// the first experiment and touches nothing else.
 pub const SID_FLAGS: &[u8] = b"B2FHM";
 
-/// Longest FBB command line accepted before the stream is called a desync. Every line in the
-/// grammar is short — the longest realistic one is an `FS` answer for a very large block — so a
-/// buffer this size with no CR in it means we are no longer aligned to the protocol, not that a
-/// long line is in flight. Matching `aprsis`'s bound, and unlike `aprsis` this is a refusal
-/// rather than a silent buffer reset: there is no packet stream here to resynchronise into.
+/// Longest FBB command line this session will hold in order to interpret it, in bytes. A line
+/// over it is **discarded, not fatal**. Matching `aprsis`'s bound.
+///
+/// Every line in the grammar is short. Measured, the longest a peer sends is its `;FW:`
+/// forwarding list, and twenty callsigns of it are 164 bytes; a CMS SID is 20, a `;PQ:` challenge
+/// 13, and an `FC` line carrying a MID at [`MAX_MID`] is 78.
+/// `an_over_long_line_is_discarded_however_it_arrives` carries all four and asserts they are
+/// interpreted, so shrinking this constant under any real line reddens the gate rather than
+/// silently dropping mail.
+///
+/// **Discarded and traced, because a CMS puts banner and MOTD text on this same stream.**
+/// [`Session::handle_line`]'s last arm exists precisely so that a line we do not recognise cannot
+/// end the session; a length check *above* that arm overrode it, and a review round shipped one —
+/// a 512-byte MOTD line that arrived whole went from traced-and-ignored to session-fatal, which
+/// is refusing a working server for saying hello. What this constant is for is memory, and a line
+/// can be bounded without being fatal: the bytes are counted, dropped and traced, and the session
+/// resumes at the next CR. ⚠️ The one line whose *meaning* that changes is an over-long `FC`:
+/// dropping it leaves a hole in what [`fbb::fb_checksum`] covers, so its block fails at the `F>`
+/// rather than quietly proposing one message fewer.
 ///
 /// **Applied to the line, not only to a CR-less buffer.** It was once the second: a line longer
 /// than this was refused when its CR had not arrived yet and accepted when it had, so the same
-/// wire passed or failed on where the caller's read boundaries happened to land — and a 7.8 MB
-/// `FC` line delivered whole was parsed, and its MID retained, while [`PROPOSAL_HELD_BYTES`]
-/// charged 552 for it. Refusing on length whatever else is in the buffer is what makes that charge
-/// an upper bound, and it makes the outcome independent of chunking, which everything else here
-/// already is.
+/// wire passed or failed on where the caller's read boundaries happened to land. The rule here
+/// makes the outcome independent of chunking, which everything else in this file already is.
+///
+/// ⚠️ **It is not what bounds [`PROPOSAL_HELD_BYTES`]**, whatever an earlier revision of this doc
+/// claimed. [`MAX_MID`] at [`Session::handle_proposal`] is, and a mutation says so: revert this
+/// rule to the CR-less-only one and
+/// `a_proposal_whose_mid_is_over_the_maximum_is_deferred_not_retained` stays green — only the line
+/// test reddens. This is defence in depth over one buffer, not the bound on a retained field.
 const MAX_LINE: usize = 512;
 
 /// Longest MID this session will retain from a proposal, in bytes.
@@ -289,12 +341,14 @@ const MAX_MID: usize = 64;
 ///
 /// One consequence is worth stating where the constant is: because the charge is honest about
 /// container overhead, a peer that streams a transfer in absurdly small blocks is refused here
-/// rather than quietly costing 20× what it appeared to. The block sizes real senders use are 125
-/// (`wl2k-go`, `fbb/b2f.go:30`, "Paclink-unix uses 250, protocol maximum is 255", read 2026-09-07)
-/// up to [`super::fbb`]'s 256, and a transfer at [`MAX_PROPOSAL_C_SIZE`] is delivered at every
-/// block size down to **8 bytes** — measured, the module header's table. Blocks of four bytes and
-/// under are refused, and they are refused with the trace [`Session::feed`] emits rather than
-/// silently. Nothing sends those.
+/// rather than quietly costing several times what it appeared to. The block sizes real senders
+/// use are 125 (`wl2k-go`, `fbb/b2f.go:30`, "Paclink-unix uses 250, protocol maximum is 255", read
+/// 2026-09-07) up to [`super::fbb`]'s 256, and a transfer at [`MAX_PROPOSAL_C_SIZE`] is delivered
+/// at every block size down to **8 bytes**; **7 and under are refused there**, with the trace
+/// [`Session::feed`] emits rather than silently. Nothing sends those, and the boundary is a
+/// property of the transfer size rather than of the framing — at Winlink's own 120,000-byte
+/// maximum every block size down to one byte delivers. Both halves are asserted; see the module
+/// header's test-backed list.
 const MAX_SESSION_HELD_BYTES: usize = 8 * 1024 * 1024;
 
 /// What one slot of [`Session::proposals`] or [`Session::accepted`] is charged against
@@ -304,8 +358,10 @@ const MAX_SESSION_HELD_BYTES: usize = 8 * 1024 * 1024;
 /// is the only heap and [`MAX_MID`] is what bounds it. That bound is enforced where the proposal
 /// is retained ([`Session::handle_proposal`]) rather than inferred from what some other function
 /// would have refused — the previous reading of this constant depended on [`Session::drain_line`]
-/// and was false by three orders of magnitude, because that refusal only applied to a buffer with
-/// no CR in it.
+/// and was false by orders of magnitude, because that refusal only applied to a buffer with no CR
+/// in it. `a_proposal_whose_mid_is_over_the_maximum_is_deferred_not_retained` is what holds the
+/// charge up, and it stays green under every mutation of [`Session::drain_line`], which is the
+/// evidence that the dependence really is gone rather than merely re-worded.
 ///
 /// Charged flat, and multiplied by `capacity()` rather than `len()`, because
 /// [`Session::held_bytes`] must be O(1): walking the vector on every line would make a block
@@ -329,17 +385,23 @@ const PROPOSAL_HELD_BYTES: usize = MAX_MID + size_of::<Proposal>();
 /// This constant is **1 MiB, roughly nine times that**, and the headroom is deliberate. Winlink
 /// raising its own limit must not turn into Nexus silently dropping messages, so this is sized to
 /// absorb that without a release, and refusing real mail is the one outcome an email transport may
-/// not have. The cost of the generosity is bounded twice over: [`Session::transfer_ceiling`] then
-/// sits at `3 * 1048576 + 260`, and [`MAX_SESSION_HELD_BYTES`] holds whatever this is set to.
+/// not have. ⚠️ The absorption is 8.7× only up to a compression ratio of 8: past that
+/// [`MAX_PROPOSAL_U_SIZE`] is the constant that bites first, since 8 MiB of plaintext is what a
+/// 1 MiB image at ratio 8 unpacks to. The cost of the generosity is bounded twice over:
+/// [`Session::transfer_ceiling`] then sits at `3 * 1048576 + 260`, and
+/// [`MAX_SESSION_HELD_BYTES`] holds whatever this is set to —
+/// `a_transfer_at_the_compressed_ceiling_is_carried_down_to_eight_byte_blocks` is what asserts
+/// that second half, at the framing a real sender uses and the smallest one that fits.
 pub const MAX_PROPOSAL_C_SIZE: u32 = 1024 * 1024;
 
 /// The largest **uncompressed** message size this station will accept a proposal for, in bytes.
 ///
 /// [`MAX_PROPOSAL_C_SIZE`]'s pair, and the one that bounds an allocation rather than a buffer.
 /// `u-size` is a peer-chosen `u32` and LZHUF expands by up to `F` (60) bytes per symbol, so
-/// without this a proposal of 1,026,815 compressed bytes — under the compressed cap, answered
-/// `FS +`, and delivered as a perfectly valid message — unpacks to 49,283,111 bytes and peaks at
-/// 95 MiB. Measured, on a message whose body is a long run; `super::lzhuf`'s own
+/// without this a proposal well inside the compressed cap — answered `FS +`, and delivered as a
+/// perfectly valid message — decompresses into tens of megabytes before anything compares the
+/// result to what the `FC` line promised. Measured 2026-09-07 on a long-run body: this coder's
+/// best ratio is **47.9×**, so a 1 MiB image unpacks to about 50 MB. `super::lzhuf`'s own
 /// `a_long_run_compresses_by_orders_of_magnitude` is the same shape at a smaller size.
 ///
 /// Refused at **proposal** time for [`MAX_PROPOSAL_C_SIZE`]'s reason — a legible `-` for one
@@ -348,11 +410,15 @@ pub const MAX_PROPOSAL_C_SIZE: u32 = 1024 * 1024;
 /// into [`lzhuf::decompress_bounded`], so the image's internal length header cannot exceed what
 /// the `FC` line already promised and was already judged against this constant.
 ///
-/// **8 MiB, eight times the compressed cap.** Winlink's own documented maximum is 120,000 bytes
-/// *compressed* (see [`MAX_PROPOSAL_C_SIZE`]), so a message that could actually reach a CMS
-/// mailbox would have to expand by more than 70× to reach this. It is not a compression-ratio
-/// limit and must not be read as one: it is a statement about the largest plaintext this station
-/// will hold, which is the resource actually at stake.
+/// **8 MiB, eight times the compressed cap, and no message a CMS can hold can reach it.** Winlink's
+/// own documented maximum is 120,000 bytes *compressed* (see [`MAX_PROPOSAL_C_SIZE`]), and the
+/// most plaintext this coder can produce from an image that size is **5,751,076 bytes** — measured
+/// 2026-09-07 by bisection on a long-run body, its own best case at 47.9×. That is 1.46× under
+/// this ceiling, so the answer is not "it would have to expand improbably far" but "it cannot",
+/// and `the_ceilings_admit_the_largest_message_a_cms_account_can_hold` asserts acceptance at that
+/// pair of literal sizes rather than at whatever these constants happen to say. It is not a
+/// compression-ratio limit and must not be read as one: it is a statement about the largest
+/// plaintext this station will hold, which is the resource actually at stake.
 pub const MAX_PROPOSAL_U_SIZE: u32 = 8 * 1024 * 1024;
 
 /// The `kind` given to a proposal line that could not be read at all.
@@ -467,11 +533,19 @@ pub struct Session {
     ///
     /// A `VecDeque` and not a `Vec`, for one reason: everything here consumes from the **front**,
     /// and `Vec::drain(..n)` memmoves the tail behind it. One line at a time out of a `Vec` made a
-    /// single `feed` quadratic in its chunk — measured at 4× the time for 2× the chunk, up to
-    /// 1,868 ms for one 512 KiB chunk of short lines — because the peer picks the line length and
-    /// so picks how many memmoves its bytes cost. A ring buffer's front drain moves the head and
-    /// nothing else, which makes the same work linear without a cursor field to keep in step.
+    /// single `feed` quadratic in its chunk — measured at roughly 4× the time for 2× the chunk of
+    /// short lines, and linear after — because the peer picks the line length and so picks how
+    /// many memmoves its bytes cost. (The shape is the claim; the absolute milliseconds are not
+    /// restated here, because they moved by 8× between two machines measuring the same run.) A
+    /// ring buffer's front drain moves the head and nothing else, which makes the same work linear
+    /// without a cursor field to keep in step.
     buf: VecDeque<u8>,
+    /// How many bytes of an over-long line have been dropped so far; `0` when the session is not
+    /// inside one. Carrying it across calls is what makes [`MAX_LINE`]'s discard independent of
+    /// where the caller's read boundaries fall: a line too long to interpret is dropped to the
+    /// next CR however many `feed`s it takes to get there. It counts bytes already gone, so it
+    /// holds nothing and [`Session::held_bytes`] charges it nothing.
+    dropping_line: usize,
     /// The peer's SID once it has arrived and been accepted.
     peer_sid: Option<Sid>,
     /// The `;PQ:` challenge value, if the peer has issued one.
@@ -495,8 +569,8 @@ pub struct Session {
     ///
     /// ⚠️ **Wire bytes, so it is not a memory term** and [`Session::held_bytes`] does not charge
     /// it. It used to stand in for `image` and `framer` on the argument that every byte in either
-    /// was counted through here — true of the bytes, false of the memory, and false by 20× once
-    /// the peer chose one-byte blocks. Both are now charged for what they hold.
+    /// was counted through here — true of the bytes, false of the memory, and false several times
+    /// over once the peer chose one-byte blocks. Both are now charged for what they hold.
     binary_bytes: u64,
 }
 
@@ -513,6 +587,7 @@ impl Session {
             role,
             state: State::Greeting,
             buf: VecDeque::new(),
+            dropping_line: 0,
             peer_sid: None,
             challenge: None,
             greeted: false,
@@ -607,7 +682,10 @@ impl Session {
     /// module header's first point at the site that has to obey it: a `Vec` that grew to a
     /// megabyte and was drained still owns the megabyte, and a vector of a million one-byte frames
     /// costs `size_of::<Frame>()` a million times over before any payload is counted. Charging
-    /// data bytes instead understated this session's real cost by up to 20×.
+    /// data bytes instead understated this session's real cost several times over — measured at
+    /// 4× for a cap-sized transfer in 8-byte blocks, and
+    /// `the_door_charges_the_frames_a_peer_makes_us_hold_not_its_data_bytes` asserts a factor of
+    /// at least four on the flood it refuses.
     ///
     /// Every term is an upper bound and every term is O(1); see the module header for why both
     /// matter. Ours-not-theirs fields charge nothing, and that is a claim about the field, not an
@@ -631,6 +709,8 @@ impl Session {
             greeted: _,
             // Peer bytes not yet consumed by a line or a binary record.
             buf,
+            // A count of bytes already dropped, not bytes held: see the field.
+            dropping_line: _,
             // The peer's SID line, kept in three pieces.
             peer_sid,
             // The `;PQ:` token as it arrived. Replaced, never appended to.
@@ -673,16 +753,13 @@ impl Session {
     ///
     /// [`MAX_LINE`] is applied to the line itself, not only to a buffer with no CR in it: see that
     /// constant for why the CR-less-only reading made the outcome depend on the caller's read
-    /// boundaries, and left [`PROPOSAL_HELD_BYTES`] charging 552 bytes for a 7.8 MB MID.
+    /// boundaries, and for why an over-long line is dropped rather than fatal.
     fn drain_line(&mut self, out: &mut Vec<Action>) -> bool {
         let cr = self.buf.iter().position(|&b| b == b'\r');
-        // Over-long in either shape: a CR past the limit, or no CR and already past it.
-        if cr.map_or(self.buf.len() > MAX_LINE, |at| at >= MAX_LINE) {
-            self.fail(
-                out,
-                SessionError::Protocol("an FBB line ran past the maximum line length"),
-            );
-            return false;
+        // Over-long in either shape — a CR past the limit, or no CR and already past it — or the
+        // rest of one whose CR has still not arrived.
+        if self.dropping_line > 0 || cr.map_or(self.buf.len() > MAX_LINE, |at| at >= MAX_LINE) {
+            return self.drop_over_long_line(cr, out);
         }
         let Some(at) = cr else {
             return false;
@@ -691,6 +768,29 @@ impl Session {
         // `O(at)`, so the cost is the line and not the tail behind it.
         let raw: Vec<u8> = self.buf.drain(..=at).collect();
         self.handle_line(trim_line(&raw), out);
+        true
+    }
+
+    /// Drops a line too long to interpret, and says how long it was. Returns whether the buffer
+    /// moved on to the next line.
+    ///
+    /// Nothing of the line is kept: [`MAX_LINE`] exists to bound what this session holds, and
+    /// holding a prefix in order to report it would be the same cost with a smaller number on it.
+    /// While the CR is still outstanding the buffer is emptied and the count carried in
+    /// [`Session::dropping_line`], so an over-long line costs the same whether it arrives whole or
+    /// in pieces — and the session resumes at the next line rather than ending over one.
+    fn drop_over_long_line(&mut self, cr: Option<usize>, out: &mut Vec<Action>) -> bool {
+        let Some(at) = cr else {
+            self.dropping_line = self.dropping_line.saturating_add(self.buf.len());
+            self.buf.clear();
+            return false;
+        };
+        let dropped = self.dropping_line.saturating_add(at + 1);
+        self.buf.drain(..=at);
+        self.dropping_line = 0;
+        out.push(Action::Trace(format!(
+            "ignored an over-long line: {dropped} bytes, over the {MAX_LINE}-byte maximum"
+        )));
         true
     }
 
@@ -1158,9 +1258,10 @@ impl Session {
         // Bounded by the `u-size` this proposal declared, which `over_ceiling` already judged
         // against `MAX_PROPOSAL_U_SIZE` before the transfer was accepted. The bound goes *into*
         // the decompressor rather than being applied to what it returns: the image carries its own
-        // uncompressed length, the peer picks it, and the equality test below cannot un-allocate a
-        // 95 MiB buffer it disagrees with. `LzhufError::TooLarge` is a peer that contradicted its
-        // own `FC` line, and it fails the transfer for the same reason the length test does.
+        // uncompressed length, the peer picks it, and the equality test below cannot un-allocate
+        // the tens of megabytes it disagrees with. `LzhufError::TooLarge` is a peer that
+        // contradicted its own `FC` line, and it fails the transfer for the same reason the length
+        // test does.
         let plain = match lzhuf::decompress_bounded(&image, proposal.u_size as usize) {
             Ok(plain) => plain,
             Err(err) => return self.fail(out, SessionError::Lzhuf(err)),
@@ -1209,14 +1310,15 @@ impl Session {
     /// The shared half of both endings.
     ///
     /// **Fresh containers, not `clear()`.** `clear()` drops the elements and keeps the allocation,
-    /// so a session that gave up went on owning every byte it had been made to hold: a failed
-    /// session with `wants_close()` true measured 35.0 MiB still resident, most of it in `framer`,
-    /// which the previous version of this function did not name at all. After this, a closed
-    /// session's `held_bytes()` is zero — which is the assertion `a_closed_session_holds_nothing`
-    /// makes, and the reason for naming every peer-filled field here rather than the big ones.
+    /// so a session that gave up went on owning every byte it had been made to hold — tens of
+    /// megabytes of it, most in `framer`, which the previous version of this function did not name
+    /// at all. After this, a closed session's `held_bytes()` is zero, which is the assertion
+    /// `a_closed_session_holds_nothing` makes and the reason for naming every peer-filled field
+    /// here rather than the big ones.
     fn close(&mut self) {
         self.state = State::Closed;
         self.buf = VecDeque::new();
+        self.dropping_line = 0;
         self.peer_sid = None;
         self.challenge = None;
         self.block = Vec::new();
@@ -1617,9 +1719,17 @@ mod tests {
         );
     }
 
-    /// One `SOH`/`STX`/`EOT` transfer on the wire: header record, then the image in 256-byte data
-    /// blocks, then the `EOT` and its checksum over the data bytes alone.
-    fn transfer_records(mid: &[u8], image: &[u8]) -> Vec<u8> {
+    /// One `SOH`/`STX`/`EOT` transfer on the wire: header record, then the image in `block`-byte
+    /// data blocks, then the `EOT` and its checksum over the data bytes alone.
+    ///
+    /// `block` is a parameter because the sender picks it and what it costs this end is the whole
+    /// subject of [`MAX_SESSION_HELD_BYTES`]: 256 is [`super::fbb`]'s maximum, 125 is `wl2k-go`'s
+    /// sender, and 1 is the smallest the framing can express.
+    fn transfer_records(mid: &[u8], image: &[u8], block: usize) -> Vec<u8> {
+        assert!(
+            (1..=256).contains(&block),
+            "FBB data blocks are 1..=256 bytes"
+        );
         let mut out = Vec::new();
         let mut header = mid.to_vec();
         header.push(0);
@@ -1629,7 +1739,7 @@ mod tests {
         out.push(header.len() as u8);
         out.extend_from_slice(&header);
         let mut sum = 0u8;
-        for chunk in image.chunks(256) {
+        for chunk in image.chunks(block) {
             out.push(0x02);
             // `0x00` in the length byte means 256, which is why a full block is not 0x100.
             out.push(if chunk.len() == 256 {
@@ -1661,6 +1771,72 @@ mod tests {
         (plain, image)
     }
 
+    /// `len` bytes that LZHUF cannot shrink (xorshift64, fixed seed), so a fixture's image size is
+    /// set by the body length rather than by how well the coder happens to do on prose.
+    fn incompressible(len: usize) -> Vec<u8> {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        std::iter::repeat_with(|| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 24) as u8
+        })
+        .take(len)
+        .collect()
+    }
+
+    /// Offers one message and feeds its whole transfer in `block`-byte data blocks, returning
+    /// everything the session did.
+    ///
+    /// The wire goes in in 4 KiB chunks because that is what the sibling socket readers in
+    /// `tempo_net` hand a session (`cluster.rs`, `aprsis.rs`), so a delivery here is the delivery
+    /// a real caller gets, boundaries and all — and not a single `feed` of the whole transfer,
+    /// which no caller performs and which would hide any chunk-boundary dependence.
+    fn deliver_at_block_size(
+        mid: &[u8],
+        plain_len: usize,
+        image: &[u8],
+        block: usize,
+    ) -> Vec<Action> {
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+        let mut session = Session::new(&cfg, Role::Client);
+        let mut actions = session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+        let fc = format!(
+            "FC EM {} {plain_len} {} 0\r",
+            String::from_utf8_lossy(mid),
+            image.len()
+        )
+        .into_bytes();
+        actions.extend(session.feed(&fc));
+        actions.extend(session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&fc)).as_bytes()));
+        for chunk in transfer_records(mid, image, block).chunks(4096) {
+            actions.extend(session.feed(chunk));
+        }
+        actions
+    }
+
+    /// The MID of every message `actions` delivered, in order.
+    fn delivered(actions: &[Action]) -> Vec<Vec<u8>> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Received(msg) => Some(msg.mid.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Why the session failed, if it did.
+    fn failure(actions: &[Action]) -> Option<SessionError> {
+        actions.iter().find_map(|a| match a {
+            Action::Failed(err) => Some(*err),
+            _ => None,
+        })
+    }
+
     /// **Two accepted proposals in one block** — a CMS holding two messages, which is the ordinary
     /// case and the one no other test in this crate covers: every fixture and every control above
     /// carries exactly one proposal per block.
@@ -1679,22 +1855,13 @@ mod tests {
     /// stop this test from discriminating anything.
     #[test]
     fn two_transfers_in_one_block_are_each_counted_against_their_own_proposal() {
-        // Deliberately incompressible (xorshift64, fixed seed): prose of this length collapses to
-        // an image far too small for the first transfer to overrun the second proposal's ceiling,
-        // and the assertion below is what caught that.
-        let mut seed = 0x2545_f491_4f6c_dd1du64;
-        let long: Vec<u8> = std::iter::repeat_with(|| {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            (seed >> 24) as u8
-        })
-        .take(1500)
-        .collect();
-        let (plain_a, image_a) = body_and_image(b"AAAAAAAAAAAA", &long);
+        // Deliberately incompressible: prose of this length collapses to an image far too small
+        // for the first transfer to overrun the second proposal's ceiling, and the assertion below
+        // is what caught that.
+        let (plain_a, image_a) = body_and_image(b"AAAAAAAAAAAA", &incompressible(1500));
         let (plain_b, image_b) = body_and_image(b"BBBBBBBBBBBB", b"ok");
 
-        let wire_a = transfer_records(b"AAAAAAAAAAAA", &image_a);
+        let wire_a = transfer_records(b"AAAAAAAAAAAA", &image_a, 256);
         let ceiling_b = 3 * image_b.len() + 258 + 2;
         assert!(
             wire_a.len() > ceiling_b,
@@ -1724,7 +1891,7 @@ mod tests {
         );
 
         let mut actions = session.feed(&wire_a);
-        actions.extend(session.feed(&transfer_records(b"BBBBBBBBBBBB", &image_b)));
+        actions.extend(session.feed(&transfer_records(b"BBBBBBBBBBBB", &image_b, 256)));
 
         let failures: Vec<_> = actions
             .iter()
@@ -1840,18 +2007,34 @@ mod tests {
         }
         session.feed(&block);
         let held = session.held_bytes();
+        // Read before the `F>`: `close_proposal_block` takes `proposals` and leaves a fresh one.
+        let proposals_capacity = session.proposals.capacity();
         let actions = session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&block)).as_bytes());
         assert!(
             actions.contains(&Action::Send(b"FS +++++\r".to_vec())),
             "a five-proposal block is legitimate and must be answered in full: {actions:?}"
         );
-        // The header quotes this number; it is what an open FBB-legal block charges. It moved from
-        // 2,918 when the accounting changed from data bytes to retained heap: `PROPOSAL_HELD_BYTES`
-        // now bounds the one field a `Proposal` owns rather than charging a whole `MAX_LINE`, and
-        // `buf`/`block` are charged their capacity rather than their length.
+        // The header quotes both of these. 1,278 is what an open FBB-legal block charges all told;
+        // it moved from 2,918 when the accounting changed from data bytes to retained heap
+        // (`PROPOSAL_HELD_BYTES` now bounds the one field a `Proposal` owns rather than charging a
+        // whole `MAX_LINE`, and `buf`/`block` are charged their capacity rather than their
+        // length). 832 is the proposals' share of it, and it is asserted separately because the
+        // header stated it as 520 for three rounds — five times `PROPOSAL_HELD_BYTES`, which is
+        // `len()` arithmetic in the one paragraph that exists to say the charge is `capacity()`.
         assert_eq!(
             held, 1_278,
             "the charged cost of an open five-proposal block"
+        );
+        assert_eq!(
+            (proposals_capacity, session.accepted.capacity()),
+            (8, 8),
+            "five proposals live in a container of eight, which is why the charge is not 5 × \
+             PROPOSAL_HELD_BYTES"
+        );
+        assert_eq!(
+            session.accepted.capacity() * PROPOSAL_HELD_BYTES,
+            832,
+            "the charged cost of five accepted proposals"
         );
 
         // The finding: `FC` lines for as long as the peer cares to send them, and no `F>`.
@@ -1899,8 +2082,9 @@ mod tests {
     ///
     /// The finding this was written for: `held_bytes` counted peer *data bytes*, so a transfer
     /// delivered as one-byte `STX` blocks — three wire bytes each, all of them inside
-    /// [`Session::transfer_ceiling`] — cost one `fbb::Frame` apiece and held 75.0 MiB while the
-    /// counter read 3.1 MB. `failed=false`, `wants_close()=false`, and nothing ever took it back.
+    /// [`Session::transfer_ceiling`] — cost one `fbb::Frame` apiece and held tens of megabytes
+    /// while the counter read a few. `failed=false`, `wants_close()=false`, and nothing ever took
+    /// it back.
     ///
     /// Both directions, and the control is the point: the **same wire budget** in the 256-byte
     /// blocks a real sender uses must not be refused. What is under test is that the ceiling
@@ -1978,10 +2162,11 @@ mod tests {
     /// [`MAX_PROPOSAL_U_SIZE`], and that it is judged **before** anything is decompressed.
     ///
     /// The finding: [`Session::complete_transfer`] decompressed into a local and only then
-    /// compared the result to the peer's `u-size`. A legal 1,026,815-byte image — under
-    /// [`MAX_PROPOSAL_C_SIZE`], answered `FS +`, delivered as an `Action::Received` — expanded 48:1
-    /// to 49,283,111 bytes and peaked at 95.3 MiB. A check performed after the allocation is not a
-    /// bound, so the number is now judged at proposal time, where refusing costs one `FS -`.
+    /// compared the result to the peer's `u-size`. A legal image well under
+    /// [`MAX_PROPOSAL_C_SIZE`] — answered `FS +`, delivered as an `Action::Received` — expands by
+    /// up to 47.9× and so allocated tens of megabytes before the comparison it was waiting for. A
+    /// check performed after the allocation is not a bound, so the number is now judged at
+    /// proposal time, where refusing costs one `FS -`.
     ///
     /// Both directions: a proposal at exactly the ceiling is legal and must be accepted.
     ///
@@ -2002,7 +2187,10 @@ mod tests {
             (session, actions)
         };
 
-        // Control: exactly at the ceiling is a legal message and is accepted.
+        // Control: exactly at the ceiling is a legal message and is accepted. ⚠️ This control is
+        // written in terms of the constant it tests, so it slides with it and can never see one
+        // set too low — `the_ceilings_admit_the_largest_message_a_cms_account_can_hold` is the
+        // control that does not move, and it is what fails if this ceiling is tightened.
         let (_, actions) = answer(u64::from(MAX_PROPOSAL_U_SIZE));
         assert!(
             actions.contains(&Action::Send(b"FS +\r".to_vec())),
@@ -2032,12 +2220,179 @@ mod tests {
         }
     }
 
+    /// **The ceilings, measured against Winlink rather than against themselves.**
+    ///
+    /// The finding this exists for is about the *gate*, not the bound: every "both directions"
+    /// control above answers `answer(MAX_PROPOSAL_U_SIZE)` or feeds "the same wire budget" the
+    /// finding half established, so each control is written in terms of the constant it tests and
+    /// slides with it. Measured: [`MAX_PROPOSAL_U_SIZE`] could be set to **4096** — refusing
+    /// essentially every real message — and all 833 tests of this crate stayed green. The two
+    /// constants are `pub`, so the next consumer to tighten one ships the narrowing with a green
+    /// gate and the operator finds out when a served agency's traffic stops arriving.
+    ///
+    /// So the numbers here are **literals that do not move**, and every one of them is a fact
+    /// about Winlink or about this coder rather than about this file:
+    ///
+    /// * **120,000 bytes compressed** — Winlink's own published per-account maximum, cited in full
+    ///   at [`MAX_PROPOSAL_C_SIZE`]. The largest message that can reach a CMS mailbox at all.
+    /// * **5,751,076 bytes uncompressed** — what an image that size unpacks to at the best ratio
+    ///   this LZHUF variant reaches (47.9×, measured 2026-09-07 by bisection on a long-run body).
+    ///   The largest plaintext any CMS-legal message can arrive as.
+    ///
+    /// Both are accepted, and a message that really does expand 47× is carried end to end, so a
+    /// ceiling set anywhere below reality reddens this test with a message that names reality.
+    #[test]
+    fn the_ceilings_admit_the_largest_message_a_cms_account_can_hold() {
+        let cfg = ClientConfig {
+            callsign: "N0CALL".into(),
+            password: "pw".into(),
+        };
+        // The proposal a CMS could legitimately make at both of Winlink's own limits at once.
+        let mut session = Session::new(&cfg, Role::Client);
+        session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+        let fc = b"FC EM ABCDEFGHIJKL 5751076 120000 0\r".to_vec();
+        session.feed(&fc);
+        let actions = session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&fc)).as_bytes());
+        assert!(
+            actions.contains(&Action::Send(b"FS +\r".to_vec())),
+            "the largest message a Winlink account can hold — 120,000 bytes compressed, unpacking \
+             to 5,751,076 at this coder's best ratio — must be accepted, whatever the ceilings \
+             happen to be set to: {actions:?}"
+        );
+
+        // And one that really does expand that far, carried end to end. A long run is the shape
+        // LZHUF codes best, so this is the ratio a proposal can legitimately declare — not a
+        // contrived one.
+        let (plain, image) = body_and_image(b"ABCDEFGHIJKL", &vec![b'Z'; 1_000_000]);
+        assert!(
+            plain.len() > 40 * image.len(),
+            "this fixture only exercises a high ratio while it has one: {} plaintext bytes from \
+             an image of {}",
+            plain.len(),
+            image.len()
+        );
+        let actions = deliver_at_block_size(b"ABCDEFGHIJKL", plain.len(), &image, 256);
+        assert_eq!(
+            failure(&actions),
+            None,
+            "a legitimate high-ratio message must not fail"
+        );
+        assert_eq!(
+            delivered(&actions),
+            vec![b"ABCDEFGHIJKL".to_vec()],
+            "a message that expands {:.0}× must be delivered: {actions:?}",
+            plain.len() as f64 / image.len() as f64
+        );
+    }
+
+    /// **A message at Winlink's published maximum, at every block size the framing permits.**
+    ///
+    /// The reality anchor for [`MAX_SESSION_HELD_BYTES`] and [`MAX_PROPOSAL_C_SIZE`] together, and
+    /// the reason the module header can say the small-block refusal costs no real mail. 120,000
+    /// bytes is Winlink's own per-account maximum; one-byte `STX` blocks are the most wasteful
+    /// framing B2F can express, three wire bytes per data byte. The two together are the worst
+    /// thing a *legitimate* peer can do to this session, and it charges 5,156,288 of the
+    /// 8,388,608-byte ceiling — 61.5 %, measured 2026-09-07.
+    ///
+    /// Measured discrimination: [`MAX_SESSION_HELD_BYTES`] at 4 MiB, or [`MAX_PROPOSAL_C_SIZE`] at
+    /// anything under 120,000, and this test goes red naming the block size that stopped working.
+    #[test]
+    fn a_message_at_winlinks_published_maximum_is_carried_at_every_legal_block_size() {
+        // 119,700 incompressible bytes land the image just under Winlink's cap; the assertions
+        // are what say so, because the coder — not this fixture — decides the exact size.
+        let (plain, image) = body_and_image(b"ABCDEFGHIJKL", &incompressible(119_700));
+        assert!(
+            image.len() <= 120_000 && image.len() > 119_000,
+            "this fixture is only Winlink's maximum while its image is just under 120,000; it is \
+             {} — re-tune the body length",
+            image.len()
+        );
+
+        for block in [256usize, 125, 8, 1] {
+            let actions = deliver_at_block_size(b"ABCDEFGHIJKL", plain.len(), &image, block);
+            assert_eq!(
+                failure(&actions),
+                None,
+                "a {}-byte message at Winlink's own maximum must not be refused in {block}-byte \
+                 blocks",
+                image.len()
+            );
+            assert_eq!(
+                delivered(&actions),
+                vec![b"ABCDEFGHIJKL".to_vec()],
+                "the message must arrive in {block}-byte blocks"
+            );
+        }
+    }
+
+    /// **A transfer at [`MAX_PROPOSAL_C_SIZE`] is carried at the framings that fit, and the one
+    /// that does not is named.**
+    ///
+    /// The coherence check between the two ceilings: this station answers `FS +` to a proposal at
+    /// the compressed cap, so it has to be able to *carry* one at the framing a real sender uses.
+    /// A [`MAX_SESSION_HELD_BYTES`] too small for what [`MAX_PROPOSAL_C_SIZE`] admits is the worst
+    /// failure this file can have — the message is accepted and then the session dies mid-stream,
+    /// with the peer told nothing.
+    ///
+    /// It also pins the boundary the module header states, which two rounds got wrong in prose:
+    /// **8-byte blocks deliver, 7-byte blocks are refused**, at this transfer size. If a later
+    /// change moves that boundary, this test is where it says so, and the header's paragraph moves
+    /// with it.
+    #[test]
+    fn a_transfer_at_the_compressed_ceiling_is_carried_down_to_eight_byte_blocks() {
+        // 1,047,800 incompressible bytes land the image just under the compressed ceiling.
+        let (plain, image) = body_and_image(b"ABCDEFGHIJKL", &incompressible(1_047_800));
+        assert!(
+            image.len() <= MAX_PROPOSAL_C_SIZE as usize
+                && image.len() > MAX_PROPOSAL_C_SIZE as usize - 4096,
+            "this fixture is only at the compressed ceiling while its image is just under \
+             {MAX_PROPOSAL_C_SIZE}; it is {} — re-tune the body length",
+            image.len()
+        );
+
+        // 125 is `wl2k-go`'s sender; 8 is the smallest framing this ceiling leaves room for.
+        for block in [125usize, 8] {
+            let actions = deliver_at_block_size(b"ABCDEFGHIJKL", plain.len(), &image, block);
+            assert_eq!(
+                failure(&actions),
+                None,
+                "a transfer this station answered `FS +` to must be carriable in {block}-byte \
+                 blocks: accepting a proposal and then failing the session is the one outcome \
+                 worse than refusing it"
+            );
+            assert_eq!(
+                delivered(&actions),
+                vec![b"ABCDEFGHIJKL".to_vec()],
+                "the message must arrive in {block}-byte blocks"
+            );
+        }
+
+        // The other side of the boundary, and it is the door that says so rather than the
+        // transfer ceiling: one byte less per block costs another 32-byte `Frame` slot each.
+        let actions = deliver_at_block_size(b"ABCDEFGHIJKL", plain.len(), &image, 7);
+        let Some(SessionError::Protocol(why)) = failure(&actions) else {
+            panic!(
+                "7-byte blocks at the compressed ceiling are over the session ceiling and must be \
+                 refused there; if this now delivers, the header's stated boundary has moved and \
+                 both it and this test need re-measuring: {actions:?}"
+            );
+        };
+        assert!(
+            why.contains("five messages per block"),
+            "the refusal must be the session ceiling, not the transfer ceiling: {why}"
+        );
+        assert!(
+            delivered(&actions).is_empty(),
+            "a refused framing must not also deliver"
+        );
+    }
+
     /// [`MAX_MID`], which is what makes [`PROPOSAL_HELD_BYTES`] a bound rather than a number.
     ///
     /// The finding: the flat charge was justified by [`Session::drain_line`]'s [`MAX_LINE`]
     /// refusal, which only applied to a buffer holding no CR — so a `Proposal` could retain a
-    /// megabytes-long MID while being charged 552 bytes for it. Two things close that, and this
-    /// test covers the one in this function; `an_over_long_line_is_refused_however_it_arrives`
+    /// megabytes-long MID while being charged a fraction of it. Two things close that, and this
+    /// test covers the one in this function; `an_over_long_line_is_discarded_however_it_arrives`
     /// covers the other.
     ///
     /// **Deferred, not rejected** — [`super::fbb`]'s trap 1. `=` leaves the peer free to offer the
@@ -2064,6 +2419,24 @@ mod tests {
             actions.extend(session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&fc)).as_bytes()));
             (session, retained, actions)
         };
+
+        // The reality control, and it is a literal: a Winlink MID is twelve characters
+        // (`wl2k-go`'s `MaxMIDLength = 12`), so any tightening of `MAX_MID` under 12 destroys
+        // every real message and must redden here rather than sliding with the constant.
+        let (session, retained, actions) = answer(12);
+        assert_eq!(
+            retained, 12,
+            "a real 12-character Winlink MID is retained in full"
+        );
+        assert!(
+            actions.contains(&Action::Send(b"FS +\r".to_vec())),
+            "a real 12-character Winlink MID must be accepted: {actions:?}"
+        );
+        assert_eq!(
+            session.accepted.front().map(|p| p.mid.len()),
+            Some(12),
+            "the accepted proposal must carry the MID it was offered"
+        );
 
         // Control: exactly `MAX_MID` is accepted and kept whole.
         let (session, retained, actions) = answer(MAX_MID);
@@ -2101,28 +2474,76 @@ mod tests {
         );
     }
 
-    /// [`MAX_LINE`] applies to the line, not to a buffer that happens to hold no CR.
+    /// [`MAX_LINE`] applies to the line rather than to a buffer that happens to hold no CR, and an
+    /// over-long line is **dropped, not fatal**.
     ///
-    /// The finding: the same 600-byte line failed the session when its CR had not arrived yet and
-    /// was parsed when it had, so a peer's line length was judged by where the *caller's* read
-    /// boundaries fell. Everything else in this file is chunk-boundary-independent by
-    /// construction, and the golden transcript asserts it; this was the one place it was not.
+    /// Two findings, one rule. The first: the same 600-byte line failed the session when its CR
+    /// had not arrived yet and was parsed when it had, so a peer's line length was judged by where
+    /// the *caller's* read boundaries fell. The second, from the round that fixed the first: it
+    /// resolved the inconsistency toward *always fatal*, which took a CMS banner or MOTD line of
+    /// 512 bytes or more — arriving whole, inside one 4 KiB read — from traced-and-ignored to a
+    /// dropped connection. Refusing a working server for saying hello is exactly the trap
+    /// [`Session::handle_line`]'s last arm exists to avoid, and a length check above that arm
+    /// silently overrode it.
     ///
-    /// Both directions and both arrival shapes, which is four cases: at the limit it is accepted
-    /// whole or split, and over it it is refused whole or split.
+    /// Three things are asserted here, and the reality control is the first because the constant
+    /// has no meaning without it:
     ///
-    /// Measured discrimination: put [`Session::drain_line`] back to refusing only when no CR is
-    /// present and this test goes red; restore it and it goes green.
+    /// 1. Every line a real session must *interpret* is carried: a CMS SID, a `;PQ:` challenge, a
+    ///    `;FW:` list of twenty callsigns (164 bytes, the longest a peer sends), an `FC` line
+    ///    whose MID is at [`MAX_MID`] (78), and the block that answers them. Shrink [`MAX_LINE`]
+    ///    under any of those and this half reddens.
+    /// 2. An over-long line is discarded and traced, the session survives it, and it survives it
+    ///    identically whole or one byte at a time.
+    /// 3. The memory this constant exists for is still bounded: a mebibyte of CR-less bytes leaves
+    ///    the session holding kilobytes, not a mebibyte.
+    ///
+    /// Measured discrimination: make the over-long arm of [`Session::drain_line`] fail again and
+    /// half 2 goes red; revert it to the CR-less-only rule and the split case of half 3 goes red.
     #[test]
-    fn an_over_long_line_is_refused_however_it_arrives() {
+    fn an_over_long_line_is_discarded_however_it_arrives() {
         let cfg = ClientConfig {
             callsign: "N0CALL".into(),
             password: "pw".into(),
         };
-        let feed_line = |content: usize, whole: bool| {
+        // A real CMS opening: SID, challenge, a forwarding list for twenty stations, and a
+        // proposal carrying the longest MID this session will retain.
+        let mut fw = b";FW:".to_vec();
+        for i in 0..20 {
+            fw.extend_from_slice(format!(" KD9TA{i:02}").as_bytes());
+        }
+        assert_eq!(
+            fw.len(),
+            164,
+            "the ;FW: control is only a control at its real length"
+        );
+        let fc = format!("FC EM {} 10 10 0\r", "A".repeat(MAX_MID)).into_bytes();
+        assert_eq!(fc.len(), 79, "the FC control carries a MID at MAX_MID");
+
+        let mut session = Session::new(&cfg, Role::Client);
+        let mut actions = session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+        fw.push(b'\r');
+        actions.extend(session.feed(&fw));
+        actions.extend(session.feed(&fc));
+        actions.extend(session.feed(format!("F> {:02X}\r", fbb::fb_checksum(&fc)).as_bytes()));
+        assert_eq!(failure(&actions), None, "no real line may fail a session");
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, Action::Trace(t) if t.contains("over-long"))),
+            "no line a real peer sends may be dropped for length: {actions:?}"
+        );
+        assert!(
+            actions.contains(&Action::Send(b"FS +\r".to_vec())),
+            "the block those lines make up must still be answered: {actions:?}"
+        );
+
+        // A banner line too long to interpret: dropped, traced, and the session goes on to work.
+        // Whole and one byte at a time, because the arrival shape used to decide the outcome.
+        for whole in [true, false] {
             let mut session = Session::new(&cfg, Role::Client);
             session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
-            let mut line = vec![b'x'; content];
+            let mut line = vec![b'x'; 600];
             line.push(b'\r');
             let mut actions = Vec::new();
             if whole {
@@ -2132,28 +2553,71 @@ mod tests {
                     actions.extend(session.feed(&[*byte]));
                 }
             }
-            actions.iter().any(|a| matches!(a, Action::Failed(_)))
-        };
+            assert_eq!(
+                failure(&actions),
+                None,
+                "a 601-byte MOTD line must not end the session (whole={whole}): {actions:?}"
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::Trace(t) if t.contains("601 bytes"))),
+                "the dropped line must be traced with its length (whole={whole}): {actions:?}"
+            );
+            // Still a session, not merely un-failed: the next line is read as a line.
+            assert_eq!(session.feed(b"FF\r").last(), Some(&Action::Done));
+        }
 
-        // Control: the longest line the limit permits is carried, whole or one byte at a time.
-        // (`x…` is not FBB, so it is traced and dropped — the point is that it was not refused.)
-        assert!(!feed_line(MAX_LINE - 1, true), "a line at the limit, whole");
+        // Control: the longest line the limit permits is interpreted, whole or split — so the
+        // dropping above is a length decision and not a refusal of everything long.
+        for whole in [true, false] {
+            let mut session = Session::new(&cfg, Role::Client);
+            session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+            let mut line = vec![b'x'; MAX_LINE - 1];
+            line.push(b'\r');
+            let mut actions = Vec::new();
+            if whole {
+                actions.extend(session.feed(&line));
+            } else {
+                for byte in &line {
+                    actions.extend(session.feed(&[*byte]));
+                }
+            }
+            assert_eq!(
+                failure(&actions),
+                None,
+                "a line at the limit (whole={whole})"
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::Trace(t) if t.contains("ignored non-protocol"))),
+                "a line at the limit must reach `handle_line` (whole={whole}): {actions:?}"
+            );
+        }
+
+        // And the memory the constant exists for: a peer that never sends a CR is holding this
+        // session's buffer open, and it must not be able to grow it.
+        let mut session = Session::new(&cfg, Role::Client);
+        session.feed(b"[WL2K-5.0-B2FWIHJM$]\r;PQ: 41913235\r");
+        for _ in 0..256 {
+            let actions = session.feed(&[b'x'; 4096]);
+            assert_eq!(failure(&actions), None, "a CR-less flood is not a failure");
+        }
         assert!(
-            !feed_line(MAX_LINE - 1, false),
-            "a line at the limit, split"
+            session.held_bytes() < 64 * 1024,
+            "a mebibyte of CR-less bytes must leave the session holding kilobytes, not the \
+             mebibyte: {} held",
+            session.held_bytes()
         );
-
-        // The finding: over the limit is refused either way, where it used to depend on chunking.
-        assert!(feed_line(MAX_LINE, true), "a line over the limit, whole");
-        assert!(feed_line(MAX_LINE, false), "a line over the limit, split");
     }
 
     /// A session that has given up holds nothing.
     ///
     /// The finding: [`Session::close`] cleared five buffers and never touched `framer`, and
     /// `clear()` keeps a `Vec`'s capacity anyway — so a session reporting `wants_close()` true
-    /// still held 35.0 MiB, for as long as its caller kept it. Its own doc said "everything
-    /// unconsumed is dropped"; the largest thing was not.
+    /// still held every buffer the peer had filled, for as long as its caller kept it. Its own doc
+    /// said "everything unconsumed is dropped"; the largest thing was not.
     ///
     /// The assertion before the failure is the control: without it this test would pass just as
     /// well against a session that had never held anything.
