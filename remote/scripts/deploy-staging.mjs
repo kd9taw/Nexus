@@ -12,19 +12,22 @@ import { STAGING, requireValue } from './staging-common.mjs'
 const repository = fileURLToPath(new URL('../../', import.meta.url))
 export async function uploadArtifact(root, mode, env = process.env) {
   requireValue(['dry-run', 'migrate', 'deploy'].includes(mode), 'Use dry-run, migrate or deploy')
-  const { config } = await verifyArtifact(root, env.GITHUB_SHA)
+  const { manifest, config } = await verifyArtifact(root, env.GITHUB_SHA)
   if (mode !== 'dry-run') {
     const current = await cloudflare(env).inspect()
     requireValue(current.databaseId === config.d1_databases[0].database_id, 'The artifact database does not match the staging account inventory')
   }
   // Wrangler's cache/diagnostic files must not change the verified artifact.
-  // Only relocate its three relative filesystem paths into a disposable config.
+  // Relocate its three filesystem paths. Install the single custom domain through
+  // the scoped API after upload verification, avoiding Wrangler's bulk route
+  // reconciliation and its noninteractive DNS-overwrite defaults.
   const directory = await mkdtemp(join(tmpdir(), 'nexus-remote-wrangler-'))
   try {
     const artifact = join(root, 'remote/staging-artifact')
     config.main = join(artifact, 'worker.js')
     config.assets.directory = join(artifact, 'assets')
     config.d1_databases[0].migrations_dir = join(artifact, 'migrations')
+    config.routes = []
     const configPath = join(directory, 'wrangler.jsonc')
     await writeFile(configPath, JSON.stringify(config), { flag: 'wx', mode: 0o600 })
     const args = mode === 'migrate'
@@ -34,11 +37,20 @@ export async function uploadArtifact(root, mode, env = process.env) {
       cwd: directory, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...env, CI: 'true', WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG: 'error', WRANGLER_LOG_PATH: directory },
     })
-    child.stdout.resume()
-    child.stderr.resume()
+    const diagnostics = []
+    let diagnosticSize = 0
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => {
+      if (diagnosticSize < 65536) { diagnostics.push(bytes.subarray(0, 65536 - diagnosticSize)); diagnosticSize += bytes.length }
+    })
     const code = await new Promise((resolve, reject) => { child.once('error', () => reject(new Error('Wrangler could not start'))); child.once('close', resolve) })
-    requireValue(code === 0, `Wrangler ${mode} failed; check the scoped token permissions and Cloudflare deployment state before retrying`)
+    const codes = [...new Set([...Buffer.concat(diagnostics).toString('utf8').matchAll(/\[code: (\d{4,6})\]/g)].map(match => match[1]))].slice(0, 4)
+    requireValue(code === 0, `Wrangler ${mode} failed (exit ${code}${codes.length ? `; Cloudflare codes ${codes.join(', ')}` : ''}); inspect Cloudflare deployment state before retrying`)
     await verifyArtifact(root, env.GITHUB_SHA)
+    if (mode === 'deploy') {
+      const api = cloudflare(env)
+      await api.markUpload(config, manifest.files['worker.js'])
+      await api.attachDomain()
+    }
   } finally { await rm(directory, { recursive: true, force: true }) }
 }
 

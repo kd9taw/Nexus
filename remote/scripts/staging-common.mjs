@@ -53,7 +53,6 @@ export function stagingConfig(template, values) {
   config.workers_dev = false
   config.preview_urls = false
   config.observability = { enabled: false }
-  config.tags = [STAGING.tag]
   return config
 }
 
@@ -78,7 +77,12 @@ export async function requestBytes(url, options = {}, fetcher = fetch, label = '
 
 export async function requestJson(url, options, fetcher, label) {
   const result = await requestBytes(url, options, fetcher, label)
-  requireValue(result.status >= 200 && result.status < 300, `${label} failed (HTTP ${result.status})`)
+  if (result.status < 200 || result.status >= 300) {
+    let codes = []
+    try { codes = JSON.parse(result.bytes.toString('utf8')).errors?.map(error => error.code)
+      .filter(code => Number.isSafeInteger(code) && code >= 1000 && code <= 999999).slice(0, 4) ?? [] } catch {}
+    throw new Error(`${label} failed (HTTP ${result.status}${codes.length ? `; Cloudflare codes ${codes.join(', ')}` : ''})`)
+  }
   try { return JSON.parse(result.bytes.toString('utf8')) }
   catch { throw new Error(`${label} returned invalid JSON`) }
 }

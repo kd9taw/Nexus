@@ -77,6 +77,19 @@ The workflow is dispatched explicitly from the reviewed branch. Select an operat
    and uploads without rebuilding. The final check requires the live Worker revision,
    identity configuration and every browser asset hash to match, and proves that anonymous
    and foreign-Origin requests are refused.
+4. **recover** handles a partial upload that created the dedicated Worker before its
+   ownership tag was recorded. Supply the source revision, Worker SHA-256 and D1 UUID
+   from the reviewed failed deployment's retained artifact. It requires the uploaded
+   module bytes, identity variables, database, namespace and runtime settings to match
+   before adding the ownership tag. It neither replaces Worker code nor attaches a domain.
+
+Worker tags are applied through Cloudflare's script-settings API and read back;
+the pinned Wrangler does not support a top-level `tags` configuration field.
+The Worker is uploaded with route reconciliation disabled. After its bytes and
+bindings are confirmed, the administrator tool attaches only the staging custom
+domain through the domain API. It does not use Wrangler's noninteractive bulk DNS
+overwrite behavior. Provider failures report numeric error codes without copying
+provider response bodies, account identifiers or credentials into public logs.
 
 Example administrator commands, after source publication and the required review:
 

@@ -8,8 +8,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { STAGING, stagingConfig, verifyIdentity, requestBytes } from '../scripts/staging-common.mjs'
-import { cloudflare } from '../scripts/cloudflare-staging.mjs'
+import { STAGING, stagingConfig, verifyIdentity, requestBytes, requestJson } from '../scripts/staging-common.mjs'
+import { cloudflare, workerDigest } from '../scripts/cloudflare-staging.mjs'
 import { createArtifact, verifyArtifact, verifyLive, verifyPublicSource } from '../scripts/staging-artifact.mjs'
 import { runtime } from './runtime.mjs'
 import { uploadArtifact } from '../scripts/deploy-staging.mjs'
@@ -111,6 +111,102 @@ test('denied/ambiguous reads and hostname collisions refuse writes without loggi
   const p = provider({ loseWrite: true })
   await assert.rejects(p.api.provision(), /before a complete response/)
   assert.equal(p.calls.filter(call => call.method === 'POST').length, 1, 'an ambiguous write is not automatically repeated')
+})
+
+function uploadedProvider({ fault, denied = false } = {}) {
+  const env = { CLOUDFLARE_ACCOUNT_ID: randomBytes(16).toString('hex'), CLOUDFLARE_API_TOKEN: randomBytes(32).toString('hex') }
+  const writes = [], privateText = randomBytes(20).toString('hex')
+  let tags = [], attached = false
+  const config = stagingConfig(template, ids)
+  const settings = { compatibility_date: config.compatibility_date, observability: { enabled: false }, bindings: [
+    ...Object.entries(config.vars).map(([name, text]) => ({ name, type: 'plain_text', text })),
+    { name: 'DB', type: 'd1', id: ids.databaseId }, { name: 'ASSETS', type: 'assets' },
+    { name: 'STATIONS', type: 'durable_object_namespace', class_name: 'StationRoom' },
+  ] }
+  if (fault === 'identity') settings.bindings.find(row => row.name === 'AUTH0_ISSUER').text = 'https://other.auth0.com/'
+  if (fault === 'revision') settings.bindings.find(row => row.name === 'REMOTE_BUILD_REVISION').text = '0'.repeat(40)
+  if (fault === 'database') settings.bindings.find(row => row.name === 'DB').id = randomUUID()
+  if (fault === 'namespace') settings.bindings.find(row => row.name === 'STATIONS').script_name = 'another-service'
+  if (fault === 'extra-binding') settings.bindings.push({ name: privateText, type: 'secret_text' })
+  if (fault === 'observability') settings.observability.enabled = true
+  const fetcher = async (input, options) => {
+    const url = new URL(input)
+    assert.equal(url.origin, 'https://api.cloudflare.com')
+    assert.equal(options.headers.authorization, `Bearer ${env.CLOUDFLARE_API_TOKEN}`)
+    if (denied) return Response.json({ success: false, errors: [{ code: 10000, message: privateText }] }, { status: 403 })
+    const path = url.pathname.slice(`/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}`.length)
+    if (options.method && options.method !== 'GET') writes.push({ path, method: options.method })
+    let result
+    if (path === '/d1/database') result = [{ uuid: ids.databaseId, name: STAGING.name }]
+    else if (path === '/workers/scripts') result = [{ id: STAGING.name, tags }]
+    else if (path === '/workers/domains') {
+      if (options.method === 'PUT') {
+        assert.deepEqual(JSON.parse(options.body), { hostname: new URL(STAGING.origin).hostname, service: STAGING.name, zone_name: STAGING.zone })
+        attached = true
+      }
+      result = attached || fault === 'domain' ? [{ hostname: new URL(STAGING.origin).hostname,
+        service: fault === 'domain' ? 'another-service' : STAGING.name }] : []
+    } else if (path === `/workers/scripts/${STAGING.name}/settings`) result = settings
+    else if (path === `/workers/scripts/${STAGING.name}/content/v2`) {
+      const form = new FormData()
+      form.set('worker.js', new File([fault === 'code' ? privateText : await readFile(join(root, 'remote/dist/index.js'))], 'worker.js', { type: 'application/javascript' }))
+      if (fault === 'extra-module') form.set('extra.js', new File([privateText], 'extra.js'))
+      return new Response(form)
+    } else if (path === `/workers/scripts/${STAGING.name}/script-settings`) {
+      assert.equal(options.method, 'PATCH')
+      const body = JSON.parse(options.body)
+      assert.deepEqual(body, { tags: [STAGING.tag] })
+      tags = body.tags; result = { tags }
+    } else assert.fail('Unexpected provider request')
+    return Response.json({ success: true, result })
+  }
+  return { api: cloudflare(env, fetcher), config, writes, privateText }
+}
+
+test('an untagged upload is recovered only from exact artifact bytes and bindings, without replacing code', async () => {
+  const p = uploadedProvider()
+  await assert.rejects(p.api.inspect(), /unrecognized deployment/)
+  assert.equal(p.writes.length, 0)
+  const result = await p.api.recover(p.config, artifact.manifest.files['worker.js'])
+  assert.equal(result.revision, ids.revision)
+  assert.equal((await p.api.inspect()).workerExists, true)
+  await p.api.recover(p.config, artifact.manifest.files['worker.js'])
+  assert.deepEqual(p.writes, [{ path: `/workers/scripts/${STAGING.name}/script-settings`, method: 'PATCH' }])
+  await p.api.attachDomain()
+  await p.api.attachDomain()
+  assert.deepEqual(p.writes[1], { path: '/workers/domains', method: 'PUT' })
+  assert.equal(p.writes.length, 2, 'domain attachment is confirmed and reused')
+})
+
+test('mismatched upload bytes, identities, resources, runtime and domains refuse recovery before any write', async () => {
+  for (const fault of ['identity', 'revision', 'database', 'namespace', 'extra-binding', 'observability', 'code', 'extra-module', 'domain']) {
+    const p = uploadedProvider({ fault })
+    await assert.rejects(p.api.recover(p.config, artifact.manifest.files['worker.js']), error => {
+      assert.ok(!error.message.includes(p.privateText)); return true
+    })
+    assert.equal(p.writes.length, 0, fault)
+  }
+  const p = uploadedProvider({ denied: true })
+  await assert.rejects(p.api.recover(p.config, artifact.manifest.files['worker.js']), /HTTP 403; Cloudflare codes 10000/)
+  assert.equal(p.writes.length, 0)
+})
+
+test('provider diagnostics expose numeric error codes only, and Worker content framing is checked', async () => {
+  const privateText = randomBytes(20).toString('hex')
+  await assert.rejects(requestJson('https://example.invalid', {}, async () => Response.json({ errors: [
+    { code: 10000, message: privateText }, { code: privateText }, { code: -1 },
+  ] }, { status: 403 }), 'Provider'), error => error.message === 'Provider failed (HTTP 403; Cloudflare codes 10000)')
+  const bytes = Buffer.from('export default {}'), headers = new Headers({ 'content-type': 'application/javascript' })
+  assert.equal(await workerDigest({ status: 200, headers, bytes }), createHash('sha256').update(bytes).digest('hex'))
+  const form = new FormData()
+  form.set('worker.js', bytes.toString('utf8'))
+  const response = new Response(form, { headers: { 'cf-entrypoint': 'worker.js' } })
+  const multipart = { status: 200, headers: response.headers, bytes: Buffer.from(await response.arrayBuffer()) }
+  assert.equal(await workerDigest(multipart), createHash('sha256').update(bytes).digest('hex'))
+  multipart.headers.set('cf-entrypoint', 'other.js')
+  await assert.rejects(workerDigest(multipart), /module inventory/)
+  await assert.rejects(workerDigest({ status: 200, headers: new Headers({ 'content-type': 'text/html' }), bytes }), /media type/)
+  await assert.rejects(workerDigest({ status: 200, headers: new Headers({ 'content-type': 'multipart/form-data; boundary=missing' }), bytes }), /framing/)
 })
 
 test('public discovery rejects issuer/JWKS substitution and missing PKCE without making a login claim', async () => {
