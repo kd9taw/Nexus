@@ -124,3 +124,23 @@ it('rejects fixtures, incompatible frames and retired station sockets; disable c
   expect(viewer.close).toHaveBeenCalledWith(1001, 'stationOffline')
   expect(() => relay.receiveStation(station, frame(1), 2)).toThrow('stationNotConnected')
 })
+
+it('supports repeated authenticated app restarts while retaining same-epoch reconnect ordering', () => {
+  const relay = new ObservationRelay(access())
+  let station = peer()
+  const identity = { accountId: 'account-a', stationId: 'station-a', generation: 1, expiresAt: 120000 }
+  for (let restart = 0; restart < 32; restart++) {
+    station = peer()
+    relay.connectStation(identity, station, restart)
+    relay.receiveStation(station, JSON.stringify({ ...fixtures.spe, source: 'native', epoch: `process-${restart}`, sequence: 10 }), restart)
+    expect(relay.checkpoint().station?.peer).toBe(station)
+  }
+  const final = peer()
+  relay.connectStation(identity, final, 40)
+  const viewer = peer()
+  relay.connectObserver('resumed', browser(), trial(), viewer, 40)
+  relay.receiveStation(final, JSON.stringify({ ...fixtures.spe, source: 'native', epoch: 'process-31', sequence: 9 }), 40)
+  expect(viewer.send).not.toHaveBeenCalled()
+  relay.receiveStation(final, JSON.stringify({ ...fixtures.spe, source: 'native', epoch: 'process-31', sequence: 11 }), 41)
+  expect(viewer.send).toHaveBeenCalledTimes(1)
+})

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { RemoteStation } from '../remote-native/RemoteStation'
 import { SAT_VFO_MAPS } from '../features/satVfo'
 import { JS8_SPEED_LIST } from '../js8Vocab'
 import { confirmDialog } from '../confirm'
@@ -3407,6 +3408,13 @@ export function SettingsPanel({
             onUpdate={update}
             onSetFreq={setFreq}
           />
+          )}
+
+          {tab === 'station' && (
+          <fieldset className="settings-section" id="settings-remote-access">
+            <legend>{t('remote.settingsLegend')}</legend>
+            <RemoteStation />
+          </fieldset>
           )}
 
           {/* ---- Rig control ---- */}

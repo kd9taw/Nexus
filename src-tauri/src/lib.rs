@@ -34,6 +34,7 @@
 mod chains;
 mod pouncer;
 mod remote_monitor;
+mod remote_service;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
@@ -21820,12 +21821,15 @@ pub fn run() {
 /// Everything the chain MOVES arrives in [`BuildDeps`], which clones, so the caller can hand a
 /// second identical set to a retry after setting a corrupt WebView2 user-data folder aside.
 fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
+    let remote_publisher = remote_monitor::Publisher::default();
+    let remote_service = remote_service::Service::new(d.engine.clone(), remote_publisher.clone());
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(d.engine)
-        .manage(remote_monitor::Publisher::default())
+        .manage(remote_publisher)
+        .manage(remote_service)
         .manage(d.spectrum_feed)
         .manage(d.meter_feed)
         .manage(d.prop_cache)
@@ -21862,6 +21866,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             ui_state_save,
             get_snapshot,
             remote_monitor::get_remote_monitor_frame,
+            remote_service::get_remote_station_status,
+            remote_service::remote_station_action,
             send_message,
             resend_chat,
             select_peer,

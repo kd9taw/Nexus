@@ -99,9 +99,12 @@ export function parseFrame(value: unknown, source: SourceKind): MonitorFrame {
 // Age keeps advancing between publications, including while a source returns the
 // same cached sequence. Wall clocks on the browser and shack need not agree.
 export function ageFrame(frame: MonitorFrame, elapsedMs: number): MonitorFrame {
+  // performance.now() is fractional; the wire schema is integer milliseconds.
+  // Round residence up so relaying/revalidating a frame never makes it fresher.
+  const elapsed = Number.isFinite(elapsedMs) ? Math.ceil(Math.max(0, elapsedMs)) : Number.MAX_SAFE_INTEGER
   const age = (stamp: ReadAge | null, limit = MEASUREMENT_STALE_MS): ReadAge | null => {
-    if (!stamp || stamp.ageMs + elapsedMs >= limit) return null
-    return { ...stamp, ageMs: stamp.ageMs + Math.max(0, elapsedMs) }
+    if (!stamp || stamp.ageMs + elapsed >= limit) return null
+    return { ...stamp, ageMs: stamp.ageMs + elapsed }
   }
   const radio = frame.station.radio
   const readings = { cat: age(radio.readings.cat), dial: age(radio.readings.dial),
@@ -119,9 +122,22 @@ export function ageFrame(frame: MonitorFrame, elapsedMs: number): MonitorFrame {
   } } }
 }
 
+export type FrameOrderState = { last: { epoch: string; sequence: number } | null; retired: string[] }
 export class FrameOrder {
-  private last: MonitorFrame | null = null
+  private last: FrameOrderState['last'] = null
   private retired = new Set<string>()
+
+  constructor(state?: FrameOrderState) {
+    if (!state) return
+    if (!Array.isArray(state.retired) || state.retired.length > 16 ||
+      state.retired.some(epoch => typeof epoch !== 'string' || epoch.length > 64) ||
+      (state.last && (typeof state.last.epoch !== 'string' || state.last.epoch.length > 64 ||
+        !Number.isSafeInteger(state.last.sequence) || state.last.sequence < 1))) throw new Error('invalidFrameOrder')
+    this.last = state.last ? { ...state.last } : null
+    this.retired = new Set(state.retired)
+  }
+
+  checkpoint(): FrameOrderState { return { last: this.last ? { ...this.last } : null, retired: [...this.retired] } }
 
   accept(next: MonitorFrame): boolean {
     if (this.retired.has(next.epoch)) return false
@@ -132,7 +148,7 @@ export class FrameOrder {
       if (this.retired.size === 16) throw new Error('monitorSourceChangedTooOften')
       this.retired.add(this.last.epoch)
     }
-    this.last = next
+    this.last = { epoch: next.epoch, sequence: next.sequence }
     return true
   }
 }

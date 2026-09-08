@@ -522,6 +522,44 @@ or FlexRadio.
 
 ## Rust dependencies
 
+### Nexus Remote observation pilot
+
+Remote links **tokio-tungstenite 0.30.0** (MIT, © Daniel Abramov and Alexey
+Galakhov, <https://github.com/snapview/tokio-tungstenite>) and **tungstenite
+0.30.0** (MIT OR Apache-2.0, © Alexey Galakhov and Jason Housley,
+<https://github.com/snapview/tungstenite-rs>) for the outbound station socket.
+The new resolved dependencies include the RustCrypto `sha1`, `digest`,
+`block-buffer`, `crypto-common`, `const-oid` and `hybrid-array` crates (MIT OR
+Apache-2.0), `data-encoding` (MIT), `tokio-macros` (MIT), `syn` (MIT OR
+Apache-2.0), and `webpki-roots` 0.26.11 (CDLA-Permissive-2.0). SHA-1 is used
+only by the WebSocket handshake, not for credentials. Remote uses the existing
+Tokio, futures-util, ring, reqwest, rustls and keyring dependencies.
+
+The hosted browser links **Auth0 SPA JS 2.24.1** (MIT, © Auth0, Inc.,
+<https://github.com/auth0/auth0-spa-js>) for sign-in. Its dependency graph includes
+Auth0 Auth JS, browser-tabs-lock (SuperTokens/VRAI Labs), es-cookie (Theodore
+Brown), lodash (OpenJS Foundation; based on Underscore.js), and Filip Skokan's
+dpop, oauth4webapi, openid-client and **jose 6.2.12** libraries, all under MIT.
+The Cloudflare Worker also links jose for provider signature and claim checks
+(<https://github.com/panva/jose>). These packages are linked, not ported; no
+upstream source was copied into Nexus application modules. Auth0 and Cloudflare
+are service providers, not sponsors of Nexus.
+
+The selected upstream license texts and copyright statements are retained in
+`licenses/remote/THIRD-PARTY.txt`, including the browser's React, React DOM,
+Scheduler and Lucide notices. They travel in the desktop resources and the
+hosted browser's `remote-licenses.txt`, alongside COPYING and this NOTICE.
+Package source files were checked for separate license/copyright declarations;
+many rely on their package license rather than repeating a grant in every file.
+
+Wrangler and Miniflare (<https://github.com/cloudflare/workers-sdk>) and `ws`
+(MIT, Einar Otto Stangvik, Arnout Kazemier, Luigi Pinca and contributors,
+<https://github.com/websockets/ws>) are development/test tools. Their npm packages
+are not shipped inside the browser or desktop app. Wrangler is MIT OR Apache-2.0;
+Miniflare is MIT. Their bundled dependencies retain their own inline notices.
+
+### Existing application dependencies
+
 Nexus's Rust workspace — 17 crates under `crates/`: `deepcw`, `fst4`, `ft4`, `ft8`, `jt65`,
 `modes`, `msk144`, `propagation`, `q65`, `tempo-app`, `tempo-audio`, `tempo-core`,
 `tempo-fast`, `tempo-fast-sys`, `tempo-net`, `tempo-sstv`, `wspr` — and the standalone Tauri
@@ -686,6 +724,9 @@ The bundled and linked components combine into the GPLv3 whole:
   redistribution under GPLv3.
 - MPL-2.0 (serialport) is GPL-compatible; its source-disclosure obligations
   apply per-file to that component.
+- Remote's MIT dependencies combine under GPLv3. The webpki-roots certificate
+  data retains CDLA-Permissive-2.0, whose text accompanies that data. Remote
+  does not change Nexus's GPL-3.0-only license or the existing DeepCW obligations.
 
 Runtime data services (the "Runtime data services" section above) are **not
 bundled or linked** — the app merely queries them over the network — so their

@@ -402,6 +402,12 @@ The modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is required
 
 Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
 
+- **[Auth0 SPA JS](https://github.com/auth0/auth0-spa-js)** and
+  **[jose](https://github.com/panva/jose)** (MIT) provide Remote sign-in and token
+  verification; **[Tokio Tungstenite](https://github.com/snapview/tokio-tungstenite)**
+  (MIT) provides the outbound station socket. Full dependency credits and bundled
+  license texts are listed in [NOTICE](NOTICE).
+
 - **WSJT-X** — Joe Taylor **K1JT**, Steve Franke **K9AN**, Bill Somerville **G4WJS**, and the WSJT
   Development Group. Nexus's digital modem (`libtempo/`) is **derived from WSJT-X**: the FT8/FT4 codec,
   the 77-bit message packing, the LDPC(174,91) FEC, the CRC-14 check, and the Q65 / FST4 / FST4W /

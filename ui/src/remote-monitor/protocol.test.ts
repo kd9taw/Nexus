@@ -3,6 +3,12 @@ import fixtures from './fixtures.v2.json'
 import { ageFrame, FrameOrder, MAX_FRAME_BYTES, parseFrame } from './protocol'
 
 describe('Rust v2 observer boundary', () => {
+  it('preserves the integer wire schema across fractional browser clock readings', () => {
+    const original = parseFrame(structuredClone(fixtures.spe), 'fixture')
+    const aged = ageFrame(original, 0.125)
+    expect(() => parseFrame(aged, 'fixture')).not.toThrow()
+    expect(aged.station.radio.readings.dial!.ageMs).toBe(original.station.radio.readings.dial!.ageMs + 1)
+  })
   it('requires attributable readings and rejects mixed radio connections', () => {
     const missing = structuredClone(fixtures.spe)
     missing.station.radio.readings.cat = null as never

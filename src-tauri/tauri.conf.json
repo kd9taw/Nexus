@@ -67,6 +67,7 @@
       "resources/hamlib/*": "resources/hamlib/",
       "resources/deepcw/*": "resources/deepcw/",
       "resources/tles/*": "resources/tles/",
+      "../licenses/remote/*": "resources/remote/",
       "../COPYING": "COPYING",
       "../NOTICE": "NOTICE"
     },

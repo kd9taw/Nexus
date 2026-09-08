@@ -208,6 +208,58 @@ jobs:
       - name: cargo clippy src-tauri --features radio
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib --features radio -- -D warnings
 
+      - name: Set up Node.js for the native Remote integration
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # The Rust probe runs the real controller, Publisher and outbound socket.
+      # Only its OS vault and hardware readings are substituted in test code.
+      # workerd verifies ephemeral JWTs and executes the actual D1 migrations.
+      - name: Build the local Remote integration runtime
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm --prefix ui ci
+          npm --prefix remote ci
+          npm --prefix ui run build:remote
+          npm --prefix remote run build
+
+      - name: Native Remote controller through the Cloudflare runtime
+        run: npm --prefix remote run test:native
+
+  remote-web:
+    name: Remote browser and Cloudflare service (local only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install Remote dependencies
+        run: |
+          npm --prefix ui ci
+          npm --prefix remote ci
+      - name: Build the hosted browser
+        run: npm --prefix ui run build:remote
+      - name: Check and bundle the Cloudflare service without deployment
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm --prefix remote run types
+          npm --prefix remote run check
+          npm --prefix remote run build
+      - name: Service authorization, real sockets and hibernation
+        run: npm --prefix remote test
+      - name: Compiled browser sign-in, approval, observation and responsive layouts
+        run: |
+          google-chrome --version
+          npm --prefix remote run test:browser
+      - name: Remote dependency advisories
+        run: npm --prefix remote audit --audit-level=moderate
+
   # Job 2 — Web UI (Vite + React + TypeScript). `npm run build` is `tsc -b &&
   # vite build`, so this also type-checks the DTO contract that mirrors
   # crates/tempo-app/src/dto.rs.

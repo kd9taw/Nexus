@@ -61,9 +61,9 @@ function Fact({ label, value, age }: { label: string; value: string | null; age?
     {value !== null && age && <dd className="rm-muted">{t('monitor.measuredAgo', { seconds: (age.ageMs / 1000).toFixed(1) })}</dd>}</div>
 }
 
-type Props = { source: MonitorSource; previewTools?: ReactNode; scale?: number }
+type Props = { source: MonitorSource; previewTools?: ReactNode; navigation?: ReactNode; scale?: number }
 
-function MonitorSession({ source, previewTools, scale }: Props) {
+function MonitorSession({ source, previewTools, navigation, scale }: Props) {
   const [state, setState] = useState<MonitorState>(initialState)
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark')
   useViewport(scale, true)
@@ -81,6 +81,7 @@ function MonitorSession({ source, previewTools, scale }: Props) {
     <div className="app remote-monitor-app">
       <header className="rm-header">
         <div className="rm-brand"><Radio size={23} aria-hidden="true" /><strong>{BRAND}</strong><span>{t('monitor.title')}</span></div>
+        {navigation}
         <button className="rm-theme" aria-label={theme === 'dark' ? t('monitor.light') : t('monitor.dark')}
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
           {theme === 'dark' ? <Sun aria-hidden="true" size={22} /> : <Moon aria-hidden="true" size={22} />}

@@ -1,11 +1,12 @@
 //! Local observer adapter. No network listener and no mutation dispatch.
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempo_app::remote_monitor::{Frame, Source, MAX_SEQUENCE, POLL_MS, VERSION};
 
+#[derive(Clone)]
 pub struct Publisher {
     epoch: String,
-    cache: Mutex<Option<(Instant, Frame)>>,
+    cache: Arc<Mutex<Option<(Instant, Frame)>>>,
 }
 
 impl Default for Publisher {
@@ -19,13 +20,17 @@ impl Default for Publisher {
                     .unwrap_or_default()
                     .as_nanos()
             ),
-            cache: Mutex::new(None),
+            cache: Arc::new(Mutex::new(None)),
         }
     }
 }
 
 impl Publisher {
-    fn read(&self, engine: &super::SharedEngine, now: Instant) -> Result<Frame, &'static str> {
+    pub(crate) fn read(
+        &self,
+        engine: &super::SharedEngine,
+        now: Instant,
+    ) -> Result<Frame, &'static str> {
         // Coalesce multiple observer windows; never queue behind capture/CAT work.
         let mut cache = self.cache.try_lock().map_err(|_| "monitorBusy")?;
         if let Some((published, frame)) = cache.as_ref() {

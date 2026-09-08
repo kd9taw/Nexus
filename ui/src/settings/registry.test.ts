@@ -43,8 +43,13 @@ const here = dirname(fileURLToPath(import.meta.url))
  * its registry entry looks orphaned. `SettingsStation.tsx` was the first (2026-08-18, the i18n
  * pilot); the failure it would otherwise have produced named the registry, not the move.
  */
-const PANEL_SOURCES = ['../components/SettingsPanel.tsx', '../components/SettingsStation.tsx']
-const panelSrc = PANEL_SOURCES.map((rel) => readFileSync(resolve(here, rel), 'utf8')).join('\n')
+const panelMain = readFileSync(resolve(here, '../components/SettingsPanel.tsx'), 'utf8')
+const stationSource = readFileSync(resolve(here, '../components/SettingsStation.tsx'), 'utf8')
+// Expand extracted sections at their actual call sites. Appending their source
+// made Station's first section appear last as soon as a second section existed.
+const stationCalls = [...panelMain.matchAll(/<SettingsStation\b[\s\S]*?\/>/g)]
+if (stationCalls.length !== 1) throw new Error('Expected exactly one SettingsStation render site')
+const panelSrc = panelMain.replace(stationCalls[0][0], stationSource)
 
 /** The panel writes legends as JSX with HTML entities (`&amp;`, `&mdash;`); the registry holds
  * plain text. Decode the handful the panel actually uses so the two can be compared.

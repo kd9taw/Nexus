@@ -5,6 +5,7 @@
 // bridge is somehow absent the call throws loudly (surfaced as an error toast)
 // rather than silently fabricating data. Nexus runs only inside the desktop app.
 
+import type { RemoteStationAction, RemoteStationStatus } from './remote-native/types'
 import type {
   AppSnapshot,
   AudioDevices,
@@ -176,6 +177,9 @@ export async function getCredentialsStatus(): Promise<import('./types').CredStat
 export async function getRemoteMonitorFrame(): Promise<unknown> {
   return invoke<unknown>('get_remote_monitor_frame')
 }
+
+export function getRemoteStationStatus(): Promise<RemoteStationStatus> { return invoke('get_remote_station_status') }
+export function remoteStationAction(action: RemoteStationAction): Promise<RemoteStationStatus> { return invoke('remote_station_action', { action }) }
 
 export async function getSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot')

@@ -18,6 +18,7 @@
 # node / tauri
 node_modules/
 /ui/dist-monitor/
+/ui/dist-remote/
 dist/
 src-tauri/target/
 

@@ -1,0 +1,16 @@
+/* Both account management and the native settings section use their host's
+   existing scroll owner. Inputs and actions remain reachable with a keyboard. */
+.remote-account { max-width: 900px; }
+.remote-account h1, .remote-account p { margin: 0; }
+.remote-section { display: grid; gap: 16px; padding: 24px; min-width: 0; }
+.remote-section h2 { margin: 0; }
+.remote-section form, .remote-section label { display: grid; gap: 10px; min-width: 0; }
+.remote-section input { min-width: 0; width: 100%; min-height: 44px; box-sizing: border-box; padding: 8px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.remote-section code, .remote-account code { overflow-wrap: anywhere; }
+.remote-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.remote-button { min-width: 44px; min-height: 44px; padding: 8px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); color: var(--text); font: inherit; cursor: pointer; white-space: normal; }
+.remote-button:disabled { opacity: 0.55; cursor: default; }
+.remote-section summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.remote-section details p { margin: 12px 0; }
+.remote-native { padding: 0; }
+.remote-native .remote-actions { margin-top: 8px; }

@@ -5,6 +5,18 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Remote observation pilot:** Settings → Station → Remote access can pair a
+  station with a pilot account and approve individual browsers. The hosted web
+  view shows radio and SPE/KPA amplifier readings, hides stale measurements, and
+  supports local disable and access revocation. Pairing survives a restart;
+  observation requires local enable after each launch. The pilot needs a
+  configured staging service and administrator-enabled trial access. Receive
+  audio, radio/amplifier commands, QSO logging and payment are later stages.
+
 ## [1.11.0] — 2026-09-08
 
 ### Added

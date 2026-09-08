@@ -103,6 +103,11 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'class', 'extra', 'general', 'technician', 'operator name', 'state', 'my call'],
   },
 
+  {
+    id: 'remote-access', label: 'Remote access', tab: 'station',
+    keywords: ['browser', 'shack', 'pairing', 'account', 'device approval', 'observation', 'internet'],
+  },
+
   // ---- Radio -------------------------------------------------------------------
   {
     id: 'radios',

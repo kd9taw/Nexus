@@ -2,7 +2,7 @@
 // supply identities/access records; these are never trusted WebSocket payloads.
 // No credentials, hardware commands, QSO writes or persistent telemetry live here.
 import { ageFrame, FrameOrder, MAX_FRAME_BYTES, parseFrame, STALE_MS } from './protocol'
-import type { MonitorFrame } from './protocol'
+import type { FrameOrderState, MonitorFrame } from './protocol'
 
 export const MAX_OBSERVERS = 4
 export const MAX_TRUSTED_DEVICES = 8
@@ -21,6 +21,8 @@ export type BrowserIdentity = Identity & { deviceId: string; deviceGeneration: n
 export type Peer = { send: (message: string) => void; close: (code: number, reason: string) => void }
 type Observer = { peer: Peer; identity: BrowserIdentity; until: number
   sent: { epoch: string; sequence: number; at: number } | null; awaiting: boolean }
+export type StationCheckpoint = { peer: Peer; identity: StationIdentity }
+export type ObserverCheckpoint = Observer & { sessionId: string }
 
 function validTime(value: number): boolean { return Number.isSafeInteger(value) && value >= 0 }
 function browserAllowed(access: StationAccess, identity: BrowserIdentity, now: number): boolean {
@@ -56,10 +58,40 @@ export class ObservationRelay {
 
   constructor(access: StationAccess) { this.access = copyAccess(access) }
 
+  /** Attachments are written by the trusted adapter. Dropping the latest frame on
+   * wake is deliberate: a new publication must arrive before any display resumes. */
+  static restore(access: StationAccess, order: FrameOrderState, station: StationCheckpoint | null,
+    observers: ObserverCheckpoint[], now: number): ObservationRelay {
+    const relay = new ObservationRelay(access)
+    relay.order = new FrameOrder(order)
+    if (station) {
+      if (station.identity.accountId !== access.accountId || station.identity.stationId !== access.stationId) throw new Error('invalidCheckpoint')
+      relay.station = station
+    }
+    if (observers.length > MAX_OBSERVERS || new Set(observers.map(o => o.sessionId)).size !== observers.length) throw new Error('invalidCheckpoint')
+    for (const observer of observers) {
+      if (!station || !validTime(observer.until) || observer.until > observer.identity.expiresAt) throw new Error('invalidCheckpoint')
+      relay.observers.set(observer.sessionId, observer)
+    }
+    relay.expire(now)
+    return relay
+  }
+
+  checkpoint(): { access: StationAccess; order: FrameOrderState; station: StationCheckpoint | null; observers: ObserverCheckpoint[] } {
+    return { access: copyAccess(this.access), order: this.order.checkpoint(),
+      station: this.station ? { ...this.station, identity: { ...this.station.identity } } : null,
+      observers: [...this.observers].map(([sessionId, o]) => ({ ...o, sessionId, identity: { ...o.identity }, sent: o.sent ? { ...o.sent } : null })) }
+  }
+
   connectStation(identity: StationIdentity, peer: Peer, now: number): void {
     if (!this.access.enabled || identity.accountId !== this.access.accountId || identity.stationId !== this.access.stationId ||
       identity.generation !== this.access.stationGeneration || !validTime(identity.expiresAt) || identity.expiresAt <= now) throw new Error('stationNotApproved')
     if (this.station) this.disconnectStation(this.station.peer)
+    // A newly authenticated producer may represent a new app process. Keep the
+    // last sequence to reject same-process reconnect replay, but scope retired
+    // epochs to that producer connection. Otherwise ordinary app restarts would
+    // permanently exhaust the bounded replay history after sixteen launches.
+    this.order = new FrameOrder({ last: this.order.checkpoint().last, retired: [] })
     this.station = { peer, identity: { ...identity } }
     this.latest = null
     this.demand()
@@ -166,7 +198,7 @@ export class ObservationRelay {
       (observer.sent?.epoch === latest.frame.epoch && observer.sent.sequence === latest.frame.sequence)) return
     observer.sent = { epoch: latest.frame.epoch, sequence: latest.frame.sequence, at: now }
     observer.awaiting = true
-    try { observer.peer.send(JSON.stringify({ type: 'observation', frame: ageFrame(latest.frame, now - latest.at) })) }
+    try { observer.peer.send(JSON.stringify({ type: 'observation', sentAtMs: now, frame: ageFrame(latest.frame, now - latest.at) })) }
     catch { this.disconnectObserver(id, 1011, 'observerUnavailable') }
   }
 

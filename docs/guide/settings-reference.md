@@ -60,6 +60,25 @@ Your operator identity, license privileges, and default frequency.
 operator name sit to the left of these. The values shown are one station's, not
 recommendations.*
 
+### Remote access
+
+The Remote observation pilot shares radio and amplifier status with approved
+browsers. It requires an account with trial access on a configured Remote service.
+
+Start **Pair a station**, enter its code in the service, then compare the account
+ID on both screens and approve the pairing here. Each browser requests its own
+approval; compare its name and code before approving it at the shack.
+
+**Enable Remote observation** opens an outbound encrypted connection. No port
+forwarding is required. **Disable Remote observation** disconnects remote viewers.
+Pairing stays in the operating system's credential store; for this pilot,
+observation must be enabled locally after every Nexus restart. A locked or
+unavailable credential store leaves Remote disabled.
+
+**Revoke station access** disconnects the station and removes its Remote pairing.
+Pair again to reconnect. The pilot provides observation only; audio, operating
+controls and QSO logging are not available through it.
+
 ---
 
 ## Radio
