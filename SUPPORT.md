@@ -13,11 +13,12 @@ TempoFast/TempoDeep chat layer. Here's the fastest way to get unstuck or get inv
 
 ## 1. Check the manual first
 
-The **[operator manual](docs/manual/)** is your full guide:
+The **[operator manual](docs/guide/)** is your full guide — one illustrated page per section of
+the app, also at **[hamradiotools.io/manual](https://hamradiotools.io/manual/)**.
 
-- **[Getting Started](docs/manual/Getting-Started.md)** — install + first run.
-- **[Troubleshooting](docs/manual/Troubleshooting.md)** — blank window, SmartScreen, no decodes, CAT/rigctld, audio levels, time sync, PTT.
-- **[Rig & Audio Setup](docs/manual/Rig-and-Audio-Setup.md)** and the **[FAQ](docs/manual/FAQ.md)**.
+- **[Quick start](docs/quick-start.md)** — install and first run, a step at a time.
+- **[Troubleshooting](docs/troubleshooting.md)** — blank window, SmartScreen, no decodes, CAT/rigctld, audio levels, time sync, PTT.
+- **[Rig & Audio Setup](docs/manual/Rig-and-Audio-Setup.md)** and the **[FAQ](docs/faq.md)**.
 
 ## 2. Ask a question
 
