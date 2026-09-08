@@ -103,6 +103,18 @@ Roster when you're scanning a busy band for the one call worth working.
    73" in [Settings ▸ Digital](settings-reference.md#digital-ft8ft4)).
    The QSO logs automatically if Auto-log is on.
 
+![The Operate QSO strip mid-exchange, reading TRANSMITTING · AwaitRr73 · W1AW · −13 dB, with the outgoing line W1AW KD9TAW R-13 beneath it and Send and Log beside it.](../img/manual/operate-qso-sequence.webp)
+
+*The sequencer three overs in, in Nexus 1.10.3. The state word is the engine's
+own — **AwaitRr73** means your rogered report has gone out and it is waiting for
+their RR73 — and the **TX** line is what goes on the next slot.*
+
+![Three logbook rows — W1AW, VE3ABC and G0ABC, all 20 m FT8 on 14.0740 — each with its sent and received report, and a green L in the QSL column of the confirmed one.](../img/manual/operate-qso-logged.webp)
+
+*The same contact after the 73, at the top of the [Logbook](logbook-qsl.md) in
+Nexus 1.10.3. Digital reports are logged as the dB figures the mode exchanged,
+not as 59.*
+
 ### Run CQ (call and work the pileup)
 
 1. Set your band and audio frequency, then click **Call CQ**. Directed CQ (CQ DX,
@@ -136,6 +148,12 @@ double-clicking a spot on the [Connect map](connect.md).
 3. Multi-payload Fox frames are split and attributed safely — a bystander's "73"
    can never fabricate a confirmation in your log.
 
+![The Operate header row with Hound lit amber at the left and, further along, SPLIT lit green beside a − / +5 / + stepper and a green CAT badge.](../img/manual/operate-hound-split.webp)
+
+*Hound armed and split set in Nexus 1.10.3 — nothing in this frame is
+transmitting. The split stepper appears only once CAT is answering, because the
+offset is programmed into the radio rather than faked in audio.*
+
 Nexus implements the **Hound** side. The **Fox** role (running the DXpedition
 end) is not implemented.
 
@@ -164,6 +182,13 @@ If another app owns the rig, **Companion mode** rides an upstream WSJT-X/JTDX
 decode stream over UDP (default :2237) instead of decoding itself — point it at
 the source in
 [Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds).
+
+![Settings ▸ Logging & Connectors: a WSJT-X UDP API toggle switched on above a UDP address field reading 127.0.0.1:2237, and at the far right a Companion UDP address field holding the same host and port.](../img/manual/operate-companion-udp.webp)
+
+*The two ends of the UDP link in Nexus 1.10.3, and they point opposite ways. The
+left pair is what Nexus **sends** — the feed GridTracker and JTAlert read. The
+right field is what Nexus **listens to** in Companion mode. Loopback here because
+both programs are on one PC; across the shack it is the other machine's address.*
 
 ## Honest limits
 

@@ -90,6 +90,16 @@ RX audio and TX indicators over to what it actually found. If it fails,
 [Troubleshooting → CAT](https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md#cat--rig-control) walks through the
 usual causes.
 
+*A station that is actually working, in Nexus 1.10.3. The dB figure is this
+station's own; anything from about 15 to 70 decodes, and 0 means no audio is
+arriving at all.*
+
+*The same strip with nothing connected. **Rig not answering** is CAT — wrong
+port, wrong baud, or the cable; hover the light for the radio's own reply, then
+fix it here and press **Test CAT** again. **RX audio error** is the input device
+refusing to open, usually because another program holds it. Fix the rig first:
+on a one-cable interface the audio device is part of the same radio.*
+
 ### Step 3 — Your log
 
 **Import my ADIF log…** reads any standard ADIF (`.adi` / `.adif`) export —

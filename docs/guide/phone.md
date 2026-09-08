@@ -140,6 +140,12 @@ QSO recording streams the rig's RX audio straight to a timestamped WAV on disk,
 with crash-safe headers and a 2-hour auto-stop, so a long ragchew or a dropped
 session never leaves you with a corrupt file.
 
+![Settings ▸ Logging & Connectors: a Save a WAV per logged QSO toggle, a sentence naming the folder the files land in, an Open recordings folder link, and beside them a Save received audio (.wav per period) dropdown reading None (default).](../img/manual/phone-qso-recording.webp)
+
+*Where the recordings go, in Nexus 1.10.3 — the path shown is this station's, and
+**Open recordings folder** opens yours. The per-period setting next to it is a
+decoder-debugging tool, not a QSO recorder: "All" writes about 2 GB a day.*
+
 ## Field Day and logging
 
 The log strip pre-fills **59 / SSB**. Log a contact and — because the draft is

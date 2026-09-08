@@ -97,6 +97,20 @@ usual causes.
 
 ![Step 2, "How does the radio connect?", with the 2 Your rig chip current. A "Detect my radio" button sits above seven detected serial rows — Silicon Labs CP210x bridges on COM6 and COM4, Dual CP2105 Standard and Enhanced COM ports on COM9, COM8, COM3 and COM5, and an FTDI USB Serial Port on COM7 — each naming its chip, the CP2105 rows adding "CI-V port — use this one" or "second port, not CI-V", and the Enhanced COM3 row outlined as selected. Below them the USB / Serial and Network connection cards, Audio in set to Line (3- USB AUDIO CODEC) and Audio out to Speakers on the same codec, a Test CAT button, and a SETUP HEALTH strip reading Rig responding, RX audio 42 dB and TX on with a Prove TX button. "← Back", "I'll set it up myself" and "Next →" close the step.](img/manual/wizard-rig.webp)
 
+![The wizard's Setup health strip with all three lights green: Rig responding, RX audio 42 dB, TX on, and a Prove TX button.](img/manual/wizard-setup-health-ok.webp)
+
+*A station that is actually working, in Nexus 1.10.3. The dB figure is this
+station's own; anything from about 15 to 70 decodes, and 0 means no audio is
+arriving at all.*
+
+![The same strip with the first two lights red: Rig not answering, RX audio error, TX off.](img/manual/wizard-setup-health-fail.webp)
+
+*The same strip with nothing connected. **Rig not answering** is CAT — wrong
+port, wrong baud, or the cable; hover the light for the radio's own reply, then
+fix it here and press **Test CAT** again. **RX audio error** is the input device
+refusing to open, usually because another program holds it. Fix the rig first:
+on a one-cable interface the audio device is part of the same radio.*
+
 ### Step 3 — Your log
 
 **Import my ADIF log…** reads any standard ADIF (`.adi` / `.adif`) export —
