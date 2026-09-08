@@ -581,6 +581,11 @@ signal lives here, not with the radio.
 
 Mic gain and voice-keyer message recording are in the Phone cockpit, not here.
 
+![The Phone (SSB / FM) group: Phone mode set to "SSB (USB/LSB by band)", and under a Microphone heading, Voice mic (recording) set to a named USB microphone.](../img/manual/settings-phone.webp)
+
+*Phone settings in Nexus 1.10.3. On SSB the repeater shift and CTCSS controls are
+hidden — they appear when Phone mode is set to FM.*
+
 ---
 
 ## CW
@@ -625,6 +630,12 @@ with the radio.
   call, F6 his call, F7 ask repeat, F8 query), so the Guided copilot's next-step
   highlight still rolls F1→F2→F3→F4 through customized text.
 
+![The CW group: Keyer backend set to "WinKeyer — K1EL hardware keyer", Sidetone pitch 600 Hz, WinKeyer port on a named COM port, a CW ID after 73 switch turned off, and a CW cockpit F-keys profile picker reading Default with New, Rename, Delete and Customize buttons.](../img/manual/settings-cw.webp)
+
+*The CW tab in Nexus 1.10.3, on a station running a hardware WinKeyer. Which
+ports and which backend are yours to pick — the four backends are described
+above.*
+
 ---
 
 ## Digital
@@ -648,6 +659,18 @@ the radio.
   goes straight out." Off = you arm TX yourself each time.
 - **Tune timeout (s)** — "Auto-release the tune carrier after this many seconds —
   never leave a key-down unattended" (default 12).
+- **Tune power (%)** — the power a tune-up keys at. Leave it empty and Nexus
+  never touches your power setting, which is the default behaviour. It can only
+  turn the rig **down**, never up: it keys at whichever is lower, this figure or
+  the power you are already running, so 50 % here while you run 25 % still tunes
+  at 25 %. On a 100 W rig, 10 % is about 10 W — enough for an antenna tuner, kind
+  to a loop.
+
+![The Digital tab's left-hand columns, four groups stacked: Transmit & sequencing with a TX watchdog of 6 minutes and Disable TX after sending 73 on; Auto-CQ & caller selection with Wait before calling CQ again set to 180 and an empty Blocked callsigns box; Logging behavior with Auto-log QSOs on and Prompt before logging off; and Decoder with Decode depth on Deep and the passband reading F low 200, F high 2900.](../img/manual/settings-digital.webp)
+
+*Four of the Digital tab's five groups in Nexus 1.10.3. Each group continues to
+the right — Tune timeout and Tune power finish the first row, Best caller the
+second. Every value shown is one station's.*
 
 **Auto-CQ & Caller Selection**
 
@@ -655,6 +678,16 @@ the radio.
   it (the TX watchdog is the backstop). Set a number to auto-stop an unanswered
   CQ run." The Tempo chat CQ run always stops (default 10 unanswered); this
   number overrides that budget too.
+- **Wait before calling CQ again** — seconds off the air after an unanswered run,
+  before the next one starts. Default 180 (three minutes). 0 = do not resume: the
+  run simply stops. You are still **listening** through the pause — a station
+  that calls you is worked as normal, and answering anyone resets the count, so a
+  busy run never pauses at all.
+- **Blocked callsigns** — stations your auto-responder must never answer when
+  they reply to your CQ. They are passed over for the next caller and shown
+  dimmed (or hidden) in the roster and Band Activity. The base call is matched,
+  so `PD2BS` also blocks `PD2BS/P`. Alt-double-click any decode or roster row to
+  add one without coming here. Saved as you leave the field, not on **Save**.
 - **Tempo chat: send cycles per message** — "A chat message transmits at most
   this many cycles, then shows 'no ack' (tap the bubble to re-send). Blank = 3
   (TempoDeep uses 5). Never affects FT8/FT4."
@@ -684,8 +717,6 @@ the radio.
 
 All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
 (Companion mode) decodes arrive already made and **none of them apply**.
-
-![The top of the Digital tab, the Digital (FT8/FT4) fieldset spread across the full width of the window. Transmit & sequencing runs along the top — Transmit period TX 1st (even) on, TX watchdog 6 minutes, Disable TX after sending 73 on, Double-click arms TX on, Tune timeout 12 s. Auto-CQ & caller selection and Logging behavior follow, with Auto-log QSOs on and Prompt before logging off. The Decoder group sits at the bottom: Decode depth on Deep, the passband reading F low 200 and F high 2900, A-priori (AP) decoding — FT8 on while AP: CQ hypothesis only and Single decode are off, with DXpedition mode beginning below. Each control has its explanation printed under it.](../img/manual/settings-modes.webp)
 
 - **Decode depth** — Fast / Normal / Deep. "Deep finds the most signals (WSJT-X
   default); Fast saves CPU on old hardware."
@@ -726,7 +757,20 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   within ~0.5 s." Turn off for fully-offline operation (no network calls).
 - **Station power (W)** — "Your transmit power in watts — unlocks the Journey
   miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
-  if unknown.
+  if unknown. This is what you actually run, for the record — it commands
+  nothing; the rig's power lives on the cockpit **Pwr** slider.
+- **Units** — Automatic (from your system), Metric (km, °C) or Imperial (mi, °F).
+  Covers distances, temperature and wind speed. Automatic follows your operating
+  system's region. It applies everywhere in the app the moment you change it.
+
+![The Station housekeeping row: Journey — track a weekly streak off, Beacon — announce presence (CQ) off, IR-HARQ — combine retransmissions on, and Clock check (NTP) on.](../img/manual/settings-station-housekeeping.webp)
+
+*Station housekeeping in Nexus 1.10.3, left half.*
+
+![Two fields: Station power (W) reading 1000, and Units set to "Automatic (from your system)".](../img/manual/settings-station-power-units.webp)
+
+*The same row's right half. 1000 W is one station's figure, recorded so the
+Journey miles-per-watt maths is right — not a setting that changes the rig.*
 
 ### JT65 — classic EME
 
@@ -777,6 +821,11 @@ Beacons transmit your callsign, grid and power, so Call CQ and S&P are inactive
 on these tiers. Transmit still has to be armed as usual: **the schedule never
 keys a radio whose transmit you have not enabled.**
 
+![The Beacons — WSPR & FST4W group: Transmit % 0, Transmit power (dBm) 0, FST4W round robin slot 0 and Round robin slots 0.](../img/manual/settings-beacons.webp)
+
+*Beacons in Nexus 1.10.3, at their defaults — Transmit % 0 is listen-only, and
+Transmit power 0 keeps the beacon silent until you enter your real power.*
+
 ### FST4 (QSO) / FST4W (beacon)
 
 - **T/R period** — 15 / 30 / 60 / 120 / 300 / 900 / 1800 s, shared by both tiers.
@@ -801,6 +850,10 @@ that text is stale — both report `tx: true`.)
 
 Q65 transmits and receives, and **both stations must match**: a correspondent on
 a different period or submode will not decode you.
+
+![The Q65 — EME / VHF+ scatter group: T/R period set to "60 s — EME (most common)" and Submode (tone spacing) set to "A — narrowest, most sensitive".](../img/manual/settings-q65.webp)
+
+*Q65 in Nexus 1.10.3. Both boxes have to match the station you are working.*
 
 ### Quick-reply macros
 
@@ -836,19 +889,38 @@ Comma-separated chip lists for the quick text you fire from each surface:
   AFSK in USB/DATA-U) so the on-air sense stays correct." Applies to TX and the
   RX decoder.
 
+![The RTTY group: "Start receiving when RTTY opens" switched on, Keying backend set to "AFSK — soundcard tones through the rig in LSB (default)", Baud rate "45.45 — the HF standard" and Shift "170 — the HF standard".](../img/manual/settings-rtty.webp)
+
+*RTTY in Nexus 1.10.3, on the AFSK default. Baud and shift drive both the
+transmitter and the decoder, so they have to match the station you are copying.*
+
 ### PSK
 
 PSK31 receive needs no setup: open the PSK screen, tune a watering hole
 (14.070 is the classic), click a warble trace on the waterfall and the text
 prints. The click nets the *decoder* — it never moves the rig — and a
-slew-limited AFC (never more than ±25 Hz) rides small drift for you. PSK31 is
-receive-only in this release; transmit is on the keyboard-modes roadmap.
+slew-limited AFC (never more than ±25 Hz) rides small drift for you.
+
+PSK31 **transmits as well as receives** in this build. Nothing about sending
+lives on this tab, which is why there is only one control here: you type and send
+from the PSK cockpit, and its dock carries the macros, the continuous-TX latch
+and its own Stop. An over is capped at 500 characters — about two to three
+minutes of air time, so a single message can never key past the default TX
+watchdog on its own — and every send is refused up front, with a reason, if TX is
+not armed, the dial is outside your licence privileges, another section owns the
+rig, or a tune carrier is up.
 
 - **Start receiving when PSK opens** — on by default: entering the screen arms
   the decoder, so a signal on the band prints without touching anything. Turn
   it off to arm by hand (the Arm RX button in the decoded-text pane) — for
   instance on a shared rig you monitor from. Stopping the receiver yourself is
-  remembered for the rest of the session either way.
+  remembered for the rest of the session either way. **This arms the receiver
+  only** — transmit is never armed for you.
+
+![The PSK group with a single control: "Start receiving when PSK opens", switched on.](../img/manual/settings-psk.webp)
+
+*The whole of the PSK tab in Nexus 1.10.3 — one receive control. Transmitting is
+done from the PSK cockpit, not from here.*
 
 ### JS8
 
@@ -902,6 +974,12 @@ nothing until you enable TX in the cockpit, every session.
 
 ### SSTV
 
+![The SSTV group: "Start receiving when SSTV opens" on, ISS SSTV auto-arm off, Transmit mode set to "Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)", and an empty Transmit power percentage box.](../img/manual/settings-sstv.webp)
+
+*SSTV in Nexus 1.10.3. A blank transmit power means Nexus leaves your power alone
+— an SSTV over is up to 290 seconds of continuous key-down, so most operators run
+it well below their SSB drive.*
+
 **Receiving**
 
 - **Start receiving when SSTV opens** — on by default. The SSTV screen starts the
@@ -938,6 +1016,11 @@ screen; that one is per-picture on purpose and resets with every new image.
 These are the RF side, and none of them needs the internet feed below — most
 stations run APRS on the radio alone.
 
+![The APRS Over the air group: Channel (RF) set to "144.390 · N. America", Beacon symbol Car, Beacon comment reading "Nexus APRS", and Digipeater path "WIDE1-1, WIDE2-1".](../img/manual/settings-aprs-rf.webp)
+
+*The RF side of APRS in Nexus 1.10.3. Beacon SSID continues to the right. The
+channel is regional — Automatic picks it from your grid.*
+
 - **Channel (RF)** — the 2 m FM channel APRS runs on, which is regional.
   **Automatic** follows your grid square, so moving to another region lands you
   on the right channel with nothing to configure, and the number it picked is
@@ -961,6 +1044,13 @@ stations run APRS on the radio alone.
   `KD9TAW-9` on the Station tab, that is what goes out.
 
 **APRS-IS (internet feed)**
+
+![The APRS-IS group: the APRS-IS feed switched on, Server rotate.aprs2.net, Port 14580, Radius 150 km, Messages off, Keep stations for 60 minutes, and Receive-only iGate on.](../img/manual/settings-aprs-internet.webp)
+
+*The internet feed in Nexus 1.10.3. Watched calls, Weather stations and
+Objects & items continue to the right. This side uses no radio and never
+transmits — the iGate below it is the one control that puts RF you heard onto
+the internet.*
 
 - **APRS-IS feed** — "Plot stations the internet reports alongside the ones your
   own antenna hears — each one tagged so you can always tell which is which. Runs
@@ -999,6 +1089,10 @@ stations run APRS on the radio alone.
 The dial frequency used when a band/mode is selected. These are **overrides** of
 the stock WSJT-X working-frequency table — "leave the list empty to use stock
 everywhere. An override replaces the stock row for its band + mode."
+
+![The last rows of the read-only WSJT-X frequency table — 23cm FT8 1296.174000 down to 2m FT4 144.170000 — above a "Your overrides" heading reading "None — the stock table is in effect", with Add override and a greyed Reset to standard button.](../img/manual/settings-working-frequencies.webp)
+
+*Working Frequencies in Nexus 1.10.3 with no overrides set, which is how it ships.*
 
 - **Standard table (read-only)** — the stock WSJT-X dial frequencies. A row with
   an active override shows your value, highlighted.
