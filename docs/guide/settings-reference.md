@@ -1535,8 +1535,6 @@ Cloudlog base URL is off.*
 
 Always visible — capability, not configuration, gates the tabs.
 
-![The Contesting tab, both its fieldsets in one view. Contest Category holds the Unassisted entry switch, off here, above an ASSISTED line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification, and a collapsed "What this means for your contest category" note. Field Day Setup below it has Field Day mode off, with Event (ARRL Field Day / Winter Field Day), FD Class, ARRL Section and Power multiplier — set to ×2 ≤100W — laid out in a row across the window.](../img/manual/settings-contesting.webp)
-
 ### Contest Category
 
 - **Unassisted entry** — "Turns off the AI CW decoder, DX cluster / RBN spots and
@@ -1622,6 +1620,11 @@ automatically on reconnect, and if the host PC dies you can enable hosting on
 any other position — everyone re-joins and nothing is lost. The host's Field
 Day view gains **Club Cabrillo / Club ADIF** exports of the merged,
 deduplicated log.
+![The Field Day Club Sync group: "Host a club event" switched off, Event name reading "N9WH Field Day 2026", Host port 42073, an empty "Join event at" box showing a host:port placeholder, a "Find club events" button, and Spectator scoreboard switched off.](../img/manual/settings-field-day-club-sync.webp)
+
+*Field Day Club Sync in Nexus 1.10.3, with hosting off. One position at the site
+turns Host on; every other position joins it.*
+
 Full walkthrough: [Contesting & POTA/SOTA](contesting-pota.md).
 
 ---
