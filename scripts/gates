@@ -17,11 +17,34 @@
 // the whole point, and scripts/gates.test.mjs holds it down by planting a step in
 // a scratch copy of the workflow and asserting it appears.
 //
+// TWO RULES THIS FILE MAY NOT BREAK. Both were added after the tool was caught
+// doing the exact thing it was written to stop.
+//
+// 1. LOUD, NEVER SILENT. This is a SUBSET reader — of YAML, and of shell — so it
+//    WILL meet shapes it does not understand. Every one of them must be named in
+//    the output and must stop the run claiming full coverage. Dropping a job, a
+//    step, a key or a command and still printing ALL GATES PASSED manufactures
+//    exactly the confidence this tool exists to replace, which makes it worse
+//    than no tool. Concretely: a region the YAML reader cannot account for is a
+//    hard error (exit 2); an unknown workflow/job/step key, an `if:` that cannot
+//    be evaluated here, a `shell:` that is not bash, a step that mixes machine
+//    provisioning with a gate on one command line, and an action with no local
+//    equivalent are each reported BY NAME and force PARTIAL.
+//
+// 2. PARTIAL IS NOT GREEN — it exits 3. `scripts/gates && git push` is how this
+//    is really used, and 29-of-39 must not read as a green light there. The
+//    codes are distinct on purpose: 0 = every gate in the workflow ran and
+//    passed, 1 = a gate went RED, 2 = usage/parse error, 3 = everything that ran
+//    passed but coverage was INCOMPLETE (a gate could not run here, a step was
+//    not understood, or --job scoped the run). A caller that genuinely accepts
+//    incomplete coverage says so, out loud, with --allow-partial.
+//
 // Usage:
 //   scripts/gates                     run every gate this machine can run
 //   scripts/gates --list              print every gate CI runs, grouped by job
 //   scripts/gates --list --unrunnable print only what CANNOT run here, and why
 //   scripts/gates --job test,ui       scope to named jobs (comma-separated)
+//   scripts/gates --allow-partial     exit 0 on incomplete coverage instead of 3
 //   scripts/gates --workflow PATH     read a different workflow (used by the tests)
 //
 // NEVER pipe this into grep/tail/head. A pipe discards the exit status of the
@@ -38,9 +61,48 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // ---------------------------------------------------------------------------
 // A minimal YAML reader — enough for a GitHub workflow, and nothing more.
-// Block maps, block sequences, flow sequences, quoted scalars, and the `|` / `>`
-// block scalars that `run:` bodies are written in.
+// Block maps, block sequences (indented OR flush with their key), flow
+// sequences, quoted scalars, and the `|` / `>` block scalars that `run:` bodies
+// are written in.
+//
+// BEING A SUBSET IS FINE. BEING A SILENT SUBSET IS NOT. Two mechanisms hold
+// rule 1 of the header down here, and they are the load-bearing part of this
+// section:
+//
+//   * the CONSTRUCTS it does not implement (anchors, aliases, merge keys, flow
+//     mappings, tags, multi-document streams) are recognised and REFUSED by
+//     name, rather than being read as some other thing that happens to parse;
+//   * every line of the file must be ACCOUNTED FOR. `parseYaml` throws unless
+//     the reader consumed the file to the end. That is the backstop for the
+//     shapes nobody thought of: a construct that quietly ends the parse early
+//     cannot vanish, because the lines it stranded are still sitting there.
+//
+// The shape that forced this: `steps:` with its dash flush at the key's own
+// column — legal YAML — ended the parse at that line. The job disappeared from
+// --list, its gates never ran, and the run still printed "ALL GATES PASSED
+// (every gate in this workflow ran here)" and exited 0. Put that job FIRST and
+// zero gates ran under the same green line.
 // ---------------------------------------------------------------------------
+
+class YamlRefusal extends Error {}
+
+// Value shapes this reader does not implement. Each would otherwise be read as
+// something else that happens to parse — an alias as the literal string `*x`, a
+// flow mapping as a string whose "entries" are its characters — which is the
+// silent-subset failure in miniature.
+const UNIMPLEMENTED_VALUES = [
+  [/^&\S/, 'a YAML anchor (&name)'],
+  [/^\*\S/, 'a YAML alias (*name)'],
+  [/^\{/, 'a flow mapping ({ ... })'],
+  [/^!/, 'a YAML tag (!name)'],
+];
+
+// `workflow_dispatch: {}` is the empty map, and it is everywhere. It carries no
+// entries to misread, so it is READ, not refused — the refusal above is for a
+// flow mapping with content, which would otherwise become a string whose
+// "entries" are its characters. Being loud must not mean being useless: a
+// refusal on four of this repo's ten workflows would just get the tool dropped.
+const EMPTY_FLOW_MAP = /^\{\s*\}$/;
 
 function stripComment(line) {
   let out = '';
@@ -73,9 +135,25 @@ function unquote(s) {
 
 function parseYaml(text) {
   const lines = text.split(/\r?\n/);
+  const pristine = text.split(/\r?\n/); // parseSeq rewrites `lines`; errors quote this.
   const indentOf = (s) => s.length - s.trimStart().length;
   const ignorable = (s) => s.trim() === '' || s.trimStart().startsWith('#');
   let i = 0;
+
+  const at = (n) => `line ${n + 1}: ${pristine[n]}`;
+  const refuse = (n, what) =>
+    new YamlRefusal(
+      `scripts/gates: this workflow uses ${what}, which the YAML reader in this script ` +
+        `does not implement — ${at(n)}\n` +
+        `  Refusing rather than guessing: a construct read as the wrong thing is how a gate ` +
+        `goes missing while the run still reports success.`
+    );
+
+  const checkValue = (raw, n) => {
+    const t = String(raw).trim();
+    if (EMPTY_FLOW_MAP.test(t)) return;
+    for (const [re, what] of UNIMPLEMENTED_VALUES) if (re.test(t)) throw refuse(n, what);
+  };
 
   const skip = () => {
     while (i < lines.length && ignorable(lines[i])) i++;
@@ -111,6 +189,7 @@ function parseYaml(text) {
 
   function scalar(raw) {
     const t = raw.trim();
+    if (EMPTY_FLOW_MAP.test(t)) return {};
     if (t.startsWith('[') && t.endsWith(']')) {
       const inner = t.slice(1, -1).trim();
       return inner === '' ? [] : inner.split(',').map(unquote);
@@ -142,6 +221,7 @@ function parseYaml(text) {
       lines[i] = lines[i].slice(0, ind) + '  ' + lines[i].slice(ind + 2);
       const inner = stripComment(lines[i]).trim();
       if (!/^[^:\s][^:]*:(\s|$)/.test(inner)) {
+        checkValue(inner, i);
         arr.push(scalar(inner));
         i++;
         continue;
@@ -161,16 +241,29 @@ function parseYaml(text) {
       const content = stripComment(lines[i]).trim();
       if (content.startsWith('- ')) break;
       const m = content.match(/^([^:]+):(?:\s+(.*))?$/);
-      if (!m) throw new Error(`scripts/gates: cannot parse line ${i + 1}: ${lines[i]}`);
+      if (!m) throw new YamlRefusal(`scripts/gates: cannot parse ${at(i)}`);
       const key = unquote(m[1]);
+      if (key === '<<') throw refuse(i, 'a merge key (<<)');
       const rest = (m[2] || '').trim();
       const bs = rest.match(/^([|>])([-+]?)(\d*)$/);
       if (bs) {
         map[key] = blockScalar(bs[1], ind);
       } else if (rest === '') {
         i++;
-        map[key] = parseNode(ind + 1);
+        let value = parseNode(ind + 1);
+        // A block sequence may sit at its KEY's own column — `steps:` with the
+        // dash flush under the `s`. Legal YAML, and the shape that used to end
+        // the parse here and delete the rest of the file in silence.
+        if (value === null) {
+          skip();
+          if (i < lines.length && indentOf(lines[i]) === ind) {
+            const head = stripComment(lines[i]).trimStart();
+            if (head === '-' || head.startsWith('- ')) value = parseSeq(ind);
+          }
+        }
+        map[key] = value;
       } else {
+        checkValue(rest, i);
         map[key] = scalar(rest);
         i++;
       }
@@ -178,7 +271,28 @@ function parseYaml(text) {
     return map;
   }
 
-  return parseNode(0);
+  // A leading `---` is a document start and is fine; a SECOND one is a
+  // multi-document stream, which this reader does not implement.
+  skip();
+  if (i < lines.length && lines[i].trim() === '---') i++;
+  const doc = parseNode(0);
+
+  // THE BACKSTOP. The reader only ever moves forward, and every construct it
+  // fails to understand ends the parse by unwinding to the top — so "did we
+  // reach the end of the file" is a complete answer to "did we read all of it".
+  // Without this the answer to a shape nobody anticipated is a shorter gate list
+  // and a green run, which is the one outcome this tool may not produce.
+  skip();
+  if (i < lines.length) {
+    throw new YamlRefusal(
+      `scripts/gates: the YAML reader stopped at ${at(i)}\n` +
+        `  ${lines.length - i} line(s) after it were never read, so any gate list derived ` +
+        `from this file would be INCOMPLETE.\n` +
+        `  Refusing to report part of a workflow as the whole of it. Either simplify the ` +
+        `construct on that line, or teach the reader in scripts/gates about it.`
+    );
+  }
+  return doc;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,8 +378,14 @@ function scannable(command) {
     .join('\n')
     .replace(/\\\n\s*/g, ' ')
     .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'))
+    // TRAILING comments, not just whole-line ones. `stripComment` cuts at a `#`
+    // that starts a word, so a URL fragment and a quoted `#` survive. Leaving
+    // them in put the prose of a comment through the command splitter: a `;` in
+    // `# websockets: CDP for the PDF; pillow: WebP→PNG` became a "command",
+    // which called a pure apt-get step a mixed one and reported `pillow:` as a
+    // missing program.
+    .map((l) => stripComment(l).trim())
+    .filter(Boolean)
     .join('\n');
 }
 
@@ -377,36 +497,137 @@ const ACTION_GATES = {
 // `npm ci` is deliberately NOT on this list. It installs into the repo, from a
 // committed lockfile, and it goes red when that lockfile and package.json
 // disagree — that is a code failure, so it is a gate like any other.
-function isProvisioning(command) {
-  const lines = command.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
-  if (!lines.length) return false;
-  const installer = [
-    /^(sudo\s+)?(apt-get|apt|brew|rustup|dnf|yum|pacman)\b/,
-    /^python3?\s+-m\s+pip\s+install\b/,
-    /^pip3?\s+install\b/,
-    /^cargo\s+install\b/,
-    /^set\s+-/,
-  ];
-  return lines.every((l) => installer.some((re) => re.test(l)));
+const INSTALLER = [
+  /^(sudo\s+)?(apt-get|apt|brew|rustup|dnf|yum|pacman)\b/,
+  /^python3?\s+-m\s+pip\s+install\b/,
+  /^pip3?\s+install\b/,
+  /^cargo\s+install\b/,
+];
+
+// Shell bookkeeping: neither a gate nor provisioning, so it must not vote. This
+// list used to sit inside INSTALLER, where per-line classification made it
+// harmless; per COMMAND it would call `set -euo pipefail` provisioning and turn
+// the eight steps that open with it into mixed ones.
+const NEUTRAL = [/^set\s+-/];
+
+// One LINE can hold several commands. `apt-get install jq && <a real gate>`
+// classified by its first word swallowed the gate: the step became "setup", the
+// gate was never counted and never ran, and the run still said ALL GATES PASSED.
+// So classify per COMMAND. Split only on the operators that SEQUENCE commands —
+// a `$( )` substitution is an argument, not a command of its own, and splitting
+// on it turns an ordinary apt step into a false mixed one.
+const SEQUENCERS = /\|\||&&|;|\||\n/;
+
+function commandsIn(command) {
+  return scannable(command)
+    .split(SEQUENCERS)
+    .map((s) => s.trim())
+    .filter((s) => s && !NEUTRAL.some((re) => re.test(s)));
 }
 
-function isProvisioningStep(command) {
-  return isProvisioning(scannable(command));
+// 'all'   — every command provisions the machine: a prerequisite, not a gate.
+// 'none'  — no command does: an ordinary gate.
+// 'mixed' — some do and some do not, on one command line. NOT resolvable by
+//           picking a side: run it and it installs system packages behind the
+//           operator's back; drop it and a gate silently disappears. It is
+//           reported as a gate that cannot run HERE, with the reason named.
+function provisioningKind(command) {
+  const cmds = commandsIn(command);
+  // Nothing but shell bookkeeping: it gates nothing, so it is a prerequisite.
+  if (!cmds.length) return 'all';
+  const installers = cmds.filter((c) => INSTALLER.some((re) => re.test(c)));
+  if (!installers.length) return 'none';
+  return installers.length === cmds.length ? 'all' : 'mixed';
 }
 
-function classifySteps(job, matrix) {
+// The provisioning commands riding inside a mixed step, for the refusal message.
+function installerCommandsIn(command) {
+  return commandsIn(command).filter((c) => INSTALLER.some((re) => re.test(c)));
+}
+
+// KEYS THIS SCRIPT UNDERSTANDS, per level. Everything outside both sets is
+// reported by name and refuses to claim coverage, because a key read by CI and
+// ignored here is precisely how a local gate ends up STRICTLY WEAKER than CI's
+// while looking identical — a job-level `RUSTFLAGS: -D warnings` or a feature
+// var, dropped without a word.
+//
+// HANDLED: acted on. IGNORED: read, and provably unable to make the local run
+// claim MORE than it ran — `id` is a reference for other expressions;
+// `continue-on-error` and `timeout-minutes` only ever make CI more forgiving
+// than this script, so honouring them could hide a failure but ignoring them
+// cannot; `needs`/`permissions`/`concurrency`/`on` are CI scheduling and
+// authorisation, which a local run does not have.
+const WORKFLOW_KEYS_HANDLED = new Set(['jobs', 'env', 'defaults']);
+const WORKFLOW_KEYS_IGNORED = new Set(['name', 'run-name', 'on', 'concurrency', 'permissions']);
+const JOB_KEYS_HANDLED = new Set(['steps', 'runs-on', 'strategy', 'name', 'env', 'defaults', 'if']);
+const JOB_KEYS_IGNORED = new Set(['needs', 'permissions', 'concurrency', 'timeout-minutes', 'continue-on-error']);
+const STEP_KEYS_HANDLED = new Set(['name', 'uses', 'with', 'run', 'env', 'if', 'working-directory', 'shell']);
+const STEP_KEYS_IGNORED = new Set(['id', 'continue-on-error', 'timeout-minutes']);
+
+function unhandledKeys(node, handled, ignored) {
+  return Object.keys(node || {}).filter((k) => !handled.has(k) && !ignored.has(k));
+}
+
+// `if:` is shown ALWAYS — it was previously parsed and then thrown away, so a
+// reader could not even see that a step was conditional. It is EVALUATED only
+// where the answer is unambiguous for a local run; every other expression reads
+// GitHub event context this script does not have, and guessing in either
+// direction is a false green, so it blocks the step by name instead.
+function ifVerdict(expr) {
+  const e = String(expr).trim().replace(/^\$\{\{/, '').replace(/\}\}$/, '').trim();
+  if (/^(success\(\)|always\(\)|true)$/i.test(e)) return null;
+  if (/^(failure\(\)|cancelled\(\))$/i.test(e)) {
+    return `\`if: ${expr}\` — false in a run where nothing has failed, so CI would skip it too`;
+  }
+  if (/^false$/i.test(e)) return `\`if: ${expr}\` is never true`;
+  return (
+    `\`if: ${expr}\` cannot be evaluated here — it reads GitHub event/context this script ` +
+    `does not have, and guessing either way would be a false green`
+  );
+}
+
+function classifySteps(job, matrix, wf) {
   const steps = [];
+  // GitHub layers env workflow < job < step, and resolves working-directory
+  // step > job defaults > workflow defaults. Both were dropped without a word.
+  const inherited = { ...(wf.env || {}), ...(job.env || {}) };
+  const defaultWd =
+    (job.defaults && job.defaults.run && job.defaults.run['working-directory']) ||
+    (wf.defaults && wf.defaults.run && wf.defaults.run['working-directory']) ||
+    null;
   for (const raw of job.steps || []) {
     if (!raw) continue;
     const name = raw.name ? expand(raw.name, matrix).text : raw.uses || '(unnamed)';
     const env = {};
     let unresolved = [];
-    for (const [k, v] of Object.entries(raw.env || {})) {
+    for (const [k, v] of Object.entries({ ...inherited, ...(raw.env || {}) })) {
       const e = expand(v, matrix);
       env[k] = e.text;
       unresolved = unresolved.concat(e.unresolved);
     }
-    const base = { name, env, if: raw.if || null };
+    const wdRaw = raw['working-directory'] || defaultWd;
+    const wd = wdRaw ? expand(wdRaw, matrix).text : null;
+    const base = { name, env, if: raw.if || null, workdir: wd };
+
+    const strange = unhandledKeys(raw, STEP_KEYS_HANDLED, STEP_KEYS_IGNORED);
+    if (strange.length) {
+      steps.push({
+        ...base,
+        kind: 'unknown',
+        detail:
+          `step key(s) this script does not implement: ${strange.join(', ')} — reported rather ` +
+          `than ignored, because a key CI acts on and this does not makes the local gate weaker`,
+      });
+      continue;
+    }
+    if (raw.shell && !/^(bash|sh)\b/.test(String(raw.shell))) {
+      steps.push({
+        ...base,
+        kind: 'unknown',
+        detail: `\`shell: ${raw.shell}\` — this script only runs steps under bash`,
+      });
+      continue;
+    }
 
     if (raw.uses) {
       const action = String(raw.uses).split('@')[0];
@@ -436,12 +657,13 @@ function classifySteps(job, matrix) {
 
     if (typeof raw.run === 'string') {
       const e = expand(raw.run, matrix);
-      const kind = isProvisioningStep(e.text) ? 'setup' : 'gate';
+      const prov = provisioningKind(e.text);
       steps.push({
         ...base,
-        kind,
+        kind: prov === 'all' ? 'setup' : 'gate',
         command: e.text,
-        detail: kind === 'setup' ? 'installs tooling — not run here' : undefined,
+        detail: prov === 'all' ? 'installs tooling — not run here' : undefined,
+        mixedProvisioning: prov === 'mixed' ? installerCommandsIn(e.text) : null,
         unresolved: unresolved.concat(e.unresolved),
       });
       continue;
@@ -468,6 +690,10 @@ function jobBlockers(jobInst) {
   } else if (/^windows/.test(runsOn)) {
     why.push(`needs a Windows runner (runs-on: ${runsOn}); this box is ${process.platform}`);
   }
+  if (jobInst.if) {
+    const verdict = ifVerdict(jobInst.if);
+    if (verdict) why.push(`job-level ${verdict}`);
+  }
   return why;
 }
 
@@ -491,6 +717,28 @@ function jobNotes(jobInst) {
 
 function stepBlockers(jobInst, step) {
   const why = [];
+  if (jobInst.unhandled && jobInst.unhandled.length) {
+    why.push(
+      `job key(s) this script does not implement: ${jobInst.unhandled.join(', ')} — every gate ` +
+        `in the job is held back rather than run under conditions that may not be CI's`
+    );
+  }
+  if (step.if) {
+    const verdict = ifVerdict(step.if);
+    if (verdict) why.push(verdict);
+  }
+  if (step.mixedProvisioning && step.mixedProvisioning.length) {
+    why.push(
+      `this step mixes machine provisioning with a gate on one command line ` +
+        `(${step.mixedProvisioning.map((c) => `\`${c}\``).join(', ')}). Running it here would ` +
+        `install system packages behind you; dropping it would delete a gate. Reported instead ` +
+        `— split the step in CI, or run it by hand`
+    );
+  }
+  if (step.workdir) {
+    const abs = path.resolve(ROOT, step.workdir);
+    if (!fs.existsSync(abs)) why.push(`working-directory ${step.workdir} does not exist`);
+  }
   // Gates run in workflow order, so a prerequisite an EARLIER gate in the same
   // job creates is not a blocker for a later one.
   const before = jobInst.steps.slice(0, jobInst.steps.indexOf(step));
@@ -660,9 +908,11 @@ function matrixCombos(job) {
 
 function loadWorkflow(file) {
   const doc = parseYaml(fs.readFileSync(file, 'utf8'));
-  if (!doc || !doc.jobs) throw new Error(`scripts/gates: no \`jobs:\` in ${file}`);
+  if (!doc || !doc.jobs) throw new YamlRefusal(`scripts/gates: no \`jobs:\` in ${file}`);
+  const unhandled = unhandledKeys(doc, WORKFLOW_KEYS_HANDLED, WORKFLOW_KEYS_IGNORED);
   const insts = [];
   for (const [id, job] of Object.entries(doc.jobs)) {
+    const jobUnhandled = unhandledKeys(job, JOB_KEYS_HANDLED, JOB_KEYS_IGNORED);
     for (const matrix of matrixCombos(job)) {
       const suffix = matrix ? `[${Object.entries(matrix).map(([k, v]) => `${k}=${v}`).join(',')}]` : '';
       insts.push({
@@ -670,23 +920,45 @@ function loadWorkflow(file) {
         label: id + suffix,
         name: job.name ? expand(job.name, matrix).text : id,
         runsOn: job['runs-on'],
+        if: job.if || null,
+        unhandled: jobUnhandled,
         matrix,
-        steps: classifySteps(job, matrix),
+        steps: classifySteps(job, matrix, doc),
       });
     }
   }
-  return { file, insts };
+  return { file, insts, unhandled };
 }
 
 // ---------------------------------------------------------------------------
 // Output.
 // ---------------------------------------------------------------------------
 
+// See rule 2 in the header. The point of four codes rather than two is that a
+// caller can tell "a gate went red" from "I did not get to run them all".
+const EXIT_OK = 0;
+const EXIT_RED = 1;
+const EXIT_USAGE = 2;
+const EXIT_PARTIAL = 3;
+
 const indent = (s, pad) => s.split('\n').map((l) => pad + l).join('\n');
+
+// A top-level key this script does not implement could change every gate in the
+// file (a workflow-wide `env:` is handled; the next one GitHub adds may not be).
+// Named, and it costs the run its full-coverage claim.
+function workflowKeyWarning(model) {
+  if (!model.unhandled || !model.unhandled.length) return null;
+  return (
+    `WORKFLOW KEY(S) NOT IMPLEMENTED HERE: ${model.unhandled.join(', ')}. ` +
+    `They may change what every gate below does, so this run cannot claim full coverage.`
+  );
+}
 
 function printList(model, only, unrunnableOnly) {
   const selected = model.insts.filter((j) => !only || only.has(j.id));
   console.log(`gates derived from ${path.relative(ROOT, model.file)} — ${selected.length} job(s)\n`);
+  const wfWarning = workflowKeyWarning(model);
+  if (wfWarning) console.log(`${wfWarning}\n`);
   let gateCount = 0;
   let blockedCount = 0;
 
@@ -713,6 +985,8 @@ function printList(model, only, unrunnableOnly) {
         text:
           `${step.name}${step.via ? `  (via ${step.via})` : ''}\n` +
           indent(step.command, '    ') +
+          (step.if ? `\n    if: ${step.if}` : '') +
+          (step.workdir ? `\n    working-directory: ${step.workdir}` : '') +
           (Object.keys(step.env).length
             ? `\n    env: ${Object.entries(step.env).map(([k, v]) => `${k}=${v}`).join(' ')}`
             : '') +
@@ -720,7 +994,9 @@ function printList(model, only, unrunnableOnly) {
       });
     }
     if (!rows.length) continue;
-    console.log(`${job.label}  (${job.name})  runs-on: ${job.runsOn}`);
+    console.log(
+      `${job.label}  (${job.name})  runs-on: ${job.runsOn}` + (job.if ? `  if: ${job.if}` : '')
+    );
     for (const r of rows) console.log(`  ${r.tag}  ${r.text.replace(/\n/g, '\n  ')}`);
     for (const n of jobNotes(job)) console.log(`  note     ${n.replace(/\n/g, '\n           ')}`);
     if (blockedHere) {
@@ -750,7 +1026,7 @@ function printList(model, only, unrunnableOnly) {
   }
 }
 
-function runGates(model, only) {
+function runGates(model, only, allowPartial) {
   const selected = model.insts.filter((j) => !only || only.has(j.id));
   fs.mkdirSync(RUNNER_TEMP, { recursive: true });
   const results = [];
@@ -771,12 +1047,13 @@ function runGates(model, only) {
       }
       console.log(`\n=== RUN   ${job.label} :: ${step.name}`);
       console.log(indent(step.command, '    '));
+      if (step.workdir) console.log(`    (working-directory: ${step.workdir})`);
       const script = path.join(RUNNER_TEMP, `step-${results.length}.sh`);
       fs.writeFileSync(script, step.command);
       // `bash -e <file>` is GitHub's own default shell for `run:`. stdio is
       // inherited: no pipe touches this, so the exit status below is the real one.
       const r = spawnSync('bash', ['--noprofile', '--norc', '-e', script], {
-        cwd: ROOT,
+        cwd: step.workdir ? path.resolve(ROOT, step.workdir) : ROOT,
         stdio: 'inherit',
         env: {
           ...process.env,
@@ -816,24 +1093,39 @@ function runGates(model, only) {
     ? `\nSCOPED to --job ${[...only].join(',')}: ${notRun.length} other job(s) in this workflow ` +
       `were NOT run (${notRun.map((j) => j.label).join(', ')}).`
     : '';
+  const wfWarning = workflowKeyWarning(model);
+  if (wfWarning) console.log(`\n${wfWarning}`);
 
   if (fail.length) {
     console.log(`\nGATES FAILED — ${fail.length} of ${pass.length + fail.length} run here went red.${scope}`);
-    return 1;
+    return EXIT_RED;
   }
-  if (skip.length || unknown.length) {
+
+  // Rule 2 of the header. `scripts/gates && git push` is the real calling
+  // convention, so anything short of "every gate in this workflow ran and
+  // passed" must NOT hand that `&&` a green light. Exit 3, distinct from a red
+  // gate's 1, and only --allow-partial turns it back into 0.
+  const short = skip.length + unknown.length;
+  const incomplete = short || notRun.length || wfWarning;
+  const verdict = allowPartial
+    ? `\n(--allow-partial: exiting 0 anyway, on the caller's word that incomplete coverage is expected.)`
+    : `\nEXIT 3 — not a green light. Coverage here is incomplete, and \`scripts/gates && ...\` must\n` +
+      `not read as if it were. Pass --allow-partial to accept that deliberately.`;
+
+  if (short) {
     console.log(
-      `\nPARTIAL — every gate that CAN run here passed, but ${skip.length + unknown.length} could NOT run.\n` +
-        `This is NOT full coverage. For those, pushing and reading the CI run IS the gate.${scope}`
+      `\nPARTIAL — every gate that CAN run here passed, but ${short} could NOT run.\n` +
+        `This is NOT full coverage. For those, pushing and reading the CI run IS the gate.${scope}` +
+        verdict
     );
-    return 0;
+    return allowPartial ? EXIT_OK : EXIT_PARTIAL;
   }
-  if (notRun.length) {
-    console.log(`\nSELECTED GATES PASSED — all ${pass.length} of them.${scope}`);
-    return 0;
+  if (incomplete) {
+    console.log(`\nSELECTED GATES PASSED — all ${pass.length} of them.${scope}${verdict}`);
+    return allowPartial ? EXIT_OK : EXIT_PARTIAL;
   }
   console.log('\nALL GATES PASSED (every gate in this workflow ran here).');
-  return 0;
+  return EXIT_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -850,32 +1142,41 @@ function main(argv) {
       header.push(l.replace(/^\/\/ ?/, ''));
     }
     console.log(header.join('\n'));
-    return 0;
+    return EXIT_OK;
   }
   let workflow = path.join(ROOT, '.github', 'workflows', 'ci.yml');
   let only = null;
+  const KNOWN_FLAGS = new Set(['--list', '--unrunnable', '--allow-partial']);
   for (let k = 0; k < args.length; k++) {
     if (args[k] === '--workflow') workflow = path.resolve(args[++k]);
     else if (args[k] === '--job') only = new Set(String(args[++k]).split(',').map((s) => s.trim()));
-    else if (args[k] !== '--list' && args[k] !== '--unrunnable') {
+    else if (!KNOWN_FLAGS.has(args[k])) {
       console.error(`scripts/gates: unknown argument ${args[k]} (try --help)`);
-      return 2;
+      return EXIT_USAGE;
     }
   }
-  const model = loadWorkflow(workflow);
+  let model;
+  try {
+    model = loadWorkflow(workflow);
+  } catch (err) {
+    // A workflow this script cannot read in full is a USAGE failure, never a
+    // quiet pass over the part it managed to read.
+    console.error(err instanceof YamlRefusal ? err.message : `scripts/gates: ${err.stack || err}`);
+    return EXIT_USAGE;
+  }
   if (only) {
     const known = new Set(model.insts.map((j) => j.id));
     const bad = [...only].filter((j) => !known.has(j));
     if (bad.length) {
       console.error(`scripts/gates: no such job(s): ${bad.join(', ')}\n  known: ${[...known].join(', ')}`);
-      return 2;
+      return EXIT_USAGE;
     }
   }
   if (args.includes('--list') || args.includes('--unrunnable')) {
     printList(model, only, args.includes('--unrunnable'));
-    return 0;
+    return EXIT_OK;
   }
-  return runGates(model, only);
+  return runGates(model, only, args.includes('--allow-partial'));
 }
 
 process.exit(main(process.argv));

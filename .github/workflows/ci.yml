@@ -102,6 +102,15 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
+      # `cargo fmt --all` stops at the workspace boundary, and src-tauri declares
+      # its OWN `[workspace]` table — so the step above has never seen it and no
+      # other job formats it either. Measured the day this gate was added: 21
+      # drifted regions in src-tauri/src/lib.rs, none of which any check could
+      # ever have reported. Formatting has to be gated to stay swept; the sweep
+      # itself landed as its own commit so it could not contaminate a real diff.
+      - name: cargo fmt --check src-tauri
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
       - name: cargo test --workspace
         run: cargo test --workspace
 
@@ -203,6 +212,19 @@ jobs:
       # rather than shipping a shortened bird list six hours later.
       - name: Test the TLE mirror generator
         run: node --test scripts/gen-tles.test.mjs
+
+      # scripts/gates derives the local gate list from THIS FILE, and its whole
+      # value rests on one property: a step added here appears there with no edit
+      # to the script. scripts/gates.test.mjs is what holds that property down —
+      # it plants a step in a scratch copy of this workflow and fails if --list
+      # misses it — and until now it ran in no workflow at all. Same argument as
+      # the doc generators above, which is not a coincidence: a tool whose only
+      # trigger is somebody remembering is not a gate.
+      #
+      # The recursion is the point. This step is in ci.yml, so scripts/gates
+      # derives it and runs it, and the tool ends up gating its own correctness.
+      - name: scripts/gates still derives the gate list from this workflow
+        run: node --test scripts/gates.test.mjs
 
       # The two doc generators, in --check mode: they write nothing, they exit 1
       # when the committed page is behind the source it is derived from.

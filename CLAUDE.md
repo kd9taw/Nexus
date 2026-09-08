@@ -20,18 +20,36 @@ and was violated anyway; transcription is the defect.
 | `scripts/gates` | runs the ones runnable here, bare, printing each real exit code |
 | `scripts/gates --list --unrunnable` | the jobs that **cannot** run here and why — for those, **pushing and reading the CI run IS the gate** |
 | `scripts/gates --job test,ui` | scope a batch; the output states what it did NOT run |
+| `scripts/gates --allow-partial` | accept incomplete coverage deliberately (see the exit codes) |
+
+**Exit codes — `scripts/gates && git push` must not lie.** `0` every gate in the workflow ran
+and passed · `1` a gate went **red** · `2` usage, or a workflow the reader could not read in
+full · `3` everything that ran passed but coverage was **incomplete** (a gate could not run
+here, a step was not understood, or `--job` scoped the run). On this box a bare run is normally
+a 3, and that is the honest answer: a local run is not full coverage. `--allow-partial` turns a
+3 into a 0 when the caller means it.
+
+**Anything the tool does not fully understand is LOUD, never silent.** It is a subset reader of
+both YAML and shell, so it meets shapes it cannot place; each is named in the output and costs
+the run its full-coverage claim. This is not decoration — it shipped able to drop a whole job
+(a legal `steps:` flush with its key), drop a gate riding behind `&&` on an apt-get line, and
+drop a job-level `env:`, and still print *ALL GATES PASSED* and exit 0. If you teach the parser
+a new shape, keep the refusal path: under-reporting coverage while printing success is worse
+than no tool.
 
 `node --test scripts/gates.test.mjs` holds the derivation property down: it plants a step in a
-scratch copy of the workflow and fails if `--list` misses it. Never pipe a gate into
-`grep`/`tail`/`head` — a pipe discards the exit status, which is how a faked-green gate shipped
-in 1.10.3.
+scratch copy of the workflow and fails if `--list` misses it. **It is a step in ci.yml**, so
+`scripts/gates` derives it and runs it — the tool gates its own correctness. It used to run in
+no workflow at all, which ci.yml's own comment answers better than this line can: a tool whose
+only trigger is somebody remembering is not a gate. Never pipe a gate into `grep`/`tail`/`head`
+— a pipe discards the exit status, which is how a faked-green gate shipped in 1.10.3.
 
 ### The traps — the WHY that a command list cannot carry
 
 | Invariant | Detail |
 |---|---|
 | `cargo test --workspace` **excludes src-tauri** | src-tauri declares its own empty `[workspace]`, so it is not a member. Also run: `cargo test --manifest-path src-tauri/Cargo.toml --lib --features radio` |
-| `cargo fmt --all` **also excludes src-tauri** | Same boundary. CI has **no** fmt gate for it (`scripts/gates --list` says so, derived), and it has drifted — 21 regions in `src-tauri/src/lib.rs` as of 2026-09-07. Format the regions you touch; a blanket sweep belongs in its own commit, never inside a feature change. |
+| `cargo fmt --all` **also excludes src-tauri** | Same boundary, so it needs its own gate: CI runs `cargo fmt --manifest-path src-tauri/Cargo.toml --check` (added 2026-09-07, after the drift it had accumulated with nothing watching reached 21 regions in `src-tauri/src/lib.rs`; that sweep landed as its own formatting-only commit). A blanket sweep still belongs in its own commit, never inside a feature change. |
 | src-tauri needs `--features radio` | Without it, ~13 phantom `tempo_audio` unresolved-crate errors. They are not real. |
 | tempo-audio full tests | `cargo test -p tempo-audio --features device,serial` — and **clippy needs the same features**: CI lints `cargo clippy tempo-audio --features device,serial`; a plain `--workspace` clippy sweep misses feature-gated code (bit 2026-08-02) |
 | propagation live fetchers | `--features live` |
