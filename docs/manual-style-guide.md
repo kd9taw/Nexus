@@ -133,7 +133,7 @@ re-derived without guessing.
 ### Naming
 
 Lowercase, hyphenated, named for **what the image shows**, not for the capture it
-came from and not for an issue number: `settings-radio.webp`, `cw-cockpit.webp`,
+came from and not for an issue number: `settings-radios.webp`, `cw-cockpit.webp`,
 `wizard-station.webp`. `scripts/build-manual-images.py` carries the mapping from
 capture stem to published name, so a rename is one entry there.
 
@@ -156,7 +156,7 @@ nowhere else to put them. There is now: the caption and the prose.
 italics, carrying version context:
 
 ```markdown
-![The Radio tab of Settings, with the Rig & CAT section open.](../img/manual/settings-radio.webp)
+![The Radio tab of Settings, with the Rig & CAT section open.](../img/manual/settings-radios.webp)
 *Settings ▸ Radio on a fresh install, in Nexus 1.10.3.*
 ```
 
