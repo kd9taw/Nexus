@@ -8217,6 +8217,11 @@ fn get_settings(state: State<'_, SharedEngine>) -> Result<Settings, String> {
     // radio's own CAT + audio device, independent of which code path last flipped the active radio.
     let mut s = eng.settings().clone();
     s.sync_flat_from_active();
+    // The Cloudlog key is write-only and never sent to the frontend. It now serializes while a
+    // legacy plaintext key is pending keychain migration (so a save cannot drop it — round 8 F1),
+    // so clear it from THIS clone before it leaves the shell; the engine's own copy is untouched
+    // and the migration retry still sees it.
+    s.cloudlog_key.clear();
     Ok(s)
 }
 

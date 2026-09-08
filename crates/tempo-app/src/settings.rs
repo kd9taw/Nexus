@@ -2048,11 +2048,23 @@ pub struct Settings {
     #[serde(default)]
     pub cloudlog_station_id: String,
     /// Cloudlog/Wavelog instance API key. LEGACY-ONLY at rest: the key now lives in
-    /// the OS keychain (see src-tauri `set_cloudlog_key`). `skip_serializing` keeps
-    /// it OUT of settings.json on every save; it still DESERIALIZES an older file's
-    /// plaintext key so the shell can migrate it into the keychain once, then clear
-    /// it. Not sent to the frontend — the UI field is write-only.
-    #[serde(default, skip_serializing)]
+    /// the OS keychain (see src-tauri `set_cloudlog_key`). It DESERIALIZES an older
+    /// file's plaintext key so the shell can migrate it into the keychain once, then
+    /// clear it.
+    ///
+    /// `skip_serializing_if = is_empty`, NOT an unconditional `skip_serializing`: the
+    /// migration DEFERS on a box with no keychain (round 7 F12) and retries next launch,
+    /// and that retry needs the key to survive in settings.json across the ordinary saves
+    /// that run right after (the FD position-id save, every settings command). An
+    /// unconditional skip dropped it from those saves and destroyed the only copy (round 8
+    /// F1). The invariant: the key lives in EXACTLY one of {file, keychain}. While it is
+    /// non-empty (pending migration) it serializes, so no save can drop it; once the
+    /// keychain has it the migration clears the field and the empty value is omitted, so
+    /// the plaintext is never re-written. `settings.save` is 0600 (F8), so the pending key
+    /// at rest is owner-only; `export_settings_bundle` strips `cloudlogKey`
+    /// (`BACKUP_REDACTED_FIELDS`); and `get_settings` clears it, keeping the "write-only,
+    /// not sent to the frontend" contract even while a pending key sits in the file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cloudlog_key: String,
     /// Auto-forward each logged QSO to the Cloudlog/Wavelog instance above. Off by default.
     #[serde(default)]
@@ -6981,6 +6993,73 @@ mod tests {
         );
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "settings.json is world-readable at {mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ **A deferred Cloudlog key must survive an unrelated save (round 8 F1, DATA LOSS).**
+    ///
+    /// The `run()` migration moves a legacy plaintext Cloudlog key into the OS keychain and clears
+    /// the field — but ONLY once the keychain store succeeds. On a box with no Secret Service the
+    /// store fails, the migration DEFERS, and the key is retried next launch. That retry depends on
+    /// the key surviving in `settings.json` across the ordinary saves that run right after the
+    /// deferral (the Field-Day position-id save, the tty heal, every settings-mutating command).
+    /// Round 7's unconditional `skip_serializing` dropped it from EVERY save, so the first such save
+    /// destroyed the operator's only copy.
+    ///
+    /// The real invariant: the key lives in EXACTLY one of {file, keychain}, and no save may drop it
+    /// from the file while it is not in the keychain. This test models the real sequence —
+    /// migrate-defer (the key is still in the in-memory `Settings` the engine took), an unrelated
+    /// save, read back — and then the OTHER direction: a cleared (migrated) key stays out of the file.
+    #[test]
+    fn a_deferred_cloudlog_key_survives_an_unrelated_save() {
+        let dir = std::env::temp_dir().join(format!("tempo_cl_defer_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // A legacy file: the plaintext Cloudlog key beside a normal (always-serialized) secret.
+        std::fs::write(
+            &path,
+            r#"{"cloudlogKey":"CLOUDLOG-LEGACY-KEY-9999","clublogApiKey":"CLUBLOG-CONTROL-8888"}"#,
+        )
+        .unwrap();
+
+        // Migration deferred: the keychain was unavailable, so the field was left in the in-memory
+        // Settings for the retry. `load` reproduces exactly that state.
+        let s = Settings::load(&path);
+        assert_eq!(
+            s.cloudlog_key, "CLOUDLOG-LEGACY-KEY-9999",
+            "pre: the legacy key deserialized into memory"
+        );
+        assert_eq!(
+            s.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "pre: the control secret is present"
+        );
+
+        // An ordinary save runs next (the FD position-id save). It must not drop the deferred key.
+        s.save(&path).unwrap();
+
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-LEGACY-KEY-9999",
+            "an ordinary save destroyed the deferred Cloudlog key — no retry is possible, it is gone"
+        );
+        // Control: a normal secret survives the SAME save, so the detector can see persistence.
+        assert_eq!(
+            back.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "control: an always-serialized secret survives the save"
+        );
+
+        // The other direction of the invariant: once the key IS in the keychain the migration clears
+        // the field, and a save must then keep it OUT of the file — the keychain is the one place.
+        let mut migrated = back;
+        migrated.cloudlog_key.clear();
+        migrated.save(&path).unwrap();
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !file.contains("cloudlogKey") && !file.contains("CLOUDLOG-LEGACY-KEY-9999"),
+            "a cleared (migrated) key must not be written back to settings.json: {file}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

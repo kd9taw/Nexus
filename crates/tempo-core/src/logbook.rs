@@ -33,13 +33,17 @@
 //! where they are, and `load` copies those bytes into the anchor BEFORE the parser runs, so the
 //! key ends up in a second file that is never rewritten. So the clean runs on the bytes at
 //! load, ahead of the copy, over the anchor and the ring as well
-//! ([`Logbook::scrub_backups`]), and the log itself is rewritten once
-//! ([`Logbook::scrub_log_in_place`]). The copy sweep is gated on a one-time `.scrubbed` marker
-//! beside the log, NOT on the log being poisoned — a copy can be poisoned while the log is
-//! already clean (an upgrade that cleaned `log.adi` on a save but never swept the copies), and
-//! the anchor is written once, so a skipped sweep would keep the key forever. After that first
-//! sweep the marker exists, the backups are not read again, and a log with nothing to clean is
-//! not written — so the ordinary launch still pays nothing.
+//! ([`Logbook::sweep_backups_if_changed`]), and the log itself is rewritten once
+//! ([`Logbook::scrub_log_in_place`]). The copy sweep is NOT gated on the log being poisoned — a
+//! copy can be poisoned while the log is already clean (an upgrade that cleaned `log.adi` on a save
+//! but never swept the copies), and it can also ARRIVE poisoned later (a backup restore, a profile
+//! sync, a laptop migration), so the sweep must not be one-shot. It is gated instead on "has any
+//! copy changed since I last swept it", answered by `stat` (size + mtime) against a small
+//! `.scrubbed` manifest — so the ordinary launch reads only that tiny file and the copies' metadata,
+//! never their multi-MB contents (the 2026-08 "a big log must not make launch slow" ruling), while
+//! anything new, restored, or synced in is simply not the signature we recorded and IS swept. A
+//! stale, empty, foreign, or absent manifest reads as "nothing recorded", so it cannot suppress a
+//! sweep — it can only cause one (the safe direction).
 //!
 //! **Why the snapshot is a COPY and not a hard link.** A link would be free, but
 //! [`Logbook::append`] opens the log with `.append(true)` and mutates it **in place** — a
@@ -47,7 +51,8 @@
 //! the bytes, and the "snapshot" would silently be a second name for the live file. Do not
 //! "optimise" the copy into a link.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 // Whole-log sweep counter, DEBUG BUILDS ONLY — instrumentation for the
 // traversal-bound test. A per-row `worked_before()` inside `snapshot()` once
@@ -1060,8 +1065,9 @@ impl Logbook {
     /// before the anchor is taken and before the parser runs — see [`scrub_upload_stamps`] for
     /// what it is, and why the parse-time filter alone left the exposure open. On a log that
     /// has none (every log this build has ever saved) this costs one pass over bytes already in
-    /// memory. The copies beside the log are swept once per install, gated by a `.scrubbed`
-    /// marker; after that first sweep the log opens with no write and without reading the ring.
+    /// memory. The copies beside the log are swept whenever one has CHANGED since the last sweep
+    /// ([`Self::sweep_backups_if_changed`], gated on a `stat`-cheap `.scrubbed` manifest); an
+    /// unchanged install opens with no write and without reading the ring.
     pub fn load(path: &Path) -> Self {
         let bytes = std::fs::read(path).unwrap_or_default();
         let clean = scrub_upload_stamps(&bytes);
@@ -1069,19 +1075,13 @@ impl Logbook {
         // survives whatever happens next. On a clean log `clean` is `None` and `bytes` are
         // already clean; on a poisoned one the anchor is taken from the scrubbed bytes.
         Self::backup_once(path, clean.as_deref().unwrap_or(&bytes));
-        // Sweep the copies beside the log — the anchor and the ring — ONCE per install, whether
-        // or not the log itself needed cleaning. A copy can be poisoned while the log is already
-        // clean (an upgrade that cleaned `log.adi` on a save but never swept the copies), and the
-        // anchor is world-readable and written once, so a skipped sweep leaves the key on disk
-        // forever. Gated on a one-time marker rather than on the log being poisoned, so the
-        // ordinary launch still does NOT read the ring — the 2026-08 "a big log must not make
-        // launch slow" ruling — and the sweep is paid at most once, exactly like the anchor.
-        let marker = path.with_extension("adi.scrubbed");
-        if !marker.exists() && Self::scrub_backups(path) {
-            // Only mark once every poisoned copy was actually cleaned; a copy we could not rewrite
-            // is retried on the next load rather than abandoned.
-            let _ = std::fs::write(&marker, b"");
-        }
+        // Sweep the copies beside the log — the anchor and the ring — of any service stamp,
+        // reading a copy's CONTENTS only when it has changed since the last sweep. A copy can be
+        // poisoned while the log is already clean (an upgrade that cleaned `log.adi` on a save but
+        // never swept the copies), and a poisoned copy can also ARRIVE later (a restore, a profile
+        // sync, a laptop migration), so the sweep is driven by "has anything changed", answered by
+        // `stat` — the ordinary launch does NOT read the ring (the 2026-08 launch-cost ruling).
+        Self::sweep_backups_if_changed(path);
         // The log itself, once per poisoned log: rewrite it clean, atomically.
         if let Some(clean) = &clean {
             Self::scrub_log_in_place(path, bytes.len(), clean);
@@ -1119,49 +1119,106 @@ impl Logbook {
         }
     }
 
-    /// Rewrite the safety copies beside `path` — the anchor and every snapshot in the ring —
-    /// so none of them holds a service's words either. Best-effort and idempotent: a file
-    /// with nothing to change is not touched at all, and one that changes comes back
-    /// owner-only (see [`replace_private`]).
+    /// Sweep the safety copies beside `path` — the anchor and every snapshot in the ring — of any
+    /// service stamp, but read a copy's CONTENTS only when it has CHANGED since the last sweep. A
+    /// changed copy that holds a stamp comes back owner-only (see [`replace_private`]); a copy with
+    /// nothing to change is not touched.
     ///
-    /// **This runs ONCE per install, gated by the `.scrubbed` marker [`load`](Self::load)
-    /// keeps** — not on the log being poisoned, because a copy can be poisoned while the log is
-    /// already clean (an upgrade that cleaned `log.adi` on a save but never swept the copies;
-    /// the anchor is world-readable and written once, so it would keep the key forever). Reading
-    /// the ring at EVERY launch is the startup cost the module header rules out, so the marker
-    /// makes it a one-time upgrade step: after a clean sweep the ring is not read again.
+    /// ## Why not the one-time `.scrubbed` marker (round 8 F2/F3)
+    /// Round 7 gated the sweep on a marker that, once written, made it one-shot. That trusted the
+    /// marker's mere EXISTENCE and left two holes: a poisoned copy RESTORED after the marker (a
+    /// backup restore, a profile sync, a laptop migration) was never swept, and a stale, empty, or
+    /// foreign marker synced in from another machine suppressed the very first sweep. The anchor is
+    /// "written once and never touched again", so a copy the sweep skips keeps the operator's key at
+    /// rest forever.
     ///
-    /// Returns `true` if every copy that needed cleaning was cleaned — the caller records the
-    /// marker only then, so a copy that failed to rewrite is retried on the next load. A file
-    /// that is absent (nothing to clean) or already clean is not a failure.
-    fn scrub_backups(path: &Path) -> bool {
-        let mut targets = vec![path.with_extension("adi.bak")];
+    /// ## The signal is "has this copy changed", answered by `stat`
+    /// The `.scrubbed` marker is now a small MANIFEST: one line per copy this build last confirmed
+    /// clean, recording that copy's `(size, mtime)`. On load we `stat` each copy (metadata only —
+    /// never the multi-MB bytes) and read+scrub only the copies whose `(size, mtime)` is absent from
+    /// the manifest or does not match it. So an ordinary launch reads the tiny manifest and stats a
+    /// handful of files and stops there (the 2026-08 launch-cost ruling holds); a copy that is new,
+    /// restored, or synced in is simply not the signature we recorded and IS swept (F2/F3 both
+    /// close, because the manifest is trusted only for the EXACT bytes it describes, never for its
+    /// existence). A copy with a future or coarse mtime is recorded with that exact value and
+    /// matches itself next launch, so it does not force a re-read every time.
+    ///
+    /// A copy that fails to rewrite (a read-only `backups/`) is left OUT of the manifest, so it —
+    /// and only it — is retried next load; the copies that DID clean are recorded and not re-read.
+    /// The residual is a local attacker who can write BOTH a poisoned copy AND a manifest naming
+    /// that copy's exact `(size, mtime)` as clean — but such an attacker already holds the plaintext
+    /// and needs no bypass. (A poisoned copy is LONGER than its clean form, so a manifest that
+    /// records the clean size never matches a poisoned copy by accident.)
+    fn sweep_backups_if_changed(path: &Path) {
+        let marker = path.with_extension("adi.scrubbed");
+        let copies = Self::backup_copy_paths(path);
+        let recorded = read_scrub_manifest(&marker);
+
+        // Fast path — metadata only. A copy is "known clean" iff its `(size, mtime)` is EXACTLY
+        // what the last sweep recorded for it; a copy we cannot even `stat` is not a trigger.
+        let changed = copies.iter().any(|c| match file_sig(c) {
+            Some(sig) => recorded.get(&file_name_key(c)) != Some(&sig),
+            None => false,
+        });
+        if !changed {
+            return; // nothing new since the last sweep — the ordinary launch pays only stats
+        }
+
+        // Something changed: scrub the copies whose signature does not match, carry the matching
+        // ones forward untouched, and rewrite the manifest with what is confirmed clean this pass.
+        let mut next: BTreeMap<String, (u64, u128)> = BTreeMap::new();
+        for c in &copies {
+            let name = file_name_key(c);
+            let Some(sig) = file_sig(c) else { continue };
+            if recorded.get(&name) == Some(&sig) {
+                next.insert(name, sig); // unchanged & already clean — no read
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(c) else {
+                continue; // unreadable -> left unrecorded -> retried next load
+            };
+            match scrub_upload_stamps(&bytes) {
+                Some(clean) => match replace_private(c, &clean) {
+                    // Record the POST-sweep signature so the clean copy matches next launch.
+                    Ok(()) => {
+                        if let Some(s) = file_sig(c) {
+                            next.insert(name, s);
+                        }
+                    }
+                    Err(e) => eprintln!("tempo: could not clean {}: {e}", c.display()),
+                },
+                // Already clean — record it so it is not re-read on the next launch.
+                None => {
+                    next.insert(name, sig);
+                }
+            }
+        }
+        write_scrub_manifest(&marker, &next);
+    }
+
+    /// The safety copies beside `path` that currently EXIST — the `.bak` anchor and every dated
+    /// snapshot in the ring. Ordering does not matter here (each copy carries its own signature);
+    /// the ring is enumerated by the same stem-prefixed listing the rest of the module uses, so a
+    /// folder holding two logs keeps two independent sets.
+    fn backup_copy_paths(path: &Path) -> Vec<PathBuf> {
+        let mut copies = Vec::new();
+        let bak = path.with_extension("adi.bak");
+        if bak.exists() {
+            copies.push(bak);
+        }
         if let Some(parent) = path.parent() {
             let dir = parent.join("backups");
             let stem = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "log".to_string());
-            targets.extend(
+            copies.extend(
                 Self::snapshot_names(&dir, &stem)
                     .into_iter()
                     .map(|n| dir.join(n)),
             );
         }
-        let mut all_clean = true;
-        for t in targets {
-            let Ok(bytes) = std::fs::read(&t) else {
-                continue;
-            };
-            let Some(clean) = scrub_upload_stamps(&bytes) else {
-                continue;
-            };
-            if let Err(e) = replace_private(&t, &clean) {
-                eprintln!("tempo: could not clean {}: {e}", t.display());
-                all_clean = false;
-            }
-        }
-        all_clean
+        copies
     }
 
     /// Rewrite `log.adi` itself from the cleaned bytes, atomically, keeping whatever mode the
@@ -2314,6 +2371,68 @@ fn take_confirmed(f: &mut std::collections::HashMap<String, String>, k: &str) ->
 /// The one field family whose value a pre-1.11 build could have filled with a service's own
 /// words. ADIF tag names are case-insensitive, so the match is too.
 const UPLOAD_FIELD_PREFIX: &[u8] = b"APP_TEMPO_UL_";
+
+/// The file name of `p` as the key used in the `.scrubbed` manifest. The copies are the `.bak`
+/// anchor and dated ring snapshots, whose names are distinct, so the file name alone is a safe key.
+fn file_name_key(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The `(size, mtime)` signature `stat` reports for `p`, or `None` if it cannot be read. `mtime`
+/// is nanoseconds since the Unix epoch; a pre-epoch or unavailable time reads as `0`, which simply
+/// makes the copy look "changed" and be re-swept — the safe direction, never a skipped sweep.
+fn file_sig(p: &Path) -> Option<(u64, u128)> {
+    let m = std::fs::metadata(p).ok()?;
+    let mtime = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Some((m.len(), mtime))
+}
+
+/// Read the `.scrubbed` manifest: the `(size, mtime)` of each copy the last sweep confirmed clean,
+/// keyed by file name. A missing, unreadable, non-file (a directory), empty, or garbled marker
+/// reads as an EMPTY map — nothing is trusted, so every present copy is swept (the safe direction;
+/// this is why a stale/foreign/attacker-planted marker cannot suppress a sweep). Lines that do not
+/// parse are skipped individually.
+fn read_scrub_manifest(marker: &Path) -> BTreeMap<String, (u64, u128)> {
+    let mut m = BTreeMap::new();
+    let Ok(text) = std::fs::read_to_string(marker) else {
+        return m;
+    };
+    for line in text.lines() {
+        let mut f = line.split('\t');
+        if let (Some(name), Some(len), Some(mtime)) = (f.next(), f.next(), f.next()) {
+            if let (Ok(len), Ok(mtime)) = (len.parse::<u64>(), mtime.parse::<u128>()) {
+                if !name.is_empty() {
+                    m.insert(name.to_string(), (len, mtime));
+                }
+            }
+        }
+    }
+    m
+}
+
+/// Write the `.scrubbed` manifest — one `name\tsize\tmtime` line per copy confirmed clean this
+/// sweep. Best-effort: a marker that cannot be written just means the next load re-stats and, if a
+/// copy still differs, re-sweeps (the safe direction). Holds no credential — only file metadata.
+fn write_scrub_manifest(marker: &Path, sigs: &BTreeMap<String, (u64, u128)>) {
+    let mut text = String::new();
+    for (name, (len, mtime)) in sigs {
+        // Our own generated copy names contain neither a tab nor a newline.
+        text.push_str(name);
+        text.push('\t');
+        text.push_str(&len.to_string());
+        text.push('\t');
+        text.push_str(&mtime.to_string());
+        text.push('\n');
+    }
+    let _ = std::fs::write(marker, text.as_bytes());
+}
 
 /// Rewrite every `APP_TEMPO_UL_*` value in a raw ADIF byte stream so it holds only tokens
 /// this file defines, leaving every other byte exactly as it was. `None` when there was
@@ -5538,9 +5657,11 @@ mod tests {
         );
     }
 
-    /// F4 (round 7): the copy sweep is not one-shot. If a ring snapshot cannot be rewritten (a
-    /// read-only `backups/`), the marker is NOT written, so a later load RETRIES the sweep rather
-    /// than treating it as done just because the log itself got cleaned.
+    /// F4 (round 7) / F2·F3 (round 8): the copy sweep is not one-shot. A copy that could not be
+    /// rewritten this load (a read-only `backups/`) is retried on a later load. Under the manifest
+    /// design the retry is per-copy: the failed snapshot is simply left OUT of the `.scrubbed`
+    /// record, so its `stat` still fails to match and it is re-read next time — while the copies
+    /// that DID clean (the anchor) are recorded and not re-read.
     #[test]
     #[cfg(unix)]
     fn an_unwritable_ring_snapshot_is_retried_on_a_later_load() {
@@ -5570,8 +5691,7 @@ mod tests {
         let _ = Logbook::load(&path);
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        // The log was cleaned, the snapshot was NOT (control), and — the point — the marker was not
-        // written, so the sweep is not recorded as done.
+        // The log was cleaned, the snapshot was NOT (control) — the unwritable ring left it poisoned.
         assert!(
             !String::from_utf8_lossy(&std::fs::read(&path).unwrap()).contains(KEY),
             "the log itself was cleaned"
@@ -5580,18 +5700,144 @@ mod tests {
             String::from_utf8_lossy(&std::fs::read(&snap).unwrap()).contains(KEY),
             "control: the snapshot really was left poisoned by the unwritable ring"
         );
+        // The point: the snapshot is NOT recorded as clean, so a later load retries IT specifically.
+        // The manifest may exist (the anchor cleaned fine) but must not name the snapshot.
+        let manifest = std::fs::read_to_string(&marker).unwrap_or_default();
         assert!(
-            !marker.exists(),
-            "the marker was written despite a copy that could not be cleaned — no retry would run"
+            !manifest.contains("log-20260101-000000.adi"),
+            "the unswept snapshot was recorded as clean — no retry would run: {manifest:?}"
         );
 
-        // The retry: a later load, ring now writable, cleans the snapshot and records the marker.
+        // The retry: a later load, ring now writable, cleans the snapshot and records it.
         let _ = Logbook::load(&path);
         assert!(
             !String::from_utf8_lossy(&std::fs::read(&snap).unwrap()).contains(KEY),
             "the snapshot was never retried"
         );
-        assert!(marker.exists(), "a clean sweep records the marker");
+        let manifest = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert!(
+            manifest.contains("log-20260101-000000.adi"),
+            "a clean sweep records the snapshot: {manifest:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// ⛔ **A poisoned copy RESTORED after the first sweep is still swept (round 8 F2).**
+    ///
+    /// Round 7's one-time marker made the sweep one-shot: a poisoned `log.adi.bak` dropped beside a
+    /// clean log by a restore / profile sync / laptop migration AFTER the marker existed was never
+    /// swept, and the key sat at 0644 forever. The manifest sweep is driven by "has this copy
+    /// changed", so a copy that appears (or changes) after the record is not the signature we stored
+    /// and IS swept.
+    #[test]
+    #[cfg(unix)]
+    fn a_poisoned_copy_restored_after_the_first_sweep_is_still_swept() {
+        use std::os::unix::fs::PermissionsExt;
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let stamp = format!("rejected|1700000500|Unable to add QSO: bad key={KEY}");
+        let clean_log = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8<eor>\n";
+        let poisoned = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+            + &field("APP_TEMPO_UL_QRZ", &stamp)
+            + "<eor>\n";
+
+        let base = scratch_log_dir();
+        let path = base.join("log.adi");
+        let bak = path.with_extension("adi.bak");
+        std::fs::write(&path, &clean_log).unwrap();
+
+        // First load of a CLEAN install: writes the anchor (clean) and records the manifest.
+        let _ = Logbook::load(&path);
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).contains(KEY),
+            "control: the anchor the first load took is clean"
+        );
+
+        // NOW a restore drops a pre-1.11 poisoned anchor over it, world-readable — after the marker.
+        std::fs::write(&bak, &poisoned).unwrap();
+        std::fs::set_permissions(&bak, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // Control: the restored copy really holds the key, at 0644, before the next load.
+        assert!(
+            String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).contains(KEY),
+            "control: the restored anchor holds the key before the load"
+        );
+
+        // The next load must catch it — the one-time marker did not.
+        let _ = Logbook::load(&path);
+        let text = String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).into_owned();
+        assert!(
+            !text.contains(KEY),
+            "a poisoned anchor restored after the first sweep kept the key: {text:?}"
+        );
+        assert!(text.contains("W9XYZ"), "the anchor lost the QSO: {text:?}");
+        let mode = std::fs::metadata(&bak).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the swept anchor is left world-readable at {mode:o}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// ⛔ **A stale / empty / foreign marker cannot suppress the sweep (round 8 F3).**
+    ///
+    /// Round 7 trusted the marker's mere existence, so a zero-byte `log.adi.scrubbed` present before
+    /// the first 1.11 load — a leftover, or a whole-profile sync where machine A wrote the marker and
+    /// machine B still holds its own local poisoned anchor — made the first-ever sweep a no-op. The
+    /// manifest reads an empty/foreign marker as "nothing recorded", so every present copy is swept.
+    #[test]
+    #[cfg(unix)]
+    fn a_stale_or_empty_marker_does_not_suppress_the_first_sweep() {
+        use std::os::unix::fs::PermissionsExt;
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let stamp = format!("rejected|1700000500|Unable to add QSO: bad key={KEY}");
+        let clean_log = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8<eor>\n";
+        let poisoned = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+            + &field("APP_TEMPO_UL_QRZ", &stamp)
+            + "<eor>\n";
+
+        let base = scratch_log_dir();
+        let path = base.join("log.adi");
+        let bak = path.with_extension("adi.bak");
+        let marker = path.with_extension("adi.scrubbed");
+        std::fs::write(&path, &clean_log).unwrap();
+        // A poisoned anchor already beside the log (this machine's own pre-1.11 copy)…
+        std::fs::write(&bak, &poisoned).unwrap();
+        std::fs::set_permissions(&bak, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // …and a pre-existing EMPTY marker (a leftover, or one synced from another machine).
+        std::fs::write(&marker, b"").unwrap();
+
+        // Controls: the copy holds the key and the marker exists but is empty (the F1 hole reopener).
+        assert!(
+            String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).contains(KEY),
+            "control: the anchor holds the key before load"
+        );
+        assert!(
+            marker.exists(),
+            "control: a marker is present before the first sweep"
+        );
+        assert_eq!(
+            std::fs::read(&marker).unwrap().len(),
+            0,
+            "control: the pre-existing marker is empty"
+        );
+
+        // The first sweep must run regardless of the marker's existence.
+        let _ = Logbook::load(&path);
+        let text = String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).into_owned();
+        assert!(
+            !text.contains(KEY),
+            "an empty marker suppressed the first sweep and the key survived: {text:?}"
+        );
+        let mode = std::fs::metadata(&bak).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the swept anchor is left world-readable at {mode:o}"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
