@@ -127,10 +127,43 @@ pub fn tqsl_candidate_paths() -> Vec<PathBuf> {
     }
 }
 
-/// Sanitize a TQSL stderr tail for storage/display: redact any absolute-path run
+/// WHY a TQSL run ended as it did, for the per-QSO stamp — the CLASS, off the exit code.
+///
+/// ⛔ Deliberately not [`sanitize_detail`]'s output. That is TQSL's own words, this value is
+/// written into `log.adi`, and `log.adi` is the file TQSL then SIGNS and uploads to ARRL —
+/// so whatever a subprocess printed would go out under the operator's callsign certificate.
+/// See [`crate::logbook::UploadDetail`]. TQSL's stderr still reaches the operator: it is the
+/// upload report's `detail`, which is a toast.
+///
+/// Reading the stderr to CLASSIFY is fine and already happens — [`classify_tqsl_exit`] does
+/// it for the cert/station-location and the record-rejection markers. This function reuses
+/// that decision rather than re-reading the stderr, so there is one reading, not two.
+pub fn tqsl_detail(code: i32, stderr: &str) -> Option<crate::logbook::UploadDetail> {
+    use crate::logbook::UploadDetail as D;
+    match classify_tqsl_exit(code, stderr)? {
+        // Nothing went wrong that needs explaining beyond the outcome.
+        UploadOutcome::Pending | UploadOutcome::Accepted | UploadOutcome::Duplicate => None,
+        UploadOutcome::AuthFail => Some(D::Credentials),
+        UploadOutcome::Rejected => match code {
+            // 9 = some records signed, the rest silently dropped, and TQSL does not say
+            // which — the one thing here the outcome alone cannot express.
+            9 => Some(D::BatchPartlySigned),
+            // 8 with rejection markers: nothing survived validation.
+            8 => Some(D::RecordRefused),
+            _ => Some(D::Unclassified),
+        },
+    }
+}
+
+/// Sanitize a TQSL stderr tail for the operator's TOAST: redact any absolute-path run
 /// (Windows drive `X:\…` / UNC `\\…`, or a POSIX `/…`) to its last component, flatten
 /// whitespace, and truncate. Avoids leaking the cert path, a custom tqsl path, or
 /// the temp `.adi` path echoed on file errors. Returns `None` for empty input.
+///
+/// ⛔ **A screen, not a record.** This is a path redactor and knows nothing about
+/// credentials; it was feeding the persisted `UploadStatus.detail` and that is what let a
+/// service's reply reach `log.adi`. Its output may go to a toast or the connection log and
+/// nowhere else — [`tqsl_detail`] is what the stamp takes.
 pub fn sanitize_detail(stderr: &str) -> Option<String> {
     let flat = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.is_empty() {

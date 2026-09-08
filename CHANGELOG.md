@@ -132,6 +132,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in it from an earlier version is cleaned the next time Nexus starts: a stored failure line
   that this version could not have written is dropped, and the row keeps the time it failed.
 
+- **A logbook service's own error text is no longer written into your log file — or uploaded
+  to ARRL with it.** When a QRZ Logbook or ClubLog upload bounced, the service's reply was
+  stored on the contact itself, inside `log.adi`. Both services answer a rejected upload by
+  quoting the request back, and the request carries your API key — so the key was written into
+  the logbook, and from there it rode out through every export built on it: the batch TQSL
+  signs with your callsign certificate and uploads to LoTW, the per-contact eQSL upload, and
+  any range or operator export you make. That is a secret leaving your machine under your own
+  signature, and it cannot be recalled. What the contact now records is Nexus's own description
+  of *why* the upload failed — the credentials were refused, the record was refused, TQSL
+  signed only part of the batch — and never the service's words. LoTW's own tool is covered by
+  the same rule. You still see exactly what the service said: it is in the upload result and in
+  this session's connection log.
+
+  A log file that already carries one of these replies is cleaned the moment Nexus reads it,
+  which is before any export can quote it — the contact keeps the fact that its upload bounced,
+  and when, and loses only the text.
+
+- **A QRZ callbook row no longer claims a working subscription it cannot prove.** QRZ answers
+  "no such callsign" and "your subscription will not do that" in exactly the same shape, and
+  four versions of this check tried to tell them apart by reading QRZ's wording — the last of
+  them still read *"Not found: your subscription does not cover this record"* as a plain miss
+  and marked the connector green, clearing a real failure. Nexus no longer guesses: only a
+  lookup that returns a record proves the XML subscription works. The trade is that looking up
+  a callsign that genuinely does not exist marks the row as failing until your next successful
+  lookup, which is the safer way round to be wrong.
+
+- **A manual HRDLog.net or World Radio League push that never reached the service now records
+  it.** Pressing the per-contact upload button and getting a network failure left the
+  Connections row saying "stored — not verified yet" forever, while the automatic upload
+  recorded the identical failure — so the button an operator presses *because* the row has
+  never been verified was the one that could not change it.
+
 - **A Cloudlog failure now says which failure, after a restart too.** Every way an upload could
   fail collapsed into one stored sentence, so once the connection log had gone with the session
   the Connections row could not tell a station profile id that is not linked to your key from a

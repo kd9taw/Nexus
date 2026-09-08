@@ -1810,6 +1810,12 @@ export interface UploadStatus {
   /** "pending" | "accepted" | "duplicate" | "rejected" | "authfail". */
   outcome: string
   whenUnix: number
+  /**
+   * The failure CLASS as a token — "credentials" | "record" | "partial" | "unclassified" |
+   * "declared" — not prose. It rides `log.adi`, which is what TQSL signs and uploads to
+   * ARRL, so it is never the service's own words; anything else is dropped on the way back
+   * into Rust. Render it through a label of your own, not verbatim.
+   */
   detail?: string | null
 }
 export interface UploadState {

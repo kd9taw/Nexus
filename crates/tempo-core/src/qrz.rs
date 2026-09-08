@@ -79,42 +79,22 @@ impl QrzSession {
                 .is_some_and(|e| e.to_ascii_lowercase().contains("session"))
     }
 
-    /// True iff QRZ answered "there is no such callsign" — an authoritative **miss** on a
-    /// live session, as opposed to a **refusal** of the lookup. Only meaningful when the
-    /// response carried no `<Callsign>` record and [`Self::needs_login`] is false.
-    ///
-    /// ⚠️ QRZ delivers a miss the same way it delivers a refusal: an `<Error>` beside a live
-    /// `<Key>`, with no `<Callsign>`. `Not found: g1srdd` is a miss; `A subscription is
-    /// required…` and a daily-limit or privilege refusal are not. So neither "there is an
-    /// `<Error>`" nor "the session is live" separates them — the wording is the only thing
-    /// that does, and this is the one place that reads it.
-    ///
-    /// **Fails closed.** Anything this cannot positively read as QRZ's not-found wording is
-    /// a refusal, including an answer carrying neither a record nor a reason. The asymmetry
-    /// is deliberate: a miss is what tells the Connections panel the XML subscription is
-    /// verified, so guessing "miss" paints a working row over a subscription that has
-    /// lapsed (#245), while guessing "refusal" costs at worst a red row on a callsign that
-    /// really does not exist.
-    ///
-    /// ⛔ **Anchored at the start, not searched for.** This defect class has come back three
-    /// times, and the third was `contains("not found")`: a refusal that merely MENTIONS the
-    /// words — *"Callsign not found at your subscription level"* — read as an authoritative
-    /// miss, and the success half of that stamp CLEARS an existing red. A substring search
-    /// asks "did QRZ use these words anywhere", which is not the question; the question is
-    /// "is this answer QRZ's not-found reply", and that reply has one shape:
-    /// `Not found: <callsign>`. So the error must BEGIN with `not found`, and what follows
-    /// must be the end of the sentence or a colon — never more prose, which is always some
-    /// other sentence that happens to contain the phrase.
-    pub fn holds_no_record(&self) -> bool {
-        let Some(e) = self.error.as_deref() else {
-            return false;
-        };
-        let e = e.trim().to_ascii_lowercase();
-        let Some(rest) = e.strip_prefix("not found") else {
-            return false;
-        };
-        rest.trim_start().is_empty() || rest.starts_with(':')
-    }
+    // ⛔ THERE IS DELIBERATELY NO `holds_no_record` HERE, AND THERE CANNOT BE ONE.
+    //
+    // QRZ delivers an authoritative miss and a REFUSAL in the same shape: an `<Error>`
+    // beside a live `<Key>`, with no `<Callsign>`. Nothing structural separates them, so
+    // four rounds of readers each tried to separate them by WORDING — `Ok(None)`,
+    // `NotFound`, `contains("not found")`, then a prefix anchored at `not found` followed
+    // by end-of-string or a colon. The fifth costume broke the anchored one too: QRZ's own
+    // *"Not found: your subscription does not cover this record"* begins exactly like a miss
+    // and is a refusal, and reading it as a miss stamps the Connections row GREEN — which
+    // does not merely fail to warn, it CLEARS an existing red (#245).
+    //
+    // A predicate that has been wrong in five different disguises is not a predicate that
+    // needs a sixth wording; it is a question the data cannot answer. So the honest answer
+    // is that this module does not answer it, and the caller fails closed: an answer with no
+    // record is not a verified lookup, whatever it says. See `QrzOutcome::NoRecord` in
+    // `src-tauri/src/lib.rs`.
 }
 
 /// A parsed QRZ callsign record. **Pure** (no serde — the serde DTO lives in
@@ -321,6 +301,22 @@ impl QrzPushResult {
             QrzPushResult::Duplicate => U::Duplicate,
             QrzPushResult::AuthFail => U::AuthFail,
             QrzPushResult::Fail => U::Rejected,
+        }
+    }
+
+    /// WHY, for the per-QSO stamp — the CLASS, off the `RESULT` token.
+    ///
+    /// ⛔ Deliberately not [`QrzPush::reason`]. That is QRZ's own prose, QRZ echoes the
+    /// failing request back, and the request carries the API key — and this value is written
+    /// into `log.adi`, which is signed by TQSL and uploaded to ARRL. See
+    /// [`crate::logbook::UploadDetail`]. The reason still reaches the operator; it goes to
+    /// the connection log and the toast, and dies with the session.
+    pub fn to_upload_detail(self) -> Option<crate::logbook::UploadDetail> {
+        use crate::logbook::UploadDetail as D;
+        match self {
+            QrzPushResult::Ok | QrzPushResult::Replace | QrzPushResult::Duplicate => None,
+            QrzPushResult::AuthFail => Some(D::Credentials),
+            QrzPushResult::Fail => Some(D::RecordRefused),
         }
     }
 }
@@ -701,52 +697,6 @@ mod tests {
         assert_eq!(s.key.as_deref(), Some("abc"));
         assert!(!s.needs_login());
         assert!(s.error.as_deref().unwrap().contains("Not found"));
-    }
-
-    /// ⛔ A MISS AND A REFUSAL ARRIVE IN THE SAME SHAPE.
-    ///
-    /// Both are an `<Error>` beside a live `<Key>` with no `<Callsign>`, so a reader that
-    /// keys off either the presence of an error or the state of the session gets one of them
-    /// wrong. Reading them as misses is what let a refused lookup report the XML
-    /// subscription verified (#245); reading every error as a refusal would paint the row
-    /// red for looking up a callsign that does not exist.
-    #[test]
-    fn a_refusal_on_a_live_session_is_not_an_authoritative_miss() {
-        // The control, and it is the pairing that matters: these two responses differ ONLY
-        // in QRZ's wording, so a check that read the session or the error's presence would
-        // answer the same for both.
-        assert!(
-            parse_session(NOT_FOUND).holds_no_record(),
-            "control: QRZ's own not-found wording is a miss"
-        );
-        for refusal in [
-            "A subscription is required to access this data",
-            "Lookup limit exceeded for this 24 hour period",
-            "Insufficient privileges for that operation",
-            // ⚠️ The third round of this defect, and the one a substring match cannot see:
-            // a REFUSAL that happens to contain QRZ's not-found words. `contains("not
-            // found")` reads this as an authoritative miss, which stamps the row green —
-            // and the success half CLEARS an existing red.
-            "Callsign not found at your subscription level",
-            "The requested data was not found in your subscription tier",
-        ] {
-            let xml = format!(
-                "<QRZDatabase><Session><Key>live</Key><Error>{refusal}</Error></Session></QRZDatabase>"
-            );
-            let s = parse_session(&xml);
-            assert!(!s.needs_login(), "control: {refusal:?} is a LIVE session");
-            assert!(
-                !s.holds_no_record(),
-                "a refusal read as an authoritative miss: {refusal:?}"
-            );
-        }
-        // Fails closed: an answer with neither a record nor a reason is not evidence of a
-        // miss either.
-        assert!(
-            !parse_session("<QRZDatabase><Session><Key>live</Key></Session></QRZDatabase>")
-                .holds_no_record(),
-            "an answer with no reason at all was read as an authoritative miss"
-        );
     }
 
     #[test]

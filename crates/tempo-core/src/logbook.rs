@@ -364,13 +364,107 @@ impl UploadOutcome {
     }
 }
 
+/// WHY an upload ended as it did — one of **Nexus's own** classes, never the service's prose.
+///
+/// # ⛔ THE RULE: A PERSISTED DETAIL IS TEXT NEXUS WROTE
+///
+/// This rides `log.adi` as the tail of an `APP_TEMPO_UL_*` field, and `log.adi` is the source
+/// of every export built on [`adif_record`] — the TQSL-signed LoTW batch, the per-QSO eQSL
+/// upload, the range and operator exports. A string here is therefore not a local status
+/// cache like `conn-health.json`: it is **signed with the operator's callsign certificate and
+/// uploaded to ARRL**, and it cannot be recalled.
+///
+/// The field used to hold QRZ's `REASON` and ClubLog's response body verbatim, passed through
+/// `crate::lotw_upload::sanitize_detail` — which is a TQSL *path* redactor and knows nothing
+/// about credentials. Both services echo the failing request back, and the request carries
+/// the API key. That is `conn-health.json`'s lesson one sink over and far worse: the server
+/// picks the encoding, so no scrub has a last move.
+///
+/// So the wire carries a **class**, not prose. [`Self::code`] is a short stable token;
+/// [`Self::sentence`] is the operator-facing English, generated here — which also means
+/// re-wording a sentence never orphans a stamp already on disk. Anything else in the field
+/// (a key a 1.x build wrote, a hand edit) fails [`Self::from_code`] and is dropped **when the
+/// record is read**, before any export can quote it.
+///
+/// The service's own words are not lost, only un-persisted: the push sites hand them to the
+/// connection log and to the operator's toast, and both die with the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadDetail {
+    /// The service turned the stored credential down.
+    Credentials,
+    /// The service took the request and refused THIS record.
+    RecordRefused,
+    /// TQSL signed part of the batch and dropped the rest, without saying which.
+    BatchPartlySigned,
+    /// It failed, and the answer carried nothing this build can classify.
+    Unclassified,
+    /// Not a failure: the operator declared these already uploaded through another tool.
+    OperatorDeclared,
+}
+
+impl UploadDetail {
+    /// Every class, for exhaustive walks (the round-trip and allow-list tests).
+    pub const ALL: [UploadDetail; 5] = [
+        UploadDetail::Credentials,
+        UploadDetail::RecordRefused,
+        UploadDetail::BatchPartlySigned,
+        UploadDetail::Unclassified,
+        UploadDetail::OperatorDeclared,
+    ];
+
+    /// The token written to ADIF. Short and stable — the sentences may be re-worded, the
+    /// codes may not, or every stamp already on disk loses its reason.
+    pub fn code(self) -> &'static str {
+        match self {
+            UploadDetail::Credentials => "credentials",
+            UploadDetail::RecordRefused => "record",
+            UploadDetail::BatchPartlySigned => "partial",
+            UploadDetail::Unclassified => "unclassified",
+            UploadDetail::OperatorDeclared => "declared",
+        }
+    }
+
+    /// Read a token back. `None` for anything this build did not write — which is the whole
+    /// point: it is the filter that cleans a `log.adi` poisoned by an earlier build.
+    pub fn from_code(s: &str) -> Option<UploadDetail> {
+        UploadDetail::ALL.into_iter().find(|d| d.code() == s)
+    }
+
+    /// The operator-facing sentence. Nexus's own words, in the connector panel's voice.
+    pub fn sentence(self) -> &'static str {
+        match self {
+            UploadDetail::Credentials => {
+                "The service turned the stored credentials down — fix them in Settings ▸ \
+                 Connectors, then upload again."
+            }
+            UploadDetail::RecordRefused => {
+                "The service took the request and refused this record — fix the QSO, then \
+                 upload again."
+            }
+            UploadDetail::BatchPartlySigned => {
+                "TQSL signed part of the batch and dropped the rest without saying which — \
+                 upload again to offer them all (LoTW ignores the duplicates)."
+            }
+            UploadDetail::Unclassified => {
+                "The upload failed in a way Nexus could not classify. The service's own \
+                 wording was in that session's connection log."
+            }
+            UploadDetail::OperatorDeclared => {
+                "Marked as already uploaded through another tool — by you, or by the log \
+                 this record was imported from."
+            }
+        }
+    }
+}
+
 /// One source's last upload status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadStatus {
     pub outcome: UploadOutcome,
     pub when_unix: i64,
-    /// Sanitized service/tool message (bounce reason); never a raw path/secret.
-    pub detail: Option<String>,
+    /// WHY, as a class Nexus chose — never the service's own text. See [`UploadDetail`]:
+    /// this field is exported inside the TQSL-signed LoTW batch.
+    pub detail: Option<UploadDetail>,
 }
 
 /// One connector's last real outcome, read back off the persisted per-QSO stamps.
@@ -380,8 +474,8 @@ pub struct UploadStatus {
 pub struct SourceHealth {
     pub last_success_unix: Option<i64>,
     pub last_failure_unix: Option<i64>,
-    /// Sanitized service message for the failure above (never a raw path/secret).
-    pub last_failure_detail: Option<String>,
+    /// WHY the failure above happened, as one of Nexus's own classes — see [`UploadDetail`].
+    pub last_failure_detail: Option<UploadDetail>,
 }
 
 /// [`Logbook::upload_health`] for the four connectors that leave a per-QSO stamp.
@@ -1284,7 +1378,7 @@ impl Logbook {
                     }
                 } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
                     src.last_failure_unix = Some(s.when_unix);
-                    src.last_failure_detail = s.detail.clone();
+                    src.last_failure_detail = s.detail;
                 }
             }
         }
@@ -1434,7 +1528,10 @@ fn field(name: &str, val: &str) -> String {
 }
 
 /// A `APP_TEMPO_UL_*` upload-state field as `"{outcome}|{when}|{detail}"` (or empty
-/// if `None`). Length-prefixed, so a `|` in `detail` is fine; parsed via splitn(3).
+/// if `None`).
+///
+/// ⛔ All three parts are tokens this file defines — see [`UploadDetail`]. Nothing a service
+/// said reaches here, because this string is exported inside the TQSL-signed LoTW batch.
 fn upload_field(name: &str, st: &Option<UploadStatus>) -> String {
     match st {
         Some(s) => field(
@@ -1443,7 +1540,7 @@ fn upload_field(name: &str, st: &Option<UploadStatus>) -> String {
                 "{}|{}|{}",
                 s.outcome.code(),
                 s.when_unix,
-                s.detail.as_deref().unwrap_or("")
+                s.detail.map(UploadDetail::code).unwrap_or("")
             ),
         ),
         None => String::new(),
@@ -2059,14 +2156,26 @@ fn take_confirmed(f: &mut std::collections::HashMap<String, String>, k: &str) ->
     })
 }
 
-/// Consume an `APP_TEMPO_UL_*` upload stamp: "{outcome}|{when}|{detail}" —
-/// splitn(3) so a detail containing '|' survives intact.
+/// Consume an `APP_TEMPO_UL_*` upload stamp: "{outcome}|{when}|{detail}".
+///
+/// # ⛔ THE CLEAN RUNS HERE, ON THE WAY IN
+///
+/// Writing only [`UploadDetail`] codes says nothing about the bytes ALREADY in the file. Up
+/// to and including 1.10.x this tail held QRZ's `REASON` and ClubLog's response body
+/// verbatim, so an operator upgrading has whatever those services echoed — an API key
+/// among it — sitting in their log today. Keeping what is found would let it ride out
+/// through the next TQSL-signed batch, under the operator's own certificate.
+///
+/// So a tail that is not a class token is DROPPED, and the outcome and timestamp are kept:
+/// the operator still learns that this QSO's upload bounced and when, which is the part of
+/// the stamp that was ever trustworthy. It happens at parse time, which is upstream of every
+/// export — see `a_key_already_in_the_log_is_dropped_when_the_record_is_read`.
 fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Option<UploadStatus> {
     let v = f.remove(k)?;
     let mut it = v.splitn(3, '|');
     let outcome = UploadOutcome::from_code(it.next()?)?;
     let when_unix = it.next()?.parse::<i64>().ok()?;
-    let detail = it.next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let detail = it.next().and_then(UploadDetail::from_code);
     Some(UploadStatus {
         outcome,
         when_unix,
@@ -2191,7 +2300,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
                 .then_some(UploadStatus {
                     outcome: UploadOutcome::Accepted,
                     when_unix: 0,
-                    detail: Some("LOTW_QSL_SENT (imported)".into()),
+                    detail: Some(UploadDetail::OperatorDeclared),
                 })
         }),
         eqsl: take_upload(f, "APP_TEMPO_UL_EQSL"),
@@ -3229,7 +3338,7 @@ mod tests {
     /// ⭐ THE CONNECTOR-HEALTH SOURCE. The Connections panel's dot used to come from a
     /// keychain read, so a revoked password stayed green forever. These stamps are what it
     /// should have been reading — and unlike the keychain they are per-connector, dated,
-    /// and carry the service's own reason.
+    /// and carry a failure CLASS (never the service's own reason — see [`UploadDetail`]).
     #[test]
     fn upload_health_reads_the_last_real_outcome_per_connector() {
         fn stamped(call: &str, when: u64, outcome: UploadOutcome, at: i64) -> QsoRecord {
@@ -3237,7 +3346,7 @@ mod tests {
             r.upload.lotw = Some(UploadStatus {
                 outcome,
                 when_unix: at,
-                detail: Some("station location not found".into()),
+                detail: Some(UploadDetail::Credentials),
             });
             r
         }
@@ -3270,9 +3379,9 @@ mod tests {
         );
         assert_eq!(h.lotw.last_failure_unix, Some(200));
         assert_eq!(
-            h.lotw.last_failure_detail.as_deref(),
-            Some("station location not found"),
-            "the service's own reason rides along, or the operator is sent to the log to guess"
+            h.lotw.last_failure_detail,
+            Some(UploadDetail::Credentials),
+            "the failure CLASS rides along, or the operator is sent to the log to guess"
         );
         // Untouched connectors stay untouched — one connector's history is not another's.
         assert_eq!(h.eqsl, SourceHealth::default());
@@ -4435,7 +4544,7 @@ mod tests {
         r.upload.lotw = Some(UploadStatus {
             outcome: UploadOutcome::Rejected,
             when_unix: 1_700_000_500,
-            detail: Some("bad record | line 3".into()), // detail with an embedded '|'
+            detail: Some(UploadDetail::BatchPartlySigned),
         });
         let adif = adif_header() + &adif_record(&r);
         let back = parse_adif(&adif);
@@ -4447,8 +4556,173 @@ mod tests {
             .expect("lotw upload state survived");
         assert_eq!(u.outcome, UploadOutcome::Rejected);
         assert_eq!(u.when_unix, 1_700_000_500);
-        assert_eq!(u.detail.as_deref(), Some("bad record | line 3")); // splitn(3) kept the '|'
+        assert_eq!(u.detail, Some(UploadDetail::BatchPartlySigned));
         assert!(back[0].upload.eqsl.is_none());
+    }
+
+    /// ⛔ NOTHING A SERVICE SAID CAN REACH AN UPLOAD STAMP.
+    ///
+    /// The counterpart of `conn-health.json`'s allow-list, at the sink that is categorically
+    /// worse: this one is exported inside the TQSL-signed LoTW batch and uploaded to ARRL
+    /// under the operator's own certificate.
+    ///
+    /// **The strongest half of the rule is not tested here and cannot be** — the assignment
+    /// that would leak no longer type-checks, and the three push sites had to be rewritten to
+    /// keep compiling. What is left to check at run time is that every decider in front of
+    /// the sink launders nothing through: each connector's whole result domain, driven with a
+    /// hostile answer, must come out as one of this file's own class tokens.
+    #[test]
+    fn no_service_reply_can_reach_the_adif_upload_stamp() {
+        const KEY: &str = "c0nnect0rk3yAbCdEf0123456789xyzQR";
+        // A reply of the shape an echoing service sends, wrapped in the format characters
+        // that rewrite a row on screen.
+        let hostile = format!("\u{202e}rejected: key={KEY}\u{200b}");
+
+        let mut details: Vec<Option<UploadDetail>> = Vec::new();
+
+        // QRZ Logbook: every RESULT token it sends, plus one it has never sent, each with
+        // the hostile text in REASON — which is exactly where QRZ echoes the request back.
+        for result in ["OK", "REPLACE", "AUTH", "FAIL", "SOMETHING_NEW"] {
+            let body = format!("RESULT={result}&COUNT=0&REASON={hostile}");
+            details.push(
+                crate::qrz::parse_push_response(&body)
+                    .result
+                    .to_upload_detail(),
+            );
+        }
+        // ClubLog: every status class, with the hostile text as the body.
+        for status in [200u16, 400, 403, 500, 503, 418] {
+            details.push(
+                crate::clublog::classify_response(status, &hostile)
+                    .result
+                    .to_upload_detail(),
+            );
+        }
+        // TQSL: every exit code it documents, plus one it does not, with the hostile text on
+        // stderr. 0..=12 covers the whole published range and then some.
+        for code in -1..=12 {
+            details.push(crate::lotw_upload::tqsl_detail(code, &hostile));
+        }
+
+        // The positive control, and this test is worthless without it: the same predicate run
+        // over the thing that WOULD leak has to trip.
+        assert!(
+            hostile.contains(KEY) && hostile.contains('\u{202e}'),
+            "control: the hostile answer must actually carry the key and the override"
+        );
+        // …and the hostile text must not be a class token, or the read filter would let it
+        // straight back in.
+        assert!(UploadDetail::from_code(&hostile).is_none());
+
+        for d in &details {
+            let mut r = rec("W9XYZ", "20m", 1_700_000_000);
+            r.upload.clublog = Some(UploadStatus {
+                outcome: UploadOutcome::Rejected,
+                when_unix: 1_700_000_500,
+                detail: *d,
+            });
+            let adif = adif_record(&r);
+            assert!(
+                !adif.contains(KEY),
+                "an API key the service echoed reached the signed ADIF: {adif:?}"
+            );
+            assert!(
+                !adif.contains('\u{202e}') && !adif.contains('\u{200b}'),
+                "a service's format characters reached the signed ADIF: {adif:?}"
+            );
+        }
+
+        // …and a failure still SAYS something. A mapping that answered `None` for every
+        // failure would satisfy every assertion above and leave the operator with a bounced
+        // upload and no reason at all.
+        assert_eq!(
+            crate::qrz::parse_push_response(&format!("RESULT=AUTH&REASON={hostile}"))
+                .result
+                .to_upload_detail(),
+            Some(UploadDetail::Credentials),
+            "a QRZ key QRZ turned down must still send the operator at their credentials"
+        );
+        assert_eq!(
+            crate::clublog::classify_response(400, &hostile)
+                .result
+                .to_upload_detail(),
+            Some(UploadDetail::RecordRefused)
+        );
+        assert_eq!(
+            crate::lotw_upload::tqsl_detail(9, &hostile),
+            Some(UploadDetail::BatchPartlySigned),
+            "TQSL dropping part of a batch is the one thing the outcome alone cannot say"
+        );
+        for d in UploadDetail::ALL {
+            assert!(!d.sentence().trim().is_empty(), "{d:?} says nothing");
+        }
+    }
+
+    /// Every class survives the ADIF round trip, driven off `ALL` — so a class added without
+    /// a `from_code` arm is a failure here rather than a stamp that silently loses its reason
+    /// on the next restart.
+    #[test]
+    fn every_upload_detail_class_survives_the_adif_round_trip() {
+        for d in UploadDetail::ALL {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.upload.qrz = Some(UploadStatus {
+                outcome: UploadOutcome::Rejected,
+                when_unix: 1_700_000_500,
+                detail: Some(d),
+            });
+            let back = parse_adif(&(adif_header() + &adif_record(&r)));
+            assert_eq!(
+                back[0].upload.qrz.as_ref().and_then(|u| u.detail),
+                Some(d),
+                "{d:?} did not survive a restart"
+            );
+        }
+        // The control on the other side: a tail this build could not have written is the one
+        // thing that must NOT survive, or "clean on read" could be satisfied by keeping
+        // everything.
+        assert!(UploadDetail::from_code("Unable to add QSO: duplicate").is_none());
+        assert!(UploadDetail::from_code("").is_none());
+    }
+
+    /// ⛔ A KEY ALREADY IN `log.adi` MUST NOT SURVIVE BEING READ.
+    ///
+    /// The leak this closes is pre-existing shipped behaviour, so every operator running a
+    /// 1.x build has whatever QRZ and ClubLog echoed back sitting in `APP_TEMPO_UL_*` today.
+    /// Fixing only the WRITE side would leave those bytes to ride out through the next
+    /// TQSL-signed batch — under the operator's own certificate, to ARRL, unrecallable.
+    ///
+    /// So the clean runs on the way IN, at `take_upload`: the field carries a class token,
+    /// and anything that is not one is dropped when the record is parsed — which is before
+    /// any export can reach it.
+    #[test]
+    fn a_key_already_in_the_log_is_dropped_when_the_record_is_read() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let poisoned = format!("Unable to add QSO: bad key={KEY}");
+        let stamp = format!("rejected|1700000500|{poisoned}");
+        let disk = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+            + &field("APP_TEMPO_UL_QRZ", &stamp)
+            + "<eor>\n";
+
+        // The control, and this test is worth nothing without it: the file really does
+        // carry the key, in the field the exports read.
+        assert!(
+            disk.contains(KEY),
+            "control: the poisoned log must actually hold the key"
+        );
+
+        let back = parse_adif(&disk);
+        assert_eq!(back.len(), 1);
+        let out = adif_record(&back[0]);
+        assert!(
+            !out.contains(KEY),
+            "a key already in log.adi rode out through an export: {out:?}"
+        );
+        // The FAILURE is not thrown away with the prose — the operator still learns that
+        // this QSO's QRZ upload bounced, and when.
+        let u = back[0].upload.qrz.as_ref().expect("the stamp survived");
+        assert_eq!(u.outcome, UploadOutcome::Rejected);
+        assert_eq!(u.when_unix, 1_700_000_500);
     }
 
     #[test]

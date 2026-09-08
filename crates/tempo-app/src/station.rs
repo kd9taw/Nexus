@@ -1093,7 +1093,7 @@ impl StationCore {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         let status = tempo_core::logbook::UploadStatus {
             outcome,
@@ -1115,7 +1115,7 @@ impl StationCore {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         let status = tempo_core::logbook::UploadStatus {
             outcome,
@@ -1137,7 +1137,7 @@ impl StationCore {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         let status = tempo_core::logbook::UploadStatus {
             outcome,
@@ -1263,7 +1263,7 @@ impl StationCore {
         indices: &[usize],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) {
         // Recover another instance's appends before the full-log rewrite; the
         // recovered records land at the end, so `indices` still address the same
@@ -1274,7 +1274,7 @@ impl StationCore {
                 r.upload.lotw = Some(tempo_core::logbook::UploadStatus {
                     outcome,
                     when_unix,
-                    detail: detail.clone(),
+                    detail,
                 });
             }
         }

@@ -13820,10 +13820,13 @@ struct ConnEvent {
 
 /// Text that may be a service's own words: shown to the operator now, written down nowhere.
 ///
-/// The guard is what this type does **not** implement. No `Display`, no `Debug`, no `Deref`
-/// — so it cannot be handed to `eprintln!`, `format!`, `panic!`, `applog` or any log macro,
-/// and a line that tries does not compile. Its one exit is `serde::Serialize`, which is how
-/// the Connections panel reads the ring, and that is a screen.
+/// The guard is what this type does **not** implement — no `Display`, no `Debug`, no `Deref`
+/// — **and the fact that its field is private to its own module**. Both halves are needed and
+/// the second one was missing: while this was a tuple struct at the crate root, `.0` was in
+/// scope for the whole of `lib.rs` and every module below it, so `eprintln!("{}", t.0)`
+/// compiled clean and the "does not compile" claim above was false. `mod ephemeral` is what
+/// makes it true. Its one exit is `serde::Serialize`, which is how the Connections panel
+/// reads the ring, and that is a screen.
 ///
 /// ⚠️ The counterpart of [`ConnDetail`], and the two together are the whole rule: a
 /// `ConnDetail` is Nexus's own sentence and may be written down; an `EphemeralText` may be a
@@ -13844,8 +13847,32 @@ struct ConnEvent {
 /// | a command's `Err(String)` → the operator's toast | the moment | yes | same |
 /// | `nexus-diag.log` ([`tempo_core::applog`]) | rotated, on disk | **no** | no connector path calls it, and nothing but this line says so |
 /// | `PendingUpload` retry queue | the process | n/a | it carries the QSO and a retry count, never an error string |
-#[derive(Clone, serde::Serialize)]
-struct EphemeralText(String);
+/// | `log.adi` `APP_TEMPO_UL_*` → **every export**, incl. the TQSL-signed LoTW batch | permanent, and uploaded to ARRL | **no** | [`tempo_core::logbook::UploadDetail`]: the wire carries a class token, and a tail that is not one is dropped when the record is READ |
+///
+/// ⚠️ That last row was missing for four rounds, and it is the worst sink on the list. The
+/// first two are local 0644 files; `log.adi` is signed with the operator's callsign
+/// certificate and uploaded to ARRL, so a leak there is exfiltration of a secret to a third
+/// party under the operator's own signature, and it is not recallable. QRZ's `REASON` and
+/// ClubLog's response body were riding it verbatim, through a redactor that only knew about
+/// file paths. **The lesson is not "one more sink": it is that the inventory is only ever as
+/// good as the last walk of it.** Anything added to this file that carries a service's words
+/// belongs on this list, and so does any new durable writer of `UploadStatus`.
+mod ephemeral {
+    /// See [`super::EphemeralText`]. In its own module so the field is genuinely private:
+    /// as a crate-root tuple struct, `.0` was in scope for the whole of `lib.rs` and every
+    /// child module, so `eprintln!("{}", t.0)` and `serde_json::to_string(&t)` both compiled
+    /// — the doc claimed a guard the type did not have.
+    #[derive(Clone, serde::Serialize)]
+    pub struct EphemeralText(String);
+
+    impl EphemeralText {
+        /// The only way in. There is deliberately no way out but `Serialize`.
+        pub fn new(text: String) -> Self {
+            Self(text)
+        }
+    }
+}
+use ephemeral::EphemeralText;
 
 static CONN_LOG: Mutex<std::collections::VecDeque<ConnEvent>> =
     Mutex::new(std::collections::VecDeque::new());
@@ -13863,22 +13890,29 @@ const CONN_LOG_CAP: usize = 200;
 /// writes the API key to the file. The header forbade `Box::leak` by convention, and a
 /// convention is what the last three rounds have each been.
 ///
-/// So the parameter is a type whose field is private to this module, and the only constructor
-/// is `#[doc(hidden)]` and reached through [`conn_detail!`], whose matcher is `$text:literal`.
-/// `conn_detail!(body.leak())` does not match a literal fragment and does not compile;
-/// `conn_detail!("QRZ refused the login")` does. The residual hole is calling
-/// `__from_literal` by name, which is not something anyone does by reaching for the obvious —
-/// and `the_only_way_to_build_a_conn_detail_is_a_string_literal` reads this file's own source
-/// and fails if it appears anywhere but its definition and the macro.
+/// So the parameter is a type whose field is private to this module, and its constructor is
+/// `#[doc(hidden)]` and meant to be reached through [`conn_detail!`], whose matcher is
+/// `$text:literal`. `conn_detail!(body.leak())` does not match a literal fragment and does
+/// not compile; `conn_detail!("QRZ refused the login")` does.
+///
+/// ⚠️ **Say what this guard is, exactly, because overstating it is worse than not having
+/// it.** The macro is a real guard: nothing that goes through it can be a runtime string.
+/// The TYPE is not — `ConnDetail::__from_literal(body.leak())` skips the macro and compiles
+/// clean, and there is no way to forbid that from inside the crate that has to call the
+/// constructor. So the last step is convention plus a mechanical check, not a compile error:
+/// `the_only_way_to_build_a_conn_detail_is_a_string_literal` reads **every source file in
+/// this crate** and fails if the constructor is named anywhere but its own definition and
+/// the macro body.
 mod conn_detail {
     /// See the module note. Construct with `conn_detail!("…")`.
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub struct ConnDetail(&'static str);
 
     impl ConnDetail {
-        /// ⛔ Not for direct use — `conn_detail!` is the constructor, and it is the half that
-        /// rejects a runtime string. Public only because a `macro_rules!` body expands at the
-        /// call site.
+        /// ⛔ Not for direct use — `conn_detail!` is the constructor, and it is the half
+        /// that rejects a runtime string. Public only because a `macro_rules!` body expands
+        /// at the call site, which is also why calling this by name compiles: that hole is
+        /// closed by a source check, not by the compiler. See the module note.
         #[doc(hidden)]
         pub const fn __from_literal(text: &'static str) -> Self {
             Self(text)
@@ -14032,6 +14066,16 @@ fn conn_health_from_json(text: &str) -> ConnHealthRows {
         .collect()
 }
 
+/// The operator-facing sentence for an upload-stamp class, for the Connections panel row.
+///
+/// ⛔ The panel row is a screen and may hold anything; what matters is where this comes FROM.
+/// It is read out of `log.adi`, which holds only [`tempo_core::logbook::UploadDetail`] codes,
+/// so the sentence is Nexus's — the row used to render QRZ's and ClubLog's own prose,
+/// straight off disk.
+fn upload_detail_sentence(d: tempo_core::logbook::UploadDetail) -> String {
+    d.sentence().to_string()
+}
+
 /// Whitespace flattened to single spaces, so a stored detail and a source sentence compare
 /// as the same string. [`note_conn_health`] applies it on the way in; the loader applies it
 /// to both sides of its allow-list check.
@@ -14059,9 +14103,9 @@ fn persistable_details() -> Vec<ConnDetail> {
     for c in propagation::live::cloudlog::CloudlogFailure::ALL {
         v.push(cloudlog_stamp(c));
     }
-    // QRZ's callbook: the two refusals and the two transport classes. The two success arms
-    // return the empty detail, which is never stored.
-    v.push(qrz_xml_stamp(&Ok(QrzOutcome::Refused(String::new()))).1);
+    // QRZ's callbook: the no-record answer, the dead session and the two transport classes.
+    // The one success arm returns the empty detail, which is never stored.
+    v.push(qrz_xml_stamp(&Ok(QrzOutcome::NoRecord(String::new()))).1);
     v.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1);
     v.push(qrz_xml_stamp(&Err(QrzFailure::unreachable(String::new()))).1);
     v.push(qrz_xml_stamp(&Err(QrzFailure::login_rejected(String::new()))).1);
@@ -14198,33 +14242,41 @@ type HealthTriple = (Option<i64>, Option<i64>, Option<String>);
 /// forever. A paid, working subscription was indistinguishable from an expired one, which is
 /// what M0DHT reported.
 ///
-/// The non-obvious half is that a **miss** counts: an authoritative "no such callsign" is a
-/// completed round trip on a live session, which is exactly what this row claims to know.
-/// Treating a miss as a failure would paint the row red for looking up a callsign that does
-/// not exist.
+/// ⛔ **ONLY A HIT IS EVIDENCE — the fifth round of this defect, and the last shape of it.**
+/// A record came back, so the subscription works. Everything else fails closed.
 ///
-/// ⚠️ And the half that got this wrong TWICE, in two disguises. A lookup QRZ **refused** is
-/// the opposite evidence from a miss, and each round of this function has had one refusal
-/// wearing a miss's clothes: first `Ok(None)`, which meant both at once, and then
-/// `QrzOutcome::NotFound`, because `qrz_try_lookup` mapped a refusal delivered on a LIVE
-/// session key — a `<Key>`, a non-session `<Error>`, no `<Callsign>` — onto it. Both painted
-/// the row green, and green here does not merely fail to warn: it CLEARS an existing red.
+/// This function used to count an authoritative miss as evidence too, which is sound in
+/// principle: "no such callsign", answered on a live session, is a completed round trip.
+/// The trouble is that nothing can establish it. QRZ delivers a miss and a REFUSAL in the
+/// same shape — an `<Error>` beside a live `<Key>`, no `<Callsign>` — so every attempt to
+/// tell them apart read QRZ's WORDING, and the wording defeated five of them in a row:
+/// `Ok(None)` (both at once), `QrzOutcome::NotFound`, `contains("not found")`, a prefix
+/// anchored at `not found` — and then *"Not found: your subscription does not cover this
+/// record"*, which satisfies the anchor and is a refusal. Every one of those painted the row
+/// GREEN, and green here does not merely fail to warn: it CLEARS an existing red (#245).
 ///
-/// So the three states the callbook can be in are three arms, and each renders as what it
-/// is: a match and a genuine miss are a completed round trip (green), a refusal and a dead
-/// session are a lookup that never happened (red, each with its own remedy).
+/// So the question is not asked any more. `QrzOutcome::NoRecord` is one arm for both, and it
+/// is red.
+///
+/// ⚠️ **The price, stated rather than discovered:** looking up a callsign that genuinely does
+/// not exist now marks this row failing until the next successful lookup. That is the wrong
+/// direction to be wrong in exactly once — a red row on a busted call costs a glance, and the
+/// operator's next real lookup clears it; a green row over a lapsed subscription is the bug
+/// this was reported as.
 ///
 /// ⛔ Every detail returned here is a fixed sentence, because it is persisted — see
 /// [`note_conn_health`]. QRZ's own words are logged by the caller and dropped.
 fn qrz_xml_stamp(r: &Result<QrzOutcome, QrzFailure>) -> (bool, ConnDetail) {
     match r {
-        Ok(QrzOutcome::Found(_) | QrzOutcome::NotFound) => (true, conn_detail!("")),
-        Ok(QrzOutcome::Refused(_)) => (
+        Ok(QrzOutcome::Found(_)) => (true, conn_detail!("")),
+        Ok(QrzOutcome::NoRecord(_)) => (
             false,
             conn_detail!(
-                "QRZ answered on a live session and refused the lookup — the XML subscription \
-                 may have lapsed or hit its daily limit. QRZ's own wording is in this \
-                 session's connection log."
+                "QRZ answered on a live session with no record. QRZ sends an unknown \
+                 callsign and a refused lookup the same way, so this does not show the XML \
+                 subscription working — if the callsign was real, check that the \
+                 subscription is current and has not hit its daily limit. QRZ's own wording \
+                 is in this session's connection log."
             ),
         ),
         Ok(QrzOutcome::NeedLogin) => (
@@ -14326,6 +14378,29 @@ const WRL_UNREACHABLE: ConnDetail = conn_detail!(
      or a proxy is inspecting HTTPS traffic. This session's connection log has the exact \
      message."
 );
+
+/// What one HRDLog push attempt says about the connector's health — **including the attempt
+/// that never got an answer**.
+///
+/// ⚠️ The `Err` half is the half that was missing. The manual push stamped only inside
+/// `if let Ok(..)`, so a push that never reached HRDLog left the row "not verified yet"
+/// forever — while the auto-push leg recorded [`HRDLOG_UNREACHABLE`] for the identical
+/// failure. Two answers to one question, and the silent one belonged to the button an
+/// operator presses *because* the row says it has never been verified.
+fn hrdlog_health_of(res: &Result<tempo_app::dto::HrdLogPushResultDto, String>) -> (bool, ConnDetail) {
+    match res {
+        Ok(r) => hrdlog_stamp(&r.result),
+        Err(_) => (false, HRDLOG_UNREACHABLE),
+    }
+}
+
+/// WRL's twin of [`hrdlog_health_of`], with the same missing-`Err` history.
+fn wrl_health_of(res: &Result<tempo_app::dto::WrlPushResultDto, String>) -> (bool, ConnDetail) {
+    match res {
+        Ok(r) => wrl_stamp(&r.result),
+        Err(_) => (false, WRL_UNREACHABLE),
+    }
+}
 
 /// What one Cloudlog/Wavelog upload says about the connector's health — the twin of
 /// [`hrdlog_stamp`] and [`wrl_stamp`], one fixed sentence per failure class.
@@ -14429,7 +14504,7 @@ fn qrz_logbook_health(logged: HealthTriple, session: HealthTriple) -> HealthTrip
 /// convention: [`EphemeralText`] implements no `Display` and no `Debug`, so a line added below
 /// that formats it does not compile.
 fn conn_log(connector: &'static str, level: &'static str, message: impl Into<String>) {
-    let message = EphemeralText(message.into());
+    let message = EphemeralText::new(message.into());
     eprintln!("conn[{connector}/{level}]");
     let mut log = CONN_LOG.lock().unwrap_or_else(|e| e.into_inner());
     log.push_back(ConnEvent {
@@ -14575,7 +14650,7 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
         (
             health.qrz.last_success_unix,
             health.qrz.last_failure_unix,
-            health.qrz.last_failure_detail,
+            health.qrz.last_failure_detail.map(upload_detail_sentence),
         ),
         conn_health_of("qrz-logbook"),
     );
@@ -14605,7 +14680,9 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             enabled: stored_lotw,
             last_success_unix: health.lotw.last_success_unix,
             last_failure_unix: health.lotw.last_failure_unix,
-            last_failure_detail: health.lotw.last_failure_detail,
+            // Read off the per-QSO stamps in `log.adi` — one of Nexus's own sentences for
+            // the failure class, never the service's prose. See `UploadDetail`.
+            last_failure_detail: health.lotw.last_failure_detail.map(upload_detail_sentence),
             paused: false,
         },
         CredStatus {
@@ -14645,7 +14722,7 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             enabled: eqsl_on,
             last_success_unix: health.eqsl.last_success_unix,
             last_failure_unix: health.eqsl.last_failure_unix,
-            last_failure_detail: health.eqsl.last_failure_detail,
+            last_failure_detail: health.eqsl.last_failure_detail.map(upload_detail_sentence),
             paused: false,
         },
         CredStatus {
@@ -14657,7 +14734,7 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             enabled: clublog_on,
             last_success_unix: health.clublog.last_success_unix,
             last_failure_unix: health.clublog.last_failure_unix,
-            last_failure_detail: health.clublog.last_failure_detail,
+            last_failure_detail: health.clublog.last_failure_detail.map(upload_detail_sentence),
             // The 403 latch, finally visible. Note it is process-global: two instances
             // sharing one log will disagree until the log-derived AuthFail stamp reaches
             // the other one, which then shows `failing` rather than `paused`.
@@ -15405,7 +15482,13 @@ fn lotw_upload_batch(
     })?;
     let code = output.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // ⛔ TWO details, and they are not interchangeable. `detail` is TQSL's own tail and goes
+    // to the operator's toast — a screen. `stamped` is the CLASS and is the only one written
+    // into `log.adi`, because `log.adi` is the file TQSL then signs and uploads to ARRL: a
+    // subprocess's words would go out under the operator's callsign certificate. See
+    // `tempo_core::logbook::UploadDetail`.
     let detail = tempo_core::lotw_upload::sanitize_detail(&stderr);
+    let stamped = tempo_core::lotw_upload::tqsl_detail(code, &stderr);
 
     match tempo_core::lotw_upload::classify_tqsl_exit(code, &stderr) {
         // Network error → leave state untouched so the next attempt retries cleanly.
@@ -15417,7 +15500,7 @@ fn lotw_upload_batch(
         Some(outcome) => {
             {
                 let mut eng = engine_lock(state);
-                eng.stamp_lotw_upload(&batch, outcome, now_unix(), detail.clone());
+                eng.stamp_lotw_upload(&batch, outcome, now_unix(), stamped);
             }
             Ok(UploadReportDto {
                 dispatched: batch.len(),
@@ -15594,24 +15677,27 @@ fn sync_qrz_since(
 /// Outcome of one lookup attempt with a given session key/id. Shared by QRZ and its
 /// HamQTH fallback — both flow into the same [`QrzLookupDto`](tempo_app::dto::QrzLookupDto).
 ///
-/// ⚠️ **Four states, because a callbook answers in four ways and three of them are not
-/// interchangeable.** `Found` and `NotFound` are both a completed round trip on a live
-/// session; `Refused` and `NeedLogin` are both a lookup that never completed. Collapsing
-/// either pair is how the Connections row came to report a working subscription while QRZ
-/// was refusing it — twice, in two different disguises (`Ok(None)` for the first, `NotFound`
-/// for the second). Whatever else changes here, keep a completed lookup and a refused one
-/// distinguishable, and let the health stamp read the difference.
+/// ⚠️ **Three states, and the third one used to be two.** `Found` is a completed lookup;
+/// `NoRecord` and `NeedLogin` are both a lookup that did not produce a record. A hit and a
+/// non-hit must stay distinguishable, and the health stamp reads the difference — collapsing
+/// them is how the Connections row came to report a working subscription while QRZ was
+/// refusing it.
+///
+/// ⛔ **`NotFound` is gone, and it is not coming back.** It claimed to mean "the callbook
+/// answered on a live session and holds no such record", which QRZ's replies cannot
+/// establish: a miss and a refusal arrive in the same shape and only the wording differs.
+/// Five readers tried to split them on wording and five were wrong — see the note on
+/// `QrzSession` in `tempo_core::qrz`. So there is one arm for both, and it fails closed.
 enum QrzOutcome {
     Found(Box<tempo_app::dto::QrzLookupDto>),
-    /// The callbook answered on a live session and holds no such record — a genuine miss.
-    NotFound,
-    /// The callbook answered on a LIVE session and refused the lookup, carrying its own
-    /// reason: a lapsed subscription, a daily-limit or privilege refusal, or an answer with
-    /// no record and no reason at all.
+    /// The callbook answered on a LIVE session and produced no record: an unknown callsign,
+    /// a lapsed subscription, a daily-limit or privilege refusal, or an answer with no
+    /// record and no reason at all. **Nexus cannot tell which**, so it claims none of them.
     ///
-    /// ⛔ The `String` is the server's own words. It goes to [`conn_log`] and to the
-    /// operator, and never to `conn-health.json` — see [`note_conn_health`].
-    Refused(String),
+    /// ⛔ The `String` is the server's own words, and only ever goes to [`conn_log`] and to
+    /// the operator — never to `conn-health.json` (see [`note_conn_health`]) and never to
+    /// `log.adi` (see [`tempo_core::logbook::UploadDetail`]).
+    NoRecord(String),
     NeedLogin, // the session key/id is expired/invalid → (re)login
 }
 
@@ -15662,10 +15748,11 @@ impl QrzFailure {
 /// One QRZ lookup with an existing session key (no login). Network only; holds no
 /// lock. Errors are already redacted by the transport.
 ///
-/// ⚠️ The three no-record cases are told apart HERE, not by the caller. QRZ delivers an
+/// ⚠️ A no-record answer is NOT told apart here, because it cannot be. QRZ delivers an
 /// authoritative miss and a refusal in the same shape — an `<Error>` beside a live `<Key>`
-/// with no `<Callsign>` — so `parse_callsign` returning `None` is not a miss on its own;
-/// `QrzSession::holds_no_record` is the one reader of QRZ's wording, and it fails closed.
+/// with no `<Callsign>` — so `parse_callsign` returning `None` says only that there is no
+/// record. It becomes [`QrzOutcome::NoRecord`] either way, and the health stamp reads that
+/// as "not verified".
 fn qrz_try_lookup(session_key: &str, callsign: &str) -> Result<QrzOutcome, QrzFailure> {
     let url = tempo_core::qrz::build_lookup_url(session_key, callsign);
     let body = propagation::live::qrz::fetch(&url).map_err(QrzFailure::unreachable)?;
@@ -15687,8 +15774,9 @@ fn qrz_outcome_from_body(body: &str) -> Result<QrzOutcome, QrzFailure> {
     }
     Ok(match tempo_core::qrz::parse_callsign(body) {
         Some(rec) => QrzOutcome::Found(Box::new(rec.into())),
-        None if session.holds_no_record() => QrzOutcome::NotFound,
-        None => QrzOutcome::Refused(
+        // ⛔ ONE arm, and that is the fix. Splitting this on QRZ's wording has been wrong
+        // five times; the shape carries no answer, so Nexus stops claiming one.
+        None => QrzOutcome::NoRecord(
             session
                 .error
                 .unwrap_or_else(|| "QRZ answered with neither a record nor a reason".into()),
@@ -15741,7 +15829,7 @@ fn hamqth_try_lookup(session_id: &str, callsign: &str) -> Result<QrzOutcome, Str
     }
     Ok(match tempo_core::hamqth::parse_callsign(&body) {
         Some(rec) => QrzOutcome::Found(Box::new(rec.into())),
-        None => QrzOutcome::NotFound,
+        None => QrzOutcome::NoRecord(String::new()),
     })
 }
 
@@ -15828,10 +15916,8 @@ fn hamqth_lookup_attempt(
     if let Some(id) = cached {
         match hamqth_try_lookup(&id, call)? {
             QrzOutcome::Found(dto) => return Ok(Some(*dto)),
-            QrzOutcome::NotFound => return Ok(None), // authoritative miss — don't re-login
-            // HamQTH does not classify refusals (see above), so this arm is unreachable
-            // today. If it ever does, a refusal is still not a hit.
-            QrzOutcome::Refused(_) => return Ok(None),
+            // No record on a live session — don't re-login, and don't call it a hit.
+            QrzOutcome::NoRecord(_) => return Ok(None),
             QrzOutcome::NeedLogin => {} // fall through to a single re-login
         }
     }
@@ -15842,7 +15928,7 @@ fn hamqth_lookup_attempt(
     }
     match hamqth_try_lookup(&id, call)? {
         QrzOutcome::Found(dto) => Ok(Some(*dto)),
-        QrzOutcome::NotFound | QrzOutcome::Refused(_) => Ok(None),
+        QrzOutcome::NoRecord(_) => Ok(None),
         // A fresh id still reporting expiry is anomalous — give up.
         QrzOutcome::NeedLogin => Ok(None),
     }
@@ -15932,10 +16018,10 @@ async fn qrz_lookup(
                 // refusal would be invisible — the lookup falls through to HamQTH and the
                 // operator is told "not in the callbook".
                 match &attempt {
-                    Ok(QrzOutcome::Refused(why)) => conn_log(
+                    Ok(QrzOutcome::NoRecord(why)) => conn_log(
                         "QRZ",
                         "error",
-                        format!("{cand}: QRZ refused the lookup — {why}"),
+                        format!("{cand}: QRZ returned no record — {why}"),
                     ),
                     Err(f) => conn_log("QRZ", "error", format!("{cand}: {}", f.message)),
                     _ => {}
@@ -16011,9 +16097,19 @@ async fn qrz_push_qso(
     let res = tauri::async_runtime::spawn_blocking(move || qrz_push_qso_impl(record, &engine))
         .await
         .map_err(|e| format!("upload task failed: {e}"))?;
+    // QRZ's `reason` rides the SESSION log, and only there. It stopped being persisted with
+    // the stamp (it can carry the API key back — see `UploadDetail`), so this line is now
+    // the one place an operator can read what QRZ actually said.
     conn_logged(
         "QRZ Logbook",
-        |r| format!("pushed {} — {}", who, r.result),
+        |r| {
+            format!(
+                "pushed {} — {}{}",
+                who,
+                r.result,
+                r.reason.as_deref().map(|m| format!(": {m}")).unwrap_or_default()
+            )
+        },
         res,
     )
 }
@@ -16162,12 +16258,15 @@ fn qrz_push_qso_impl(
     let push = tempo_core::qrz::parse_push_response(&resp);
     // Record the outcome on the just-pushed QSO so diagnostics can surface R1 (never
     // pushed to QRZ) / R9 (QRZ upload bounced). QRZ outcomes are always definitive.
+    //
+    // ⛔ The detail is the CLASS, off QRZ's `RESULT` token — never `push.reason`. QRZ echoes
+    // the failing request back and the request carries the API key, and this stamp is
+    // written into `log.adi`, which TQSL signs and uploads to ARRL. QRZ's own reason goes to
+    // the connection log and the operator's toast, and dies with the session. See
+    // `tempo_core::logbook::UploadDetail`.
     {
         let outcome = push.result.to_upload_outcome();
-        let detail = push
-            .reason
-            .as_deref()
-            .and_then(tempo_core::lotw_upload::sanitize_detail);
+        let detail = push.result.to_upload_detail();
         let mut eng = engine_lock(engine);
         eng.stamp_qrz_upload(&rec, outcome, now_unix(), detail);
     }
@@ -16407,10 +16506,13 @@ async fn wrl_push_qso(
         |r| format!("pushed {} — {}", who, r.result),
         res,
     );
-    if let Ok(r) = &res {
-        let (ok, detail) = wrl_stamp(&r.result);
-        note_conn_health("wrl", ok, detail);
-    }
+    // A manual push stamps BOTH ways, exactly as the auto-push leg does. Stamping only the
+    // `Ok` half meant a manual push that never reached WRL left the row "not verified yet"
+    // forever, while the identical failure on the auto path recorded WRL_UNREACHABLE — two
+    // answers to one question, and the quieter one was the button an operator presses
+    // *because* the row says it has never been verified.
+    let (ok, detail) = wrl_health_of(&res);
+    note_conn_health("wrl", ok, detail);
     res
 }
 
@@ -16463,11 +16565,11 @@ async fn hrdlog_push_qso(
         res,
     );
     // A manual push is exactly as much evidence as an automatic one — and for HRDLog it is
-    // the evidence an operator reaches for when the row says "not verified yet".
-    if let Ok(r) = &res {
-        let (ok, detail) = hrdlog_stamp(&r.result);
-        note_conn_health("hrdlog", ok, detail);
-    }
+    // the evidence an operator reaches for when the row says "not verified yet". BOTH halves
+    // stamp: a push that never reached HRDLog is evidence too, and leaving it unrecorded is
+    // what kept the row unverified through the very failure the operator was chasing.
+    let (ok, detail) = hrdlog_health_of(&res);
+    note_conn_health("hrdlog", ok, detail);
     res
 }
 
@@ -16519,7 +16621,19 @@ async fn clublog_push_qso(
     let res = tauri::async_runtime::spawn_blocking(move || clublog_push_qso_impl(record, &engine))
         .await
         .map_err(|e| format!("upload task failed: {e}"))?;
-    conn_logged("ClubLog", |r| format!("pushed {} — {}", who, r.result), res)
+    // ClubLog's own body rides the SESSION log, and only there — same reason as QRZ above.
+    conn_logged(
+        "ClubLog",
+        |r| {
+            format!(
+                "pushed {} — {}{}",
+                who,
+                r.result,
+                r.message.as_deref().map(|m| format!(": {m}")).unwrap_or_default()
+            )
+        },
+        res,
+    )
 }
 
 fn clublog_push_qso_impl(
@@ -16589,11 +16703,14 @@ fn clublog_push_qso_impl(
     // Record the outcome on the just-pushed QSO so diagnostics can surface R1 (never
     // pushed to ClubLog) / R9 (bounced). Transient results (ServerError/Unknown) map
     // to None → leave it unstamped for a clean retry.
+    //
+    // ⛔ The detail is the CLASS, off the HTTP status line — never `push.message`. ClubLog
+    // echoes the failing request back and the request body carries the app-password and the
+    // API key, and this stamp is written into `log.adi`, which TQSL signs and uploads to
+    // ARRL. ClubLog's own body goes to the connection log and the toast. See
+    // `tempo_core::logbook::UploadDetail`.
     if let Some(outcome) = push.result.to_upload_outcome() {
-        let detail = push
-            .message
-            .as_deref()
-            .and_then(tempo_core::lotw_upload::sanitize_detail);
+        let detail = push.result.to_upload_detail();
         let mut eng = engine_lock(engine);
         eng.stamp_clublog_upload(&rec, outcome, now_unix(), detail);
     }
@@ -16895,7 +17012,14 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                 conn_log(
                     "QRZ Logbook",
                     if ok { "ok" } else { "error" },
-                    format!("auto-push QSO with {call} — {}", r.result),
+                    format!(
+                        "auto-push QSO with {call} — {}{}",
+                        r.result,
+                        r.reason
+                            .as_deref()
+                            .map(|m| format!(": {m}"))
+                            .unwrap_or_default()
+                    ),
                 );
                 let part = match r.result.as_str() {
                     "ok" => "QRZ ✓".to_string(),
@@ -16932,7 +17056,14 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                 conn_log(
                     "ClubLog",
                     if ok { "ok" } else { "error" },
-                    format!("auto-push QSO with {call} — {}", r.result),
+                    format!(
+                        "auto-push QSO with {call} — {}{}",
+                        r.result,
+                        r.message
+                            .as_deref()
+                            .map(|m| format!(": {m}"))
+                            .unwrap_or_default()
+                    ),
                 );
                 let part = match r.result.as_str() {
                     "ok" | "modified" => "ClubLog ✓".to_string(),
@@ -22983,7 +23114,7 @@ mod tests {
         for c in propagation::live::cloudlog::CloudlogFailure::ALL {
             details.push(cloudlog_stamp(c).as_str());
         }
-        details.push(qrz_xml_stamp(&Ok(QrzOutcome::Refused(hostile.clone()))).1.as_str());
+        details.push(qrz_xml_stamp(&Ok(QrzOutcome::NoRecord(hostile.clone()))).1.as_str());
         details.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1.as_str());
         details.push(
             qrz_xml_stamp(&Err(QrzFailure::unreachable(hostile.clone())))
@@ -23111,9 +23242,40 @@ mod tests {
     /// the source for. Compile-failure cases cannot be asserted from inside the crate they
     /// would break, so the residual hole is checked the way the wire-id guards are: by
     /// reading the file.
+    ///
+    /// ⚠️ **Every file in the crate, not just `lib.rs`.** `mod conn_detail` is crate-private
+    /// at the root, so `crate::conn_detail::ConnDetail::__from_literal(body.leak())` compiles
+    /// from `chains.rs`, `pouncer.rs` or any module added later — and reading one file would
+    /// have said the hole was closed. The directory is walked at run time rather than listed,
+    /// because a hand-kept list of modules is exactly the thing a new module is not added to.
     #[test]
     fn the_only_way_to_build_a_conn_detail_is_a_string_literal() {
-        let src = include_str!("lib.rs");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources: Vec<(String, String)> = std::fs::read_dir(&dir)
+            .expect("the crate's own src/ is readable")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .map(|p| {
+                let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                (name, std::fs::read_to_string(&p).unwrap_or_default())
+            })
+            .collect();
+        sources.sort();
+        // Controls for the walk itself: it must have found more than one file, and it must
+        // have found the one the type lives in — a walk that read nothing would make every
+        // assertion below vacuously true.
+        assert!(
+            sources.len() > 1 && sources.iter().any(|(n, _)| n == "lib.rs"),
+            "control: the source walk found {:?}",
+            sources.iter().map(|(n, _)| n).collect::<Vec<_>>()
+        );
+        let src: String = sources
+            .iter()
+            .map(|(_, body)| body.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let src = src.as_str();
         // Split so this test's own lines are not among the hits it counts.
         let ctor = concat!("__from", "_literal");
         // Comment lines are excluded: prose cannot call a constructor, and the module note
@@ -23148,6 +23310,60 @@ mod tests {
             src.contains(matcher),
             "conn_detail! stopped matching a literal fragment, so any expression now reaches \
              the persisted sink"
+        );
+    }
+
+    /// ⛔ A PUSH THAT NEVER REACHED THE SERVICE IS EVIDENCE TOO.
+    ///
+    /// HRDLog and WRL leave no per-QSO stamp, so a round trip is the ONLY thing that can ever
+    /// move their Connections row off "stored — not verified yet". The manual push stamped
+    /// inside `if let Ok(r) = &res` — so a transport failure moved nothing, and the row stayed
+    /// unverified through exactly the failure the operator was chasing, while the auto-push
+    /// leg recorded `*_UNREACHABLE` for the identical result.
+    ///
+    /// Both halves are asserted here, and the `Ok` half is the control: a helper that returned
+    /// `(false, UNREACHABLE)` for everything would satisfy the failure assertions alone.
+    #[test]
+    fn a_manual_push_that_never_reached_the_service_stamps_the_row() {
+        use super::{hrdlog_health_of, wrl_health_of, HRDLOG_UNREACHABLE, WRL_UNREACHABLE};
+        let hrd = |r: &str| tempo_app::dto::HrdLogPushResultDto {
+            result: r.into(),
+            message: None,
+        };
+        let wrl = |r: &str| tempo_app::dto::WrlPushResultDto {
+            result: r.into(),
+            message: None,
+        };
+
+        // The transport failure — the half that recorded nothing.
+        assert_eq!(
+            hrdlog_health_of(&Err("connection refused".to_string())),
+            (false, HRDLOG_UNREACHABLE),
+            "a manual HRDLog push that never got an answer left the row unverified"
+        );
+        assert_eq!(
+            wrl_health_of(&Err("dns error".to_string())),
+            (false, WRL_UNREACHABLE),
+            "a manual WRL push that never got an answer left the row unverified"
+        );
+        // …and it is the SAME detail the auto-push leg stamps, which is the disagreement this
+        // closes rather than a second answer to the same question.
+        assert!(HRDLOG_UNREACHABLE.as_str().contains("never reached HRDLog"));
+        assert!(WRL_UNREACHABLE
+            .as_str()
+            .contains("never reached World Radio League"));
+
+        // The controls: a real answer still decides on its own merits, both ways.
+        assert!(hrdlog_health_of(&Ok(hrd("ok"))).0);
+        assert!(wrl_health_of(&Ok(wrl("accepted"))).0);
+        assert_eq!(
+            hrdlog_health_of(&Ok(hrd("authFail"))),
+            super::hrdlog_stamp("authFail"),
+            "an answer must not be overwritten by the unreachable detail"
+        );
+        assert_eq!(
+            wrl_health_of(&Ok(wrl("authFail"))),
+            super::wrl_stamp("authFail")
         );
     }
 
@@ -23216,7 +23432,7 @@ mod tests {
         for c in propagation::live::cloudlog::CloudlogFailure::ALL {
             details.push(cloudlog_stamp(c).as_str());
         }
-        details.push(qrz_xml_stamp(&Ok(QrzOutcome::Refused(String::new()))).1.as_str());
+        details.push(qrz_xml_stamp(&Ok(QrzOutcome::NoRecord(String::new()))).1.as_str());
         details.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1.as_str());
         details.push(
             qrz_xml_stamp(&Err(QrzFailure::unreachable(String::new())))
@@ -23304,12 +23520,13 @@ mod tests {
         // A hit is a working subscription.
         let found = QrzOutcome::Found(Box::new(tempo_core::qrz::QrzLookup::default().into()));
         assert_eq!(qrz_xml_stamp(&Ok(found)), (true, conn_detail!("")));
-        // So is an authoritative miss: QRZ answered on a live session. Calling this a failure
-        // would paint the row red for looking up a callsign that simply does not exist.
-        assert_eq!(
-            qrz_xml_stamp(&Ok(QrzOutcome::NotFound)),
-            (true, conn_detail!(""))
-        );
+        // An answer with NO record is not — see `qrz_xml_stamp`: QRZ sends an unknown
+        // callsign and a refused lookup the same way, so nothing here can call it a
+        // completed lookup.
+        let (no_record_ok, no_record_detail) =
+            qrz_xml_stamp(&Ok(QrzOutcome::NoRecord("Not found: g1srdd".into())));
+        assert!(!no_record_ok);
+        assert!(!no_record_detail.as_str().trim().is_empty());
         // A rejected login is the case M0DHT could not see. QRZ's own sentence goes to the
         // connection log, not to disk, so what the row must carry is the REMEDY — and it must
         // be the credential remedy, not the network one.
@@ -23344,14 +23561,11 @@ mod tests {
     #[test]
     fn a_lookup_qrz_refused_never_reports_the_subscription_verified() {
         use super::{qrz_xml_stamp, QrzOutcome};
-        // The control, and the pairing is the point: these two arrived as the SAME value
-        // before the fix, so a test that checked only the refusal would also pass against a
-        // stamp that had simply been flipped to call every Ok a failure.
-        let (miss_ok, _) = qrz_xml_stamp(&Ok(QrzOutcome::NotFound));
-        assert!(
-            miss_ok,
-            "control: an authoritative miss is still a live session"
-        );
+        // The control, and the pairing is the point: without it, a stamp simply flipped to
+        // call every answer a failure would satisfy the assertion below.
+        let found = QrzOutcome::Found(Box::new(tempo_core::qrz::QrzLookup::default().into()));
+        let (hit_ok, _) = qrz_xml_stamp(&Ok(found));
+        assert!(hit_ok, "control: a record IS a working subscription");
 
         let (refused_ok, detail) = qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin));
         assert!(
@@ -23383,62 +23597,88 @@ mod tests {
         );
     }
 
-    /// ⛔ MATCH, MISS, REFUSAL — THREE STATES, DRIVEN FROM QRZ'S OWN BYTES.
+    /// ⛔ ONLY A HIT IS EVIDENCE. THE FIFTH COSTUME OF THIS DEFECT, AND THE LAST.
     ///
-    /// Round 2 split `Ok(None)` into [`QrzOutcome`] and the refusal still collapsed into the
-    /// miss, because the split was made one layer too high: `qrz_try_lookup` mapped **every**
-    /// record-less response to `NotFound`, and QRZ delivers a refusal on a live session key
-    /// in exactly that shape — a `<Key>`, an `<Error>` that never says "session", and no
-    /// `<Callsign>`. So the row went green on a refusal, and green does not merely fail to
-    /// warn here: `note_conn_health` writes the success half, which CLEARS an existing red.
+    /// A miss and a refusal arrive from QRZ in exactly the same shape — a live `<Key>`, an
+    /// `<Error>` that never says "session", no `<Callsign>` — so every reader that tried to
+    /// separate them read QRZ's WORDING, and the wording won five times running:
+    ///
+    /// 1. `Ok(None)`, which meant both at once.
+    /// 2. `QrzOutcome::NotFound`, mapped from every record-less response.
+    /// 3. `contains("not found")`, which a refusal MENTIONING the words satisfies.
+    /// 4. a prefix anchored at `not found` — beaten by *"Not found: your subscription does
+    ///    not cover this record"*, which begins exactly like a miss and is a refusal.
+    ///
+    /// Each of those painted the row GREEN, and green does not merely fail to warn here:
+    /// `note_conn_health` writes the success half, which CLEARS an existing red. So the fifth
+    /// answer is not a fifth wording: the question is not asked. Every record-less answer is
+    /// one arm and it is red.
+    ///
+    /// ⚠️ The cost is stated in `qrz_xml_stamp`: a lookup of a callsign that genuinely does
+    /// not exist marks the row failing until the next real lookup clears it.
     ///
     /// Driven through `qrz_outcome_from_body` rather than asserted on hand-built enum values,
-    /// because the defect was in the mapping, not in the rendering — a test that constructs
-    /// `QrzOutcome::Refused` itself would have passed against the broken code.
+    /// because the defect was always in the mapping, not the rendering.
     #[test]
-    fn a_qrz_refusal_a_miss_and_a_match_are_three_different_rows() {
+    fn a_qrz_answer_with_no_record_is_never_a_verified_lookup() {
         use super::{qrz_outcome_from_body, qrz_xml_stamp, QrzOutcome};
 
-        // QRZ's three answers, as it actually sends them. The miss and the refusal differ
-        // ONLY in QRZ's wording — same live key, same `<Error>`, same absent record — which
-        // is why nothing structural can tell them apart.
+        // THE CONTROL, and this test is worthless without it: a hit must still be green, or
+        // every assertion below is satisfied by a stamp that calls everything a failure.
         let hit = "<QRZDatabase><Callsign><call>AA7BQ</call></Callsign>\
 <Session><Key>live</Key></Session></QRZDatabase>";
-        let miss = "<QRZDatabase><Session><Key>live</Key>\
-<Error>Not found: g1srdd</Error></Session></QRZDatabase>";
-        let refusal = "<QRZDatabase><Session><Key>live</Key>\
-<Error>A subscription is required to access this data</Error></Session></QRZDatabase>";
-
-        let (hit_ok, _) = qrz_xml_stamp(&qrz_outcome_from_body(hit));
-        let (miss_ok, _) = qrz_xml_stamp(&qrz_outcome_from_body(miss));
-        let (refused_ok, refused_detail) = qrz_xml_stamp(&qrz_outcome_from_body(refusal));
-
-        // Two controls, and the pairing is the whole test: a stamp simply flipped to call
-        // every answer a failure would satisfy the refusal assertion on its own.
-        assert!(hit_ok, "control: a record is a working subscription");
         assert!(
-            miss_ok,
-            "control: an authoritative miss is a completed round trip on a live session"
-        );
-        assert!(
-            !refused_ok,
-            "a refusal QRZ delivered on a live session reported the subscription verified"
-        );
-        assert!(
-            !refused_detail.as_str().trim().is_empty(),
-            "and the row has to say what happened, or it is red with no reason"
-        );
-
-        // The mapping, not just the rendering: the refusal must not BE a `NotFound`.
-        assert!(
-            matches!(qrz_outcome_from_body(refusal), Ok(QrzOutcome::Refused(_))),
-            "the refusal collapsed into the miss again"
+            qrz_xml_stamp(&qrz_outcome_from_body(hit)).0,
+            "control: a record is a working subscription"
         );
         assert!(matches!(
-            qrz_outcome_from_body(miss),
-            Ok(QrzOutcome::NotFound)
+            qrz_outcome_from_body(hit),
+            Ok(QrzOutcome::Found(_))
         ));
-        // A dead session is the fourth state and still its own row (round 2's fix, kept).
+
+        // Every costume this defect has worn, plus QRZ's genuine miss and an answer with no
+        // reason at all. They are one arm now, so the list is what the arm is checked with —
+        // not a wording table anything reads.
+        for error in [
+            // ⚠️ THE FIFTH COSTUME FIRST, because it is the one that was still green: the
+            // anchored `not found` prefix accepts this, and it is a refusal.
+            "Not found: your subscription does not cover this record",
+            // QRZ's real not-found reply — the same arm now, and for the same reason.
+            "Not found: g1srdd",
+            // The fourth: a refusal that merely mentions the words.
+            "Callsign not found at your subscription level",
+            "The requested data was not found in your subscription tier",
+            "A subscription is required to access this data",
+            "Lookup limit exceeded for this 24 hour period",
+            "Insufficient privileges for that operation",
+        ] {
+            let body = format!(
+                "<QRZDatabase><Session><Key>live</Key><Error>{error}</Error></Session></QRZDatabase>"
+            );
+            assert!(
+                matches!(qrz_outcome_from_body(&body), Ok(QrzOutcome::NoRecord(_))),
+                "a record-less answer was classified as something else: {error:?}"
+            );
+            let (ok, detail) = qrz_xml_stamp(&qrz_outcome_from_body(&body));
+            assert!(
+                !ok,
+                "an answer QRZ delivered with no record reported the subscription \
+                 verified: {error:?}"
+            );
+            assert!(
+                !detail.as_str().trim().is_empty(),
+                "and the row has to say what happened, or it is red with no reason"
+            );
+        }
+        // An answer with neither a record nor a reason is the same arm.
+        let bare = "<QRZDatabase><Session><Key>live</Key></Session></QRZDatabase>";
+        assert!(matches!(
+            qrz_outcome_from_body(bare),
+            Ok(QrzOutcome::NoRecord(_))
+        ));
+        assert!(!qrz_xml_stamp(&qrz_outcome_from_body(bare)).0);
+
+        // A dead session is still its own row, with its own remedy (round 2's fix, kept).
         let dead = "<QRZDatabase><Session><Error>Session Timeout</Error></Session></QRZDatabase>";
         assert!(matches!(
             qrz_outcome_from_body(dead),
