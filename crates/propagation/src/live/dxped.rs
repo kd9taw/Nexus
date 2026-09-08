@@ -137,10 +137,6 @@ fn fetch_plans_uncached() -> Result<Vec<DxpeditionPlan>, String> {
     Ok(plans)
 }
 
-/// ClubLog most-wanted list → entity-name → rank, cached 24 h. Accepts both JSON
-/// shapes ClubLog has used: {"1":"P5",...} (rank→prefix) and {"P5":1,...}
-/// (prefix→rank). Prefixes resolve to entity names via cty.dat so plan calls can
-/// match regardless of the operation's actual callsign.
 /// What to print when ClubLog answers `mostwanted.php` with an `{"error": …}` body — Nexus's
 /// own breadcrumb, or `None` when the body is not an error at all.
 ///
@@ -160,6 +156,10 @@ fn most_wanted_error_breadcrumb(v: &serde_json::Value) -> Option<&'static str> {
         .map(|_| "propagation: ClubLog most-wanted refused the request")
 }
 
+/// ClubLog most-wanted list → entity-name → rank, cached 24 h. Accepts both JSON
+/// shapes ClubLog has used: {"1":"P5",...} (rank→prefix) and {"P5":1,...}
+/// (prefix→rank). Prefixes resolve to entity names via cty.dat so plan calls can
+/// match regardless of the operation's actual callsign.
 fn most_wanted(c: &reqwest::blocking::Client) -> HashMap<String, u32> {
     {
         let cache = MOST_WANTED.lock().unwrap_or_else(|e| e.into_inner());

@@ -149,14 +149,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which is before any export can quote it — the contact keeps the fact that its upload bounced,
   and when, and loses only the text.
 
-- **A QRZ callbook row no longer claims a working subscription it cannot prove.** QRZ answers
-  "no such callsign" and "your subscription will not do that" in exactly the same shape, and
-  four versions of this check tried to tell them apart by reading QRZ's wording — the last of
-  them still read *"Not found: your subscription does not cover this record"* as a plain miss
-  and marked the connector green, clearing a real failure. Nexus no longer guesses: only a
-  lookup that returns a record proves the XML subscription works. The trade is that looking up
-  a callsign that genuinely does not exist marks the row as failing until your next successful
-  lookup, which is the safer way round to be wrong.
+  **And so are the safety copies of it.** Nexus keeps a `log.adi.bak` beside your log — taken
+  the first time it opens a log and never overwritten — plus dated snapshots in a `backups`
+  folder. Those copies are made from the raw file, so on any machine that ran an affected
+  version they hold the same replies, and nothing ever rewrote them. Upgrading now cleans them
+  too: the copies keep every contact, they lose only the reply text, and any copy that held one
+  is rewritten so only your own account can read it. Your log itself is cleaned once, in place,
+  the first time this version opens it. A log with nothing to clean is not rewritten at all, so
+  a large log still opens as fast as it did.
+
+- **The automatic QRZ Logbook sync no longer prints QRZ's reply where the desktop can keep it.**
+  When the hourly sync failed, Nexus printed QRZ's own refusal line — which on Linux the desktop
+  session saves to a world-readable file until your next login, and QRZ quotes your failing
+  request, API key included. The failure now says what went wrong in Nexus's own words: no key
+  stored, the sync never reached QRZ, or QRZ refused it. QRZ's own wording still reaches you, in
+  Settings ▸ Connections, and it goes no further than that session.
+
+- **A LoTW upload that TQSL turns down now says what TQSL said, and which of two problems it
+  was.** The reason on the contact is Nexus's own sentence — the service's wording is not
+  written into your log — and that sentence sends you to this session's connection log to read
+  what TQSL actually printed. For LoTW it was not there: every other connector wrote its line,
+  LoTW wrote none, so a failed sign left the real message only in the toast of the click that
+  produced it. It is now recorded for every failing upload, automatic or manual. And a batch
+  that fails to sign no longer reports "check your credentials" for two problems with nothing
+  in common: a missing or expired **Callsign Certificate** (request or renew it at ARRL, load
+  the .p12 into TQSL) is now told apart from an unusable **Station Location** (create it in
+  TQSL, or correct the name in Settings).
+
+- **A QRZ callbook row no longer claims a working subscription it cannot prove.** The row went
+  green on far too little. QRZ answers "no such callsign" and "your subscription will not do
+  that" in exactly the same shape, so several versions of this check tried to tell them apart by
+  reading QRZ's wording, and each was beaten by the next wording — one of them still read *"Not
+  found: your subscription does not cover this record"* as a plain miss and marked the connector
+  green, clearing a real failure.
+
+  The wording was never the real problem. When your XML subscription lapses, QRZ does not send an
+  error at all — it sends a **successful** lookup with the free-tier fields in it: the callsign, a
+  name, a country, and no grid square and no state, because those are what the subscription buys.
+  Every version of this check saw a record come back and called the subscription healthy, so the
+  row read green for operators who were no longer subscribed to anything.
+
+  So the check was turned around. The row goes green only on positive proof — a lookup that comes
+  back carrying a subscriber-only field, read from the returned record itself and not from QRZ's
+  surrounding prose — and it now also believes QRZ's own subscription field: a reply that says
+  `non-subscriber`, or whose subscription expired, reads red no matter what else it carries. Every
+  other answer, including shapes QRZ has not sent before, reads as not confirmed. Two trades, both
+  deliberate: looking up a callsign that genuinely does not exist marks the row as failing until
+  your next successful lookup, and so does a lookup whose record happens to carry neither a grid nor
+  a state. A row that reads red until your next lookup costs you a glance; a row that reads green
+  over a subscription that has quietly lapsed is the bug this was reported as.
+
+<!-- ℹ️ NICE-TO-KNOW, no longer load-bearing (round 7 pass 2): green would rest on QRZ withholding
+     <state> from a non-subscriber (<state> is FCC-ULS-derivable, so QRZ MIGHT return it to a free US
+     account) — EXCEPT the predicate now also reads QRZ's own <SubExp> and refuses an explicit
+     `non-subscriber`/expired reply regardless of which fields it carries. So if QRZ ever does return
+     <state> free, the SubExp disqualifier is what catches it (the reply carries
+     <SubExp>non-subscriber</SubExp>), and #245 cannot return through that door. Proven by
+     `a_non_subscriber_body_carrying_a_real_state_is_disqualified_by_subexp` in qrz.rs. The only
+     residual — a free reply with <state> and NO SubExp marker at all — is worth confirming, not the
+     single assumption the fix rests on. CHECK when convenient: one lookup from a lapsed/free QRZ XML
+     subscription — does the <Callsign> carry <state>, and does the <Session> carry a <SubExp>? Do
+     NOT use live credentials in code/CI. -->
 
 - **A manual HRDLog.net or World Radio League push that never reached the service now records
   it.** Pressing the per-contact upload button and getting a network failure left the
@@ -191,6 +244,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent it that way, so the service rejected every QSO and nothing on screen explained why —
   the code looked right because it was right, apart from a character you cannot see. Codes are
   now trimmed when you save them. Existing stored codes are unaffected until you re-enter one.
+
+- **settings.json is no longer world-readable.** It holds your ClubLog API key (and, briefly, a
+  Cloudlog key on its way into the OS keychain), but was written so any account on the machine
+  could read it. It is now owner-only. Existing files are tightened the next time Nexus saves them.
+
+- **Upgrading no longer destroys a stored Cloudlog key when the OS keychain is unavailable.** The
+  one-time move of a legacy Cloudlog/Wavelog key from settings.json into the keychain cleared the
+  key from the file whether or not it had actually been stored — so on a Linux box with no Secret
+  Service running, the key was silently deleted at launch. It is now cleared only once it is safely
+  in the keychain, and the migration retries on a later launch otherwise.
 
 ## [1.10.3] — 2026-09-04
 

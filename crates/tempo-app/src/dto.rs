@@ -1435,8 +1435,10 @@ pub struct UploadStatusDto {
     /// "pending" | "accepted" | "duplicate" | "rejected" | "authfail".
     pub outcome: String,
     pub when_unix: i64,
-    /// The failure CLASS as a token — "credentials" | "record" | "partial" |
-    /// "unclassified" | "declared" — exactly like `outcome`, and for the same reason.
+    /// The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record"
+    /// | "partial" | "unclassified" | "declared" — exactly like `outcome`, and for the same
+    /// reason. [`tempo_core::logbook::UploadDetail::ALL`] is the set; this list is a reading
+    /// aid and cannot be relied on to be current.
     ///
     /// ⛔ Not the service's prose, and not the English sentence either: this DTO round-trips
     /// back into a `QsoRecord`, so a free string here would be a way to write text into

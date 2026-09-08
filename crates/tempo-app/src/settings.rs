@@ -4323,9 +4323,30 @@ impl Settings {
         to_save.sync_active_from_flat();
         let json = serde_json::to_string_pretty(&to_save).map_err(std::io::Error::other)?;
         let tmp = path.with_extension("json.tmp");
+        // ⛔ Owner-only. settings.json holds the ClubLog API key (and a Cloudlog key until the
+        // keychain migration completes) and sits beside conn-health.json; `File::create` leaves it
+        // world-readable at 0644 (round 7 F8). Create the temp 0600 from the first byte on unix, and
+        // re-assert the mode to cover a slack umask or a stale temp; the rename carries the mode onto
+        // the published file. On non-unix the profile dir's ACL governs it, as elsewhere.
+        #[cfg(unix)]
+        let mut f = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?
+        };
+        #[cfg(not(unix))]
         let mut f = std::fs::File::create(&tmp)?;
         std::io::Write::write_all(&mut f, json.as_bytes())?;
         f.sync_all()?; // data on disk BEFORE the rename publishes it
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
         drop(f);
         // No pre-remove of `path`: rename replaces it atomically on Unix and Windows
         // (MOVEFILE_REPLACE_EXISTING); a remove-first would open a no-file crash window.
@@ -6877,6 +6898,31 @@ mod tests {
         assert!(back.fd_scoreboard);
         assert_eq!(back.fd_scoreboard_port, 7474);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// F8 (round 7): settings.json holds the ClubLog API key (and a Cloudlog key until the keychain
+    /// migration completes), so it must not be world-readable. `File::create` leaves it at 0644.
+    #[test]
+    #[cfg(unix)]
+    fn save_writes_the_settings_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("tempo_settings_mode");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let s = Settings {
+            mycall: "W9XYZ".into(),
+            clublog_api_key: "cl0gk3yAbCdEf0123456789".into(),
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        // Control: the key really is in the file at rest (so "owner-only" is protecting something).
+        assert!(
+            std::fs::read_to_string(&path).unwrap().contains("cl0gk3y"),
+            "control: the ClubLog key is written to settings.json"
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "settings.json is world-readable at {mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

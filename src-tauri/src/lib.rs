@@ -4328,14 +4328,12 @@ fn fd_rules_load_from_disk() {
                 stats.rules_year, stats.generated
             ),
         ),
-        Err(tempo_core::fd_rules::RulesInitError::AlreadyInitialized) => {
-            tempo_core::applog::error(
-                "startup",
-                "fd-rules: table was already loaded before the startup install — \
+        Err(tempo_core::fd_rules::RulesInitError::AlreadyInitialized) => tempo_core::applog::error(
+            "startup",
+            "fd-rules: table was already loaded before the startup install — \
                  something read the ruleset too early (code-ordering regression); the \
                  bundled seed is locked in for this session",
-            )
-        }
+        ),
         Err(e) => tempo_core::applog::info(
             "startup",
             &format!("fd-rules: downloaded file rejected ({e}) — bundled seed ({seed}) active"),
@@ -13808,8 +13806,12 @@ fn clublog_credentials_ready(email: &str, effective_key: &str) -> bool {
 /// "I hit save / it synced / it failed and I couldn't tell". Every connector
 /// action (credential save, login, download, push, feed start/stop, rejection)
 /// records one of these; the UI shows the rolling tail.
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// ⛔ **This type is not serializable, and cannot be made so by adding a derive.** Its
+/// `message` is an [`EphemeralText`], which implements no serde trait, so
+/// `#[derive(serde::Serialize)]` here does not compile — which is the point: dumping the ring
+/// to a file is one obvious-looking line, and until this it was a line that built. The wire
+/// shape the panel receives is [`ConnEventView`], built in [`get_connection_log`] alone.
 struct ConnEvent {
     ts_unix: i64,
     connector: String,
@@ -13818,15 +13820,64 @@ struct ConnEvent {
     message: EphemeralText,
 }
 
+/// The wire shape of a [`ConnEvent`] — the one boundary a service's own words cross.
+///
+/// A separate type on purpose. The ring's type is not serializable at all; this one holds a
+/// plain `String`, is built in [`get_connection_log`] and nowhere else, and goes straight out
+/// over Tauri's IPC to the Connections panel, which is a screen. Every guard on
+/// [`EphemeralText`] is spent right here, so the crossing is one function long and a source
+/// check keeps it that way.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnEventView {
+    ts_unix: i64,
+    connector: String,
+    level: String,
+    message: String,
+}
+
 /// Text that may be a service's own words: shown to the operator now, written down nowhere.
 ///
-/// The guard is what this type does **not** implement — no `Display`, no `Debug`, no `Deref`
-/// — **and the fact that its field is private to its own module**. Both halves are needed and
-/// the second one was missing: while this was a tuple struct at the crate root, `.0` was in
-/// scope for the whole of `lib.rs` and every module below it, so `eprintln!("{}", t.0)`
-/// compiled clean and the "does not compile" claim above was false. `mod ephemeral` is what
-/// makes it true. Its one exit is `serde::Serialize`, which is how the Connections panel
-/// reads the ring, and that is a screen.
+/// # What the compiler enforces here, exactly
+///
+/// Three things, and each of them is a hole a previous round of this work believed it had
+/// closed with prose:
+///
+/// - **No `Display`, no `Debug`, no `Deref`.** `format!("{t}")`, `eprintln!("{t:?}")` and
+///   anything that reaches through to the `String` do not compile.
+/// - **The field is private to `mod ephemeral`.** `t.0` outside it is `E0616`. Round 4's doc
+///   claimed this and it was false: as a tuple struct at the crate ROOT, `.0` was in scope
+///   for the whole of `lib.rs` and every module below it, so `eprintln!("{}", t.0)` compiled
+///   clean.
+/// - **No `serde::Serialize` — not on this type, and not on anything holding one.**
+///   `serde_json::to_string(&t)` is `E0277`, and so is a `#[derive(serde::Serialize)]` on
+///   [`ConnEvent`]. This is the hole round 5 left: it closed `.0` and `Debug` and then said
+///   "its one exit is `Serialize`", which left writing the whole ring to a file as one line
+///   of ordinary-looking code. Serde is how everything else in this crate reaches disk, so
+///   the way to keep this out of a file is for that line not to build.
+///   ⚠️ **But the guard ends the instant [`reveal_on_screen`](ephemeral::EphemeralText::reveal_on_screen)
+///   is called.** Its `&str` copies into a plain `String`, and [`get_connection_log`] does exactly
+///   that to build the serializable [`ConnEventView`] — so `fs::write(p, to_string(&get_connection_log()))`
+///   compiles. The compiler stops a serde dump of the RING; it does not stop one of the wire twin.
+///   That last leg is convention plus the source check, the same standing as the `&str` residual
+///   below — the sink table's serde row says so (round 7 F6).
+///
+/// # What it does NOT enforce — and nothing can
+///
+/// [`ephemeral::EphemeralText::reveal_on_screen`] hands out a `&str`, because the Connections
+/// panel has to render the words and that is #226's entire point. Past that call the compiler
+/// has no further say, and no signature brings it back: a callback taking `&str` can return a
+/// `String`, and a borrowed wire type can still be serialised inside its own scope. So the
+/// last step is what [`ConnDetail`]'s is — **convention plus a mechanical check, not a
+/// compile error**: `the_only_reader_of_an_ephemeral_text_is_the_screen` reads every source
+/// file in this crate, recursively, and fails if that accessor is named anywhere but its own
+/// definition and [`get_connection_log`]. Like the `ConnDetail` check it is a string scan: it
+/// cannot see a call split across two lines, and it is a test, so it fails a suite rather
+/// than a build.
+///
+/// **Say that plainly rather than rounding it up.** "It cannot be written down" would be the
+/// fourth wording in this file to promise a mechanical guarantee the compiler does not give,
+/// and the cost of the previous three was that the next person believed them.
 ///
 /// ⚠️ The counterpart of [`ConnDetail`], and the two together are the whole rule: a
 /// `ConnDetail` is Nexus's own sentence and may be written down; an `EphemeralText` may be a
@@ -13842,14 +13893,16 @@ struct ConnEvent {
 /// | Sink | Lifetime | Server text? | What makes that true |
 /// |---|---|---|---|
 /// | `conn-health.json` (0644) | until overwritten | **no** | [`ConnDetail`]: literal-only by type, and [`conn_health_from_json`] runs the same allow-list on the way IN |
-/// | stderr → `~/.xsession-errors` (0644) | until next login | **no** | [`conn_log`] prints `connector`/`level` only, both `&'static str`; this type has no `Display`/`Debug` to print |
+/// | stderr → `~/.xsession-errors` (0644) | until next login | **no** | [`conn_log`] prints `connector`/`level` only, both `&'static str`; this type has no `Display`/`Debug` to print. The qrz-sync worker is the other printer on this row and prints [`QrzSyncFailure::detail`], a [`ConnDetail`] |
 /// | [`CONN_LOG`] ring (200) → [`get_connection_log`] | the process | yes | it is a screen — that is #226's whole point |
 /// | a command's `Err(String)` → the operator's toast | the moment | yes | same |
 /// | `nexus-diag.log` ([`tempo_core::applog`]) | rotated, on disk | **no** | no connector path calls it, and nothing but this line says so |
+/// | any file written through serde — a settings dump, a crash report, a debug dump | permanent | **convention** | the RING ([`ConnEvent`]) implements no serde trait, so `to_string(&ring)` and a `derive` on it do not compile — but its wire twin [`ConnEventView`] MUST serialize for the Connections IPC and holds the same words as a plain `String`, so `fs::write(p, to_string(&get_connection_log()))` DOES compile (round 7 F6). Nothing writes it, and the source check keeps `reveal_on_screen` to `get_connection_log` alone — the same standing as the ring row above, NOT a compile guarantee |
 /// | `PendingUpload` retry queue | the process | n/a | it carries the QSO and a retry count, never an error string |
 /// | `log.adi` `APP_TEMPO_UL_*` → **every export**, incl. the TQSL-signed LoTW batch | permanent, and uploaded to ARRL | **no** | [`tempo_core::logbook::UploadDetail`]: the wire carries a class token, and a tail that is not one is dropped when the record is READ |
+/// | `log.adi.bak` and `backups/*.adi` (0600) | permanent, local, never rotated (the anchor) | **no** | `tempo_core::logbook`'s byte scrub: the anchor is taken from CLEANED bytes, and a copy an earlier build already poisoned is rewritten in place on the next load |
 ///
-/// ⚠️ That last row was missing for four rounds, and it is the worst sink on the list. The
+/// ⚠️ The `log.adi` row was missing for four rounds, and it is the worst sink on the list. The
 /// first two are local 0644 files; `log.adi` is signed with the operator's callsign
 /// certificate and uploaded to ARRL, so a leak there is exfiltration of a secret to a third
 /// party under the operator's own signature, and it is not recallable. QRZ's `REASON` and
@@ -13857,18 +13910,51 @@ struct ConnEvent {
 /// file paths. **The lesson is not "one more sink": it is that the inventory is only ever as
 /// good as the last walk of it.** Anything added to this file that carries a service's words
 /// belongs on this list, and so does any new durable writer of `UploadStatus`.
+///
+/// ⚠️ Round 6 proved that lesson again on the row below it. Cleaning `log.adi` on the way IN
+/// left the key in the two files `log.adi` is COPIED to — the anchor `.bak`, taken before the
+/// parser runs and never rewritten again, and the `backups/` ring — so the shipped exposure
+/// outlived the fix for it by one round. A sink's copies are sinks.
+///
+/// ⚠️ And the row under it is the same lesson again, one round later: the parse-time filter
+/// that closed `log.adi` cleaned what an EXPORT could quote and left the BYTES where they
+/// were — while `Logbook::load` copies those bytes into the anchor `.bak` **before**
+/// `parse_adif` ever runs. So every machine that ran an affected build had a second copy of
+/// the key in a file that is never overwritten and never cleaned, plus one per snapshot in
+/// `backups/`. A sink is not closed while a COPY of it is still being taken upstream of the
+/// filter.
 mod ephemeral {
-    /// See [`super::EphemeralText`]. In its own module so the field is genuinely private:
-    /// as a crate-root tuple struct, `.0` was in scope for the whole of `lib.rs` and every
-    /// child module, so `eprintln!("{}", t.0)` and `serde_json::to_string(&t)` both compiled
-    /// — the doc claimed a guard the type did not have.
-    #[derive(Clone, serde::Serialize)]
+    /// See [`super::EphemeralText`]. In its own module so the field is genuinely private: as
+    /// a crate-root tuple struct, `.0` was in scope for the whole of `lib.rs` and every child
+    /// module, so `eprintln!("{}", t.0)` compiled — the doc claimed a guard the type did not
+    /// have. It derives NOTHING: a `Serialize` here would put `serde_json::to_string(&t)`,
+    /// and a derive on any struct holding one, back within reach of a single line.
     pub struct EphemeralText(String);
 
     impl EphemeralText {
-        /// The only way in. There is deliberately no way out but `Serialize`.
+        /// The only way in.
         pub fn new(text: String) -> Self {
             Self(text)
+        }
+
+        /// ⛔ THE ONLY WAY OUT, and it is named for the only place the value may go.
+        ///
+        /// The Connections panel has to render a service's words — that is what #226 is
+        /// about — so something has to hand them over, and a `&str` is what that costs. From
+        /// here the compiler has no further say: a caller holding this could write it
+        /// anywhere, and no signature closes that (a callback taking `&str` can return a
+        /// `String`; a borrowed wire type can still be serialised inside its own scope). So
+        /// this is convention with a mechanical check behind it, exactly like
+        /// [`super::ConnDetail`]'s hidden constructor:
+        /// `the_only_reader_of_an_ephemeral_text_is_the_screen` reads every source file in
+        /// this crate and fails if this name appears anywhere but here and
+        /// [`super::get_connection_log`].
+        ///
+        /// If you are adding the second caller, the question to answer first is not "is this
+        /// string safe" — three rounds were lost to that one, and the server picks the
+        /// encoding — it is "does what I am writing it into outlive the session".
+        pub fn reveal_on_screen(&self) -> &str {
+            &self.0
         }
     }
 }
@@ -13901,8 +13987,9 @@ const CONN_LOG_CAP: usize = 200;
 /// clean, and there is no way to forbid that from inside the crate that has to call the
 /// constructor. So the last step is convention plus a mechanical check, not a compile error:
 /// `the_only_way_to_build_a_conn_detail_is_a_string_literal` reads **every source file in
-/// this crate** and fails if the constructor is named anywhere but its own definition and
-/// the macro body.
+/// this crate, recursively** — it read one directory level until round 6, which made a module
+/// in a subdirectory invisible to it — and fails if the constructor is named anywhere but its
+/// own definition and the macro body.
 mod conn_detail {
     /// See the module note. Construct with `conn_detail!("…")`.
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -14103,8 +14190,17 @@ fn persistable_details() -> Vec<ConnDetail> {
     for c in propagation::live::cloudlog::CloudlogFailure::ALL {
         v.push(cloudlog_stamp(c));
     }
-    // QRZ's callbook: the no-record answer, the dead session and the two transport classes.
-    // The one success arm returns the empty detail, which is never stored.
+    // QRZ's callbook: the record that proves nothing, the no-record answer, the dead session
+    // and the two transport classes. The one success arm returns the empty detail, which is
+    // never stored — and it cannot be reached from here, because `QrzEntitlement` can only be
+    // proven by a body and there is none to read.
+    v.push(
+        qrz_xml_stamp(&Ok(QrzOutcome::Found(
+            Box::new(tempo_core::qrz::QrzLookup::default().into()),
+            QrzEntitlement::unproven(),
+        )))
+        .1,
+    );
     v.push(qrz_xml_stamp(&Ok(QrzOutcome::NoRecord(String::new()))).1);
     v.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1);
     v.push(qrz_xml_stamp(&Err(QrzFailure::unreachable(String::new()))).1);
@@ -14242,33 +14338,62 @@ type HealthTriple = (Option<i64>, Option<i64>, Option<String>);
 /// forever. A paid, working subscription was indistinguishable from an expired one, which is
 /// what M0DHT reported.
 ///
-/// ⛔ **ONLY A HIT IS EVIDENCE — the fifth round of this defect, and the last shape of it.**
-/// A record came back, so the subscription works. Everything else fails closed.
+/// ⛔ **GREEN REQUIRES POSITIVE PROOF — round 6, and the inversion the previous five needed.**
+/// The row goes green on one signal a non-subscriber or error body **cannot** carry, and every
+/// other answer, including bodies nobody has ever seen, is not-confirmed by construction.
 ///
-/// This function used to count an authoritative miss as evidence too, which is sound in
-/// principle: "no such callsign", answered on a live session, is a completed round trip.
-/// The trouble is that nothing can establish it. QRZ delivers a miss and a REFUSAL in the
-/// same shape — an `<Error>` beside a live `<Key>`, no `<Callsign>` — so every attempt to
-/// tell them apart read QRZ's WORDING, and the wording defeated five of them in a row:
-/// `Ok(None)` (both at once), `QrzOutcome::NotFound`, `contains("not found")`, a prefix
-/// anchored at `not found` — and then *"Not found: your subscription does not cover this
-/// record"*, which satisfies the anchor and is a refusal. Every one of those painted the row
-/// GREEN, and green here does not merely fail to warn: it CLEARS an existing red (#245).
+/// **How the first five went.** This function used to count an authoritative miss as evidence,
+/// which is sound in principle: "no such callsign", answered on a live session, is a completed
+/// round trip. Nothing can establish it, though — QRZ delivers a miss and a REFUSAL in the same
+/// shape, an `<Error>` beside a live `<Key>` and no `<Callsign>` — so every attempt to tell them
+/// apart read QRZ's WORDING, and the wording won five times: `Ok(None)` (both at once),
+/// `QrzOutcome::NotFound`, `contains("not found")`, a prefix anchored at `not found`, and then
+/// *"Not found: your subscription does not cover this record"*, which satisfies the anchor and
+/// is a refusal. Round 5 stopped asking: `QrzOutcome::NoRecord` is one arm for both, and it is
+/// red.
 ///
-/// So the question is not asked any more. `QrzOutcome::NoRecord` is one arm for both, and it
-/// is red.
+/// ⛔ **And that still shipped #245, because the sixth costume was not a wording.** QRZ's
+/// non-subscriber reply is a *success* body — a real `<Callsign>`, a `<call>`, a name, a
+/// country, and no grid or state, because those are what the subscription buys. A check hunting
+/// for failure text found nothing to object to, so the repo's own `LOOKUP_FREE` fixture stamped
+/// this row GREEN, and green does not merely fail to warn: [`note_conn_health`] writes the
+/// success half, which CLEARS an existing red. An operator whose subscription had lapsed had a
+/// green QRZ row.
 ///
-/// ⚠️ **The price, stated rather than discovered:** looking up a callsign that genuinely does
-/// not exist now marks this row failing until the next successful lookup. That is the wrong
-/// direction to be wrong in exactly once — a red row on a busted call costs a glance, and the
-/// operator's next real lookup clears it; a green row over a lapsed subscription is the bug
-/// this was reported as.
+/// **So the shape changed, not the details.** Every earlier round was a deny-list — a lookup
+/// counted as proof unless its body matched a known failure — which defaults every unrecognised
+/// answer to green and can only ever be one costume behind. This is an allow-list of one signal:
+/// a `<Callsign>` carrying a **subscriber-scoped field**, a `<grid>` or a `<state>`, which a
+/// free or lapsed account is not given. [`tempo_core::qrz::proves_entitled_lookup`] reads it,
+/// once, beside the fixture corpus; [`QrzEntitlement`] is the only value that can carry the
+/// answer here and its only constructor reads a body. An answer nobody has seen falls on the
+/// not-confirmed side because there is no list left for it to be missing from.
+///
+/// ⚠️ **The price, stated rather than discovered — and it grew in round 6.** A lookup of a
+/// callsign that genuinely does not exist marks this row failing until the next successful
+/// lookup (round 5's trade, unchanged). Added to it: an entitled lookup whose record happens to
+/// carry neither a grid nor a state also reads as not-confirmed, so a subscriber can see a red
+/// row after a lookup that genuinely worked, until they look up a record that has one. Both are
+/// the correct direction to be wrong in — a red row costs a glance and the operator's next real
+/// lookup clears it, while a green row over a lapsed subscription is the bug this was reported
+/// as, six times.
 ///
 /// ⛔ Every detail returned here is a fixed sentence, because it is persisted — see
 /// [`note_conn_health`]. QRZ's own words are logged by the caller and dropped.
 fn qrz_xml_stamp(r: &Result<QrzOutcome, QrzFailure>) -> (bool, ConnDetail) {
     match r {
-        Ok(QrzOutcome::Found(_)) => (true, conn_detail!("")),
+        // The one green arm in this function, and it is guarded on proof rather than on the
+        // presence of a record.
+        Ok(QrzOutcome::Found(_, e)) if e.is_proven() => (true, conn_detail!("")),
+        Ok(QrzOutcome::Found(_, _)) => (
+            false,
+            conn_detail!(
+                "QRZ returned a record, but only the fields a free account gets — no grid \
+                 square and no state — so this does not show the XML subscription working. \
+                 That is what QRZ sends when a subscription has lapsed or was never bought. \
+                 If yours is current, look up a callsign whose record carries a grid."
+            ),
+        ),
         Ok(QrzOutcome::NoRecord(_)) => (
             false,
             conn_detail!(
@@ -14387,7 +14512,9 @@ const WRL_UNREACHABLE: ConnDetail = conn_detail!(
 /// forever — while the auto-push leg recorded [`HRDLOG_UNREACHABLE`] for the identical
 /// failure. Two answers to one question, and the silent one belonged to the button an
 /// operator presses *because* the row says it has never been verified.
-fn hrdlog_health_of(res: &Result<tempo_app::dto::HrdLogPushResultDto, String>) -> (bool, ConnDetail) {
+fn hrdlog_health_of(
+    res: &Result<tempo_app::dto::HrdLogPushResultDto, String>,
+) -> (bool, ConnDetail) {
     match res {
         Ok(r) => hrdlog_stamp(&r.result),
         Err(_) => (false, HRDLOG_UNREACHABLE),
@@ -14534,10 +14661,23 @@ fn conn_logged<T>(
 }
 
 /// The rolling connectivity log, newest first.
+///
+/// ⛔ The one place an [`EphemeralText`] is read. The ring's own type does not serialize, so
+/// this function is what turns it into something Tauri can send — and Tauri's IPC to the
+/// Connections panel is the whole of where it may go. See [`EphemeralText`] for what that
+/// guard is and, just as importantly, what it is not.
 #[tauri::command]
-fn get_connection_log() -> Vec<ConnEvent> {
+fn get_connection_log() -> Vec<ConnEventView> {
     let log = CONN_LOG.lock().unwrap_or_else(|e| e.into_inner());
-    log.iter().rev().cloned().collect()
+    log.iter()
+        .rev()
+        .map(|e| ConnEventView {
+            ts_unix: e.ts_unix,
+            connector: e.connector.clone(),
+            level: e.level.clone(),
+            message: e.message.reveal_on_screen().to_string(),
+        })
+        .collect()
 }
 
 /// Per-connector STATUS: whether a credential is stored, and — the part that matters —
@@ -14581,7 +14721,10 @@ struct CredStatus {
     /// Newest failure. Compared against `last_success_unix` in the UI to decide
     /// failing-vs-working.
     last_failure_unix: Option<i64>,
-    /// The service's own (already sanitized) reason for that failure.
+    /// Why it last failed, in NEXUS's own words. Every arm that fills this hands over a
+    /// sentence this build wrote — [`upload_detail_sentence`] for the four connectors with
+    /// per-QSO stamps, a [`ConnDetail`] off [`persistable_details`] for the rest — never the
+    /// service's prose, which is what it used to be and what the UI's comment still claimed.
     last_failure_detail: Option<String>,
     /// Session kill-switch tripped (ClubLog's 403 latch). While set, EVERY ClubLog leg is
     /// skipped — today that appears only as one line in a 200-entry log the operator has
@@ -14734,7 +14877,10 @@ fn get_credentials_status(state: State<'_, SharedEngine>) -> Result<Vec<CredStat
             enabled: clublog_on,
             last_success_unix: health.clublog.last_success_unix,
             last_failure_unix: health.clublog.last_failure_unix,
-            last_failure_detail: health.clublog.last_failure_detail.map(upload_detail_sentence),
+            last_failure_detail: health
+                .clublog
+                .last_failure_detail
+                .map(upload_detail_sentence),
             // The 403 latch, finally visible. Note it is process-global: two instances
             // sharing one log will disagree until the log-derived AuthFail stamp reaches
             // the other one, which then shows `failing` rather than `paused`.
@@ -15502,6 +15648,35 @@ fn lotw_upload_batch(
                 let mut eng = engine_lock(state);
                 eng.stamp_lotw_upload(&batch, outcome, now_unix(), stamped);
             }
+            // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
+            //
+            // `UploadDetail`'s sentences tell the operator the service's own wording "was in
+            // that session's connection log", and for LoTW it was not: this was the one
+            // durable stamp producer with no `conn_log` call, so TQSL's actual words lived
+            // only in the toast of the run that produced them and were gone by the time the
+            // operator read the stamp. A class that sends someone somewhere to look has to be
+            // matched by something written there.
+            //
+            // Placed here rather than in either caller because BOTH reach it — the Logbook
+            // button and the automatic timer — so the wording is recorded exactly once per
+            // failing batch. What is logged is `sanitize_detail`'s output, which is the same
+            // text the toast already carries: a screen, in a ring that dies with the process.
+            // The retry arm above deliberately says nothing — a network failure carries no
+            // service wording, and the timer would repeat it every interval of an outage.
+            if matches!(
+                outcome,
+                tempo_core::logbook::UploadOutcome::Rejected
+                    | tempo_core::logbook::UploadOutcome::AuthFail
+            ) {
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!(
+                        "TQSL exit {code} — {}",
+                        detail.as_deref().unwrap_or("no output from TQSL")
+                    ),
+                );
+            }
             Ok(UploadReportDto {
                 dispatched: batch.len(),
                 outcome: outcome.code().to_string(),
@@ -15628,8 +15803,96 @@ async fn sync_qrz(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, Stri
                 r.added, r.newly_confirmed_any
             )
         },
-        res,
+        // QRZ's own wording is allowed here and only here: `conn_logged` puts it in the
+        // session ring, and the `Err` becomes the operator's toast. Both are screens.
+        res.map_err(|f| f.message.into_string()),
     )
+}
+
+/// Why a QRZ Logbook SYNC failed, split the way [`QrzFailure`] splits a callbook pass and for
+/// the same reason: one string cannot be both a thing that may be written down and a thing
+/// that may only be shown.
+///
+/// # ⛔ Why this is a struct and not a `String`
+///
+/// [`sync_qrz_since`] returned QRZ's own `FETCH` `REASON` as its `Err`, and the qrz-sync
+/// worker printed it: `eprintln!("[qrz-sync] failed: {e}")`. On Linux a Tauri app is launched
+/// by the desktop session, which redirects a GUI process's stderr into `~/.xsession-errors`,
+/// mode 0644, kept until the next login — the same 0644 file [`conn_log`]'s mirror line was
+/// writing keys into, reached one function over. QRZ echoes the failing request in `REASON`,
+/// and the request body carries the Logbook API key.
+///
+/// So the error is two halves. `detail` is a [`ConnDetail`] — a sentence Nexus wrote, and the
+/// only half a durable sink may have. `message` may be QRZ's own words and goes only to
+/// [`conn_log`] and the operator's toast, both of which die with the session. There is no
+/// `Display` and no `Debug`, so `eprintln!("{e}")` does not compile.
+struct QrzSyncFailure {
+    /// Nexus's own sentence. Safe for stderr, and it is what stderr gets.
+    detail: ConnDetail,
+    /// May be QRZ's own answer. Screen and session only — see the type note.
+    message: ScreenReason,
+}
+
+/// A string that may be a service's own words (QRZ's `REASON`, echoing the request and its API
+/// key). Screen-and-session only.
+///
+/// ⛔ **Why a type and not a `String` (round 7 F7).** [`QrzSyncFailure`]/[`QrzFailure`] carried
+/// `message: String`, and their doc claimed the *struct's* missing `Display`/`Debug` kept it off
+/// stderr — but the field itself is an ordinary crate-visible `String`, so
+/// `eprintln!("{}", f.message)` compiled clean, which is exactly the `EphemeralText.0` hole round 4
+/// shipped and round 5 closed by moving the field into a module. This is that fix, applied to the
+/// two types created in the same round to carry the same class of text: the inner is private to
+/// `mod screen_reason`, and there is no `Display`, `Debug`, or `Serialize`, so a service's words can
+/// only leave through the two NAMED, greppable exits below — never a format string or a serde dump.
+mod screen_reason {
+    pub struct ScreenReason(String);
+
+    impl ScreenReason {
+        pub fn new(text: String) -> Self {
+            Self(text)
+        }
+        /// Borrow for a screen/toast render (a `conn_log` line, a `format!` for the panel).
+        pub fn on_screen(&self) -> &str {
+            &self.0
+        }
+        /// Consume into the `Err(String)` a command returns as the operator's toast.
+        pub fn into_string(self) -> String {
+            self.0
+        }
+    }
+}
+use screen_reason::ScreenReason;
+
+/// No key stored. Not a service failure at all, and the remedy is a Settings field.
+const QRZ_SYNC_NO_KEY: ConnDetail = conn_detail!(
+    "no QRZ Logbook API key is stored — this is the per-logbook key from logbook.qrz.com \
+     (Settings ▸ Logbook & QSL ▸ QRZ), not the QRZ password."
+);
+/// The sync never got an answer. D#181's lesson: a transport failure is not a credential
+/// failure, and sending the operator to check their key is exactly the wrong misdirection.
+const QRZ_SYNC_UNREACHABLE: ConnDetail = conn_detail!(
+    "the sync never reached QRZ — check the network, and whether antivirus or a proxy is \
+     inspecting HTTPS traffic. This session's connection log has the exact message."
+);
+/// QRZ answered and refused. The class; never QRZ's wording, which is the leak.
+const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
+    "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Logbook & \
+     QSL. This session's connection log has QRZ's own wording."
+);
+
+/// QRZ answered the FETCH and refused it. Extracted from [`sync_qrz_since`] — which does
+/// blocking HTTP and so cannot be driven in a test — so the one decision that matters can be:
+/// what of QRZ's answer ends up on the half that may be printed. See
+/// `no_qrz_fetch_reason_can_reach_stderr`.
+fn qrz_fetch_refused(reason: Option<String>) -> QrzSyncFailure {
+    QrzSyncFailure {
+        detail: QRZ_SYNC_REFUSED,
+        message: ScreenReason::new(
+            reason
+                .filter(|r| !r.trim().is_empty())
+                .unwrap_or_else(|| "QRZ rejected the FETCH — check your Logbook API key.".into()),
+        ),
+    }
 }
 
 /// The QRZ pull. `since_unix` = the last SUCCESSFUL automatic sync, which turns this
@@ -15642,12 +15905,21 @@ async fn sync_qrz(state: State<'_, SharedEngine>) -> Result<LotwSyncResult, Stri
 fn sync_qrz_since(
     engine: &SharedEngine,
     since_unix: Option<u64>,
-) -> Result<LotwSyncResult, String> {
-    let key = qrz_logbook_keychain()?.get_password().map_err(|_| {
-        "No QRZ Logbook API key stored — this is the per-logbook key from logbook.qrz.com \
-         (Settings ▸ Logbook & QSL ▸ QRZ), NOT your QRZ password."
-            .to_string()
-    })?;
+) -> Result<LotwSyncResult, QrzSyncFailure> {
+    let key = qrz_logbook_keychain()
+        .map_err(|message| QrzSyncFailure {
+            detail: QRZ_SYNC_NO_KEY,
+            message: ScreenReason::new(message),
+        })?
+        .get_password()
+        .map_err(|_| QrzSyncFailure {
+            detail: QRZ_SYNC_NO_KEY,
+            message: ScreenReason::new(
+                "No QRZ Logbook API key stored — this is the per-logbook key from \
+                 logbook.qrz.com (Settings ▸ Logbook & QSL ▸ QRZ), NOT your QRZ password."
+                    .to_string(),
+            ),
+        })?;
     // Build + send the FETCH; the body carries the key, so it's dropped right after.
     let resp = {
         // One day of overlap: MODSINCE is DATE granularity, so a run just after
@@ -15657,13 +15929,16 @@ fn sync_qrz_since(
             Some(d) => tempo_core::qrz::build_fetch_since_body(&key, &d),
             None => tempo_core::qrz::build_fetch_body(&key),
         };
-        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body)?
+        propagation::live::qrz::post_form(tempo_core::qrz::QRZ_LOGBOOK_URL, body).map_err(
+            |message| QrzSyncFailure {
+                detail: QRZ_SYNC_UNREACHABLE,
+                message: ScreenReason::new(message),
+            },
+        )?
     };
     let fetched = tempo_core::qrz::parse_fetch(&resp);
     if !fetched.ok {
-        return Err(fetched
-            .reason
-            .unwrap_or_else(|| "QRZ rejected the FETCH — check your Logbook API key.".into()));
+        return Err(qrz_fetch_refused(fetched.reason));
     }
     let mut eng = engine_lock(engine);
     let (added, summary) = eng.merge_qrz_report(&fetched.adif);
@@ -15673,6 +15948,50 @@ fn sync_qrz_since(
 }
 
 // ----- QRZ.com / HamQTH.com callsign lookup (session-key XML APIs) -----------
+
+/// **Positive proof, read out of QRZ's own bytes, that a lookup was served to an ENTITLED
+/// subscription** — the one thing [`qrz_xml_stamp`] turns green on.
+///
+/// ⛔ **The field is private to `mod qrz_entitlement`, and that is the guard.** The only way to
+/// get a `true` into one is [`qrz_entitlement::QrzEntitlement::of_body`], which reads a
+/// response body, so no caller — test code included — can assert an entitlement it did not
+/// read off the wire. That is not a theoretical hazard: rounds 4 and 5 each "proved" this row
+/// correct with `QrzOutcome::Found(Box::new(QrzLookup::default().into()))`, a hand-built hit
+/// that was green by construction and stood in for evidence nobody had. Both of those lines
+/// stopped compiling when this type was introduced.
+///
+/// It takes the **body**, not a parsed record, so the decision cannot drift from the bytes,
+/// and it delegates to [`tempo_core::qrz::proves_entitled_lookup`] — one reading of QRZ's wire
+/// format, in the crate that owns that format and the fixture corpus.
+mod qrz_entitlement {
+    /// See [`super::QrzEntitlement`]. `Copy`, so it is free to pass around; deliberately **no
+    /// `Default`**, because a default would be one more way to name a value without reading a
+    /// body.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct QrzEntitlement(bool);
+
+    impl QrzEntitlement {
+        /// The one constructor that can produce proof, and it can only do so from QRZ's answer.
+        pub fn of_body(body: &str) -> Self {
+            Self(tempo_core::qrz::proves_entitled_lookup(body))
+        }
+
+        /// Proof this answer cannot carry, for the two callers that have none to offer: the
+        /// HamQTH arm (a different callbook on a different account — a HamQTH hit says nothing
+        /// whatever about QRZ's XML subscription) and [`super::persistable_details`], which has
+        /// to reach the not-confirmed sentence to allow-list it. It can only ever build a
+        /// `false`, so it cannot manufacture a green.
+        pub fn unproven() -> Self {
+            Self(false)
+        }
+
+        /// True only where a body proved it.
+        pub fn is_proven(self) -> bool {
+            self.0
+        }
+    }
+}
+use qrz_entitlement::QrzEntitlement;
 
 /// Outcome of one lookup attempt with a given session key/id. Shared by QRZ and its
 /// HamQTH fallback — both flow into the same [`QrzLookupDto`](tempo_app::dto::QrzLookupDto).
@@ -15688,8 +16007,16 @@ fn sync_qrz_since(
 /// establish: a miss and a refusal arrive in the same shape and only the wording differs.
 /// Five readers tried to split them on wording and five were wrong — see the note on
 /// `QrzSession` in `tempo_core::qrz`. So there is one arm for both, and it fails closed.
+///
+/// ⛔ **And `Found` is not evidence on its own — round 6.** A record came back, which is what
+/// the *lookup* wanted; whether the *subscription* is entitled is a second question, and QRZ's
+/// non-subscriber reply answers the first one yes and the second one no. So `Found` carries
+/// its own [`QrzEntitlement`] and the health stamp reads that, not the presence of a record.
 enum QrzOutcome {
-    Found(Box<tempo_app::dto::QrzLookupDto>),
+    /// A record. The [`QrzEntitlement`] is what the health row may act on; the record itself
+    /// goes to the operator either way, because a free account's name-and-country is still the
+    /// lookup they asked for.
+    Found(Box<tempo_app::dto::QrzLookupDto>, QrzEntitlement),
     /// The callbook answered on a LIVE session and produced no record: an unknown callsign,
     /// a lapsed subscription, a daily-limit or privilege refusal, or an answer with no
     /// record and no reason at all. **Nexus cannot tell which**, so it claims none of them.
@@ -15714,7 +16041,7 @@ enum QrzOutcome {
 /// wording was rewritten to stop.
 struct QrzFailure {
     detail: ConnDetail,
-    message: String,
+    message: ScreenReason,
 }
 
 impl QrzFailure {
@@ -15727,7 +16054,7 @@ impl QrzFailure {
                  the network, and whether antivirus or a proxy is inspecting HTTPS traffic; \
                  this session's connection log has the exact message."
             ),
-            message,
+            message: ScreenReason::new(message),
         }
     }
 
@@ -15740,7 +16067,7 @@ impl QrzFailure {
                  password, and that the XML subscription is current. QRZ's own wording is in \
                  this session's connection log."
             ),
-            message,
+            message: ScreenReason::new(message),
         }
     }
 }
@@ -15753,6 +16080,10 @@ impl QrzFailure {
 /// with no `<Callsign>` — so `parse_callsign` returning `None` says only that there is no
 /// record. It becomes [`QrzOutcome::NoRecord`] either way, and the health stamp reads that
 /// as "not verified".
+///
+/// ⚠️ Nor is the other side automatic: a record that came back is a record, not proof the XML
+/// subscription is entitled — QRZ serves a free or lapsed account a `<Callsign>` too. The
+/// [`QrzEntitlement`] beside the record is what the health stamp reads.
 fn qrz_try_lookup(session_key: &str, callsign: &str) -> Result<QrzOutcome, QrzFailure> {
     let url = tempo_core::qrz::build_lookup_url(session_key, callsign);
     let body = propagation::live::qrz::fetch(&url).map_err(QrzFailure::unreachable)?;
@@ -15773,7 +16104,12 @@ fn qrz_outcome_from_body(body: &str) -> Result<QrzOutcome, QrzFailure> {
         return Ok(QrzOutcome::NeedLogin);
     }
     Ok(match tempo_core::qrz::parse_callsign(body) {
-        Some(rec) => QrzOutcome::Found(Box::new(rec.into())),
+        // ⛔ The entitlement is read from the BODY, beside the record and not from it — a
+        // record is what the operator asked for, proof of a paid-up XML subscription is what
+        // the health row needs, and QRZ's non-subscriber reply carries the first without the
+        // second. Round 6: this line used to be `Found(rec)` and nothing else, so the free-tier
+        // reply stamped the row green (#245).
+        Some(rec) => QrzOutcome::Found(Box::new(rec.into()), QrzEntitlement::of_body(body)),
         // ⛔ ONE arm, and that is the fix. Splitting this on QRZ's wording has been wrong
         // five times; the shape carries no answer, so Nexus stops claiming one.
         None => QrzOutcome::NoRecord(
@@ -15828,7 +16164,11 @@ fn hamqth_try_lookup(session_id: &str, callsign: &str) -> Result<QrzOutcome, Str
         return Ok(QrzOutcome::NeedLogin);
     }
     Ok(match tempo_core::hamqth::parse_callsign(&body) {
-        Some(rec) => QrzOutcome::Found(Box::new(rec.into())),
+        // ⛔ `unproven`, always: this is a different callbook on a different account, so a
+        // HamQTH hit is not evidence about QRZ's XML subscription. Nothing reads it — HamQTH
+        // has no Connections row — but the type makes the claim impossible rather than merely
+        // absent, and `of_body` could not be called here anyway (it takes QRZ's bytes).
+        Some(rec) => QrzOutcome::Found(Box::new(rec.into()), QrzEntitlement::unproven()),
         None => QrzOutcome::NoRecord(String::new()),
     })
 }
@@ -15877,8 +16217,9 @@ fn qrz_lookup_attempt(
     let cached = qrz_session.lock().ok().and_then(|g| g.clone());
     if let Some(key) = cached {
         match qrz_try_lookup(&key, call)? {
-            // Only an expired key is worth a re-login; a hit and an authoritative miss are
-            // both final answers from a live session.
+            // Only an expired key is worth a re-login. A record and a record-less answer are
+            // both final answers from a live session, whatever they say and whatever they
+            // prove — the health stamp reads the difference, this retry does not.
             QrzOutcome::NeedLogin => {}
             done => return Ok(done),
         }
@@ -15903,8 +16244,9 @@ fn qrz_lookup_attempt(
 /// as "not in the callbook". Deliberately left — HamQTH has no row in the Connections panel,
 /// so nothing here is claiming to be verified, and changing it would change what the LOOKUP
 /// tells the operator rather than what the panel does. For the same reason
-/// [`hamqth_try_lookup`] never produces [`QrzOutcome::Refused`]: it does not read HamQTH's
-/// wording, because no row depends on the answer.
+/// [`hamqth_try_lookup`] reads none of HamQTH's wording and claims no entitlement from it —
+/// every hit it returns carries an unproven [`QrzEntitlement`], because no row depends on the
+/// answer.
 fn hamqth_lookup_attempt(
     call: &str,
     username: &str,
@@ -15915,7 +16257,7 @@ fn hamqth_lookup_attempt(
     let cached = hamqth_session.0.lock().ok().and_then(|g| g.clone());
     if let Some(id) = cached {
         match hamqth_try_lookup(&id, call)? {
-            QrzOutcome::Found(dto) => return Ok(Some(*dto)),
+            QrzOutcome::Found(dto, _) => return Ok(Some(*dto)),
             // No record on a live session — don't re-login, and don't call it a hit.
             QrzOutcome::NoRecord(_) => return Ok(None),
             QrzOutcome::NeedLogin => {} // fall through to a single re-login
@@ -15927,7 +16269,7 @@ fn hamqth_lookup_attempt(
         *g = Some(id.clone());
     }
     match hamqth_try_lookup(&id, call)? {
-        QrzOutcome::Found(dto) => Ok(Some(*dto)),
+        QrzOutcome::Found(dto, _) => Ok(Some(*dto)),
         QrzOutcome::NoRecord(_) => Ok(None),
         // A fresh id still reporting expiry is anomalous — give up.
         QrzOutcome::NeedLogin => Ok(None),
@@ -16023,10 +16365,12 @@ async fn qrz_lookup(
                         "error",
                         format!("{cand}: QRZ returned no record — {why}"),
                     ),
-                    Err(f) => conn_log("QRZ", "error", format!("{cand}: {}", f.message)),
+                    Err(f) => {
+                        conn_log("QRZ", "error", format!("{cand}: {}", f.message.on_screen()))
+                    }
                     _ => {}
                 }
-                if let QrzOutcome::Found(dto) = attempt.map_err(|f| f.message)? {
+                if let QrzOutcome::Found(dto, _) = attempt.map_err(|f| f.message.into_string())? {
                     return Ok(*dto);
                 }
             }
@@ -16107,7 +16451,10 @@ async fn qrz_push_qso(
                 "pushed {} — {}{}",
                 who,
                 r.result,
-                r.reason.as_deref().map(|m| format!(": {m}")).unwrap_or_default()
+                r.reason
+                    .as_deref()
+                    .map(|m| format!(": {m}"))
+                    .unwrap_or_default()
             )
         },
         res,
@@ -16402,7 +16749,11 @@ async fn set_wrl_key(key: String, state: State<'_, SharedEngine>) -> Result<(), 
     let entry = wrl_keychain()?;
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
-        conn_log("World Radio League", "info", "API key cleared from the OS keychain");
+        conn_log(
+            "World Radio League",
+            "info",
+            "API key cleared from the OS keychain",
+        );
         set_upload_toggle(&state, UploadToggle::Wrl, false);
         return Ok(());
     }
@@ -16421,7 +16772,11 @@ async fn set_wrl_key(key: String, state: State<'_, SharedEngine>) -> Result<(), 
             eprintln!("tempo: couldn't persist settings: {e}");
         }
     }
-    conn_log("World Radio League", "ok", "API key verified and saved to the OS keychain");
+    conn_log(
+        "World Radio League",
+        "ok",
+        "API key verified and saved to the OS keychain",
+    );
     set_upload_toggle(&state, UploadToggle::Wrl, true);
     Ok(())
 }
@@ -16445,7 +16800,10 @@ fn wrl_resolve_logbook(key: &str) -> Result<Option<String>, String> {
                  worldradioleague.com."
                     .to_string()
             }
-            "KEY_REVOKED" => "That key has been revoked — generate a new one on worldradioleague.com.".to_string(),
+            "KEY_REVOKED" => {
+                "That key has been revoked — generate a new one on worldradioleague.com."
+                    .to_string()
+            }
             other => format!("World Radio League refused the key ({other})"),
         });
     }
@@ -16459,17 +16817,26 @@ fn wrl_resolve_logbook(key: &str) -> Result<Option<String>, String> {
         return Ok(None);
     }
     // No default: a single logbook is unambiguous; several is the operator's call.
-    let (status, body) =
-        propagation::live::wrl::get_json(tempo_core::wrl::WRL_LOGBOOKS_URL, key)?;
+    let (status, body) = propagation::live::wrl::get_json(tempo_core::wrl::WRL_LOGBOOKS_URL, key)?;
     if status != 200 {
         return Err("Couldn't list your World Radio League logbooks — try again.".to_string());
     }
     let v: serde_json::Value = serde_json::from_str(&body)
         .map_err(|_| "World Radio League answered with something unreadable".to_string())?;
-    let books = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+    let books = v
+        .get("data")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
     match books.len() {
-        1 => Ok(books[0].get("id").and_then(|i| i.as_str()).map(str::to_string)),
-        0 => Err("Your World Radio League account has no logbook yet — create one there first.".to_string()),
+        1 => Ok(books[0]
+            .get("id")
+            .and_then(|i| i.as_str())
+            .map(str::to_string)),
+        0 => Err(
+            "Your World Radio League account has no logbook yet — create one there first."
+                .to_string(),
+        ),
         _ => Err(
             "Your World Radio League account has several logbooks and no default — set a \
              default logbook on worldradioleague.com, then save the key again."
@@ -16484,7 +16851,11 @@ fn wrl_resolve_logbook(key: &str) -> Result<Option<String>, String> {
 fn clear_wrl_key(state: State<'_, SharedEngine>) -> Result<(), String> {
     let r = clear_keychain_entry(&wrl_keychain()?);
     if r.is_ok() {
-        conn_log("World Radio League", "info", "API key cleared from the OS keychain");
+        conn_log(
+            "World Radio League",
+            "info",
+            "API key cleared from the OS keychain",
+        );
         set_upload_toggle(&state, UploadToggle::Wrl, false);
     }
     r
@@ -16629,7 +17000,10 @@ async fn clublog_push_qso(
                 "pushed {} — {}{}",
                 who,
                 r.result,
-                r.message.as_deref().map(|m| format!(": {m}")).unwrap_or_default()
+                r.message
+                    .as_deref()
+                    .map(|m| format!(": {m}"))
+                    .unwrap_or_default()
             )
         },
         res,
@@ -17536,7 +17910,11 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
             "get_path_outlook" => {
-                let grid = v.get("grid").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let grid = v
+                    .get("grid")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 ok(get_path_outlook(grid, app.state(), app.state()).await)
             }
             "get_getting_out" => ok(get_getting_out(app.state(), app.state()).await),
@@ -17651,7 +18029,10 @@ fn get_ota_map_spots(
             let (lat, lon, approx) = place_ota(&sp)?;
             Some(OtaMapSpot {
                 new_ref: !worked.contains(&sp.reference.to_uppercase()),
-                age_secs: sp.spot_time_unix.map(|t| now.saturating_sub(t)).unwrap_or(0),
+                age_secs: sp
+                    .spot_time_unix
+                    .map(|t| now.saturating_sub(t))
+                    .unwrap_or(0),
                 program: sp.program,
                 reference: sp.reference,
                 name: sp.name,
@@ -19908,13 +20289,29 @@ pub fn run() {
     // One-time migration: an older build kept the Cloudlog/Wavelog API key in
     // plaintext in settings.json. Move any legacy key into the OS keychain and
     // scrub it from the file at rest (the field is now skip-serialized too).
+    //
+    // ⛔ Scrub the plaintext ONLY once the key has actually landed in the keychain. On a box with
+    // no Secret Service `set_password` fails, and clearing the field regardless would silently
+    // DESTROY the operator's stored key (round 7 F12). If it did not store, the key stays in the
+    // file — the same state as before this launch — and the migration is retried next launch.
     if !settings.cloudlog_key.trim().is_empty() {
-        if let Ok(entry) = cloudlog_keychain() {
-            let _ = entry.set_password(settings.cloudlog_key.trim());
-        }
-        settings.cloudlog_key.clear();
-        if let Err(e) = settings.save(&settings_path()) {
-            eprintln!("tempo: couldn't re-save settings after Cloudlog key migration: {e}");
+        let stored = cloudlog_keychain()
+            .and_then(|entry| {
+                entry
+                    .set_password(settings.cloudlog_key.trim())
+                    .map_err(|e| e.to_string())
+            })
+            .is_ok();
+        if stored {
+            settings.cloudlog_key.clear();
+            if let Err(e) = settings.save(&settings_path()) {
+                eprintln!("tempo: couldn't re-save settings after Cloudlog key migration: {e}");
+            }
+        } else {
+            eprintln!(
+                "tempo: Cloudlog key migration deferred — the OS keychain is unavailable, so the \
+                 key was left in settings.json rather than destroyed. It will retry next launch."
+            );
         }
     }
 
@@ -20409,7 +20806,16 @@ pub fn run() {
                 }
                 // Leave the high-water ALONE on failure so the next run covers the
                 // same span — a network blip must not create a hole in the delta.
-                Err(e) => eprintln!("[qrz-sync] failed: {e}"),
+                Err(f) => {
+                    // The CLASS is all stderr gets. This line used to print QRZ's own
+                    // `FETCH REASON`, which on Linux lands in `~/.xsession-errors` (0644,
+                    // until the next login) and which QRZ fills with the failing request —
+                    // Logbook API key included. See `QrzSyncFailure`.
+                    eprintln!("[qrz-sync] failed: {}", f.detail.as_str());
+                    // QRZ's own wording is not lost, only un-persisted: the automatic leg
+                    // has no toast, so the connection log is where the operator reads it.
+                    conn_log("QRZ Logbook", "error", f.message.into_string());
+                }
             }
         });
     }
@@ -20468,6 +20874,10 @@ pub fn run() {
                         // A bad certificate, a wrong Station Location, or one malformed
                         // record: none of these heal on their own, so stop rather than
                         // re-sign the same batch every six hours.
+                        //
+                        // This line no longer repeats TQSL's own wording: `lotw_upload_batch`
+                        // logs it for every failing batch, manual or automatic, so quoting it
+                        // again here put the same sentence in two adjacent ring entries.
                         "authfail" | "rejected" => {
                             LOTW_AUTO_SUSPENDED.store(true, std::sync::atomic::Ordering::Relaxed);
                             if !LOTW_AUTO_ANNOUNCED.swap(true, std::sync::atomic::Ordering::Relaxed)
@@ -20476,7 +20886,7 @@ pub fn run() {
                                     "LoTW",
                                     "error",
                                     format!(
-                                        "automatic upload paused — {}{}. Fix it, then use \
+                                        "automatic upload paused — {}. Fix it, then use \
                                          Upload to LoTW in the Logbook; saving any LoTW \
                                          setting restarts the timer.",
                                         if r.outcome == "authfail" {
@@ -20484,10 +20894,6 @@ pub fn run() {
                                         } else {
                                             "LoTW refused the batch"
                                         },
-                                        r.detail
-                                            .as_deref()
-                                            .map(|d| format!(" ({d})"))
-                                            .unwrap_or_default(),
                                     ),
                                 );
                             }
@@ -20972,12 +21378,10 @@ pub fn run() {
                             let name = e.settings().fd_event_name.clone();
                             e.fd_host_start(fd_event_journal_path(&name))
                         };
-                        let bound = started
-                            .map_err(|e| e.to_string())
-                            .and_then(|()| {
-                                std::net::TcpListener::bind(("0.0.0.0", port))
-                                    .map_err(|e| e.to_string())
-                            });
+                        let bound = started.map_err(|e| e.to_string()).and_then(|()| {
+                            std::net::TcpListener::bind(("0.0.0.0", port))
+                                .map_err(|e| e.to_string())
+                        });
                         match bound {
                             Ok(listener) => {
                                 let shutdown = Arc::new(AtomicBool::new(false));
@@ -21051,10 +21455,7 @@ pub fn run() {
                     if let Some(addr) = want_addr {
                         // No posid yet (fresh profile that never finished
                         // startup init) = don't connect; next tick retries.
-                        let ready = !engine_lock(&mgr_engine)
-                            .fd_sync_identity()
-                            .0
-                            .is_empty();
+                        let ready = !engine_lock(&mgr_engine).fd_sync_identity().0.is_empty();
                         if ready {
                             let shutdown = Arc::new(AtomicBool::new(false));
                             let backend: Arc<dyn tempo_net::fdsync::PositionSync> = Arc::new(
@@ -22461,6 +22862,58 @@ fn winlink_disconnect() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// ⛔ QRZ'S `FETCH REASON` IS NOT A THING THAT MAY BE PRINTED.
+    ///
+    /// `sync_qrz_since` handed QRZ's own refusal text back as its `Err`, and the qrz-sync
+    /// worker printed it verbatim. On Linux a Tauri app's stderr is the desktop session's
+    /// `~/.xsession-errors`, mode 0644, kept until the next login — the same 0644 file
+    /// `conn_log`'s mirror line was writing keys into, reached by a different route. QRZ
+    /// echoes the failing request, and the request carries the Logbook API key.
+    ///
+    /// Same class as `conn_log` and the dxped breadcrumb, so the same fix rather than a
+    /// second mechanism: the half that reaches a durable sink is a `ConnDetail` — a sentence
+    /// Nexus wrote — and the service's own words go to the connection log and the operator's
+    /// toast, both of which die with the session.
+    #[test]
+    fn no_qrz_fetch_reason_can_reach_stderr() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let hostile = format!("\u{202e}FETCH denied for key={KEY}\u{200b}");
+
+        // Everything QRZ's parser can hand this mapping: its own words, an empty REASON,
+        // and no REASON at all.
+        for reason in [Some(hostile.clone()), Some(String::new()), None] {
+            let printed = super::qrz_fetch_refused(reason).detail.as_str();
+            assert!(
+                !printed.contains(KEY),
+                "QRZ's own answer reached stderr: {printed:?}"
+            );
+            assert!(
+                !printed.contains('\u{202e}') && !printed.contains('\u{200b}'),
+                "a service's format characters reached stderr: {printed:?}"
+            );
+            assert!(
+                !printed.is_empty(),
+                "a failed sync still has to say something"
+            );
+        }
+
+        // The controls. The hostile answer really does carry both…
+        assert!(
+            hostile.contains(KEY) && hostile.contains('\u{202e}'),
+            "control: the hostile REASON must actually carry the key and the override"
+        );
+        // …and QRZ's words are UN-PERSISTED, not thrown away: they still reach the screen.
+        // Without this the assertions above would pass just as happily against a build that
+        // dropped the reason on the floor and told the operator nothing.
+        assert!(
+            super::qrz_fetch_refused(Some(hostile))
+                .message
+                .on_screen()
+                .contains(KEY),
+            "control: QRZ's own wording must still reach the operator's session"
+        );
+    }
     /// The JS8 station journal lives beside settings.json, exactly where pending_msgs.json
     /// does — one config dir, one backup story.
     #[test]
@@ -22513,12 +22966,22 @@ mod tests {
     fn rbn_comment_grid_takes_the_skimmer_token_and_nothing_looser() {
         // The wire shapes seen in the field report, 4- and 6-char.
         assert_eq!(super::rbn_comment_grid("FT8 -15 dB DM03 CQ"), Some("DM03"));
-        assert_eq!(super::rbn_comment_grid("FT8 5 dB EN52wc CQ"), Some("EN52wc"));
+        assert_eq!(
+            super::rbn_comment_grid("FT8 5 dB EN52wc CQ"),
+            Some("EN52wc")
+        );
         // Nothing grid-shaped: the usual RBN CW comment.
         assert_eq!(super::rbn_comment_grid("CW 21 dB 25 WPM CQ"), None);
         // Human spellings that a folded or loose pattern would swallow: lowercase field,
         // uppercase subsquare, wrong lengths, out-of-range field letter.
-        for c in ["worked dm03 earlier", "EN52WC", "DM0", "DM034", "SM03", "TU 599 73"] {
+        for c in [
+            "worked dm03 earlier",
+            "EN52WC",
+            "DM0",
+            "DM034",
+            "SM03",
+            "TU 599 73",
+        ] {
             assert_eq!(super::rbn_comment_grid(c), None, "{c:?} must not match");
         }
     }
@@ -22676,14 +23139,23 @@ mod tests {
             "WFD bans the WSJT modes: {:?}",
             wfd.banned_modes
         );
-        assert_eq!(wfd.enforcement, "warn", "warn, never remove — operator ruling");
-        assert!(wfd.spotting_allowed && wfd.cluster_allowed, "2026 seed is dormant");
+        assert_eq!(
+            wfd.enforcement, "warn",
+            "warn, never remove — operator ruling"
+        );
+        assert!(
+            wfd.spotting_allowed && wfd.cluster_allowed,
+            "2026 seed is dormant"
+        );
 
         // ARRL FD ("" = the settings default): no banned modes, same dormancy.
         let sfd = super::fd_ruleset_dto("");
         assert_eq!(sfd.event, "arrlfd");
         assert!(sfd.banned_modes.is_empty(), "ARRL FD bans no modes");
-        assert!(sfd.spotting_allowed && sfd.cluster_allowed, "2026 seed is dormant");
+        assert!(
+            sfd.spotting_allowed && sfd.cluster_allowed,
+            "2026 seed is dormant"
+        );
         assert!(sfd.rules_year >= 2026);
     }
 
@@ -23114,7 +23586,11 @@ mod tests {
         for c in propagation::live::cloudlog::CloudlogFailure::ALL {
             details.push(cloudlog_stamp(c).as_str());
         }
-        details.push(qrz_xml_stamp(&Ok(QrzOutcome::NoRecord(hostile.clone()))).1.as_str());
+        details.push(
+            qrz_xml_stamp(&Ok(QrzOutcome::NoRecord(hostile.clone())))
+                .1
+                .as_str(),
+        );
         details.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1.as_str());
         details.push(
             qrz_xml_stamp(&Err(QrzFailure::unreachable(hostile.clone())))
@@ -23229,6 +23705,144 @@ mod tests {
         }
     }
 
+    /// Every `.rs` file under this crate's `src/`, **recursively**, as `(path relative to
+    /// src/, body)`, sorted. The reading surface for both source checks below.
+    ///
+    /// ⚠️ **Recursive, and it was not.** `std::fs::read_dir` is one level deep, so a module in
+    /// a subdirectory — `src/connectors/lotw.rs` — was invisible to a check documented as
+    /// reading "every source file in this crate", and the check would have reported the hole
+    /// closed. That is the hand-kept-list failure the walk was widened to avoid, one directory
+    /// down. `src/` is flat today, which is exactly why nothing in the real tree can tell the
+    /// two walks apart — `the_source_walk_actually_recurses` plants a tree that can.
+    fn crate_sources() -> Vec<(String, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = Vec::new();
+        walk_rs_dir(&root, &root, &mut out);
+        out.sort();
+        // Controls for the walk itself: it must have found more than one file, and it must
+        // have found the one the guarded types live in — a walk that read nothing would make
+        // every assertion in either check vacuously true.
+        assert!(
+            out.len() > 1 && out.iter().any(|(n, _)| n == "lib.rs"),
+            "control: the source walk found {:?}",
+            out.iter().map(|(n, _)| n).collect::<Vec<_>>()
+        );
+        out
+    }
+
+    /// The walk itself. Panics rather than skipping an unreadable directory: a silently
+    /// short walk is the failure mode both checks are blind to.
+    fn walk_rs_dir(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("unreadable: {}: {e}", dir.display()));
+        for p in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
+            if p.is_dir() {
+                walk_rs_dir(root, &p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                let rel = p
+                    .strip_prefix(root)
+                    .unwrap_or(&p)
+                    .to_string_lossy()
+                    .to_string();
+                out.push((rel, std::fs::read_to_string(&p).unwrap_or_default()));
+            }
+        }
+    }
+
+    /// ⛔ THE CONTROL FOR BOTH SOURCE CHECKS, AND THEY PROVE NOTHING WITHOUT IT.
+    ///
+    /// Each of them asserts "this name appears exactly N times in the crate", so each is only
+    /// as wide as the walk. The walk was a bare one-level `read_dir` of `src/` while its doc
+    /// said "every source file in this crate": a call from `src/connectors/lotw.rs` would have
+    /// been counted as zero and reported as the hole being closed.
+    ///
+    /// `src/` is flat, so no assertion about the real tree can tell a recursive walk from a
+    /// one-level one — the tree is planted here instead, and this test fails the moment the
+    /// recursion is removed.
+    #[test]
+    fn the_source_walk_actually_recurses() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("nexus_walk_ctl_{nonce}"));
+        let deep = root.join("connectors").join("nested");
+        std::fs::create_dir_all(&deep).expect("the control tree is creatable");
+        std::fs::write(root.join("top.rs"), "// top\n").expect("top.rs");
+        std::fs::write(deep.join("buried.rs"), "// buried\n").expect("buried.rs");
+        std::fs::write(deep.join("notrust.txt"), "// not rust\n").expect("notrust.txt");
+
+        let mut found = Vec::new();
+        walk_rs_dir(&root, &root, &mut found);
+        let _ = std::fs::remove_dir_all(&root);
+        let names: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+
+        assert!(
+            names.iter().any(|n| n.ends_with("buried.rs")),
+            "the walk is one level deep, so a module in a subdirectory is invisible to both \
+             source checks: {names:?}"
+        );
+        // The other two directions, or "reads everything under src/" would pass as easily as
+        // "reads every Rust file under src/".
+        assert!(
+            names.contains(&"top.rs"),
+            "the walk missed the top level: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.ends_with(".txt")),
+            "the walk read a file that is not Rust: {names:?}"
+        );
+    }
+
+    /// ⛔ AN `EphemeralText` MAY BE READ IN ONE PLACE: ON ITS WAY TO THE SCREEN.
+    ///
+    /// The type's compile-time half is real and is proved by things that do not build — no
+    /// `Display`, no `Debug`, no private-field access, and, since this round, no `Serialize`
+    /// on it or on any struct holding one, which is what still let the whole `ConnEvent` be
+    /// written to a file.
+    ///
+    /// What no signature can close is the accessor the Connections panel needs. Once a caller
+    /// holds the `&str` the compiler is done, so the residual is checked the way
+    /// `ConnDetail`'s hidden constructor is: by reading the crate. Same limits, said plainly
+    /// — a string scan cannot see a call split across two lines, and a test failing is not a
+    /// build failing.
+    #[test]
+    fn the_only_reader_of_an_ephemeral_text_is_the_screen() {
+        let sources = crate_sources();
+        let src: String = sources
+            .iter()
+            .map(|(_, body)| body.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Split so this test's own lines are not among the hits it counts.
+        let reader = concat!("reveal_on", "_screen");
+        // Comment lines are excluded: prose cannot read a value, and the doc names the
+        // accessor on purpose, in several places.
+        let uses: Vec<&str> = src
+            .lines()
+            .filter(|l| l.contains(reader) && !l.trim_start().starts_with("//"))
+            .collect();
+
+        // The controls: both expected occurrences must actually be found, or a renamed
+        // accessor would leave an empty result that satisfies the count below.
+        assert!(
+            uses.iter().any(|l| l.contains("pub fn")),
+            "control: the accessor's definition was not found — the needle is wrong: {uses:#?}"
+        );
+        assert!(
+            uses.iter().any(|l| !l.contains("pub fn")),
+            "control: the panel's read was not found — the needle is wrong: {uses:#?}"
+        );
+        assert_eq!(
+            uses.len(),
+            2,
+            "a service's own words are read somewhere other than the one function that hands \
+             them to the Connections panel — the question for that new site is not whether \
+             the string is safe, it is whether what you are writing it into outlives the \
+             session: {uses:#?}"
+        );
+    }
+
     /// ⛔ `String::leak` WAS A ONE-TOKEN HOLE IN THE PERSISTED-DETAIL ALLOW-LIST.
     ///
     /// Round 3's guard was the parameter type `&'static str`, on the reasoning that a
@@ -23250,26 +23864,7 @@ mod tests {
     /// because a hand-kept list of modules is exactly the thing a new module is not added to.
     #[test]
     fn the_only_way_to_build_a_conn_detail_is_a_string_literal() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut sources: Vec<(String, String)> = std::fs::read_dir(&dir)
-            .expect("the crate's own src/ is readable")
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
-            .map(|p| {
-                let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
-                (name, std::fs::read_to_string(&p).unwrap_or_default())
-            })
-            .collect();
-        sources.sort();
-        // Controls for the walk itself: it must have found more than one file, and it must
-        // have found the one the type lives in — a walk that read nothing would make every
-        // assertion below vacuously true.
-        assert!(
-            sources.len() > 1 && sources.iter().any(|(n, _)| n == "lib.rs"),
-            "control: the source walk found {:?}",
-            sources.iter().map(|(n, _)| n).collect::<Vec<_>>()
-        );
+        let sources = crate_sources();
         let src: String = sources
             .iter()
             .map(|(_, body)| body.as_str())
@@ -23389,7 +23984,10 @@ mod tests {
         assert_eq!(rows.len(), 1, "control: the cloudlog row must still load");
         let (_, _, fail) = &rows[0];
         let (when, detail) = fail.as_ref().expect("the failure timestamp must survive");
-        assert_eq!(*when, 1_700_000_000, "the failure's time is the honest part");
+        assert_eq!(
+            *when, 1_700_000_000,
+            "the failure's time is the honest part"
+        );
         assert!(
             !detail.contains(SECRET),
             "a key already in the file rode forward: {detail:?}"
@@ -23432,7 +24030,11 @@ mod tests {
         for c in propagation::live::cloudlog::CloudlogFailure::ALL {
             details.push(cloudlog_stamp(c).as_str());
         }
-        details.push(qrz_xml_stamp(&Ok(QrzOutcome::NoRecord(String::new()))).1.as_str());
+        details.push(
+            qrz_xml_stamp(&Ok(QrzOutcome::NoRecord(String::new())))
+                .1
+                .as_str(),
+        );
         details.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1.as_str());
         details.push(
             qrz_xml_stamp(&Err(QrzFailure::unreachable(String::new())))
@@ -23457,7 +24059,9 @@ mod tests {
             let rows = vec![("hrdlog", None, Some((1_700_000_000_i64, d.to_string())))];
             let back = conn_health_from_json(&conn_health_to_json(&rows));
             assert_eq!(
-                back.first().and_then(|r| r.2.as_ref()).map(|(_, s)| s.as_str()),
+                back.first()
+                    .and_then(|r| r.2.as_ref())
+                    .map(|(_, s)| s.as_str()),
                 Some(d),
                 "a sentence a stamp can produce is dropped on load — it is missing from \
                  persistable_details: {d:?}"
@@ -23516,10 +24120,30 @@ mod tests {
     /// "verified today" into their panel — this test did exactly that before it was rewritten.
     #[test]
     fn a_completed_qrz_callbook_lookup_is_what_the_row_reports() {
-        use super::{qrz_xml_stamp, QrzFailure, QrzOutcome};
-        // A hit is a working subscription.
-        let found = QrzOutcome::Found(Box::new(tempo_core::qrz::QrzLookup::default().into()));
-        assert_eq!(qrz_xml_stamp(&Ok(found)), (true, conn_detail!("")));
+        use super::{qrz_outcome_from_body, qrz_xml_stamp, QrzFailure, QrzOutcome};
+        use tempo_core::qrz::fixtures;
+        // A subscriber's record is a working subscription — driven from QRZ's real bytes,
+        // because a hand-built `Found` can no longer claim one. This line used to be
+        // `QrzOutcome::Found(Box::new(QrzLookup::default().into()))`: a green asserted into
+        // existence, standing in for evidence nobody had. Round 6 made `QrzEntitlement`'s field
+        // private with a body-reading constructor, and that is what stopped it compiling.
+        assert_eq!(
+            qrz_xml_stamp(&qrz_outcome_from_body(fixtures::LOOKUP_FULL)),
+            (true, conn_detail!(""))
+        );
+        // …and QRZ's free-tier record is NOT, which is #245 round 6 in one line: it is a
+        // success body with a real `<Callsign>` in it, and it is exactly what a LAPSED
+        // subscription is served. The row must name what is missing, or the operator cannot
+        // act on it.
+        let (free_ok, free_detail) = qrz_xml_stamp(&qrz_outcome_from_body(fixtures::LOOKUP_FREE));
+        assert!(
+            !free_ok,
+            "a non-subscriber record must not report the XML subscription verified"
+        );
+        assert!(
+            free_detail.as_str().contains("grid"),
+            "and the row has to name what is missing: {free_detail:?}"
+        );
         // An answer with NO record is not — see `qrz_xml_stamp`: QRZ sends an unknown
         // callsign and a refused lookup the same way, so nothing here can call it a
         // completed lookup.
@@ -23560,12 +24184,16 @@ mod tests {
     /// [`QrzOutcome`], so the two outcomes are no longer the same value.
     #[test]
     fn a_lookup_qrz_refused_never_reports_the_subscription_verified() {
-        use super::{qrz_xml_stamp, QrzOutcome};
+        use super::{qrz_outcome_from_body, qrz_xml_stamp, QrzOutcome};
+        use tempo_core::qrz::fixtures;
         // The control, and the pairing is the point: without it, a stamp simply flipped to
-        // call every answer a failure would satisfy the assertion below.
-        let found = QrzOutcome::Found(Box::new(tempo_core::qrz::QrzLookup::default().into()));
-        let (hit_ok, _) = qrz_xml_stamp(&Ok(found));
-        assert!(hit_ok, "control: a record IS a working subscription");
+        // call every answer a failure would satisfy the assertion below. It is a SUBSCRIBER's
+        // record now — round 6, where a bare record stopped being evidence.
+        let (hit_ok, _) = qrz_xml_stamp(&qrz_outcome_from_body(fixtures::LOOKUP_FULL));
+        assert!(
+            hit_ok,
+            "control: a subscriber's record IS a working subscription"
+        );
 
         let (refused_ok, detail) = qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin));
         assert!(
@@ -23597,7 +24225,9 @@ mod tests {
         );
     }
 
-    /// ⛔ ONLY A HIT IS EVIDENCE. THE FIFTH COSTUME OF THIS DEFECT, AND THE LAST.
+    /// ⛔ THE FIFTH COSTUME OF THIS DEFECT. **It was not the last — see
+    /// `every_qrz_fixture_is_classified_and_only_a_subscriber_record_is_green` for the sixth,
+    /// and for why "only a hit is evidence" was still too weak: a hit is not evidence either.**
     ///
     /// A miss and a refusal arrive from QRZ in exactly the same shape — a live `<Key>`, an
     /// `<Error>` that never says "session", no `<Callsign>` — so every reader that tried to
@@ -23622,23 +24252,38 @@ mod tests {
     #[test]
     fn a_qrz_answer_with_no_record_is_never_a_verified_lookup() {
         use super::{qrz_outcome_from_body, qrz_xml_stamp, QrzOutcome};
+        use tempo_core::qrz::fixtures;
 
-        // THE CONTROL, and this test is worthless without it: a hit must still be green, or
-        // every assertion below is satisfied by a stamp that calls everything a failure.
-        let hit = "<QRZDatabase><Callsign><call>AA7BQ</call></Callsign>\
-<Session><Key>live</Key></Session></QRZDatabase>";
+        // THE CONTROL, and this test is worthless without it: a verified lookup must still be
+        // green, or every assertion below is satisfied by a stamp that calls everything a
+        // failure.
+        //
+        // ⚠️ **Round 6 had to change what the control IS, and that is the finding.** It was a
+        // bare `<call>` beside a live key — which is precisely the shape QRZ's non-subscriber
+        // reply degrades to, so the control was asserting the defect and this test shipped
+        // green over it. It is a real subscriber record now, and the bare-call body is checked
+        // on the other side of the line.
         assert!(
-            qrz_xml_stamp(&qrz_outcome_from_body(hit)).0,
-            "control: a record is a working subscription"
+            qrz_xml_stamp(&qrz_outcome_from_body(fixtures::LOOKUP_FULL)).0,
+            "control: a subscriber's record is a working subscription"
         );
         assert!(matches!(
-            qrz_outcome_from_body(hit),
-            Ok(QrzOutcome::Found(_))
+            qrz_outcome_from_body(fixtures::LOOKUP_FULL),
+            Ok(QrzOutcome::Found(_, _))
         ));
+        assert!(
+            !qrz_xml_stamp(&qrz_outcome_from_body(fixtures::BARE_CALL)).0,
+            "a record carrying nothing subscriber-scoped proves nothing (#245, round 6)"
+        );
 
         // Every costume this defect has worn, plus QRZ's genuine miss and an answer with no
         // reason at all. They are one arm now, so the list is what the arm is checked with —
         // not a wording table anything reads.
+        //
+        // ⚠️ This is the one QRZ body in this crate that is BUILT rather than captured, and it
+        // is deliberate: it is a sweep over `<Error>` wordings, not a response anybody has on
+        // file, so it does not belong in `fixtures`. Every captured response does live there,
+        // in one copy, read by both crates.
         for error in [
             // ⚠️ THE FIFTH COSTUME FIRST, because it is the one that was still green: the
             // anchored `not found` prefix accepts this, and it is a refusal.
@@ -23671,20 +24316,68 @@ mod tests {
             );
         }
         // An answer with neither a record nor a reason is the same arm.
-        let bare = "<QRZDatabase><Session><Key>live</Key></Session></QRZDatabase>";
         assert!(matches!(
-            qrz_outcome_from_body(bare),
+            qrz_outcome_from_body(fixtures::NO_RECORD_NO_REASON),
             Ok(QrzOutcome::NoRecord(_))
         ));
-        assert!(!qrz_xml_stamp(&qrz_outcome_from_body(bare)).0);
+        assert!(!qrz_xml_stamp(&qrz_outcome_from_body(fixtures::NO_RECORD_NO_REASON)).0);
 
         // A dead session is still its own row, with its own remedy (round 2's fix, kept).
-        let dead = "<QRZDatabase><Session><Error>Session Timeout</Error></Session></QRZDatabase>";
         assert!(matches!(
-            qrz_outcome_from_body(dead),
+            qrz_outcome_from_body(fixtures::EXPIRED),
             Ok(QrzOutcome::NeedLogin)
         ));
-        assert!(!qrz_xml_stamp(&qrz_outcome_from_body(dead)).0);
+        assert!(!qrz_xml_stamp(&qrz_outcome_from_body(fixtures::EXPIRED)).0);
+    }
+
+    /// ⛔ **THE GATE: EVERY CAPTURED QRZ RESPONSE, CLASSIFIED, END TO END (#245, round 6).**
+    ///
+    /// The sixth costume was not a wording. QRZ's non-subscriber reply is a **success** body
+    /// with a real `<Callsign>` in it — `<call>`, a name, a country, and no grid or state,
+    /// because those are what the subscription buys. Five rounds of reading QRZ's failure text
+    /// had nothing to read here, so the repo's own `LOOKUP_FREE` fixture stamped this row
+    /// GREEN, and green does not merely fail to warn: `note_conn_health` writes the success
+    /// half, which CLEARS an existing red. An operator whose subscription lapsed had a green
+    /// QRZ row.
+    ///
+    /// So the check was inverted. It is no longer a deny-list of failure bodies that every
+    /// unrecognised answer defaults past; it is an allow-list of one signal a non-subscriber or
+    /// error body **cannot** carry — see [`tempo_core::qrz::proves_entitled_lookup`] — and an
+    /// answer nobody has seen yet falls on the not-confirmed side by construction rather than
+    /// by enumeration. This walks the whole corpus through the real chain,
+    /// `qrz_outcome_from_body` → `qrz_xml_stamp`, and checks each body against the answer the
+    /// corpus records. A seventh costume has to get past a fixture table, not a wording list.
+    #[test]
+    fn every_qrz_fixture_is_classified_and_only_a_subscriber_record_is_green() {
+        use super::{qrz_outcome_from_body, qrz_xml_stamp};
+        use tempo_core::qrz::fixtures;
+
+        // Both controls, because one direction is half a test. Without a positive sample a
+        // stamp wired to `false` passes everything below; without the negative ones a stamp
+        // wired to `true` does.
+        assert!(
+            fixtures::ALL.iter().any(|s| s.verifies_subscription),
+            "control: the corpus must hold a body that MUST come out green"
+        );
+        assert!(
+            fixtures::ALL.iter().any(|s| !s.verifies_subscription),
+            "control: the corpus must hold bodies that MUST NOT come out green"
+        );
+
+        for sample in fixtures::ALL {
+            let (green, detail) = qrz_xml_stamp(&qrz_outcome_from_body(sample.body));
+            assert_eq!(
+                green, sample.verifies_subscription,
+                "{} was stamped wrong: green claims the XML subscription is live and \
+                 entitled, and a wrong green CLEARS an existing red (#245)",
+                sample.name
+            );
+            assert!(
+                green || !detail.as_str().trim().is_empty(),
+                "{} is red with no reason on the row",
+                sample.name
+            );
+        }
     }
 
     /// #245, defect 2: a **successful** QRZ Logbook Test could not clear the amber dot. The
@@ -27325,14 +28018,21 @@ mod tests {
             grid: Some("FN20jc".into()),
             ..base.clone()
         };
-        let (la, lo, approx) = crate::place_ota(&exact).expect("a park with coordinates was dropped");
+        let (la, lo, approx) =
+            crate::place_ota(&exact).expect("a park with coordinates was dropped");
         assert!((la - 40.1209).abs() < 1e-9 && (lo - -75.2237).abs() < 1e-9);
         assert!(!approx, "exact coordinates were reported as approximate");
 
         // No coordinates: the grid centre, flagged approximate.
-        let gridded = propagation::OtaSpot { grid: Some("FN20jc".into()), ..base.clone() };
+        let gridded = propagation::OtaSpot {
+            grid: Some("FN20jc".into()),
+            ..base.clone()
+        };
         let (gla, glo, gapprox) = crate::place_ota(&gridded).expect("a gridded park was dropped");
-        assert!(gapprox, "a grid-placed park did not admit it is approximate");
+        assert!(
+            gapprox,
+            "a grid-placed park did not admit it is approximate"
+        );
         // Same square, so within a few km of the exact fix above.
         assert!((gla - 40.1209).abs() < 0.1 && (glo - -75.2237).abs() < 0.1);
 
@@ -27343,10 +28043,12 @@ mod tests {
         );
 
         // A grid too short to resolve is also not a guess.
-        let junk = propagation::OtaSpot { grid: Some("F".into()), ..base };
+        let junk = propagation::OtaSpot {
+            grid: Some("F".into()),
+            ..base
+        };
         assert!(crate::place_ota(&junk).is_none());
     }
-
 
     /// #184 (akhepcat): "just because I'm not licensed to transmit in the US, there are no
     /// restrictions on receiving. The correct behavior should be to block transmit when
@@ -27386,7 +28088,10 @@ mod tests {
             .iter()
             .find(|c| c.band == "20m")
             .expect("20 m missing for a General");
-        assert!(twenty.tx, "20 m is a General's own band and must be keyable");
+        assert!(
+            twenty.tx,
+            "20 m is a General's own band and must be keyable"
+        );
         assert!(tempo_app::privileges::tx_allowed(
             LicenseClass::General,
             twenty.dial_mhz,
@@ -27399,7 +28104,10 @@ mod tests {
             .iter()
             .find(|c| c.band == "20m")
             .expect("20 m vanished for a Technician — they may still listen there");
-        assert!(!t20.tx, "a Technician must not be told they can key 20 m data");
+        assert!(
+            !t20.tx,
+            "a Technician must not be told they can key 20 m data"
+        );
 
         // Open (non-US / undeclared) keeps everything transmit-capable.
         let open = crate::licensed_bands(LicenseClass::Open, OperatingMode::Digital);

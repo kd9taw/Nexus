@@ -121,7 +121,11 @@ export function whenText(c: CredStatus, s: ConnState, now = Date.now()): string 
     const when = whenLabel(c.lastFailureUnix, now)
     const why = c.lastFailureDetail?.trim()
     if (!when && !why) return ''
-    // The service's own words. Sanitized upstream (never a raw path or secret).
+    // NOT the service's own words. Every producer of this field hands over one of Nexus's
+    // own sentences — an upload stamp's failure CLASS, or a `ConnDetail` literal off the
+    // conn-health allow-list — so it is safe to render verbatim. It said "the service's own
+    // words, sanitized upstream" until round 5 replaced the prose with a class, and a
+    // comment promising a scrub that no longer exists is how the next scrub gets skipped.
     return `failed ${when}${why ? ` — ${why}` : ''}`.trim()
   }
   const when = whenLabel(c.lastSuccessUnix, now)
