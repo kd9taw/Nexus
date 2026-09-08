@@ -8,8 +8,10 @@ transmission the way a teleprinter operator does. It is a ragchew station, not a
 station: no serials, no dupe check, no log strip — a contact you work here goes in the
 [Logbook](logbook-qsl.md) yourself.
 
-PSK is an opt-in section. Turn it on in the first-run wizard's "which modes?" step or in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+PSK ships enabled — the wizard turns everything on; there is no mode picker to miss it
+in. No goal profile enables it, though, so if you pick one in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch PSK back on
+there — or take **Everything (expert)**, which includes it.
 
 ## The tour
 

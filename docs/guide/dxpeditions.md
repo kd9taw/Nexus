@@ -6,7 +6,9 @@ and — the part that earns its keep — a per-day forecast of *your* best shot 
 each entity plus a wake-me alarm that only fires when the expedition is actually
 on the air.
 
-DXpeditions is an opt-in section. Turn it on in the first-run wizard or in
+DXpeditions ships enabled — the wizard turns everything on — and the DX/awards
+and 6m/VHF goal profiles both keep it. If you have trimmed sections, switch it
+back on in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features). It never
 touches the rig on its own — it's a board; working a station happens through the
 cockpits.

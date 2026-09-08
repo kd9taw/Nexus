@@ -8,8 +8,10 @@ zero-beat scope, and your license privileges enforced — so you can call CQ and
 hold a conversation without a paddle and without copying by ear if you'd rather
 not.
 
-CW is an opt-in section. Turn it on in the first-run wizard's "which modes?"
-step or in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+CW ships enabled — the wizard turns everything on; there is no mode picker to
+miss it in. No goal profile enables it, though, so if you pick one in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch CW
+back on there — or take **Everything (expert)**, which includes it.
 
 ![The CW cockpit receiving on 14.0310 MHz. Its header carries the Keyer dropdown set to CAT, the Speed slider at 22 WPM, Pitch and the MEM strip, with ⊞ Panels · 2 hidden, Tune and Stop TX on the row above the CW audio zero-beat scope. Below the scope the Decode pane holds the transcript, its title bar carrying the AI badge, the decoded 28 WPM, the AI switch and Clear; Band activity sits under it and the Log pane (WC1D, 599 sent and received) takes the right-hand column, with the eight F-key macros and the type-and-send field along the bottom.](../img/manual/cw-cockpit.webp)
 

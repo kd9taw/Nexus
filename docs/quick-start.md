@@ -60,9 +60,13 @@ is why the fields in the captures below already hold a station.
 
 Enter your **callsign** and **grid square**. The grid is the anchor for
 everything location-based: the propagation map, satellite passes, DXpedition
-windows, and the range rings all compute from it. Four characters (e.g. `EN52`)
-is plenty; the field turns red if it isn't a valid Maidenhead locator.
+windows, and the range rings all compute from it. The field takes four or six
+characters and turns red on anything that isn't a valid Maidenhead locator —
+but give it **all six**, which is what the app asks for under the box: four
+(`EN52`) only pins you to the middle of a ~100-mile square, and that centre is
+where every distance and bearing is then measured from.
 
+<!-- Figure width, deliberate: the four wizard captures are 648 px wide — the dialog's own native size, cropped, never upscaled — so they render about a third the width of this manual's 1920 px cockpit figures. That is 1:1 pixels; enlarging them would blur the only text a reader needs to match against their screen. Do not "fix" the mismatch by scaling these up. -->
 ![Step 1 of the first-run wizard, "Who's on the air?", with the four step chips — 1 Your station, 2 Your rig, 3 Your log, 4 Finish — across the top and the first one outlined as current. Under a line explaining that the grid square anchors satellite passes, propagation, the map and DXpedition windows, a Callsign box reads KD9TAW beside a Grid square box reading EN52, with a note under it asking for all six characters because four pins you to the middle of a ~100-mile square. "I'll set it up myself" and a blue "Next →" button sit at the bottom right.](img/manual/wizard-station.webp)
 
 ### Step 2 — Your rig
@@ -115,7 +119,9 @@ FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. If you woul
 rather run a leaner app, sections come off one at a time afterwards in
 [Settings ▸ Appearance ▸ Features](guide/settings-reference.md#features), which is
 also where the goal profiles — getting started, DX/awards, contesting, POTA/SOTA,
-6m/VHF — set a batch of sensible defaults in one pick.
+6m/VHF, and **Everything (expert)**, which turns the whole console back on — set
+a batch of sensible defaults in one pick. Toggle features by hand and the profile
+reads **Custom**.
 
 The one thing this step asks for is your **license class**: Technician, General,
 Amateur Extra, or *Outside the US* for no limits. This becomes a real Part 97

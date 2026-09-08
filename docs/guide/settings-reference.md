@@ -1281,8 +1281,9 @@ _Undocumented so far._
 Turn sections on and off, and pick a goal profile.
 
 - **Profile** — a goal (getting started, DX/awards, contesting, POTA/SOTA,
-  6m/VHF) sets sensible defaults. "Pick a goal to set sensible defaults — every
-  feature stays toggleable below." Hand-toggling produces a **Custom** set, and
+  6m/VHF, or **Everything (expert)**, which turns the whole console on) sets
+  sensible defaults. "Pick a goal to set sensible defaults — every feature stays
+  toggleable below." Hand-toggling produces a seventh chip, **Custom**, and
   switching away from Custom asks first because it discards your hand-tuned set.
   A **Re-run setup…** link reopens the first-run wizard.
 - **Core — always on** — the spine (Operate, Logbook, Settings, Now Bar, Chat,

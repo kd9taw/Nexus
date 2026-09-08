@@ -3,8 +3,11 @@
 Two portable/event workflows live here: **Field Day** (ARRL or Winter Field Day),
 which reshapes the app for the weekend and pushes to the club's master log in
 real time, and the **POTA/SOTA hunter**, which finds activators and tags your
-contact for upload. Both are opt-in sections — enable them in the first-run
-wizard or [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+contact for upload. The hunter ships enabled — the wizard turns everything on.
+**Field Day mode is the exception**: it stays off until you switch it on in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features) or
+[Contesting ▸ Field Day Setup](settings-reference.md#field-day-setup), because it
+reshapes the app for a weekend most operators are not having.
 
 ---
 

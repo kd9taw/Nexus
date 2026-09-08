@@ -58,8 +58,11 @@ is why the fields in the captures below already hold a station.
 
 Enter your **callsign** and **grid square**. The grid is the anchor for
 everything location-based: the propagation map, satellite passes, DXpedition
-windows, and the range rings all compute from it. Four characters (e.g. `EN52`)
-is plenty; the field turns red if it isn't a valid Maidenhead locator.
+windows, and the range rings all compute from it. The field takes four or six
+characters and turns red on anything that isn't a valid Maidenhead locator —
+but give it **all six**, which is what the app asks for under the box: four
+(`EN52`) only pins you to the middle of a ~100-mile square, and that centre is
+where every distance and bearing is then measured from.
 
 ### Step 2 — Your rig
 
@@ -107,7 +110,9 @@ FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. If you woul
 rather run a leaner app, sections come off one at a time afterwards in
 [Settings ▸ Appearance ▸ Features](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md#features), which is
 also where the goal profiles — getting started, DX/awards, contesting, POTA/SOTA,
-6m/VHF — set a batch of sensible defaults in one pick.
+6m/VHF, and **Everything (expert)**, which turns the whole console back on — set
+a batch of sensible defaults in one pick. Toggle features by hand and the profile
+reads **Custom**.
 
 The one thing this step asks for is your **license class**: Technician, General,
 Amateur Extra, or *Outside the US* for no limits. This becomes a real Part 97

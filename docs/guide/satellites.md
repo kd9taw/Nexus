@@ -5,7 +5,9 @@ grid. It predicts amateur-satellite passes over your location, schedules your �
 birds 48 h out, plots each pass, lists the working frequencies, and — if you
 have a rotator — can auto-track a bird across the sky through a pass.
 
-Satellites is an opt-in section. Turn it on in the first-run wizard or in
+Satellites ships enabled — the wizard turns everything on — and the
+getting-started and 6m/VHF goal profiles both keep it. If you have trimmed
+sections, switch it back on in
 [Settings ▸ Appearance ▸ Features](settings-reference.md#features). It needs
 your grid set in [Settings ▸ Station](settings-reference.md#station) to compute
 passes.

@@ -91,8 +91,9 @@ operate by ear. Nothing changes for sighted operators.
 
 ## What is in it
 
-**Setup is the fast part.** A three-step wizard finds your radio over USB or the
-network (FlexRadio included), fills in CAT and audio, and pairs the sound device.
+**Setup is the fast part.** A four-step wizard — station, rig, log, finish —
+finds your radio over USB or the network (FlexRadio included), fills in CAT and
+audio, pairs the sound device, and imports your existing ADIF log.
 Around fifty rigs are curated out of the box, from the IC-9700 up to 23 cm to the
 Xiegu G90, with Hamlib bundled. Digirig and RIGblaster interfaces are recognised
 by name. Your licence class becomes a hard transmit lockout in every keying path,
