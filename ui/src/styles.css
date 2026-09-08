@@ -20075,6 +20075,7 @@ button.sat-chip:disabled {
 }
 /* Feeds: readable minimum on the CONTENT wrapper (never on the frame). */
 .js8-activity,
+.js8-offsets,
 .js8-stations,
 .js8-inbox {
   font-family: var(--font-mono);
@@ -20106,7 +20107,64 @@ button.sat-chip:disabled {
 .js8-time,
 .js8-freq,
 .js8-snr,
-.js8-age {
+.js8-age,
+.js8-dt,
+.js8-dist,
+.js8-az {
+  color: var(--text-dim);
+}
+/* BAND ACTIVITY BY OFFSET — one row per offset, JS8Call's tableWidgetRXAll column order
+   (Offset · Age · SNR · Time Delta · Speed · Message). The transcript's row semantics carry
+   over so a directed or low-confidence decode reads the same in both surfaces. */
+.js8-offset-row {
+  display: grid;
+  grid-template-columns: 5.2em 2.6em 3em 4.4em 1.2em minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: 1px var(--space-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-offset-row.mine {
+  color: var(--accent);
+}
+.js8-offset-row.directed {
+  border-left: 3px solid var(--accent);
+}
+.js8-offset-row.low {
+  color: var(--text-dim);
+}
+/* ★ the operator pin: a text button, dim until it holds a row. */
+.js8-pin {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-dim);
+  line-height: 1;
+}
+.js8-pin.on {
+  color: var(--accent);
+}
+.js8-station.pinned {
+  background: var(--bg-elev-2);
+}
+/* Worked-before: the log's own tick, in the colour every other B4 cue uses. */
+.js8-b4 {
+  color: var(--state-ok);
+  font-weight: 700;
+}
+/* Name / Comment come out of the log and can be long — they yield before the row wraps. */
+.js8-opname,
+.js8-opcomment {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.js8-opname {
+  max-width: 8em;
+}
+.js8-opcomment {
+  max-width: 14em;
   color: var(--text-dim);
 }
 .js8-station,

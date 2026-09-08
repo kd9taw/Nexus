@@ -749,8 +749,15 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
 
 /** JS8 cockpit's removable panels (the JS8 programme, 2026-09). CW's region shape:
  *  `scope` is the band waterfall (see SCOPE_PANEL_ID), `activity` every decoded frame at
- *  every enabled speed, `stations` the heard list, `inbox` the directed / store-and-forward
- *  messages, `log` the LogEntry strip. The CockpitHeader and the TX dock are not panels.
+ *  every enabled speed, `offsets` the same decodes collapsed to one row per frequency offset,
+ *  `stations` the heard list, `inbox` the directed / store-and-forward messages, `log` the
+ *  LogEntry strip. The CockpitHeader and the TX dock are not panels.
+ *
+ *  `offsets` is JS8Call's second decode surface (`tableWidgetRXAll`, mainwindow.ui:989 — the
+ *  offset-bucketed table with the Time Delta column), which the first build fused into the
+ *  chronological `activity` transcript. It is an ordinary pane with an ordinary id: it renders
+ *  no sender and no stop, so it is ⊞-hideable exactly like its siblings and needs no special
+ *  case in the census below.
  *
  *  THE STOP LINE holds here the Operate way (a slotted mode): the census — every holder
  *  OUTSIDE every ⊞-removable pane, none with an id in this vocabulary: Stop TX (header →
@@ -761,7 +768,7 @@ export const PSK_PANELS: PanelVocabulary<PskPanelId> = {
  *  completes), so it is not on the sweep list. The dock's "Drop queue" is a SENDER-class
  *  control (it empties the queue; a frame already keyed finishes) and must never be added to
  *  stopControls. Swept in stop-line.test.tsx's JS8 case, rendered with App's props. */
-export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, 'activity', 'stations', 'inbox', 'log'] as const
+export const JS8_PANEL_IDS = [SCOPE_PANEL_ID, 'activity', 'offsets', 'stations', 'inbox', 'log'] as const
 export type Js8PanelId = (typeof JS8_PANEL_IDS)[number]
 
 export const JS8_PANELS: PanelVocabulary<Js8PanelId> = {

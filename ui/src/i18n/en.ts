@@ -7038,10 +7038,21 @@ export const EN = {
   'js8.panel.stations': 'Stations',
   'js8.panel.inbox': 'Inbox',
   'js8.panel.log': 'Log',
+  'js8.panel.offsets': 'Band activity',
   'js8.panel.activity.title':
     'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
+  // Appended to the tooltip above rather than folded into it: a translated catalog keeps its
+  // sentence and this one falls back to English, instead of the note going missing wherever the
+  // translation is older than the pane.
+  'js8.panel.activity.differs':
+    'One list, where JS8Call splits two: this is the running transcript, in time order. The Band activity pane holds the same decodes collapsed to one row per offset, with DT.',
   'js8.panel.activity.empty': 'Listening… frames decoded at every enabled speed print here',
   'js8.panel.activity.row.title': 'Double-click to write to this station',
+  'js8.panel.offsets.title':
+    'One row per frequency offset in the passband — the newest decode heard there, with its age, SNR, DT (how far off the slot clock the sender is) and speed. Read it to find a clear offset and to see who is in sync.',
+  'js8.panel.offsets.empty': 'Listening… each offset in the passband gets a row as it decodes',
+  'js8.panel.offsets.row.title': 'Double-click to move RX here',
+  'js8.panel.offsets.dt.title': 'DT — the sender’s time delta against the slot clock, in milliseconds. Negative is early.',
 
   // ── JS8 ▸ the header ─────────────────────────────────────────────────────────────────
   'js8.header.power.label': 'Drive',
@@ -7061,6 +7072,12 @@ export const EN = {
   'js8.station.select.title': 'Write to {{call}} (fills the To box and the log strip)',
   'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
   'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
+  'js8.station.pin.title': 'Pin {{call}} to the top of this list',
+  'js8.station.unpin.title': 'Unpin {{call}} — it goes back into the heard order',
+  'js8.station.distance.title': 'Great-circle distance to {{grid}}, from your grid square',
+  'js8.station.worked.title': 'Worked before — {{count}} in the log, last {{when}}',
+  'js8.station.name.title': 'Name from your log',
+  'js8.station.comment.title': 'Comment from your log',
 
   // ── JS8 ▸ the inbox pane ─────────────────────────────────────────────────────────────
   'js8.inbox.empty': 'Nothing in the inbox — messages addressed to you, and MSG TO: messages you hold for others, appear here',
@@ -7116,6 +7133,10 @@ export const EN = {
     'Heartbeat acknowledgements are on, but TX is off — nothing keys. Enable TX (the header pill).',
   'js8.dock.hbAck.title.armed':
     'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
+  // Appended to all three faces of the three arm chips (the reason it is its own key rather
+  // than nine edits is the same as js8.panel.activity.differs).
+  'js8.dock.arm.differs':
+    'Two acts, where JS8Call has one: this switch is the second, the header’s TX pill is the first, and the chip reads ARMED only while both are on.',
   'js8.dock.pending': 'Auto-reply to {{to}} in {{secs}} s: {{text}}',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
   'js8.dock.pending.idle': 'Would reply to {{to}} — not armed (idle watchdog), nothing keys: {{text}}',

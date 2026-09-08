@@ -53,6 +53,9 @@ vi.mock('../api', async (importOriginal) => {
     js8Arm: vi.fn(async () => s()),
     js8Cancel: vi.fn(async () => s()),
     js8DropQueue: vi.fn(async () => s()),
+    // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
+    // so the auto-stub's `{}` is not a usable log — this suite runs against an empty one.
+    getLog: vi.fn(async () => []),
     getLicensedBandPlan: vi.fn(async () => []),
   }
 })
