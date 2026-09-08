@@ -93,6 +93,12 @@ re-click slightly more precisely, or press **Re-acquire**.
 You do not need to tune the radio to work up and down the band. Everything in the passband is
 reachable by clicking, which is why PSK operators park on a watering hole and stay there.
 
+![The PSK Decoded Text pane holding a two-way QSO in plain text, its head showing RX armed, a green carrier pill reading −4 Hz, and Re-acquire. Part of one line prints faint.](../img/manual/psk-decode-netted.webp)
+
+*Netted and printing, in Nexus 1.10.3. The dot on the carrier pill is the quality
+squelch — lit means the demodulator has a signal right now — and the number
+beside it is how far the AFC has walked from where you clicked.*
+
 ### Work a station
 
 Put their call in the **{CALL}** field, then use the macros: **Answer** calls them,
@@ -131,6 +137,12 @@ hard per-over ceiling bounds it no matter how long you keep typing.
 
 **Esc stops it, from anywhere in this cockpit**, as does **Esc / Stop** in the dock and
 **Stop TX** in the header.
+
+![The PSK TX dock with the TX button reading On air in red and Esc Stop enabled beside it, over a compose bar holding a half-finished sentence to W1AW.](../img/manual/psk-continuous-typing.webp)
+
+*Continuous running in Nexus 1.10.3. Every keystroke goes out as you make it, so
+the field is append-only — backspace, paste and a drop are all refused, because
+there is nothing to un-send.*
 
 ### Drive, and why it matters more here
 

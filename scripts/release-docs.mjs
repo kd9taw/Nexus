@@ -210,6 +210,9 @@ const SHOT_OWNERS = {
   // Setup — the first-run wizard.
   'wizard-': ['ui/src/components/SetupWizard.tsx'],
   'wizard-rig': ['ui/src/components/SetupWizard.tsx', 'ui/src/components/SetupHealth.tsx'],
+  // The Setup health strip alone — it is SHARED (the wizard's rig step and Settings ▸ Radio
+  // render the same component), so the strip's own file is what makes these pictures wrong.
+  'wizard-setup-health': ['ui/src/components/SetupHealth.tsx', 'ui/src/components/SetupWizard.tsx'],
 
   // Settings. One family, 33 captures: the panel and the registry that generates it.
   'settings-': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],

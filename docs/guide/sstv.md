@@ -32,6 +32,13 @@ is remembered for the rest of the session, so re-entering the section will not
 restart it behind you; pressing **Arm** again clears that. The decoder is
 RX-only — arming can never key the rig.
 
+![The SSTV receive status line reading "4 images decoded since arming, last one 71 s ago", an empty Transmit drop zone below it, and a Gallery of four cards — PD-120, Scottie 1, Scottie 2 and Scottie 1 — each captioned with its mode, UTC time and dial.](../img/manual/sstv-gallery.webp)
+
+*The receive half in Nexus 1.10.3, parked on the 20 m SSTV calling channel. The
+blue line on the last card is a decoded FSK callsign ID; the third card is torn
+because the decoder lost sync part-way down, which is what a marginal picture
+looks like. These are neutral test images, not off-air copy.*
+
 The section stays alive when you navigate away: the receiver keeps listening and
 pictures keep landing in the gallery while you are on the map or in the logbook.
 Only the on-screen readout pauses while it is hidden, and it catches up on the
@@ -236,6 +243,12 @@ The status line is the diagnosis, in order of what to do about it:
 6. Watch the progress bar count down. **Stop** aborts the image, drops the queued
    job and unkeys; so does turning the TX latch off.
 
+![The SSTV Transmit pane holding a picture with KD9TAW burned into its top-left corner, above Change image…, a Text row of CQ / 73 / Reply / + Text, the source file's name and resized dimensions, and a "My picture already shows my callsign" tick box.](../img/manual/sstv-composer.webp)
+
+*The composer in Nexus 1.10.3, stopped one click short of **Send**. The line
+under the buttons is the identification receipt — it names where the plate went
+— and ticking the box below it skips the plate for this picture only.*
+
 On 145.800 MHz — the ISS downlink — Send asks first: "Transmit only during a
 sanctioned ARISS uplink event. Send anyway?"
 
@@ -247,6 +260,12 @@ sanctioned ARISS uplink event. Send anyway?"
 2. At AOS of a pass, Nexus saves your dial, tunes 145.800 FM and arms the
    receiver, telling you it has done so.
 3. ARISS transmits PD-120, which decodes here like anything else.
+
+   ![The SSTV header on 145.8000 MHz with a "2 m · ISS downlink" channel pick, a 2m band chip, USB and FM chips with FM selected, the Slant trim, and an Armed button.](../img/manual/sstv-iss-preset.webp)
+
+   *The ISS downlink staged by hand in Nexus 1.10.3 — the channel pick sets the
+   dial and FM together, and nothing in this frame transmits. Sending here is
+   gated behind its own confirmation, quoted in the step above.*
 4. At LOS it disarms and puts your dial back — but only if you are still parked
    on 145.800 FM, so a mid-pass QSY of your own is left alone. That automatic
    stop is not treated as your decision, so opening the section later still

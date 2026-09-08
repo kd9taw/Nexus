@@ -193,7 +193,11 @@ together.
 5. If the AFC locked onto the wrong signal, press **Re-tune** to drop and rebuild
    the demodulator rather than fighting it with the VFO.
 
-<!-- TODO: capture screenshot — the decoded-text pane close up: the head row showing RX armed, Auto off, the AFC pill reading a locked offset with the padlock, Re-tune and Clear; below it a transcript mixing solid and faint characters -->
+![The RTTY Decoded Text pane holding a full 599 exchange, its head showing RX armed, Auto, an AFC pill reading −12 Hz with a padlock, Re-tune and Clear. Part of one line prints faint.](../img/manual/rtty-copy.webp)
+
+*Copy running in Nexus 1.10.3. The padlock means the AFC has frozen on the
+signal. The faint run is the decoder's own per-character confidence — those are
+the characters to ask **AGN** about rather than the ones to write in the log.*
 
 ### Send an over by hand
 
@@ -245,6 +249,12 @@ extends.
    drops a stale one. Until there is one the button sits disabled showing a dash,
    explaining itself on hover: "No CQ heard yet — Answer lights up when the
    decoder surfaces one." Nexus only looks for CQs at all while Auto is on.
+
+   ![The RTTY auto-sequencer row with Auto on: a CQ · Auto call button and an Answer button carrying the callsign W1AW, above the ordinary macro row.](../img/manual/rtty-auto-sequencer.webp)
+
+   *The sequencer's two doors in, in Nexus 1.10.3. **Answer** carries the newest
+   CQ still in the transcript and stays dead until there is one, so nothing here
+   starts a contact except a click.*
 3. The row then shows the live state — Calling CQ, Answering, Exchange sent,
    Confirmed, Done — plus the station being worked and their exchange as you copy
    it. Callsigns are matched with one character of fuzz, forgiven only where the

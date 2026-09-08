@@ -89,6 +89,12 @@ queued for you. Turn it off to sit silent.
 Pick a station from the roster, or click a thread in Recent chats. Type, press Enter, watch the
 bubble's state. Keep overs short — this is a mode where a sentence is a transmission.
 
+![A Tempo thread with W1AW: two inbound bubbles carrying SNR, audio frequency and dT, and two outbound bubbles each ending in a double tick.](../img/manual/tempo-delivered.webp)
+
+*A finished exchange in Nexus 1.10.3. The double tick on an outbound bubble is
+**Delivered**: an acknowledgement carrying that message's own id came back. It is
+not inferred from the reply that followed.*
+
 ### Call CQ and be found
 
 Press **📣 Call CQ**. It goes out on the band feed and arms transmit. Anyone running Tempo who
@@ -105,6 +111,13 @@ long as that takes — minutes, or until the band opens.
 This is why the roster keeps stations long after they have gone quiet, and why the heartbeat
 matters: presence is what turns a queued message into a delivered one. Nothing is broadcast
 blindly into an empty band on your behalf.
+
+![Three outbound Tempo bubbles to VE3ABC, ending in a warning triangle, a retry mark reading 2, and an ellipsis.](../img/manual/tempo-queued.webp)
+
+*The three states an outbound message sits in, in Nexus 1.10.3. **⋯** has never
+been on the air — VE3ABC has not been heard yet. **↻2** is on its second transmit
+cycle. **⚠** spent its whole cycle budget with nothing coming back; tap it to
+re-queue the same text.*
 
 ### When a message will not go
 

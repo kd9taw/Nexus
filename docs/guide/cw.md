@@ -185,6 +185,11 @@ leaving you guessing:
    each over — nothing fires automatically.
 4. **`Esc`** aborts keying instantly: it clears the queue and stops the rig.
 
+![The CW macro row, F1 CQ through F8, over the type-and-send field holding W1AW DE KD9TAW R R TNX JIM UR 599 599 IN MADISON WI BK, with a Send button at the right.](../img/manual/cw-typed-buffer.webp)
+
+*The macro row and the typed buffer in Nexus 1.10.3. Enter sends what is in the
+field, and it queues behind whatever a macro is already sending.*
+
 ### Read the other station
 
 1. Watch the transcript fill in, with the decoded WPM beside it. Leave WPM on
@@ -196,6 +201,12 @@ leaving you guessing:
    follow the next copy, even if you had scrolled up.
 4. Click a decoded-call chip in the Copilot to make that station your worked peer
    — it fills the his-call token in your macros and the Log pane.
+
+![The CW Decode pane holding a full exchange with W1AW, its head carrying an AI badge, 24 WPM and the AI switch on, beside a Copilot pane reading Working W1AW · 579 · JIM with two runner-up call chips.](../img/manual/cw-decode-copilot.webp)
+
+*Decode and Copilot in Nexus 1.10.3. The WPM beside the AI badge is the speed
+read off the air, not a setting. The Copilot's first chip is its best candidate
+for the call and the two after it are the near-misses it also considered.*
 
 ### Land here from the Needed board
 
