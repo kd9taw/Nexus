@@ -135,10 +135,50 @@ cut down to `5NN`** automatically. Set your operator name (for `{NAME}`) in
 
 ## Core workflows
 
+### Keying backends, and what each one puts the rig into
+
+Entering the cockpit commands the rig's mode for you, and **which mode depends on
+the keyer you picked**. Three of the four leave the rig in CW and let it shape the
+signal; the Soundcard backend plays an audio tone, so it needs the rig on the SSB
+side in a data submode — the same reason FT8 does.
+
+![The CW cockpit header row with the Keyer dropdown open. Left to right: the Speed slider at 24 WPM, the Keyer control reading WinKeyer with its list open below it — CAT, Serial, WinKeyer (highlighted), Soundcard — then Pitch 600 and BW 500.](../img/manual/cw-keyer-backends.webp)
+
+*The four keyer backends in Nexus 1.10.3. Each entry in the list explains itself
+on hover, so you can read the others before you switch.*
+
+| Keyer | What makes the Morse | Mode Nexus commands | Does Nexus key PTT? | TX audio | Extra setup |
+|---|---|---|---|---|---|
+| **CAT** | the rig's own keyer (Hamlib `send_morse`, fed one word at a time) | **CW** at 30 m and up, **CW-L** (Hamlib `CWR`) on 160/80/40 m | no — the rig keys itself | not used | none |
+| **Serial** | the rig, keyed by DTR or RTS on its KEY jack | same as CAT | no — the rig keys off its KEY line | not used | **Keyline serial port** and **Keying line** in [Settings ▸ CW](settings-reference.md#cw) |
+| **WinKeyer** | a K1EL WinKeyer over serial | same as CAT | no — the keyer and the rig handle it | not used | **WinKeyer port** in [Settings ▸ CW](settings-reference.md#cw) |
+| **Soundcard** | Nexus, as a keyed audio tone | **DATA-U** at 30 m and up, **DATA-L** on 160/80/40 m — plain USB/LSB only if **plain SSB for data modes** is ticked for that radio | **yes** | yes — the same TX audio path FT8 uses | your PTT method, plus Nexus's audio routed to the rig and drive under ALC |
+
+The 10 MHz split is the ordinary CW and sideband convention: below it the lower
+side, above it the upper. It is the same rule the Phone cockpit follows, and it
+is why a rig on 40 m lands in CW-L rather than CW-U.
+
+**When nothing goes out**, the cockpit names the backend that failed rather than
+leaving you guessing:
+
+- **CAT** — "Your rig didn't accept CAT CW keying (Hamlib `send_morse`)." Many
+  Hamlib backends serve frequency, mode and PTT but not keying. Move to WinKeyer
+  or Soundcard.
+- **Serial** — the operating system's own error on the port, verbatim, with the
+  reminder that CAT or another program may be holding it.
+- **Soundcard** — "the rig didn't accept PTT". Audio-routing faults cannot be
+  detected here: a tone that plays locally while the rig is in plain SSB on a
+  data-input interface radiates nothing, and looks identical to a good send.
+- On a **Yaesu FTX-1**, CAT keying is flagged **unproven** where you pick it: its
+  Hamlib backend sends a different keying command from the one other radios use
+  and reports success either way, so a silent failure cannot be reported. It is a
+  notice, not a block.
+
 ### Call CQ and work an answer
 
-1. Set your band and frequency. Entering the cockpit commands the rig to CW
-   automatically (or USB/LSB on the Soundcard path).
+1. Set your band and frequency. Entering the cockpit commands the rig's mode for
+   you — CW (CW-L below 10 MHz) on the CAT, Serial and WinKeyer keyers, a DATA
+   submode on the Soundcard keyer. See the table above.
 2. Press **`F1`** to send CQ.
 3. When someone answers, type or click their call into the his-call field, then
    run **`F3`** (report + name) → **`F4`** (73) as the QSO progresses. You send

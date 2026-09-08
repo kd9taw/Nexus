@@ -110,6 +110,13 @@ keyer's F-keys are always reachable rather than rendered past the edge. **PTT**,
 
 The voice keyer has six F-key slots: **CQ, My Call, Report, QRZ?, 73, Again**.
 
+![The Voice Keyer pane. Under the line "click or press F1–F6 to send · Esc stops" and a ■ Stop button, six slot cards: F1 CQ, F2 My Call, F3 Report, F4 QRZ?, F5 73 and F6 Again. F2 is outlined and carries a ▶ play arrow; the other five read "record". Each card has a ● record button, an import arrow and a ✕.](../img/manual/phone-voice-keyer.webp)
+
+*The voice keyer in Nexus 1.10.3. **F2 My Call** holds a recording, so it shows a
+▶; an empty slot reads **record** instead. **●** records into the slot, the arrow
+imports a WAV, **✕** clears it, and the pane's **■ Stop** ends whatever is
+playing.*
+
 1. **Record in-app** or **import any WAV** (Nexus resamples and downmixes
    automatically). Choose your recording mic in
    [Settings ▸ Phone](settings-reference.md#phone-ssb--fm) — on a

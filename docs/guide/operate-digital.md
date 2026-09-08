@@ -25,6 +25,12 @@ defaults.
 Decoding is **always on** — there is no Monitor toggle to forget; the decoder
 runs every RX slot regardless of TX state.
 
+![The ⊞ Panels menu open over the cockpit, six ticked entries — Waterfall, Band Activity, Tx Messages, Rx Frequency, Stations, TX Meters — with "readings appear on transmit" printed under TX Meters, and Undo last change (greyed) beside Reset layout along the bottom.](../img/manual/operate-panels.webp)
+
+*The ⊞ Panels menu in Nexus 1.10.3. Untick a pane to hide it; **Reset layout**
+puts the default arrangement back. An entry with nothing behind it right now says
+so in a line under it, as TX Meters does here.*
+
 **Waterfall gestures.** RX and TX are two separate cursors, and the click that
 moves one leaves the other where it is. The pane header prints the whole rule
 next to the word WATERFALL:
@@ -61,7 +67,12 @@ carrying your transmit controls — **TX On/Off**,
 **Tune**, **Stop TX**, **Hold Tx** — beside **Call CQ** and **S&P**. (These live
 in the QSO strip in this view; Phone and CW keep the cluster in the top bar.)
 
-<!-- TODO: capture screenshot — a decode row showing country, B4, new-DXCC tag, and L mark -->
+![Band Activity scrolling on 40 m FT8. The filter chips — All, CQ, CQ+73, To me, On RX, B4, New, −Blk, −Conf, −B4, Countries, Hide calls — run above a "300 heard" count and a column of decode rows. Each row carries the FT8 badge, the slot time, SNR and DT, the audio frequency, the decoded message, then the annotations: LoTW and L marks, blue CQ badges, green POTA chips, grey B4 chips on calls already worked, and the country name with its bearing and a QRZ button at the right.](../img/manual/operate-band-activity.webp)
+
+*Band Activity in Nexus 1.10.3, with the annotations stock WSJT-X never had.
+Rows worked before carry **B4**; **L** and **LoTW** mark calls known to upload to
+LoTW; **POTA** flags a park activation; the entity name and bearing sit at the
+right of every row.*
 
 **Classic ↔ Roster.** A single toggle switches the layout:
 
@@ -159,8 +170,44 @@ the source in
 - **Fox role is not implemented** — you can hound a DXpedition, not run one.
 - **No contest modes** in the digital cockpit beyond Field Day (no NA VHF,
   RTTY RU, WW Digi).
-- **Fox role aside, the mode list is complete**: FT8, FT4, FST4, FST4W, Q65, MSK144, JT65 and
-  WSPR all decode *and* transmit, alongside Nexus's own TempoFast/TempoDeep.
+
+### What each tier can do in 1.10.3
+
+Every tier the dial offers decodes *and* transmits. Two of them transmit on a
+schedule instead of working a QSO, and the sequencer is not offered on those.
+
+| Tier | Decode | Transmit | Auto-sequencer |
+|---|---|---|---|
+| FT8 | yes | yes | yes — plus Fox/Hound (Hound side) and contest exchanges |
+| FT4 | yes | yes | yes |
+| FT2 | yes | yes | yes |
+| Q65 | yes | yes | yes |
+| MSK144 | yes | yes | yes |
+| FST4 | yes | yes | yes |
+| FST4W | yes | yes | **no** — a beacon: callsign, grid and power on a transmit-percentage schedule |
+| JT65 | yes | yes | yes |
+| WSPR | yes | yes | **no** — a beacon, as FST4W |
+| TempoFast | yes | yes | yes |
+| TempoDeep | yes | yes | yes |
+
+The table is the code, not a promise: `Capabilities.tx` in
+`crates/modes/src/mode.rs` is what the engine reads, `modes::tx_mode` is the only
+path to a mode that may key the radio, and
+`tx_capability_is_declared_not_inherited` in that file asserts the two agree for
+every tier above. A mode that declared no transmitter could not be armed at all —
+`Engine::set_tx_enabled` refuses the arm outright.
+
+**One label in the app is wrong about this.** The JT65 pill in the top bar still
+carries an **RX** badge and a tooltip reading "Receive only in this build
+(transmit is disabled pending a fix)". That was true for 0.19.17 only, as a
+mitigation while a decoder fault crashed Windows on Call CQ; the fault was fixed
+and the restriction lifted, but the badge and the tooltip were not. **JT65
+transmits in 1.10.3** — arm TX and call CQ on it exactly as on FT8.
+
+![The top bar's tier pills, left to right: Tempo Fast, Tempo Deep, FT4, FT8 (selected), FT2, WSPR badged BCN, Q65, MSK144, JT65 badged RX, FST4, and FST4W badged BCN.](../img/manual/operate-tier-pills.webp)
+
+*The tier pills in Nexus 1.10.3. **BCN** on WSPR and FST4W is correct — those are
+beacons. **RX** on JT65 is a stale label; that mode transmits.*
 
 ---
 
