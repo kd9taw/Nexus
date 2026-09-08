@@ -103,6 +103,11 @@ const SHARED = [
   'nexus.dxped.chasing',
   'nexus.features.v1',
   'nexus.features.wizardSeen',
+  // ★-pinned JS8 calls. SHARED, and NOT durable: which calls this operator is holding at the
+  // top of the roster is a fact about the operator rather than a window, but it is about who is
+  // on the band right now — one click to remake, meaningless tomorrow — so it does not join the
+  // watch list and the chase sets in DURABLE_KEYS (features/js8Pins).
+  'nexus.js8.pins',
   'nexus.memory.bank.v1',
   'nexus.memory.bank.v2',
   'nexus.needed.autopop',

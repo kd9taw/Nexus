@@ -5,8 +5,8 @@
 // in the code is the mode's own vocabulary (js8Vocab.ts): JS8, HB, CQ, @ALLCALL, the speed
 // names and their ALL.TXT letters, the 32 directed-command texts, callsigns, grids, offsets in
 // Hz, SNR in dB, UTC stamps and the s/m/h age units.
-import { useEffect, useRef, useState } from 'react'
-import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch } from '../types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { AppSnapshot, BandChannel, Js8InboxState, Js8Origin, Js8State, Js8Switch, LoggedQso } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PanelsMenu } from './PanelsMenu'
@@ -19,6 +19,7 @@ import { useRegionCols, type RegionCols } from '../useRegionCols'
 import {
   atuTune,
   getJs8State,
+  getLog,
   getLicensedBandPlan,
   haltTx,
   js8Arm,
@@ -38,6 +39,10 @@ import {
   setTxOffset,
 } from '../api'
 import { bandLabelForMhz } from '../band'
+import { callHistory } from '../features/callHistory'
+import { loadJs8Pins, saveJs8Pins, sortPinnedFirst, toggleJs8Pin } from '../features/js8Pins'
+import { azimuthLabel, azimuthTitle, azimuthTo, distanceLabel } from '../grid'
+import { useUnits } from '../units'
 import { pushToast, withErrorToast } from '../toast'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { t } from '../i18n'
@@ -58,7 +63,9 @@ import {
   RX_PLATE,
   TX_PLATE,
   ageLabel,
+  bandActivityByOffset,
   countBits,
+  dtLabel,
   estimateFrames,
   fmtSnr,
   utcClock,
@@ -91,6 +98,7 @@ interface Props {
 const js8PanelLabels = (): Record<Js8PanelId, string> => ({
   scope: t('js8.panel.scope'),
   activity: t('js8.panel.activity'),
+  offsets: t('js8.panel.offsets'),
   stations: t('js8.panel.stations'),
   inbox: t('js8.panel.inbox'),
   log: t('js8.panel.log'),
@@ -204,6 +212,26 @@ export function Js8Cockpit({
     void getLicensedBandPlan('js8').then(setPlan).catch(() => {})
   }, [])
 
+  // THE LOGBOOK JOIN behind the roster's ✓ / Name / Comment columns. The log strip and the
+  // Operate cockpit answer "have I worked this call" exactly this way — one getLog() into
+  // features/callHistory — and this is that path, not a second one. Re-read on the view-entry
+  // edge so a QSO logged in another section shows up without a relaunch; the roster is a
+  // display join, so a stale-by-one-view read is the right cost for not polling the log.
+  const [log, setLog] = useState<LoggedQso[]>([])
+  useEffect(() => {
+    if (!active) return
+    void getLog().then(setLog).catch(() => {})
+  }, [active])
+
+  // ★ PINS — an operator hold on a roster that re-sorts under him. Held in state so a write
+  // that localStorage refuses still applies for the session (features/js8Pins).
+  const [pins, setPins] = useState<string[]>(loadJs8Pins)
+  const togglePin = (call: string) => {
+    const next = toggleJs8Pin(pins, call)
+    setPins(next)
+    saveJs8Pins(next)
+  }
+
   const commitDial = (mhz: number) => {
     onSetFrequency?.(mhz, bandLabelForMhz(mhz), snap?.radio.sideband || 'USB')
   }
@@ -240,6 +268,13 @@ export function Js8Cockpit({
   const snapRef = useRef(snap)
   snapRef.current = snap
   const selectStation = (call: string) => setToCall(call.toUpperCase())
+  /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
+   *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
+  const tuneRx = (hz: number) => {
+    void setRxOffset(hz)
+      .then((sn) => onSnap?.(sn))
+      .catch(() => {})
+  }
 
   /** The two refusals worth a toast BEFORE the round trip; the engine re-checks both. */
   const refuseIfUnready = (): boolean => {
@@ -332,13 +367,47 @@ export function Js8Cockpit({
   // REGION TIERS (CW's rule): three tracks only when the activity column, the aux column
   // (stations / inbox) AND the log column all have something to hold; an empty track is the
   // "band of empty black" rebuilt. useRegionCols owns data-cols/data-flow.
-  const activityPresent = shown('activity')
+  // The main track carries BOTH decode surfaces (the transcript and the offset table), so it
+  // is present while either is: hiding only `activity` must not strand `offsets` in no column.
+  const activityPresent = shown('activity') || shown('offsets')
   const auxPresent = shown('stations') || shown('inbox')
   const logPresent = shown('log')
   const populated = [activityPresent, auxPresent, logPresent].filter(Boolean).length
   const { ref: panesRef, cols } = useRegionCols<HTMLDivElement>(Math.max(1, populated) as RegionCols)
 
   const activityPin = usePinnedScroll<HTMLDivElement>()
+  const units = useUnits()
+  const myGrid = snap?.mygrid ?? ''
+
+  // ONE row per offset, from the same activity feed (js8Vocab.bandActivityByOffset) — the
+  // pane adds no engine state, it reads the decodes the transcript already carries.
+  const offsetRows = useMemo(() => bandActivityByOffset(js8?.activity ?? []), [js8?.activity])
+
+  /** Per-heard-call log detail: worked-before, the name and comment of the most recent QSO,
+   *  and that QSO's grid as a fallback when the station has not sent one (JS8Call does the
+   *  same, mainwindow.cpp:10325-10345). Keyed on the CALL SET, not the stations array — that
+   *  array is a fresh object on every 500 ms poll, and re-scanning the whole log twice a
+   *  second per station is not a thing a roster may cost. */
+  const stationCalls = (js8?.stations ?? []).map((h) => h.call).join(' ')
+  const logDetail = useMemo(() => {
+    const out = new Map<string, { count: number; lastUnix: number | null; grid: string; name: string; comment: string }>()
+    for (const call of stationCalls.split(' ').filter(Boolean)) {
+      // JS8Call's own scope for this column is hasWorkedBefore(call, "") — worked ANYWHERE,
+      // any band, any mode. The band/mode dupe scope belongs to the log strip, not here.
+      const hist = callHistory(log, call, '')
+      if (!hist.workedBefore) continue
+      const last = hist.qsos.reduce((a, b) => (b.whenUnix > a.whenUnix ? b : a))
+      out.set(call, {
+        count: hist.count,
+        lastUnix: hist.lastUnix,
+        grid: (last.grid ?? '').trim(),
+        name: (last.name ?? '').trim(),
+        comment: (last.comment ?? '').trim(),
+      })
+    }
+    return out
+  }, [log, stationCalls])
+
   const sending = js8?.sending === true
   const rxCount = countBits(js8?.rxSpeeds ?? 0)
   const selectedCall = toCall.trim().toUpperCase()
@@ -430,7 +499,9 @@ export function Js8Cockpit({
       className={`cw-macro rtty-arm js8-arm ${cls}${on ? ' on' : ''}${on && armed ? ' armed' : ''}`}
       aria-pressed={on}
       onClick={() => toggleSwitch(which, on)}
-      title={on && armed ? titles[2] : on ? titles[1] : titles[0]}
+      // Every face carries the two-act note: an armed chip that has not fired reads as a bug
+      // to a JS8Call operator, and the sentence that stops it is the one naming the latch.
+      title={`${on && armed ? titles[2] : on ? titles[1] : titles[0]} ${t('js8.dock.arm.differs')}`}
     >
       <span className="cw-macro-label">{label}</span>
     </button>
@@ -448,7 +519,10 @@ export function Js8Cockpit({
         className="js8-activity"
         ref={activityPin.ref}
         onScroll={activityPin.onScroll}
-        title={t('js8.panel.activity.title')}
+        // Two sentences, composed: the second is the "how this differs from JS8Call" note the
+        // operator asked for in the UI rather than the manual, and keeping it a separate entry
+        // means a catalog older than this pane loses the translation, not the note.
+        title={`${t('js8.panel.activity.title')} ${t('js8.panel.activity.differs')}`}
       >
         {!js8 || js8.activity.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.panel.activity.empty')}</div>
@@ -474,6 +548,48 @@ export function Js8Cockpit({
     </CockpitPaneFrame>
   )
 
+  // BAND ACTIVITY BY OFFSET — JS8Call's tableWidgetRXAll (mainwindow.ui:989): one row per
+  // frequency offset, ordered by offset, carrying the DT the transcript drops. A fill pane
+  // with a weight: it is a table of rows, so it can use surplus height (the role question).
+  // It renders no sender and no stop — a double-click moves the RX cursor, which is a receive
+  // control — so it is ⊞-hideable like its siblings.
+  const offsetsPane = shown('offsets') && (
+    <CockpitPaneFrame
+      title={t('js8.panel.offsets')}
+      paneId="offsets"
+      weight={1}
+      onRemove={panels ? () => panels.setPanelState('offsets', 'removed') : undefined}
+    >
+      <div className="js8-offsets" title={t('js8.panel.offsets.title')}>
+        {offsetRows.length === 0 ? (
+          <div className="cw-decode-idle">{t('js8.panel.offsets.empty')}</div>
+        ) : (
+          offsetRows.map((r) => (
+            <div
+              key={r.offsetHz}
+              className={`js8-offset-row${r.mine ? ' mine' : ''}${r.directedToMe ? ' directed' : ''}${
+                r.lowConf ? ' low' : ''
+              }`}
+              onDoubleClick={() => tuneRx(r.offsetHz)}
+              title={t('js8.panel.offsets.row.title')}
+            >
+              <span className="js8-cell js8-freq">
+                {r.offsetHz} {HZ}
+              </span>
+              <span className="js8-cell js8-age">{ageLabel(now - r.atMs)}</span>
+              <span className="js8-cell js8-snr">{fmtSnr(r.snrDb)}</span>
+              <span className="js8-cell js8-dt" title={t('js8.panel.offsets.dt.title')}>
+                {dtLabel(r.dtS)}
+              </span>
+              <span className="js8-cell js8-speed">{JS8_SPEEDS[r.speed].letter}</span>
+              <span className="js8-cell js8-text">{r.text}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </CockpitPaneFrame>
+  )
+
   const stationsPane = shown('stations') && (
     <CockpitPaneFrame
       title={t('js8.panel.stations')}
@@ -484,8 +600,31 @@ export function Js8Cockpit({
         {!js8 || js8.stations.length === 0 ? (
           <div className="cw-decode-idle">{t('js8.station.empty')}</div>
         ) : (
-          js8.stations.map((h) => (
-            <div key={h.call} className={`js8-station${h.call === selectedCall ? ' selected' : ''}`}>
+          sortPinnedFirst(js8.stations, pins).map((h) => {
+            // The DX columns JS8Call carries (mainwindow.cpp:10296-10362): distance and
+            // azimuth from MY grid to theirs, then the logbook's answer about this call. The
+            // grid falls back to the one in the log when the station has not sent one — the
+            // same fallback JS8Call makes, and the reason a worked station shows a bearing
+            // before its first grid frame.
+            const det = logDetail.get(h.call)
+            const grid = (h.grid ?? '').trim() || det?.grid || ''
+            const dist = distanceLabel(myGrid, grid || null, units)
+            // No entity centroid here: `Js8Heard` carries no country, so a grid-less station
+            // gets NO bearing rather than a rough one. `azimuthTo` already answers null.
+            const az = azimuthTo(myGrid, grid || null, null, null)
+            const azText = azimuthLabel(az)
+            const pinned = pins.includes(h.call.toUpperCase())
+            return (
+            <div key={h.call} className={`js8-station${h.call === selectedCall ? ' selected' : ''}${pinned ? ' pinned' : ''}`}>
+              <button
+                type="button"
+                className={`js8-pin${pinned ? ' on' : ''}`}
+                aria-pressed={pinned}
+                onClick={() => togglePin(h.call)}
+                title={pinned ? t('js8.station.unpin.title', { call: h.call }) : t('js8.station.pin.title', { call: h.call })}
+              >
+                ★
+              </button>
               <button
                 type="button"
                 className="js8-station-call"
@@ -494,13 +633,44 @@ export function Js8Cockpit({
               >
                 {h.call}
               </button>
-              <span className="js8-cell">{h.grid ?? ''}</span>
+              <span className="js8-cell">{grid}</span>
               <span className="js8-cell js8-snr">{fmtSnr(h.snrDb)}</span>
               <span className="js8-cell">
                 {Math.round(h.freqHz)} {HZ}
               </span>
               <span className="js8-cell js8-speed">{JS8_SPEEDS[h.speed].letter}</span>
               <span className="js8-cell js8-age">{ageLabel(now - h.lastMs)}</span>
+              {dist && (
+                <span className="js8-cell js8-dist" title={t('js8.station.distance.title', { grid })}>
+                  {dist}
+                </span>
+              )}
+              {azText && az && (
+                <span className="js8-cell js8-az" title={azimuthTitle(az)}>
+                  {azText}
+                </span>
+              )}
+              {det && (
+                <span
+                  className="js8-cell js8-b4"
+                  title={t('js8.station.worked.title', {
+                    count: det.count,
+                    when: det.lastUnix ? new Date(det.lastUnix * 1000).toISOString().slice(0, 10) : '',
+                  })}
+                >
+                  ✓
+                </span>
+              )}
+              {det?.name && (
+                <span className="js8-cell js8-opname" title={t('js8.station.name.title')}>
+                  {det.name}
+                </span>
+              )}
+              {det?.comment && (
+                <span className="js8-cell js8-opcomment" title={t('js8.station.comment.title')}>
+                  {det.comment}
+                </span>
+              )}
               {h.lastHb && <span className="js8-chip">{HB}</span>}
               {h.lastCq && <span className="js8-chip">{CQ}</span>}
               {h.storedMsgs > 0 && (
@@ -522,7 +692,8 @@ export function Js8Cockpit({
                 ))}
               </span>
             </div>
-          ))
+            )
+          })
         )}
       </div>
     </CockpitPaneFrame>
@@ -736,6 +907,7 @@ export function Js8Cockpit({
           <>
             <div className="cockpit-col" key="main">
               {activityPane}
+              {offsetsPane}
             </div>
             <div className="cockpit-col" key="aux">
               {stationsPane}
@@ -749,6 +921,7 @@ export function Js8Cockpit({
           <>
             <div className="cockpit-col" key="main">
               {activityPane}
+              {offsetsPane}
             </div>
             <div className="cockpit-col" key="aux">
               {stationsPane}
@@ -760,6 +933,7 @@ export function Js8Cockpit({
             {(activityPresent || auxPresent) && (
               <div className="cockpit-col" key="main">
                 {activityPane}
+                {offsetsPane}
                 {stationsPane}
                 {inboxPane}
               </div>

@@ -71,6 +71,9 @@ vi.mock('../api', async (importOriginal) => {
     js8Arm: vi.fn(async () => state.current),
     js8InboxMark: vi.fn(async () => state.current),
     js8InboxDelete: vi.fn(async () => state.current),
+    // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
+    // so the auto-stub's `{}` is not a usable log — this suite runs against an empty one.
+    getLog: vi.fn(async () => []),
     getLicensedBandPlan: vi.fn(async () => []),
     haltTx: vi.fn(async () => ({})),
   }
@@ -190,7 +193,7 @@ describe('Js8Cockpit pane shell', () => {
 
   it('every operator-content block renders through a CockpitPaneFrame inside the region', async () => {
     await renderCockpit()
-    for (const id of ['activity', 'stations', 'inbox', 'log']) {
+    for (const id of ['activity', 'offsets', 'stations', 'inbox', 'log']) {
       const pane = document.querySelector(`[data-pane="${id}"]`)
       expect(pane, `pane "${id}" missing`).not.toBeNull()
       expect(pane!.classList.contains('pane-frame'), `"${id}" is not a .pane-frame`).toBe(true)
@@ -226,7 +229,7 @@ describe('Js8Cockpit pane shell', () => {
     expect(region.getAttribute('data-cols'), 'a 3-track template with an empty log track').toBe('2')
     expect(document.querySelector('[data-pane="log"]')).toBeNull()
     cleanup()
-    await renderCockpit({ panels: fakePanels(['scope', 'activity', 'stations', 'inbox', 'log']) })
+    await renderCockpit({ panels: fakePanels(['scope', 'activity', 'offsets', 'stations', 'inbox', 'log']) })
     expect(document.querySelector('.waterfall-wrap')).toBeNull()
     expect(document.querySelector('.cockpit-panes'), 'the region is a shell child, hidden panes or not').not.toBeNull()
     expect(document.querySelectorAll('.pane-frame').length).toBe(0)
