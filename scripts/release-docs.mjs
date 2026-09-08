@@ -40,6 +40,7 @@
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -345,6 +346,201 @@ function checkScreenshots() {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. The assets the pages point at — existence, alt text, orphans, duplicates
+// ---------------------------------------------------------------------------
+//
+// Section 3 asks whether an image is STALE. This asks whether it is THERE, and whether the page
+// around it is intact. Nothing did, and every one of these has a way of reaching the public in
+// silence:
+//
+//   * a page points at an image that is not in the tree — the reader gets a broken-image icon,
+//     and neither the EPUB nor the PDF build says a word about it;
+//   * an image is in the tree that no page points at — which is not a wasted 200 KB, it is a
+//     capture somebody cropped and published and then never actually placed;
+//   * an image ships with empty alt text — invisible to a sighted reviewer by construction,
+//     and the only thing a screen-reader user gets;
+//   * the same bytes ship twice under two names — one capture, presented as two things.
+//
+// This is I29's mechanical half. The judgement half (is the picture the RIGHT picture) is not
+// automatable and is not attempted here.
+
+// A local target that this repo can actually answer for. Anything remote, inline or
+// site-absolute is somebody else's to verify.
+const isLocalRef = (t) => !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(t)
+
+/** Every `![alt](src)` and `<img src alt>` in `text`, with 1-based line numbers. */
+function imageRefs(text) {
+  const out = []
+  text.split('\n').forEach((line, i) => {
+    for (const m of line.matchAll(/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g))
+      out.push({ line: i + 1, alt: m[1], src: m[2] })
+    for (const m of line.matchAll(/<img\b[^>]*>/g)) {
+      const src = /\bsrc="([^"]*)"/.exec(m[0])
+      // A missing alt attribute and alt="" are the same defect to a screen reader, and both
+      // arrive here as ''.
+      out.push({ line: i + 1, alt: (/\balt="([^"]*)"/.exec(m[0]) ?? ['', ''])[1], src: src ? src[1] : '' })
+    }
+  })
+  return out
+}
+
+// An alt that says only "image" describes nothing; it is the shape of a placeholder somebody
+// meant to come back to. Kept short and literal — a length threshold would be arbitrary, and
+// "Settings ▸ Radio" is a perfectly good short alt.
+const PLACEHOLDER_ALT = new Set([
+  'image', 'images', 'img', 'screenshot', 'screen shot', 'screengrab', 'picture', 'photo',
+  'figure', 'fig', 'diagram', 'graphic', 'alt', 'alt text', 'todo', 'tbd',
+])
+
+function checkDocAssets() {
+  const manualDir = path.join(DOCS, 'img', 'manual')
+  const problems = []
+  const referenced = new Set()
+
+  for (const abs of docFiles()) {
+    for (const { line, alt, src } of imageRefs(readFileSync(abs, 'utf8'))) {
+      if (!isLocalRef(src)) continue
+      const target = path.resolve(path.dirname(abs), src)
+      referenced.add(target)
+      if (!existsSync(target)) {
+        problems.push(`${rel(abs)}:${line} points at ${src} — no such file`)
+        continue
+      }
+      const trimmed = alt.trim()
+      if (!trimmed) problems.push(`${rel(abs)}:${line} ${path.basename(src)} has empty alt text`)
+      else if (PLACEHOLDER_ALT.has(trimmed.toLowerCase()))
+        problems.push(`${rel(abs)}:${line} ${path.basename(src)} alt is the placeholder "${trimmed}"`)
+    }
+  }
+
+  // Orphans and duplicates are asked of docs/img/manual/ ONLY. The rest of docs/img/ is the
+  // site's and SourceForge's — banners, the social card, the demo GIF — referenced from repos
+  // that are not this one, so "unreferenced" there means nothing. This directory exists to
+  // serve manual pages and nothing else, so there it means everything.
+  if (existsSync(manualDir)) {
+    const files = readdirSync(manualDir)
+      .map((f) => path.join(manualDir, f))
+      .filter((p) => !statSync(p).isDirectory())
+    for (const p of files)
+      if (!referenced.has(p)) problems.push(`${rel(p)} is published but no page shows it`)
+
+    const byHash = new Map()
+    for (const p of files) {
+      const h = createHash('sha256').update(readFileSync(p)).digest('hex')
+      if (!byHash.has(h)) byHash.set(h, [])
+      byHash.get(h).push(rel(p))
+    }
+    for (const names of byHash.values())
+      if (names.length > 1) problems.push(`identical bytes under ${names.length} names: ${names.join(', ')}`)
+  }
+
+  if (problems.length) {
+    FAIL('manual assets', problems,
+      'Each is mechanical: place the image or drop the reference, write the alt text, delete the ' +
+        'duplicate. Alt text describes the PICTURE for somebody who cannot see it — it is not a ' +
+        'caption and not a repeat of the sentence above it.')
+  } else {
+    OK('manual assets', `${referenced.size} referenced images all present, alt-texted and placed once`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3c. Internal links and anchors
+// ---------------------------------------------------------------------------
+//
+// The other half of I29. A cross-reference between chapters is the manual's only navigation, and
+// a heading gets reworded in every editing pass — at which point every deep link into it points
+// at the top of the page instead, silently, in the repo and on the site and in the EPUB.
+//
+// Only LOCAL links are checked. An external URL needs the network and would make this check
+// flap; the site's own copy is checked separately, against the live index.
+
+/** GitHub's heading slug: strip inline markup, lowercase, drop punctuation, spaces to hyphens. */
+function slugify(heading) {
+  return heading
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\*\*?([^*]*)\*\*?/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\- ]/gu, '')
+    .replace(/ /g, '-')
+}
+
+/** Non-fenced lines of a markdown file, as `[lineNumber, text]`. Fenced code is not prose. */
+function proseLines(text) {
+  const out = []
+  let fence = null
+  text.split('\n').forEach((line, i) => {
+    const m = /^\s*(```+|~~~+)/.exec(line)
+    if (m) {
+      if (fence === null) fence = m[1][0]
+      else if (m[1][0] === fence) fence = null
+      return
+    }
+    if (fence === null) out.push([i + 1, line.replace(/`[^`]*`/g, '')])
+  })
+  return out
+}
+
+/** Every heading anchor in the file, including GitHub's `-1`, `-2` suffixes for repeats. */
+function anchorsOf(abs) {
+  const seen = new Map()
+  const anchors = new Set()
+  for (const [, line] of proseLines(readFileSync(abs, 'utf8'))) {
+    const m = /^#{1,6}\s+(.*)$/.exec(line)
+    if (!m) continue
+    const base = slugify(m[1])
+    const n = seen.get(base) ?? 0
+    seen.set(base, n + 1)
+    anchors.add(n === 0 ? base : `${base}-${n}`)
+  }
+  return anchors
+}
+
+function checkDocLinks() {
+  const anchorCache = new Map()
+  const anchors = (abs) => {
+    if (!anchorCache.has(abs)) anchorCache.set(abs, anchorsOf(abs))
+    return anchorCache.get(abs)
+  }
+
+  const broken = []
+  let checked = 0
+  for (const abs of docFiles()) {
+    for (const [line, text] of proseLines(readFileSync(abs, 'utf8'))) {
+      for (const m of text.matchAll(/(?<!!)\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g)) {
+        const target = m[1]
+        const [file, anchor] = target.split('#')
+        if (file && !isLocalRef(file)) continue
+        checked++
+        let dest = abs
+        if (file) {
+          // The wiki pages link each other extensionless (`[Install](Install)`), which is how
+          // they resolve on the GitHub and SourceForge wikis. In the repo that is Install.md.
+          const candidates = [path.resolve(path.dirname(abs), file), path.resolve(path.dirname(abs), `${file}.md`)]
+          dest = candidates.find((c) => existsSync(c))
+          if (!dest) {
+            broken.push(`${rel(abs)}:${line} → ${target} — no such file`)
+            continue
+          }
+        }
+        if (anchor && dest.endsWith('.md') && !anchors(dest).has(anchor))
+          broken.push(`${rel(abs)}:${line} → ${target} — ${rel(dest)} has no heading with that anchor`)
+      }
+    }
+  }
+
+  if (broken.length) {
+    FAIL('internal links and anchors', broken,
+      'A renamed heading breaks every link into it and nothing says so. Fix the link, or restore ' +
+        'the heading — do not delete the cross-reference to make this green.')
+  } else {
+    OK('internal links and anchors', `${checked} local links resolve, anchors included`)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 4. The release's own two doc deliverables
 // ---------------------------------------------------------------------------
 
@@ -549,6 +745,8 @@ console.log(`repo: ${ROOT}\n`)
 checkGenerators()
 checkDocGates()
 checkScreenshots()
+checkDocAssets()
+checkDocLinks()
 checkReleaseDocs()
 checkIssueCredits()
 checkVersionProse()
