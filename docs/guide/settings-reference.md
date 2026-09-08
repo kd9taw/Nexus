@@ -769,8 +769,9 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
 
 ![Two fields: Station power (W) reading 1000, and Units set to "Automatic (from your system)".](../img/manual/settings-station-power-units.webp)
 
-*The same row's right half. 1000 W is one station's figure, recorded so the
-Journey miles-per-watt maths is right — not a setting that changes the rig.*
+*The same row's right half in Nexus 1.10.3. 1000 W is one station's figure,
+recorded so the Journey miles-per-watt maths is right — not a setting that
+changes the rig.*
 
 ### JT65 — classic EME
 
@@ -1166,7 +1167,7 @@ A status grid of every connector, and a **Test** button on QRZ Logbook that
 round-trips the API without logging anything. Below it, a session **Connection
 log**: "every save, sync, push, and failure lands here."
 
-![The Connections grid, nine rows each with a coloured dot: LoTW "stored — not verified yet", QRZ callbook "lookup only", QRZ Logbook "working, last upload 9/3/2026", eQSL "no credential", ClubLog "working", HRDLog.net "no credential", World Radio League "working", Cloudlog "no credential", RepeaterBook "no credential". Below it a Connection log of timestamped lines about the rotator, APRS-IS, PSK Reporter, DX cluster and RBN connections.](../img/manual/settings-connections.webp)
+![The Connections grid: nine connector rows, each with a coloured dot and a state — LoTW "stored — not verified yet", QRZ Logbook and ClubLog and World Radio League "working" with an upload date, the rest "no credential" or "lookup only". Below it a Connection log of timestamped lines.](../img/manual/settings-connections.webp)
 
 *Connector health in Nexus 1.10.3. The dots are one station's; read the shape,
 not the values — amber against LoTW here means a stored credential nothing has
