@@ -2833,6 +2833,9 @@ export interface Settings {
    * default off: worked on 40m marks B4-on-band for 40m in every mode. */
   b4MatchMode?: boolean
   dataModesPlainSsb: boolean
+  /** Hold the FM DATA submode for as long as the SSTV receiver is running, rather than only
+   * around a send. Per radio (flat mirror of the active radio). Off by default. */
+  sstvHoldDataSubmode: boolean
   /** Antenna rotator: rotctld daemon `host:port` (empty = no rotator). */
   /** Integrated rotator: Hamlib rotator model # (0 = none) + serial port +
    * baud — Nexus launches the bundled rotctld itself, like the rig. */
@@ -3369,6 +3372,13 @@ export interface RadioProfile {
    * the MIC, so the radio transmits with no RF. Correct only when the audio reaches the mic path
    * (an interface wired into the mic jack). RTTY-FSK is unaffected. */
   dataModesPlainSsb: boolean
+  /** Hold the FM DATA submode (FM-D / PKTFM) for as long as the SSTV receiver is running,
+   * instead of only while an image is queued or on the air. Per radio. Off by default.
+   *
+   * ⚠️ The receiver stays armed after you leave the SSTV view, so with this on an FM VOICE
+   * call made without stopping it first is commanded in the data submode and modulates from
+   * the data port, not the microphone. */
+  sstvHoldDataSubmode: boolean
   audioIn: string
   audioOut: string
   txLevel: number

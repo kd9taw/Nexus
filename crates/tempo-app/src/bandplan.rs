@@ -123,16 +123,45 @@ pub fn ft8_band_plan() -> Vec<BandChannel> {
         // `models/FrequencyList.cpp` ships NO 5 MHz row at all, so this value is ours.
         // 5.3715 is the USB dial for the US 60 m channel centred on 5373.0 kHz
         // (suppressed-carrier dial = centre − 1.5 kHz), operator's choice 2026-08-05.
-        // 60 m is CHANNELISED in the US and several other administrations and the channels
-        // differ country to country — an operator outside the US must check their own plan.
+        //
+        // ⭐ #175 SAID THIS TUNES THE WRONG FREQUENCY, AND THE ANSWER IS "NOT ANY MORE".
+        // Researched 2026-09-07 against ARRL "60 Meter Band" (arrl.org/60-meter-band), "60M
+        // Channel Allocation" (arrl.org/60m-channel-allocation) and the ARRL news item "New
+        // 60-Meter Frequencies Available as of February 13"; all three agree. An FCC Report &
+        // Order of December 2025 took effect 0000 EST on 2026-02-13 and split US 60 m in two:
+        // FOUR channels survive at 100 W ERP (centres 5332.0 / 5348.0 / 5373.0 / 5405.0 kHz,
+        // USB dial = centre − 1.5 kHz), and a new 15 kHz segment 5351.5–5366.5 kHz is open to
+        // General and above at 9.15 W ERP (15 W EIRP), 2.8 kHz max. The 5358.5 kHz channel —
+        // the one 5.357 dialled, and where 60 m FT8 lived worldwide — was ELIMINATED as a
+        // channel and folded into the low-power segment.
+        //
+        // So when the report was filed, 5.3715 was the wrong dial and 5.357 was the right one.
+        // Today neither is right for everyone, and the two answers differ by REGION and by
+        // POWER, which is why this stays one row rather than becoming a guess:
+        //   5.3715 — US channel, 100 W ERP, and where US FT8 moved to keep that power after the
+        //            change (w3pie.org, 2026-02-13, read 2026-09-07). US-ONLY: most of the world
+        //            has no allocation at 5373 at all.
+        //   5.357  — inside the WRC-15 segment, which is the allocation most of the world has,
+        //            so it is where the DX is — but 9.15 W ERP for a US station.
+        //
+        // IT STAYS 5.3715. A band button is a TRANSMIT decision, and moving it to 5.357 would
+        // drop a US operator's legal ceiling by roughly 10 dB with nothing on screen saying so —
+        // Nexus cannot know their antenna gain, so it cannot enforce the lower limit either. The
+        // note below states the choice instead of hiding it, and 5.357 is one click away as a
+        // Memories preset (`ui/src/features/packs.ts`, shipped 1.10.3 for this same report).
+        // ⚠️ Do NOT "fix" this to 5.357 without re-reading those sources: on a US channel the
+        // Report & Order also wants the emission CENTRED on the channel centre, i.e. 1500 Hz
+        // audio, which is a real constraint on how FT8 is operated here and a separate question.
         ch(
             "60m",
             "HF",
             5.3715,
             "USB",
             "60 m · FT8",
-            "US 60 m channel at 5373.0 kHz centre (dial = centre - 1.5 kHz); 60 m is channelised \
-             and the channels differ by country - check your own band plan",
+            "US 60 m channel at 5373.0 kHz centre (dial = centre - 1.5 kHz), 100 W ERP - since \
+             13 Feb 2026 this is where US FT8 runs. Outside the US, and for QRP, use 5.357 in \
+             the worldwide 5351.5-5366.5 kHz segment instead (9.15 W ERP): it is a Memories \
+             preset. 60 m differs country to country - check your own band plan",
         ),
         ch("40m", "HF", 7.074, "USB", "40 m · FT8", n),
         ch("30m", "HF", 10.136, "USB", "30 m · FT8", n),

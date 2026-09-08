@@ -3075,6 +3075,10 @@ export default function App() {
               needScopes={needScopes}
               selectedCall={activePeer}
               onSelect={handleSelect}
+              // #204: F4 / Clear has to reach the callsign card, and half of what the card
+              // reads is BACKEND state. `handleMapSelect` already round-trips a null through
+              // `select_peer` — reuse it rather than adding a second deselect path.
+              onClearSelection={() => handleMapSelect(null)}
               layoutMode={operateLayout}
               onLayoutMode={handleOperateLayout}
               panels={operatePanels}

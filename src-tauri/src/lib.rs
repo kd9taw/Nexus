@@ -1290,6 +1290,24 @@ fn sanitize_profile(s: &str) -> Option<String> {
 /// whose config dir is plain `tempo` — byte-identical to the pre-profile layout, so a single
 /// instance is unaffected. Two instances get separate config by launching with distinct
 /// profiles; that is what keeps them from clobbering each other's settings/journals.
+///
+/// ⚠️ `--profile` IS THE ONLY ARGUMENT NEXUS PARSES, AND THAT IS DELIBERATE. A reply on #101
+/// mentioned a `--debug` flag; none exists, and one was considered and declined on 2026-09-07.
+/// The reasons, so the next reader does not add it on the strength of that reply:
+///
+/// * The extra-detail tier already has a switch — Settings ▸ Logging & Connectors ▸ "Extra
+///   detail in the diagnostic log" — and it applies LIVE, with no restart. Whatever is being
+///   chased is usually happening right now, so a flag that only takes effect on the next launch
+///   is the worse instrument, not the better one.
+/// * The case a launch flag would uniquely cover — a fault that kills the app before Settings
+///   is reachable — is already covered: the BASE diagnostic log runs from the first moments of
+///   startup and cannot be turned off. The extra tier adds CAT traffic and per-period decode
+///   counts, which need a running session to produce anything at all.
+/// * A second way to set one piece of state needs a precedence rule against the persisted one,
+///   and that rule is a bug surface with no covered case behind it.
+///
+/// `--profile` earns its place on the one test that matters here: it must be read BEFORE the
+/// config directory is chosen, so it cannot be a setting. Debug detail is not in that class.
 fn active_profile() -> Option<&'static str> {
     static PROFILE: OnceLock<Option<String>> = OnceLock::new();
     PROFILE

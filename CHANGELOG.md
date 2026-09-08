@@ -42,7 +42,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backlog that was already active when you turned it on. It works whether or not the map
   window is open.
 
+- **A per-radio switch to hold FM-D while you are receiving SSTV.** Nexus commands the FM data
+  submode (FM-D / DATA-FM) only while a picture is queued or going out, and puts the radio back
+  in plain FM in between — deliberate, because an SSTV send once keyed a data mode into an FM
+  repeater input, but wrong if you park on an FM SSTV calling channel for the evening and expect
+  the rig to stay in FM-D. **Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ▸ "Hold FM-D while SSTV is
+  receiving"**, off by default, set per radio because it depends on how that rig is cabled and
+  what you use it for.
+
+  With it on, the radio is held in the data submode for as long as the SSTV receiver is running.
+  **Stop the receiver before you go back to voice** — the receiver keeps running after you leave
+  the SSTV screen, and while it does, transmit audio comes from the data port and your microphone
+  modulates nothing. The switch's own hint says so.
+
+  ⚠️ **NEEDS-BENCH on a real IC-9700.** What is proven here is the mode word Nexus commands — and
+  it is not a new word; it is the same one an SSTV send already uses. What is not proven is a
+  radio's on-air behaviour when it is *held* in FM-D between pictures. (#130)
+
+  This one was reported as already fixed, twice. It was not — see below.
+
 ### Fixed
+
+- **Nothing could clear the callsign card in the FT cockpit, and F4 did nothing while you were
+  typing.** Two separate faults behind one report. The card follows whichever station you have
+  open plus whoever the sequencer is working, and no control anywhere put it back to empty — the
+  answer that said F4 did it was wrong, because F4 cleared the DX Call and Grid boxes in the Tx
+  Messages panel, which is a different block. F4 now clears both, and the card comes back on its
+  own the moment it would be about a different station. Separately, F4 was disarmed whenever the
+  cursor sat in a text box, which is exactly when you reach for it; it now fires while you type,
+  the way WSJT-X does. Alt+F4 still closes the window and clears nothing. (#204)
+
+- **The 60 m FT8 dial, and what changed underneath it.** The band button tunes 5.3715, the US
+  channel centred on 5373.0 kHz, and that was reported as the wrong frequency — which it was when
+  the report was filed, because 60 m FT8 lived on 5.357 worldwide. It is not wrong now: on
+  13 February 2026 the FCC split US 60 m into four 100 W ERP channels (5332.0 / 5348.0 / 5373.0 /
+  5405.0 kHz) plus the worldwide 5351.5–5366.5 kHz segment at 9.15 W ERP, and eliminated the
+  5358.5 kHz channel that 5.357 dialled. US FT8 moved to 5.3715 to keep the power.
+
+  So the band button stays where it is — moving it to 5.357 would drop a US station's legal
+  ceiling by about 10 dB with nothing on screen saying so — and the entry now says which dial is
+  which, and why. **Outside the US, and for QRP, 5.357 is still the one you want**, and it is a
+  Memories preset alongside it. A 60 m spot on *either* dial is now recognised as FT8 rather than
+  a bare "Digital", which it was not before. The 60 m notes on the Memories presets were also
+  wrong after the rule change — they described a 100 W channel at 5358.5 that no longer exists —
+  and are corrected. (#175)
+
+- **The diagnostic log's "Always on" now says why, and there is no `--debug`.** A reply implied
+  the log could be switched off and that a `--debug` command-line flag existed. Neither is true,
+  and neither is going to be: a log you can turn off is missing on exactly the launch that needed
+  it, and the switch would live in a settings file a failing launch may never reach. The Settings
+  entry now states that rather than leaving "Always on" as a bare assertion, and the
+  troubleshooting guide names the one switch that *is* yours — Settings ▸ Logging & Connectors ▸
+  "Extra detail in the diagnostic log", which applies live with no restart — and states plainly
+  that `--profile` is the only argument Nexus takes. (#101)
 
 - **The satellite catalog was publishing years-old orbits for birds that had stopped being
   tracked.** The mirror took the freshest elements it could find for each active bird — but for a

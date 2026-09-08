@@ -102,14 +102,21 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
-      # `cargo fmt --all` stops at the workspace boundary, and src-tauri declares
-      # its OWN `[workspace]` table — so the step above has never seen it and no
-      # other job formats it either. Measured the day this gate was added: 21
-      # drifted regions in src-tauri/src/lib.rs, none of which any check could
-      # ever have reported. Formatting has to be gated to stay swept; the sweep
-      # itself landed as its own commit so it could not contaminate a real diff.
+      # `cargo fmt --all` stops at the workspace boundary and src-tauri declares its
+      # OWN `[workspace]` table, so the step above has never reached it and no other
+      # job formats it either. Measured 2026-09-07, independently by two branches
+      # that both found the same number: the root step exited 0 while
+      # src-tauri/src/lib.rs carried 21 drifted regions no check could report. That
+      # also made `cargo fmt` unsafe to run in that directory, because it swept ~20
+      # unrelated reformats into whatever commit happened to be open. The sweep
+      # landed as its own commit so it could not contaminate a real diff.
+      #
+      # `--all` rather than the bare form: src-tauri is a single-package workspace
+      # today, so the two are equivalent — but if a member is ever added, the bare
+      # form silently stops covering it. Cheap and fast, so it sits beside the root
+      # fmt step: a formatting failure should not wait for a build.
       - name: cargo fmt --check src-tauri
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
 
       - name: cargo test --workspace
         run: cargo test --workspace

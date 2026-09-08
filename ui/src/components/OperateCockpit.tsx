@@ -145,6 +145,15 @@ interface Props {
   selectedCall: string | null
   /** Select (open) a station from the Roster layout (single click). */
   onSelect: (call: string) => void
+  /** Deselect — clear the app-wide selected station (App: `selectPeer(null)`).
+   *
+   * #204 (KR4FQG). The callsign card reads `selectedCall || snap.qso.dxcall`, and BOTH are
+   * owned outside this component: `selectedCall` is the backend's `activePeer` and the QSO's
+   * dxcall is the sequencer's. `clearDx` touched neither, so nothing anywhere put the card
+   * back to empty — the reporter was told F4 did it and F4 could not. This is the half of the
+   * clear this component cannot do for itself; the other half is local (`dismissedCall`).
+   * Optional so a host that has no selection to clear (the detached panel) can omit it. */
+  onClearSelection?: () => void
   /** Layout: 'classic' (WSJT-X — Band Activity dominant + compact roster aside) or
    * 'roster' (GridTracker — the full sortable Call Roster dominant). */
   layoutMode: 'classic' | 'roster'
@@ -341,6 +350,7 @@ export function OperateCockpit({
   needScopes,
   selectedCall,
   onSelect,
+  onClearSelection,
   layoutMode,
   onLayoutMode,
   onPopOut,
@@ -521,6 +531,15 @@ export function OperateCockpit({
   const tx6Edited = useRef(false)
   // Locally picked "next" row (0-based) until qso.txNow confirms one.
   const [localNext, setLocalNext] = useState<number | null>(null)
+  // #204 — THE CALLSIGN CARD'S DISMISSAL. The call the operator last cleared, so the card can
+  // go back to empty without this component pretending to own either of the two values it is
+  // derived from. It is scoped to a CALL rather than a boolean on purpose: a plain "hidden"
+  // flag would have to be reset by hand from every path that changes who the card is about,
+  // and the one that would get missed is the CQ auto-answer, where a QSO starts with no click
+  // anywhere. Comparing against the current call needs no reset at all.
+  const [dismissedCall, setDismissedCall] = useState<string | null>(null)
+  // The card's current subject, readable from `clearDx` — which is created once, like `keyRef`.
+  const recallCallRef = useRef<string | null>(null)
   // The blocked-callsigns set (Alt-double-click a decode/roster row). PERSISTED and
   // engine-honored when App wires `blockedCalls`/`onToggleBlocked` (the auto-responder
   // never answers a listed call); the session-only useState survives as the fallback for
@@ -627,7 +646,15 @@ export function OperateCockpit({
     // re-reads this field on every Tx6 fire, so keeping the text IS keeping the direction —
     // and clearing it back to a plain CQ stays one edit away.
     setLocalNext(null)
-  }, [])
+    // #204 — AND THE CALLSIGN CARD, which is the half that was missing. Two owners, so two
+    // moves: `selectedCall` is backend state and rounds through the app (`selectPeer(null)`),
+    // while the sequencer's `qso.dxcall` is NOT ours to clear — a QSO is not cancelled by
+    // tidying the screen — so the card is dismissed for THAT call and comes back by itself the
+    // moment the card would be about a different station. `recallCallRef` carries the value
+    // because this callback is created once, the same way `keyRef` does for the key handler.
+    setDismissedCall(recallCallRef.current)
+    onClearSelection?.()
+  }, [onClearSelection])
 
   // Stock "Clear DX call and grid after logging": App bumps the tick when a
   // QSO is logged with the option on. Skip the mount tick.
@@ -714,6 +741,14 @@ export function OperateCockpit({
     setDxCall(up)
   }
 
+  /** Roster single-click. Wraps the host's `onSelect` so that re-opening the SAME station the
+   * operator just cleared brings its card back — without this, the dismissal would outlive the
+   * click that contradicts it and the card would stay stubbornly blank. */
+  const handleSelectStation = (call: string) => {
+    setDismissedCall(null)
+    onSelect(call)
+  }
+
   const handleToggleIgnore = (call: string) => {
     if (onToggleBlocked) onToggleBlocked(call)
     else setSessionIgnored((prev) => toggleIgnored(prev, call))
@@ -721,9 +756,9 @@ export function OperateCockpit({
   const handleSetRx = (hz: number) => onTune(hz, 'rx')
 
   // Cockpit keyboard (stock WSJT-X): Esc = halt TX, F4 = clear DX, F6 = re-decode,
-  // Alt+1…6 = the Tx buttons. Window-level, active-view only, and never while
-  // typing in an input/textarea. Handlers ride a ref so the listener binds once
-  // per activation without re-subscribing on every keystroke of state.
+  // Alt+1…6 = the Tx buttons. Window-level and active-view only. F6 and Alt+1–6 stay behind
+  // the typing guard; Esc and F4 are hoisted above it. Handlers ride a ref so the listener
+  // binds once per activation without re-subscribing on every keystroke of state.
   const keyRef = useRef({ doTx, clearDx, halt: onHaltTx, redecode: handleRedecode })
   keyRef.current = { doTx, clearDx, halt: onHaltTx, redecode: handleRedecode }
   useEffect(() => {
@@ -737,14 +772,22 @@ export function OperateCockpit({
         keyRef.current.halt()
         return
       }
-      const t = e.target as HTMLElement | null
-      const tag = t?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
-      if (e.key === 'F4') {
+      // F4 IS ALSO ABOVE THE GUARD (#204). WSJT-X handles it in `MainWindow::keyPressEvent`
+      // (mainwindow.cpp), so a focused QLineEdit never swallows it — an operator half-way
+      // through typing a call presses F4 and the fields clear. Ours returned early on
+      // INPUT/TEXTAREA/SELECT, so F4 did nothing in exactly the moment it is reached for, and
+      // the reporter's "pressed F4 and nothing happened" was the guard, not the wiring.
+      // WSJT-X parity is the goal, so it moves up beside Escape rather than gaining a second
+      // shortcut. Modifier-free only: Alt+F4 is the platform's close-window gesture and must
+      // never be answered here — hoisted, it would otherwise clear the DX fields on the way out.
+      if (e.key === 'F4' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
         e.preventDefault()
         keyRef.current.clearDx()
         return
       }
+      const t = e.target as HTMLElement | null
+      const tag = t?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
       if (e.key === 'F6') {
         e.preventDefault()
         keyRef.current.redecode()
@@ -823,6 +866,12 @@ export function OperateCockpit({
   // Same field the roster highlights as `workingCall`, so the two can never disagree
   // about who is being worked.
   const recallCall = selectedCall || snap.qso?.dxcall || null
+  // #204 — what F4 / Clear actually empties. `dismissedCall` holds the call the operator
+  // dismissed; the card reappears by itself as soon as `recallCall` names a DIFFERENT station,
+  // so a clear never outlives the thing it cleared. The ref exists so `clearDx` (created once)
+  // can read the current value without taking it as a dependency.
+  recallCallRef.current = recallCall
+  const shownRecallCall = recallCall && recallCall === dismissedCall ? null : recallCall
   // The decode panes' hide-filter exemption: the station the sequencer is actively working,
   // and nobody after Done — the same "engaged" line the alerts draw.
   const partnerCall = engagedInQso({
@@ -831,8 +880,8 @@ export function OperateCockpit({
   })
     ? (snap.qso?.dxcall ?? null)
     : null
-  const recallCard = recallCall ? (
-    <OperateRecall snap={snap} call={recallCall} mode={tier} onOpenLog={onOpenLogbook} />
+  const recallCard = shownRecallCall ? (
+    <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} />
   ) : null
 
   return (
@@ -1281,7 +1330,7 @@ export function OperateCockpit({
                     // peer and is null throughout an FT8 session, so the roster had nothing to
                     // highlight and #16 was reported.
                     workingCall={snap.qso?.dxcall ?? null}
-                    onSelect={onSelect}
+                    onSelect={handleSelectStation}
                     onCall={onCall}
                     ignoredCalls={ignored}
                     onToggleIgnore={handleToggleIgnore}

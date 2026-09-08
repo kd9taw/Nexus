@@ -6718,7 +6718,8 @@ impl Engine {
 
     /// The FM-class word to command right now: the FM **data** submode `PKTFM` (Hamlib's
     /// `RIG_MODE_PKTFM` → Yaesu FM-D, Icom FM-D) while an SSTV image is queued or in flight,
-    /// plain `FM` otherwise.
+    /// plain `FM` otherwise — or, on a radio configured for it, for the whole time the SSTV
+    /// receiver is running ([`Self::sstv_holds_data_submode`], default off, #130).
     ///
     /// ⭐ THE ON-AIR BUG THIS EXISTS FOR (FTDX10 + IC-9700 owner, 2026-08-12): *"when I select
     /// preset frequency 144.500 for SSTV it switches to FM, but as soon as I start TXing it
@@ -6739,11 +6740,37 @@ impl Engine {
     /// `plain_ssb_if_configured` keeps the per-radio mic-jack opt-out working: it maps `PKTFM`
     /// back to plain `FM` exactly as it maps `PKTUSB` to `USB`.
     fn fm_mode_word(&self) -> String {
-        if self.sstv_in_flight() {
+        if self.sstv_in_flight() || self.sstv_holds_data_submode() {
             self.settings.plain_ssb_if_configured("PKTFM")
         } else {
             "FM".to_string()
         }
+    }
+
+    /// Is this radio configured to HOLD the FM data submode for the whole time the SSTV
+    /// receiver is running, rather than only around a send? (#130, PA3GYQ via the operator.)
+    ///
+    /// The default is `false` and the answer is then exactly today's: `PKTFM` around an image,
+    /// plain `FM` otherwise. The reply that told the reporter this shipped in 1.10.2 was wrong
+    /// — the switch did not exist. It does now, per radio
+    /// ([`crate::settings::RadioProfile::sstv_hold_data_submode`]), because whether holding
+    /// FM-D is right is a property of how one rig is cabled and operated.
+    ///
+    /// `sstv_armed` is the gate, and it is the operator's own declaration: the receiver starts
+    /// when they open the SSTV view and stops when they press Stop. Nothing else here can key
+    /// anything — this only chooses the mode WORD the radio loop commands.
+    ///
+    /// ⚠️ NEEDS-BENCH (no IC-9700 on this machine). The word is not a guess — `PKTFM` is the
+    /// same word this function already commands around a send, and `plain_ssb_if_configured`
+    /// already maps it — so what is new is only WHEN it is commanded. What is unproven is the
+    /// on-air behaviour of a rig held in FM-D between pictures.
+    ///
+    /// ⚠️ AND THE COST: the receiver outlives the view, so with this on an FM VOICE call made
+    /// without stopping it first is commanded in FM-D and modulates from the data port, not the
+    /// microphone. That is why it is opt-in, per radio, and why the switch's own hint says to
+    /// stop the receiver before going back to voice.
+    fn sstv_holds_data_submode(&self) -> bool {
+        self.settings.sstv_hold_data_submode && self.sstv_armed
     }
 
     /// Is the PHONE section's mode class FM at `band` / `dial_mhz`? THE one predicate both
@@ -21049,6 +21076,78 @@ mod tests {
         assert_eq!(e.rig_mode_effective(), "FM", "idle again → plain FM");
     }
 
+    /// #130 (PA3GYQ, via the operator) — THE SWITCH THAT WAS SAID TO HAVE SHIPPED AND HAD NOT.
+    ///
+    /// The reply on that thread told the reporter the IC-9700 dropping out of FM-D was fixed in
+    /// 1.10.2. It was not, and it was not a bug: the revert above is deliberate. What was
+    /// missing is the per-radio opt-in to HOLD the data submode for an operator who parks on an
+    /// FM SSTV channel for the evening rather than sending one picture and leaving.
+    ///
+    /// Four states, because a switch proven in one direction is half a test — and the first is
+    /// the one that must not move for the 99 % who never touch it.
+    ///
+    /// ⚠️ NEEDS-BENCH: this pins the mode WORD Nexus commands, which is all that can be pinned
+    /// without a rig. `PKTFM` is not a new word — the neighbour above already commands it — so
+    /// what is unproven is a radio's behaviour when it is HELD there between pictures.
+    #[test]
+    fn the_fm_data_submode_is_held_while_sstv_receives_only_when_this_radio_asks_for_it() {
+        // (1) DEFAULT OFF, receiver armed: today's answer, unchanged. This is the control —
+        // without it the test below would pass on an engine that simply always held PKTFM.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.sstv_tune(144.500, "2m", "FM");
+        e.set_sstv_armed(true);
+        assert!(!e.settings.sstv_hold_data_submode, "default must stay off");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "off by default: an armed receiver alone changes nothing, so voice PTT still keys \
+             the mic between pictures"
+        );
+
+        // (2) SWITCH ON, receiver NOT armed: the switch alone holds nothing. The operator is
+        // not working SSTV, so neither is the radio.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.sstv_tune(144.500, "2m", "FM");
+        assert!(!e.sstv_armed(), "precondition: the receiver is not running");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "the setting is gated on the receiver actually running"
+        );
+
+        // (3) SWITCH ON + receiver armed: the reported ask. FM-D between pictures, with no
+        // image queued and none in flight.
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTFM",
+            "held in the FM data submode for as long as the receiver runs (#130)"
+        );
+        // …and Stop hands the radio back, which is the operator's off-ramp before voice.
+        e.set_sstv_armed(false);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "stopping the receiver ends the hold — plain FM, mic path, same as before"
+        );
+
+        // (4) The mic-jack opt-out reaches the HELD word exactly as it reaches the sent one.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.settings.data_modes_plain_ssb = true;
+        e.sstv_tune(144.500, "2m", "FM");
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "a mic-jack rig is held in plain FM, never PKTFM"
+        );
+    }
+
     /// The other two ways the Phone section can be in FM — neither of which arms `fm_channel`,
     /// so neither was reachable through the arm above. Both were PKTUSB on the air before the
     /// shared predicate existed: the tester's own "my custom-mode frequency (local FM
@@ -32983,6 +33082,7 @@ mod tests {
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: p.icom_data_mode,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
+            sstv_hold_data_submode: p.sstv_hold_data_submode,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
