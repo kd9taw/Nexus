@@ -484,6 +484,9 @@ pub struct Js8Armed {
     pub relay: bool,
     pub hb_ack: bool,
     pub hb: bool,
+    /// The repeating CQ — armed only when the session switch, the TX latch and a clear idle
+    /// watchdog all agree, exactly like `hb`.
+    pub cq: bool,
 }
 
 /// One activity-pane row: a decoded frame (or a reassembled multi-frame message).
@@ -544,6 +547,12 @@ pub struct Js8State {
     pub hb_on: bool,
     pub hb_next_at_ms: Option<u64>,
     pub hb_interval_min: u16,
+    /// The repeating CQ: session-only (never persisted), its next fire time, and the
+    /// persisted interval that decides whether the cockpit's CQ button is a one-shot
+    /// (0) or JS8Call's checkable auto-repeat with a live countdown (> 0).
+    pub cq_on: bool,
+    pub cq_next_at_ms: Option<u64>,
+    pub cq_interval_min: u16,
     /// The persisted switches (the second act), echoed so the chips render engine truth.
     pub autoreply: bool,
     pub relay: bool,
@@ -2642,6 +2651,9 @@ mod tests {
             hb_on: false,
             hb_next_at_ms: None,
             hb_interval_min: 0,
+            cq_on: true,
+            cq_next_at_ms: Some(9_000),
+            cq_interval_min: 5,
             autoreply: true,
             relay: true,
             hb_ack: false,
@@ -2650,6 +2662,7 @@ mod tests {
                 relay: false,
                 hb_ack: false,
                 hb: false,
+                cq: false,
             },
             idle_minutes: 3,
             idle_limit_min: 60,
@@ -2687,7 +2700,10 @@ mod tests {
             "\"hbNextAtMs\":null",
             "\"hbIntervalMin\":0",
             "\"hbAck\":false",
-            "\"armed\":{\"autoreply\":false,\"relay\":false,\"hbAck\":false,\"hb\":false}",
+            "\"armed\":{\"autoreply\":false,\"relay\":false,\"hbAck\":false,\"hb\":false,\"cq\":false}",
+            "\"cqOn\":true",
+            "\"cqNextAtMs\":9000",
+            "\"cqIntervalMin\":5",
             "\"idleMinutes\":3",
             "\"idleLimitMin\":60",
             "\"idleTripped\":false",

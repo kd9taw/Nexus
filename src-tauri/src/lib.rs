@@ -10311,6 +10311,21 @@ fn js8_arm(
     Ok(eng.js8_state())
 }
 
+/// Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant to send). SESSION-ONLY and
+/// never written to disk, exactly like the HB toggle — a relaunch can never come back calling
+/// CQ. The repeat INTERVAL is the persisted half and lives in Settings (`js8CqIntervalMin`).
+/// Arming keys nothing: the TX latch is the first act and is re-read at plan time every slot.
+#[tauri::command(async)]
+fn js8_cq_repeat(
+    state: State<'_, SharedEngine>,
+    on: bool,
+    idx: u8,
+) -> Result<tempo_app::dto::Js8State, String> {
+    let mut eng = engine_lock(&state);
+    eng.js8_set_cq_repeat(on, idx)?;
+    Ok(eng.js8_state())
+}
+
 /// Cancel the pending automatic reply (safe no-op when none).
 #[tauri::command(async)]
 fn js8_cancel(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Js8State, String> {
@@ -20738,6 +20753,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             js8_send_command,
             js8_call_cq,
             js8_arm,
+            js8_cq_repeat,
             js8_cancel,
             js8_drop_queue,
             js8_inbox_mark,

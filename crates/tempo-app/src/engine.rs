@@ -4115,6 +4115,7 @@ impl Engine {
             relay: false,
             hb_ack: false,
             hb_interval_min: 0,
+            cq_interval_min: 0,
             idle_watchdog_min: 0,
             groups: Vec::new(),
             info: String::new(),
@@ -34324,6 +34325,260 @@ mod tests {
         e.set_mode("qso-monitor")
             .expect("a passive spec is always accepted");
         assert!(e.js8_state().queue.is_empty() && !e.js8_hb_on);
+    }
+
+    // ===== the auto-repeating CQ / heartbeat (JS8Call's checkable CQ & HB buttons) =====
+
+    /// THE TWO-ACT ARM, repeat edition. The session CQ-repeat switch is only the SECOND act:
+    /// with the TX latch down, an armed repeat at a 1-minute interval keys NOTHING however
+    /// many ticks and slots go by, and books no own-TX row. (`js8_cq_repeat_armed_and_latched_
+    /// keys_the_cq` below is the positive control — this is not passing because nothing ever
+    /// keys.)
+    #[test]
+    fn js8_cq_repeat_without_the_tx_latch_keys_nothing() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.js8_set_cq_repeat(true, 0).expect("the session CQ toggle");
+        assert!(!e.tx_enabled(), "the FIRST act was never given");
+        let st = e.js8_state();
+        assert!(st.cq_on, "the switch is on…");
+        assert!(!st.armed.cq, "…and reports NOT armed, because the latch is down");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        for min in 1..=10u64 {
+            e.js8_tick(base + min * 60_000);
+            for s in s0 + min * 4..s0 + min * 4 + 4 {
+                assert!(e.poll_tx(s).is_empty(), "repeat armed, latch down: slot {s} keyed");
+            }
+        }
+        assert!(
+            !e.snapshot().recent_decodes.iter().any(|d| d.mine),
+            "nothing was booked as an own-TX row"
+        );
+    }
+
+    /// The positive control for the pair above, and the feature itself: with BOTH acts
+    /// present a scheduled CQ keys — on the operator's own TX offset (a CQ is not a
+    /// heartbeat, so it does not move into the HB sub-band), as `Origin::CqRepeat`, and
+    /// riding `plan.beacon`.
+    #[test]
+    fn js8_cq_repeat_with_both_acts_keys_one_cq_on_the_operators_offset() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("the session CQ toggle");
+        assert!(e.js8_state().armed.cq, "both acts present → armed");
+        // The once-a-second service tick is what moves a due CQ into the outbox.
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+        assert_eq!(
+            e.js8_state().queue.first().map(|q| q.origin),
+            Some(::js8::Origin::CqRepeat),
+            "a SCHEDULED CQ is an automatic origin, never Operator"
+        );
+        let plan = e.plan_tx(js8_slot_now() + 1).expect("the scheduled CQ plans an over");
+        assert!(plan.beacon, "a repeating CQ rides plan.beacon");
+        let TxWaveform::Js8 { f0, .. } = &plan.waveform else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert_eq!(*f0, 1500.0, "a CQ goes out on the operator's offset");
+        assert!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .any(|d| d.mine && d.message.contains("CQ")),
+            "own-TX row booked"
+        );
+    }
+
+    /// THE INVARIANT THIS FEATURE COULD HAVE BROKEN: a repeat loop must never outlive the
+    /// idle watchdog. A scheduled CQ is `Origin::CqRepeat`, so `Station::note_tx_done` does
+    /// NOT reset the idle baseline for it — had it been queued as `Origin::Operator` (the
+    /// one-shot's origin) every CQ would have reset the very clock meant to stop it and an
+    /// unattended station would call CQ forever. Positive control: CQs really did go out.
+    #[test]
+    fn the_idle_watchdog_stops_a_repeating_cq_and_heartbeat() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 5;
+        e.settings.js8_hb_interval_min = 5;
+        e.settings.js8_idle_watchdog_min = 60;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        let mut keyed = 0;
+        for min in 1..=61u64 {
+            e.js8_tick(base + min * 60_000);
+            if !e.poll_tx(s0 + min).is_empty() {
+                keyed += 1;
+            }
+        }
+        assert!(keyed >= 10, "control: the repeats really ran ({keyed} overs)");
+        let st = e.js8_state();
+        assert!(st.idle_tripped, "61 idle minutes trip the 60-minute watchdog");
+        assert!(!st.cq_on && st.cq_next_at_ms.is_none(), "the trip stops the CQ repeat");
+        assert!(!st.hb_on, "…and the heartbeat, as it always did");
+        assert!(!st.armed.cq && !st.armed.hb);
+        assert!(e.tx_enabled(), "tx_enabled untouched (JS8Call semantics)");
+        for s in s0 + 100..s0 + 110 {
+            assert!(e.poll_tx(s).is_empty(), "tripped: slot {s} must not key");
+        }
+    }
+
+    /// HALT IS TOTAL for the repeat schedule too (spec invariant 7), through all three
+    /// clearing paths — Stop TX, leaving the tier, and a mode change — and re-arming the
+    /// latch afterwards must not resurrect it.
+    #[test]
+    fn halt_tier_change_and_mode_change_each_cancel_the_cq_repeat() {
+        let arm = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.settings.js8_cq_interval_min = 1;
+            e.js8_apply_station_config();
+            e.js8_enter();
+            e.set_tx_enabled(true);
+            e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+            e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+            assert!(
+                e.js8_state().cq_on && !e.js8_state().queue.is_empty(),
+                "precondition: armed, with a scheduled CQ waiting"
+            );
+            e
+        };
+
+        let mut e = arm();
+        e.halt_tx();
+        let st = e.js8_state();
+        assert!(!st.cq_on && st.cq_next_at_ms.is_none(), "Stop TX cancels the schedule");
+        assert!(st.queue.is_empty(), "…and drops the frame it had already queued");
+        e.set_tx_enabled(true);
+        for s in js8_slot_now() + 1..js8_slot_now() + 6 {
+            assert!(e.poll_tx(s).is_empty(), "re-arming after a halt keys nothing (slot {s})");
+        }
+
+        let mut e = arm();
+        e.set_tier(Tier::Ft8);
+        assert!(!e.js8_station.cq_on(), "leaving the tier cancels the schedule");
+        assert!(e.js8_state().queue.is_empty());
+
+        let mut e = arm();
+        e.set_mode("qso-monitor").expect("a passive spec is always accepted");
+        assert!(!e.js8_station.cq_on(), "a mode change cancels the schedule");
+        assert!(e.js8_state().queue.is_empty());
+    }
+
+    /// A SCHEDULE, never a queue that can burst — at the engine, not just the station. Ten
+    /// minutes of a 1-minute repeat, ticked and polled every simulated minute, key ONE over
+    /// per period and never two in a period; and a tick that jumps a whole hour produces one
+    /// CQ, not sixty.
+    #[test]
+    fn a_repeating_cq_never_bursts_at_the_engine() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.settings.js8_idle_watchdog_min = 0; // isolate: this test is about bursting
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        for min in 1..=10u64 {
+            e.js8_tick(base + min * 60_000);
+            assert!(
+                e.js8_state().queue.len() <= 1,
+                "minute {min}: the schedule queued more than one CQ"
+            );
+            assert!(!e.poll_tx(s0 + min * 2).is_empty(), "minute {min}: the CQ goes out");
+            assert!(
+                e.poll_tx(s0 + min * 2).is_empty(),
+                "minute {min}: a second poll in the same period must not key again"
+            );
+            assert!(e.js8_state().queue.is_empty(), "minute {min}: the outbox drained");
+        }
+        // An hour in one jump: one CQ, and the schedule re-bases on NOW.
+        e.js8_tick(base + 70 * 60_000);
+        assert_eq!(e.js8_state().queue.len(), 1, "a missed hour is skipped, never batched");
+        while !e.poll_tx(js8_slot_now() + 40).is_empty() {}
+        // A BUSY OUTBOX IS NEVER STACKED ON. While a multi-frame operator message drains,
+        // the schedule waits rather than queueing CQs behind it — otherwise ten quiet
+        // minutes on a long message would come due all at once the moment it finished.
+        e.js8_send(
+            None,
+            "A LONG ENOUGH MESSAGE TO NEED SEVERAL FRAMES AT NORMAL SPEED".to_string(),
+        )
+        .expect("queues");
+        let frames = e.js8_state().queue.len();
+        assert!(frames >= 4, "control: the operator message really is multi-frame");
+        for min in 71..=80u64 {
+            e.js8_tick(base + min * 60_000);
+            assert!(
+                !e.js8_state()
+                    .queue
+                    .iter()
+                    .any(|q| q.origin == ::js8::Origin::CqRepeat),
+                "minute {min}: a CQ was stacked behind the draining operator message"
+            );
+        }
+        assert_eq!(
+            e.js8_state().queue.len(),
+            frames,
+            "the outbox grew while it was busy"
+        );
+    }
+
+    /// JS8Call's `resetCQTimer(stop = true)`: a directed message addressed to me STOPS the
+    /// repeating CQ (somebody answered), while the heartbeat schedule is only pushed out.
+    #[test]
+    fn a_directed_reply_stops_the_repeating_cq_but_not_the_heartbeat() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 5;
+        e.settings.js8_hb_interval_min = 5;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        assert!(e.js8_state().cq_on, "precondition");
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
+        let st = e.js8_state();
+        assert!(!st.cq_on, "a station answering my CQ stops the repeat");
+        assert!(st.hb_on, "the heartbeat keeps beaconing");
+    }
+
+    /// The wall-clock TX watchdog bounds operator/autoreply/relay JS8 traffic and always
+    /// has; the two BEACON-class origins are exempt, or a 6-minute clock would kill a
+    /// 15-minute CQ repeat after its first call. Both directions are checked here, so this
+    /// is not "nothing ever trips".
+    #[test]
+    fn a_repeating_cq_is_exempt_from_the_wall_clock_but_an_operator_send_is_not() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.tx_watchdog_min = 6;
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            !e.poll_tx(js8_slot_now() + 1).is_empty(),
+            "the scheduled CQ keys despite the elapsed wall clock"
+        );
+        assert!(e.tx_enabled() && !e.tx_watchdog, "…and trips nothing");
+        // THE OTHER DIRECTION: an operator send on the same aged clock DOES trip it.
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            e.poll_tx(js8_slot_now() + 2).is_empty(),
+            "control: an operator frame is still bounded by the wall clock"
+        );
+        assert!(e.tx_watchdog && !e.tx_enabled(), "…and the trip is a hard kill");
     }
 
     // ===== B7.7 sender-class control =====

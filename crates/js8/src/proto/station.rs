@@ -88,8 +88,13 @@ fn clamp_str(s: &str, max: usize) -> String {
     s[..n].to_string()
 }
 
-/// Which automatic (or operator) class produced a frame — the gate key B7 uses. CQ counts as
-/// Operator.
+/// Which automatic (or operator) class produced a frame — the gate key B7 uses. A CQ the
+/// operator CLICKS counts as `Operator`; a CQ the repeat schedule produces is `CqRepeat`,
+/// an AUTOMATIC origin. The split is load-bearing, not cosmetic: `note_tx_done` resets the
+/// idle-watchdog baseline for `Operator` alone, so folding a scheduled CQ into `Operator`
+/// would let the repeat loop reset the very watchdog that is meant to stop it — an
+/// unattended station calling CQ forever with no bound. `CqRepeat` is bounded exactly as
+/// `Heartbeat` is: the idle watchdog, which no automatic TX can reset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Origin {
@@ -98,6 +103,7 @@ pub enum Origin {
     HbAck,
     AutoReply,
     Relay,
+    CqRepeat,
 }
 
 /// Where a frame wants to transmit. `HbSubband` is a random free 50 Hz slot, 500..=1000 Hz;
@@ -129,6 +135,10 @@ pub struct StationConfig {
     pub relay: bool,
     pub hb_ack: bool,
     pub hb_interval_min: u16,
+    /// CQ repeat interval in minutes; 0 = on demand (JS8Call `CQInterval`). JS8Call offers
+    /// 1/5/10/15 for CQ — a shorter ladder than the heartbeat's, because a CQ is a call, not
+    /// a beacon (`buildRepeatMenu`'s `isLowInterval`, mainwindow.cpp:6186).
+    pub cq_interval_min: u16,
     pub idle_watchdog_min: u16,
     pub groups: Vec<String>,
     pub info: String,
@@ -147,6 +157,7 @@ impl Default for StationConfig {
             relay: true,
             hb_ack: false,
             hb_interval_min: 0,
+            cq_interval_min: 0,
             idle_watchdog_min: 60,
             groups: Vec::new(),
             info: String::new(),
@@ -284,6 +295,11 @@ pub struct Station {
     next_inbox_id: u32,
     hb_on: bool,
     hb_next_ms: Option<u64>,
+    /// The CQ repeat: session-only, exactly like `hb_on` (never journaled, so the app can
+    /// never launch calling CQ). `cq_idx` is the CQS variant the operator armed it with.
+    cq_on: bool,
+    cq_next_ms: Option<u64>,
+    cq_idx: u8,
     last_activity_ms: u64,
     idle_tripped: bool,
     last_tx_display: Option<String>,
@@ -301,6 +317,9 @@ impl Station {
             next_inbox_id: 1,
             hb_on: false,
             hb_next_ms: None,
+            cq_on: false,
+            cq_next_ms: None,
+            cq_idx: 0,
             last_activity_ms: 0,
             idle_tripped: false,
             last_tx_display: None,
@@ -360,6 +379,10 @@ impl Station {
             // JS8Call resets its idle timer on UI key/mouse activity alone, never on RX
             // (mainwindow.cpp:2987). (No-op at interval 0, the on-demand case.)
             self.bump_hb_schedule(now_ms);
+            // The repeating CQ, by contrast, is STOPPED outright — JS8Call's
+            // `resetAutomaticIntervalTransmissions(stopCQ = true, …)` (mainwindow.cpp:8333,
+            // 8788). Somebody answered the call, so stop calling; a beacon keeps beaconing.
+            self.stop_cq_repeat();
         }
 
         // A directed message with a failed checksum is surfaced, never acted on.
@@ -787,6 +810,24 @@ impl Station {
                 }
             }
         }
+        // CQ repeat schedule — the heartbeat's shape exactly (JS8Call runs both off one
+        // 1 Hz `checkRepeat`, mainwindow.cpp:5718). A SCHEDULE, never a queue: it enqueues
+        // only into an EMPTY outbox with nothing pending, so a slow drain can never let CQs
+        // pile up, and `bump_cq_schedule` re-bases on NOW, so a missed window is skipped
+        // rather than replayed. If a heartbeat took this tick, the CQ simply waits for the
+        // next one — one frame per period is the whole rule.
+        if self.cq_on && self.outbox.is_empty() && self.pending.is_empty() {
+            if let Some(next) = self.cq_next_ms {
+                if now_ms >= next {
+                    let _ = self.enqueue_cq();
+                    if self.cfg.cq_interval_min > 0 {
+                        self.bump_cq_schedule(now_ms);
+                    } else {
+                        self.cq_next_ms = None; // interval 0 = "on demand" = ONCE
+                    }
+                }
+            }
+        }
         actions
     }
 
@@ -796,6 +837,7 @@ impl Station {
         self.cfg.relay = false;
         self.hb_on = false;
         self.hb_next_ms = None;
+        self.stop_cq_repeat();
         self.outbox.clear();
         self.pending.clear();
         actions.push(StationAction::IdleTripped);
@@ -811,6 +853,15 @@ impl Station {
         // The interval-0 "fire once" clear lives in `tick`, right after the heartbeat fires.
         if self.hb_on && self.cfg.hb_interval_min > 0 {
             self.hb_next_ms = Some(now_ms + self.cfg.hb_interval_min as u64 * 60 * 1000);
+        }
+    }
+
+    /// Re-base the CQ repeat on NOW. Deliberately `now + interval`, never
+    /// `previous_deadline + interval`: a window the station slept through is SKIPPED, so a
+    /// suspended laptop or a long busy period can never wake up owing four CQs.
+    fn bump_cq_schedule(&mut self, now_ms: u64) {
+        if self.cq_on && self.cfg.cq_interval_min > 0 {
+            self.cq_next_ms = Some(now_ms + self.cfg.cq_interval_min as u64 * 60 * 1000);
         }
     }
 
@@ -928,16 +979,31 @@ impl Station {
 
     pub fn call_cq(&mut self, idx: u8, now_ms: u64) -> Result<(), ComposeError> {
         self.mark_active(now_ms);
+        let out = self.compose_cq(idx, Origin::Operator)?;
+        self.push_outbox(out);
+        Ok(())
+    }
+
+    /// The CQ line both the operator's click and the repeat schedule send, differing only in
+    /// `origin`. Shared so a change to the wire text can never drift between them.
+    fn compose_cq(&self, idx: u8, origin: Origin) -> Result<OutMsg, ComposeError> {
         let cqs = crate::proto::alphabet::CQS[(idx & 7) as usize];
         let line = format!("{cqs} {}", self.cfg.grid);
         let seq = frames(&self.cfg.mycall, None, line.trim(), self.cfg.speed)?;
-        let out = OutMsg {
-            origin: Origin::Operator,
+        Ok(OutMsg {
+            origin,
             display: format!("{}: @ALLCALL {line}", self.base()),
             frames: seq,
             cursor: 0,
             freq_hint: FreqHint::Dial,
-        };
+        })
+    }
+
+    /// Enqueue ONE scheduled CQ. Deliberately does NOT `mark_active`: an automatic origin
+    /// must not reset the idle-watchdog baseline, or the repeat outlives the watchdog that
+    /// bounds it. `enqueue_heartbeat`'s rule, for the same reason.
+    fn enqueue_cq(&mut self) -> Result<(), ComposeError> {
+        let out = self.compose_cq(self.cq_idx, Origin::CqRepeat)?;
         self.push_outbox(out);
         Ok(())
     }
@@ -979,6 +1045,36 @@ impl Station {
         self.hb_next_ms
     }
 
+    /// Arm/disarm the repeating CQ with the CQS variant to send (JS8Call's checkable
+    /// `cqMacroButton`). `set_hb`'s shape exactly: the first CQ fires now (interval 0 = "on
+    /// demand" = once) or after the interval, and disarming clears the schedule. Arming keys
+    /// NOTHING by itself — it only schedules; `plan_js8_tx` still re-reads the TX latch.
+    pub fn set_cq(&mut self, on: bool, idx: u8, now_ms: u64) {
+        self.cq_on = on;
+        if on {
+            self.cq_idx = idx & 7;
+            self.cq_next_ms = Some(now_ms + self.cfg.cq_interval_min as u64 * 60 * 1000);
+        } else {
+            self.cq_next_ms = None;
+        }
+    }
+
+    pub fn cq_on(&self) -> bool {
+        self.cq_on
+    }
+
+    pub fn cq_next_ms(&self) -> Option<u64> {
+        self.cq_next_ms
+    }
+
+    /// JS8Call's `resetCQTimer(stop = true)` (mainwindow.cpp:3711): traffic addressed to us
+    /// STOPS the repeating CQ outright — somebody answered, so stop calling. (It only pushes
+    /// the heartbeat timer out; the heartbeat is a beacon, the CQ is a call.)
+    fn stop_cq_repeat(&mut self) {
+        self.cq_on = false;
+        self.cq_next_ms = None;
+    }
+
     pub fn cancel_pending_reply(&mut self) {
         self.pending.clear();
     }
@@ -1012,6 +1108,7 @@ impl Station {
         self.pending.clear();
         self.hb_on = false;
         self.hb_next_ms = None;
+        self.stop_cq_repeat();
     }
 
     /// Reset the idle-watchdog baseline to `now_ms` (and clear any standing trip). Called
@@ -1413,6 +1510,115 @@ mod tests {
         );
         let f = drain(&mut s2, 6000).expect("chain ACK");
         assert_eq!(f.display, "KD9TAW: W1AW>N0XYZ>KD9TAW ACK");
+    }
+
+    /// The repeating CQ is a SCHEDULE, never a queue that can burst: one frame per period,
+    /// bounded by the interval, and a MISSED period is SKIPPED rather than batched. Jumping
+    /// the clock four intervals forward must produce ONE CQ, not four — `bump_cq_schedule`
+    /// sets the next fire to `now + interval`, it does not accumulate.
+    #[test]
+    fn a_repeating_cq_is_a_schedule_that_never_bursts() {
+        let mut c = cfg();
+        c.cq_interval_min = 5;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.set_cq(true, 0, 0);
+        assert_eq!(s.cq_next_ms(), Some(5 * 60 * 1000), "first CQ one interval out");
+        assert!(drain(&mut s, 60_000).is_none(), "nothing before the interval");
+        // Four intervals pass with no tick in between (a suspended laptop, a busy loop).
+        s.tick(20 * 60 * 1000);
+        let mut sent = 0;
+        while let Some(f) = drain(&mut s, 20 * 60 * 1000) {
+            assert_eq!(f.origin, Origin::CqRepeat);
+            sent += 1;
+        }
+        assert_eq!(sent, 1, "one CQ for the missed window, never a burst of four");
+        assert_eq!(
+            s.cq_next_ms(),
+            Some(25 * 60 * 1000),
+            "rescheduled from NOW, not from the missed deadline"
+        );
+    }
+
+    /// FINDING 1's sibling for the CQ repeat, and the whole reason `Origin::CqRepeat` exists:
+    /// a scheduled CQ must NOT reset the idle-watchdog baseline. A station left calling CQ
+    /// unattended MUST still stand down at the watchdog. Positive control: CQs really did go
+    /// out, so "it stopped" is not a broken fixture.
+    #[test]
+    fn a_repeating_cq_does_not_reset_the_idle_watchdog_and_the_watchdog_stops_it() {
+        let mut c = cfg();
+        c.idle_watchdog_min = 60;
+        c.cq_interval_min = 5;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.set_cq(true, 0, 0);
+        let mut cqs_sent = 0;
+        let mut tripped_at = None;
+        for min in 1..=61u64 {
+            let now = min * 60 * 1000;
+            if s.tick(now)
+                .iter()
+                .any(|a| matches!(a, StationAction::IdleTripped))
+            {
+                tripped_at = Some(min);
+                break;
+            }
+            while let Some(f) = drain(&mut s, now) {
+                s.note_tx_done(&f, now);
+                if f.origin == Origin::CqRepeat {
+                    cqs_sent += 1;
+                }
+            }
+        }
+        assert!(cqs_sent >= 10, "control: the repeat really ran ({cqs_sent} CQs)");
+        assert_eq!(tripped_at, Some(60), "the idle watchdog still trips at 60 min");
+        assert!(!s.cq_on() && s.cq_next_ms().is_none(), "the trip stops the repeat");
+        assert!(
+            drain(&mut s, 100 * 60 * 1000).is_none(),
+            "and nothing is left to key afterwards"
+        );
+    }
+
+    /// JS8Call `resetCQTimer(stop = true)` (mainwindow.cpp:3711, called from the directed-RX
+    /// paths at 8333/8788): traffic addressed to me STOPS the repeating CQ — someone answered.
+    /// The heartbeat is only PUSHED OUT by the same event, never stopped: a beacon is not a call.
+    #[test]
+    fn directed_traffic_to_me_stops_the_cq_repeat_but_only_defers_the_heartbeat() {
+        let mut c = cfg();
+        c.cq_interval_min = 5;
+        c.hb_interval_min = 5;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.set_cq(true, 0, 0);
+        s.set_hb(true, 0);
+        s.on_event(
+            &directed("W1AW", "KD9TAW", Some(Command::SnrQuery), None, "", -7),
+            60_000,
+        );
+        assert!(!s.cq_on() && s.cq_next_ms().is_none(), "a reply stops the CQ repeat");
+        assert!(s.hb_on(), "the heartbeat is not stopped");
+        assert_eq!(
+            s.hb_next_ms(),
+            Some(60_000 + 5 * 60 * 1000),
+            "…only pushed out one interval"
+        );
+    }
+
+    /// `halt` is TOTAL for the CQ repeat too, and arming it never touches the idle baseline
+    /// on its own (only the ENGINE verb does, deliberately).
+    #[test]
+    fn halt_cancels_the_cq_repeat() {
+        let mut c = cfg();
+        c.cq_interval_min = 1;
+        let mut s = Station::new(c);
+        s.mark_active(0);
+        s.set_cq(true, 3, 0);
+        s.tick(60_000);
+        assert!(s.cq_on() && drain(&mut s, 60_000).is_some(), "precondition: it runs");
+        s.halt();
+        assert!(!s.cq_on() && s.cq_next_ms().is_none());
+        s.tick(10 * 60_000);
+        assert!(drain(&mut s, 10 * 60_000).is_none(), "nothing after a halt");
     }
 
     #[test]

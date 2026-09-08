@@ -81,6 +81,7 @@ impl Engine {
             relay: s.js8_relay,
             hb_ack: s.js8_hb_ack,
             hb_interval_min: s.js8_hb_interval_min,
+            cq_interval_min: s.js8_cq_interval_min,
             idle_watchdog_min: match s.js8_idle_watchdog_min {
                 0 => 0,
                 m => m.max(5),
@@ -154,6 +155,13 @@ impl Engine {
             hb_on: self.js8_hb_on,
             hb_next_at_ms: self.js8_station.hb_next_ms(),
             hb_interval_min: s.js8_hb_interval_min,
+            // Read STRAIGHT off the station — no engine-side mirror to drift. The CQ repeat
+            // is stopped from three places the engine never sees (the idle trip, `halt`, and
+            // JS8Call's "somebody answered, stop calling" on directed RX), and a mirror would
+            // have to be kept in step with each of them.
+            cq_on: self.js8_station.cq_on(),
+            cq_next_at_ms: self.js8_station.cq_next_ms(),
+            cq_interval_min: s.js8_cq_interval_min,
             autoreply: s.js8_autoreply,
             relay: s.js8_relay,
             hb_ack: s.js8_hb_ack,
@@ -162,6 +170,7 @@ impl Engine {
                 relay: s.js8_relay && live,
                 hb_ack: s.js8_hb_ack && live,
                 hb: self.js8_hb_on && live,
+                cq: self.js8_station.cq_on() && live,
             },
             idle_minutes: self.js8_station.idle_minutes(),
             idle_limit_min: self.js8_station.config().idle_watchdog_min,
@@ -596,6 +605,22 @@ impl Engine {
         Ok(())
     }
 
+    /// Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant, ignored when disarming).
+    /// The SECOND act, session-only and never persisted — the same rule the heartbeat toggle
+    /// follows (G3), so a crash or a relaunch can never come back calling CQ. Arming keys
+    /// nothing: `plan_js8_tx` re-reads the TX latch every slot, and the idle watchdog, Stop
+    /// TX, a tier change and a mode change each cancel the schedule.
+    pub fn js8_set_cq_repeat(&mut self, on: bool, idx: u8) -> Result<(), String> {
+        let now_ms = tempo_core::timing::now_unix_ms() as u64;
+        self.js8_station.set_cq(on, idx, now_ms);
+        if on {
+            // An operator verb: it retires an idle trip and restarts the wall clock.
+            self.js8_station.clear_idle_trip();
+            self.reset_tx_watchdog();
+        }
+        Ok(())
+    }
+
     /// The operator's veto on a pending automatic reply (the visible countdown's Cancel).
     pub fn js8_cancel(&mut self) {
         self.js8_station.cancel_pending_reply();
@@ -733,7 +758,11 @@ impl Engine {
         // operator verb; a Heartbeat exists only because of the session toggle — that IS
         // the act (HB is never persisted, G3).
         let switch_on = match tf.origin {
-            Origin::Operator | Origin::Heartbeat => true,
+            // A `CqRepeat` frame, like a `Heartbeat`, EXISTS only because the session
+            // toggle is on — that toggle IS the second act. Neither is persisted (G3), and
+            // the schedule behind both is cancelled by Stop TX, the idle watchdog, a tier
+            // change and a mode change, so there is no state here to re-read.
+            Origin::Operator | Origin::Heartbeat | Origin::CqRepeat => true,
             Origin::HbAck => self.settings().js8_hb_ack,
             Origin::AutoReply => self.settings().js8_autoreply,
             Origin::Relay => self.settings().js8_relay,
@@ -752,9 +781,18 @@ impl Engine {
             self.set_transmitting(false);
             return None;
         }
-        // Wall-clock watchdog, RE-APPLIED for every origin but Heartbeat (G2: the HB is a
-        // beacon by design — `plan.beacon` below carries the exemption to commit_tx).
-        if tf.origin != Origin::Heartbeat && self.js8_wall_clock_trips() {
+        // BEACON-CLASS ORIGINS: the scheduled heartbeat (G2) and the scheduled CQ repeat.
+        // Both are unattended repeated transmission BY DESIGN, which is the exact premise of
+        // the 2026-08-17 beacon exemption ("the watchdog's premise is idleness"); applying a
+        // 6-minute wall clock to a 15-minute CQ repeat would kill it after the first call and
+        // the feature would not exist. They are not unbounded: `Station::note_tx_done` resets
+        // the idle baseline for `Origin::Operator` ALONE, so neither a heartbeat nor a
+        // repeated CQ can hold off the idle watchdog that stops them (default 60 min, floor
+        // 5), and every over stays hard-bounded by the slot clamp.
+        let beacon = matches!(tf.origin, Origin::Heartbeat | Origin::CqRepeat);
+        // Wall-clock watchdog, RE-APPLIED for every non-beacon origin — operator, autoreply,
+        // relay and HB-ack traffic is bounded by it exactly as before.
+        if !beacon && self.js8_wall_clock_trips() {
             return None;
         }
         // f0: the operator's TX offset, or the station's HB sub-band pick — an AUDIO
@@ -765,7 +803,6 @@ impl Engine {
             FreqHint::HbSubband(f) if (500.0..=1000.0).contains(&f) => f,
             FreqHint::HbSubband(_) => self.tx_offset_hz(),
         };
-        let beacon = tf.origin == Origin::Heartbeat;
         // Book the over (station bookkeeping: Last sent, HB timer, idle counter; own-TX
         // row; activity row; ALL.TXT Tx line) — plan time, on the period-start axis.
         self.js8_station.note_tx_done(&tf, period_start_ms);

@@ -1540,7 +1540,10 @@ export function SettingsPanel({
       .filter(Boolean)
       .map((g) => `@${g}`)
   // Whole non-negative minutes; junk leaves the stored value alone (never coerces to 0).
-  const updateMinutes = (key: 'js8HbIntervalMin' | 'js8IdleWatchdogMin', raw: string) => {
+  const updateMinutes = (
+    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin',
+    raw: string,
+  ) => {
     const n = Number(raw)
     if (raw.trim() === '' || Number.isNaN(n)) return
     updateNum(key, Math.max(0, Math.floor(n)))
@@ -7218,6 +7221,20 @@ export function SettingsPanel({
                   autoComplete="off"
                 />
                 <span className="settings-hint">{t('settings.js8.hbIntervalMin.hint')}</span>
+              </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.cqIntervalMin.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={String(form.js8CqIntervalMin ?? 0)}
+                  placeholder="0"
+                  onChange={(e) => updateMinutes('js8CqIntervalMin', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.cqIntervalMin.hint')}</span>
               </label>
               <div className="settings-field">
                 <label className="settings-toggle">
