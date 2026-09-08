@@ -199,8 +199,8 @@ test('provider diagnostics expose numeric error codes only, and Worker content f
   const bytes = Buffer.from('export default {}'), headers = new Headers({ 'content-type': 'application/javascript' })
   assert.equal(await workerDigest({ status: 200, headers, bytes }), createHash('sha256').update(bytes).digest('hex'))
   const form = new FormData()
-  form.set('worker.js', bytes.toString('utf8'))
-  const response = new Response(form, { headers: { 'cf-entrypoint': 'worker.js' } })
+  form.set('../../staging-artifact/worker.js', bytes.toString('utf8'))
+  const response = new Response(form, { headers: { 'cf-entrypoint': '../../staging-artifact/worker.js' } })
   const multipart = { status: 200, headers: response.headers, bytes: Buffer.from(await response.arrayBuffer()) }
   assert.equal(await workerDigest(multipart), createHash('sha256').update(bytes).digest('hex'))
   multipart.headers.set('cf-entrypoint', 'other.js')

@@ -13,11 +13,13 @@ export async function workerDigest(response) {
     let parts
     try { parts = [...(await new Response(bytes, { headers: response.headers }).formData()).entries()] }
     catch { throw new Error('Worker content has invalid multipart framing') }
-    requireValue(parts.length === 1 && parts[0][0] === 'worker.js'
-      && (!response.headers.has('cf-entrypoint') || response.headers.get('cf-entrypoint') === 'worker.js'),
-      'Worker module inventory does not match the bundled artifact')
+    const inventory = { moduleCount: parts.length, entrypointPresent: response.headers.has('cf-entrypoint'),
+      entrypointMatches: parts.length === 1 && response.headers.get('cf-entrypoint') === parts[0][0] }
+    requireValue(parts.length === 1 && (!inventory.entrypointPresent || inventory.entrypointMatches),
+      `Worker module inventory does not match the bundled artifact: ${JSON.stringify(inventory)}`)
     // Cloudflare can return a text form part without a filename, as also handled
-    // by Wrangler's Worker downloader. Either representation must hash exactly.
+    // by Wrangler's Worker downloader. The entrypoint name can be relative to
+    // Wrangler's disposable config; either representation must hash exactly.
     bytes = typeof parts[0][1] === 'string' ? Buffer.from(parts[0][1], 'utf8') : Buffer.from(await parts[0][1].arrayBuffer())
   } else requireValue(/^(application|text)\/javascript(?:;|$)/.test(type), 'Worker content has an unexpected media type')
   return createHash('sha256').update(bytes).digest('hex')
@@ -87,14 +89,17 @@ export function cloudflare(env = process.env, fetcher = fetch) {
       && bindings.get('STATIONS').class_name === 'StationRoom'
       && (!bindings.get('STATIONS').script_name || bindings.get('STATIONS').script_name === STAGING.name),
     'Uploaded Worker service bindings differ from the artifact')
-    const content = await requestBytes(`${base}/workers/scripts/${STAGING.name}/content/v2`, {
-      headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
-    }, fetcher, 'Worker content read')
-    requireValue(await workerDigest(content) === expectedHash, 'Uploaded Worker bytes differ from the artifact')
     const runtime = { dateMatches: settings.compatibility_date === config.compatibility_date,
       dateTimestampMatches: settings.compatibility_date === `${config.compatibility_date}T00:00:00Z`,
       observabilityPresent: Object.hasOwn(settings, 'observability'), observabilityNull: settings.observability === null,
       observabilityDisabled: settings.observability?.enabled === false, observabilityEnabled: settings.observability?.enabled === true }
+    const content = await requestBytes(`${base}/workers/scripts/${STAGING.name}/content/v2`, {
+      headers: { authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
+    }, fetcher, 'Worker content read')
+    let digest
+    try { digest = await workerDigest(content) }
+    catch (error) { throw new Error(`${error.message}; runtime comparison: ${JSON.stringify(runtime)}`) }
+    requireValue(digest === expectedHash, 'Uploaded Worker bytes differ from the artifact')
     requireValue(runtime.dateMatches && runtime.observabilityDisabled,
       `Uploaded Worker runtime configuration differs from the artifact: ${JSON.stringify(runtime)}`)
     return { worker, result }
