@@ -238,13 +238,18 @@ const SHOT_OWNERS = {
   'contest-': ['ui/src/components/ContestCalendarPane.tsx'],
 
   // Log, awards, statistics.
+  'logbook': ['ui/src/components/Logbook.tsx'],
   'logbook-': ['ui/src/components/Logbook.tsx'],
   'logbook-entry': ['ui/src/components/Logbook.tsx', 'ui/src/components/LogEntry.tsx'],
+  'awards-': ['ui/src/components/AwardsView.tsx'],
   'awards-official': ['ui/src/components/AwardsView.tsx'],
   'awards-journey': ['ui/src/components/AwardsJourney.tsx'],
+  'journey': ['ui/src/components/AwardsJourney.tsx'],
+  'stats': ['ui/src/components/StatsView.tsx'],
   'stats-': ['ui/src/components/StatsView.tsx'],
 
   // Maps, memories, programming, satellites.
+  'satellite-': ['ui/src/components/SatellitesView.tsx'],
   'connect-': ['ui/src/components/ConnectView.tsx'],
   'connect-map': ['ui/src/components/ConnectView.tsx', 'ui/src/components/MapView.tsx'],
   'memories-': ['ui/src/components/MemoriesView.tsx'],
@@ -382,7 +387,18 @@ const isLocalRef = (t) => !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(t)
 /** Every `![alt](src)` and `<img src alt>` in `text`, with 1-based line numbers. */
 function imageRefs(text) {
   const out = []
+  // A fenced code block is an EXAMPLE, not a reference — docs about the docs (the style guide)
+  // show `![alt](../img/manual/....webp)` as sample markdown, and counting those as real
+  // references makes the check fail on a file that is correct.
+  let fence = null
   text.split('\n').forEach((line, i) => {
+    const f = /^\s{0,3}(`{3,}|~{3,})/.exec(line)
+    if (f) {
+      if (fence === null) fence = f[1][0]
+      else if (f[1][0] === fence) fence = null
+      return
+    }
+    if (fence !== null) return
     for (const m of line.matchAll(/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g))
       out.push({ line: i + 1, alt: m[1], src: m[2] })
     for (const m of line.matchAll(/<img\b[^>]*>/g)) {
