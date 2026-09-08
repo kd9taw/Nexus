@@ -644,6 +644,16 @@ Comma-separated chip lists for the quick text you fire from each surface:
 
 ### RTTY
 
+**Receiving**
+
+- **Start receiving when RTTY opens** — on by default: entering the screen arms
+  the decoder, so a signal on the tuned tone pair prints without touching
+  anything. Turn it off to arm by hand (the Arm RX button in the decoded-text
+  pane) — for instance on a shared rig you monitor from. Either way this arms the
+  **receiver** only; transmitting is never armed for you. Stopping the receiver
+  yourself is remembered for the rest of the session, so re-entering the section
+  does not restart it behind you.
+
 **Keying**
 
 - **Keying backend** — **AFSK** plays the two-tone waveform through the same TX
@@ -673,8 +683,11 @@ Comma-separated chip lists for the quick text you fire from each surface:
 PSK31 receive needs no setup: open the PSK screen, tune a watering hole
 (14.070 is the classic), click a warble trace on the waterfall and the text
 prints. The click nets the *decoder* — it never moves the rig — and a
-slew-limited AFC (never more than ±25 Hz) rides small drift for you. PSK31 is
-receive-only in this release; transmit is on the keyboard-modes roadmap.
+slew-limited AFC (never more than ±25 Hz) rides small drift for you.
+
+PSK31 and QPSK31 both transmit as well as receive — the macros, the compose bar
+and the continuous-TX latch in the [PSK cockpit](psk.md) all key the rig. (The
+PSK entry in the Features list still ends "(receive)"; that wording is stale.)
 
 - **Start receiving when PSK opens** — on by default: entering the screen arms
   the decoder, so a signal on the band prints without touching anything. Turn
