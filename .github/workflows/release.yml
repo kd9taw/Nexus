@@ -73,6 +73,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # EVERY job that builds or names an artifact stamps, and it stamps FIRST: a prerelease tag
+      # must produce artifacts and an app that say 1.11.0-beta.3, not 1.11.0. A stable tag is a
+      # no-op. Miss one job and that platform ships a differently-versioned artifact than its
+      # siblings. The script header carries the why; publish's filename check catches a miss.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -249,6 +256,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # See linux-x86: every artifact-producing job stamps, first, or this platform's installer
+      # carries a different version from its siblings.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -371,6 +383,11 @@ jobs:
       CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
     steps:
       - uses: actions/checkout@v7
+
+      # See linux-x86: every artifact-producing job stamps, first. The DMG, the .app's
+      # CFBundleShortVersionString and the updater tarball all take their version from here.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
 
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
@@ -691,6 +708,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # See linux-x86: every artifact-producing job stamps, first. BOTH Pi bases go through
+      # this job, and the stamp is on the RUNNER — Dockerfile.pi COPYs the build context, so
+      # the container's tauri.conf.json is the stamped one (it seds the same file for
+      # createUpdaterArtifacts on top of it).
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
       - name: Stage the DeepCW model (not committed — AGPL-3.0 (c) e04)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -794,6 +818,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      # See linux-x86: the cover version below is read straight out of tauri.conf.json, so the
+      # manual attached to a prerelease says 1.11.0-beta.3 like everything else in the release.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
       - name: Tools (pandoc + the CDP websockets client; Chrome is preinstalled)
         run: |
           set -euo pipefail
@@ -865,25 +893,33 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           ver="${tag#v}"
-          # A prerelease tag (v1.10.3-beta.1) heads to the same BASE version the artifacts and
-          # tauri.conf.json carry (1.10.3); strip the -suffix for those cross-checks. ver/tag keep
-          # the suffix for the release title and the latest.json version.
+          # A prerelease tag (v1.10.3-beta.1) carries a suffix the REPO never does: main keeps the
+          # plain version and scripts/stamp-version.sh writes the full one into tauri.conf.json
+          # inside each BUILD job. This job does not build and does not stamp, so the two checks
+          # below deliberately read different things — the committed version against the tag's
+          # BASE, and the artifacts against the FULL version they were actually stamped with.
           base_ver="${ver%%-*}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
-          # The tag must match the version in tauri.conf.json — the single source of truth
-          # every artifact is stamped from. A mismatch means someone forgot to bump.
+          # The tag's base must match the version in tauri.conf.json — the single source of truth
+          # every artifact is stamped from. A mismatch means someone forgot to bump (or committed
+          # a suffix by hand, which this repo never does).
           conf=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           [ "$conf" = "$base_ver" ] || { echo "tag $tag (base $base_ver) != tauri.conf.json ($conf)"; exit 1; }
-          # And every artifact filename must carry that exact version — catches a stale
-          # artifact from a cached/retried job sneaking into the release.
+          # And every artifact filename must carry the FULL version. Two things ride on this
+          # matching $ver rather than $base_ver: it still catches a stale artifact from a
+          # cached/retried job, AND on a prerelease it is what proves EVERY build job ran the
+          # stamp — a job that missed it produces Nexus_1.11.0_… , which no longer satisfies a
+          # v1.11.0-beta.3 tag. Matching on the base would wave that straight through, and one
+          # platform shipping a different version than its siblings is worse than none of them
+          # having the suffix at all.
           for f in dist/*; do
             case "$(basename "$f")" in
-              *"$base_ver"*) : ;;
-              *) echo "artifact does not carry version $base_ver: $f"; exit 1 ;;
+              *"$ver"*) : ;;
+              *) echo "artifact does not carry version $ver: $f"; exit 1 ;;
             esac
           done
-          echo "All artifacts stamped $base_ver:"; ls -la dist/
+          echo "All artifacts stamped $ver:"; ls -la dist/
 
       - name: Assemble release notes
         run: |

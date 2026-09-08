@@ -48,6 +48,20 @@ fi
 
 echo "version: $CUR -> $NEW"
 
+# A PRERELEASE SUFFIX HERE IS FOR A HAND-BUILT TESTER INSTALLER — NOT FOR A TAGGED RELEASE.
+# release.yml derives the suffix from the TAG (scripts/stamp-version.sh stamps tauri.conf.json
+# at build time) and requires the committed version to be the plain base, so committing
+# 1.11.0-beta.3 and then pushing v1.11.0-beta.3 fails every build job in its first seconds.
+# Said out loud rather than refused: a suffix is still exactly right when you are building the
+# installer yourself and handing it to a tester, because there is no tag to stamp from.
+if [ "${NEW%%-*}" != "$NEW" ]; then
+  cat >&2 <<EOF
+note: $NEW carries a prerelease suffix, so this is a HAND-BUILT tester build.
+  To cut one through CI instead, leave the repo at ${NEW%%-*} and push the tag v$NEW — the
+  workflow stamps the suffix into the build itself, and nothing suffixed is ever committed.
+EOF
+fi
+
 # 1. The three manifests.
 sed -i "0,/^version = \"[^\"]*\"/s//version = \"$NEW\"/" src-tauri/Cargo.toml
 sed -i "0,/\"version\": *\"[^\"]*\"/s//\"version\": \"$NEW\"/" src-tauri/tauri.conf.json
@@ -59,6 +73,14 @@ cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/nul
 
 # 3. CHANGELOG heading.
 TODAY=$(date +%F)
+# The guide's overview states the version it documents, in prose, on its own line. It ships
+# inside the app, on the website and in the PDF/EPUB, so a stale number here tells every reader
+# the manual describes a release it does not. It was 1.10.3 while the book was 1.11.1.
+if grep -q '^\*\*This guide documents Nexus ' docs/guide/index.md; then
+  sed -i -E "s/^\*\*This guide documents Nexus [0-9]+\.[0-9]+\.[0-9]+[^*]*\.\*\*/**This guide documents Nexus $NEW.**/" docs/guide/index.md
+  echo "guide overview: documents Nexus $NEW"
+fi
+
 if grep -q '^## \[Unreleased\]' CHANGELOG.md; then
   sed -i "0,/^## \[Unreleased\]/s//## [$NEW] — $TODAY/" CHANGELOG.md
   echo "CHANGELOG: [Unreleased] -> [$NEW] — $TODAY"

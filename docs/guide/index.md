@@ -1,10 +1,10 @@
-<!-- CHAPTER ORDER LIVES HERE: the PDF and EPUB builders take the book's order from the -->
-<!-- FIRST bare `](<page>.md)` link in this file, so a chapter link added above "The -->
-<!-- sections" silently moves that chapter to the front of the book. A cross-reference -->
-<!-- higher up carries an anchor (`](cw.md#macros)`), which does not claim the slot. -->
-<!-- House rules for editing the guide: docs/manual-style-guide.md -->
-
 # Nexus User Guide
+
+<!-- CHAPTER ORDER LIVES HERE: the PDF and EPUB builders take the book's order from the -->
+<!-- FIRST bare link to a chapter page in this file, so a chapter link added above "The -->
+<!-- sections" silently moves that chapter to the front of the book. A cross-reference -->
+<!-- higher up carries an anchor (cw.md#macros), which does not claim the slot. -->
+<!-- House rules for editing the guide: docs/manual-style-guide.md -->
 
 Nexus is a free, open-source ham radio workstation for Windows, macOS, Linux and
 Raspberry Pi that puts the whole station — digital, phone, CW, satellites,
@@ -15,7 +15,7 @@ Nexus left beta at 1.0.0. The habit the beta was written with does not close wit
 it: where a feature is opt-in, or a number comes from simulation rather than the
 air, these pages say so, and each page ends with what its section does **not** do.
 
-**This guide documents Nexus 1.10.3.** These pages ship inside the app, and the same files are
+**This guide documents Nexus 1.11.1.** These pages ship inside the app, and the same files are
 synced to the website and built into the PDF and EPUB at each release — so a copy matches the
 release it came out with. It cannot promise to match the build *you* are running. The website
 and the downloads track the latest release; your installed copy may be older, or newer than a

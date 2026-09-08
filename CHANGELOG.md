@@ -17,7 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured staging service and administrator-enabled trial access. Receive
   audio, radio/amplifier commands, QSO logging and payment are later stages.
 
-## [1.11.0] — 2026-09-08
+## [1.11.1] — 2026-09-08
+
+> **There is no 1.11.0 release.** The first beta of this work shipped as `v1.11.0-beta.2`
+> and, through a defect in the release workflow since fixed, its installer was stamped
+> `1.11.0` rather than `1.11.0-beta.2`. A prerelease sorts below its release, so those
+> installs believed they were newer than any 1.11.0 that followed and would never have been
+> offered it. Releasing as 1.11.1 reaches them. Operators who were on 1.10.3 are unaffected
+> and were never offered a beta.
 
 ### Added
 
