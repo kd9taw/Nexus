@@ -6,8 +6,10 @@ audio decodes on its own: the picture appears where the waterfall was and is
 saved to a local gallery with its mode, frequency and time. Transmit lives here
 too — choose a picture, choose a mode, press **Send** — but it is always an
 explicit act, and nothing on this screen keys the rig until you press that
-button. It is not an image editor (your picture is cover-cropped to the mode's
-size and nothing else) and it does not log: no QSO is written from this section.
+button. The composer is not an image editor: it cover-crops your picture to the
+mode's size, lets you drag the crop and lay text over it, and does nothing else —
+no filters, no drawing, no adjustment. It does not log either: no QSO is written
+from this section.
 
 SSTV sits in the left rail's Digital group (FT · Tempo · RTTY · SSTV · APRS) and
 is on by default — the wizard turns everything on. It is a mode rather than a
@@ -117,9 +119,22 @@ shift ten, Home re-centres, and double-click does the same. Only the over-long
 axis moves — the cursor tells you which — and when the picture already matches the
 mode it says so instead of offering a control that would do nothing.
 
+**Text on the picture.** A **Text:** row under the preview lays lettering over the
+image, MMSSTV-style. **CQ** and **73** drop in a line built from your own call
+(`CQ CQ DE <your call>`); **Reply** builds `<their call> DE <your call> 599` from
+the newest FSK ID in the gallery, and is disabled until a station with one has
+been received; **+ Text** adds a free line. Each line gets a row of controls —
+the text itself, **Crisp** (the ident's own pixel font, proven through the
+decoder) or **Banner** (big display type with an outline), a size, eight colours,
+and **Plate** or **Outline** for what keeps it readable at the far end. Drag a
+line on the preview to place it, click to select, arrows nudge, Delete removes.
+Text draws under the ID plate, never over it.
+
 **Your callsign is burned into the top-left corner**, and that is not decoration —
 see [Your callsign goes out in the picture](#your-callsign-goes-out-in-the-picture)
-below. What you see on the preview canvas is byte-for-byte what goes out, plate
+below. A line above the preview says where the identification is on this
+picture — burned in, in your own text, or already in the artwork by your word.
+What you see on the preview canvas is byte-for-byte what goes out, plate
 included. Under it, the file name, its original size, the size it was resized to,
 the mode and how long the rig will be keyed (`sunset.jpg (4032×3024) → 320×256 ·
 Scottie 1 · 1:51 key-down`). Change the mode and it re-derives the crop at the new
@@ -159,6 +174,12 @@ of reach.
 ## Core workflows
 
 ### Receive your first picture
+
+![The SSTV band picker open, grouped HF and VHF. HF: 160 m SSTV 1.8900 LSB; 80 m SSTV (US) 3.8450 LSB and (EU) 3.7300 LSB; 40 m SSTV (US) 7.1710 LSB and (EU) 7.1650 LSB; 20 m SSTV 14.2300 USB with alt 14.2330 and alt 2 14.2360; 17 m 18.1600, 15 m 21.3400, 12 m 24.9750 and 10 m 28.6800, all USB. VHF: 6 m SSTV 50.6800 USB, 2 m ISS downlink 145.8000 FM and 2 m SSTV calling 144.5000 FM.](../img/manual/sstv-band-picker.webp)
+
+*The band picker's built-in calling frequencies in Nexus 1.10.3 — the same table
+printed in the tour above. The list is filtered to the bands your license class
+can key phone on, so yours may be shorter.*
 
 1. Open **SSTV**. The receiver starts; the header's Arm button reads **Armed**.
 2. Tune 14.230 USB — type it into the readout or take it from the band picker.
@@ -201,13 +222,18 @@ The status line is the diagnosis, in order of what to do about it:
 3. Pick a mode in the bottom bar. Until you choose one, Nexus follows the band:
    Scottie 1 on HF (the North American calling-frequency convention) and PD-120
    above 30 MHz (what ARISS uses).
-4. Press **Send**. Nexus switches the app to Phone so the image rides the phone
+4. Add text if you want it — **CQ**, **73**, **Reply** or **+ Text** — and drag
+   each line where you want it. Check the identification line above the preview
+   before you send: if your text already carries your call it will say so and the
+   corner plate is left off, and if the call is in the artwork itself, tick
+   **My picture already shows my callsign**.
+5. Press **Send**. Nexus switches the app to Phone so the image rides the phone
    segment — without moving your dial — then hands the encoded transmission to
    the gated transmit path. A refusal is a toast that names the reason: **no
    callsign set**, TX off, outside your license privileges, the transmitter
    already busy with the voice keyer or mic PTT, or a mode whose key-down would
    out-run your Tx Watchdog.
-5. Watch the progress bar count down. **Stop** aborts the image, drops the queued
+6. Watch the progress bar count down. **Stop** aborts the image, drops the queued
    job and unkeys; so does turning the TX latch off.
 
 On 145.800 MHz — the ISS downlink — Send asks first: "Transmit only during a
@@ -231,9 +257,25 @@ picture.
 
 ## Your callsign goes out in the picture
 
-Your call is burned into the top-left corner of every image you transmit, white on
-a black plate. There is no switch for it, and **Send is refused if you have not set
-a callsign** in [Settings ▸ Station](settings-reference.md).
+Every picture you transmit carries your call, and **Send is refused if you have
+not set a callsign** in [Settings ▸ Station](settings-reference.md) — with no
+callsign the station has no identity to put anywhere, and that refusal has no
+exception.
+
+*Where* the call sits has three answers, and the line above the preview always
+names the one in force:
+
+| What the preview says | When | What goes out |
+|---|---|---|
+| **`<call>` burned in · top left** | the default | Nexus draws the plate into the picture for you |
+| **`<call>` in your text · no plate burned in** | one of your text lines contains your callsign | your own lettering is the identification; the plate is left off so it does not cover your layout |
+| **`<call>` — you've said it's already in the picture** | you tick **My picture already shows my callsign** under the preview | nothing is drawn; you have told Nexus the artwork carries the call |
+
+The tick is for a pre-made QSO card that already shows your call, where a plate
+would cover the artwork to repeat what it says. **It clears every time you load a
+new image**, on purpose: it is a statement about one picture, and Nexus cannot
+read your artwork to check the next one. Delete the text that carried your call
+and the plate comes back on the same redraw.
 
 **This is how the station is identified, and before this build there was no
 identification at all.** An SSTV over is one continuous key-down of up to about
@@ -248,8 +290,11 @@ The end-of-communication ident is still yours. If the QSO finishes on voice, or 
 hit **Stop** part-way through an image, the last thing transmitted did not
 necessarily carry your call.
 
-Some detail, because "there is a callsign in the bitmap" is not the same as "the
-other station can read it":
+Some detail about the plate, because "there is a callsign in the bitmap" is not
+the same as "the other station can read it". The figures below are the plate's.
+A **Crisp** text line uses the same pixel font, but its size, colour and place on
+the picture are yours — and a callsign that lives in your own artwork was never
+measured at all. Both of those paths hand the identification back to you:
 
 - **It is sized as a fraction of the picture width**, so it scales with the mode:
   5 px strokes on the 320-wide modes, 12 px on PD-290. That is at or above the
@@ -293,9 +338,12 @@ other station can read it":
   crisp (and capped at 6×, leaving margin rather than blur). The full-resolution
   image exists only once it is saved.
 - **The gallery is a gallery, not a viewer.** There is no click-to-enlarge, no
-  delete, no rename, no export or share. To see an image full size, open the file
-  from the folder — the card's tooltip gives you the path. The in-app list keeps
-  the 200 newest; images past that stay on disk but drop off the screen.
+  rename, no export or share. To see an image full size, open the file from the
+  folder — the card's tooltip gives you the path. Each card carries two actions:
+  **✕** deletes the image, after a confirmation, and the file is gone for good;
+  **✎** loads it back into the composer so you can put your own text on it and
+  send it back. The in-app list keeps the 200 newest; images past that stay on
+  disk but drop off the screen.
 - **Images are PNG, and lossless.** A received picture is the only copy of what
   somebody sent you, so it is stored exactly as it was decoded — nothing is
   smoothed or thrown away to make the file smaller. Each one also carries its own
@@ -308,9 +356,9 @@ other station can read it":
 - **Nothing here logs.** No QSO, no callsign field, no dupe check. On receive, the
   only callsign SSTV recovers is the FSK ID some stations append after the picture,
   which is best-effort, at most ten characters, and simply absent when the burst is
-  missing or garbled. Nexus does not transmit an FSK ID of its own — its own
-  identification is the burned-in plate described above, which is human-readable
-  rather than machine-readable.
+  missing or garbled. Nexus does not transmit an FSK ID of its own — its
+  identification rides in the picture, as described above, which is
+  human-readable rather than machine-readable.
 - **The resized picture is not kept.** The crop lives in the section while the app
   runs and is gone on restart; your original file is untouched and is the only copy
   Nexus keeps. Sent images do not go into the Gallery — that folder means "what I
