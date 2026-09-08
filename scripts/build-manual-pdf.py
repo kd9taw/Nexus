@@ -381,7 +381,7 @@ def main() -> int:
         <div><h4>Chasing</h4><p>The Needed board and its evidence, spots, DXpeditions,
           propagation, satellites and the logbook.</p></div>
         <div><h4>Station</h4><p>Rig and audio setup, memories, radio programming,
-          contesting, and all eight Settings tabs.</p></div>
+          contesting, and every Settings tab.</p></div>
       </div>
       <div class="spectrum">{bars}</div>
       <div class="foot"><span>Version <b>{html.escape(args.version)}</b> · KD9TAW</span>
