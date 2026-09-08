@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 📖 Documentation
-    url: https://github.com/kd9taw/Nexus/tree/main/docs/manual
-    about: Getting started, rig and audio setup, per-mode operating guides, integrations, and troubleshooting. Worth a look first.
+  - name: 📖 Operator manual
+    url: https://hamradiotools.io/manual/
+    about: The illustrated manual — one page per section of the app, from the first-run wizard to awards. Worth a look first.
+  - name: 🔧 Troubleshooting
+    url: https://github.com/kd9taw/Nexus/blob/main/docs/troubleshooting.md
+    about: Blank window, SmartScreen, no decodes, CAT and rigctld failures, audio levels, time sync, PTT.
   - name: 💬 Questions and setup help
     url: https://github.com/kd9taw/Nexus/discussions
     about: Setup problems, usage questions, and general discussion belong in a Discussion rather than an issue.

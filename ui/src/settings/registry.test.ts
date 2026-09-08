@@ -239,10 +239,10 @@ describe('density — the guard the four prior reorgs lacked', () => {
   // 12→13 (2026-09, JS8): JS8 is a first-class digital mode joining RTTY/PSK/SSTV/APRS on this
   // same tab, each of which needs exactly the same shape of section (speed/receiving, the
   // automatic-transmission switches, station text) that JS8's own settings need — there is no
-  // tab a keyboard-mode's settings belong on besides Digital. Ships `defaultOff: true`, so most
-  // operators never see the JS8 cockpit, but this registry (and the fieldset it renders) is
-  // scanned regardless of that toggle, so the density cost is real and counted here rather than
-  // argued away.
+  // tab a keyboard-mode's settings belong on besides Digital. It shipped staged (`defaultOff`)
+  // and the density cost was counted anyway, because this registry is scanned regardless of the
+  // feature toggle; JS8 is now ON by default (2026-09), so the section is one every operator
+  // scans and the cost counted here is simply the real one.
   const MAX_SECTIONS_PER_TAB = 13
 
   it('keeps every tab under the density ceiling', () => {

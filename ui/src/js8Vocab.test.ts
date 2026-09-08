@@ -4,8 +4,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   JS8_COMMANDS, JS8_CQS, JS8_SPEEDS, JS8_SPEED_LIST, JS8_QUICK_QUERIES,
-  ageLabel, countBits, estimateFrames, fmtSnr, utcClock,
+  ageLabel, bandActivityByOffset, countBits, dtLabel, estimateFrames, fmtSnr, utcClock,
 } from './js8Vocab'
+import type { Js8ActivityRow } from './types'
 
 describe('the 32-command table (varicode.cpp:46-84, leading space included)', () => {
   it('has 32 unique ids 0..31 in order and the exact wire texts', () => {
@@ -71,5 +72,57 @@ describe('estimateFrames — the composer’s pre-send estimate (an approximatio
   })
   it('a directed message is one header frame plus the text frames', () => {
     expect(estimateFrames('W1AW', null, 'HELLO THERE OM', 'KD9TAW', 'normal')).toBe(1 + 2)
+  })
+})
+
+describe('bandActivityByOffset — JS8Call’s offset-bucketed band-activity table', () => {
+  const row = (atMs: number, freqHz: number, text: string, extra: Partial<Js8ActivityRow> = {}): Js8ActivityRow => ({
+    atMs, speed: 'normal', freqHz, snrDb: -8, dtS: 0.1, from: 'W0IND', text,
+    directedToMe: false, mine: false, complete: true, lowConf: false, ...extra,
+  })
+
+  it('keeps the NEWEST decode per offset, ordered by offset', () => {
+    const out = bandActivityByOffset([
+      row(3_000, 1500, 'THIRD'),
+      row(1_000, 700, 'FIRST'),
+      row(2_000, 1500, 'SECOND'),
+    ])
+    expect(out.map((r) => [r.offsetHz, r.text])).toEqual([
+      [700, 'FIRST'],
+      [1500, 'THIRD'],
+    ])
+  })
+
+  it('merges a decode within the ±10 Hz tolerance and re-keys the bucket to the new offset', () => {
+    const out = bandActivityByOffset([row(1_000, 1500, 'OLD'), row(2_000, 1508, 'NEW')])
+    expect(out.length).toBe(1)
+    expect(out[0].offsetHz).toBe(1508)
+    expect(out[0].text).toBe('NEW')
+  })
+
+  it('keeps two buckets when the offsets are further apart than the tolerance', () => {
+    const out = bandActivityByOffset([row(1_000, 1500, 'A'), row(2_000, 1511, 'B')])
+    expect(out.map((r) => r.offsetHz)).toEqual([1500, 1511])
+  })
+
+  it('carries the DT and the row semantics the pane paints with', () => {
+    const out = bandActivityByOffset([row(1_000, 900, 'HI', { dtS: -0.42, directedToMe: true, lowConf: true })])
+    expect(out[0].dtS).toBeCloseTo(-0.42)
+    expect(out[0].directedToMe).toBe(true)
+    expect(out[0].lowConf).toBe(true)
+  })
+
+  it('is empty for an empty feed', () => {
+    expect(bandActivityByOffset([])).toEqual([])
+  })
+})
+
+describe('dtLabel — JS8Call’s Time Delta face (whole ms, signed)', () => {
+  it('renders whole milliseconds', () => {
+    expect(dtLabel(0.12)).toBe('120 ms')
+    expect(dtLabel(0)).toBe('0 ms')
+  })
+  it('keeps the sign — an early station reads negative', () => {
+    expect(dtLabel(-0.4)).toBe('-400 ms')
   })
 })

@@ -76,6 +76,24 @@ impl ClubLogResult {
             ClubLogResult::ServerError | ClubLogResult::Unknown => None,
         }
     }
+
+    /// WHY, for the per-QSO stamp — the CLASS, off the HTTP status line.
+    ///
+    /// ⛔ Deliberately not [`ClubLogPush::message`]. That is ClubLog's own body, ClubLog
+    /// echoes the failing request back, and the request body carries the app-password and
+    /// the API key — and this value is written into `log.adi`, which is signed by TQSL and
+    /// uploaded to ARRL. See [`crate::logbook::UploadDetail`]. The body still reaches the
+    /// operator through the connection log and the toast, and dies with the session.
+    pub fn to_upload_detail(self) -> Option<crate::logbook::UploadDetail> {
+        use crate::logbook::UploadDetail as D;
+        match self {
+            ClubLogResult::Ok | ClubLogResult::Modified | ClubLogResult::Duplicate => None,
+            ClubLogResult::Rejected => Some(D::RecordRefused),
+            ClubLogResult::AuthFail => Some(D::Credentials),
+            // Transient — `to_upload_outcome` stamps nothing, so there is nothing to explain.
+            ClubLogResult::ServerError | ClubLogResult::Unknown => None,
+        }
+    }
 }
 
 /// A classified realtime response.

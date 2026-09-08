@@ -75,6 +75,12 @@ interface Props {
    * ⊞-removable pane; nothing is ever removed or disabled by rule). */
   fdActive?: boolean
   fdRuleset?: FdRulesetDto | null
+  /** Calls of DXpeditions that are ON THE AIR NOW and announced SuperFox (the propagation
+   * snapshot's workable-now cards, `ft8Mode === 'SuperFox'`). Nexus does not decode SuperFox
+   * in this version, so the header names them beside the Hound button — an operator has to
+   * learn that before they call, not halfway through a pileup that never answers. Empty or
+   * absent ⇒ no notice at all. */
+  superFoxCalls?: string[]
   snap: AppSnapshot
   theme: string
   /** Active mode/tier (authoritative from the snapshot's link). */
@@ -145,6 +151,15 @@ interface Props {
   selectedCall: string | null
   /** Select (open) a station from the Roster layout (single click). */
   onSelect: (call: string) => void
+  /** Deselect — clear the app-wide selected station (App: `selectPeer(null)`).
+   *
+   * #204 (KR4FQG). The callsign card reads `selectedCall || snap.qso.dxcall`, and BOTH are
+   * owned outside this component: `selectedCall` is the backend's `activePeer` and the QSO's
+   * dxcall is the sequencer's. `clearDx` touched neither, so nothing anywhere put the card
+   * back to empty — the reporter was told F4 did it and F4 could not. This is the half of the
+   * clear this component cannot do for itself; the other half is local (`dismissedCall`).
+   * Optional so a host that has no selection to clear (the detached panel) can omit it. */
+  onClearSelection?: () => void
   /** Layout: 'classic' (WSJT-X — Band Activity dominant + compact roster aside) or
    * 'roster' (GridTracker — the full sortable Call Roster dominant). */
   layoutMode: 'classic' | 'roster'
@@ -233,34 +248,15 @@ const DF_RX = 'Rx'
 const DF_TX = 'Tx'
 const HZ_UNIT = 'Hz'
 
-/** DXpedition special-op chip definitions. */
-const SPECIAL_OPS: {
-  value: NonNullable<Settings['specialOp']>
-  label: string
-  title: string
-}[] = [
-  {
-    value: 'none',
-    get label() {
-      return t('operate.dxped.off.label')
-    },
-    get title() {
-      return t('operate.dxped.off.title')
-    },
-  },
-  {
-    value: 'hound',
-    label: HOUND_LABEL,
-    get title() {
-      return t('operate.dxped.hound.title')
-    },
-  },
-  // SuperFox (superhound) retired by operator decision — the QPC table file's
-  // license bars vendoring the native decoder outside WSJT-X. A settings file
-  // that still says 'superhound' loads fine and behaves as plain Hound.
-]
+/** Is this saved special-op value Hound? `superhound` is a RETIRED alias that the engine
+ *  treats as plain Hound (settings.rs), so a settings file carrying it reads as Hound ON —
+ *  never as a third state, and never as its own choice on the button. */
+const isHound = (op: Settings['specialOp'] | undefined): boolean =>
+  op === 'hound' || op === 'superhound'
 
 const NO_MACROS: string[] = []
+/** Stable empty default — a fresh `[]` per render would re-run every memo that reads it. */
+const NO_CALLS: string[] = []
 
 /** Operator-facing names for the removable panels (the ⊞ Panels menu). Resolved when the
  *  menu is BUILT — a module constant would freeze the first locale loaded. */
@@ -341,6 +337,7 @@ export function OperateCockpit({
   needScopes,
   selectedCall,
   onSelect,
+  onClearSelection,
   layoutMode,
   onLayoutMode,
   onPopOut,
@@ -349,6 +346,7 @@ export function OperateCockpit({
   companionAddr,
   fdActive = false,
   fdRuleset = null,
+  superFoxCalls = NO_CALLS,
   onOpenSettings,
   wheelSensitivity,
 }: Props) {
@@ -521,6 +519,15 @@ export function OperateCockpit({
   const tx6Edited = useRef(false)
   // Locally picked "next" row (0-based) until qso.txNow confirms one.
   const [localNext, setLocalNext] = useState<number | null>(null)
+  // #204 — THE CALLSIGN CARD'S DISMISSAL. The call the operator last cleared, so the card can
+  // go back to empty without this component pretending to own either of the two values it is
+  // derived from. It is scoped to a CALL rather than a boolean on purpose: a plain "hidden"
+  // flag would have to be reset by hand from every path that changes who the card is about,
+  // and the one that would get missed is the CQ auto-answer, where a QSO starts with no click
+  // anywhere. Comparing against the current call needs no reset at all.
+  const [dismissedCall, setDismissedCall] = useState<string | null>(null)
+  // The card's current subject, readable from `clearDx` — which is created once, like `keyRef`.
+  const recallCallRef = useRef<string | null>(null)
   // The blocked-callsigns set (Alt-double-click a decode/roster row). PERSISTED and
   // engine-honored when App wires `blockedCalls`/`onToggleBlocked` (the auto-responder
   // never answers a listed call); the session-only useState survives as the fallback for
@@ -627,7 +634,15 @@ export function OperateCockpit({
     // re-reads this field on every Tx6 fire, so keeping the text IS keeping the direction —
     // and clearing it back to a plain CQ stays one edit away.
     setLocalNext(null)
-  }, [])
+    // #204 — AND THE CALLSIGN CARD, which is the half that was missing. Two owners, so two
+    // moves: `selectedCall` is backend state and rounds through the app (`selectPeer(null)`),
+    // while the sequencer's `qso.dxcall` is NOT ours to clear — a QSO is not cancelled by
+    // tidying the screen — so the card is dismissed for THAT call and comes back by itself the
+    // moment the card would be about a different station. `recallCallRef` carries the value
+    // because this callback is created once, the same way `keyRef` does for the key handler.
+    setDismissedCall(recallCallRef.current)
+    onClearSelection?.()
+  }, [onClearSelection])
 
   // Stock "Clear DX call and grid after logging": App bumps the tick when a
   // QSO is logged with the option on. Skip the mount tick.
@@ -714,6 +729,14 @@ export function OperateCockpit({
     setDxCall(up)
   }
 
+  /** Roster single-click. Wraps the host's `onSelect` so that re-opening the SAME station the
+   * operator just cleared brings its card back — without this, the dismissal would outlive the
+   * click that contradicts it and the card would stay stubbornly blank. */
+  const handleSelectStation = (call: string) => {
+    setDismissedCall(null)
+    onSelect(call)
+  }
+
   const handleToggleIgnore = (call: string) => {
     if (onToggleBlocked) onToggleBlocked(call)
     else setSessionIgnored((prev) => toggleIgnored(prev, call))
@@ -721,9 +744,9 @@ export function OperateCockpit({
   const handleSetRx = (hz: number) => onTune(hz, 'rx')
 
   // Cockpit keyboard (stock WSJT-X): Esc = halt TX, F4 = clear DX, F6 = re-decode,
-  // Alt+1…6 = the Tx buttons. Window-level, active-view only, and never while
-  // typing in an input/textarea. Handlers ride a ref so the listener binds once
-  // per activation without re-subscribing on every keystroke of state.
+  // Alt+1…6 = the Tx buttons. Window-level and active-view only. F6 and Alt+1–6 stay behind
+  // the typing guard; Esc and F4 are hoisted above it. Handlers ride a ref so the listener
+  // binds once per activation without re-subscribing on every keystroke of state.
   const keyRef = useRef({ doTx, clearDx, halt: onHaltTx, redecode: handleRedecode })
   keyRef.current = { doTx, clearDx, halt: onHaltTx, redecode: handleRedecode }
   useEffect(() => {
@@ -737,14 +760,22 @@ export function OperateCockpit({
         keyRef.current.halt()
         return
       }
-      const t = e.target as HTMLElement | null
-      const tag = t?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
-      if (e.key === 'F4') {
+      // F4 IS ALSO ABOVE THE GUARD (#204). WSJT-X handles it in `MainWindow::keyPressEvent`
+      // (mainwindow.cpp), so a focused QLineEdit never swallows it — an operator half-way
+      // through typing a call presses F4 and the fields clear. Ours returned early on
+      // INPUT/TEXTAREA/SELECT, so F4 did nothing in exactly the moment it is reached for, and
+      // the reporter's "pressed F4 and nothing happened" was the guard, not the wiring.
+      // WSJT-X parity is the goal, so it moves up beside Escape rather than gaining a second
+      // shortcut. Modifier-free only: Alt+F4 is the platform's close-window gesture and must
+      // never be answered here — hoisted, it would otherwise clear the DX fields on the way out.
+      if (e.key === 'F4' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
         e.preventDefault()
         keyRef.current.clearDx()
         return
       }
+      const t = e.target as HTMLElement | null
+      const tag = t?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t?.isContentEditable) return
       if (e.key === 'F6') {
         e.preventDefault()
         keyRef.current.redecode()
@@ -823,6 +854,12 @@ export function OperateCockpit({
   // Same field the roster highlights as `workingCall`, so the two can never disagree
   // about who is being worked.
   const recallCall = selectedCall || snap.qso?.dxcall || null
+  // #204 — what F4 / Clear actually empties. `dismissedCall` holds the call the operator
+  // dismissed; the card reappears by itself as soon as `recallCall` names a DIFFERENT station,
+  // so a clear never outlives the thing it cleared. The ref exists so `clearDx` (created once)
+  // can read the current value without taking it as a dependency.
+  recallCallRef.current = recallCall
+  const shownRecallCall = recallCall && recallCall === dismissedCall ? null : recallCall
   // The decode panes' hide-filter exemption: the station the sequencer is actively working,
   // and nobody after Done — the same "engaged" line the alerts draw.
   const partnerCall = engagedInQso({
@@ -831,8 +868,8 @@ export function OperateCockpit({
   })
     ? (snap.qso?.dxcall ?? null)
     : null
-  const recallCard = recallCall ? (
-    <OperateRecall snap={snap} call={recallCall} mode={tier} onOpenLog={onOpenLogbook} />
+  const recallCard = shownRecallCall ? (
+    <OperateRecall snap={snap} call={shownRecallCall} mode={tier} onOpenLog={onOpenLogbook} />
   ) : null
 
   return (
@@ -946,24 +983,47 @@ export function OperateCockpit({
         }}
         txState={false}
       >
-        {/* DXpedition special-op selector — one compact select (was a 3-chip group;
-            header-density pass 2026-08), always visible in both layouts. Edits
-            settings.specialOp. */}
+        {/* HOUND — ONE CLICK, in the cockpit header, always visible in both layouts.
+            Operator ask: "so users can click it on and off without having to go into the
+            settings". Hound is a per-DXpedition mode entered and left inside a session (the
+            engine drops it at every launch for exactly that reason), so a dropdown — open it,
+            read two options, pick one — was one interaction too many for something operated
+            mid-pileup. It edits the same `settings.specialOp` Settings does; this is a second
+            way in, not a second source of truth.
+
+            TWO STATES, because there are only two: `superhound` is a retired alias the engine
+            treats as plain Hound, so it renders the button ON and is never offered as a choice
+            of its own.
+
+            NOT A STOP CONTROL, and not part of the stop line: it neither starts nor stops a
+            transmission. It sits here with the other header state controls, outside every
+            ⊞-removable pane, and carries no vocabulary id.
+
+            Toggling it mid-QSO is safe by construction — a contact in flight keeps the rules it
+            started under (engine.rs `hound_split`); the toggle governs the NEXT one. */}
         <div className="cockpit-specialop">
-          <span className="cockpit-specialop-label">{t('operate.header.dxped.label')}</span>
-          <select
-            className="cockpit-specialop-select"
-            aria-label={t('operate.header.dxped.aria')}
-            value={specialOp === 'superhound' ? 'hound' : specialOp}
-            onChange={(e) => handleSpecialOp(e.target.value as NonNullable<Settings['specialOp']>)}
-            title={SPECIAL_OPS.find((op) => op.value === (specialOp === 'superhound' ? 'hound' : specialOp))?.title}
+          <button
+            type="button"
+            className={`cockpit-specialop-btn${isHound(specialOp) ? ' active' : ''}`}
+            aria-pressed={isHound(specialOp)}
+            onClick={() => handleSpecialOp(isHound(specialOp) ? 'none' : 'hound')}
+            title={t('operate.dxped.hound.title')}
           >
-            {SPECIAL_OPS.map((op) => (
-              <option key={op.value} value={op.value} title={op.title}>
-                {op.label}
-              </option>
-            ))}
-          </select>
+            {HOUND_LABEL}
+          </button>
+          {/* SuperFox, said BEFORE the call. The DXpedition calendar already knows which
+              operations announced it; what an operator could not find out until the pileup
+              was that this build has no SuperFox decoder, so the Fox never appears in the
+              decode list and Hound cannot help. Rendered only while such an operation is
+              actually on the air — a standing notice is noise, not a warning. */}
+          {superFoxCalls.length > 0 && (
+            <span
+              className="cockpit-superfox-note"
+              title={t('operate.dxped.superfox.title')}
+            >
+              {t('operate.dxped.superfox.note', { calls: superFoxCalls.join(', ') })}
+            </span>
+          )}
         </div>
 
         {/* Warn-only Field Day banned-mode chip (e.g. FT8 at WFD — this cockpit is
@@ -1281,7 +1341,7 @@ export function OperateCockpit({
                     // peer and is null throughout an FT8 session, so the roster had nothing to
                     // highlight and #16 was reported.
                     workingCall={snap.qso?.dxcall ?? null}
-                    onSelect={onSelect}
+                    onSelect={handleSelectStation}
                     onCall={onCall}
                     ignoredCalls={ignored}
                     onToggleIgnore={handleToggleIgnore}

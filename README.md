@@ -11,10 +11,10 @@
 ![Status](https://img.shields.io/badge/status-1.0-brightgreen)
 
 [![Download](https://img.shields.io/badge/⬇_Download-Windows_·_macOS_·_Linux_·_Pi-0078D6?style=for-the-badge&logo=windows)](https://github.com/kd9taw/Nexus/releases/latest)
-[![Operator manual](https://img.shields.io/badge/📖_Operator_manual-docs-8957e5?style=for-the-badge)](docs/manual/)
+[![Operator manual](https://img.shields.io/badge/📖_Operator_manual-docs-8957e5?style=for-the-badge)](docs/guide/)
 
 <sub>Offline installer, bundles WebView2 **and Hamlib**, per-user install, no admin rights. ·
-**[Operator manual](docs/manual/)** · **[Comprehensive overview](docs/OVERVIEW.md)**</sub>
+**[Operator manual](docs/guide/)** · **[Comprehensive overview](docs/OVERVIEW.md)**</sub>
 
 </div>
 
@@ -294,7 +294,8 @@ logs, and never shown back to the UI beyond "configured."
 4. Watch decodes arrive. Double-click a station, the sequencer runs the QSO, and the contact lands
    in the logbook, on PSK Reporter, and (if configured) on QRZ and LoTW.
 
-New here? Start with **[Getting Started](docs/manual/Getting-Started.md)**.
+New here? Start with **[Quick start](docs/quick-start.md)** — install, the first-run wizard a
+step at a time, and your first contact.
 
 > The installer is **unsigned** (cross-compiled on Linux), so SmartScreen may warn: *More info →
 > Run anyway*. Verify the download against the `SHA-256` published on the
@@ -385,8 +386,14 @@ The modem is Fortran + C behind a Rust FFI, so the **GNU toolchain** is required
 
 ## Documentation
 
+- **[Operator manual](docs/guide/)** — the illustrated manual: one page per section of the app,
+  screenshots and all. Also published at
+  **[hamradiotools.io/manual](https://hamradiotools.io/manual/)**, and built into the EPUB and PDF
+- **[Quick start](docs/quick-start.md)** · **[Install](docs/install.md)** ·
+  **[Troubleshooting](docs/troubleshooting.md)** · **[FAQ](docs/faq.md)**
+- **[Topic pages](docs/manual/)** — rig and audio setup, building from source, architecture, the
+  frequency plan, Field Day, integrations, the roadmap
 - **[Comprehensive overview](docs/OVERVIEW.md)** — every surface, in depth
-- **[Operator manual](docs/manual/)** — setup, per-mode operating guides, integrations, troubleshooting
 - **[Tempo protocol specification](docs/Tempo-Protocol.md)** — the native waveforms, for implementers
 - **[Frequency plan](docs/FREQUENCIES.md)** — where the TempoFast/TempoDeep tiers live on the bands
 - **[Changelog](CHANGELOG.md)** — every release, in operator-facing prose
@@ -470,7 +477,7 @@ contributions welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)** and the
 <div align="center"><sub>
 
 **[⬇ Download](https://github.com/kd9taw/Nexus/releases/latest)** ·
-**[📖 Manual](docs/manual/)** ·
+**[📖 Manual](docs/guide/)** ·
 **[💬 Discussion group](https://groups.io/g/hamradiotools)** ·
 **[🐛 Report a bug](https://github.com/kd9taw/Nexus/issues)** ·
 **[🌐 hamradiotools.io](https://hamradiotools.io)**

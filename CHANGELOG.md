@@ -5,9 +5,26 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.11.0] — 2026-09-08
 
 ### Added
+
+- **JS8: CQ and the heartbeat repeat on their own, with the countdown on the button.** JS8Call's
+  CQ and HB buttons are switches — arm one and it calls or beacons on a timer, with the seconds to
+  the next transmission ticking down in the button's own label (`CQ (12)`, `HB (42)`, `HB (now)`).
+  Nexus's were one-shots. They aren't any more. Set **Settings ▸ Digital ▸ JS8 ▸ CQ repeat
+  interval**; at 0 the CQ button stays the single-shot it always was, above 0 it becomes the
+  switch. The heartbeat's countdown appears whenever its schedule is running. This is the POTA and
+  beacon habit: set it going and walk away.
+
+  It stops when it should, and every existing transmit guard still holds. It keys nothing until
+  **both** acts are present — the session TX latch and the repeat switch itself — so arming one
+  with TX off shows "on", never "armed", and sends nothing. A station answering you turns the CQ
+  repeat off, exactly as JS8Call does. The idle watchdog (60 min by default) stands both down, and
+  a scheduled call cannot reset that clock the way your own sends do — an unattended station has a
+  bound. Stop TX, leaving JS8 and changing operating mode each cancel the schedule and drop
+  anything already queued. It is never remembered across launches: the app can never come back
+  calling CQ.
 
 - **The FT-710 can draw its own band scope.** The radio has a real spectrum display inside it and
   an internal USB bridge that will hand it over; until now Nexus could only show the sound card's
@@ -24,12 +41,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so Nexus derives it from the band edge. That is measured, not assumed — but check it against the
   rig's own scale, and the tooltip says so.
 
-- **JS8 transmits.** The JS8 section (shipped hidden — Settings ▸ Features) now keys every
+- **JS8 is on out of the box.** The JS8 section shipped hidden behind a Settings ▸ Features
+  toggle while it was new. It now sits in the Digital group of the rail, after APRS, with no
+  toggle to find first. Nothing else about it changed: opening it tunes the rig to the band's
+  JS8 watering hole and starts decoding all four speeds, and it still transmits nothing until
+  you enable TX in the header and switch on whatever you want it to send. If you don't operate
+  JS8, turn it off in Settings ▸ Appearance ▸ Features.
+
+  Two things worth knowing, because they have not changed either: the four speeds have not been
+  run side by side with JS8Call on the air yet — Fast and Turbo have only ever been decoded from
+  generated audio, never off a real band — and at Normal, Nexus needs roughly 2 dB more signal
+  than JS8Call to print the same message. Reports from the air are welcome.
+
+- **JS8 transmits.** The JS8 section now keys every
   period like JS8Call: your messages, CQ, heartbeats on a random free 500–1000 Hz slot, and —
   behind the session TX latch plus the persisted switch — autoreplies, relay and HB-ack, each
   with a visible, cancellable countdown. Heartbeats are exempt from the 6-minute TX watchdog
   the way WSPR/FST4W beacons are and bounded by JS8Call's 60-minute idle watchdog; Stop TX
-  clears the queue, the heartbeat schedule and any pending reply.- **A POTA activity map in FT mode.** A new *Map* button beside Classic/Roster in the FT header
+  clears the queue, the heartbeat schedule and any pending reply.
+- **A POTA activity map in FT mode.** A new *Map* button beside Classic/Roster in the FT header
   opens the map in its own window — put it on a second monitor next to the roster, the way
   GridTracker is used for park hunting. It plots every spotted POTA activator from the live
   feed (the same source GridTracker reads, with no mode or age filter), coloured by
@@ -42,7 +72,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backlog that was already active when you turned it on. It works whether or not the map
   window is open.
 
+- **A per-radio switch to hold FM-D while you are receiving SSTV.** Nexus commands the FM data
+  submode (FM-D / DATA-FM) only while a picture is queued or going out, and puts the radio back
+  in plain FM in between — deliberate, because an SSTV send once keyed a data mode into an FM
+  repeater input, but wrong if you park on an FM SSTV calling channel for the evening and expect
+  the rig to stay in FM-D. **Settings ▸ Radio ▸ Rig & CAT ▸ Advanced ▸ "Hold FM-D while SSTV is
+  receiving"**, off by default, set per radio because it depends on how that rig is cabled and
+  what you use it for.
+
+  With it on, the radio is held in the data submode for as long as the SSTV receiver is running.
+  **Stop the receiver before you go back to voice** — the receiver keeps running after you leave
+  the SSTV screen, and while it does, transmit audio comes from the data port and your microphone
+  modulates nothing. The switch's own hint says so.
+
+  ⚠️ **NEEDS-BENCH on a real IC-9700.** What is proven here is the mode word Nexus commands — and
+  it is not a new word; it is the same one an SSTV send already uses. What is not proven is a
+  radio's on-air behaviour when it is *held* in FM-D between pictures. (#130)
+
+  This one was reported as already fixed, twice. It was not — see below.
+
+- **The manual is illustrated, and corrected.** Every one of the 22 chapters now carries
+  screenshots — 137 of them, up from 11 — and the pages an operator reaches first were the ones
+  most in need: the first-run wizard, the waterfall, the settings reference. An audit against the
+  running app also turned up a stack of things the manual said that were no longer true: the
+  wizard is four steps and not three, the waterfall takes three mouse gestures and not two, the
+  grid wants all six characters, and the mode chapters described transmit capabilities that
+  several modes do not have. Those are fixed. Where a picture would have had to be staged to
+  exist, there is no picture and the text says what is missing instead.
+
 ### Fixed
+
+- **The JS8 screen was drawing the Tempo screen underneath it.** Opening JS8 rendered the whole
+  Tempo workspace below the cockpit: its Fast and Deep tier buttons, its station roster, its
+  conversation pane, and a second waterfall beside JS8's own. Every other digital cockpit is
+  wired to leave that slot empty and JS8 had been missed, so it fell through to the chat screen's
+  layout. JS8 now shows JS8 and nothing else.
+
+- **Nothing could clear the callsign card in the FT cockpit, and F4 did nothing while you were
+  typing.** Two separate faults behind one report. The card follows whichever station you have
+  open plus whoever the sequencer is working, and no control anywhere put it back to empty — the
+  answer that said F4 did it was wrong, because F4 cleared the DX Call and Grid boxes in the Tx
+  Messages panel, which is a different block. F4 now clears both, and the card comes back on its
+  own the moment it would be about a different station. Separately, F4 was disarmed whenever the
+  cursor sat in a text box, which is exactly when you reach for it; it now fires while you type,
+  the way WSJT-X does. Alt+F4 still closes the window and clears nothing. (#204)
+
+- **The 60 m FT8 dial, and what changed underneath it.** The band button tunes 5.3715, the US
+  channel centred on 5373.0 kHz, and that was reported as the wrong frequency — which it was when
+  the report was filed, because 60 m FT8 lived on 5.357 worldwide. It is not wrong now: on
+  13 February 2026 the FCC split US 60 m into four 100 W ERP channels (5332.0 / 5348.0 / 5373.0 /
+  5405.0 kHz) plus the worldwide 5351.5–5366.5 kHz segment at 9.15 W ERP, and eliminated the
+  5358.5 kHz channel that 5.357 dialled. US FT8 moved to 5.3715 to keep the power.
+
+  So the band button stays where it is — moving it to 5.357 would drop a US station's legal
+  ceiling by about 10 dB with nothing on screen saying so — and the entry now says which dial is
+  which, and why. **Outside the US, and for QRP, 5.357 is still the one you want**, and it is a
+  Memories preset alongside it. A 60 m spot on *either* dial is now recognised as FT8 rather than
+  a bare "Digital", which it was not before. The 60 m notes on the Memories presets were also
+  wrong after the rule change — they described a 100 W channel at 5358.5 that no longer exists —
+  and are corrected. (#175)
+
+- **The diagnostic log's "Always on" now says why, and there is no `--debug`.** A reply implied
+  the log could be switched off and that a `--debug` command-line flag existed. Neither is true,
+  and neither is going to be: a log you can turn off is missing on exactly the launch that needed
+  it, and the switch would live in a settings file a failing launch may never reach. The Settings
+  entry now states that rather than leaving "Always on" as a bare assertion, and the
+  troubleshooting guide names the one switch that *is* yours — Settings ▸ Logging & Connectors ▸
+  "Extra detail in the diagnostic log", which applies live with no restart — and states plainly
+  that `--profile` is the only argument Nexus takes. (#101)
+- **Hound is one click, on the FT8 screen.** The DXpedition Hound mode was a dropdown in the
+  Operate header behind a setting only Settings otherwise wrote; it is now a single **Hound**
+  button you click on and off while you work. That matters because Hound is a per-DXpedition
+  mode, not a station setting — Nexus drops it at every restart for exactly that reason — and
+  you should be able to enter and leave it in the middle of a session without going anywhere.
+  Toggling it mid-QSO is safe: a contact already on the air keeps the rules it started under,
+  and the button governs the next one. The retired *SuperHound* option is not offered as a
+  choice, because it never did anything a plain Hound did not.
+
+- **Nexus tells you a DXpedition is running SuperFox before you call it.** SuperFox is a
+  transmission format this version has no decoder for, so such an operation never appears in
+  the decode list and Hound mode does not change that — which, found out mid-pileup, looks
+  exactly like bad propagation. When the DXpedition calendar shows a SuperFox operation on the
+  air, the Operate header now names it beside the Hound button and its card on the DXpeditions
+  board says the same thing: work that one in WSJT-X.
+
+- **Turning Hound off during a QSO with a Fox could strand the contact.** A DXpedition Fox
+  packs two replies into one transmission, and the half confirming you arrives without a
+  sender; Nexus put the Fox's callsign back on it so the exchange could close. That repair
+  was keyed to the Hound switch *as it stood right then* rather than to the contact, so
+  switching Hound off part way through stopped it: the Fox's confirmation no longer read as
+  one, and you kept calling a station that had already rogered you. The reverse could happen
+  too — switching Hound on during an ordinary contact let a passing Fox's confirmation be read
+  as your partner's. A contact now keeps the rules it started under from end to end.
 
 - **The satellite catalog was publishing years-old orbits for birds that had stopped being
   tracked.** The mirror took the freshest elements it could find for each active bird — but for a
@@ -93,6 +214,176 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   export, stamped with the call that made it, and both upload paths sign from the record rather
   than from the current setting. Contacts logged by earlier versions carry no station call and
   upload exactly as they did before.
+
+- **The QRZ callbook row in Settings ▸ Connections could never say it was working.** It was
+  wired to nothing, so a paid subscription with a working password and a subscription that had
+  lapsed months ago showed the same grey "not verified yet" row, and the only way anyone found
+  to clear it was to push a QSO through. Every callbook lookup now updates that row, and so
+  does the Test connection button on the QRZ Logbook row — which also could not clear its own
+  dot before. Because the row is a lookup and not an upload it now says "last lookup" rather
+  than "last upload".
+
+  A lookup QRZ *refuses* is kept apart from a callsign QRZ simply does not have. QRZ answers
+  both the same way — on a live session, with an error and no record — so a refused lookup was
+  being counted as a completed one: the row went green, and green does not just fail to warn,
+  it clears a red that was already there. A match and a genuine miss now read as a working
+  subscription; a refusal and a session QRZ will not accept read as failures, each naming what
+  to go and check. Telling those two apart reads QRZ's own not-found wording, and it now has to
+  be QRZ's not-found *reply* rather than any refusal that happens to use the words — a
+  subscription-level refusal worded "callsign not found at your subscription level" was being
+  read as a plain miss, which turned the row green.
+
+- **Cloudlog and Wavelog threw away the reason your upload was rejected.** The instance sends
+  back what it actually refused — a read-only API key, a station profile id not linked to that
+  key, a missing ADIF field — and Nexus replaced all of it with "auth rejected — check the API
+  key", which sent people to check the one thing that was usually fine. The instance's own
+  words now lead in the upload result, and where it said nothing the guess names the station
+  profile id as well as the key. A failure to reach the instance at all is no longer blamed on
+  the URL either: an antivirus or company proxy inspecting HTTPS traffic is named as the likely
+  cause, which is what it usually is.
+
+- **A logbook service's own error text is no longer kept in your config directory.** The Connections panel's
+  failure line was stored word for word in a file in your config directory, and for Cloudlog
+  and Wavelog that text can contain your API key — the key travels inside the upload request,
+  and an instance running in debug mode, or a proxy or firewall page in front of it, answers by
+  quoting the request straight back. What gets stored is now always Nexus's own sentence,
+  naming the failure and what to check. The service's exact words are still shown to you, in
+  the upload result and in this session's connection log; they are simply not kept. The same
+  rule now covers HRDLog.net and World Radio League, whose replies were being stored with no
+  length limit at all.
+
+  It covers the diagnostic output as well. On Linux the desktop session captures a program's
+  console output into a world-readable file in your home directory, and the connection log was
+  echoing every service reply there verbatim — so the same API key was landing in a second
+  file, kept until your next login. The console line now names only the connector and whether
+  it succeeded, and the ClubLog most-wanted fetcher, whose request carries your ClubLog key in
+  its URL, no longer echoes ClubLog's refusal there either. And a file that already had a key
+  in it from an earlier version is cleaned the next time Nexus starts: a stored failure line
+  that this version could not have written is dropped, and the row keeps the time it failed.
+
+- **A logbook service's own error text is no longer written into your log file — or uploaded
+  to ARRL with it.** When a QRZ Logbook or ClubLog upload bounced, the service's reply was
+  stored on the contact itself, inside `log.adi`. Both services answer a rejected upload by
+  quoting the request back, and the request carries your API key — so the key was written into
+  the logbook, and from there it rode out through every export built on it: the batch TQSL
+  signs with your callsign certificate and uploads to LoTW, the per-contact eQSL upload, and
+  any range or operator export you make. That is a secret leaving your machine under your own
+  signature, and it cannot be recalled. What the contact now records is Nexus's own description
+  of *why* the upload failed — the credentials were refused, the record was refused, TQSL
+  signed only part of the batch — and never the service's words. LoTW's own tool is covered by
+  the same rule. You still see exactly what the service said: it is in the upload result and in
+  this session's connection log.
+
+  A log file that already carries one of these replies is cleaned the moment Nexus reads it,
+  which is before any export can quote it — the contact keeps the fact that its upload bounced,
+  and when, and loses only the text.
+
+  **And so are the safety copies of it.** Nexus keeps a `log.adi.bak` beside your log — taken
+  the first time it opens a log and never overwritten — plus dated snapshots in a `backups`
+  folder. Those copies are made from the raw file, so on any machine that ran an affected
+  version they hold the same replies, and nothing ever rewrote them. Upgrading now cleans them
+  too: the copies keep every contact, they lose only the reply text, and any copy that held one
+  is rewritten so only your own account can read it. Your log itself is cleaned once, in place,
+  the first time this version opens it. A log with nothing to clean is not rewritten at all, so
+  a large log still opens as fast as it did.
+
+- **The automatic QRZ Logbook sync no longer prints QRZ's reply where the desktop can keep it.**
+  When the hourly sync failed, Nexus printed QRZ's own refusal line — which on Linux the desktop
+  session saves to a world-readable file until your next login, and QRZ quotes your failing
+  request, API key included. The failure now says what went wrong in Nexus's own words: no key
+  stored, the sync never reached QRZ, or QRZ refused it. QRZ's own wording still reaches you, in
+  Settings ▸ Connections, and it goes no further than that session.
+
+- **A LoTW upload that TQSL turns down now says what TQSL said, and which of two problems it
+  was.** The reason on the contact is Nexus's own sentence — the service's wording is not
+  written into your log — and that sentence sends you to this session's connection log to read
+  what TQSL actually printed. For LoTW it was not there: every other connector wrote its line,
+  LoTW wrote none, so a failed sign left the real message only in the toast of the click that
+  produced it. It is now recorded for every failing upload, automatic or manual. And a batch
+  that fails to sign no longer reports "check your credentials" for two problems with nothing
+  in common: a missing or expired **Callsign Certificate** (request or renew it at ARRL, load
+  the .p12 into TQSL) is now told apart from an unusable **Station Location** (create it in
+  TQSL, or correct the name in Settings).
+
+- **A QRZ callbook row no longer claims a working subscription it cannot prove.** The row went
+  green on far too little. QRZ answers "no such callsign" and "your subscription will not do
+  that" in exactly the same shape, so several versions of this check tried to tell them apart by
+  reading QRZ's wording, and each was beaten by the next wording — one of them still read *"Not
+  found: your subscription does not cover this record"* as a plain miss and marked the connector
+  green, clearing a real failure.
+
+  The wording was never the real problem. When your XML subscription lapses, QRZ does not send an
+  error at all — it sends a **successful** lookup with the free-tier fields in it: the callsign, a
+  name, a country, and no grid square and no state, because those are what the subscription buys.
+  Every version of this check saw a record come back and called the subscription healthy, so the
+  row read green for operators who were no longer subscribed to anything.
+
+  So the check was turned around. The row goes green only on positive proof — a lookup that comes
+  back carrying a subscriber-only field, read from the returned record itself and not from QRZ's
+  surrounding prose — and it now also believes QRZ's own subscription field: a reply that says
+  `non-subscriber`, or whose subscription expired, reads red no matter what else it carries. Every
+  other answer, including shapes QRZ has not sent before, reads as not confirmed. Two trades, both
+  deliberate: looking up a callsign that genuinely does not exist marks the row as failing until
+  your next successful lookup, and so does a lookup whose record happens to carry neither a grid nor
+  a state. A row that reads red until your next lookup costs you a glance; a row that reads green
+  over a subscription that has quietly lapsed is the bug this was reported as.
+
+<!-- ℹ️ NICE-TO-KNOW, no longer load-bearing (round 7 pass 2): green would rest on QRZ withholding
+     <state> from a non-subscriber (<state> is FCC-ULS-derivable, so QRZ MIGHT return it to a free US
+     account) — EXCEPT the predicate now also reads QRZ's own <SubExp> and refuses an explicit
+     `non-subscriber`/expired reply regardless of which fields it carries. So if QRZ ever does return
+     <state> free, the SubExp disqualifier is what catches it (the reply carries
+     <SubExp>non-subscriber</SubExp>), and #245 cannot return through that door. Proven by
+     `a_non_subscriber_body_carrying_a_real_state_is_disqualified_by_subexp` in qrz.rs. The only
+     residual — a free reply with <state> and NO SubExp marker at all — is worth confirming, not the
+     single assumption the fix rests on. CHECK when convenient: one lookup from a lapsed/free QRZ XML
+     subscription — does the <Callsign> carry <state>, and does the <Session> carry a <SubExp>? Do
+     NOT use live credentials in code/CI. -->
+
+- **A manual HRDLog.net or World Radio League push that never reached the service now records
+  it.** Pressing the per-contact upload button and getting a network failure left the
+  Connections row saying "stored — not verified yet" forever, while the automatic upload
+  recorded the identical failure — so the button an operator presses *because* the row has
+  never been verified was the one that could not change it.
+
+- **A Cloudlog failure now says which failure, after a restart too.** Every way an upload could
+  fail collapsed into one stored sentence, so once the connection log had gone with the session
+  the Connections row could not tell a station profile id that is not linked to your key from a
+  URL that is not a Cloudlog instance from the instance being down. Each of those now has its
+  own line on the row, naming what to go and check — the same way the HRDLog.net and World Radio
+  League rows already worked.
+
+- **A connector row could read green in the second it failed.** The panel compares when a
+  connector last worked with when it last failed, and those are stamped to the whole second —
+  so a QSO that uploaded and then failed inside the same second read as working, and stayed
+  that way until the next failure. The auto-upload worker pushes to every service back to back
+  with no spacing, and a Cloudlog instance on your own network answers in milliseconds, so this
+  was reachable. A tie now reads as failing.
+
+- **A LoTW report that failed to download said which step failed, not what went wrong.** Every
+  failure reading the response became "could not read the response body", so a request that
+  died after a minute and one that never started looked identical. It now says which happened
+  and how long it waited — and where it genuinely cannot tell (LoTW still assembling the
+  report, or a report too large to arrive inside the deadline) it says both instead of
+  guessing, and tells you to narrow the date range if it keeps happening.
+
+- **An upload code pasted with a stray space or newline made every upload fail, silently.**
+  Copying an HRDLog.net upload code, a QRZ Logbook API key or a World Radio League key out of a
+  web page usually brings a trailing newline with it. Nexus stored it exactly as pasted and
+  sent it that way, so the service rejected every QSO and nothing on screen explained why —
+  the code looked right because it was right, apart from a character you cannot see. Codes are
+  now trimmed when you save them. Existing stored codes are unaffected until you re-enter one.
+
+- **settings.json is no longer world-readable.** It holds your ClubLog API key (and, briefly, a
+  Cloudlog key on its way into the OS keychain), but was written so any account on the machine
+  could read it. It is now owner-only. Existing files are tightened the next time Nexus saves them.
+
+- **Upgrading no longer destroys a stored Cloudlog key when the OS keychain is unavailable.** The
+  one-time move of a legacy Cloudlog/Wavelog key from settings.json into the keychain cleared the
+  key from the file whether or not it had actually been stored — so on a Linux box with no Secret
+  Service running, the key was silently deleted at launch. It is now cleared only once it is safely
+  in the keychain, and the migration retries on a later launch otherwise.
+
 
 ## [1.10.3] — 2026-09-04
 

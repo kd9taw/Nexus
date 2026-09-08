@@ -18,10 +18,13 @@ const base = (): Js8State => ({
   hbOn: false,
   hbNextAtMs: null,
   hbIntervalMin: 0,
+  cqOn: false,
+  cqNextAtMs: null,
+  cqIntervalMin: 0,
   autoreply: true,
   relay: true,
   hbAck: false,
-  armed: { autoreply: false, relay: false, hbAck: false, hb: false },
+  armed: { autoreply: false, relay: false, hbAck: false, hb: false, cq: false },
   idleMinutes: 12,
   idleLimitMin: 60,
   idleTripped: false,
@@ -51,6 +54,9 @@ vi.mock('../api', async (importOriginal) => {
     js8Arm: vi.fn(async () => s()),
     js8Cancel: vi.fn(async () => s()),
     js8DropQueue: vi.fn(async () => s()),
+    // The roster's ✓/Name/Comment columns join against the logbook (features/callHistory),
+    // so the auto-stub's `{}` is not a usable log — this suite runs against an empty one.
+    getLog: vi.fn(async () => []),
     getLicensedBandPlan: vi.fn(async () => []),
   }
 })
@@ -132,7 +138,7 @@ describe('the pending row knows whether its reply can key', () => {
   })
 
   it('TX on but the origin not armed (idle-tripped) → the "not armed" face', async () => {
-    state.current = { ...base(), txEnabled: true, idleTripped: true, pendingReply, armed: { autoreply: false, relay: false, hbAck: false, hb: false } }
+    state.current = { ...base(), txEnabled: true, idleTripped: true, pendingReply, armed: { autoreply: false, relay: false, hbAck: false, hb: false, cq: false } }
     await renderCockpit()
     expect(q('.js8-pending-row').textContent).toMatch(/not armed/i)
     expect(q('.js8-pending-row').textContent).not.toMatch(/TX is off/)
@@ -140,7 +146,7 @@ describe('the pending row knows whether its reply can key', () => {
   })
 
   it('both acts present → the countdown', async () => {
-    state.current = { ...base(), txEnabled: true, pendingReply, armed: { autoreply: true, relay: true, hbAck: false, hb: false } }
+    state.current = { ...base(), txEnabled: true, pendingReply, armed: { autoreply: true, relay: true, hbAck: false, hb: false, cq: false } }
     await renderCockpit()
     expect(q('.js8-pending-row').textContent).toMatch(/\d+ s/)
     expect(q('.js8-pending-row').textContent).not.toMatch(/not armed|TX is off/i)
@@ -151,7 +157,7 @@ describe('the pending row knows whether its reply can key', () => {
       ...base(),
       txEnabled: true,
       pendingReply: { ...pendingReply, origin: 'relay' },
-      armed: { autoreply: true, relay: false, hbAck: false, hb: false },
+      armed: { autoreply: true, relay: false, hbAck: false, hb: false, cq: false },
     }
     await renderCockpit()
     expect(q('.js8-pending-row').textContent).toMatch(/not armed/i)

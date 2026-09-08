@@ -15,6 +15,13 @@ section never touches the rig — only an explicit **Tune** retunes.
 
 ## The tour
 
+![The Memories section in List view. The sidebar holds All memories with a count of 88, ★ Favorites 12, Nets 11, then five group rows — Well-Known HF Nets 3, VHF/UHF Calling & Simplex 9, Emergency & EmComm 12, HF Traffic & Ragchew Nets 10, Reference: Time, Beacons … 22 — and a New group… box. The main pane has a Search all… box and a List / Grid switch above an HF section headed "HF 65", whose rows each show a checkbox, a ★ toggle, the name, the frequency and mode, and group chips: FT8 40 m 7.0740 FT8, FT8 30 m 10.1360 FT8, Maritime Mobile Service Net 14.3000 USB with two group chips, and so on. Three rows are starred.](../img/manual/memories-list.webp)
+
+*The bank in List view in Nexus 1.10.3, 88 channels in it. The per-row controls — ▲ ▼ for
+hand-ordering, ✎, **Tune** and ✕ — and the toolbar's ＋ Save / ＋ New / Import / Export / Pop
+out / Packs buttons sit at the right-hand end of each row and of the toolbar, off the right of
+this crop.*
+
 **What a memory holds.** The RX (repeater-output) frequency in MHz is the one
 required field; a mode string is the other thing a row cannot be without. On top
 of that: a name (typed, or derived as `146.940 FM` when you save without one), a
@@ -62,8 +69,11 @@ so typing is optional) or DTCS code, and Callsign. An HF net row instead gets
 day chips **Su–Sa**, a **Start (UTC)** time, and a **Remind me** row: a checkbox
 and a lead time in minutes, 1 to 120. Notes and group chips close the editor, and
 **Done** shuts it. Every text field commits on Enter or when you click away, and
-**Esc** reverts — an edit the store rejects (a blanked frequency, for instance)
-snaps back rather than looking saved.
+**Esc** inside a field reverts *that field* — an edit the store rejects (a blanked
+frequency, for instance) snaps back rather than looking saved. The same editor
+opens for **＋ New**, but pinned along the bottom of the pane instead of under a
+row, so the channel you are making is always in front of you rather than
+somewhere in a long list.
 
 **The grid** is the same rows as a CHIRP-style spreadsheet: ★, Name, RX MHz,
 Mode, Offset, Tone, Kind, and a Tune / ✕ pair. Name, RX MHz and Mode are editable
@@ -86,6 +96,12 @@ have edited is yours from then on: a later pack update leaves it alone. The
 dialog closes on **Esc**, the ✕, or a click outside. The first-run wizard offers
 the same packs, pre-ticking calling frequencies and FT8/FT4, and only on a bank
 that is still empty.
+
+![The Starter packs dialog. Its opening line reads "One-click channel sets. Duplicates are skipped, so installing again is safe. Net schedules are UTC and approximate — enable a reminder per net." Below it, one card per pack with a name, a description, a channel count and region, and a button: VHF/UHF Calling & Simplex, 10 channels · North America, Update; HF FT8 & FT4, 20 channels · Worldwide, Install; Digital Watering Holes (JS8, PSK31, RTTY, SSTV, VarAC), 20 channels · Worldwide, Install; CW & QRP Watering Holes, 18 channels, Install; Emergency & EmComm, 12 channels, Update; HF Traffic & Ragchew Nets, 10 channels, Update; VHF+ Weak-Signal & Digital, 10 channels, Install; Amateur Satellites, Install.](../img/manual/memories-packs.webp)
+
+*Starter packs in Nexus 1.10.3. The button is the tell: **Install** where the pack's group does
+not exist yet, **Update** where it does. Nothing here is a recommendation — install the ones
+that match how you operate.*
 
 **The MEM strip** is the same bank in the header of the Phone, CW and Operate
 cockpits — the ★ favorites only, in bank order. **MEM** labels it; **＋** saves
@@ -135,6 +151,36 @@ only while the Memories section is enabled.
 
 ### Enter a repeater by hand
 
+**Read this before you press ＋ New.** The channel is written to the bank the moment you press
+the button — before you have typed anything. The count in the sidebar goes up straight away,
+and so does the number on **Export CSV**. There is no draft state and no "save" step: the
+panel that opens is editing a channel that already exists.
+
+That means backing out is the thing to get right:
+
+| What you do | What happens to the channel |
+|---|---|
+| **Enter** in a text field | Commits that field and closes the panel. **The channel is kept.** |
+| **Esc** in a text field | Reverts *that field* to its previous value and leaves the field. The panel stays open. |
+| **Esc** anywhere else in the panel — a chip, a button, after leaving a field | Closes the panel. **The channel is kept.** |
+| Click away, switch section, close the window, crash | **The channel is kept.** |
+| **Discard**, at the right-hand end of the panel's header | Deletes this new channel and closes the panel. This is the only way out that leaves the bank as you found it. |
+
+Keeping it is the deliberate choice, not an oversight — a row seeded from the dial is a valid
+channel, and a stray click or a closed window cannot lose the one you were making. But it does
+mean an abandoned ＋ New leaves a channel named for a frequency behind. Pressing ＋ New again
+while an untouched new row is still sitting there re-opens *that* row rather than adding a
+second, so repeated presses do not pile up blanks — but a row you typed into, or one made at a
+different dial, is a separate channel. And **delete has no confirmation and no undo**, on
+Discard as on the row ✕.
+
+![The Memories section in Grid view with the New memory panel docked along the bottom. The sidebar now reads All memories 89. The panel's header reads "NEW MEMORY   Enter saves · Esc closes — the channel is kept either way" and its fields are NAME "7.070 PSK31", KIND "Other", RX MHZ "7.07", MODE "PSK31", NOTES empty, a GROUPS row of five group chips, and a Done button.](../img/manual/memories-new.webp)
+
+*＋ New in Nexus 1.10.3, one press in. The bank read **88** before the press (the List-view
+picture at the top of this chapter) and reads **89** here, with nothing typed and nothing
+saved — the channel is already in the bank. The panel says so in its own header. **Discard**
+sits at the right-hand end of that header row, off this crop.*
+
 1. **＋ New** adds a row seeded from the current dial and opens its editor. The
    new row matches the view you are in, so it is visible where you created it —
    starred under Favorites, an HF net under Nets, a member of the group you have
@@ -172,6 +218,13 @@ on every render. Set your grid in
 mileage follows you.
 
 ### Track a net and get a reminder
+
+![A net memory open in the editor, with the days it meets lit and a reminder ticked.](../img/manual/memories-net-editor.webp)
+
+*The net editor in Nexus 1.10.3 on a temporary fixture memory. **Days** has Mo–Fr lit and
+**Start (UTC)** holds the meeting time; the row above prints the same schedule back as
+`MoTuWeThFr 23:30z`, and it is UTC, so it does not drift when the clocks change. **Remind me**
+is ticked with a ten-minute lead. The net is invented for this picture.*
 
 1. Set a memory's **Kind ▸ HF net** (or install the **HF Traffic & Ragchew Nets**
    pack, which arrives pre-scheduled). Net rows collect under **Nets** in the
@@ -233,8 +286,12 @@ mileage follows you.
 - **Duplicate detection is frequency (to 100 Hz) + mode + CTCSS encode tone.**
   Two channels that differ only by offset, name, group or DTCS code count as the
   same channel, so the second one is skipped on import or on a Program save.
+- **＋ New saves before you type.** The channel exists in the bank from the press, and the
+  count moves with it. **Escape keeps it; Discard is the only way out that removes it.** See
+  [Enter a repeater by hand](#enter-a-repeater-by-hand).
 - **Delete is immediate — no confirmation, no undo.** That applies to the ✕ on a
-  row in both views. An **Export CSV** is your only copy.
+  row in both views, and to **Discard** in the ＋ New panel. An **Export CSV** is
+  your only copy.
 - **The bank is local to this machine.** It lives in the app's local storage, not
   in the logbook and not in any cloud sync; a torn-off Memories window shares it
   live, another computer does not. If local storage is unavailable or full, edits

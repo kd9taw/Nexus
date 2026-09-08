@@ -4116,6 +4116,7 @@ impl Engine {
             relay: false,
             hb_ack: false,
             hb_interval_min: 0,
+            cq_interval_min: 0,
             idle_watchdog_min: 0,
             groups: Vec::new(),
             info: String::new(),
@@ -4640,6 +4641,22 @@ impl Engine {
         // Alt-double-click gesture and the Settings editor both go through it), so a
         // stale form save can't silently un-block or re-block a call mid-QSO.
         let live_blocked = std::mem::take(&mut self.settings.blocked_calls);
+        // The Cloudlog key is a WRITE-ONLY credential, not editable state, so it is captured here and
+        // restored below UNCONDITIONALLY — on a form save AND on a restore/reset, unlike the roster
+        // fields above. `get_settings` clears it on the way OUT to the frontend (round 9), so the
+        // frontend never holds it and every form Save posts it back EMPTY; a factory reset sends
+        // `Settings::default()` (empty); and a restore's bundle has `cloudlogKey` redacted
+        // (`BACKUP_REDACTED_FIELDS`, also empty). It therefore has exactly ONE legitimate non-empty
+        // source — a legacy settings.json read at startup, held here as a pending keychain migration —
+        // and no incoming `s` can ever author it. Letting the wholesale `self.settings = s` below adopt
+        // the incoming empty value destroyed that pending key: the save that follows omits the
+        // now-empty field (`skip_serializing_if`), leaving the key in NEITHER the keychain (migration
+        // deferred) nor the file — permanently lost. This is the WRITE half of the same contract
+        // `get_settings`'s clear is the READ half of; the two must stay symmetric. `apply_settings_inner`
+        // is the ONLY session-time wholesale replace of `self.settings`, so preserving it here closes
+        // every save path — form Save, reset AND restore — at their one common point (round 10 Finding 1;
+        // three earlier partial fixes each patched only the path their author was testing).
+        let live_cloudlog_key = std::mem::take(&mut self.settings.cloudlog_key);
         // Which radio the incoming flat fields describe. A P2-aware Settings form carries the roster
         // + its edited radio in `active_radio`. A LEGACY payload with no `radios` (an old settings.json
         // or a pre-P2 saved config profile) describes the LIVE active radio — fold its flat CAT there,
@@ -4650,6 +4667,13 @@ impl Engine {
             s.active_radio
         };
         self.settings = s;
+        // Restore the engine-owned pending Cloudlog key captured above (see that comment). Prefer a
+        // NON-empty incoming value — that can only be a legacy first-load carrying its own plaintext
+        // key, never the frontend — but keep the live pending key whenever `s` carries none, which is
+        // every real path today.
+        if self.settings.cloudlog_key.is_empty() {
+            self.settings.cloudlog_key = live_cloudlog_key;
+        }
         // Implicit-ACK toggle lives app-side (the observe loop consumes it).
         self.app.set_implicit_ack(self.settings.chat_implicit_ack);
         self.settings.source = live_source;
@@ -6724,7 +6748,8 @@ impl Engine {
 
     /// The FM-class word to command right now: the FM **data** submode `PKTFM` (Hamlib's
     /// `RIG_MODE_PKTFM` → Yaesu FM-D, Icom FM-D) while an SSTV image is queued or in flight,
-    /// plain `FM` otherwise.
+    /// plain `FM` otherwise — or, on a radio configured for it, for the whole time the SSTV
+    /// receiver is running ([`Self::sstv_holds_data_submode`], default off, #130).
     ///
     /// ⭐ THE ON-AIR BUG THIS EXISTS FOR (FTDX10 + IC-9700 owner, 2026-08-12): *"when I select
     /// preset frequency 144.500 for SSTV it switches to FM, but as soon as I start TXing it
@@ -6745,11 +6770,37 @@ impl Engine {
     /// `plain_ssb_if_configured` keeps the per-radio mic-jack opt-out working: it maps `PKTFM`
     /// back to plain `FM` exactly as it maps `PKTUSB` to `USB`.
     fn fm_mode_word(&self) -> String {
-        if self.sstv_in_flight() {
+        if self.sstv_in_flight() || self.sstv_holds_data_submode() {
             self.settings.plain_ssb_if_configured("PKTFM")
         } else {
             "FM".to_string()
         }
+    }
+
+    /// Is this radio configured to HOLD the FM data submode for the whole time the SSTV
+    /// receiver is running, rather than only around a send? (#130, PA3GYQ via the operator.)
+    ///
+    /// The default is `false` and the answer is then exactly today's: `PKTFM` around an image,
+    /// plain `FM` otherwise. The reply that told the reporter this shipped in 1.10.2 was wrong
+    /// — the switch did not exist. It does now, per radio
+    /// ([`crate::settings::RadioProfile::sstv_hold_data_submode`]), because whether holding
+    /// FM-D is right is a property of how one rig is cabled and operated.
+    ///
+    /// `sstv_armed` is the gate, and it is the operator's own declaration: the receiver starts
+    /// when they open the SSTV view and stops when they press Stop. Nothing else here can key
+    /// anything — this only chooses the mode WORD the radio loop commands.
+    ///
+    /// ⚠️ NEEDS-BENCH (no IC-9700 on this machine). The word is not a guess — `PKTFM` is the
+    /// same word this function already commands around a send, and `plain_ssb_if_configured`
+    /// already maps it — so what is new is only WHEN it is commanded. What is unproven is the
+    /// on-air behaviour of a rig held in FM-D between pictures.
+    ///
+    /// ⚠️ AND THE COST: the receiver outlives the view, so with this on an FM VOICE call made
+    /// without stopping it first is commanded in FM-D and modulates from the data port, not the
+    /// microphone. That is why it is opt-in, per radio, and why the switch's own hint says to
+    /// stop the receiver before going back to voice.
+    fn sstv_holds_data_submode(&self) -> bool {
+        self.settings.sstv_hold_data_submode && self.sstv_armed
     }
 
     /// Is the PHONE section's mode class FM at `band` / `dial_mhz`? THE one predicate both
@@ -9197,7 +9248,7 @@ impl Engine {
                 &indices,
                 tempo_core::logbook::UploadOutcome::Accepted,
                 now_unix_secs() as i64,
-                Some("marked already on LoTW".into()),
+                Some(tempo_core::logbook::UploadDetail::OperatorDeclared),
             );
         }
         n
@@ -17699,10 +17750,11 @@ impl Engine {
         let fox_capable = self
             .tier_mode_kind(self.app.tier())
             .is_some_and(|k| modes::make_mode(k).capabilities().fox_hound);
-        // The station we're working (for reconstructing the Fox's implied sender below).
-        let fox: Option<String> = match &self.mode {
-            Mode::Qso { station, .. } => station.dxcall.clone(),
-            _ => None,
+        // The station we're working (for reconstructing the Fox's implied sender below), and
+        // whether THAT contact began as a Hound QSO — see the reattach gate below.
+        let (fox, hound_qso): (Option<String>, bool) = match &self.mode {
+            Mode::Qso { station, .. } => (station.dxcall.clone(), station.quiet_finish),
+            _ => (None, false),
         };
         if fox.is_none() || !fox_capable {
             // Fox multiplexing is an FT8 DXpedition construct — the mode declares
@@ -17722,12 +17774,19 @@ impl Engine {
         // The DISPLAY split below still runs so a Fox stays readable; only the sequencer-feeding
         // fabrication is gated. A sender-LESS 2-token half cannot parse as a terminal (Rr73/Rrr/Bye73
         // all need 3 tokens), so un-reattached it never advances the sequencer.
-        let hound_active = matches!(
-            self.settings.special_op,
-            crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
-        );
+        //
+        // ⚠️ GATED ON THE CONTACT, NOT ON THE LIVE SETTING. `station.quiet_finish` is the marker
+        // `call_station_ctx` stamps on TRUE Hound QSOs — the same one the QSY-to-the-Fox rule
+        // reads, and for the same reason. Reading `settings.special_op` here let a mid-QSO
+        // toggle reach inside a contact already on the air, in both directions: leaving Hound
+        // stranded a Fox exchange (its sender-less RR73 half stopped parsing, so the contact
+        // never closed and we kept calling a station that had rogered us), and entering Hound
+        // opened #236 on the ordinary QSO in flight. Everything else Hound decides for a
+        // contact — the quiet finish, the >1000 Hz initial offset — was already captured once at
+        // `call_station_ctx`; this was the one live read. A QSO in flight keeps the rules it
+        // started under, and the toggle governs the NEXT one.
         let reattach = |m: String| -> String {
-            if !hound_active {
+            if !hound_qso {
                 return m;
             }
             let t: Vec<&str> = m.split_whitespace().collect();
@@ -18896,7 +18955,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_qrz_upload(pushed, outcome, when_unix, detail)
@@ -18908,7 +18967,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_clublog_upload(pushed, outcome, when_unix, detail)
@@ -18920,7 +18979,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_eqsl_upload(pushed, outcome, when_unix, detail)
@@ -18971,7 +19030,7 @@ impl Engine {
         indices: &[usize],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) {
         self.station
             .stamp_lotw_upload(indices, outcome, when_unix, detail)
@@ -21176,6 +21235,78 @@ mod tests {
         // shift/CTCSS gate (service.rs) sees the FM family throughout.
         e.set_sstv_sending(false);
         assert_eq!(e.rig_mode_effective(), "FM", "idle again → plain FM");
+    }
+
+    /// #130 (PA3GYQ, via the operator) — THE SWITCH THAT WAS SAID TO HAVE SHIPPED AND HAD NOT.
+    ///
+    /// The reply on that thread told the reporter the IC-9700 dropping out of FM-D was fixed in
+    /// 1.10.2. It was not, and it was not a bug: the revert above is deliberate. What was
+    /// missing is the per-radio opt-in to HOLD the data submode for an operator who parks on an
+    /// FM SSTV channel for the evening rather than sending one picture and leaving.
+    ///
+    /// Four states, because a switch proven in one direction is half a test — and the first is
+    /// the one that must not move for the 99 % who never touch it.
+    ///
+    /// ⚠️ NEEDS-BENCH: this pins the mode WORD Nexus commands, which is all that can be pinned
+    /// without a rig. `PKTFM` is not a new word — the neighbour above already commands it — so
+    /// what is unproven is a radio's behaviour when it is HELD there between pictures.
+    #[test]
+    fn the_fm_data_submode_is_held_while_sstv_receives_only_when_this_radio_asks_for_it() {
+        // (1) DEFAULT OFF, receiver armed: today's answer, unchanged. This is the control —
+        // without it the test below would pass on an engine that simply always held PKTFM.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.sstv_tune(144.500, "2m", "FM");
+        e.set_sstv_armed(true);
+        assert!(!e.settings.sstv_hold_data_submode, "default must stay off");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "off by default: an armed receiver alone changes nothing, so voice PTT still keys \
+             the mic between pictures"
+        );
+
+        // (2) SWITCH ON, receiver NOT armed: the switch alone holds nothing. The operator is
+        // not working SSTV, so neither is the radio.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.sstv_tune(144.500, "2m", "FM");
+        assert!(!e.sstv_armed(), "precondition: the receiver is not running");
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "the setting is gated on the receiver actually running"
+        );
+
+        // (3) SWITCH ON + receiver armed: the reported ask. FM-D between pictures, with no
+        // image queued and none in flight.
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "PKTFM",
+            "held in the FM data submode for as long as the receiver runs (#130)"
+        );
+        // …and Stop hands the radio back, which is the operator's off-ramp before voice.
+        e.set_sstv_armed(false);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "stopping the receiver ends the hold — plain FM, mic path, same as before"
+        );
+
+        // (4) The mic-jack opt-out reaches the HELD word exactly as it reaches the sent one.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("extra");
+        e.settings.sstv_hold_data_submode = true;
+        e.settings.data_modes_plain_ssb = true;
+        e.sstv_tune(144.500, "2m", "FM");
+        e.set_sstv_armed(true);
+        assert_eq!(
+            e.rig_mode_effective(),
+            "FM",
+            "a mic-jack rig is held in plain FM, never PKTFM"
+        );
     }
 
     /// The other two ways the Phone section can be in FM — neither of which arms `fm_channel`,
@@ -25183,6 +25314,182 @@ mod tests {
         assert_eq!(snap.radio.tx_offset_hz, 1200.0);
     }
 
+    /// ⛔ DATA LOSS (round 10 Finding 1). A PENDING Cloudlog key must survive an ordinary Settings
+    /// form Save from the frontend.
+    ///
+    /// On a keychain-less box the `run()` migration DEFERS, leaving the plaintext key in the engine's
+    /// in-memory `Settings` for a retry next launch (round 8 F1). `get_settings` then CLEARS the key
+    /// on the copy it hands the frontend (round 9), so the frontend never holds it and posts the form
+    /// back with an EMPTY `cloudlog_key`. The bug: `apply_settings`'s wholesale `self.settings = s`
+    /// overwrote the engine's pending key with that empty value, and the save that follows omitted the
+    /// now-empty field (`skip_serializing_if`) — the key ended up in NEITHER the keychain nor the file,
+    /// on the exact box round 9 set out to protect.
+    ///
+    /// Models the real sequence — defer, get_settings-clear, edit an UNRELATED field, save, read back
+    /// — not the assignment being fixed. Control: `clublog_api_key`, an always-serialized secret the
+    /// form legitimately round-trips, must survive the SAME flow, so the detector can see persistence.
+    #[test]
+    fn a_form_save_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-form-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        // Migration deferred: the engine holds the plaintext key as pending, live state.
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            clublog_api_key: "CLUBLOG-CONTROL-8888".into(),
+            cloudlog_url: "https://log.example.com".into(),
+            ..Settings::default()
+        });
+        assert_eq!(
+            e.settings.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "pre: the engine holds the pending key"
+        );
+
+        // get_settings hands the frontend a clone with the key CLEARED (round 9); the frontend never
+        // holds it, so the form it posts back carries an EMPTY cloudlog_key.
+        let mut form = e.settings().clone();
+        form.cloudlog_key.clear();
+        assert!(
+            form.cloudlog_key.is_empty(),
+            "pre: the wire the frontend gets carries no cloudlog key"
+        );
+        assert_eq!(
+            form.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "pre: but it does carry the control secret"
+        );
+        // The operator edits an UNRELATED field and clicks Save.
+        form.mygrid = "FN20".into();
+
+        e.apply_settings(form);
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+
+        // Positive control FIRST: a sibling secret that legitimately round-trips proves the
+        // save/reload path can observe persistence — a dropped key would be caught, not silently
+        // missed. The unrelated edit landing proves the form Save actually took effect.
+        println!(
+            "control: clublog after form-save round-trip = {:?}; cloudlog after = {:?}",
+            back.clublog_api_key, back.cloudlog_key
+        );
+        assert_eq!(
+            back.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "control: an always-serialized secret survives the form Save round-trip"
+        );
+        assert_eq!(
+            back.mygrid, "FN20",
+            "control: the unrelated edit the operator actually made was saved"
+        );
+        // The value under test: the pending key must have survived the SAME round-trip.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: an ordinary Settings form Save destroyed the pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ DATA LOSS (round 10 Finding 1, reset arm). A factory reset must not destroy a PENDING
+    /// Cloudlog key.
+    ///
+    /// `reset_settings` routes `Settings::default()` through `apply_restored_settings`. Its own doc
+    /// promises it "keeps … stored credentials" — and a pending Cloudlog key IS a stored credential,
+    /// merely one that has not finished migrating into the keychain. Before the fix the reset's
+    /// wholesale `self.settings = s` blanked it, leaving it in neither the keychain nor the file.
+    ///
+    /// Control: the reset is proven to ACTUALLY take effect — an unrelated field the engine held is
+    /// cleared by it — so the key's survival is a real preservation, not a reset that no-opped.
+    #[test]
+    fn a_factory_reset_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-reset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            cloudlog_url: "https://log.example.com".into(),
+            ..Settings::default()
+        });
+
+        // reset_settings sends a fresh default (empty cloudlog_key), roster-normalized.
+        let mut fresh = Settings::default();
+        fresh.ensure_radio_profiles();
+        fresh.ensure_distinct_radio_ports();
+        fresh.ensure_routing_targets();
+        assert!(
+            fresh.cloudlog_key.is_empty(),
+            "pre: the reset carries no cloudlog key"
+        );
+        e.apply_restored_settings(fresh);
+
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+        // Control: the reset really replaced the struct — an unrelated field the engine held is gone.
+        assert!(
+            back.cloudlog_url.is_empty(),
+            "control: the factory reset actually took effect (cloudlog_url was cleared), so a \
+             surviving key is a real preservation and not a skipped reset"
+        );
+        // The pending credential the reset promised to keep must survive.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: a factory reset destroyed the pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ DATA LOSS (round 10 Finding 1, restore arm). Restoring a settings bundle must not destroy a
+    /// locally-PENDING Cloudlog key.
+    ///
+    /// `import_settings_bundle` routes the bundle through `apply_restored_settings`. Every bundle has
+    /// `cloudlogKey` REDACTED (`BACKUP_REDACTED_FIELDS`), so a restore's incoming key is always empty
+    /// — and before the fix the wholesale `self.settings = s` blanked a locally-pending key with it,
+    /// leaving the credential in neither place.
+    ///
+    /// Control: the bundle's OWN fields are proven to be applied (a restore is authoritative for what
+    /// it carries), so the key's survival is a real preservation and not a restore that was ignored.
+    #[test]
+    fn a_settings_bundle_restore_keeps_the_pending_cloudlog_key() {
+        let dir = std::env::temp_dir().join(format!("nexus-cl-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut e = Engine::with_settings(Settings {
+            cloudlog_key: "CLOUDLOG-PENDING-KEY-9999".into(),
+            mygrid: "EN37".into(),
+            ..Settings::default()
+        });
+
+        // A restored bundle: cloudlogKey is redacted out (empty), but the bundle IS authoritative for
+        // the rest — here a different grid.
+        let bundle = Settings {
+            cloudlog_key: String::new(), // redacted from every bundle (BACKUP_REDACTED_FIELDS)
+            mygrid: "FN20".into(),
+            ..Settings::default()
+        };
+        e.apply_restored_settings(bundle);
+
+        e.settings().save(&path).unwrap();
+        let back = Settings::load(&path);
+        // Control: the restore actually took effect — the bundle's grid replaced the engine's.
+        assert_eq!(
+            back.mygrid, "FN20",
+            "control: the restore actually applied the bundle (grid replaced), so a surviving key is \
+             a real preservation and not an ignored restore"
+        );
+        // The locally-pending credential the bundle could not carry must survive.
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-PENDING-KEY-9999",
+            "DATA LOSS: a settings-bundle restore destroyed the locally-pending Cloudlog key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn watchdog_trips_after_the_limit_then_clears() {
         // WALL-CLOCK watchdog: trips after `tx_watchdog_min` minutes of real elapsed
@@ -26470,6 +26777,68 @@ mod tests {
         assert!(
             e.get_log().is_empty(),
             "the ordinary QSO must NOT complete or key a 73 from a bystander Fox's confirm (#236)"
+        );
+    }
+
+    /// THE MID-QSO TOGGLE RULE, both directions: **a QSO in flight keeps the rules it started
+    /// under.** Written as a pair because one direction is half a test.
+    ///
+    /// Hound became a one-click button in the Operate header (operator: "so users can click it
+    /// on and off without having to go into the settings"), which turns a mid-QSO toggle from a
+    /// thing nobody did — it needed a Settings trip — into a thing that happens by hand at the
+    /// wrong moment. Everything Hound decides for a contact was already captured at
+    /// `call_station_ctx`: the quiet finish and the >1000 Hz initial offset are both read there,
+    /// once. `hound_split`'s sender REATTACH was the exception — it read the LIVE setting on
+    /// every decode, so the toggle reached inside a contact already on the air.
+    ///
+    /// It is the same marker the QSY-to-the-Fox rule already uses (`station.quiet_finish`, "the
+    /// marker call_station sets on TRUE hound QSOs — not just the persistent setting").
+    #[test]
+    fn leaving_hound_mid_qso_still_completes_the_fox_exchange() {
+        // Hound ON, the operator double-clicks the Fox, then flips the header button OFF while
+        // the contact is running. The Fox's confirm arrives sender-less inside a multiplex; with
+        // the reattach gone it parses as nothing and the contact strands, calling forever at a
+        // station that has already rogered us.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest_decodes_for_test(&[dec_at("CQ DX PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ DX PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("K1ABC RR73; W9XYZ PJ4DX -08", -10, 320.0)], 3);
+        // THE TOGGLE, mid-contact.
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; N0CALL PJ4DX +03", -10, 320.0)], 5);
+        assert!(
+            !e.get_log().is_empty(),
+            "leaving Hound mid-QSO stranded the contact — the Fox's multiplexed RR73 must still \
+             close a QSO that STARTED as a Hound QSO"
+        );
+    }
+
+    #[test]
+    fn entering_hound_mid_qso_never_fabricates_a_roger_from_the_partner() {
+        // The other direction, and it is #236 reached through the new button: an ORDINARY QSO is
+        // running when the operator flips Hound on to go chase a DXpedition. A bystander Fox's
+        // multiplexed confirm addressed to us must still not be stamped with our current
+        // partner's call — this contact did not start under Hound, so it does not get Hound's
+        // reattach part way through.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        assert_eq!(
+            e.settings.special_op,
+            crate::settings::SpecialOp::None,
+            "control: the contact STARTS ordinary — Hound off"
+        );
+        e.ingest_decodes_for_test(&[dec_at("CQ PJ4DX", -10, 400.0)], 1);
+        let _ = e.call_station_ctx("PJ4DX", None, Some("CQ PJ4DX"), Some(-10), Some(400.0));
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ PJ4DX -08", -10, 400.0)], 3);
+        // THE TOGGLE, mid-contact.
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; NEXTHOUND N0CALL -08", -10, 320.0)], 5);
+        assert!(
+            e.get_log().is_empty(),
+            "turning Hound on mid-QSO forged a roger from the partner — #236 through the header \
+             button"
         );
     }
 
@@ -33112,6 +33481,7 @@ mod tests {
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: p.icom_data_mode,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
+            sstv_hold_data_submode: p.sstv_hold_data_submode,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
@@ -34283,6 +34653,306 @@ mod tests {
         e.set_mode("qso-monitor")
             .expect("a passive spec is always accepted");
         assert!(e.js8_state().queue.is_empty() && !e.js8_hb_on);
+    }
+
+    // ===== the auto-repeating CQ / heartbeat (JS8Call's checkable CQ & HB buttons) =====
+
+    /// THE TWO-ACT ARM, repeat edition. The session CQ-repeat switch is only the SECOND act:
+    /// with the TX latch down, an armed repeat at a 1-minute interval keys NOTHING however
+    /// many ticks and slots go by, and books no own-TX row. (`js8_cq_repeat_armed_and_latched_
+    /// keys_the_cq` below is the positive control — this is not passing because nothing ever
+    /// keys.)
+    #[test]
+    fn js8_cq_repeat_without_the_tx_latch_keys_nothing() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.js8_set_cq_repeat(true, 0).expect("the session CQ toggle");
+        assert!(!e.tx_enabled(), "the FIRST act was never given");
+        let st = e.js8_state();
+        assert!(st.cq_on, "the switch is on…");
+        assert!(
+            !st.armed.cq,
+            "…and reports NOT armed, because the latch is down"
+        );
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        for min in 1..=10u64 {
+            e.js8_tick(base + min * 60_000);
+            for s in s0 + min * 4..s0 + min * 4 + 4 {
+                assert!(
+                    e.poll_tx(s).is_empty(),
+                    "repeat armed, latch down: slot {s} keyed"
+                );
+            }
+        }
+        assert!(
+            !e.snapshot().recent_decodes.iter().any(|d| d.mine),
+            "nothing was booked as an own-TX row"
+        );
+    }
+
+    /// The positive control for the pair above, and the feature itself: with BOTH acts
+    /// present a scheduled CQ keys — on the operator's own TX offset (a CQ is not a
+    /// heartbeat, so it does not move into the HB sub-band), as `Origin::CqRepeat`, and
+    /// riding `plan.beacon`.
+    #[test]
+    fn js8_cq_repeat_with_both_acts_keys_one_cq_on_the_operators_offset() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("the session CQ toggle");
+        assert!(e.js8_state().armed.cq, "both acts present → armed");
+        // The once-a-second service tick is what moves a due CQ into the outbox.
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+        assert_eq!(
+            e.js8_state().queue.first().map(|q| q.origin),
+            Some(::js8::Origin::CqRepeat),
+            "a SCHEDULED CQ is an automatic origin, never Operator"
+        );
+        let plan = e
+            .plan_tx(js8_slot_now() + 1)
+            .expect("the scheduled CQ plans an over");
+        assert!(plan.beacon, "a repeating CQ rides plan.beacon");
+        let TxWaveform::Js8 { f0, .. } = &plan.waveform else {
+            panic!("a JS8 plan carries the typed waveform");
+        };
+        assert_eq!(*f0, 1500.0, "a CQ goes out on the operator's offset");
+        assert!(
+            e.snapshot()
+                .recent_decodes
+                .iter()
+                .any(|d| d.mine && d.message.contains("CQ")),
+            "own-TX row booked"
+        );
+    }
+
+    /// THE INVARIANT THIS FEATURE COULD HAVE BROKEN: a repeat loop must never outlive the
+    /// idle watchdog. A scheduled CQ is `Origin::CqRepeat`, so `Station::note_tx_done` does
+    /// NOT reset the idle baseline for it — had it been queued as `Origin::Operator` (the
+    /// one-shot's origin) every CQ would have reset the very clock meant to stop it and an
+    /// unattended station would call CQ forever. Positive control: CQs really did go out.
+    #[test]
+    fn the_idle_watchdog_stops_a_repeating_cq_and_heartbeat() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 5;
+        e.settings.js8_hb_interval_min = 5;
+        e.settings.js8_idle_watchdog_min = 60;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        let mut keyed = 0;
+        for min in 1..=61u64 {
+            e.js8_tick(base + min * 60_000);
+            if !e.poll_tx(s0 + min).is_empty() {
+                keyed += 1;
+            }
+        }
+        assert!(
+            keyed >= 10,
+            "control: the repeats really ran ({keyed} overs)"
+        );
+        let st = e.js8_state();
+        assert!(
+            st.idle_tripped,
+            "61 idle minutes trip the 60-minute watchdog"
+        );
+        assert!(
+            !st.cq_on && st.cq_next_at_ms.is_none(),
+            "the trip stops the CQ repeat"
+        );
+        assert!(!st.hb_on, "…and the heartbeat, as it always did");
+        assert!(!st.armed.cq && !st.armed.hb);
+        assert!(e.tx_enabled(), "tx_enabled untouched (JS8Call semantics)");
+        for s in s0 + 100..s0 + 110 {
+            assert!(e.poll_tx(s).is_empty(), "tripped: slot {s} must not key");
+        }
+    }
+
+    /// HALT IS TOTAL for the repeat schedule too (spec invariant 7), through all three
+    /// clearing paths — Stop TX, leaving the tier, and a mode change — and re-arming the
+    /// latch afterwards must not resurrect it.
+    #[test]
+    fn halt_tier_change_and_mode_change_each_cancel_the_cq_repeat() {
+        let arm = || {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.settings.js8_cq_interval_min = 1;
+            e.js8_apply_station_config();
+            e.js8_enter();
+            e.set_tx_enabled(true);
+            e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+            e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+            assert!(
+                e.js8_state().cq_on && !e.js8_state().queue.is_empty(),
+                "precondition: armed, with a scheduled CQ waiting"
+            );
+            e
+        };
+
+        let mut e = arm();
+        e.halt_tx();
+        let st = e.js8_state();
+        assert!(
+            !st.cq_on && st.cq_next_at_ms.is_none(),
+            "Stop TX cancels the schedule"
+        );
+        assert!(
+            st.queue.is_empty(),
+            "…and drops the frame it had already queued"
+        );
+        e.set_tx_enabled(true);
+        for s in js8_slot_now() + 1..js8_slot_now() + 6 {
+            assert!(
+                e.poll_tx(s).is_empty(),
+                "re-arming after a halt keys nothing (slot {s})"
+            );
+        }
+
+        let mut e = arm();
+        e.set_tier(Tier::Ft8);
+        assert!(
+            !e.js8_station.cq_on(),
+            "leaving the tier cancels the schedule"
+        );
+        assert!(e.js8_state().queue.is_empty());
+
+        let mut e = arm();
+        e.set_mode("qso-monitor")
+            .expect("a passive spec is always accepted");
+        assert!(!e.js8_station.cq_on(), "a mode change cancels the schedule");
+        assert!(e.js8_state().queue.is_empty());
+    }
+
+    /// A SCHEDULE, never a queue that can burst — at the engine, not just the station. Ten
+    /// minutes of a 1-minute repeat, ticked and polled every simulated minute, key ONE over
+    /// per period and never two in a period; and a tick that jumps a whole hour produces one
+    /// CQ, not sixty.
+    #[test]
+    fn a_repeating_cq_never_bursts_at_the_engine() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 1;
+        e.settings.js8_idle_watchdog_min = 0; // isolate: this test is about bursting
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        let base = tempo_core::timing::now_unix_ms() as u64;
+        let s0 = js8_slot_now();
+        for min in 1..=10u64 {
+            e.js8_tick(base + min * 60_000);
+            assert!(
+                e.js8_state().queue.len() <= 1,
+                "minute {min}: the schedule queued more than one CQ"
+            );
+            assert!(
+                !e.poll_tx(s0 + min * 2).is_empty(),
+                "minute {min}: the CQ goes out"
+            );
+            assert!(
+                e.poll_tx(s0 + min * 2).is_empty(),
+                "minute {min}: a second poll in the same period must not key again"
+            );
+            assert!(
+                e.js8_state().queue.is_empty(),
+                "minute {min}: the outbox drained"
+            );
+        }
+        // An hour in one jump: one CQ, and the schedule re-bases on NOW.
+        e.js8_tick(base + 70 * 60_000);
+        assert_eq!(
+            e.js8_state().queue.len(),
+            1,
+            "a missed hour is skipped, never batched"
+        );
+        while !e.poll_tx(js8_slot_now() + 40).is_empty() {}
+        // A BUSY OUTBOX IS NEVER STACKED ON. While a multi-frame operator message drains,
+        // the schedule waits rather than queueing CQs behind it — otherwise ten quiet
+        // minutes on a long message would come due all at once the moment it finished.
+        e.js8_send(
+            None,
+            "A LONG ENOUGH MESSAGE TO NEED SEVERAL FRAMES AT NORMAL SPEED".to_string(),
+        )
+        .expect("queues");
+        let frames = e.js8_state().queue.len();
+        assert!(
+            frames >= 4,
+            "control: the operator message really is multi-frame"
+        );
+        for min in 71..=80u64 {
+            e.js8_tick(base + min * 60_000);
+            assert!(
+                !e.js8_state()
+                    .queue
+                    .iter()
+                    .any(|q| q.origin == ::js8::Origin::CqRepeat),
+                "minute {min}: a CQ was stacked behind the draining operator message"
+            );
+        }
+        assert_eq!(
+            e.js8_state().queue.len(),
+            frames,
+            "the outbox grew while it was busy"
+        );
+    }
+
+    /// JS8Call's `resetCQTimer(stop = true)`: a directed message addressed to me STOPS the
+    /// repeating CQ (somebody answered), while the heartbeat schedule is only pushed out.
+    #[test]
+    fn a_directed_reply_stops_the_repeating_cq_but_not_the_heartbeat() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.js8_cq_interval_min = 5;
+        e.settings.js8_hb_interval_min = 5;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_arm(Js8Switch::Hb, true).expect("HB on");
+        assert!(e.js8_state().cq_on, "precondition");
+        e.js8_ingest(&[js8_snr_query_from("W1AW")], js8_slot_now());
+        let st = e.js8_state();
+        assert!(!st.cq_on, "a station answering my CQ stops the repeat");
+        assert!(st.hb_on, "the heartbeat keeps beaconing");
+    }
+
+    /// The wall-clock TX watchdog bounds operator/autoreply/relay JS8 traffic and always
+    /// has; the two BEACON-class origins are exempt, or a 6-minute clock would kill a
+    /// 15-minute CQ repeat after its first call. Both directions are checked here, so this
+    /// is not "nothing ever trips".
+    #[test]
+    fn a_repeating_cq_is_exempt_from_the_wall_clock_but_an_operator_send_is_not() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.tx_watchdog_min = 6;
+        e.settings.js8_cq_interval_min = 1;
+        e.js8_apply_station_config();
+        e.js8_enter();
+        e.set_tx_enabled(true);
+        e.js8_set_cq_repeat(true, 0).expect("CQ repeat on");
+        e.js8_tick(tempo_core::timing::now_unix_ms() as u64 + 61_000);
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            !e.poll_tx(js8_slot_now() + 1).is_empty(),
+            "the scheduled CQ keys despite the elapsed wall clock"
+        );
+        assert!(e.tx_enabled() && !e.tx_watchdog, "…and trips nothing");
+        // THE OTHER DIRECTION: an operator send on the same aged clock DOES trip it.
+        e.js8_send(None, "TEST".to_string()).expect("queues");
+        e.tx_watchdog_start = Some(now_unix_secs().saturating_sub(9_999));
+        assert!(
+            e.poll_tx(js8_slot_now() + 2).is_empty(),
+            "control: an operator frame is still bounded by the wall clock"
+        );
+        assert!(
+            e.tx_watchdog && !e.tx_enabled(),
+            "…and the trip is a hard kill"
+        );
     }
 
     // ===== B7.7 sender-class control =====

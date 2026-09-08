@@ -413,6 +413,23 @@ export default function App() {
       .catch(() => {})
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
+  // DXpeditions ON THE AIR NOW that announced SuperFox — a format this version of Nexus has no
+  // decoder for, so the operation never reaches the decode list and Hound mode cannot help.
+  // The Operate header names them beside the Hound button; the calendar already knew, and an
+  // operator who finds out in the middle of the pileup has found out too late. Deduped —
+  // `workableNow` carries one card per needed BAND, so a multi-band operation appears several
+  // times and would otherwise be listed several times.
+  const superFoxCalls = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (prop?.dxpeditions.workableNow ?? [])
+            .filter((c) => c.ft8Mode === 'SuperFox')
+            .map((c) => c.call),
+        ),
+      ),
+    [prop],
+  )
   // Operate layout mode: Classic (WSJT-X — Band Activity dominant) vs Roster
   // (GridTracker — the Call Roster dominant). Persisted UI pref; Roster is the
   // default (the friendlier at-a-glance view), and die-hards can pick Classic —
@@ -2662,9 +2679,20 @@ export default function App() {
     case 'psk':
     case 'sstv':
     case 'aprs':
+    case 'js8':
       // Same keep-alive pattern as Operate: RTTY's + PSK's decoded streams,
-      // SSTV's always-armed VIS receiver, and APRS's decode list must survive
-      // navigation, so all four live in persistent hosts below. Nothing in the slot.
+      // SSTV's always-armed VIS receiver, APRS's decode list and JS8's four-speed
+      // activity stream must survive navigation, so all five live in persistent hosts
+      // below. Nothing in the slot.
+      //
+      // ⚠️ A KEEP-ALIVE COCKPIT WITHOUT A CASE HERE FALLS THROUGH TO `default:` AND DRAWS
+      // THE TEMPO WORKSPACE UNDERNEATH ITSELF. 'js8' was missing and did exactly that —
+      // TempoHeader's TempoFast/TempoDeep chips, the Tempo roster + conversation, and the
+      // right rail's FT waterfall beside the cockpit's own, all on the JS8 screen (operator,
+      // 2026-09: "why is there tempo fast and tempo slow listed?", "also bringing in tempo
+      // chats", and a "split waterfall"). It is the 0.4–0.21 two-mains-in-the-shell class
+      // reached from the SWITCH rather than from the CSS that host-hidden.test.ts guards.
+      // Pinned by App.js8workspace.test.tsx, which mounts App and counts what is on screen.
       workspace = null
       break
     case 'connect':
@@ -3040,6 +3068,7 @@ export default function App() {
               companionAddr={settings?.companionAddr}
               fdActive={settings?.fdActive ?? false}
               fdRuleset={fdRuleset}
+              superFoxCalls={superFoxCalls}
               blockedCalls={settings?.blockedCalls ?? []}
               onToggleBlocked={handleToggleBlocked}
               snap={snap}
@@ -3075,6 +3104,10 @@ export default function App() {
               needScopes={needScopes}
               selectedCall={activePeer}
               onSelect={handleSelect}
+              // #204: F4 / Clear has to reach the callsign card, and half of what the card
+              // reads is BACKEND state. `handleMapSelect` already round-trips a null through
+              // `select_peer` — reuse it rather than adding a second deselect path.
+              onClearSelection={() => handleMapSelect(null)}
               layoutMode={operateLayout}
               onLayoutMode={handleOperateLayout}
               panels={operatePanels}
@@ -3150,7 +3183,7 @@ export default function App() {
           {/* JS8 keep-alive host — same contract as .rtty-host/.psk-host: the engine keeps
               decoding all four speeds while the operator is on another section; `active`
               gates the display poll and fires js8_enter on the rising edge. Gated on the
-              feature toggle (JS8 ships defaultOff), so a disabled section mounts nothing.
+              feature toggle (JS8 ships ON, so this mounts unless the operator turned it off).
               `onSetTxEnabled` is the header pill — the only TX latch in this view. */}
           {isViewEnabled('js8') && (
             <div className="js8-host" hidden={effectiveView !== 'js8'}>

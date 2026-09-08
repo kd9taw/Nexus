@@ -509,6 +509,16 @@ pub enum PounceThreshold {
     AtnoZoneOrState,
 }
 
+/// `skip_serializing_if` for the pending [`Settings::cloudlog_key`]. A whitespace-only value is not
+/// a real key, so it is treated as ABSENT — matching the migration gate, which skips migrating a
+/// `cloudlog_key.trim().is_empty()` value (`run()` in src-tauri `lib.rs`). A plain `String::is_empty`
+/// disagreed with that gate: a whitespace-only value serialized to settings.json forever yet was
+/// never migrated (round 10 N2). Trimming here makes the two agree — neither serializes nor migrates
+/// a blank key.
+fn cloudlog_key_absent(s: &str) -> bool {
+    s.trim().is_empty()
+}
+
 /// Everything the operator configures: identity, band/frequency, Field Day
 /// exchange, rig/PTT control, and network (WSJT-X UDP API + PSK Reporter).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -627,6 +637,12 @@ pub struct Settings {
     /// app can never launch beaconing.
     #[serde(default)]
     pub js8_hb_interval_min: u16,
+    /// CQ repeat interval in minutes; 0 = on demand (JS8Call `CQInterval` default), which
+    /// leaves the cockpit's CQ button the one-shot it is today. Whether the repeat is ON is
+    /// NOT a setting — it is session-only (`Station::cq_on`), so the app can never launch
+    /// calling CQ, exactly as for the heartbeat.
+    #[serde(default)]
+    pub js8_cq_interval_min: u16,
     /// Answer heard heartbeats with `HEARTBEAT SNR +NN` (JS8Call `SubModeHBAck`, default
     /// OFF). The persisted SECOND act of the two-act rule; the session TX latch is the first.
     #[serde(default)]
@@ -968,6 +984,10 @@ pub struct Settings {
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// Hold the FM DATA submode for as long as the SSTV receiver is running, for the active
+    /// radio (flat mirror — see [`RadioProfile::sstv_hold_data_submode`]). Default off.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -2038,11 +2058,33 @@ pub struct Settings {
     #[serde(default)]
     pub cloudlog_station_id: String,
     /// Cloudlog/Wavelog instance API key. LEGACY-ONLY at rest: the key now lives in
-    /// the OS keychain (see src-tauri `set_cloudlog_key`). `skip_serializing` keeps
-    /// it OUT of settings.json on every save; it still DESERIALIZES an older file's
-    /// plaintext key so the shell can migrate it into the keychain once, then clear
-    /// it. Not sent to the frontend — the UI field is write-only.
-    #[serde(default, skip_serializing)]
+    /// the OS keychain (see src-tauri `set_cloudlog_key`). It DESERIALIZES an older
+    /// file's plaintext key so the shell can migrate it into the keychain once, then
+    /// clear it.
+    ///
+    /// `skip_serializing_if = is_empty`, NOT an unconditional `skip_serializing`: the
+    /// migration DEFERS on a box with no keychain (round 7 F12) and retries next launch,
+    /// and that retry needs the key to survive in settings.json across the ordinary saves
+    /// that run right after (the FD position-id save, every settings command). An
+    /// unconditional skip dropped it from those saves and destroyed the only copy (round 8
+    /// F1). The invariant: the key lives in EXACTLY one of {file, keychain}. While it is
+    /// non-empty (pending migration) it serializes, so no save can drop it; once the
+    /// keychain has it the migration clears the field and the empty value is omitted, so
+    /// the plaintext is never re-written. `settings.save` is 0600 (F8), so the pending key
+    /// at rest is owner-only; `export_settings_bundle` strips `cloudlogKey`
+    /// (`BACKUP_REDACTED_FIELDS`); `get_settings` clears it, keeping the "write-only, not sent
+    /// to the frontend" contract even while a pending key sits in the file; and
+    /// `Engine::apply_settings_inner` preserves it across the wholesale `self.settings = s` of
+    /// every form Save / reset / restore, so no such round-trip can blank it (round 10 Finding 1).
+    ///
+    /// `skip_serializing_if = cloudlog_key_absent` (trim-aware), NOT `String::is_empty`, so it
+    /// agrees with the migration gate on a whitespace-only value (round 10 N2).
+    ///
+    /// DOWNGRADE CAVEAT (round 10 N3): an OLDER build carried an unconditional
+    /// `skip_serializing`, so if the operator downgrades while a key is pending it deserializes the
+    /// key, then drops it on its first save — the pending key is lost. This build cannot prevent a
+    /// prior build's behaviour; the mitigation is simply not to downgrade with a migration pending.
+    #[serde(default, skip_serializing_if = "cloudlog_key_absent")]
     pub cloudlog_key: String,
     /// Auto-forward each logged QSO to the Cloudlog/Wavelog instance above. Off by default.
     #[serde(default)]
@@ -2601,6 +2643,30 @@ pub struct RadioProfile {
     /// a DATA submode nor SSB.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// **Hold the FM DATA submode while the SSTV receiver is running** (#130, PA3GYQ).
+    ///
+    /// Default OFF, which is today's behaviour: [`Engine::fm_mode_word`] commands `PKTFM`
+    /// only while an image is QUEUED OR IN FLIGHT and plain `FM` the rest of the time, so a
+    /// rig parked on an FM SSTV channel drops out of FM-D between pictures. That revert is
+    /// deliberate — an SSTV send once keyed a data mode into an FM repeater input — but it is
+    /// wrong for the operator who sits on an FM SSTV calling channel all evening.
+    ///
+    /// ON, the DATA submode is held for as long as `Engine::sstv_armed` is true, i.e. from the
+    /// moment the SSTV view starts the receiver until the operator stops it.
+    ///
+    /// ⚠️ THE COST, AND IT IS THE REASON THIS IS OPT-IN. The receiver stays armed after the
+    /// operator leaves the SSTV view (only an explicit Stop, or the ISS LOS unwind, disarms
+    /// it). So with this on, an FM VOICE call made without stopping the receiver first is
+    /// commanded in the FM data submode, where a normally-wired rig takes transmit audio from
+    /// the data port and the microphone modulates nothing — the same "red light, no RF"
+    /// failure `data_modes_plain_ssb` exists for, one mode along. Stop the receiver before
+    /// going back to voice; the hint on the switch says so.
+    ///
+    /// PER RADIO, not global, for `data_modes_plain_ssb`'s reason: it is a property of how
+    /// THAT rig is cabled and operated. A station can run SSTV on the 9700 and voice on the HF
+    /// rig, and only one of them should be held.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -2712,6 +2778,11 @@ pub struct RadioProfilePatch {
     /// See `RadioProfile::data_modes_plain_ssb` — plain SSB instead of the DATA submode.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// See `RadioProfile::sstv_hold_data_submode` — hold FM-D while the SSTV receiver runs.
+    /// `#[serde(default)]` like its neighbour: a patch written before the field existed still
+    /// deserializes, as OFF, which is the pre-field behaviour.
+    #[serde(default)]
+    pub sstv_hold_data_submode: bool,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -2785,6 +2856,7 @@ impl RadioProfilePatch {
         p.icom_native_cat = self.icom_native_cat;
         p.icom_data_mode = self.icom_data_mode;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
+        p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
@@ -2882,6 +2954,7 @@ impl Default for RadioProfile {
             icom_native_cat: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -3259,6 +3332,7 @@ impl Default for Settings {
             js8_speed: default_js8_speed(),
             js8_rx_speeds: default_js8_rx_speeds(),
             js8_hb_interval_min: 0,
+            js8_cq_interval_min: 0,
             js8_hb_ack: false,
             js8_autoreply: default_js8_autoreply(),
             js8_relay: default_js8_relay(),
@@ -3327,6 +3401,7 @@ impl Default for Settings {
             yaesu_rf_scope: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
@@ -3632,6 +3707,7 @@ impl Settings {
             icom_native_cat: self.icom_native_cat,
             icom_data_mode: self.icom_data_mode,
             data_modes_plain_ssb: self.data_modes_plain_ssb,
+            sstv_hold_data_submode: self.sstv_hold_data_submode,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -4002,6 +4078,7 @@ impl Settings {
         self.icom_native_cat = p.icom_native_cat;
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
+        self.sstv_hold_data_submode = p.sstv_hold_data_submode;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
@@ -4041,6 +4118,7 @@ impl Settings {
             icom_native_cat,
             yaesu_rf_scope,
             data_modes_plain_ssb,
+            sstv_hold_data_submode,
             audio_in,
             audio_out,
             tx_level,
@@ -4068,6 +4146,7 @@ impl Settings {
             self.icom_native_cat,
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
+            self.sstv_hold_data_submode,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -4096,6 +4175,7 @@ impl Settings {
             p.icom_native_cat = icom_native_cat;
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
+            p.sstv_hold_data_submode = sstv_hold_data_submode;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -4323,9 +4403,30 @@ impl Settings {
         to_save.sync_active_from_flat();
         let json = serde_json::to_string_pretty(&to_save).map_err(std::io::Error::other)?;
         let tmp = path.with_extension("json.tmp");
+        // ⛔ Owner-only. settings.json holds the ClubLog API key (and a Cloudlog key until the
+        // keychain migration completes) and sits beside conn-health.json; `File::create` leaves it
+        // world-readable at 0644 (round 7 F8). Create the temp 0600 from the first byte on unix, and
+        // re-assert the mode to cover a slack umask or a stale temp; the rename carries the mode onto
+        // the published file. On non-unix the profile dir's ACL governs it, as elsewhere.
+        #[cfg(unix)]
+        let mut f = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?
+        };
+        #[cfg(not(unix))]
         let mut f = std::fs::File::create(&tmp)?;
         std::io::Write::write_all(&mut f, json.as_bytes())?;
         f.sync_all()?; // data on disk BEFORE the rename publishes it
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
         drop(f);
         // No pre-remove of `path`: rename replaces it atomically on Unix and Windows
         // (MOVEFILE_REPLACE_EXISTING); a remove-first would open a no-file crash window.
@@ -4616,6 +4717,7 @@ mod tests {
             icom_native_cat: true,
             icom_data_mode: 2,
             data_modes_plain_ssb: true,
+            sstv_hold_data_submode: true,
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -4755,6 +4857,7 @@ mod tests {
             icom_native_cat: false,
             icom_data_mode: 3,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -4903,6 +5006,7 @@ mod tests {
             icom_native_cat: false,
             icom_data_mode: 1,
             data_modes_plain_ssb: false,
+            sstv_hold_data_submode: false,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -4978,7 +5082,7 @@ mod tests {
             "pttMethod": "cat", "rigModel": 1049, "rigModelName": "Yaesu FT-710",
             "serialPort": "/dev/cu.usbserial-01AF7FED0", "pttSerialPort": "", "baud": 38400,
             "rigConn": "serial", "rigAddr": "", "omnirigSlot": 0, "rigctldPort": 4533,
-            "icomNativeCat": false, "dataModesPlainSsb": false,
+            "icomNativeCat": false, "dataModesPlainSsb": false, "sstvHoldDataSubmode": false,
             "audioIn": "USB Audio Device", "audioOut": "USB Audio Device",
             "txLevel": 0.9, "rxGain": 1.0,
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
@@ -5150,6 +5254,7 @@ mod tests {
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: 1,
             data_modes_plain_ssb: p.data_modes_plain_ssb,
+            sstv_hold_data_submode: p.sstv_hold_data_submode,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
@@ -6617,6 +6722,10 @@ mod tests {
             s.js8_hb_interval_min, 0,
             "HB on demand (JS8Call HBInterval=0)"
         );
+        assert_eq!(
+            s.js8_cq_interval_min, 0,
+            "CQ on demand (JS8Call CQInterval=0) — the CQ button stays a one-shot"
+        );
         assert!(!s.js8_hb_ack, "JS8Call SubModeHBAck default false");
         assert!(s.js8_autoreply, "JS8Call autoreply default ON (G3)");
         assert!(s.js8_relay, "JS8Call relay default ON (G3)");
@@ -6631,6 +6740,7 @@ mod tests {
             "\"js8Speed\":1",
             "\"js8RxSpeeds\":15",
             "\"js8HbIntervalMin\":0",
+            "\"js8CqIntervalMin\":0",
             "\"js8HbAck\":false",
             "\"js8Autoreply\":true",
             "\"js8Relay\":true",
@@ -6667,6 +6777,7 @@ mod tests {
             "js8Speed",
             "js8RxSpeeds",
             "js8HbIntervalMin",
+            "js8CqIntervalMin",
             "js8HbAck",
             "js8Autoreply",
             "js8Relay",
@@ -6683,8 +6794,9 @@ mod tests {
         }
         // CONTROL: a key that must NOT exist is not found, so the scan is not vacuous.
         assert!(
-            !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:")),
-            "HB on/off is session-only and must never be a setting"
+            !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:"))
+                && !body.lines().any(|l| l.trim_start().starts_with("js8CqOn:")),
+            "HB and CQ-repeat on/off are session-only and must never be settings"
         );
     }
 
@@ -6877,6 +6989,128 @@ mod tests {
         assert!(back.fd_scoreboard);
         assert_eq!(back.fd_scoreboard_port, 7474);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// F8 (round 7): settings.json holds the ClubLog API key (and a Cloudlog key until the keychain
+    /// migration completes), so it must not be world-readable. `File::create` leaves it at 0644.
+    #[test]
+    #[cfg(unix)]
+    fn save_writes_the_settings_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join("tempo_settings_mode");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+        let s = Settings {
+            mycall: "W9XYZ".into(),
+            clublog_api_key: "cl0gk3yAbCdEf0123456789".into(),
+            ..Settings::default()
+        };
+        s.save(&path).unwrap();
+        // Control: the key really is in the file at rest (so "owner-only" is protecting something).
+        assert!(
+            std::fs::read_to_string(&path).unwrap().contains("cl0gk3y"),
+            "control: the ClubLog key is written to settings.json"
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "settings.json is world-readable at {mode:o}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ **A deferred Cloudlog key must survive an unrelated save (round 8 F1, DATA LOSS).**
+    ///
+    /// The `run()` migration moves a legacy plaintext Cloudlog key into the OS keychain and clears
+    /// the field — but ONLY once the keychain store succeeds. On a box with no Secret Service the
+    /// store fails, the migration DEFERS, and the key is retried next launch. That retry depends on
+    /// the key surviving in `settings.json` across the ordinary saves that run right after the
+    /// deferral (the Field-Day position-id save, the tty heal, every settings-mutating command).
+    /// Round 7's unconditional `skip_serializing` dropped it from EVERY save, so the first such save
+    /// destroyed the operator's only copy.
+    ///
+    /// The real invariant: the key lives in EXACTLY one of {file, keychain}, and no save may drop it
+    /// from the file while it is not in the keychain. This test models the real sequence —
+    /// migrate-defer (the key is still in the in-memory `Settings` the engine took), an unrelated
+    /// save, read back — and then the OTHER direction: a cleared (migrated) key stays out of the file.
+    #[test]
+    fn a_deferred_cloudlog_key_survives_an_unrelated_save() {
+        let dir = std::env::temp_dir().join(format!("tempo_cl_defer_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // A legacy file: the plaintext Cloudlog key beside a normal (always-serialized) secret.
+        std::fs::write(
+            &path,
+            r#"{"cloudlogKey":"CLOUDLOG-LEGACY-KEY-9999","clublogApiKey":"CLUBLOG-CONTROL-8888"}"#,
+        )
+        .unwrap();
+
+        // Migration deferred: the keychain was unavailable, so the field was left in the in-memory
+        // Settings for the retry. `load` reproduces exactly that state.
+        let s = Settings::load(&path);
+        assert_eq!(
+            s.cloudlog_key, "CLOUDLOG-LEGACY-KEY-9999",
+            "pre: the legacy key deserialized into memory"
+        );
+        assert_eq!(
+            s.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "pre: the control secret is present"
+        );
+
+        // An ordinary save runs next (the FD position-id save). It must not drop the deferred key.
+        s.save(&path).unwrap();
+
+        let back = Settings::load(&path);
+        assert_eq!(
+            back.cloudlog_key, "CLOUDLOG-LEGACY-KEY-9999",
+            "an ordinary save destroyed the deferred Cloudlog key — no retry is possible, it is gone"
+        );
+        // Control: a normal secret survives the SAME save, so the detector can see persistence.
+        assert_eq!(
+            back.clublog_api_key, "CLUBLOG-CONTROL-8888",
+            "control: an always-serialized secret survives the save"
+        );
+
+        // The other direction of the invariant: once the key IS in the keychain the migration clears
+        // the field, and a save must then keep it OUT of the file — the keychain is the one place.
+        let mut migrated = back;
+        migrated.cloudlog_key.clear();
+        migrated.save(&path).unwrap();
+        let file = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !file.contains("cloudlogKey") && !file.contains("CLOUDLOG-LEGACY-KEY-9999"),
+            "a cleared (migrated) key must not be written back to settings.json: {file}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// round 10 N2 — the serializer skip and the migration gate must agree on a WHITESPACE-only key.
+    ///
+    /// The migration (`run()`) skips a `cloudlog_key.trim().is_empty()` value; the serializer must
+    /// too, or a blank value serializes to settings.json forever yet is never migrated. Control: a
+    /// REAL key still serializes, so the check is not simply "nothing ever serializes".
+    #[test]
+    fn a_whitespace_only_cloudlog_key_is_treated_as_absent() {
+        // A blank "key" is not migratable and must not be persisted.
+        let blank = Settings {
+            cloudlog_key: "   ".into(),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&blank).unwrap();
+        assert!(
+            !json.contains("cloudlogKey"),
+            "a whitespace-only cloudlog key must be treated as absent (agree with the migration \
+             gate), not serialized forever: {json}"
+        );
+        // Control: a real key DOES serialize (the skip is trim-aware, not "always skip").
+        let real = Settings {
+            cloudlog_key: "REAL-KEY-1234".into(),
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&real).unwrap();
+        assert!(
+            json.contains("REAL-KEY-1234"),
+            "control: a genuine pending key must still serialize so the migration can retry: {json}"
+        );
     }
 
     #[test]

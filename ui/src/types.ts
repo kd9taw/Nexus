@@ -223,6 +223,11 @@ export interface WorkableCard {
   /** Live PSK Reporter spots confirm this band toward the DX region. */
   liveConfirmed: boolean
   howToCall: string
+  /** The announced FT8 DXpedition protocol (propagation::Ft8DxpMode), kept structured
+   * beside the English `howToCall` sentence. `SuperFox` is the one Nexus does not decode
+   * in this version — the interface says so before the operator calls, and it branches on
+   * this field rather than on the wording of that sentence. Absent = none announced. */
+  ft8Mode?: 'FoxHound' | 'Mshv' | 'SuperFox' | null
   windowHint: string
   priority: number
   /** Announced modes (NG3K) — routes map click-to-work to the right cockpit.
@@ -1447,8 +1452,9 @@ export interface PskState {
 
 /** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). */
 export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo'
-/** Who originated a queued/pending frame (serde camelCase). CQ counts as `operator`. */
-export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay'
+/** Who originated a queued/pending frame (serde camelCase). A CQ the operator CLICKS is
+ * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. */
+export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay' | 'cqRepeat'
 /** The second act of the two-act rule: three persisted switches + the session-only HB. */
 export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
 /** Inbox row state, lowercase on the wire. */
@@ -1458,6 +1464,8 @@ export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
  * "armed" from THIS, never from the persisted switch alone. */
 export interface Js8Armed {
   autoreply: boolean
+  /** The repeating CQ — the session switch AND the TX latch AND no idle trip. */
+  cq: boolean
   relay: boolean
   hbAck: boolean
   hb: boolean
@@ -1540,6 +1548,12 @@ export interface Js8State {
   hbOn: boolean
   hbNextAtMs: number | null
   hbIntervalMin: number
+  /** JS8Call's checkable auto-repeating CQ: session-only, its next fire time (drives the
+   * live countdown ON the CQ button), and the persisted interval that decides whether the
+   * button is a one-shot (0) or the repeat toggle (> 0). */
+  cqOn: boolean
+  cqNextAtMs: number | null
+  cqIntervalMin: number
   /** The persisted switches (the second act), echoed so the chips render engine truth. */
   autoreply: boolean
   relay: boolean
@@ -1810,6 +1824,12 @@ export interface UploadStatus {
   /** "pending" | "accepted" | "duplicate" | "rejected" | "authfail". */
   outcome: string
   whenUnix: number
+  /**
+   * The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record" |
+   * "partial" | "unclassified" | "declared" — not prose. It rides `log.adi`, which is what
+   * TQSL signs and uploads to ARRL, so it is never the service's own words; anything else is
+   * dropped on the way back into Rust. Render it through a label of your own, not verbatim.
+   */
   detail?: string | null
 }
 export interface UploadState {
@@ -2224,7 +2244,9 @@ export interface CredStatus {
   lastSuccessUnix: number | null
   /** Newest failure, unix seconds. */
   lastFailureUnix: number | null
-  /** The service's own (sanitized) reason for that failure. */
+  /** Why it last failed, in NEXUS's own words — the sentence for the failure class, never
+   *  the service's prose (see `UploadDetail` on the Rust side, and the `conn-health.json`
+   *  allow-list for the connectors that leave no per-QSO stamp). Safe to render verbatim. */
   lastFailureDetail: string | null
   /** Session kill-switch tripped (ClubLog's 403 latch): every leg is being skipped. */
   paused: boolean
@@ -2741,6 +2763,10 @@ export interface Settings {
   /** Heartbeat repeat interval in minutes; 0 = on demand. HB on/off itself is
    * session-only and is NOT here — the app can never launch beaconing. */
   js8HbIntervalMin: number
+  /** CQ repeat interval in minutes; 0 = on demand, which leaves the cockpit's CQ button
+   * the one-shot it has always been. Whether the repeat is ON is session-only and is NOT
+   * here — the app can never launch calling CQ. */
+  js8CqIntervalMin: number
   /** Answer heard heartbeats with HEARTBEAT SNR (JS8Call default off). The persisted
    * second act of the two-act rule; the session TX latch is the first. */
   js8HbAck: boolean
@@ -2833,6 +2859,9 @@ export interface Settings {
    * default off: worked on 40m marks B4-on-band for 40m in every mode. */
   b4MatchMode?: boolean
   dataModesPlainSsb: boolean
+  /** Hold the FM DATA submode for as long as the SSTV receiver is running, rather than only
+   * around a send. Per radio (flat mirror of the active radio). Off by default. */
+  sstvHoldDataSubmode: boolean
   /** Antenna rotator: rotctld daemon `host:port` (empty = no rotator). */
   /** Integrated rotator: Hamlib rotator model # (0 = none) + serial port +
    * baud — Nexus launches the bundled rotctld itself, like the rig. */
@@ -3369,6 +3398,13 @@ export interface RadioProfile {
    * the MIC, so the radio transmits with no RF. Correct only when the audio reaches the mic path
    * (an interface wired into the mic jack). RTTY-FSK is unaffected. */
   dataModesPlainSsb: boolean
+  /** Hold the FM DATA submode (FM-D / PKTFM) for as long as the SSTV receiver is running,
+   * instead of only while an image is queued or on the air. Per radio. Off by default.
+   *
+   * ⚠️ The receiver stays armed after you leave the SSTV view, so with this on an FM VOICE
+   * call made without stopping it first is commanded in the data submode and modulates from
+   * the data port, not the microphone. */
+  sstvHoldDataSubmode: boolean
   audioIn: string
   audioOut: string
   txLevel: number

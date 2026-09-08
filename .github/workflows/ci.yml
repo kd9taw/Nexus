@@ -102,6 +102,22 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
+      # `cargo fmt --all` stops at the workspace boundary and src-tauri declares its
+      # OWN `[workspace]` table, so the step above has never reached it and no other
+      # job formats it either. Measured 2026-09-07, independently by two branches
+      # that both found the same number: the root step exited 0 while
+      # src-tauri/src/lib.rs carried 21 drifted regions no check could report. That
+      # also made `cargo fmt` unsafe to run in that directory, because it swept ~20
+      # unrelated reformats into whatever commit happened to be open. The sweep
+      # landed as its own commit so it could not contaminate a real diff.
+      #
+      # `--all` rather than the bare form: src-tauri is a single-package workspace
+      # today, so the two are equivalent — but if a member is ever added, the bare
+      # form silently stops covering it. Cheap and fast, so it sits beside the root
+      # fmt step: a formatting failure should not wait for a build.
+      - name: cargo fmt --check src-tauri
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+
       - name: cargo test --workspace
         run: cargo test --workspace
 
@@ -235,6 +251,19 @@ jobs:
       # now — the loader itself — so the gate and its corpus both live in the
       # `test` job above; see the comment there.)
 
+      # scripts/gates derives the local gate list from THIS FILE, and its whole
+      # value rests on one property: a step added here appears there with no edit
+      # to the script. scripts/gates.test.mjs is what holds that property down —
+      # it plants a step in a scratch copy of this workflow and fails if --list
+      # misses it — and until now it ran in no workflow at all. Same argument as
+      # the doc generators above, which is not a coincidence: a tool whose only
+      # trigger is somebody remembering is not a gate.
+      #
+      # The recursion is the point. This step is in ci.yml, so scripts/gates
+      # derives it and runs it, and the tool ends up gating its own correctness.
+      - name: scripts/gates still derives the gate list from this workflow
+        run: node --test scripts/gates.test.mjs
+
       # The two doc generators, in --check mode: they write nothing, they exit 1
       # when the committed page is behind the source it is derived from.
       #
@@ -259,6 +288,23 @@ jobs:
       # FT2 two without appearing on the page whose job is listing them.
       - name: docs/shipped.json is generated from the app's own lists
         run: node scripts/gen-shipped.mjs --check
+
+      # The per-commit half of scripts/release-docs.mjs: every published screenshot is mapped to
+      # the source it depicts, every image a page points at exists and carries alt text, every
+      # image in docs/img/manual/ is actually placed on a page, and every local link and heading
+      # anchor across docs/ resolves.
+      #
+      # WHY --push-gate AND NOT THE WHOLE SCRIPT. The rest of release-docs asks release questions
+      # — is there a RELEASE_NOTES for this version, is the CHANGELOG stamped, are its issue
+      # credits closed on GitHub, is the live site in sync — all legitimately unfinished on a
+      # topic branch, and two of them need the network. Those stay at release time. What is here
+      # is true of every commit and needs nothing but the checkout.
+      #
+      # WHY IT IS HERE AT ALL. release-docs.mjs ran in no workflow, so its checks fired only when
+      # somebody remembered to run it — which is the exact argument that file was written to make
+      # about gen-wiki.mjs, and it had come to apply to the file itself.
+      - name: The manual's images and cross-references resolve
+        run: node scripts/release-docs.mjs --push-gate
 
   # The downloadable manual's EPUB must stay valid — a doc change that breaks it should go
   # red here, on the push, not be discovered on a Kindle after release. Builds the EPUB only

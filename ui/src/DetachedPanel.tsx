@@ -774,6 +774,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           needScopes={needScopes}
           selectedCall={selected}
           onSelect={onSelect}
+          // #204: the detached cockpit clears the card the same way the main window does.
+          onClearSelection={() => onSelect(null)}
           layoutMode={operateLayout}
           onLayoutMode={changeLayout}
           panels={operatePanels}

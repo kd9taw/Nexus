@@ -21,7 +21,7 @@ New here? Start with [Quick Start](Quick-Start), [Install](Install), and
 
 ## Section guides
 
-The per-section reference — pick the section you're working in. All eighteen pages
+The per-section reference — pick the section you're working in. All twenty-one pages
 are indexed at
 [docs/guide](https://github.com/kd9taw/Nexus/blob/main/docs/guide/index.md).
 
@@ -33,6 +33,9 @@ are indexed at
 | [Phone (SSB / FM)](https://github.com/kd9taw/Nexus/blob/main/docs/guide/phone.md) | The traditional rig panel: live dial read-back, colored bandscope, voice keyer, QSO recording |
 | [CW](https://github.com/kd9taw/Nexus/blob/main/docs/guide/cw.md) | The keyboard CW station: keyer back-ends, F-key macros, live decoder |
 | [RTTY](https://github.com/kd9taw/Nexus/blob/main/docs/guide/rtty.md) | A 45.45 baud Baudot teleprinter: per-character decode confidence, a click-to-net waterfall, macros, and AFSK or true FSK keying |
+| [PSK](https://github.com/kd9taw/Nexus/blob/main/docs/guide/psk.md) | PSK31 and QPSK31 keyboard ragchewing at 31.25 baud: click a warble on the waterfall and it prints, type into a live transmission, four macros |
+| [JS8](https://github.com/kd9taw/Nexus/blob/main/docs/guide/js8.md) | JS8Call-compatible keyboard chat on FT8's waveform: heartbeats, directed messages, relay and a store-and-forward inbox, all four speeds decoded at once |
+| [Chat (Tempo)](https://github.com/kd9taw/Nexus/blob/main/docs/guide/chat.md) | Nexus's own weak-signal text mode: a roster, threaded conversations, and messages that queue until the other station is actually heard |
 | [SSTV](https://github.com/kd9taw/Nexus/blob/main/docs/guide/sstv.md) | Receive-first slow-scan — pictures decode themselves into a local gallery, and transmit is always an explicit **Send** |
 | [APRS](https://github.com/kd9taw/Nexus/blob/main/docs/guide/aprs.md) | A 2 m AFSK-1200 packet monitor with its own map, plus position beacons, short messages, and the receive-only iGate |
 | [Memories](https://github.com/kd9taw/Nexus/blob/main/docs/guide/memories.md) | The saved-channel bank behind the cockpit MEM strip: one click tunes the rig, applies the shift and tone, and opens the cockpit that mode belongs in |
@@ -66,7 +69,7 @@ are indexed at
 | Guide | What it covers |
 |---|---|
 | [Program](https://github.com/kd9taw/Nexus/blob/main/docs/guide/program.md) | The radio-programming workbench: the repeaters around a location become a channel list, and the list becomes a CHIRP CSV |
-| [Settings reference](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md) | A walk through all eight Settings tabs, field by field |
+| [Settings reference](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md) | A walk through every Settings tab, field by field |
 
 ---
 

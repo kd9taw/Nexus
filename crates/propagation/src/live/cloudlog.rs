@@ -2,6 +2,128 @@
 //! web logbooks with an identical QSO API: `POST {base}/index.php/api/qso` with the instance
 //! API key + station-profile id + one ADIF record. The URL + JSON builders are pure (unit-
 //! tested); [`upload`] does the blocking POST.
+//!
+//! # ⛔ Where the API key is kept out of, and by what
+//!
+//! The key rides in the REQUEST body, and an instance can echo a request back — a debug-mode
+//! PHP notice, a WAF page, a proxy error. So every string this module hands upwards is
+//! assumed to be able to contain the key, and the boundary that matters is **what gets
+//! written down**:
+//!
+//! - **Persisted** (`conn-health.json`, mode 0644, survives the session): guarded by an
+//!   ALLOW-LIST at the sink — `note_conn_health` in `src-tauri/src/lib.rs` takes a
+//!   `ConnDetail`, which can only be built from a string literal, so nothing derived from a
+//!   response can reach it at all. That is the guarantee, and it is the only one. What this
+//!   module gives that sink is [`CloudlogFailure`] — a closed set of CLASSES, so the row can
+//!   still name which failure it was without persisting a character the instance wrote.
+//! - **Ephemeral** (the operator's toast for this upload, and the in-memory connection log):
+//!   carries the instance's own words, because #226 is precisely that Nexus threw them away.
+//!   [`echoes_key`] reduces the chance the key is among them, and **it is best-effort, not a
+//!   guarantee** — see its own note. Do not build anything on it, and do not add a round to
+//!   it: three were spent, and the server picks the encoding.
+//! - **stderr is NOT ephemeral, and that is why [`CloudlogError`] has no `Display`.** On
+//!   Linux the desktop session redirects a GUI process's stderr into `~/.xsession-errors`,
+//!   mode 0644, which outlives the session exactly as `conn-health.json` does. A type that
+//!   formats itself is one `eprintln!` away from that file, so this one does not; read
+//!   `.message` where the instance's words are actually wanted.
+
+use super::neterr;
+
+/// Why one Cloudlog/Wavelog upload did not go through — the **class**, which is a closed set
+/// Nexus decides, told apart from the instance's own words, which are not.
+///
+/// ⚠️ This exists because of the persisted row. `conn-health.json` may hold only sentences
+/// Nexus wrote (see `note_conn_health` in `src-tauri/src/lib.rs`), and when that rule landed
+/// this module had nothing but `Ok`/`Err(String)` to offer it — so every Cloudlog failure
+/// collapsed into one sentence, and after a restart the panel could not tell a station
+/// profile id that is not linked to the key from a URL that is not a Cloudlog instance from
+/// an HTTP 500. HRDLog and WRL kept per-class sentences only because their services answer
+/// with a closed result set; Cloudlog's classes are just as closed, they were only never
+/// named. Naming them is what lets the row be as specific as its siblings without persisting
+/// a single character the instance wrote.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CloudlogFailure {
+    /// Nothing was sent: the instance URL, the API key or the station profile id is missing,
+    /// or the URL is not `https://`.
+    NotConfigured,
+    /// Nexus never got an answer out of the instance — DNS, a refused connect, a rejected
+    /// TLS handshake, a redirect.
+    Unreachable,
+    /// The instance answered and rejected the credentials (HTTP 401/403).
+    Credentials,
+    /// The URL answered, but not as a Cloudlog/Wavelog QSO API (HTTP 404).
+    NotAnApi,
+    /// The instance took the request and refused to FILE the record — a station profile id
+    /// not linked to this key, a malformed ADIF field. Carried in the body of an HTTP 2xx,
+    /// which is why a 2xx alone never means the QSO landed.
+    RecordRefused,
+    /// The instance is in trouble (HTTP 5xx) — not the credentials, and worth retrying.
+    ServerError,
+    /// Answered, refused, and with no class of its own.
+    Refused,
+}
+
+impl CloudlogFailure {
+    /// Every class. The caller keeps one persisted sentence per class, so it needs to be able
+    /// to enumerate them — see `cloudlog_stamp` in `src-tauri/src/lib.rs`.
+    pub const ALL: [CloudlogFailure; 7] = [
+        CloudlogFailure::NotConfigured,
+        CloudlogFailure::Unreachable,
+        CloudlogFailure::Credentials,
+        CloudlogFailure::NotAnApi,
+        CloudlogFailure::RecordRefused,
+        CloudlogFailure::ServerError,
+        CloudlogFailure::Refused,
+    ];
+}
+
+/// One failed Cloudlog/Wavelog upload: what class of failure it was, and what the instance
+/// said about it.
+///
+/// ⛔ The two halves go to different places and that is the whole point of the split.
+/// `class` is Nexus's own, and is what the Connections row persists. `message` may quote the
+/// instance verbatim — it goes to the operator's toast and to this session's in-memory
+/// connection log, is read once, and is dropped. Deliberately no `Display`: a type that
+/// formats itself is a type that can be handed to `eprintln!` or a log macro by accident, and
+/// stderr is a file on Linux. Read `.message` where the words are wanted.
+#[derive(Clone, Debug)]
+pub struct CloudlogError {
+    pub class: CloudlogFailure,
+    pub message: String,
+}
+
+impl CloudlogError {
+    fn new(class: CloudlogFailure, message: impl Into<String>) -> Self {
+        Self {
+            class,
+            message: message.into(),
+        }
+    }
+}
+
+/// How much of the server's own words to show, in characters.
+///
+/// A Cloudlog/Wavelog `reason` is a short sentence; what else can arrive on this socket is a
+/// reverse proxy's HTML error page or a PHP notice. The bound is not about screen space —
+/// the panel row already truncates with `text-overflow: ellipsis` (`ui/src/styles.css`
+/// `.conn-when`) — it is about where the string GOES: `src-tauri/src/lib.rs` puts it in the
+/// 200-entry in-memory connection log and hands it to the operator's toast, and a 50 000-
+/// character proxy page is 200 log entries' worth of memory for one failure. 160 leaves room
+/// for a real sentence and cuts a web page off at its title, which is the part that
+/// identifies it. (It no longer reaches `conn-health.json` at all — only a [`CloudlogFailure`]
+/// does.)
+///
+/// Measured against a 50 000-character HTML error page: the whole operator-facing message
+/// comes out at **201 characters** (this bound, the ellipsis, and the longest prefix
+/// `classify` builds). A genuine Cloudlog reason lands well inside it — the reported
+/// station-profile rejection measures 96.
+///
+/// ⚠️ It is a SIZE bound and nothing else. It was once described as a backstop for the API-key
+/// scrub; it never was one, and the arithmetic says so plainly — a Cloudlog key is 33
+/// characters and this is 160, so a key echoed near-verbatim fits with 120 to spare. What
+/// keeps the key out of the persisted file is the allow-list at the sink (module header);
+/// [`echoes_key`] only thins the ephemeral surfaces.
+const REASON_MAX_CHARS: usize = 160;
 
 /// Build the QSO API endpoint from a user-entered base URL. Tolerant of a trailing slash, an
 /// already-present `/index.php`, or the full `/index.php/api/qso` path.
@@ -47,24 +169,241 @@ pub fn build_body(key: &str, station_id: &str, adif: &str) -> String {
 /// body (`{"status":"created"}` on success; `{"status":"failed"|"error",...}` on a rejected or
 /// misfiled record), so an HTTP 2xx alone does not mean the QSO was filed. Lenient on unknown
 /// body shapes so a Wavelog variant with a different success payload isn't reported as failed.
-fn classify_body(text: &str) -> Result<String, String> {
+fn classify_body(text: &str, reason: Option<&str>) -> Result<String, CloudlogError> {
     let t = text.to_ascii_lowercase().replace(' ', "");
     if t.contains("\"status\":\"failed\"") || t.contains("\"status\":\"error\"") {
-        return Err("Cloudlog rejected the QSO — check the instance log".to_string());
+        return Err(CloudlogError::new(
+            CloudlogFailure::RecordRefused,
+            match reason {
+                Some(r) => format!("Cloudlog rejected the QSO: {r}"),
+                None => "Cloudlog rejected the QSO — check the instance log".to_string(),
+            },
+        ));
     }
     Ok(text.to_string())
+}
+
+/// Unicode **Cf** (format) characters, which [`char::is_control`] does not cover.
+///
+/// ⚠️ U+202E RIGHT-TO-LEFT OVERRIDE visually reverses everything after it, so a server-supplied
+/// string carrying one rewrites the rest of the failure detail on the panel row and in
+/// `conn-health.json`. U+200B, U+FEFF and U+00AD are simply invisible — they pad a message
+/// with characters nobody can see or delete. C0/C1, DEL, ESC and BEL were already stripped by
+/// the `is_control` filter below; these are the rest of the class.
+///
+/// Listed rather than derived: `std` carries no general-category table, and the alternative
+/// (keep only what looks safe) throws away every non-Latin script a service might answer in.
+/// The same filter guards the other end of this string — `note_conn_health` in
+/// `src-tauri/src/lib.rs`, which is where every connector's detail is persisted.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00AD                  // SOFT HYPHEN
+        | 0x0600..=0x0605       // Arabic number signs
+        | 0x061C                // ARABIC LETTER MARK
+        | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2
+        | 0x180E                // MONGOLIAN VOWEL SEPARATOR
+        | 0x200B..=0x200F       // ZWSP, ZWNJ, ZWJ, LRM, RLM
+        | 0x202A..=0x202E       // bidi embedding/override — U+202E is the dangerous one
+        | 0x2060..=0x2064       // WORD JOINER, invisible operators
+        | 0x2066..=0x206F       // bidi isolates, deprecated format characters
+        | 0xFEFF                // ZWNBSP / byte-order mark
+        | 0xFFF9..=0xFFFB       // interlinear annotation
+        | 0xE0000..=0xE007F     // TAGS — invisible by construction
+    )
+}
+
+/// What the operator is told instead of the body when the server echoed our own API key back.
+///
+/// Fixed text: nothing from the body survives. It is still the actionable half — an instance
+/// answering with the request it just received is a debug-mode notice or a proxy page, not
+/// Cloudlog, and that is a thing to go and look at.
+const KEY_ECHOED: &str = "the reply echoed the API key back, so its wording is withheld \
+                          (something is answering with the request it received)";
+
+/// How much of the key has to show through for [`echoes_key`] to suppress the body.
+///
+/// Twelve alphanumeric characters of a random key will not appear in a Cloudlog sentence or a
+/// proxy's error page by chance, and twelve characters of a credential is already more than
+/// belongs in a persisted file. Short enough that encoding one character in the middle cannot
+/// hide the rest, which is the failure this window exists for.
+const KEY_WINDOW: usize = 12;
+
+/// `s` reduced to its alphanumeric characters, lowercased.
+fn alnum_lower(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// `text` with every escape-shaped run deleted — HTML entities (`&#45;`, `&#x2D;`, `&amp;`),
+/// percent escapes (`%2D`) and backslash escapes (`\u002d`, `\x2d`).
+///
+/// Deliberately NOT a decoder: it removes the escape rather than producing the character it
+/// stood for. That is what [`echoes_key`] needs — the comparison drops non-alphanumerics
+/// anyway, so an escape standing for one of the key's separators has to VANISH rather than
+/// turn into the digits of its own code point (`&#45;` decoded is `-`, which then drops out;
+/// `&#45;` half-decoded is `45`, which wedges two digits into the middle of the key and hides
+/// it). Every form is bounded so a bare `&` or `%` in prose is left alone.
+fn strip_escapes(text: &str) -> String {
+    let c: Vec<char> = text.chars().collect();
+    let hex = |from: usize, n: usize| {
+        c.len() >= from + n && c[from..from + n].iter().all(char::is_ascii_hexdigit)
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < c.len() {
+        match c[i] {
+            // An entity is at most `&#x10FFFF;`; anything longer is not one.
+            '&' => match c[i + 1..].iter().take(10).position(|ch| *ch == ';') {
+                Some(n) => i += n + 2,
+                None => {
+                    out.push(c[i]);
+                    i += 1;
+                }
+            },
+            '%' if hex(i + 1, 2) => i += 3,
+            '\\' if c.len() > i + 1 && c[i + 1] == 'u' && hex(i + 2, 4) => i += 6,
+            '\\' if c.len() > i + 1 && c[i + 1] == 'x' && hex(i + 2, 2) => i += 4,
+            ch => {
+                out.push(ch);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// ⚠️ BEST EFFORT, AND KNOWN TO BE DEFEATABLE. Does the API key show through `text`?
+///
+/// **This is not what keeps the key off disk** — the allow-list at `note_conn_health` is (see
+/// the module header). It runs on the surfaces that are shown once and dropped: the toast for
+/// this upload and the in-memory connection log. There it is worth having and worth no more
+/// rounds than it has had.
+///
+/// What it does: ignoring every non-alphanumeric, and again with escape-shaped runs deleted,
+/// does any [`KEY_WINDOW`]-character stretch of the key appear? That catches the echoes a
+/// server produces without trying — a PHP notice HTML-escaping what it prints, a WAF page
+/// percent-encoding it, a JSON error writing `\uXXXX`, a zero-width character wedged inside.
+///
+/// **What it does not catch, measured rather than assumed:**
+/// - an echo with EVERY character escaped (`%63%6C…`, `&#99;…`, `&#x63;…`). [`strip_escapes`]
+///   deletes escape runs instead of decoding them, so both views go blind and all 33
+///   characters stay recoverable from the text.
+/// - fragmentation: [`KEY_WINDOW`] is a fixed 12, so two escaped characters at roughly
+///   one-third and two-thirds leave no 12-character stretch in either view.
+///
+/// Those are recorded, not scheduled. Round 1 was `str::replace`, defeated by one re-encoded
+/// character; round 2 was this, defeated two ways; the server chooses the encoding, so a
+/// blocklist here has no last move. Round 3 was to stop playing and allow-list the sink
+/// instead. If a persisted surface ever needs the instance's words, the answer is a bounded
+/// classification of the response, not a better detector here.
+fn echoes_key(text: &str, key: &str) -> bool {
+    let needle: Vec<char> = alnum_lower(key).chars().collect();
+    let win = needle.len().min(KEY_WINDOW);
+    // Below this the shape is not distinctive and ordinary prose would match it. A key this
+    // short is not a working Cloudlog key; the literal scrub still applies to it.
+    if win < 8 {
+        return false;
+    }
+    let views = [alnum_lower(text), alnum_lower(&strip_escapes(text))];
+    needle.windows(win).any(|w| {
+        let stretch: String = w.iter().collect();
+        views.iter().any(|v| v.contains(&stretch))
+    })
+}
+
+/// The server's own explanation of a failure, made safe to show — or `None` when it said
+/// nothing an operator can use.
+///
+/// ⚠️ #226, and this is the whole point of the issue. Cloudlog and Wavelog answer a rejected
+/// upload with a body naming what they rejected: a missing or read-only API key, a station
+/// profile id not linked to that key, a malformed record. Nexus read that body and threw it
+/// away, so all of them arrived as "check the API key" — the one thing the reporter had
+/// already checked, on two independent instances, with a key four other clients accept.
+///
+/// Two things are done to the body before any of it is shown:
+///
+/// 1. **The API key is scrubbed as far as a scrub can go.** The key rides in the REQUEST
+///    body, and a debug-mode PHP notice or a WAF page can echo a request straight back. The
+///    literal replacement below catches a verbatim echo; [`echoes_key`] catches the ordinary
+///    re-encodings, and when it fires **none of the body is shown**. ⚠️ Neither is a
+///    guarantee, and this string must not be treated as one: it is for the surfaces that are
+///    read once and dropped. Nothing derived from it may be persisted — `conn-health.json`
+///    takes only Nexus's own sentences, enforced by the type of `note_conn_health` in
+///    `src-tauri/src/lib.rs`. See the module header.
+/// 2. **It is flattened to one line and cut to [`REASON_MAX_CHARS`].** A size bound, not a
+///    security one — see that constant.
+///
+/// A JSON answer's explanation is read from its named field, because the object as a whole is
+/// machine shape rather than words for an operator. A body that is not JSON at all — a
+/// reverse proxy's HTML page, a PHP notice — IS the message, and a bounded slice of it is
+/// worth showing: knowing a proxy answered instead of Cloudlog is the actionable half.
+fn server_reason(text: &str, key: &str) -> Option<String> {
+    let k = key.trim();
+    let scrubbed = match k {
+        "" => text.to_string(),
+        k => text.replace(k, "[api key]"),
+    };
+    let words = match serde_json::from_str::<serde_json::Value>(&scrubbed) {
+        Ok(v) => ["reason", "message", "error"]
+            .iter()
+            .find_map(|f| v.get(f).and_then(serde_json::Value::as_str))
+            .or_else(|| v.as_str())
+            .map(str::to_string)?,
+        Err(_) => scrubbed.clone(),
+    };
+    // Fail closed. Both views are checked: `scrubbed` is the body as it arrived, and `words`
+    // is what serde produced from it — by which point any `\uXXXX` the server escaped the key
+    // with has already been decoded back into the key itself.
+    if !k.is_empty() && (echoes_key(&scrubbed, k) || echoes_key(&words, k)) {
+        return Some(KEY_ECHOED.to_string());
+    }
+    // Control characters (newlines included) and invisible format characters become spaces,
+    // then runs of whitespace collapse: an HTML page is otherwise 40 blank lines in a tooltip,
+    // and a U+202E reverses the rest of the row on screen.
+    let flat = words
+        .chars()
+        .map(|c| {
+            if c.is_control() || is_invisible_format(c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>();
+    let mut out: String = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.is_empty() {
+        return None;
+    }
+    if out.chars().count() > REASON_MAX_CHARS {
+        out = out.chars().take(REASON_MAX_CHARS).collect::<String>() + "…";
+    }
+    Some(out)
 }
 
 /// POST one ADIF record to a Cloudlog/Wavelog instance. `Ok(body)` when the record is actually
 /// filed; a redacted error otherwise (the API key is in the REQUEST body — never echoed into an
 /// error string). Enforces HTTPS + no redirects so a credential-bearing request can't be
 /// downgraded onto cleartext, matching every sibling connector.
-pub fn upload(base_url: &str, key: &str, station_id: &str, adif: &str) -> Result<String, String> {
+pub fn upload(
+    base_url: &str,
+    key: &str,
+    station_id: &str,
+    adif: &str,
+) -> Result<String, CloudlogError> {
     if key.trim().is_empty() {
-        return Err("Cloudlog API key is empty — set it in Settings".to_string());
+        return Err(CloudlogError::new(
+            CloudlogFailure::NotConfigured,
+            "Cloudlog API key is empty — set it in Settings",
+        ));
     }
     if station_id.trim().is_empty() {
-        return Err("Cloudlog station profile id is empty — set it in Settings".to_string());
+        return Err(CloudlogError::new(
+            CloudlogFailure::NotConfigured,
+            "Cloudlog station profile id is empty — set it in Settings",
+        ));
     }
     let url = api_url(base_url);
     let body = build_body(key, station_id, adif);
@@ -73,29 +412,163 @@ pub fn upload(base_url: &str, key: &str, station_id: &str, adif: &str) -> Result
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|_| "couldn't build HTTP client".to_string())?;
+        .map_err(|_| {
+            CloudlogError::new(CloudlogFailure::Unreachable, "couldn't build HTTP client")
+        })?;
     let resp = client
         .post(&url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(body)
         .send()
-        .map_err(|_| {
-            "Cloudlog/Wavelog unreachable — check the URL (must be https://)".to_string()
+        // #226's defect on the transport arm: this flattened every way of failing to reach
+        // the instance into one sentence blaming the URL. `is_connect()` is true for a DNS
+        // failure, a refused connect, an unreachable proxy AND a rejected TLS handshake, and
+        // it is the handshake that matters — an HTTPS-inspecting antivirus re-signs with a CA
+        // Nexus does not carry (D#181), so "check the URL" sends that operator after the one
+        // thing that is right. `neterr` splits them and never stringifies the error, which
+        // this request needs anyway: the API key is in its body.
+        .map_err(|e| {
+            if e.is_builder() {
+                // The one case the old sentence WAS right about: `https_only` rejects an
+                // http:// URL here, before any I/O (reqwest async_impl/client.rs:2582).
+                // Nothing was sent, and the fix is in Settings — the same class as an empty
+                // key, not a network failure.
+                CloudlogError::new(
+                    CloudlogFailure::NotConfigured,
+                    "Cloudlog/Wavelog: the instance URL must be https:// — an upload carrying \
+                     the API key is never sent in the clear",
+                )
+            } else {
+                // Policy::none, so `redact`'s redirect wording is the right one.
+                CloudlogError::new(CloudlogFailure::Unreachable, neterr::redact("Cloudlog", &e))
+            }
         })?;
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
-    if status.is_success() {
-        classify_body(&text)
-    } else if status.as_u16() == 401 || status.as_u16() == 403 {
-        Err("auth rejected — check the API key".to_string())
-    } else {
-        Err(format!("Cloudlog HTTP {}", status.as_u16()))
+    classify(status.as_u16(), &text, key)
+}
+
+/// Turn one answered response into the operator's result. Pure, so the whole
+/// classification is unit-testable without a server (`upload` above is only the socket).
+///
+/// Where the server explained itself, its words lead and Nexus's guess is dropped: a guess
+/// printed beside an answer is noise. Where it did not, the guess is all there is, so it
+/// stays exactly as it was — and it names the station profile id as well as the key, because
+/// #226's actual failure was the profile id and the old wording never mentioned it.
+fn classify(status: u16, text: &str, key: &str) -> Result<String, CloudlogError> {
+    let reason = server_reason(text, key);
+    if (200..300).contains(&status) {
+        return classify_body(text, reason.as_deref());
     }
+    // The status line is a bounded value Nexus reads off the wire, not text out of the body,
+    // so classifying by it carries nothing the instance chose. 404 is the wrong-URL case
+    // #226's reporter could not tell from the others, and 5xx is the instance's own trouble
+    // rather than anything the operator can fix.
+    let class = match status {
+        401 | 403 => CloudlogFailure::Credentials,
+        404 => CloudlogFailure::NotAnApi,
+        500..=599 => CloudlogFailure::ServerError,
+        _ => CloudlogFailure::Refused,
+    };
+    let what = if class == CloudlogFailure::Credentials {
+        "rejected the credentials"
+    } else {
+        "refused the upload"
+    };
+    Err(CloudlogError::new(
+        class,
+        match reason {
+            Some(r) => format!("Cloudlog HTTP {status} — {what}: {r}"),
+            None if class == CloudlogFailure::Credentials => format!(
+                "Cloudlog HTTP {status} — {what}, and said no more. Check the API key and the \
+                 station profile id (a key is scoped to one profile)."
+            ),
+            None => format!("Cloudlog HTTP {status} — {what}, and said no more."),
+        },
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    /// #226's defect on the transport arm: every way of failing to reach the instance was
+    /// flattened into one sentence blaming the URL.
+    ///
+    /// `neterr` exists because `is_connect()` is true for a DNS failure, a refused connect, an
+    /// unreachable proxy AND a rejected TLS handshake — and the handshake case is the one that
+    /// matters, since an HTTPS-inspecting antivirus re-signs with a CA Nexus does not carry
+    /// (D#181). Telling that operator to check their URL sends them after the one thing that
+    /// is right.
+    #[test]
+    fn a_transport_failure_says_what_actually_failed() {
+        // A refused connect: bind a port, drop it, connect to nothing.
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        drop(l);
+        let e = upload(&format!("https://127.0.0.1:{port}"), KEY, "3", "<eor>").unwrap_err();
+        let err = e.message;
+        assert!(
+            err.contains("could not connect"),
+            "an unreachable instance was blamed on the URL: {err}"
+        );
+        assert_eq!(
+            e.class,
+            CloudlogFailure::Unreachable,
+            "a refused connect is not a credential or a record problem"
+        );
+
+        // A rejected TLS handshake: something answers the TCP connect but is not a peer we
+        // accept. On the operator's machine that something is the antivirus's certificate.
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = l.accept() {
+                let _ = sock.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n");
+                let _ = sock.flush();
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+        let e = upload(&format!("https://127.0.0.1:{port}"), KEY, "3", "<eor>").unwrap_err();
+        let err = e.message;
+        assert!(
+            err.contains("antivirus"),
+            "a rejected handshake was blamed on the URL: {err}"
+        );
+        assert_eq!(e.class, CloudlogFailure::Unreachable);
+        // The classification is by type, so the message can never carry the request.
+        assert!(!err.contains(KEY), "API key leaked into the message: {err}");
+
+        // The control: the one case the old sentence was right about must keep its answer.
+        // `https_only` rejects an http:// URL before any I/O. Nothing was sent and the fix is
+        // in Settings, so its CLASS is the not-configured one, not the network one.
+        let e = upload("http://log.example.invalid", KEY, "3", "<eor>").unwrap_err();
+        let err = e.message;
+        assert!(
+            err.contains("https://"),
+            "control: an http:// URL must still be told to use https: {err}"
+        );
+        assert_eq!(e.class, CloudlogFailure::NotConfigured);
+
+        // …and the two Settings-side refusals, which never open a socket at all.
+        assert_eq!(
+            upload("https://log.example.invalid", "  ", "3", "<eor>")
+                .unwrap_err()
+                .class,
+            CloudlogFailure::NotConfigured,
+            "an empty API key is a configuration problem, not a network one"
+        );
+        assert_eq!(
+            upload("https://log.example.invalid", KEY, " ", "<eor>")
+                .unwrap_err()
+                .class,
+            CloudlogFailure::NotConfigured,
+            "so is an empty station profile id"
+        );
+    }
 
     #[test]
     fn api_url_tolerates_url_variants() {
@@ -112,5 +585,289 @@ mod tests {
         assert!(b.starts_with("{\"key\":\"K3Y\",\"station_profile_id\":\"3\",\"type\":\"adif\""));
         assert!(b.contains("W1ABC"));
         assert!(b.contains("\\\"x\\\""), "embedded quotes escaped: {b}");
+    }
+
+    const KEY: &str = "cl0udl0g-4pi-k3y-abcdef0123456789";
+
+    #[test]
+    fn an_auth_rejection_carries_the_servers_own_reason() {
+        // #226: the same key works from GridTracker2 and WSJT-X-improved and fails against
+        // two independent instances, because what the server actually rejected was NOT the
+        // key. Collapsing every 401 into "check the API key" sends the operator back to the
+        // one thing they have already checked, and Nexus has the answer in hand.
+        let err = classify(
+            401,
+            r#"{"status":"failed","reason":"station_profile_id 7 is not linked to this API key"}"#,
+            KEY,
+        )
+        .unwrap_err()
+        .message;
+        assert!(
+            err.contains("station_profile_id 7 is not linked to this API key"),
+            "the server's own reason must reach the operator: {err}"
+        );
+    }
+
+    #[test]
+    fn a_2xx_that_rejects_the_record_carries_the_reason_too() {
+        // Cloudlog files the per-record verdict IN the body, so this is the other half of
+        // the same defect: HTTP 200 and the QSO still did not land.
+        let err = classify(
+            200,
+            r#"{"status":"failed","reason":"ADIF field BAND is missing"}"#,
+            KEY,
+        )
+        .unwrap_err()
+        .message;
+        assert!(
+            err.contains("ADIF field BAND is missing"),
+            "a rejected record must say why: {err}"
+        );
+    }
+
+    #[test]
+    fn a_reason_that_echoes_the_api_key_never_reaches_the_message() {
+        // The key rides in the REQUEST body, so a debug-mode PHP notice or a WAF page can
+        // echo it straight back — and this string is persisted to conn-health.json and kept
+        // in the connection log, so an echo would put the key on disk in cleartext.
+        let body = format!(r#"{{"status":"failed","reason":"denied for key={KEY} (profile 7)"}}"#);
+        let err = classify(403, &body, KEY).unwrap_err().message;
+        // Positive control, and it has to be a word the OLD flattened message never used —
+        // "rejected" would have passed against "auth rejected — check the API key" and this
+        // test would have proved nothing.
+        assert!(
+            err.contains("(profile 7)"),
+            "the reason must be surfaced: {err}"
+        );
+        assert!(!err.contains(KEY), "API key leaked into the message: {err}");
+    }
+
+    /// The key's own alphanumeric runs of 8 characters or more — here, `cl0udl0g` and
+    /// `abcdef0123456789`.
+    ///
+    /// This is the leak detector, and it is deliberately NOT the implementation's notion of a
+    /// match: re-encoding is something done to a key's *separators* (`-` becomes `&#45;`,
+    /// `%2D`, `\u002d`), so its alphanumeric runs come through every encoder untouched. A
+    /// message carrying one of these is a message a person can read the key out of, whatever
+    /// escaping sits between the runs. Asking the question this way keeps the test from
+    /// re-deriving the answer from the code under test.
+    fn key_runs(key: &str) -> Vec<String> {
+        key.split(|c: char| !c.is_alphanumeric())
+            .filter(|r| r.chars().count() >= 8)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// ⛔ CREDENTIAL. One re-encoded character must not defeat the scrub.
+    ///
+    /// The key rides in the REQUEST body, so a debug-mode PHP notice or a WAF page can echo it
+    /// straight back — and a server that echoes a request does not echo it byte for byte: it
+    /// HTML-escapes what it prints, or percent-encodes it, or escapes it as `\uXXXX` in JSON.
+    /// A literal `str::replace` catches none of those, and truncation is not the backstop it
+    /// was claimed to be: [`REASON_MAX_CHARS`] is 160 and a Cloudlog key is 33, so a
+    /// near-verbatim key fits with 120 characters to spare and lands in `conn-health.json`,
+    /// which is world-readable and persisted.
+    #[test]
+    fn a_re_encoded_api_key_never_reaches_the_message() {
+        let cases = [
+            // Fully HTML-entity encoded separators — a PHP notice printing what it received.
+            ("html entities", KEY.replace('-', "&#45;")),
+            // Hex entities, the other spelling of the same thing.
+            ("hex entities", KEY.replace('-', "&#x2D;")),
+            // Percent-encoded — a WAF page echoing a URL-encoded body.
+            ("percent escapes", KEY.replace('-', "%2D")),
+            // JSON's own escape, which the body is already made of.
+            ("json unicode escapes", KEY.replace('-', r"\u002d")),
+            // PARTIALLY encoded: ONE character. The case the review named, and the one that
+            // shows the defect is not about any particular encoder.
+            ("one separator", KEY.replacen('-', "&#45;", 1)),
+            // …and one encoded LETTER, which breaks a run as well as a separator.
+            ("one letter", KEY.replacen('c', "&#99;", 1)),
+            // A zero-width character wedged in: on screen this still reads as the key.
+            ("a zero-width split", KEY.replacen('-', "-\u{200b}", 1)),
+        ];
+        for (what, encoded) in cases {
+            let body =
+                format!(r#"{{"status":"failed","reason":"denied for key={encoded} (profile 7)"}}"#);
+            let runs = key_runs(&encoded);
+            // The positive control, per case: there IS still readable key material in this
+            // body. Without it an encoding that happened to destroy the key would read as a
+            // pass, and the case would be proving nothing.
+            assert!(
+                !runs.is_empty() && runs.iter().all(|r| body.contains(r)),
+                "control ({what}): no readable key material left in the body to leak"
+            );
+            let err = classify(403, &body, KEY).unwrap_err().message;
+            for r in &runs {
+                assert!(
+                    !err.contains(r.as_str()),
+                    "API key survived {what} into the message ({r}): {err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_body_that_never_carried_the_key_still_says_what_the_server_said() {
+        // The control for the test above: failing closed must not mean failing silent. Same
+        // shape of body, no key in it — the server's words must still reach the operator, or
+        // "the key never leaks" would be satisfied by never showing anything.
+        let err = classify(
+            403,
+            r#"{"status":"failed","reason":"station_profile_id 7 is not linked to this API key"}"#,
+            KEY,
+        )
+        .unwrap_err()
+        .message;
+        assert!(
+            err.contains("station_profile_id 7 is not linked"),
+            "the reason was suppressed although the key was never in it: {err}"
+        );
+    }
+
+    #[test]
+    fn an_enormous_or_hostile_body_is_bounded_and_flattened_to_one_line() {
+        // A reverse proxy answers with an HTML page, not a Cloudlog reason. Showing a slice
+        // of it is useful (it tells the operator the URL reached a proxy), showing all of it
+        // is not: the message is written to conn-health.json on every change.
+        let hostile = format!(
+            "<!DOCTYPE html>\n<html><head><title>502 Bad Gateway</title></head>\n{}",
+            "A".repeat(50_000)
+        );
+        let err = classify(502, &hostile, KEY).unwrap_err().message;
+        assert!(
+            err.contains("502 Bad Gateway"),
+            "the useful head of the page must survive: {err}"
+        );
+        // Measured at 201 characters for this 50 000-character page. Asserted tightly, so a
+        // longer prefix or a raised REASON_MAX_CHARS has to be a deliberate edit here rather
+        // than silent drift.
+        assert!(
+            err.chars().count() <= 201,
+            "unbounded body reached the message ({} chars)",
+            err.chars().count()
+        );
+        assert!(
+            !err.contains('\n') && !err.contains('\r'),
+            "the message must stay one line: {err}"
+        );
+    }
+
+    #[test]
+    fn an_invisible_character_cannot_rewrite_what_the_operator_reads() {
+        // `char::is_control` covers C0/C1 and DEL and stops there — it does not cover Unicode
+        // Cf. U+202E RIGHT-TO-LEFT OVERRIDE visually reverses everything after it, so a
+        // server-supplied string can rewrite the rest of the failure detail on the panel row;
+        // U+200B and U+FEFF are simply invisible. All three reached the row and the persisted
+        // conn-health.json.
+        let hostile = "profile 7 \u{202e}denied\u{200b} for \u{feff}this key\u{00ad}";
+        let body = format!(r#"{{"status":"failed","reason":"{hostile}"}}"#);
+        let err = classify(403, &body, KEY).unwrap_err().message;
+        for (name, c) in [
+            ("U+202E right-to-left override", '\u{202e}'),
+            ("U+200B zero-width space", '\u{200b}'),
+            ("U+FEFF byte-order mark", '\u{feff}'),
+            ("U+00AD soft hyphen", '\u{00ad}'),
+        ] {
+            // The control: the character really is in the body, so a filter that did nothing
+            // could not pass by accident.
+            assert!(body.contains(c), "control: {name} is not in the body");
+            assert!(!err.contains(c), "{name} reached the operator: {err:?}");
+        }
+        // …and the words the operator needs are still there. Stripping everything would
+        // satisfy the assertions above and tell them nothing.
+        assert!(
+            err.contains("profile 7") && err.contains("denied"),
+            "the reason was destroyed rather than cleaned: {err}"
+        );
+    }
+
+    /// ⛔ THE PERSISTED CLOUDLOG ROW HAS TO SAY *WHICH* FAILURE.
+    ///
+    /// `conn-health.json` may hold only sentences Nexus wrote (`note_conn_health`), and this
+    /// module's answer to that rule was one sentence for every failure — so after a restart
+    /// the panel could not tell a station-profile id that is not linked to the key from a URL
+    /// that is not a Cloudlog instance from an HTTP 500. HRDLog and WRL keep per-class
+    /// sentences because their services answer with a closed result set; Cloudlog's classes
+    /// are just as closed, they were only never named.
+    ///
+    /// So `classify` returns the CLASS beside the instance's words. The class is the half the
+    /// row persists; the words are the half that is read once and dropped.
+    #[test]
+    fn each_way_a_cloudlog_upload_can_fail_is_its_own_class() {
+        // The three the reporter could not tell apart after a restart, plus the two the
+        // transport arm already distinguished.
+        let cases = [
+            (
+                "a station profile not linked to the key",
+                classify(
+                    200,
+                    r#"{"status":"failed","reason":"station_profile_id 7 is not linked"}"#,
+                    KEY,
+                ),
+                CloudlogFailure::RecordRefused,
+            ),
+            (
+                "a URL that is not a Cloudlog API",
+                classify(404, "<html><title>Not Found</title></html>", KEY),
+                CloudlogFailure::NotAnApi,
+            ),
+            (
+                "the instance itself in trouble",
+                classify(500, "", KEY),
+                CloudlogFailure::ServerError,
+            ),
+            (
+                "a rejected key",
+                classify(403, "", KEY),
+                CloudlogFailure::Credentials,
+            ),
+            (
+                "a status with no class of its own",
+                classify(418, "", KEY),
+                CloudlogFailure::Refused,
+            ),
+        ];
+        let mut seen: Vec<CloudlogFailure> = Vec::new();
+        for (what, got, want) in cases {
+            let e = got.expect_err(what);
+            assert_eq!(e.class, want, "{what} was classified as {:?}", e.class);
+            // The class is not a replacement for the instance's words — the toast still
+            // carries them, and #226 is precisely that Nexus threw them away.
+            assert!(
+                !e.message.is_empty(),
+                "{what}: the operator gets no message"
+            );
+            seen.push(e.class);
+        }
+        // The point of the test, and the thing one collapsed sentence failed: the classes
+        // are DISTINCT. Without this a `classify` that returned `Refused` for everything
+        // would satisfy every assertion above.
+        for (i, a) in seen.iter().enumerate() {
+            for b in &seen[i + 1..] {
+                assert_ne!(a, b, "two different failures share one class: {a:?}");
+            }
+        }
+        // Every class is reachable, so the caller's persisted-sentence table cannot carry a
+        // dead arm — and a class added here without a case above trips this.
+        assert_eq!(
+            CloudlogFailure::ALL.len(),
+            seen.len() + 2,
+            "CloudlogFailure::ALL and this test's coverage drifted (NotConfigured and \
+             Unreachable are covered by a_transport_failure_says_what_actually_failed)"
+        );
+    }
+
+    #[test]
+    fn a_server_that_says_nothing_still_gets_the_old_actionable_guess() {
+        // The control for the three above: when there is no reason to surface, the message
+        // must not become emptier than it was.
+        let err = classify(401, "", KEY).unwrap_err().message;
+        assert!(
+            err.contains("API key"),
+            "no-reason fallback lost its hint: {err}"
+        );
+        let err = classify(500, "", KEY).unwrap_err().message;
+        assert!(err.contains("500"), "the status must still be named: {err}");
     }
 }

@@ -1968,6 +1968,11 @@ export const EN = {
   'dxped.card.details.hide': '▾ details',
   'dxped.card.work.title': 'Jump the rig to {{band}} and open the right cockpit',
   'dxped.card.work.label': '▶ Work {{band}}',
+  // Read before the Work button, not after the pileup. "In this version" is deliberate — the
+  // SuperFox decoder is out on a licence ruling that is being re-examined, not by nature.
+  'dxped.card.superfox': 'Nexus does not decode SuperFox in this version — work this one in WSJT-X.',
+  'dxped.card.superfox.title':
+    'This operation announced SuperFox. Its transmissions do not reach the decode list in this version of Nexus, and Hound mode cannot help; WSJT-X decodes them.',
 
   // The ★ chase toggle — the card and the calendar row are the same control, so one key.
   'dxped.chase.toggle.on.title':
@@ -4460,6 +4465,9 @@ export const EN = {
   'settings.rigControl.plainSsb.label': 'Data modes use plain SSB',
   'settings.rigControl.plainSsb.hint':
     "<b>Leave this off unless you know you need it.</b> Nexus normally puts the radio in its DATA submode (DATA-U / USB-D / PKTUSB) for FT8, FT4, RTTY-AFSK and SSTV, because on most rigs that is the only mode where the USB codec reaches the transmitter. Turn this on and Nexus commands plain <b>USB/LSB</b> for those modes instead, and stays there — through band changes and when you call a station. Correct if your transmit audio goes in the <b>microphone</b> path, as with an interface wired to the mic jack (some RIGblaster models) — or if you simply prefer plain USB to the DATA submode (for its wider receive passband, say) and your rig is set to send its USB-codec audio in SSB, which on many modern rigs (FT-991A, IC-7300 and the like) is a single menu item. Either way the rig has to put the audio you're feeding onto the air in plain SSB: where it does not — the codec feeds only the data port and nothing carries in SSB — plain SSB takes audio from the mic and the radio transmits <b>no RF at all</b>, a red TX light and nothing on the air. <b>Per radio</b>, since it depends on how that rig is cabled and set. True FSK RTTY is unaffected — it keeps the rig's own RTTY mode.",
+  'settings.rigControl.sstvHoldData.label': 'Hold FM-D while SSTV is receiving',
+  'settings.rigControl.sstvHoldData.hint':
+    "Keeps this radio in the FM <b>data</b> submode (FM-D / DATA-FM) for the whole time the SSTV receiver is running, instead of only while a picture is queued or going out. Off by default, which is what Nexus does today: it commands the data submode around a send and puts the radio back in plain FM in between, so a rig parked on an FM SSTV channel keeps dropping out of FM-D. That revert is deliberate — an SSTV send once keyed a data mode into an FM repeater input — but it is the wrong answer if you sit on an FM SSTV calling channel for the evening. <b>Stop the receiver before you go back to voice.</b> The receiver keeps running after you leave the SSTV screen, and while it runs this radio is held in the data submode, where transmit audio comes from the data port and your microphone modulates nothing. <b>Per radio</b>, since it depends on how that rig is cabled and what you use it for.",
   'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
   'settings.rigControl.icomNative.hint':
     'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',
@@ -5356,6 +5364,9 @@ export const EN = {
   'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
   'settings.js8.hbIntervalMin.hint':
     '0 = a heartbeat only when you press HB. Otherwise, while the HB chip is on, one goes out every this-many minutes on a random free slot between 500 and 1000 Hz. The HB chip itself is never remembered across launches, and nothing keys unless TX is on.',
+  'settings.js8.cqIntervalMin.label': 'CQ repeat interval (minutes)',
+  'settings.js8.cqIntervalMin.hint':
+    '0 = the CQ button sends one CQ, as it does today. Above 0 the button becomes a switch: leave it on and a CQ goes out every this-many minutes, with the seconds to the next one counting down on the button — the POTA and beacon habit. A station answering you turns it off, so does the idle watchdog, and so does Stop TX. It is never remembered across launches, and nothing keys unless TX is on.',
   'settings.js8.hbAck.label': 'Answer heartbeats',
   'settings.js8.hbAck.hint':
     'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
@@ -6591,14 +6602,18 @@ export const EN = {
   'operate.header.power.label': 'Pwr',
   'operate.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
 
-  // The DXpedition selector. `Hound` is WSJT-X's role name and stays in the code; only its
-  // explanation and the Off row are words.
-  'operate.header.dxped.label': 'DXped:',
-  'operate.header.dxped.aria': 'DXpedition mode',
-  'operate.dxped.off.label': 'Off',
-  'operate.dxped.off.title': 'No DXpedition special mode',
+  // The DXpedition Hound toggle. `Hound` is WSJT-X's role name and stays in the code (it is
+  // the button's whole label); only its explanation is words. One title serves both states —
+  // it describes what Hound IS, which is what an operator hovering it wants to know.
   'operate.dxped.hound.title':
-    "DXpedition hound: calls go out above 1000 Hz, your R+report auto-moves to the Fox's frequency, and the QSO ends on the Fox's RR73 with NO parting 73 — a 73 there is QRM in the Fox's own segment. Off again at every launch: turn it on for the DXpedition, not for the day.",
+    "DXpedition hound: calls go out above 1000 Hz, your R+report auto-moves to the Fox's frequency, and the QSO ends on the Fox's RR73 with NO parting 73 — a 73 there is QRM in the Fox's own segment. Click to turn it on and off; a QSO already running keeps the rules it started under. Off again at every launch: turn it on for the DXpedition, not for the day.",
+  // SuperFox, named before the operator calls. `{{calls}}` is a list of callsigns — data.
+  // Deliberately "in this version": the retirement is a licence ruling on the decoder, not a
+  // property of the protocol, and it is being re-examined.
+  'operate.dxped.superfox.note':
+    'SuperFox on the air: {{calls}} — Nexus does not decode SuperFox in this version. Work that one in WSJT-X.',
+  'operate.dxped.superfox.title':
+    'A SuperFox DXpedition transmits in a format this version of Nexus has no decoder for, so its transmissions do not reach the decode list here and Hound cannot help. Work it in WSJT-X and log it back in Nexus.',
 
   // The signal source. `{{active}}` is the backend's own `sourceLabel` and `{{addr}}` the
   // configured companion UDP address — both data. Two whole sentences, because the
@@ -7091,10 +7106,21 @@ export const EN = {
   'js8.panel.stations': 'Stations',
   'js8.panel.inbox': 'Inbox',
   'js8.panel.log': 'Log',
+  'js8.panel.offsets': 'Band activity',
   'js8.panel.activity.title':
     'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
+  // Appended to the tooltip above rather than folded into it: a translated catalog keeps its
+  // sentence and this one falls back to English, instead of the note going missing wherever the
+  // translation is older than the pane.
+  'js8.panel.activity.differs':
+    'One list, where JS8Call splits two: this is the running transcript, in time order. The Band activity pane holds the same decodes collapsed to one row per offset, with DT.',
   'js8.panel.activity.empty': 'Listening… frames decoded at every enabled speed print here',
   'js8.panel.activity.row.title': 'Double-click to write to this station',
+  'js8.panel.offsets.title':
+    'One row per frequency offset in the passband — the newest decode heard there, with its age, SNR, DT (how far off the slot clock the sender is) and speed. Read it to find a clear offset and to see who is in sync.',
+  'js8.panel.offsets.empty': 'Listening… each offset in the passband gets a row as it decodes',
+  'js8.panel.offsets.row.title': 'Double-click to move RX here',
+  'js8.panel.offsets.dt.title': 'DT — the sender’s time delta against the slot clock, in milliseconds. Negative is early.',
 
   // ── JS8 ▸ the header ─────────────────────────────────────────────────────────────────
   'js8.header.power.label': 'Drive',
@@ -7114,6 +7140,12 @@ export const EN = {
   'js8.station.select.title': 'Write to {{call}} (fills the To box and the log strip)',
   'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
   'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
+  'js8.station.pin.title': 'Pin {{call}} to the top of this list',
+  'js8.station.unpin.title': 'Unpin {{call}} — it goes back into the heard order',
+  'js8.station.distance.title': 'Great-circle distance to {{grid}}, from your grid square',
+  'js8.station.worked.title': 'Worked before — {{count}} in the log, last {{when}}',
+  'js8.station.name.title': 'Name from your log',
+  'js8.station.comment.title': 'Comment from your log',
 
   // ── JS8 ▸ the inbox pane ─────────────────────────────────────────────────────────────
   'js8.inbox.empty': 'Nothing in the inbox — messages addressed to you, and MSG TO: messages you hold for others, appear here',
@@ -7136,6 +7168,13 @@ export const EN = {
   'js8.dock.send.label': 'Send',
   'js8.dock.cq.aria': 'CQ variant',
   'js8.dock.cq.title': 'Call CQ — a heartbeat frame addressed to @ALLCALL, in the next period',
+  'js8.dock.cqRepeat.title.off':
+    'Repeating CQ is off. Click to call CQ every {{min}} min until someone answers — the button counts down to the next one. It keys only while TX is on, and it is never remembered across launches.',
+  'js8.dock.cqRepeat.title.on':
+    'Repeating CQ is on, but TX is off — nothing keys. Enable TX (the header pill) to let the CQs go out.',
+  'js8.dock.cqRepeat.title.armed':
+    'Calling CQ every {{min}} min, on your TX offset. Stops on its own when a station answers you, or at the idle watchdog. Click to stop the schedule — a CQ already on the air finishes; Stop TX cuts it.',
+  'js8.dock.repeat.now': 'now',
   'js8.dock.hb.title.off':
     'Heartbeat schedule is off. Click to send a heartbeat every period’s interval (Settings ▸ Digital ▸ JS8) — it keys only while TX is on, and it is never remembered across launches.',
   'js8.dock.hb.title.on':
@@ -7169,6 +7208,10 @@ export const EN = {
     'Heartbeat acknowledgements are on, but TX is off — nothing keys. Enable TX (the header pill).',
   'js8.dock.hbAck.title.armed':
     'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
+  // Appended to all three faces of the three arm chips (the reason it is its own key rather
+  // than nine edits is the same as js8.panel.activity.differs).
+  'js8.dock.arm.differs':
+    'Two acts, where JS8Call has one: this switch is the second, the header’s TX pill is the first, and the chip reads ARMED only while both are on.',
   'js8.dock.pending': 'Auto-reply to {{to}} in {{secs}} s: {{text}}',
   'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
   'js8.dock.pending.idle': 'Would reply to {{to}} — not armed (idle watchdog), nothing keys: {{text}}',
@@ -7184,6 +7227,7 @@ export const EN = {
   'js8.dock.origin.hbAck': 'heartbeat ack',
   'js8.dock.origin.autoReply': 'auto-reply',
   'js8.dock.origin.relay': 'relay',
+  'js8.dock.origin.cqRepeat': 'repeating CQ',
   'js8.dock.idle': 'Idle {{min}}/{{limit}} min',
   'js8.dock.idle.off': 'Idle watchdog off',
   'js8.dock.idle.tripped': 'Idle watchdog tripped — heartbeats, auto-reply and relay are off until you send something',

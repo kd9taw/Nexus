@@ -835,6 +835,15 @@ button.nb-chip:hover {
   color: var(--text-faint);
   margin-top: 2px;
 }
+/* The SuperFox caveat, directly under the how-to-call line it qualifies. Louder than
+   `.wn-how` on purpose: it is the difference between a callable operation and one that will
+   never appear in this build's decode list. */
+.wn-superfox {
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  color: var(--alert-warning, #f7c243);
+  margin-top: 2px;
+}
 /* Chase star (WorkNowCard + calendar rows) — quiet until armed. */
 .wn-chase {
   margin-left: var(--space-1);
@@ -12974,33 +12983,45 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex-wrap: wrap;
 }
 
-/* DXpedition special-op selector — compact 3-chip strip in the cockpit bar. */
+/* DXpedition Hound — a ONE-CLICK toggle in the cockpit bar (was a select; before that a
+   3-chip group ~180px). It reads ON from `.active`, matching the other header state
+   chips, and warm rather than accent because Hound changes how the sequencer finishes a
+   QSO — the same amber the HOUND badge in the operating strip uses. */
 .cockpit-specialop {
   display: flex;
   align-items: center;
   gap: var(--space-1);
   flex-shrink: 0;
 }
-.cockpit-specialop-label {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  font-weight: 600;
-  white-space: nowrap;
-}
-/* One compact select (header-density pass 2026-08 — was a 3-chip group ~180px). */
-.cockpit-specialop-select {
+.cockpit-specialop-btn {
   font-size: 0.72rem;
   font-weight: 700;
-  padding: 2px var(--space-1);
+  padding: 2px var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
   color: var(--text-dim);
   cursor: pointer;
 }
-.cockpit-specialop-select:hover {
+.cockpit-specialop-btn:hover {
   border-color: var(--accent);
   color: var(--text);
+}
+.cockpit-specialop-btn.active {
+  color: var(--alert-warning, #f7c243);
+  background: color-mix(in srgb, var(--alert-warning, #f7c243) 14%, transparent);
+  border-color: color-mix(in srgb, var(--alert-warning, #f7c243) 45%, transparent);
+}
+/* A SuperFox operation is on the air and this build cannot decode it. A STATUS line, not a
+   control: no id, nothing to click, and it only exists while such an operation is up. */
+.cockpit-superfox-note {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--alert-warning, #f7c243);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 34ch;
 }
 
 /* Active DXpedition mode badge — shown in the merged operating strip. */
@@ -20075,6 +20096,7 @@ button.sat-chip:disabled {
 }
 /* Feeds: readable minimum on the CONTENT wrapper (never on the frame). */
 .js8-activity,
+.js8-offsets,
 .js8-stations,
 .js8-inbox {
   font-family: var(--font-mono);
@@ -20106,7 +20128,64 @@ button.sat-chip:disabled {
 .js8-time,
 .js8-freq,
 .js8-snr,
-.js8-age {
+.js8-age,
+.js8-dt,
+.js8-dist,
+.js8-az {
+  color: var(--text-dim);
+}
+/* BAND ACTIVITY BY OFFSET — one row per offset, JS8Call's tableWidgetRXAll column order
+   (Offset · Age · SNR · Time Delta · Speed · Message). The transcript's row semantics carry
+   over so a directed or low-confidence decode reads the same in both surfaces. */
+.js8-offset-row {
+  display: grid;
+  grid-template-columns: 5.2em 2.6em 3em 4.4em 1.2em minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: 1px var(--space-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-offset-row.mine {
+  color: var(--accent);
+}
+.js8-offset-row.directed {
+  border-left: 3px solid var(--accent);
+}
+.js8-offset-row.low {
+  color: var(--text-dim);
+}
+/* ★ the operator pin: a text button, dim until it holds a row. */
+.js8-pin {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-dim);
+  line-height: 1;
+}
+.js8-pin.on {
+  color: var(--accent);
+}
+.js8-station.pinned {
+  background: var(--bg-elev-2);
+}
+/* Worked-before: the log's own tick, in the colour every other B4 cue uses. */
+.js8-b4 {
+  color: var(--state-ok);
+  font-weight: 700;
+}
+/* Name / Comment come out of the log and can be long — they yield before the row wraps. */
+.js8-opname,
+.js8-opcomment {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.js8-opname {
+  max-width: 8em;
+}
+.js8-opcomment {
+  max-width: 14em;
   color: var(--text-dim);
 }
 .js8-station,

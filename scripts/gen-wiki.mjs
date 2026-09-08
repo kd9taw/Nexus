@@ -21,7 +21,8 @@
 // The transforms are the mechanical, systematic differences between a docs/ page and
 // its wiki twin. Nothing here rewrites prose:
 //
-//   1. Screenshot TODO comments are dropped   (the wiki carries no images)
+//   1. Screenshot TODO comments and image references are dropped   (the wiki
+//      carries no images, and a docs-relative image path is broken once pasted)
 //   2. Links to docs/ pages that HAVE a wiki twin become bare wiki page names
 //      ([Install & Verify](install.md) -> [Install](Install)); every other relative
 //      docs link becomes an absolute GitHub URL, because the wiki is not in the tree
@@ -87,6 +88,14 @@ const SPELLING = [
 // Drop the <!-- TODO: capture screenshot --> markers, and the blank line each one
 // leaves behind, so paragraphs do not end up separated by three newlines.
 const stripComments = (s) => s.replace(/<!--[\s\S]*?-->\n?\n?/g, '')
+
+// And drop the images themselves, for the same reason and with the same result: the
+// wiki carries no images. A docs page's `![alt](img/manual/x.webp)` is a relative path
+// into this tree, and a wiki page is not in this tree, so pasting one ships a broken
+// image. The alt text goes with it rather than being left as a stray caption -- the
+// prose around each figure carries the instruction, which is why the docs pages can
+// afford to lose the picture here.
+const stripImages = (s) => s.replace(/^!\[(?:[^\]\\]|\\.)*\]\([^)]*\)\n?\n?/gm, '')
 
 const rewriteLinks = (s) =>
   s
@@ -221,6 +230,7 @@ function render(page) {
   let s = readFileSync(path.join(DOCS, page.source), 'utf8')
 
   s = stripComments(s)
+  s = stripImages(s)
 
   for (const { find, replace } of page.replacements ?? []) {
     if (!s.includes(find)) {

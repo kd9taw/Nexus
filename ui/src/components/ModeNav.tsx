@@ -127,8 +127,8 @@ const DIGITAL_SUBS: DigitalSub[] = [
     titleKey: 'nav.digital.aprs.title',
     active: (v) => v === 'aprs',
   },
-  // JS8 is a STAGED section (registry defaultOff) — the filter below hides it until the
-  // operator turns it on in Settings ▸ Features, like RTTY/SSTV when disabled.
+  // JS8 shows by default like RTTY/PSK/SSTV/APRS; the filter below hides it only when the
+  // operator turns it off in Settings ▸ Features (its DigitalMode doubles as its FeatureId).
   {
     mode: 'js8',
     label: 'JS8',

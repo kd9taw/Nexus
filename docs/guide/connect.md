@@ -51,15 +51,20 @@ of the app.
 Four **intent presets** — Chase DX, POTA/SOTA, Ragchew, 6m/VHF — configure the
 whole surface in one tap.
 
-<!-- TODO: capture screenshot — the Layers menu open, showing greyline / aurora / satellites / PCA -->
+![The Layers menu open beside the 3-D globe: tick boxes for Spots, My decodes, Heard-me arcs, DXpeditions, Band heat, Opening sectors, Flare blackout, Aurora, MUF, Polar cap (PCA), Greyline, Satellites, Tracked pass, Range rings, CQ zones, My coverage, US states, Graticule and City lights — about half of them ticked. The globe behind shows North America under a dense cluster of green and blue spot dots with the greyline drawn across it.](../img/manual/connect-map-layers.webp)
+
+*The Layers menu in Nexus 1.10.3. Which boxes are ticked is one operator's
+preference, not a recommendation.*
 
 ### The pane grid
 
 Around the globe is a **HamClock-style assignable pane grid** — seven slots
 (left ×2, right ×2, bottom ×3). Each pane frame has a picker in its corner: click
-it and choose what that slot shows. A **Basic / Expert** switch controls density —
-Basic shows a one-line plain-language projection of each pane, Expert shows the
-full panel.
+it and choose what that slot shows. Every pane renders in full; the one-line
+plain-language version of a pane is what you see while it is waiting on data,
+offline, or has nothing to report, not a density setting. (There was a
+**Basic / Expert** switch that chose between the two by hand; it was removed on
+2026-07-26 and there is no such control now.)
 
 The panes you can assign:
 
@@ -86,7 +91,7 @@ The panes you can assign:
 | Rotor | rotator control + compass (appears once a rotctld is configured) |
 | Amplifier | your linear's own readings (appears once an amplifier is configured) |
 
-The default Basic layout puts the conditions reference on the left, the flagship
+The default layout puts the conditions reference on the left, the flagship
 **Chase** pane and Band Outlook on the right, and a live "now" ticker (Openings,
 Space Wx, Getting Out) across the bottom.
 
@@ -97,6 +102,14 @@ KPA500/KPA1500** — put it on its own serial port, set it under
 [Settings ▸ Radio ▸ Amplifier](settings-reference.md#radio), and assign this pane to a
 slot. It shows power out, SWR at the antenna and before the tuner, supply volts and
 current, PA temperature, and the amplifier's own alarms and warnings.
+
+![The Amplifier pane showing link state, power out, SWR before and after the tuner, PA temperature, volts and current.](../img/manual/connect-amplifier-pane.webp)
+
+*The Amplifier pane in Nexus 1.10.3. Everything in it is **telemetry the amplifier reported** —
+there is no control here. Operate/Standby and the band ladder ride in the cockpit's own
+amplifier strip, where you are transmitting. The temperature prints with a degree sign and no
+scale letter because the SPE protocol does not state the unit. No amplifier was connected for
+this capture; the readings are a documentation fixture.*
 
 It has to be **its own port**. A serial port can only be opened once, so an amplifier
 typed onto the CAT port does not give you a silent amplifier — it gives you a radio
@@ -140,17 +153,20 @@ radio through its own band-data cable, in hardware. Where that cable is fitted t
 setting is a second thing steering one band — redundant at best, and at worst two
 controllers disagreeing about where the amplifier should be.
 
-<!-- TODO: capture screenshot — a pane's corner picker open, and the Basic / Expert toggle -->
-
 ## Core workflows
 
 ### Assign a pane to a slot
 
+![A pane picker open: the closed control reads "24h Band×Hour", and the list below is grouped — Panels (Conditions, Band Advisor, Selection, Band Outlook, Openings, Openings Log, Space Wx, Getting Out), B2 (Kp outlook, Best Band → Region, Activity Matrix, NCDXF Beacons, Insights, Chase) and B3 (Greyline, 24h Band×Hour highlighted as the current choice, Sporadic-E).](../img/manual/connect-pane-picker.webp)
+
+*A pane picker open in Nexus 1.10.3. The **Panels** / **B2** / **B3** headings
+are the picker's own grouping of the pane list — any pane in any group can go
+in any slot.*
+
 1. Click the picker in any pane frame's corner.
 2. Choose a pane from the list. If that pane already lives in another slot, the
    two **swap** — nothing ever vanishes from the grid.
-3. Switch **Basic / Expert** to trade density for a plain-language summary. Your
-   layout and mode persist across sessions.
+3. Your layout persists across sessions — the grid comes back as you left it.
 
 ### Read an opening
 
@@ -167,8 +183,8 @@ octant, distance, and the participating stations.
 The **Chase** and **Chase Feed** panes fuse the [Needed board](needed-dx.md) with
 band openness and timing: they surface the stations that are both *needed* and
 *heard*, scored by need × openness × rarity × time-remaining. Each row has a
-why-line and a ▶ **Work** button that QSYs and opens the right cockpit. Basic mode
-shows the top few; Expert shows the full ranked table.
+why-line and a ▶ **Work** button that QSYs and opens the right cockpit. Chase
+leads with the top few; Chase Feed is the full ranked table.
 
 ### Track propagation to a specific call
 
@@ -176,6 +192,14 @@ Click a station on the map (or in a pane) and the **Selection** and **Band
 Outlook** panes switch to *that call*: the modelled path, its MUF ceiling, and
 per-band workability. With the P.533 engine selected you also get per-mode
 FT8/FT4/CW/SSB "workable now" chips.
+
+![The Band Outlook pane retitled Path to G4XYZ, listing per-band workability, windows and per-mode chips.](../img/manual/connect-path-prediction.webp)
+
+*Band Outlook in Nexus 1.10.3 with a call selected. The heading becomes **Path to G4XYZ** and
+the engine names itself on the right (**P.533**) — everything in this pane is *modelled*,
+including the FT8/CW/SSB chips. The *observed* half is a different pane: **Getting Out** lists
+the stations that actually reported hearing you. Both are documentation fixtures here — no path
+was solved for a real contact, and nobody reported this station.*
 
 ### Choose the prediction engine
 

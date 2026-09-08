@@ -17,9 +17,12 @@ The tabs, in the order they appear:
 [Appearance](#appearance) · [Config](#config)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
-took) and a **Check for updates** button.
+took) and a **Check for updates** button, both at the right-hand end of the same
+row as the search box.
 
-![The Settings panel with the Radio tab open on a fresh install. The ten tabs — Station, Radio, Phone, CW, Digital, Spots & Alerts, Logging & Connectors, Contesting, Appearance, Config — run across the top beside a "Find a setting" box, and the header carries the build stamp and Check for updates. Below them a Setup health strip, the Radios roster holding a single radio badged ACTIVE with an Add radio button, Profiles, and the Rig & CAT section laid out in columns across the full width of the window: PTT Method, Zero-config setup with a Detect my radio button, Rig Model, Connection, Serial Port with Refresh and Auto-test, Baud, and Antenna Rotator. Each control has its explanation printed under it.](../img/manual/settings-radio.webp)
+![The Settings header: a Find a setting box, and under it the ten tab names in a row with Station first and Radio selected.](../img/manual/settings-tabs.webp)
+
+*The ten tabs and the setting search, in Nexus 1.10.3.*
 
 ---
 
@@ -34,6 +37,14 @@ Your operator identity, license privileges, and default frequency.
   and bearing from the middle of a ~100-mile square." Drives satellite passes,
   propagation anchoring, and distance math.
 - **Operator name** — "Used by the CW `{NAME}` macro and logging."
+- **Operator at the key** — for multi-operator only: the callsign of whoever is
+  actually running the station, when that is not the station call. It is stamped
+  on every contact you log (ADIF `OPERATOR`), so a shared activation can be split
+  per operator afterwards — POTA and Field Day both want each operator to submit
+  their own. Blank means single-op and nothing is stamped. Change it when you swap
+  seats. It is the same setting as **Operator at the key** under
+  [Who's who at this event](#whos-who-at-this-event); editing either one moves
+  both.
 - **State** — "Your US state/province — the CW `{MYSTATE}` macro (ragchew QTH)."
 - **License Class** — Technician / General / Amateur Extra (US), or **Open** for
   non-US operators. "Sets your transmit privileges + the licensed-segment band
@@ -42,6 +53,12 @@ Your operator identity, license privileges, and default frequency.
   refuses to key the rig outside your segment.
 - **Band & Frequency** — "Pick a band-plan channel, or type a dial frequency in
   MHz."
+
+![Three Station fields side by side: Operator at the key, empty with the placeholder "leave blank if that is you"; State, reading IL; and License Class, set to "Open — no transmit limits".](../img/manual/settings-operator-at-key.webp)
+
+*The right-hand half of Operator & Radio in Nexus 1.10.3 — callsign, grid and
+operator name sit to the left of these. The values shown are one station's, not
+recommendations.*
 
 ---
 
@@ -62,7 +79,12 @@ live indicators, so setup stops running on faith:
 
 **Prove TX** keys a ~2-second tune carrier to verify the CAT → PTT → RF path. It
 asks for confirmation first, every time, and reminds you to have an antenna or
-dummy load connected.
+dummy load connected. The button sits at the right-hand end of the strip.
+
+![The Setup health strip: three chips reading "Rig responding", "RX audio 44 dB" and "TX off", with a "Re-run setup wizard…" link under them.](../img/manual/settings-setup-health.webp)
+
+*Setup health on a working station in Nexus 1.10.3. Prove TX is at the far right
+of the same strip, off-frame here.*
 
 ### Radios
 
@@ -79,6 +101,12 @@ Run more than one rig. Always shown — with one radio it is just a card and an
   all. Appears once you have two radios.
 - **+ Add radio** — the discovery affordance. "Run two rigs at once — e.g. an HF
   radio plus a VHF/UHF radio on a different antenna?"
+
+![Three radio cards stacked. The first, named Yeasu, is outlined and badged ACTIVE, its meta line reading Yaesu FTDX10, CAT COM3, audio Line 3, CAT helper port 4532, with band chips 160m through 6m lit. The second, 9700, has Edit, Make active and Remove buttons and lights 2m and 70cm. The third, 991a, lights 6m and 2m. An "+ Add radio" button sits below.](../img/manual/settings-radios.webp)
+
+*A three-radio roster in Nexus 1.10.3. The outlined card is the **active** radio;
+the form further down the tab edits whichever card you last pressed **Edit** on,
+which need not be the same one.*
 
 With two or more radios, three more controls appear:
 
@@ -100,6 +128,74 @@ With two or more radios, three more controls appear:
   Leave off if you only ever use one radio at a time — you can still switch
   between them from the top bar.
 
+#### How a QSY picks a radio
+
+Every retune asks the same question — *which radio owns this band and this mode?*
+— and answers it in a fixed order. The first tier that answers wins; nothing
+below it is consulted.
+
+1. **Satellite-designated rules**, but only for a tune that started from a
+   transponder pick. A rule whose mode box reads **Satellite** is invisible to
+   every terrestrial retune, and it is checked *above* the mode rules — so it
+   beats your FM & APRS rule for a packet bird no matter where the two sit in
+   the list. Order inside this tier is still first-match.
+2. **Routing rules**, top to bottom, first match wins. An empty band selector
+   means *any band*; **Any mode** means any mode class. A rule aimed at a radio
+   you have switched **off** is skipped at the moment of the decision — an
+   unplugged rig never becomes the handoff target, and the rule comes back when
+   you switch the radio on. A rule aimed at a radio you **remove** is deleted
+   along with it, so no rule is ever left pointing at nothing.
+3. **Band coverage** — the **Covers bands** chips on each card. A radio that
+   lists the band explicitly beats one that covers everything, which beats one
+   that lists the band nowhere. Nexus only moves you when another radio scores
+   *strictly better* than the one you are on, so a tie leaves you where you are
+   and a fine-tune inside a shared band never bounces between rigs.
+4. **Everything else** — the fallback radio, or "Stay on the current radio".
+
+Two things this order implies, and both surprise people. A rule **outranks band
+coverage**, which is the whole reason rules exist: it is how 2 m FT8 leaves an HF
+rig that also does 2 m. And a matched rule pointing at the radio you are already
+on means *stay put* — it does not fall through to a broader tier that would then
+walk you off.
+
+The top bar's **Peg** switch turns the whole thing off: while it is on, band
+changes never move the active radio.
+
+![Four routing rules stacked and numbered. 1: Weak-signal digital to 9700 with 2m and 70cm lit. 2: Satellite to 9700, same bands. 3: FM & APRS to 991a, same bands. 4: Any mode to Yeasu with 160m through 6m lit. Each rule has up, down and remove buttons.](../img/manual/settings-radio-routing.webp)
+
+*One station's routing table in Nexus 1.10.3 — an example, not a recommendation.
+The **Everything else** selector and the **Where would this go?** button sit to
+the right of these rules and below them.*
+
+**A worked example.** Take the roster above — an FTDX10 covering 160–6 m and
+active, an IC-9700 covering 2 m and 70 cm, an FT-991A covering 6 m and 2 m — with
+those four rules and **Everything else** left on *Stay on the current radio*.
+
+| You tune to | Band, mode class | What happens |
+|---|---|---|
+| 14.074 FT8 | 20 m, weak-signal digital | Rules 1–3 name only 2 m and 70 cm, so none matches. Rule 4 matches on 20 m and names the FTDX10 — which is already active, so nothing moves. |
+| 144.174 FT8 | 2 m, weak-signal digital | Rule 1 matches. The IC-9700 becomes the active radio, with its own CAT port and its own sound card. |
+| 144.390 APRS | 2 m, FM & APRS | Rule 1 misses on mode class. Rule 2 is a Satellite rule, so a terrestrial tune cannot see it. Rule 3 matches: the FT-991A takes it. |
+| a 2 m/70 cm bird | 2 m, FM & APRS | The satellite tier runs first, so rule 2 wins and the IC-9700 takes it — even though rule 3 would also have matched. |
+| 50.313 FT8 | 6 m, weak-signal digital | Rules 1–3 miss on band. Rule 4 matches and keeps 6 m on the FTDX10, although the FT-991A also lists 6 m: a rule outranks coverage. |
+
+Delete all four rules and the same station still works, on band coverage alone:
+2 m and 70 cm would go to whichever of the two VHF rigs the tie-break picked, and
+that is exactly the ambiguity a rule exists to settle.
+
+**Test a band + mode** answers the same question without touching the rig — it
+calls the resolver the radio loop calls, so it is the configuration's own answer,
+not a second implementation of it.
+
+**Audio follows the active radio, not the routing table.** Each card carries its
+own input and output device, and the live RX audio, the waterfall and the
+decoders all follow whichever radio is active at that moment. That is why an APRS
+decoder armed by hand can report **No 2 m radio** on a station that clearly has
+one: arming **Monitor** tunes nothing, so no routing decision has been made and
+the decoder is still listening to the HF rig. Use APRS's **Tune to 144.390**
+instead — that is a retune, it runs the FM & APRS rule, and the decoder follows
+the rig that ends up active.
+
 ### Profiles
 
 - **Saved profiles** — **Load** applies a profile merged onto your current
@@ -111,6 +207,14 @@ With two or more radios, three more controls appear:
 
 ### Rig & CAT
 
+Every control here is **per radio**: it belongs to whichever card you pressed
+**Edit** on, not to the station.
+
+![The left half of the Rig & CAT row: PTT Method set to CAT (via rigctld), an unticked "Interface keys RTS on the CAT port" box, a Zero-config setup group with a "Detect my radio" button, and Rig Model with a search box above a dropdown reading Yaesu FTDX10.](../img/manual/settings-rig-cat.webp)
+
+*The first four Rig & CAT controls in Nexus 1.10.3. Connection, Serial Port and
+Baud continue across to the right.*
+
 - **PTT Method** — "How transmit is keyed": CAT (via rigctld), Serial RTS, Serial
   DTR, or VOX (no keying). PTT and CAT are independent axes — VOX PTT with full
   CAT control is a valid setup.
@@ -118,6 +222,13 @@ With two or more radios, three more controls appear:
   for an SO2R controller (u2R/MK2R) that routes PTT separately from CAT. Blank =
   keying shares the CAT port, which is how a single-cable interface like a
   Digirig Mobile is wired. Per radio.
+- **Interface keys RTS on the CAT port** — tick it when your interface keys the
+  radio from the CAT port's own RTS line, which is how a Digirig Mobile and most
+  other one-cable interfaces are wired. Nexus then holds RTS down instead of
+  leaving it up, where on some rigs it starts a transmission the moment the port
+  opens. **If your radio transmits as soon as Nexus starts, this is the setting.**
+  Leave it off when a plain serial cable runs straight to the rig: that radio may
+  be using the line for flow control, and taking it away can cost you CAT.
 - **Zero-config setup ▸ Detect my radio** — "One scan for everything: USB radios
   (fills model, port, sound device) AND FlexRadios on the network (fills the
   SmartSDR CAT config). Review, then Save." Each hit gets a **Use this** button.
@@ -191,7 +302,16 @@ link.
 
 ### Audio
 
-With two or more radios, a banner names which radio these devices belong to.
+With two or more radios, a banner names which radio these devices belong to:
+*"Audio devices below are for &lt;name&gt;. Each radio has its OWN input/output — click
+'Edit' on another radio (in Radios above) to set its audio. The live RX audio +
+waterfall follow whichever radio is active."*
+
+![The Audio group: Input Device (RX) set to Line (3- USB AUDIO CODEC) with a Refresh button, Output Device (TX) set to Speakers, a live input spectrum showing a moving noise floor, and TX Power, RX Level and RX Gain sliders below.](../img/manual/settings-audio.webp)
+
+*Audio for one radio in Nexus 1.10.3. Device names are whatever your computer
+calls its sound cards; the RX Level meter reading 40 dB is one station's, not a
+target to copy.*
 
 - **Input Device (RX)** — "Sound card carrying receive audio." **Refresh**
   re-scans.
@@ -214,6 +334,10 @@ This plays the audio your radio is RECEIVING out of a device on this computer �
 or speakers — so you can hear the band, or check levels and RFI, without listening on the
 rig itself.
 
+![The Receive audio on this computer group: an unticked "Play receive audio here" box, a Headphones or speakers dropdown set to System default, and a Listening level slider at 50%.](../img/manual/settings-receive-audio.webp)
+
+*Receive audio in Nexus 1.10.3, off by default.*
+
 **It is not a transmit monitor.** In amateur usage "monitor" usually means hearing your own
 transmitted audio, which is what MONI on the radio does. This never plays your voice back;
 these controls used to be called "monitor" and the word was doing real harm, so it is gone
@@ -231,6 +355,12 @@ from the labels. (The search still knows it — look for "monitor" and you will 
 Corrects both legs of a pass — the downlink you listen on and the uplink you
 transmit on. Nexus tunes only while auto-track is following a pass and you have
 picked a transponder in the Satellites section.
+
+![The Satellite Doppler group: a ticked Doppler correction box, VFO mapping set to "Main = downlink, Sub = uplink (IC-9700 full duplex)", Minimum shift 20 Hz and Update interval 1000 ms.](../img/manual/settings-satellite-doppler.webp)
+
+*Satellite Doppler in Nexus 1.10.3, set up for a full-duplex IC-9700. Pass alert
+sounds sit to the right, off-frame. The VFO mapping has to match your own wiring
+— copying this one is how you transmit on your own downlink.*
 
 - **Doppler correction** — on by default. "Retunes the radio through a pass so
   you stay on the station you are working." Clearing it stops both legs.
@@ -264,10 +394,21 @@ SatNOGS.
 The status line always shows the bird count, the band coverage, the fetch date
 and the source. A failed refresh adds a plain-language "Last refresh" line.
 
+![The Orbital elements group: Update now and Import from file buttons beside a status line reading "372 birds · 1 past 14 d · 39 sit out past 30 d · fetched 2026-09-07 · mirror".](../img/manual/settings-orbital-elements.webp)
+
+*Orbital elements in Nexus 1.10.3. The status line is the thing to read — it says
+how fresh the elements actually are.*
+
 ### Rotator
 
 The rotator itself, and its pointing manners. The manners apply to satellite
 auto-track.
+
+![The Rotator group: Rotator model set to "Dummy (testing — no hardware)", an External rotctld (advanced) box, Park position 0/0 and Ready position 0/0, with an unticked Allow flip box below.](../img/manual/settings-rotator.webp)
+
+*The first four Rotator controls in Nexus 1.10.3, on a station with no rotator
+hardware attached. After a pass, Tolerance and Calibration trim continue to the
+right.*
 
 - **Rotator model** — pick yours and "Nexus runs the control daemon (rotctld)
   for you, the same way it does CAT." Then use the Rotor pane in
@@ -310,14 +451,47 @@ auto-track.
 
 Reads a linear's own status — power out, SWR, temperature, supply volts and amps,
 and any alarm it is raising — and shows it in the **Amplifier** pane in Connect.
-Nothing here changes how the radio transmits.
+Nothing on this settings page changes how the radio transmits.
 
-**Nexus only ever READS the amplifier.** There is no standby, operate, reset or
-tune button, and none is planned. Two reasons, and both are about a kilowatt: SPE's
-control protocol is front-panel *keystrokes* — relative steps and toggles whose
-meaning depends on a state Nexus learns a poll late, so every write is a guess —
-and putting an amplifier in standby is not a way to stop a transmission anyway,
-because the exciter keeps keying and the drive passes straight through.
+**Reading is most of it, but Nexus does command the amplifier — three things,
+and only these three.** Standby ↔ Operate, one band up, one band down. Nothing
+else is representable: there is no tune, no reset, and **no way to switch the
+amplifier off**. That last one is not merely unused — SPE's `SWITCH OFF`
+keycode sits immediately next to `TUNE` in the vendor's keystroke table, so the
+command set is written as a closed three-value list with no arithmetic path to
+either byte, and Hamlib's own SPE backend maps its "standby" onto the off code
+and powers amplifiers down when asked for standby. That is the failure Nexus is
+built not to have.
+
+**Where the three controls are.** Not here. They are a compact strip in every
+cockpit header once an amplifier is configured — Standby/Operate, band ◀ ▶ and
+power out — described under
+[Connect ▸ The Amplifier pane](connect.md#the-amplifier-pane). The only control
+on *this* page that moves the amplifier is **Follow the radio's band** below,
+and it is the only one that acts without being asked.
+
+**Both write paths are refused while you are transmitting**, in the poll thread
+that holds the readings rather than in the button — changing band on a keyed
+amplifier can take a PA out. And **standby is not a stop**: dropping the
+amplifier out mid-over ends nothing, because the exciter keeps keying and the
+drive passes straight through. No amplifier control counts as a way to stop a
+transmission.
+
+**Which family does what on the wire**, because it decides how the controls
+behave:
+
+| | SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA | Elecraft KPA500 / KPA1500 |
+|---|---|---|
+| Readings | power out, SWR (at the antenna and before the tuner), temperature, volts, amps, alarms | the same set |
+| Operate ↔ Standby | a front-panel **keystroke** that *toggles* — there is no "go to operate". The button reads the amplifier's own status, never what was last sent, so a lost frame corrects itself on the next poll | names the state it wants (`^OS`), so a resent command is harmless |
+| Band | steps **one band at a time**; the protocol has no "set band" | names the band (`^BN`), clamped to the published ladder |
+| Temperature units | shown as a bare number — the protocol does not say whether the amplifier is reporting °C or °F, and it reports whatever its own display is set to | labelled, because Elecraft documents it as Celsius |
+
+⚠️ **The line at the top of this settings block in 1.10.3 is out of date.** It
+reads "Nexus never commands the amplifier: it only reads it", which was true
+before the cockpit strip shipped and is contradicted by the **Follow the
+radio's band** switch directly beneath it. Read it as "nothing on this page
+commands the amplifier except Follow the radio's band".
 
 - **Amplifier** — the family: SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, or Elecraft
   KPA500 / KPA1500. None is the default and the state of most stations; with None
@@ -347,6 +521,13 @@ because the exciter keeps keying and the drive passes straight through.
 Per radio, like the rotator: an SO2R station with an amplifier on each radio
 configures each one on its own radio, and the pane follows the radio you are on.
 
+![The Amplifier group: a note reading "Read-only status from a linear on its own serial port — power out, SWR, temperature and any alarm. Nexus never commands the amplifier; it only reads it", an Amplifier dropdown set to SPE Expert 1.3K-FA / 1.5K-FA / 2K-FA, an Amplifier port reading com7, and an unticked "Follow the radio's band" box.](../img/manual/settings-amplifier.webp)
+
+*The Amplifier group in Nexus 1.10.3.* ⚠️ *The grey note at the top of that group
+is out of date in this build: as its own **Follow the radio's band** control says
+two columns to the right, Nexus does send band steps and a standby/operate
+toggle. Read the section above, not the note.*
+
 > ⚠️ **The SPE side is confirmed on hardware; the Elecraft side is not.** An
 > EXPERT 1.5K-FA was linked on 2026-08-29 — it identifies itself as `15K`, and its
 > readings and controls were checked against the amplifier's own front panel. The
@@ -362,6 +543,11 @@ configures each one on its own radio, and the pane follows the radio you are on.
 
 What the rig is allowed to do, and who else may drive it. These used to sit at
 the bottom of Rig & CAT.
+
+![The Transmit limits & sharing group: Band-edge tones switched on, three empty Max power by mode boxes for Phone, CW and Digital, and a "Share this radio with other programs" switch turned off.](../img/manual/settings-transmit-limits.webp)
+
+*Transmit limits in Nexus 1.10.3, at their defaults — the power boxes blank means
+full power on every mode.*
 
 - **Band-edge tones** — "A short audio cue when the dial crosses your license
   privileges — a rising 'ding' back in band, a falling 'dong' past an edge."
@@ -413,6 +599,11 @@ signal lives here, not with the radio.
 
 Mic gain and voice-keyer message recording are in the Phone cockpit, not here.
 
+![The Phone (SSB / FM) group: Phone mode set to "SSB (USB/LSB by band)", and under a Microphone heading, Voice mic (recording) set to a named USB microphone.](../img/manual/settings-phone.webp)
+
+*Phone settings in Nexus 1.10.3. On SSB the repeater shift and CTCSS controls are
+hidden — they appear when Phone mode is set to FM.*
+
 ---
 
 ## CW
@@ -457,6 +648,12 @@ with the radio.
   call, F6 his call, F7 ask repeat, F8 query), so the Guided copilot's next-step
   highlight still rolls F1→F2→F3→F4 through customized text.
 
+![The CW group: Keyer backend set to "WinKeyer — K1EL hardware keyer", Sidetone pitch 600 Hz, WinKeyer port on a named COM port, a CW ID after 73 switch turned off, and a CW cockpit F-keys profile picker reading Default with New, Rename, Delete and Customize buttons.](../img/manual/settings-cw.webp)
+
+*The CW tab in Nexus 1.10.3, on a station running a hardware WinKeyer. Which
+ports and which backend are yours to pick — the four backends are described
+above.*
+
 ---
 
 ## Digital
@@ -480,6 +677,18 @@ the radio.
   goes straight out." Off = you arm TX yourself each time.
 - **Tune timeout (s)** — "Auto-release the tune carrier after this many seconds —
   never leave a key-down unattended" (default 12).
+- **Tune power (%)** — the power a tune-up keys at. Leave it empty and Nexus
+  never touches your power setting, which is the default behaviour. It can only
+  turn the rig **down**, never up: it keys at whichever is lower, this figure or
+  the power you are already running, so 50 % here while you run 25 % still tunes
+  at 25 %. On a 100 W rig, 10 % is about 10 W — enough for an antenna tuner, kind
+  to a loop.
+
+![The Digital tab's left-hand columns, four groups stacked: Transmit & sequencing with a TX watchdog of 6 minutes and Disable TX after sending 73 on; Auto-CQ & caller selection with Wait before calling CQ again set to 180 and an empty Blocked callsigns box; Logging behavior with Auto-log QSOs on and Prompt before logging off; and Decoder with Decode depth on Deep and the passband reading F low 200, F high 2900.](../img/manual/settings-digital.webp)
+
+*Four of the Digital tab's five groups in Nexus 1.10.3. Each group continues to
+the right — Tune timeout and Tune power finish the first row, Best caller the
+second. Every value shown is one station's.*
 
 **Auto-CQ & Caller Selection**
 
@@ -487,6 +696,16 @@ the radio.
   it (the TX watchdog is the backstop). Set a number to auto-stop an unanswered
   CQ run." The Tempo chat CQ run always stops (default 10 unanswered); this
   number overrides that budget too.
+- **Wait before calling CQ again** — seconds off the air after an unanswered run,
+  before the next one starts. Default 180 (three minutes). 0 = do not resume: the
+  run simply stops. You are still **listening** through the pause — a station
+  that calls you is worked as normal, and answering anyone resets the count, so a
+  busy run never pauses at all.
+- **Blocked callsigns** — stations your auto-responder must never answer when
+  they reply to your CQ. They are passed over for the next caller and shown
+  dimmed (or hidden) in the roster and Band Activity. The base call is matched,
+  so `PD2BS` also blocks `PD2BS/P`. Alt-double-click any decode or roster row to
+  add one without coming here. Saved as you leave the field, not on **Save**.
 - **Tempo chat: send cycles per message** — "A chat message transmits at most
   this many cycles, then shows 'no ack' (tap the bubble to re-send). Blank = 3
   (TempoDeep uses 5). Never affects FT8/FT4."
@@ -516,8 +735,6 @@ the radio.
 
 All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
 (Companion mode) decodes arrive already made and **none of them apply**.
-
-![The top of the Digital tab, the Digital (FT8/FT4) fieldset spread across the full width of the window. Transmit & sequencing runs along the top — Transmit period TX 1st (even) on, TX watchdog 6 minutes, Disable TX after sending 73 on, Double-click arms TX on, Tune timeout 12 s. Auto-CQ & caller selection and Logging behavior follow, with Auto-log QSOs on and Prompt before logging off. The Decoder group sits at the bottom: Decode depth on Deep, the passband reading F low 200 and F high 2900, A-priori (AP) decoding — FT8 on while AP: CQ hypothesis only and Single decode are off, with DXpedition mode beginning below. Each control has its explanation printed under it.](../img/manual/settings-modes.webp)
 
 - **Decode depth** — Fast / Normal / Deep. "Deep finds the most signals (WSJT-X
   default); Fast saves CPU on old hardware."
@@ -558,7 +775,21 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   within ~0.5 s." Turn off for fully-offline operation (no network calls).
 - **Station power (W)** — "Your transmit power in watts — unlocks the Journey
   miles-per-watt & QRP feats." It also feeds the P.533 link budget. Leave blank
-  if unknown.
+  if unknown. This is what you actually run, for the record — it commands
+  nothing; the rig's power lives on the cockpit **Pwr** slider.
+- **Units** — Automatic (from your system), Metric (km, °C) or Imperial (mi, °F).
+  Covers distances, temperature and wind speed. Automatic follows your operating
+  system's region. It applies everywhere in the app the moment you change it.
+
+![The Station housekeeping row: Journey — track a weekly streak off, Beacon — announce presence (CQ) off, IR-HARQ — combine retransmissions on, and Clock check (NTP) on.](../img/manual/settings-station-housekeeping.webp)
+
+*Station housekeeping in Nexus 1.10.3, left half.*
+
+![Two fields: Station power (W) reading 1000, and Units set to "Automatic (from your system)".](../img/manual/settings-station-power-units.webp)
+
+*The same row's right half in Nexus 1.10.3. 1000 W is one station's figure,
+recorded so the Journey miles-per-watt maths is right — not a setting that
+changes the rig.*
 
 ### JT65 — classic EME
 
@@ -609,6 +840,11 @@ Beacons transmit your callsign, grid and power, so Call CQ and S&P are inactive
 on these tiers. Transmit still has to be armed as usual: **the schedule never
 keys a radio whose transmit you have not enabled.**
 
+![The Beacons — WSPR & FST4W group: Transmit % 0, Transmit power (dBm) 0, FST4W round robin slot 0 and Round robin slots 0.](../img/manual/settings-beacons.webp)
+
+*Beacons in Nexus 1.10.3, at their defaults — Transmit % 0 is listen-only, and
+Transmit power 0 keeps the beacon silent until you enter your real power.*
+
 ### FST4 (QSO) / FST4W (beacon)
 
 - **T/R period** — 15 / 30 / 60 / 120 / 300 / 900 / 1800 s, shared by both tiers.
@@ -634,6 +870,10 @@ that text is stale — both report `tx: true`.)
 Q65 transmits and receives, and **both stations must match**: a correspondent on
 a different period or submode will not decode you.
 
+![The Q65 — EME / VHF+ scatter group: T/R period set to "60 s — EME (most common)" and Submode (tone spacing) set to "A — narrowest, most sensitive".](../img/manual/settings-q65.webp)
+
+*Q65 in Nexus 1.10.3. Both boxes have to match the station you are working.*
+
 ### Quick-reply macros
 
 Comma-separated chip lists for the quick text you fire from each surface:
@@ -643,6 +883,16 @@ Comma-separated chip lists for the quick text you fire from each surface:
 - **Band / CQ** — open broadcasts: the Call CQ launchpad and band feed.
 
 ### RTTY
+
+**Receiving**
+
+- **Start receiving when RTTY opens** — on by default: entering the screen arms
+  the decoder, so a signal on the tuned tone pair prints without touching
+  anything. Turn it off to arm by hand (the Arm RX button in the decoded-text
+  pane) — for instance on a shared rig you monitor from. Either way this arms the
+  **receiver** only; transmitting is never armed for you. Stopping the receiver
+  yourself is remembered for the rest of the session, so re-entering the section
+  does not restart it behind you.
 
 **Keying**
 
@@ -668,19 +918,41 @@ Comma-separated chip lists for the quick text you fire from each surface:
   AFSK in USB/DATA-U) so the on-air sense stays correct." Applies to TX and the
   RX decoder.
 
+![The RTTY group: "Start receiving when RTTY opens" switched on, Keying backend set to "AFSK — soundcard tones through the rig in LSB (default)", Baud rate "45.45 — the HF standard" and Shift "170 — the HF standard".](../img/manual/settings-rtty.webp)
+
+*RTTY in Nexus 1.10.3, on the AFSK default. Baud and shift drive both the
+transmitter and the decoder, so they have to match the station you are copying.*
+
 ### PSK
 
 PSK31 receive needs no setup: open the PSK screen, tune a watering hole
 (14.070 is the classic), click a warble trace on the waterfall and the text
 prints. The click nets the *decoder* — it never moves the rig — and a
-slew-limited AFC (never more than ±25 Hz) rides small drift for you. PSK31 is
-receive-only in this release; transmit is on the keyboard-modes roadmap.
+slew-limited AFC (never more than ±25 Hz) rides small drift for you.
+
+PSK31 and QPSK31 both **transmit as well as receive** in this build. Nothing about
+sending lives on this tab, which is why there is only one control here: you type and send
+from the [PSK cockpit](psk.md), and its dock carries the macros, the continuous-TX latch
+and its own Stop. An over is capped at 500 characters — about two to three
+minutes of air time, so a single message can never key past the default TX
+watchdog on its own — and every send is refused up front, with a reason, if TX is
+not armed, the dial is outside your licence privileges, another section owns the
+rig, or a tune carrier is up.
+
+(The PSK entry in the Features list still ends "(receive)". That wording is stale —
+the mode transmits.)
 
 - **Start receiving when PSK opens** — on by default: entering the screen arms
   the decoder, so a signal on the band prints without touching anything. Turn
   it off to arm by hand (the Arm RX button in the decoded-text pane) — for
   instance on a shared rig you monitor from. Stopping the receiver yourself is
-  remembered for the rest of the session either way.
+  remembered for the rest of the session either way. **This arms the receiver
+  only** — transmit is never armed for you.
+
+![The PSK group with a single control: "Start receiving when PSK opens", switched on.](../img/manual/settings-psk.webp)
+
+*The whole of the PSK tab in Nexus 1.10.3 — one receive control. Transmitting is
+done from the PSK cockpit, not from here.*
 
 ### JS8
 
@@ -734,6 +1006,12 @@ nothing until you enable TX in the cockpit, every session.
 
 ### SSTV
 
+![The SSTV group: "Start receiving when SSTV opens" on, ISS SSTV auto-arm off, Transmit mode set to "Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)", and an empty Transmit power percentage box.](../img/manual/settings-sstv.webp)
+
+*SSTV in Nexus 1.10.3. A blank transmit power means Nexus leaves your power alone
+— an SSTV over is up to 290 seconds of continuous key-down, so most operators run
+it well below their SSB drive.*
+
 **Receiving**
 
 - **Start receiving when SSTV opens** — on by default. The SSTV screen starts the
@@ -770,6 +1048,11 @@ screen; that one is per-picture on purpose and resets with every new image.
 These are the RF side, and none of them needs the internet feed below — most
 stations run APRS on the radio alone.
 
+![The APRS Over the air group: Channel (RF) set to "144.390 · N. America", Beacon symbol Car, Beacon comment reading "Nexus APRS", and Digipeater path "WIDE1-1, WIDE2-1".](../img/manual/settings-aprs-rf.webp)
+
+*The RF side of APRS in Nexus 1.10.3. Beacon SSID continues to the right. The
+channel is regional — Automatic picks it from your grid.*
+
 - **Channel (RF)** — the 2 m FM channel APRS runs on, which is regional.
   **Automatic** follows your grid square, so moving to another region lands you
   on the right channel with nothing to configure, and the number it picked is
@@ -793,6 +1076,13 @@ stations run APRS on the radio alone.
   `KD9TAW-9` on the Station tab, that is what goes out.
 
 **APRS-IS (internet feed)**
+
+![The APRS-IS group: the APRS-IS feed switched on, Server rotate.aprs2.net, Port 14580, Radius 150 km, Messages off, Keep stations for 60 minutes, and Receive-only iGate on.](../img/manual/settings-aprs-internet.webp)
+
+*The internet feed in Nexus 1.10.3. Watched calls, Weather stations and
+Objects & items continue to the right. This side uses no radio and never
+transmits — the iGate below it is the one control that puts RF you heard onto
+the internet.*
 
 - **APRS-IS feed** — "Plot stations the internet reports alongside the ones your
   own antenna hears — each one tagged so you can always tell which is which. Runs
@@ -832,6 +1122,10 @@ The dial frequency used when a band/mode is selected. These are **overrides** of
 the stock WSJT-X working-frequency table — "leave the list empty to use stock
 everywhere. An override replaces the stock row for its band + mode."
 
+![The last rows of the read-only WSJT-X frequency table — 23cm FT8 1296.174000 down to 2m FT4 144.170000 — above a "Your overrides" heading reading "None — the stock table is in effect", with Add override and a greyed Reset to standard button.](../img/manual/settings-working-frequencies.webp)
+
+*Working Frequencies in Nexus 1.10.3 with no overrides set, which is how it ships.*
+
 - **Standard table (read-only)** — the stock WSJT-X dial frequencies. A row with
   an active override shows your value, highlighted.
 - **Your overrides** — rows of band + mode + dial MHz. **Add override** adds a
@@ -853,6 +1147,11 @@ rather than waiting for the spot board to refresh. A loud tone plays whether or
 not Nexus is the window you are looking at, and a banner offers one-click Work.
 Each station alerts once per band and mode.
 
+![The Pounce — new-one alert group: a paragraph of explanation above an "Alert me for" dropdown set to "New DXCC entity only".](../img/manual/settings-pounce.webp)
+
+*Pounce in Nexus 1.10.3. How rare "rare" should be depends on your own totals —
+start narrow.*
+
 - **Alert me for** — Off (default) / New DXCC entity only / New entity or CQ zone
   / New entity, zone, or US state.
 
@@ -862,6 +1161,10 @@ talking. Start with *New DXCC entity only* once your log is far enough along tha
 a new one is genuinely an event.
 
 ### Alerts
+
+![The Alerts row: My call on, Confirmation opportunities on, CQ calls off, and New DXCC set to All bands, above a Watch list with a Call / prefix picker, an entry box and an Add button.](../img/manual/settings-alerts.webp)
+
+*Alerts in Nexus 1.10.3. New grid and Rare grid continue to the right.*
 
 - **My call** — "Beep + flash when someone directs a call at you."
 - **CQ calls** — "Alert on any decoded CQ. Off by default — CQs are constant."
@@ -894,6 +1197,12 @@ and **Forget** removes it.
 A status grid of every connector, and a **Test** button on QRZ Logbook that
 round-trips the API without logging anything. Below it, a session **Connection
 log**: "every save, sync, push, and failure lands here."
+
+![The Connections grid: nine connector rows, each with a coloured dot and a state — LoTW "stored — not verified yet", QRZ Logbook and ClubLog and World Radio League "working" with an upload date, the rest "no credential" or "lookup only". Below it a Connection log of timestamped lines.](../img/manual/settings-connections.webp)
+
+*Connector health in Nexus 1.10.3. The dots are one station's; read the shape,
+not the values — amber against LoTW here means a stored credential nothing has
+been pushed through yet, which is not a fault.*
 
 The dot reports the **last time Nexus actually talked to the service**, not
 whether a password is on file. That distinction is the point: a revoked ClubLog
@@ -934,6 +1243,11 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
 
 **Local APIs & Loggers**
 
+![The Local APIs & loggers row: WSJT-X UDP API on with UDP address 127.0.0.1:2237, and Ham Radio Deluxe logging off with HRD UDP address 127.0.0.1:2333.](../img/manual/settings-local-apis.webp)
+
+*The loopback feeds in Nexus 1.10.3, at their defaults. Companion UDP address and
+the decode-log switches continue to the right.*
+
 - **WSJT-X UDP API** + **UDP Address** — "for JTAlert / GridTracker / loggers"
   (default `127.0.0.1:2237`).
 - **Ham Radio Deluxe logging** + **HRD UDP Address** — push each QSO to HRD
@@ -952,6 +1266,11 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
   always-on."
 
 **Spot Sources**
+
+![The Spot sources group: PSK Reporter on, DX Cluster / RBN spots on, and a Phone/SSB cluster nodes list holding three nodes, each with a remove button, above an "Add a known node…" picker and a "+ Custom" button.](../img/manual/settings-spot-sources.webp)
+
+*Spot sources in Nexus 1.10.3. Which nodes you list is a matter of coverage, not
+correctness — Nexus connects to all of them and merges what they report.*
 
 - **PSK Reporter** — "upload spots to the global map."
 - **DX Cluster / RBN spots** — "Surface 'new ones' from the Reverse Beacon
@@ -983,6 +1302,10 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
 Pushes each logged QSO into DXKeeper over its TCP Network Service. Enable it in
 DXKeeper under *Configuration ▸ Defaults ▸ Network Service* first.
 
+![The DXKeeper group: an empty DXKeeper host box showing the placeholder "127.0.0.1 (empty = off)", DXLab base port 52000, and "Let DXKeeper do the uploads" switched off.](../img/manual/settings-dxkeeper.webp)
+
+*DXKeeper in Nexus 1.10.3, disabled — a blank host is off.*
+
 - **DXKeeper host** — "Usually 127.0.0.1 — same PC. Leave blank to disable."
 - **DXLab Base Port** — the *Base Port* from DXKeeper's Network Service panel
   (default 52000). DXKeeper itself listens on base + 1 and **Nexus adds the 1 for
@@ -997,6 +1320,11 @@ DXKeeper under *Configuration ▸ Defaults ▸ Network Service* first.
 "Each FD contact lands in the club's **N3FJP Field Day Contest Log** the moment
 you log it — so the whole club's score updates in real time." Run N3FJP on the
 master computer and point Nexus at its IP and port.
+
+![The N3FJP group: an empty N3FJP host box showing the placeholder "192.168.1.10 (empty = off)", N3FJP port 1100, "Use ENTER for Field Day scoring" on, and "Report my band to N3FJP" off.](../img/manual/settings-n3fjp.webp)
+
+*N3FJP in Nexus 1.10.3, disabled — a blank host is off. Forward every QSO and the
+Test N3FJP button continue to the right.*
 
 - **N3FJP host** — IP or hostname of the master log computer. Blank = off.
 - **N3FJP port** — N3FJP's API TCP port (default 1100).
@@ -1052,6 +1380,11 @@ master computer and point Nexus at its IP and port.
 
 ### Confirmations
 
+One group per service, in the order the panel shows them. Every password, key and
+token here goes into the operating system's keychain, never to disk in the clear,
+and none of them is ever shown back to you — the boxes read their placeholder
+whether or not something is stored. **Set** saves one, **Forget** removes it.
+
 **LoTW**
 
 - **LoTW username** — "Often your callsign, but not always — use your LoTW
@@ -1094,6 +1427,11 @@ master computer and point Nexus at its IP and port.
   accept eQSL) — a separate tier."
 - **Auto-upload QSOs to eQSL** — upload each logged QSO as you log it.
 
+![The LoTW group — username, an empty password box, a Download confirmations button and a Station Location reading KD9TAW — above the eQSL group with empty username, QTH nickname and password boxes.](../img/manual/settings-confirmations-lotw.webp)
+
+*LoTW and eQSL in Nexus 1.10.3. The empty eQSL boxes are what an unconfigured
+service looks like.*
+
 **QRZ**
 
 - **QRZ username** / **QRZ password** — "this is what powers callbook lookups"
@@ -1131,6 +1469,11 @@ master computer and point Nexus at its IP and port.
   ClubLog auto-revokes published keys)."
 - **Auto-upload QSOs to ClubLog** — push each logged QSO in real time.
 
+![Three groups stacked: QRZ with a username, empty password and Logbook API key boxes and Auto-upload switched on; HamQTH with empty username and password; and ClubLog with an email, a callsign, an empty app-password and an empty application API key.](../img/manual/settings-confirmations-qrz.webp)
+
+*QRZ, HamQTH and ClubLog in Nexus 1.10.3. QRZ takes two separate credentials —
+the login that powers callbook lookups, and a Logbook API key that only uploads.*
+
 **HRDLog**
 
 - **HRDLog.net upload code** — from your HRDLog.net account (Options → your
@@ -1139,6 +1482,59 @@ master computer and point Nexus at its IP and port.
 - **Auto-upload QSOs to HRDLog.net** — "HRDLog.net is a live-logging and awards
   site — it is **not** an ARRL confirmation source, so an upload here never earns
   DXCC/WAS credit."
+
+**World Radio League**
+
+WRL is a live-logging site. Nexus pushes contacts **up** to your WRL logbook as
+you make them, one contact per QSO. Nothing comes back down — there is no
+confirmation sync and no download — and like HRDLog it is **not** an ARRL
+confirmation source, so an upload here never earns DXCC or WAS credit.
+
+You need a WRL account and a logbook on it. The only thing to fill in here is
+the key.
+
+- **API key** — from **worldradioleague.com ▸ Integrations ▸ Developer API**. Paste
+  it and press **Set**. Nexus checks it against the live service before saving,
+  so a mistyped key fails here, with a plain message, rather than silently on
+  your first contact. The same check resolves where your contacts will land: your
+  account's default logbook if you have one, otherwise its only logbook. An
+  account with several logbooks and no default is a real ambiguity and Nexus
+  refuses to guess — set a default on the WRL site, then press **Set** again. The
+  key is stored write-only in the OS keychain and is never shown again.
+  **Forget** removes it.
+- **Auto-upload each QSO** — pushes every logged contact as it lands. Saving a
+  valid key switches this **on** for you; **Forget** switches it off, because
+  there is nothing to push with.
+- **Already have a log? ▸ Export ADIF for WRL** — writes your whole log to an
+  ADIF file in your Downloads folder, for WRL's own ADIF import on their site.
+  Use it once, when you start: auto-upload only covers contacts made from now on,
+  and WRL's API caps uploads at 5,000 a day, so for a log of any size the file is
+  much the faster path.
+
+**When an upload fails.** The **World Radio League** row under
+[Connections](#connections) carries the state and the time of the last successful
+push, and every attempt — good or bad — lands in the Connection log underneath
+it. What Nexus does next depends on what WRL said:
+
+- **accepted** or **duplicate** — done. WRL saying it already has the contact
+  counts as success: Nexus stops and marks the upload done rather than retrying
+  something that has already landed.
+- **key invalid** — the credential is wrong or has been revoked. This is **not**
+  retried, because retrying cannot fix it. Set the key again.
+- **busy** — a rate limit, or trouble at their end. The contact is fine, the
+  moment was not, so it goes back on the queue and retries with widening gaps
+  (4 s, 8 s, 16 s… up to five minutes) until it gets through or twenty attempts
+  are up.
+- **rejected** — WRL refused the contact itself. Not retried; the log line
+  carries their reason.
+
+Contacts waiting to go out survive with the switch off, up to the most recent
+256, so turning auto-upload on later still sends this session's recent work.
+
+![The World Radio League group: an API key box showing the placeholder "wrl_live_…" with Set and Forget buttons, an "Auto-upload each QSO" switch turned on, and an "Already have a log?" heading above an "Export ADIF for WRL" button.](../img/manual/settings-confirmations-wrl.webp)
+
+*The World Radio League connector in Nexus 1.10.3. The key box shows its
+placeholder — a stored key is never displayed back.*
 
 **RepeaterBook**
 
@@ -1162,13 +1558,16 @@ HTTP.
 - **Auto-forward QSOs** — push every logged QSO to the instance above as it's
   logged.
 
+![The RepeaterBook group with an empty API token box, above the Cloudlog / Wavelog group: a Base URL showing the placeholder https://log.example.com, Station profile id 1, and an empty API key.](../img/manual/settings-confirmations-cloudlog.webp)
+
+*RepeaterBook and Cloudlog / Wavelog in Nexus 1.10.3, both unconfigured. A blank
+Cloudlog base URL is off.*
+
 ---
 
 ## Contesting
 
 Always visible — capability, not configuration, gates the tabs.
-
-![The Contesting tab, both its fieldsets in one view. Contest Category holds the Unassisted entry switch, off here, above an ASSISTED line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification, and a collapsed "What this means for your contest category" note. Field Day Setup below it has Field Day mode off, with Event (ARRL Field Day / Winter Field Day), FD Class, ARRL Section and Power multiplier — set to ×2 ≤100W — laid out in a row across the window.](../img/manual/settings-contesting.webp)
 
 ### Contest Category
 
@@ -1180,6 +1579,11 @@ Always visible — capability, not configuration, gates the tabs.
 - **Assistance record** — the timestamped journal: a row per flip and a row each
   time Nexus starts, with which sources were active. Kept in `assistance_journal.json` beside your settings, so
   it survives restarts. Newest first.
+
+![The Contest Category group: Unassisted entry switched off, an ASSISTED badge on a line reading that the AI CW decoder, DX cluster / RBN and PSK Reporter needs are supplying callsign identification since 23:18Z, and below it an Assistance record of eight timestamped rows.](../img/manual/settings-contest-category.webp)
+
+*Contest Category in Nexus 1.10.3. The badge states what you are entitled to
+claim right now; the record underneath is the evidence, kept across restarts.*
 
 ### Field Day Setup
 
@@ -1230,11 +1634,16 @@ narrow.
 Nothing here is a second copy: change one of them anywhere and it changes
 everywhere.
 
+![The Who's who at this event group: Callsign on the air reading KD9TAW, Position name reading "Comms Trailer", and an empty Operator at the key box showing the placeholder "blank = the callsign above".](../img/manual/settings-whos-who.webp)
+
+*Who's who in Nexus 1.10.3 — three fields answering three different questions.*
+
 ### Field Day Club Sync
 
 Run the whole club on Nexus: one PC **hosts a club event** (this opens a TCP
-port on the site LAN — the only time Nexus listens beyond the local computer,
-and only while the toggle is on); every other position joins it with **Find
+port on the site LAN, and only while the toggle is on — the spectator scoreboard
+below and [Connect on a TV](#connect-on-a-tv) are the other two things that
+listen beyond the local computer); every other position joins it with **Find
 club events** or by typing the host's `host:port` into **Join event at**. Each
 position's contacts stream to the host as they're logged, and the host pushes
 back the club score, a live band board, and the club-wide dupe list that
@@ -1245,6 +1654,11 @@ automatically on reconnect, and if the host PC dies you can enable hosting on
 any other position — everyone re-joins and nothing is lost. The host's Field
 Day view gains **Club Cabrillo / Club ADIF** exports of the merged,
 deduplicated log.
+![The Field Day Club Sync group: "Host a club event" switched off, Event name reading "N9WH Field Day 2026", Host port 42073, an empty "Join event at" box showing a host:port placeholder, a "Find club events" button, and Spectator scoreboard switched off.](../img/manual/settings-field-day-club-sync.webp)
+
+*Field Day Club Sync in Nexus 1.10.3, with hosting off. One position at the site
+turns Host on; every other position joins it.*
+
 Full walkthrough: [Contesting & POTA/SOTA](contesting-pota.md).
 
 ---
@@ -1255,6 +1669,12 @@ UI-only preferences (applied live, not via Save) and the section toggles.
 
 ### Workspace
 
+- **Language** — the language Nexus writes in. Frequencies, signal reports,
+  callsigns, grid squares, and band and mode names are never translated or
+  reformatted: a dial reads the same in every language.
+- **Theme** — Light or Dark. Light reads best outdoors in daylight. Either way,
+  the top bar's **Field** chip boosts contrast and size on top of the theme you
+  picked.
 - **UI scale** — **Auto (fit)** scales the whole interface to the window so
   nothing is cut off, with **Max scale** cap chips so auto never overshoots on a
   big monitor. A cap this window can't reach is disabled and its tooltip says
@@ -1266,23 +1686,77 @@ UI-only preferences (applied live, not via Save) and the section toggles.
   layout itself is set in the cockpits: drag the dividers between panes to resize
   (double-click a divider to reset), and use the ⊞ menu to show or hide panes.
 
-(The theme picker — dark / light / amber night-vision — lives in the app chrome,
-not this tab.)
+![The Workspace row: Language set to English, Theme with Dark selected of Light and Dark, UI scale on Auto (fit) with max-scale chips from 100% to 175% and 125% lit, and Density set to Comfortable.](../img/manual/settings-workspace.webp)
+
+*Workspace in Nexus 1.10.3. Reset pane sizes sits to the right of Density.*
 
 ### Connect on a TV
 
-<!-- TODO(settings-reference): "Connect on a TV" (registry id `connect-web`) has no prose yet.
-     Write it here; scripts/gen-settings-reference.mjs carries it across from now on. -->
+Serves the [Connect](connect.md) view — the map with every layer, the panes,
+live openings — as a plain web page to any browser on your own network. A shack
+TV, a tablet on the bench, a phone in the garage. Nothing is installed on the
+TV and nothing can be changed from it: the page is read-only, and the server
+answers GET and HEAD only. The page also loads no script, font or image from the
+internet, so it renders fully on a shack network with no route out — which is
+where a wall display usually lives.
 
-_Undocumented so far._
+![The Connect on a TV settings block: a "Serve Connect on this network" switch turned on, with the hints "Serves the full Connect view — the map with every layer, the panes, live openings — read-only, to any browser on your network: a shack TV, a tablet, a phone. Nothing can be changed from it." and "While this is on, anyone on your network can see your callsign, grid square and the propagation picture — including the callsigns of stations heard and spotted. Your log, your needs board and the frequency you are on are never sent."](../img/manual/settings-connect-tv.webp)
+
+*Connect on a TV in Settings ▸ Appearance, Nexus 1.10.3, switched on.*
+
+⚠️ **This puts your station on the LAN, so read what it exposes.** The page
+carries your callsign, your grid square and the propagation picture, including
+the callsigns of stations you have heard and stations that have been spotted.
+It deliberately does **not** carry your log, your needs board, or the frequency
+you are on — what the station is doing right now is a different thing from what
+the ionosphere is doing, and only the second belongs on a wall. **Off by
+default.** Anyone who can reach the port can read the page; there is no
+password.
+
+**Put it on the TV:**
+
+1. Turn on **Serve Connect on this network** and press **Save**.
+2. Leave **Port** alone unless something else on the machine wants 7374. It is
+   deliberately not the [Field Day scoreboard's](contesting-pota.md#field-day)
+   port, so a club host can serve both at once.
+3. Read the address off **Open this on the TV**. It fills in once the server is
+   up — it says "Starting…" until then — and looks like
+   `http://192.0.2.15:7374`, with your machine's own address on the network in
+   place of that one. **Copy** puts it on the clipboard.
+4. Type that address into the TV's browser, on the same network. That is the
+   whole setup: nothing to install, no account, no pairing.
+5. To take it down, turn the switch off and save. The port closes and the TV's
+   page stops answering; refresh it there and you get a browser error rather
+   than a stale display.
+
+**If the TV cannot reach it**, work through these in order: the two devices are
+on the same network and not on separated guest and main Wi-Fi; the machine's
+firewall lets the port through — the first enable on Windows can pop a prompt,
+and denying it leaves the page unreachable with no error on the Nexus side;
+and the address is the one this row shows, not `localhost`, which on the TV
+means the TV. If the row shows an error instead of an address, the port is in
+use — change it and save.
+
+**What the page does when Nexus is busy.** It is a snapshot of the same
+propagation data the app has, fetched by the page as it refreshes. It loads no
+script, font or image from anywhere outside your machine, because a shack TV is
+often on a network with no route to the internet at all.
 
 ### Features
 
 Turn sections on and off, and pick a goal profile.
 
+![The Features group: six profile chips — Just getting started, DX chasing & awards, Contesting, POTA / SOTA, 6m / VHF & openings, Everything (expert) — with a seventh, Custom, selected. Below, a "Core — always on" row listing Operate, Logbook, Settings and Now bar with no switches, and an Operate row with CW, Phone, RTTY and PSK each switched on.](../img/manual/settings-features.webp)
+
+*Features in Nexus 1.10.3. **Custom** is what the chip row shows once you have
+changed any individual switch — it is not a seventh profile you pick, it is the
+panel saying you are no longer on one. The core row has no switches because those
+sections cannot be turned off.*
+
 - **Profile** — a goal (getting started, DX/awards, contesting, POTA/SOTA,
-  6m/VHF) sets sensible defaults. "Pick a goal to set sensible defaults — every
-  feature stays toggleable below." Hand-toggling produces a **Custom** set, and
+  6m/VHF, or **Everything (expert)**, which turns the whole console on) sets
+  sensible defaults. "Pick a goal to set sensible defaults — every feature stays
+  toggleable below." Hand-toggling produces a seventh chip, **Custom**, and
   switching away from Custom asks first because it discards your hand-tuned set.
   A **Re-run setup…** link reopens the first-run wizard.
 - **Core — always on** — the spine (Operate, Logbook, Settings, Now Bar, Chat,
@@ -1306,6 +1780,18 @@ Speech and sound cues for operating by ear. The keyboard and screen-reader label
 throughout Nexus are **always on** — these settings only control what comes out
 of the speakers.
 
+![The Accessibility & eyes-free group: "Announce decodes (screen reader)" set to Needed, with TX / RX earcon and Decode-batch tick both switched off.](../img/manual/settings-accessibility.webp)
+
+*Accessibility in Nexus 1.10.3. A screenshot cannot show what these do — each cue
+is described below.*
+
+![The Settings tab strip with the CW tab outlined by the keyboard focus ring while the Station tab stays selected.](../img/manual/settings-keyboard-focus.webp)
+
+*Keyboard focus in Nexus 1.10.3. Tab and Shift-Tab move the ring, and the outlined tab is where
+the keyboard is — separate from the coloured one, which is still the tab being shown. Every
+interactive control in Nexus carries the same ring. The speech and earcon settings above cannot
+be photographed, and were not exercised for this capture.*
+
 - **Announce decodes (screen reader)** — Off / Needed only (calling you / new /
   watched) / All (adds a per-cycle CQ summary). Silent without a reader running.
 - **TX / RX earcon** — "A rising tone when you key up, falling when you unkey —
@@ -1323,6 +1809,10 @@ undiscoverable: backing up a whole station has nothing to do with transmit
 limits.
 
 ### Backup & reset
+
+![The Backup & reset group: an explanation, "Back up" and "Restore…" links, a note that the file holds no passwords or API keys, and a red "Reset all settings…" link under a Start over heading.](../img/manual/settings-backup-reset.webp)
+
+*Backup & reset in Nexus 1.10.3 — the whole of the Config tab.*
 
 - **Back up** — writes your radios, operating preferences, memory channels,
   watchlist and chase sets to a single `.json`. For a new computer, or before a

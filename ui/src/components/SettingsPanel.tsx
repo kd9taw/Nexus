@@ -648,6 +648,10 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     rigctldPort: s.rigctldPort ?? 4532,
     icomNativeCat: s.icomNativeCat ?? false,
     dataModesPlainSsb: s.dataModesPlainSsb ?? false,
+    // ⚠️ PER-RADIO, so it MUST be seeded here for the same reason `omnirigSlot` is: the Save
+    // path builds a RadioProfilePatch from this form, and a field the form drops is a field
+    // the patch blanks on the profile it touches.
+    sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
     audioIn: s.audioIn ?? '',
     audioOut: s.audioOut ?? '',
     txLevel: s.txLevel ?? 1,
@@ -1536,7 +1540,10 @@ export function SettingsPanel({
       .filter(Boolean)
       .map((g) => `@${g}`)
   // Whole non-negative minutes; junk leaves the stored value alone (never coerces to 0).
-  const updateMinutes = (key: 'js8HbIntervalMin' | 'js8IdleWatchdogMin', raw: string) => {
+  const updateMinutes = (
+    key: 'js8HbIntervalMin' | 'js8CqIntervalMin' | 'js8IdleWatchdogMin',
+    raw: string,
+  ) => {
     const n = Number(raw)
     if (raw.trim() === '' || Number.isNaN(n)) return
     updateNum(key, Math.max(0, Math.floor(n)))
@@ -4418,6 +4425,27 @@ export function SettingsPanel({
                 </span>
               </label>
 
+              {/* #130 (PA3GYQ). Beside the plain-SSB switch on purpose: both decide which MODE
+                  WORD this radio is commanded for soundcard audio, and this one inherits the
+                  other's mapping (`plain_ssb_if_configured` sends PKTFM back to plain FM). */}
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.rigControl.sstvHoldData.label')}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.sstvHoldDataSubmode ?? false}
+                  className={`toggle${form.sstvHoldDataSubmode ? ' on' : ''}`}
+                  onClick={() => updateBool('sstvHoldDataSubmode', !form.sstvHoldDataSubmode)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                <span className="settings-hint">
+                  <T k="settings.rigControl.sstvHoldData.hint" tags={{ b: <strong /> }} />
+                </span>
+              </label>
+
               {/* Offered on the ENGINE's question — the model number — not on what the model
                   NAME happens to look like. And when the answer is "this radio qualifies but
                   the connection cannot carry it", the control is DISABLED WITH THE REASON
@@ -7194,6 +7222,20 @@ export function SettingsPanel({
                 />
                 <span className="settings-hint">{t('settings.js8.hbIntervalMin.hint')}</span>
               </label>
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.js8.cqIntervalMin.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  value={String(form.js8CqIntervalMin ?? 0)}
+                  placeholder="0"
+                  onChange={(e) => updateMinutes('js8CqIntervalMin', e.target.value)}
+                  autoComplete="off"
+                />
+                <span className="settings-hint">{t('settings.js8.cqIntervalMin.hint')}</span>
+              </label>
               <div className="settings-field">
                 <label className="settings-toggle">
                   <span className="settings-label">{t('settings.js8.hbAck.label')}</span>
@@ -8360,15 +8402,27 @@ export function SettingsPanel({
                     startup, deliberately, because the failures worth diagnosing are the early
                     ones. That is exactly why it needs a line HERE: it was the one
                     operator-facing artefact nothing in the interface named, on a file we ask
-                    people to send us when something goes wrong. */}
+                    people to send us when something goes wrong.
+
+                    #101 (akhepcat) asked for a way to turn it off, and the answer is no —
+                    ruled 2026-09-07 and written into the hint below rather than left as a
+                    silent “Always on”. A log that can be switched off is missing on exactly
+                    the run that needed it, and the switch would have to live in a settings
+                    file the failing launch may never have reached. The tier that IS
+                    switchable is the field underneath. */}
                 <div className="settings-field">
                   <span className="settings-label">Diagnostic log</span>
                   <span className="settings-hint">
-                    Always on. A plain-text record of what Nexus did — startup steps, the CAT and
-                    audio device open, updater checks, and any failure — so a “it won’t start” or
-                    “it stopped decoding” report has something to look at. Passwords, API keys and
-                    tokens are masked before anything is written, so it is safe to attach to a bug
-                    report. Bounded to two files, about 8 MB in total.
+                    Always on, and there is no switch for it — by design. The runs worth
+                    diagnosing are the ones that die during startup, before any setting has been
+                    read, so a log you could turn off would be missing on precisely the launch
+                    you needed it for. It is a plain-text record of what Nexus did — startup
+                    steps, the CAT and audio device open, updater checks, and any failure — so a
+                    “it won’t start” or “it stopped decoding” report has something to look at.
+                    Passwords, API keys and tokens are masked before anything is written, so it
+                    is safe to attach to a bug report. Bounded to two files, about 8 MB in total,
+                    so it cannot grow without limit. What you can turn on and off is the extra
+                    detail below; there is no command-line switch for either.
                     {diagLogPath && (
                       <>
                         {' '}Saved at <code>{diagLogPath}</code>.

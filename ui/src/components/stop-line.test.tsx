@@ -166,10 +166,13 @@ const js8State = {
   hbOn: false,
   hbNextAtMs: null,
   hbIntervalMin: 0,
+  cqOn: false,
+  cqNextAtMs: null,
+  cqIntervalMin: 0,
   autoreply: true,
   relay: true,
   hbAck: false,
-  armed: { autoreply: false, relay: false, hbAck: false, hb: false },
+  armed: { autoreply: false, relay: false, hbAck: false, hb: false, cq: false },
   idleMinutes: 0,
   idleLimitMin: 60,
   idleTripped: false,
@@ -304,6 +307,9 @@ vi.mock('../api', async (importOriginal) => {
     pskType: vi.fn(async () => pskState),
     pskStop: vi.fn(async () => pskState),
     getJs8State: vi.fn(async () => js8State),
+    // The JS8 roster joins against the logbook (features/callHistory) for its ✓/Name/
+    // Comment columns; the auto-stub's `{}` is not a log this sweep can render against.
+    getLog: vi.fn(async () => []),
     // `js8_enter` fires on the rising edge of `active`; the auto-stub would answer `{}` and
     // the cockpit would then render a state with no `armed` — pin the fixture.
     js8Enter: vi.fn(async () => js8State),

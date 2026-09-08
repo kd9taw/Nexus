@@ -263,7 +263,8 @@ describe('OperateCockpit — TX controls are not panels', () => {
     const onHaltTx = vi.fn()
     renderCockpit({}, 'classic', { active: true, onHaltTx })
     // Escape is an abort key, not an editing key: the typing guard that disarms
-    // F4/F6/Alt+1–6 must not disarm it.
+    // F6/Alt+1–6 must not disarm it. (F4 joined Escape above the guard for #204 —
+    // WSJT-X parity — and has its own coverage in OperateCockpit.clearcard.test.tsx.)
     fireEvent.keyDown(screen.getByLabelText('Rx offset in Hz'), { key: 'Escape' })
     expect(onHaltTx).toHaveBeenCalledTimes(1)
   })

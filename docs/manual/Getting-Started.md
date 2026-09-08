@@ -33,22 +33,27 @@ The app installs per-user. Settings are written to `%APPDATA%\tempo\settings.jso
 
 On the first launch Nexus shows a one-time setup wizard (stored under localStorage key `nexus.features.wizardSeen`). You can reopen it any time from Settings.
 
-The wizard is a three-step flow — **Station** (callsign + grid), **Rig**
-(detect-my-radio, connection, audio), then **Goals** (goal cards, operating
-modes, license class). Every step is skippable, and you can re-run the wizard
-any time from Settings ▸ Appearance ▸ Features ▸ "Re-run setup…".
+The wizard is a four-step flow — **Station** (callsign + grid), **Rig**
+(detect-my-radio, connection, audio, Test CAT), **Log** (optional ADIF import),
+then **Finish** (license class, starter channel packs on a first run, and the
+walkthrough offer). Every step is skippable, and you can re-run the wizard any
+time from the **Re-run setup wizard…** link on the Settings ▸ Radio tab, or from
+Settings ▸ Appearance ▸ Features ▸ "Re-run setup…". Re-running edits in place:
+callsign, radio and log come with you.
 
-**Goals** — Five goal cards appear:
+**Log** — **Import my ADIF log…** reads any standard ADIF export (WSJT-X, N1MM,
+Log4OM, HRD, QRZ, LoTW, ClubLog). That history is what lights up worked-before
+(B4) flags, the Needed board's new-DXCC / new-state / new-grid calls, and awards
+progress. The import is local and duplicates are skipped; you can import later
+from the Logbook instead.
 
-- **Just getting started** — turns on FT8/FT4 and the basics
-- **DX chasing and awards** — adds the Needed board, logbook connectors, and the Connect map
-- **Contesting** — adds Field Day and contest logging
-- **POTA / SOTA** — adds the hunter view and log tagging
-- **6m / VHF and openings** — adds the opening detector and VHF-aware propagation filters
-
-Select one or more cards simultaneously. There is also a **Turn everything on (Expert)** one-click option. Your selections configure the feature registry, which uses a dependency-validated graph — enabling a feature automatically enables everything it depends on.
-
-**Operating modes** — Digital (FT8/FT4) is always enabled and cannot be deselected. Phone (SSB) and CW are opt-in; check the boxes here if you operate those modes.
+**There are no goal cards.** Every mode and every section starts on; trimming
+happens afterwards in Settings ▸ Appearance ▸ Features, which is where the goal
+profiles now live: Just getting started, DX chasing & awards, Contesting,
+POTA / SOTA, 6m / VHF & openings, and Everything (expert), with a seventh
+**Custom** chip shown once you hand-toggle.
+They configure the same feature registry, a dependency-validated graph — enabling
+a feature automatically enables everything it depends on.
 
 **License class** — Pick **Technician**, **General**, **Amateur Extra**, or **Outside the US**. This is persisted immediately as a transmit lockout enforced against FCC Part 97 Region 2 sub-band rules. The default is Open so a fresh install is never silently restricted. Examples of what the lockout does:
 

@@ -8,14 +8,14 @@ contest mode — a short exchange takes a few periods, a paragraph takes a minut
 is the mode of choice on 40 and 20 m when the band is too poor for voice and FT8's
 canned exchange is not a conversation.
 
-**Before you start.** JS8 ships switched off. Turn it on in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) and it appears in the
-Digital group of the rail after APRS. Entering the screen tunes the rig to the JS8
-watering hole for the current band (7.078, 14.078, 3.578 … — JS8Call's own list, USB) and
-starts decoding every speed at once. Nothing transmits until you enable TX in the
-header, every session. The mode's own switches — transmit speed, which speeds to
-decode, heartbeat interval, the three automatic-reply switches, the idle watchdog and
-your INFO/STATUS/group texts — are in
+**Before you start.** JS8 is on out of the box — look in the Digital group of the rail,
+after APRS. If you don't operate it, switch it off in
+[Settings ▸ Appearance ▸ Features](settings-reference.md#features). Entering the screen
+tunes the rig to the JS8 watering hole for the current band (7.078, 14.078, 3.578 … —
+JS8Call's own list, USB) and starts decoding every speed at once. Nothing transmits
+until you enable TX in the header, every session. The mode's own switches — transmit
+speed, which speeds to decode, heartbeat interval, the three automatic-reply switches,
+the idle watchdog and your INFO/STATUS/group texts — are in
 [Settings ▸ Digital ▸ JS8](settings-reference.md#js8).
 
 ## The tour

@@ -194,7 +194,11 @@ const DIGITAL_HOLES: &[(f64, &str)] = &[
     (1.840, "FT8"), // 160m
     (3.573, "FT8"), // 80m
     (3.575, "FT4"),
-    (5.3715, "FT8"), // 60m (US channel, 5373.0 kHz centre)
+    // 60 m carries TWO FT8 dials and has done since 2026-02-13, so BOTH are holes. A spot on
+    // 5.357 was classified as bare "Digital" before this line existed, which on the busier of
+    // the two dials is the wrong answer — see the ruling on `band_digital_mhz` below.
+    (5.357, "FT8"),  // 60m WRC-15 worldwide segment 5351.5-5366.5 kHz (US: 9.15 W ERP)
+    (5.3715, "FT8"), // 60m US channel, 5373.0 kHz centre (100 W ERP; US-only)
     (7.074, "FT8"),  // 40m
     (7.0475, "FT4"),
     (10.136, "FT8"), // 30m
@@ -237,6 +241,38 @@ pub fn band_digital_mhz(band: Band) -> f64 {
     match band {
         Band::B160 => 1.840,
         Band::B80 => 3.573,
+        // 60 m, and it is the one band where this constant needs a ruling rather than a lookup.
+        //
+        // ⭐ WHAT CHANGED, read 2026-09-07 from ARRL "60 Meter Band" (arrl.org/60-meter-band),
+        // "60M Channel Allocation" (arrl.org/60m-channel-allocation) and the ARRL news item
+        // "New 60-Meter Frequencies Available as of February 13", all three of which agree: an
+        // FCC Report & Order of December 2025 took effect at 0000 EST on 2026-02-13 and split
+        // US 60 m in two. FOUR channels survive at 100 W ERP — centres 5332.0, 5348.0, 5373.0
+        // and 5405.0 kHz, USB dial = centre - 1.5 kHz — and a new 15 kHz segment,
+        // 5351.5-5366.5 kHz, is open to General and above at 9.15 W ERP (15 W EIRP) with 2.8 kHz
+        // of bandwidth. The old 5358.5 kHz channel — the one 5.357 dialled, and where 60 m FT8
+        // lived worldwide — is ELIMINATED as a channel and absorbed into the low-power segment.
+        //
+        // So neither dial is "the" 60 m FT8 frequency any more, and which is right depends on
+        // where the operator is and how much power they run:
+        //   5.357   → inside the WRC-15 segment, which is the allocation MOST OF THE WORLD has,
+        //             so it is where the DX is — but 9.15 W ERP for a US station, and FT8's
+        //             ordinary many-signals-per-slot behaviour is only unambiguously legal here
+        //             (the channels require the emission CENTRED on the channel centre, i.e.
+        //             one signal at exactly 1500 Hz audio).
+        //   5.3715  → US channel 5373.0, still 100 W ERP, and community reporting after the
+        //             change (w3pie.org, 2026-02-13, read 2026-09-07) is that US DXers moved
+        //             their 60 m FT8 here to keep the power. US-only: most of the world has no
+        //             allocation at 5373 at all.
+        //
+        // THE RULING (2026-09-07, #175). This constant is the dial a digital-first PROPAGATION
+        // model uses to represent the band; 14.5 kHz at 5 MHz changes nothing it computes, so
+        // it stays on the same number `bandplan::ft8_band_plan` tunes — one 60 m dial in the
+        // app, not two that disagree. The reason THAT number is 5.3715 and not 5.357 is a
+        // transmit decision and it is argued where it is made, in `bandplan.rs`: moving the
+        // band button to 5.357 would drop a US station's legal ceiling by ~10 dB without
+        // telling them. Both dials are holes above, because CLASSIFYING a spot carries no such
+        // risk and 5.357 is busy.
         Band::B60 => 5.3715,
         Band::B40 => 7.074,
         Band::B30 => 10.136,
@@ -636,6 +672,30 @@ mod tests {
         assert_eq!(digital_hole_mode(144.150), Some("MSK144"));
         // The tolerance the classifier already used: a spot a little off the centre still counts.
         assert_eq!(digital_hole_mode(14.0745), Some("FT8"));
+        // #175 — BOTH 60 m FT8 dials, which is the point: the US kept four 100 W channels AND
+        // gained the 5351.5-5366.5 kHz worldwide segment on 2026-02-13, so FT8 is on two dials
+        // and a table with one of them stamps the other "Digital". A spot at the dial and a
+        // spot at the dial + an audio offset must both land.
+        assert_eq!(
+            digital_hole_mode(5.357),
+            Some("FT8"),
+            "the WRC-15 segment dial"
+        );
+        assert_eq!(
+            digital_hole_mode(5.3585),
+            Some("FT8"),
+            "…and a signal 1.5 kHz up in it"
+        );
+        assert_eq!(
+            digital_hole_mode(5.3715),
+            Some("FT8"),
+            "the US 5373.0 kHz channel dial"
+        );
+        assert_eq!(
+            digital_hole_mode(5.373),
+            Some("FT8"),
+            "…and its channel centre"
+        );
     }
 
     /// Off a hole there is genuinely nothing more specific to say, and the caller keeps using the
@@ -646,6 +706,24 @@ mod tests {
         assert_eq!(digital_hole_mode(14.250), None); // 20m phone
         assert_eq!(digital_hole_mode(14.100), None); // NCDXF beacons, not a hole
         assert_eq!(digital_hole_mode(0.0), None);
+        // The 60 m control. Two holes on one small band must not smear into one another or into
+        // the CW/voice channels between them — 5.3465 is US channel 2's dial, 5.3625 is inside
+        // the WRC-15 segment but above the FT8 window, and neither is an FT8 spot.
+        assert_eq!(
+            digital_hole_mode(5.3465),
+            None,
+            "60m channel 2 is not an FT8 hole"
+        );
+        assert_eq!(
+            digital_hole_mode(5.3625),
+            None,
+            "the rest of the WRC-15 segment is not one"
+        );
+        assert_eq!(
+            digital_hole_mode(5.3305),
+            None,
+            "60m channel 1 is not one either"
+        );
     }
 
     /// The classifier itself is untouched — it still answers with the class, so every existing

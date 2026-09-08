@@ -11,9 +11,11 @@
 //! Two safety copies, and they answer different questions:
 //!
 //! - **The anchor** — `log.adi.bak`, beside the log, written by [`Logbook::backup_once`] the
-//!   first time a non-empty log is loaded and **never touched again**. It answers "what did
-//!   this log look like before this build ever wrote to it", which is the only question that
-//!   helps when the PARSER is what lost the records. It is never rotated and never deleted.
+//!   first time a non-empty log is loaded, owner-only, and touched again exactly once and only
+//!   if it holds an upload stamp a pre-1.11 build wrote (see [`scrub_upload_stamps`]). It
+//!   answers "what did this log look like before this build ever wrote to it", which is the
+//!   only question that helps when the PARSER is what lost the records. It is never rotated
+//!   and never deleted.
 //! - **The ring** — dated snapshots in a `backups/` folder beside the log, taken on the SAVE
 //!   path by [`Logbook::snapshot_before_save`]. It answers "what did the log look like last
 //!   week", and it is bounded three ways so it cannot grow without limit.
@@ -25,13 +27,32 @@
 //! ruled out (2026-08: "a big log must not make launch slow"). `load` writes at most the
 //! one-time anchor and, after that, nothing at all.
 //!
+//! **The one exception, and it happens once per install.** A `log.adi` written up to 1.10.x can
+//! carry a service's own refusal text — an API key among it — in an `APP_TEMPO_UL_*` tail. The
+//! parse-time filter in [`take_upload`] keeps that out of every EXPORT and leaves the bytes
+//! where they are, and `load` copies those bytes into the anchor BEFORE the parser runs, so the
+//! key ends up in a second file that is never rewritten. So the clean runs on the bytes at
+//! load, ahead of the copy, over the anchor and the ring as well
+//! ([`Logbook::sweep_backups_if_changed`]), and the log itself is rewritten once
+//! ([`Logbook::scrub_log_in_place`]). The copy sweep is NOT gated on the log being poisoned — a
+//! copy can be poisoned while the log is already clean (an upgrade that cleaned `log.adi` on a save
+//! but never swept the copies), and it can also ARRIVE poisoned later (a backup restore, a profile
+//! sync, a laptop migration), so the sweep must not be one-shot. It is gated instead on "has any
+//! copy changed since I last swept it", answered by `stat` (size + mtime) against a small
+//! `.scrubbed` manifest — so the ordinary launch reads only that tiny file and the copies' metadata,
+//! never their multi-MB contents (the 2026-08 "a big log must not make launch slow" ruling), while
+//! anything new, restored, or synced in is simply not the signature we recorded and IS swept. A
+//! stale, empty, foreign, or absent manifest reads as "nothing recorded", so it cannot suppress a
+//! sweep — it can only cause one (the safe direction).
+//!
 //! **Why the snapshot is a COPY and not a hard link.** A link would be free, but
 //! [`Logbook::append`] opens the log with `.append(true)` and mutates it **in place** — a
 //! hard link is the same inode, so it would follow every later append instead of freezing
 //! the bytes, and the "snapshot" would silently be a second name for the live file. Do not
 //! "optimise" the copy into a link.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 // Whole-log sweep counter, DEBUG BUILDS ONLY — instrumentation for the
 // traversal-bound test. A per-row `worked_before()` inside `snapshot()` once
@@ -364,13 +385,133 @@ impl UploadOutcome {
     }
 }
 
+/// WHY an upload ended as it did — one of **Nexus's own** classes, never the service's prose.
+///
+/// # ⛔ THE RULE: A PERSISTED DETAIL IS TEXT NEXUS WROTE
+///
+/// This rides `log.adi` as the tail of an `APP_TEMPO_UL_*` field, and `log.adi` is the source
+/// of every export built on [`adif_record`] — the TQSL-signed LoTW batch, the per-QSO eQSL
+/// upload, the range and operator exports. A string here is therefore not a local status
+/// cache like `conn-health.json`: it is **signed with the operator's callsign certificate and
+/// uploaded to ARRL**, and it cannot be recalled.
+///
+/// The field used to hold QRZ's `REASON` and ClubLog's response body verbatim, passed through
+/// `crate::lotw_upload::sanitize_detail` — which is a TQSL *path* redactor and knows nothing
+/// about credentials. Both services echo the failing request back, and the request carries
+/// the API key. That is `conn-health.json`'s lesson one sink over and far worse: the server
+/// picks the encoding, so no scrub has a last move.
+///
+/// So the wire carries a **class**, not prose. [`Self::code`] is a short stable token;
+/// [`Self::sentence`] is the operator-facing English, generated here — which also means
+/// re-wording a sentence never orphans a stamp already on disk. Anything else in the field
+/// (a key a 1.x build wrote, a hand edit) fails [`Self::from_code`] and is dropped **when the
+/// record is read**, before any export can quote it.
+///
+/// The service's own words are not lost, only un-persisted: every push site hands them to the
+/// connection log and to the operator's toast, and both die with the session.
+///
+/// ⚠️ That last sentence was FALSE for LoTW when these classes landed, and [`Self::Unclassified`]
+/// tells the operator in so many words to go and read the connection log. `lotw_upload_batch`
+/// was the one stamp producer with no `conn_log` call, so a TQSL failure's actual wording
+/// existed only in the toast of the run that produced it. It has one now — the lesson being
+/// that a class that sends someone somewhere to look is only as good as what is written there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadDetail {
+    /// The service turned the stored credential down.
+    Credentials,
+    /// TQSL has no usable Callsign Certificate for this call. Split from [`Self::Credentials`]
+    /// because the fix is not a Nexus setting at all: the operator requests or renews the
+    /// certificate at ARRL and loads the `.p12` into TQSL.
+    CallsignCertificate,
+    /// TQSL could not use the Station Location the batch asked it to sign with. The other
+    /// half of the old single "credentials" class, and the fix is the opposite end: create or
+    /// rename the location in TQSL, or point Settings at one that exists.
+    StationLocation,
+    /// The service took the request and refused THIS record.
+    RecordRefused,
+    /// TQSL signed part of the batch and dropped the rest, without saying which.
+    BatchPartlySigned,
+    /// It failed, and the answer carried nothing this build can classify.
+    Unclassified,
+    /// Not a failure: the operator declared these already uploaded through another tool.
+    OperatorDeclared,
+}
+
+impl UploadDetail {
+    /// Every class, for exhaustive walks (the round-trip and allow-list tests).
+    pub const ALL: [UploadDetail; 7] = [
+        UploadDetail::Credentials,
+        UploadDetail::CallsignCertificate,
+        UploadDetail::StationLocation,
+        UploadDetail::RecordRefused,
+        UploadDetail::BatchPartlySigned,
+        UploadDetail::Unclassified,
+        UploadDetail::OperatorDeclared,
+    ];
+
+    /// The token written to ADIF. Short and stable — the sentences may be re-worded, the
+    /// codes may not, or every stamp already on disk loses its reason.
+    pub fn code(self) -> &'static str {
+        match self {
+            UploadDetail::Credentials => "credentials",
+            UploadDetail::CallsignCertificate => "cert",
+            UploadDetail::StationLocation => "station-location",
+            UploadDetail::RecordRefused => "record",
+            UploadDetail::BatchPartlySigned => "partial",
+            UploadDetail::Unclassified => "unclassified",
+            UploadDetail::OperatorDeclared => "declared",
+        }
+    }
+
+    /// Read a token back. `None` for anything this build did not write — which is the whole
+    /// point: it is the filter that cleans a `log.adi` poisoned by an earlier build.
+    pub fn from_code(s: &str) -> Option<UploadDetail> {
+        UploadDetail::ALL.into_iter().find(|d| d.code() == s)
+    }
+
+    /// The operator-facing sentence. Nexus's own words, in the connector panel's voice.
+    pub fn sentence(self) -> &'static str {
+        match self {
+            UploadDetail::Credentials => {
+                "The service turned the stored credentials down — fix them in Settings ▸ \
+                 Connectors, then upload again."
+            }
+            UploadDetail::CallsignCertificate => {
+                "TQSL has no usable Callsign Certificate for this callsign — request or renew \
+                 one at lotw.arrl.org and load the .p12 into TQSL, then upload again."
+            }
+            UploadDetail::StationLocation => {
+                "TQSL could not use the Station Location this upload asked for — create it in \
+                 TQSL, or set the name of one you already have in Settings ▸ Connectors."
+            }
+            UploadDetail::RecordRefused => {
+                "The service took the request and refused this record — fix the QSO, then \
+                 upload again."
+            }
+            UploadDetail::BatchPartlySigned => {
+                "TQSL signed part of the batch and dropped the rest without saying which — \
+                 upload again to offer them all (LoTW ignores the duplicates)."
+            }
+            UploadDetail::Unclassified => {
+                "The upload failed in a way Nexus could not classify. The service's own \
+                 wording was in that session's connection log."
+            }
+            UploadDetail::OperatorDeclared => {
+                "Marked as already uploaded through another tool — by you, or by the log \
+                 this record was imported from."
+            }
+        }
+    }
+}
+
 /// One source's last upload status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadStatus {
     pub outcome: UploadOutcome,
     pub when_unix: i64,
-    /// Sanitized service/tool message (bounce reason); never a raw path/secret.
-    pub detail: Option<String>,
+    /// WHY, as a class Nexus chose — never the service's own text. See [`UploadDetail`]:
+    /// this field is exported inside the TQSL-signed LoTW batch.
+    pub detail: Option<UploadDetail>,
 }
 
 /// One connector's last real outcome, read back off the persisted per-QSO stamps.
@@ -380,8 +521,8 @@ pub struct UploadStatus {
 pub struct SourceHealth {
     pub last_success_unix: Option<i64>,
     pub last_failure_unix: Option<i64>,
-    /// Sanitized service message for the failure above (never a raw path/secret).
-    pub last_failure_detail: Option<String>,
+    /// WHY the failure above happened, as one of Nexus's own classes — see [`UploadDetail`].
+    pub last_failure_detail: Option<UploadDetail>,
 }
 
 /// [`Logbook::upload_health`] for the four connectors that leave a per-QSO stamp.
@@ -917,11 +1058,36 @@ impl Logbook {
     /// cannot spill into the following record. Losing the spelling of a name is a paper cut;
     /// losing the QSO is not. The anchor `.bak` keeps the original bytes either way, so nothing
     /// is destroyed.
+    ///
+    /// # The one-time clean (round 6)
+    ///
+    /// A stamp tail no build of this file could have written is dropped from the BYTES here,
+    /// before the anchor is taken and before the parser runs — see [`scrub_upload_stamps`] for
+    /// what it is, and why the parse-time filter alone left the exposure open. On a log that
+    /// has none (every log this build has ever saved) this costs one pass over bytes already in
+    /// memory. The copies beside the log are swept whenever one has CHANGED since the last sweep
+    /// ([`Self::sweep_backups_if_changed`], gated on a `stat`-cheap `.scrubbed` manifest); an
+    /// unchanged install opens with no write and without reading the ring.
     pub fn load(path: &Path) -> Self {
         let bytes = std::fs::read(path).unwrap_or_default();
-        Self::backup_once(path, &bytes);
+        let clean = scrub_upload_stamps(&bytes);
+        // The anchor FIRST, and from the CLEANEST bytes we have, because it is the copy that
+        // survives whatever happens next. On a clean log `clean` is `None` and `bytes` are
+        // already clean; on a poisoned one the anchor is taken from the scrubbed bytes.
+        Self::backup_once(path, clean.as_deref().unwrap_or(&bytes));
+        // Sweep the copies beside the log — the anchor and the ring — of any service stamp,
+        // reading a copy's CONTENTS only when it has changed since the last sweep. A copy can be
+        // poisoned while the log is already clean (an upgrade that cleaned `log.adi` on a save but
+        // never swept the copies), and a poisoned copy can also ARRIVE later (a restore, a profile
+        // sync, a laptop migration), so the sweep is driven by "has anything changed", answered by
+        // `stat` — the ordinary launch does NOT read the ring (the 2026-08 launch-cost ruling).
+        Self::sweep_backups_if_changed(path);
+        // The log itself, once per poisoned log: rewrite it clean, atomically.
+        if let Some(clean) = &clean {
+            Self::scrub_log_in_place(path, bytes.len(), clean);
+        }
         Self {
-            records: parse_adif(&String::from_utf8_lossy(&bytes)),
+            records: parse_adif(&String::from_utf8_lossy(clean.as_deref().unwrap_or(&bytes))),
         }
     }
 
@@ -948,8 +1114,140 @@ impl Logbook {
         if bak.exists() {
             return; // earliest = most complete; do not clobber with a later (possibly truncated) file
         }
-        if let Err(e) = std::fs::write(&bak, bytes) {
+        if let Err(e) = replace_private(&bak, bytes) {
             eprintln!("tempo: could not back up logbook to {}: {e}", bak.display());
+        }
+    }
+
+    /// Sweep the safety copies beside `path` — the anchor and every snapshot in the ring — of any
+    /// service stamp, but read a copy's CONTENTS only when it has CHANGED since the last sweep. A
+    /// changed copy that holds a stamp comes back owner-only (see [`replace_private`]); a copy with
+    /// nothing to change is not touched.
+    ///
+    /// ## Why not the one-time `.scrubbed` marker (round 8 F2/F3)
+    /// Round 7 gated the sweep on a marker that, once written, made it one-shot. That trusted the
+    /// marker's mere EXISTENCE and left two holes: a poisoned copy RESTORED after the marker (a
+    /// backup restore, a profile sync, a laptop migration) was never swept, and a stale, empty, or
+    /// foreign marker synced in from another machine suppressed the very first sweep. The anchor is
+    /// "written once and never touched again", so a copy the sweep skips keeps the operator's key at
+    /// rest forever.
+    ///
+    /// ## The signal is "has this copy changed", answered by `stat`
+    /// The `.scrubbed` marker is now a small MANIFEST: one line per copy this build last confirmed
+    /// clean, recording that copy's `(size, mtime)`. On load we `stat` each copy (metadata only —
+    /// never the multi-MB bytes) and read+scrub only the copies whose `(size, mtime)` is absent from
+    /// the manifest or does not match it. So an ordinary launch reads the tiny manifest and stats a
+    /// handful of files and stops there (the 2026-08 launch-cost ruling holds); a copy that is new,
+    /// restored, or synced in is simply not the signature we recorded and IS swept (F2/F3 both
+    /// close, because the manifest is trusted only for the EXACT bytes it describes, never for its
+    /// existence). A copy with a future or coarse mtime is recorded with that exact value and
+    /// matches itself next launch, so it does not force a re-read every time.
+    ///
+    /// A copy that fails to rewrite (a read-only `backups/`) is left OUT of the manifest, so it —
+    /// and only it — is retried next load; the copies that DID clean are recorded and not re-read.
+    /// The residual is a local attacker who can write BOTH a poisoned copy AND a manifest naming
+    /// that copy's exact `(size, mtime)` as clean — but such an attacker already holds the plaintext
+    /// and needs no bypass. (A poisoned copy is LONGER than its clean form, so a manifest that
+    /// records the clean size never matches a poisoned copy by accident.)
+    fn sweep_backups_if_changed(path: &Path) {
+        let marker = path.with_extension("adi.scrubbed");
+        let copies = Self::backup_copy_paths(path);
+        let recorded = read_scrub_manifest(&marker);
+
+        // Fast path — metadata only. A copy is "known clean" iff its `(size, mtime)` is EXACTLY
+        // what the last sweep recorded for it; a copy we cannot even `stat` is not a trigger.
+        let changed = copies.iter().any(|c| match file_sig(c) {
+            Some(sig) => recorded.get(&file_name_key(c)) != Some(&sig),
+            None => false,
+        });
+        if !changed {
+            return; // nothing new since the last sweep — the ordinary launch pays only stats
+        }
+
+        // Something changed: scrub the copies whose signature does not match, carry the matching
+        // ones forward untouched, and rewrite the manifest with what is confirmed clean this pass.
+        let mut next: BTreeMap<String, (u64, u128)> = BTreeMap::new();
+        for c in &copies {
+            let name = file_name_key(c);
+            let Some(sig) = file_sig(c) else { continue };
+            if recorded.get(&name) == Some(&sig) {
+                next.insert(name, sig); // unchanged & already clean — no read
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(c) else {
+                continue; // unreadable -> left unrecorded -> retried next load
+            };
+            match scrub_upload_stamps(&bytes) {
+                Some(clean) => match replace_private(c, &clean) {
+                    // Record the POST-sweep signature so the clean copy matches next launch.
+                    Ok(()) => {
+                        if let Some(s) = file_sig(c) {
+                            next.insert(name, s);
+                        }
+                    }
+                    Err(e) => eprintln!("tempo: could not clean {}: {e}", c.display()),
+                },
+                // Already clean — record it so it is not re-read on the next launch.
+                None => {
+                    next.insert(name, sig);
+                }
+            }
+        }
+        write_scrub_manifest(&marker, &next);
+    }
+
+    /// The safety copies beside `path` that currently EXIST — the `.bak` anchor and every dated
+    /// snapshot in the ring. Ordering does not matter here (each copy carries its own signature);
+    /// the ring is enumerated by the same stem-prefixed listing the rest of the module uses, so a
+    /// folder holding two logs keeps two independent sets.
+    fn backup_copy_paths(path: &Path) -> Vec<PathBuf> {
+        let mut copies = Vec::new();
+        let bak = path.with_extension("adi.bak");
+        if bak.exists() {
+            copies.push(bak);
+        }
+        if let Some(parent) = path.parent() {
+            let dir = parent.join("backups");
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "log".to_string());
+            copies.extend(
+                Self::snapshot_names(&dir, &stem)
+                    .into_iter()
+                    .map(|n| dir.join(n)),
+            );
+        }
+        copies
+    }
+
+    /// Rewrite `log.adi` itself from the cleaned bytes, atomically, keeping whatever mode the
+    /// operator's other tools gave it — the log is a file they point other loggers at, and
+    /// tightening it is not this fix's business.
+    ///
+    /// **This is the one write [`load`](Self::load) does beyond the anchor, and it happens
+    /// once per poisoned log, ever.** Leaving it to the next [`save`](Self::save) is not
+    /// equivalent: `save` is rare (a merge, a mark-all), `append` is the common path, and
+    /// until the file is rewritten every snapshot taken from it starts out poisoned again.
+    ///
+    /// Refuses if the file changed length between the read and now: another instance appends
+    /// to this same log in place, and a rewrite from stale bytes would drop the record it
+    /// just wrote. Records are never empty, so an append always moves the length. Backing off
+    /// costs nothing — the file is still the poisoned one, so the next load tries again.
+    fn scrub_log_in_place(path: &Path, read_len: usize, clean: &[u8]) {
+        let Ok(meta) = std::fs::metadata(path) else {
+            return;
+        };
+        if meta.len() != read_len as u64 {
+            return;
+        }
+        let tmp = path.with_extension(format!("adi.{}.scrub", std::process::id()));
+        let done = std::fs::write(&tmp, clean)
+            .and_then(|()| std::fs::set_permissions(&tmp, meta.permissions()))
+            .and_then(|()| std::fs::rename(&tmp, path));
+        if let Err(e) = done {
+            let _ = std::fs::remove_file(&tmp);
+            eprintln!("tempo: could not clean {}: {e}", path.display());
         }
     }
 
@@ -1041,7 +1339,15 @@ impl Logbook {
         } else {
             format!("{stem}-{day}-{h:02}{mi:02}{s:02}.adi")
         };
-        if std::fs::copy(path, dir.join(&name)).is_err() {
+        // Read + rewrite rather than `fs::copy`, for two reasons that are one reason. A copy
+        // carries the LOG's mode across, and a logbook backup has no reader but its owner;
+        // and a copy of a file `scrub_log_in_place` had to back off from would put a
+        // pre-1.11 stamp tail into a brand-new snapshot.
+        let Ok(body) = std::fs::read(path) else {
+            return;
+        };
+        let scrubbed = scrub_upload_stamps(&body);
+        if replace_private(&dir.join(&name), scrubbed.as_deref().unwrap_or(&body)).is_err() {
             return;
         }
         snaps.push(name);
@@ -1284,7 +1590,7 @@ impl Logbook {
                     }
                 } else if src.last_failure_unix.is_none_or(|w| s.when_unix > w) {
                     src.last_failure_unix = Some(s.when_unix);
-                    src.last_failure_detail = s.detail.clone();
+                    src.last_failure_detail = s.detail;
                 }
             }
         }
@@ -1434,7 +1740,10 @@ fn field(name: &str, val: &str) -> String {
 }
 
 /// A `APP_TEMPO_UL_*` upload-state field as `"{outcome}|{when}|{detail}"` (or empty
-/// if `None`). Length-prefixed, so a `|` in `detail` is fine; parsed via splitn(3).
+/// if `None`).
+///
+/// ⛔ All three parts are tokens this file defines — see [`UploadDetail`]. Nothing a service
+/// said reaches here, because this string is exported inside the TQSL-signed LoTW batch.
 fn upload_field(name: &str, st: &Option<UploadStatus>) -> String {
     match st {
         Some(s) => field(
@@ -1443,7 +1752,7 @@ fn upload_field(name: &str, st: &Option<UploadStatus>) -> String {
                 "{}|{}|{}",
                 s.outcome.code(),
                 s.when_unix,
-                s.detail.as_deref().unwrap_or("")
+                s.detail.map(UploadDetail::code).unwrap_or("")
             ),
         ),
         None => String::new(),
@@ -2059,14 +2368,284 @@ fn take_confirmed(f: &mut std::collections::HashMap<String, String>, k: &str) ->
     })
 }
 
-/// Consume an `APP_TEMPO_UL_*` upload stamp: "{outcome}|{when}|{detail}" —
-/// splitn(3) so a detail containing '|' survives intact.
+/// The one field family whose value a pre-1.11 build could have filled with a service's own
+/// words. ADIF tag names are case-insensitive, so the match is too.
+const UPLOAD_FIELD_PREFIX: &[u8] = b"APP_TEMPO_UL_";
+
+/// The file name of `p` as the key used in the `.scrubbed` manifest. The copies are the `.bak`
+/// anchor and dated ring snapshots, whose names are distinct, so the file name alone is a safe key.
+fn file_name_key(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The `(size, mtime)` signature `stat` reports for `p`, or `None` if it cannot be read. `mtime`
+/// is nanoseconds since the Unix epoch; a pre-epoch or unavailable time reads as `0`, which simply
+/// makes the copy look "changed" and be re-swept — the safe direction, never a skipped sweep.
+fn file_sig(p: &Path) -> Option<(u64, u128)> {
+    let m = std::fs::metadata(p).ok()?;
+    let mtime = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Some((m.len(), mtime))
+}
+
+/// Read the `.scrubbed` manifest: the `(size, mtime)` of each copy the last sweep confirmed clean,
+/// keyed by file name. A missing, unreadable, non-file (a directory), empty, or garbled marker
+/// reads as an EMPTY map — nothing is trusted, so every present copy is swept (the safe direction;
+/// this is why a stale/foreign/attacker-planted marker cannot suppress a sweep). Lines that do not
+/// parse are skipped individually.
+fn read_scrub_manifest(marker: &Path) -> BTreeMap<String, (u64, u128)> {
+    let mut m = BTreeMap::new();
+    let Ok(text) = std::fs::read_to_string(marker) else {
+        return m;
+    };
+    for line in text.lines() {
+        let mut f = line.split('\t');
+        if let (Some(name), Some(len), Some(mtime)) = (f.next(), f.next(), f.next()) {
+            if let (Ok(len), Ok(mtime)) = (len.parse::<u64>(), mtime.parse::<u128>()) {
+                if !name.is_empty() {
+                    m.insert(name.to_string(), (len, mtime));
+                }
+            }
+        }
+    }
+    m
+}
+
+/// Write the `.scrubbed` manifest — one `name\tsize\tmtime` line per copy confirmed clean this
+/// sweep. Best-effort: a marker that cannot be written just means the next load re-stats and, if a
+/// copy still differs, re-sweeps (the safe direction). Holds no credential — only file metadata.
+fn write_scrub_manifest(marker: &Path, sigs: &BTreeMap<String, (u64, u128)>) {
+    let mut text = String::new();
+    for (name, (len, mtime)) in sigs {
+        // Our own generated copy names contain neither a tab nor a newline.
+        text.push_str(name);
+        text.push('\t');
+        text.push_str(&len.to_string());
+        text.push('\t');
+        text.push_str(&mtime.to_string());
+        text.push('\n');
+    }
+    let _ = std::fs::write(marker, text.as_bytes());
+}
+
+/// Rewrite every `APP_TEMPO_UL_*` value in a raw ADIF byte stream so it holds only tokens
+/// this file defines, leaving every other byte exactly as it was. `None` when there was
+/// nothing to change — which is the ordinary case, and is what keeps this off the cost of a
+/// launch.
+///
+/// # ⛔ Why this exists ON TOP of the parse-time filter in [`take_upload`]
+///
+/// That filter cleans what an EXPORT can quote, and nothing else. The bytes stay on disk —
+/// and [`Logbook::load`] copies them into the anchor `.bak` before the parser ever runs, so
+/// a machine that ran an affected 1.x build has the key in a second file that is never
+/// overwritten and never cleaned, plus one copy per snapshot in `backups/`. Cleaning has to
+/// happen on the BYTES, upstream of the copy, or it only fixes the file that was going to be
+/// rewritten anyway.
+///
+/// # Why it is a byte rewrite and not a parse-and-re-emit
+///
+/// Re-emitting from [`parse_adif`] would push the operator's whole log through the very
+/// parser whose lossiness the anchor exists to insure against — a scrub that silently drops
+/// a record it could not assemble would be a far worse bug than the one it fixes. So this is
+/// a copier with one exception: the tail of a stamp no build of this file could have written.
+/// Everything else, including a record the parser would refuse and a field in CP1253, is
+/// passed through untouched.
+///
+/// # A well-formed length is trusted; a corrupt one is resynced, never trusted-and-copied
+///
+/// The scan walks `<NAME:len>value` sequentially and skips each value by its own length, so a
+/// stamp-shaped tag QUOTED inside another field's value is data and is left alone. A length that
+/// over-runs the whole file (or overflows) is unambiguous corruption — its declared count cannot be
+/// believed. It is NOT stopped-at-and-copied-verbatim, because that routes a poisoned stamp AFTER
+/// the corruption straight past the scrub and into a fresh anchor (round 7 F5); instead the scan
+/// resyncs at the next `<` and keeps going, exactly as [`parse_adif`] does. `<` cannot occur inside
+/// a UTF-8 multibyte sequence, and only a corrupt file can over-run the file length, so no
+/// well-formed field is ever skipped by the resync.
+fn scrub_upload_stamps(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut changed = false;
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        let Some(rel) = bytes[pos..].iter().position(|&b| b == b'<') else {
+            break;
+        };
+        let open = pos + rel;
+        let Some(rel_gt) = bytes[open..].iter().position(|&b| b == b'>') else {
+            break;
+        };
+        let close = open + rel_gt;
+        out.extend_from_slice(&bytes[pos..=close]);
+        pos = close + 1;
+
+        // `<NAME:len>` or `<NAME:len:TYPE>`. Anything else — `<EOR>`, `<EOH>`, an angle
+        // bracket in prose — carries no length and no value to skip.
+        let spec = &bytes[open + 1..close];
+        let mut parts = spec.split(|&b| b == b':');
+        let (Some(name), Some(len_s)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Some(len) = std::str::from_utf8(len_s)
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        // A length that over-runs the file — or overflows `usize` on an attacker-supplied count
+        // (parse_adif's `saturating_add` hazard, but here a bare `pos + len` would panic in debug)
+        // — is corrupt. Resync at the next `<` rather than trusting the count: `continue` leaves
+        // `pos` just past this tag's `>`, so the loop resumes there and the partial value is copied
+        // by the next iteration. See the doc's resync note (round 7 F5/F11).
+        let value = match pos.checked_add(len) {
+            Some(end) if end <= bytes.len() => {
+                let v = &bytes[pos..end];
+                pos = end;
+                v
+            }
+            _ => continue,
+        };
+        match scrubbed_stamp(name, value) {
+            None => out.extend_from_slice(value),
+            Some(v) => {
+                // Re-emit the spec with the new length: drop the header just copied, keep
+                // the name and any type suffix byte for byte.
+                out.truncate(out.len() - (close - open + 1));
+                out.push(b'<');
+                out.extend_from_slice(name);
+                out.push(b':');
+                out.extend_from_slice(v.len().to_string().as_bytes());
+                for suffix in spec.split(|&b| b == b':').skip(2) {
+                    out.push(b':');
+                    out.extend_from_slice(suffix);
+                }
+                out.push(b'>');
+                out.extend_from_slice(&v);
+                changed = true;
+            }
+        }
+    }
+    out.extend_from_slice(&bytes[pos..]);
+    changed.then_some(out)
+}
+
+/// The value one `APP_TEMPO_UL_*` field should hold, or `None` to leave it alone. The same
+/// decision [`take_upload`] makes on the way in, made on bytes: the outcome and the timestamp
+/// are kept, and a detail that is not a [`UploadDetail`] code is dropped.
+fn scrubbed_stamp(name: &[u8], value: &[u8]) -> Option<Vec<u8>> {
+    if name.len() < UPLOAD_FIELD_PREFIX.len()
+        || !name[..UPLOAD_FIELD_PREFIX.len()].eq_ignore_ascii_case(UPLOAD_FIELD_PREFIX)
+    {
+        return None;
+    }
+    let mut segs = value.splitn(3, |&b| b == b'|');
+    let (Some(outcome), Some(when)) = (segs.next(), segs.next()) else {
+        // No separator at all: a value no build of this file ever wrote, and one
+        // `take_upload` will refuse whole. Nothing in it can be read back, so nothing in
+        // it is worth keeping.
+        return (!value.is_empty()).then(Vec::new);
+    };
+    let detail = segs.next().unwrap_or(b"");
+    // The outcome and the timestamp are kept VERBATIM below, so validate them exactly as
+    // [`take_upload`] does before trusting them. A stamp whose outcome is not a code, or whose
+    // second segment is not a timestamp, is not one any build of this file wrote — a one-pipe
+    // `outcome|reason` shape lands here with the service's reason in the `when` slot. `take_upload`
+    // refuses such a stamp whole; its bytes cannot be read back, so keep none of them.
+    let head_is_a_stamp = std::str::from_utf8(outcome)
+        .ok()
+        .and_then(UploadOutcome::from_code)
+        .is_some()
+        && std::str::from_utf8(when)
+            .ok()
+            .and_then(|w| w.parse::<i64>().ok())
+            .is_some();
+    if !head_is_a_stamp {
+        return (!value.is_empty()).then(Vec::new);
+    }
+    if detail.is_empty()
+        || std::str::from_utf8(detail)
+            .ok()
+            .and_then(UploadDetail::from_code)
+            .is_some()
+    {
+        return None;
+    }
+    let mut v = Vec::with_capacity(outcome.len() + when.len() + 2);
+    v.extend_from_slice(outcome);
+    v.push(b'|');
+    v.extend_from_slice(when);
+    v.push(b'|');
+    Some(v)
+}
+
+/// Replace a logbook SAFETY COPY with `bytes`, owner-only, write-tmp + rename.
+///
+/// Three things, and each is here for its own reason. **Rename**, because a truncate-in-place
+/// that dies half way through destroys the copy the operator would be reaching for. **0600 from
+/// the first byte**, because a logbook backup has no reader but its owner and the ones written
+/// before 1.11 hold whatever QRZ and ClubLog echoed back. The temp is *created* owner-only
+/// (`OpenOptions::mode`), not created world-readable and chmod'd after — the tmp can briefly hold
+/// a poisoned anchor's raw bytes (the desync branch of [`scrub_upload_stamps`]), and a chmod-after
+/// leaves a window, however small, in which every account on the machine could read them. The
+/// explicit `set_permissions` after the write is the belt to that suspenders: it pins the exact
+/// mode against a slack umask or a stale same-PID tmp. On non-unix the profile dir's ACL governs
+/// the mode, exactly as it does the final file's. **Per-process tmp name**, for the same reason
+/// [`Logbook::save_at`] uses one: two instances can share one log.
+///
+/// Not used for `log.adi` itself, which keeps whatever mode the operator's other tools gave
+/// it — see [`Logbook::scrub_log_in_place`].
+fn replace_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!("nexus{}.tmp", std::process::id()));
+    let write = (|| {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(bytes)?;
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&tmp, bytes)?;
+        }
+        std::fs::rename(&tmp, path)
+    })();
+    if write.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    write
+}
+
+/// Consume an `APP_TEMPO_UL_*` upload stamp: "{outcome}|{when}|{detail}".
+///
+/// # ⛔ THE CLEAN RUNS HERE, ON THE WAY IN
+///
+/// Writing only [`UploadDetail`] codes says nothing about the bytes ALREADY in the file. Up
+/// to and including 1.10.x this tail held QRZ's `REASON` and ClubLog's response body
+/// verbatim, so an operator upgrading has whatever those services echoed — an API key
+/// among it — sitting in their log today. Keeping what is found would let it ride out
+/// through the next TQSL-signed batch, under the operator's own certificate.
+///
+/// So a tail that is not a class token is DROPPED, and the outcome and timestamp are kept:
+/// the operator still learns that this QSO's upload bounced and when, which is the part of
+/// the stamp that was ever trustworthy. It happens at parse time, which is upstream of every
+/// export — see `a_key_already_in_the_log_is_dropped_when_the_record_is_read`.
 fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Option<UploadStatus> {
     let v = f.remove(k)?;
     let mut it = v.splitn(3, '|');
     let outcome = UploadOutcome::from_code(it.next()?)?;
     let when_unix = it.next()?.parse::<i64>().ok()?;
-    let detail = it.next().filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let detail = it.next().and_then(UploadDetail::from_code);
     Some(UploadStatus {
         outcome,
         when_unix,
@@ -2191,7 +2770,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
                 .then_some(UploadStatus {
                     outcome: UploadOutcome::Accepted,
                     when_unix: 0,
-                    detail: Some("LOTW_QSL_SENT (imported)".into()),
+                    detail: Some(UploadDetail::OperatorDeclared),
                 })
         }),
         eqsl: take_upload(f, "APP_TEMPO_UL_EQSL"),
@@ -3229,7 +3808,7 @@ mod tests {
     /// ⭐ THE CONNECTOR-HEALTH SOURCE. The Connections panel's dot used to come from a
     /// keychain read, so a revoked password stayed green forever. These stamps are what it
     /// should have been reading — and unlike the keychain they are per-connector, dated,
-    /// and carry the service's own reason.
+    /// and carry a failure CLASS (never the service's own reason — see [`UploadDetail`]).
     #[test]
     fn upload_health_reads_the_last_real_outcome_per_connector() {
         fn stamped(call: &str, when: u64, outcome: UploadOutcome, at: i64) -> QsoRecord {
@@ -3237,7 +3816,7 @@ mod tests {
             r.upload.lotw = Some(UploadStatus {
                 outcome,
                 when_unix: at,
-                detail: Some("station location not found".into()),
+                detail: Some(UploadDetail::Credentials),
             });
             r
         }
@@ -3270,9 +3849,9 @@ mod tests {
         );
         assert_eq!(h.lotw.last_failure_unix, Some(200));
         assert_eq!(
-            h.lotw.last_failure_detail.as_deref(),
-            Some("station location not found"),
-            "the service's own reason rides along, or the operator is sent to the log to guess"
+            h.lotw.last_failure_detail,
+            Some(UploadDetail::Credentials),
+            "the failure CLASS rides along, or the operator is sent to the log to guess"
         );
         // Untouched connectors stay untouched — one connector's history is not another's.
         assert_eq!(h.eqsl, SourceHealth::default());
@@ -4171,11 +4750,12 @@ mod tests {
         sorted.sort();
         assert_eq!(
             sorted,
-            ["log.adi", "log.adi.bak"],
-            "the first load writes the anchor and nothing else — no backups/ folder"
+            ["log.adi", "log.adi.bak", "log.adi.scrubbed"],
+            "the first load writes the anchor and the one-time sweep marker — no backups/ folder"
         );
 
-        // A second (and third) load, with the anchor already there: nothing at all.
+        // A second (and third) load, with the anchor and marker already there: nothing at all.
+        // The marker is what keeps the copy sweep from reading the ring on every launch.
         let before = std::fs::metadata(&path).unwrap().len();
         let _ = Logbook::load(&path);
         let _ = Logbook::load(&path);
@@ -4435,7 +5015,7 @@ mod tests {
         r.upload.lotw = Some(UploadStatus {
             outcome: UploadOutcome::Rejected,
             when_unix: 1_700_000_500,
-            detail: Some("bad record | line 3".into()), // detail with an embedded '|'
+            detail: Some(UploadDetail::BatchPartlySigned),
         });
         let adif = adif_header() + &adif_record(&r);
         let back = parse_adif(&adif);
@@ -4447,8 +5027,819 @@ mod tests {
             .expect("lotw upload state survived");
         assert_eq!(u.outcome, UploadOutcome::Rejected);
         assert_eq!(u.when_unix, 1_700_000_500);
-        assert_eq!(u.detail.as_deref(), Some("bad record | line 3")); // splitn(3) kept the '|'
+        assert_eq!(u.detail, Some(UploadDetail::BatchPartlySigned));
         assert!(back[0].upload.eqsl.is_none());
+    }
+
+    /// ⛔ NOTHING A SERVICE SAID CAN REACH AN UPLOAD STAMP.
+    ///
+    /// The counterpart of `conn-health.json`'s allow-list, at the sink that is categorically
+    /// worse: this one is exported inside the TQSL-signed LoTW batch and uploaded to ARRL
+    /// under the operator's own certificate.
+    ///
+    /// **The strongest half of the rule is not tested here and cannot be** — the assignment
+    /// that would leak no longer type-checks, and the three push sites had to be rewritten to
+    /// keep compiling. What is left to check at run time is that every decider in front of
+    /// the sink launders nothing through: each connector's whole result domain, driven with a
+    /// hostile answer, must come out as one of this file's own class tokens.
+    #[test]
+    fn no_service_reply_can_reach_the_adif_upload_stamp() {
+        const KEY: &str = "c0nnect0rk3yAbCdEf0123456789xyzQR";
+        // A reply of the shape an echoing service sends, wrapped in the format characters
+        // that rewrite a row on screen.
+        let hostile = format!("\u{202e}rejected: key={KEY}\u{200b}");
+
+        let mut details: Vec<Option<UploadDetail>> = Vec::new();
+
+        // QRZ Logbook: every RESULT token it sends, plus one it has never sent, each with
+        // the hostile text in REASON — which is exactly where QRZ echoes the request back.
+        for result in ["OK", "REPLACE", "AUTH", "FAIL", "SOMETHING_NEW"] {
+            let body = format!("RESULT={result}&COUNT=0&REASON={hostile}");
+            details.push(
+                crate::qrz::parse_push_response(&body)
+                    .result
+                    .to_upload_detail(),
+            );
+        }
+        // ClubLog: every status class, with the hostile text as the body.
+        for status in [200u16, 400, 403, 500, 503, 418] {
+            details.push(
+                crate::clublog::classify_response(status, &hostile)
+                    .result
+                    .to_upload_detail(),
+            );
+        }
+        // TQSL: every exit code it documents, plus one it does not, with the hostile text on
+        // stderr. 0..=12 covers the whole published range and then some.
+        for code in -1..=12 {
+            details.push(crate::lotw_upload::tqsl_detail(code, &hostile));
+        }
+
+        // The positive control, and this test is worthless without it: the same predicate run
+        // over the thing that WOULD leak has to trip.
+        assert!(
+            hostile.contains(KEY) && hostile.contains('\u{202e}'),
+            "control: the hostile answer must actually carry the key and the override"
+        );
+        // …and the hostile text must not be a class token, or the read filter would let it
+        // straight back in.
+        assert!(UploadDetail::from_code(&hostile).is_none());
+
+        for d in &details {
+            let mut r = rec("W9XYZ", "20m", 1_700_000_000);
+            r.upload.clublog = Some(UploadStatus {
+                outcome: UploadOutcome::Rejected,
+                when_unix: 1_700_000_500,
+                detail: *d,
+            });
+            let adif = adif_record(&r);
+            assert!(
+                !adif.contains(KEY),
+                "an API key the service echoed reached the signed ADIF: {adif:?}"
+            );
+            assert!(
+                !adif.contains('\u{202e}') && !adif.contains('\u{200b}'),
+                "a service's format characters reached the signed ADIF: {adif:?}"
+            );
+        }
+
+        // …and a failure still SAYS something. A mapping that answered `None` for every
+        // failure would satisfy every assertion above and leave the operator with a bounced
+        // upload and no reason at all.
+        assert_eq!(
+            crate::qrz::parse_push_response(&format!("RESULT=AUTH&REASON={hostile}"))
+                .result
+                .to_upload_detail(),
+            Some(UploadDetail::Credentials),
+            "a QRZ key QRZ turned down must still send the operator at their credentials"
+        );
+        assert_eq!(
+            crate::clublog::classify_response(400, &hostile)
+                .result
+                .to_upload_detail(),
+            Some(UploadDetail::RecordRefused)
+        );
+        assert_eq!(
+            crate::lotw_upload::tqsl_detail(9, &hostile),
+            Some(UploadDetail::BatchPartlySigned),
+            "TQSL dropping part of a batch is the one thing the outcome alone cannot say"
+        );
+        for d in UploadDetail::ALL {
+            assert!(!d.sentence().trim().is_empty(), "{d:?} says nothing");
+        }
+    }
+
+    /// Every class survives the ADIF round trip, driven off `ALL` — so a class added without
+    /// a `from_code` arm is a failure here rather than a stamp that silently loses its reason
+    /// on the next restart.
+    #[test]
+    fn every_upload_detail_class_survives_the_adif_round_trip() {
+        for d in UploadDetail::ALL {
+            let mut r = rec("W1AW", "20m", 1_700_000_000);
+            r.upload.qrz = Some(UploadStatus {
+                outcome: UploadOutcome::Rejected,
+                when_unix: 1_700_000_500,
+                detail: Some(d),
+            });
+            let back = parse_adif(&(adif_header() + &adif_record(&r)));
+            assert_eq!(
+                back[0].upload.qrz.as_ref().and_then(|u| u.detail),
+                Some(d),
+                "{d:?} did not survive a restart"
+            );
+        }
+        // The control on the other side: a tail this build could not have written is the one
+        // thing that must NOT survive, or "clean on read" could be satisfied by keeping
+        // everything.
+        assert!(UploadDetail::from_code("Unable to add QSO: duplicate").is_none());
+        assert!(UploadDetail::from_code("").is_none());
+    }
+
+    /// ⛔ A KEY ALREADY IN `log.adi` MUST NOT SURVIVE BEING READ.
+    ///
+    /// The leak this closes is pre-existing shipped behaviour, so every operator running a
+    /// 1.x build has whatever QRZ and ClubLog echoed back sitting in `APP_TEMPO_UL_*` today.
+    /// Fixing only the WRITE side would leave those bytes to ride out through the next
+    /// TQSL-signed batch — under the operator's own certificate, to ARRL, unrecallable.
+    ///
+    /// So the clean runs on the way IN, at `take_upload`: the field carries a class token,
+    /// and anything that is not one is dropped when the record is parsed — which is before
+    /// any export can reach it.
+    #[test]
+    fn a_key_already_in_the_log_is_dropped_when_the_record_is_read() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let poisoned = format!("Unable to add QSO: bad key={KEY}");
+        let stamp = format!("rejected|1700000500|{poisoned}");
+        let disk = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+            + &field("APP_TEMPO_UL_QRZ", &stamp)
+            + "<eor>\n";
+
+        // The control, and this test is worth nothing without it: the file really does
+        // carry the key, in the field the exports read.
+        assert!(
+            disk.contains(KEY),
+            "control: the poisoned log must actually hold the key"
+        );
+
+        let back = parse_adif(&disk);
+        assert_eq!(back.len(), 1);
+        let out = adif_record(&back[0]);
+        assert!(
+            !out.contains(KEY),
+            "a key already in log.adi rode out through an export: {out:?}"
+        );
+        // The FAILURE is not thrown away with the prose — the operator still learns that
+        // this QSO's QRZ upload bounced, and when.
+        let u = back[0].upload.qrz.as_ref().expect("the stamp survived");
+        assert_eq!(u.outcome, UploadOutcome::Rejected);
+        assert_eq!(u.when_unix, 1_700_000_500);
+    }
+
+    /// ★ THE COPY ALREADY ON DISK (round 6, and it is a SHIPPED exposure).
+    ///
+    /// The parse-time filter above cleans what an EXPORT can quote, and nothing else.
+    /// [`Logbook::load`] took the anchor `.bak` **before** `parse_adif` ran, so on any
+    /// machine that ran an affected 1.x build the poisoned `log.adi` was copied verbatim
+    /// into a sibling that is never overwritten and never cleaned — and the ring in
+    /// `backups/` (shipped 1.10.0) holds the same bytes, at mode 0644.
+    ///
+    /// So the clean runs on the BYTES, at load, before the anchor is taken, and over every
+    /// safety copy already beside the log. The records are untouched: only the tail of an
+    /// `APP_TEMPO_UL_*` field that no build of this file could have written goes.
+    #[test]
+    fn an_upgrade_leaves_no_key_in_the_log_or_any_of_its_backups() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let stamp = format!("rejected|1700000500|Unable to add QSO: bad key={KEY}");
+        let poisoned = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+            + &field("APP_TEMPO_UL_QRZ", &stamp)
+            + "<eor>\n";
+
+        let path = scratch_adi();
+        let bak = path.with_extension("adi.bak");
+        let dir = path.parent().expect("scratch has a parent").join("backups");
+        let stem = path
+            .file_stem()
+            .expect("scratch has a stem")
+            .to_string_lossy()
+            .into_owned();
+        let snap = dir.join(format!("{stem}-20260101-000000.adi"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in [&path, &bak, &snap] {
+            std::fs::write(f, &poisoned).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+        }
+
+        // The control, and nothing below means anything without it: all three files really
+        // do carry the key, at the mode the shipped build left them.
+        for f in [&path, &bak, &snap] {
+            assert!(
+                String::from_utf8_lossy(&std::fs::read(f).unwrap()).contains(KEY),
+                "control: {} must actually hold the key",
+                f.display()
+            );
+        }
+
+        let lb = Logbook::load(&path);
+        assert_eq!(lb.records.len(), 1, "the QSO survives the clean");
+
+        for f in [&path, &bak, &snap] {
+            let raw = std::fs::read(f).unwrap();
+            let text = String::from_utf8_lossy(&raw).into_owned();
+            assert!(
+                !text.contains(KEY),
+                "a key a service echoed is still on disk in {}: {text:?}",
+                f.display()
+            );
+            // A backup is a RECOVERY file, so the fix cannot be to delete it: the QSO, and
+            // the part of the stamp the operator can act on, are both still there.
+            assert!(
+                text.contains("W9XYZ"),
+                "{} lost the QSO it exists to preserve",
+                f.display()
+            );
+            assert!(
+                text.contains("rejected|1700000500|"),
+                "{} lost the outcome and timestamp with the prose: {text:?}",
+                f.display()
+            );
+        }
+
+        // A file that HELD credential material must not be left readable by every account
+        // on the machine.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for f in [&bak, &snap] {
+                let mode = std::fs::metadata(f).unwrap().permissions().mode() & 0o777;
+                assert_eq!(
+                    mode,
+                    0o600,
+                    "{} is still world-readable after being rewritten",
+                    f.display()
+                );
+            }
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak);
+        let _ = std::fs::remove_file(&snap);
+    }
+
+    /// ⛔ **A poisoned COPY beside an already-CLEAN log must still be swept (#round7 F1).**
+    ///
+    /// Round 6 gated the sweep on `log.adi` itself being poisoned. A copy can be poisoned while the
+    /// log is clean: an intermediate build cleaned `log.adi` on a save (the parse-time filter drops
+    /// the service detail) but never swept the copies, and the anchor is world-readable (0644) and
+    /// written ONCE — so it would keep the key forever. The sweep is now gated on a one-time
+    /// marker, not on the log, so it runs on this branch too.
+    #[test]
+    fn a_poisoned_copy_is_swept_even_when_the_log_is_already_clean() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let stamp = format!("rejected|1700000500|Unable to add QSO: bad key={KEY}");
+        // A CLEAN log — no service bytes in it at all…
+        let clean_log = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8<eor>\n";
+        // …but a poisoned anchor and ring snapshot beside it, at the world-readable mode a
+        // pre-1.11 / round-5 build left them.
+        let poisoned = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+            + &field("APP_TEMPO_UL_QRZ", &stamp)
+            + "<eor>\n";
+
+        let path = scratch_adi();
+        let bak = path.with_extension("adi.bak");
+        let marker = path.with_extension("adi.scrubbed");
+        let dir = path.parent().expect("scratch has a parent").join("backups");
+        let stem = path
+            .file_stem()
+            .expect("scratch has a stem")
+            .to_string_lossy()
+            .into_owned();
+        let snap = dir.join(format!("{stem}-20260101-000000.adi"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(&marker);
+        std::fs::write(&path, &clean_log).unwrap();
+        for f in [&bak, &snap] {
+            std::fs::write(f, &poisoned).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+        }
+
+        // The controls: the copies really hold the key, and the LOG really does NOT — this is the
+        // clean-log branch, the one round 6 skipped the sweep on.
+        for f in [&bak, &snap] {
+            assert!(
+                String::from_utf8_lossy(&std::fs::read(f).unwrap()).contains(KEY),
+                "control: {} must actually hold the key before load",
+                f.display()
+            );
+        }
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(&path).unwrap()).contains(KEY),
+            "control: the log is already clean — the branch round 6 did not sweep"
+        );
+
+        let lb = Logbook::load(&path);
+        assert_eq!(lb.records.len(), 1, "the QSO survives");
+
+        for f in [&bak, &snap] {
+            let text = String::from_utf8_lossy(&std::fs::read(f).unwrap()).into_owned();
+            assert!(
+                !text.contains(KEY),
+                "a poisoned copy beside a clean log kept the key: {} → {text:?}",
+                f.display()
+            );
+            assert!(text.contains("W9XYZ"), "{} lost the QSO", f.display());
+            assert!(
+                text.contains("rejected|1700000500|"),
+                "{} lost the outcome and timestamp",
+                f.display()
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(f).unwrap().permissions().mode() & 0o777;
+                assert_eq!(
+                    mode,
+                    0o600,
+                    "{} left world-readable after the sweep",
+                    f.display()
+                );
+            }
+        }
+
+        // Remove only OUR files — `backups/` sits under the shared temp dir and other tests are
+        // writing their own snapshots into it concurrently.
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak);
+        let _ = std::fs::remove_file(&snap);
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    /// The operator who has no anchor yet — the clean has to run BEFORE the copy is taken,
+    /// not after. `backup_once` is called from `load` ahead of `parse_adif`, so the copy is
+    /// of the raw file; taking it first and cleaning it second would put the key on disk in
+    /// a second place, which is the whole shape of this bug.
+    #[test]
+    fn the_anchor_taken_during_the_upgrade_is_clean_when_it_is_written() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let stamp = format!("rejected|1700000500|Unable to add QSO: bad key={KEY}");
+        let path = scratch_adi();
+        let bak = path.with_extension("adi.bak");
+        let _ = std::fs::remove_file(&bak);
+        std::fs::write(
+            &path,
+            adif_header()
+                + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+                + &field("APP_TEMPO_UL_QRZ", &stamp)
+                + "<eor>\n",
+        )
+        .unwrap();
+        assert!(!bak.exists(), "control: there is no anchor to clean");
+
+        let _ = Logbook::load(&path);
+
+        let written =
+            String::from_utf8(std::fs::read(&bak).expect("the anchor was taken")).unwrap();
+        assert!(
+            !written.contains(KEY),
+            "the anchor was taken from the poisoned bytes: {written:?}"
+        );
+        assert!(
+            written.contains("W9XYZ"),
+            "the anchor lost the QSO: {written:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak);
+    }
+
+    /// The other direction, and it is the control on the one above: a log with nothing to
+    /// clean must not be REWRITTEN. `load` runs at launch, and a whole-file write there is
+    /// the cost the module header rules out for a big log. The scrub is a one-time upgrade
+    /// step, not a load-time habit.
+    ///
+    /// Checked on the INODE, not the mtime: the write and the load land in the same
+    /// millisecond on any real filesystem, so an mtime comparison would pass whether or not
+    /// the file was replaced.
+    #[test]
+    #[cfg(unix)]
+    fn a_clean_log_is_never_rewritten_at_load() {
+        use std::os::unix::fs::MetadataExt;
+        let path = scratch_adi();
+        let bak = path.with_extension("adi.bak");
+        let _ = std::fs::remove_file(&bak);
+        let clean = adif_header() + &adif_record(&rec("W1AW", "20m", 1_700_000_000));
+        std::fs::write(&path, &clean).unwrap();
+        let before = std::fs::metadata(&path).unwrap().ino();
+
+        let _ = Logbook::load(&path);
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().ino(),
+            before,
+            "load replaced a log that had nothing to clean"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), clean.as_bytes());
+
+        // …and the control that the check can trip at all: the same load over a poisoned
+        // file DOES replace it, atomically (a new inode = write-tmp + rename, never a
+        // truncate in place of the operator's log).
+        let stamp = "rejected|1700000500|bad key=qrz10gb00kk3y0123456789ABCDEFxyz";
+        std::fs::write(
+            &path,
+            adif_header()
+                + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+                + &field("APP_TEMPO_UL_QRZ", stamp)
+                + "<eor>\n",
+        )
+        .unwrap();
+        let before = std::fs::metadata(&path).unwrap().ino();
+        let _ = Logbook::load(&path);
+        assert_ne!(
+            std::fs::metadata(&path).unwrap().ino(),
+            before,
+            "control: a poisoned log must be replaced, and by rename"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak);
+    }
+
+    /// The byte scrub rewrites ONE field family and is otherwise a copier — it runs over the
+    /// operator's live log, so "leaves everything else alone" is the load-bearing half.
+    ///
+    /// Three things a naive `str::replace` would get wrong are pinned here: a value that
+    /// merely CONTAINS a stamp-shaped tag is skipped by the length prefix, a type-suffixed
+    /// spec keeps its suffix, and a length that over-runs the file stops the rewrite instead
+    /// of guessing at offsets.
+    #[test]
+    fn the_byte_scrub_rewrites_the_stamp_and_nothing_else() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+
+        // Nothing to do → no copy, no write. (The control for the "never rewritten" test.)
+        let clean = adif_header() + &adif_record(&rec("W1AW", "20m", 1_700_000_000));
+        assert!(
+            scrub_upload_stamps(clean.as_bytes()).is_none(),
+            "a clean file must report nothing to change"
+        );
+
+        // A COMMENT that quotes a stamp is data, not a field: the length prefix says so, and
+        // rewriting inside it would corrupt the record that contains it.
+        let inner = format!("<APP_TEMPO_UL_QRZ:9>key={KEY}");
+        let quoted = format!(
+            "{}<CALL:5>W9XYZ{}<eor>\n",
+            adif_header(),
+            field("COMMENT", &inner)
+        );
+        assert!(
+            scrub_upload_stamps(quoted.as_bytes()).is_none(),
+            "the scrub reached inside another field's value"
+        );
+
+        // The real thing, with a type suffix and a neighbour on each side.
+        let poisoned = format!("rejected|1700000500|bad key={KEY}");
+        let disk = format!(
+            "{}<CALL:5>W9XYZ<APP_TEMPO_UL_QRZ:{}:S>{}<NOTES:2>hi<eor>\n",
+            adif_header(),
+            poisoned.len(),
+            poisoned
+        );
+        let out = scrub_upload_stamps(disk.as_bytes()).expect("a poisoned stamp is a change");
+        let out = String::from_utf8(out).expect("ASCII in, ASCII out");
+        assert!(!out.contains(KEY), "the key survived: {out:?}");
+        assert!(
+            out.contains("<APP_TEMPO_UL_QRZ:20:S>rejected|1700000500|<NOTES:2>hi"),
+            "the spec lost its type suffix or its neighbour: {out:?}"
+        );
+        assert!(out.contains("<CALL:5>W9XYZ"));
+
+        // A length prefix that over-runs the file is corrupt (round 7 F5): the scan must NOT stop
+        // and copy the poisoned stamp AFTER it verbatim — that is what routed the key into a fresh
+        // anchor. It resyncs at the next `<` and scrubs the stamp; the record is left corrupt (the
+        // over-running CALL cannot be repaired) but the key is gone.
+        let ragged = format!(
+            "{}<CALL:900>W9XYZ{}",
+            adif_header(),
+            field("APP_TEMPO_UL_QRZ", &poisoned)
+        );
+        let out = scrub_upload_stamps(ragged.as_bytes())
+            .expect("a poisoned stamp after a corrupt length is still a change");
+        assert!(
+            !String::from_utf8_lossy(&out).contains(KEY),
+            "the scrub left the key on the far side of a corrupt length: {:?}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+
+    /// F3 (round 7): the scrub keeps the outcome and timestamp segments only when they ARE an
+    /// outcome and a timestamp — the same check [`take_upload`] makes. A stamp shape no build
+    /// wrote (a one-pipe `outcome|reason`, or a non-code outcome) puts a service's bytes into a
+    /// segment the scrub used to keep verbatim, so it must be dropped whole.
+    #[test]
+    fn the_scrub_keeps_no_segment_of_a_stamp_no_build_wrote() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let name = b"APP_TEMPO_UL_QRZ";
+
+        // Control: a well-formed 3-segment stamp keeps `outcome|when|` and drops only the detail,
+        // so "drop it whole" is not being satisfied by dropping every stamp.
+        let ok = format!("rejected|1700000500|bad key={KEY}");
+        let out = scrubbed_stamp(name, ok.as_bytes()).expect("a poisoned detail is a change");
+        assert_eq!(
+            out, b"rejected|1700000500|",
+            "the readable head must survive"
+        );
+
+        // The two-segment shape: a valid outcome, but the reason lands in the WHEN position, which
+        // is not a timestamp — the `when` check catches it and keeps nothing.
+        let two = format!("rejected|bad key={KEY}");
+        let out = scrubbed_stamp(name, two.as_bytes())
+            .expect("a non-timestamp second segment is a change");
+        assert!(
+            out.is_empty(),
+            "a one-pipe stamp kept its reason: {:?}",
+            String::from_utf8_lossy(&out)
+        );
+
+        // A non-code outcome with a numeric when — the OTHER segment the scrub used to keep.
+        let bad_outcome = format!("{KEY}|1700000500|");
+        let out =
+            scrubbed_stamp(name, bad_outcome.as_bytes()).expect("a non-code outcome is a change");
+        assert!(
+            out.is_empty(),
+            "a garbage outcome survived: {:?}",
+            String::from_utf8_lossy(&out)
+        );
+
+        // Idempotence: the scrubbed (empty) value is stable — a second pass reports no change.
+        assert!(
+            scrubbed_stamp(name, b"").is_none(),
+            "an already-empty value must report nothing to change"
+        );
+    }
+
+    /// F5 (round 7): a length prefix that over-runs the file, AHEAD of a poisoned stamp, must not
+    /// route the stamp into a brand-new anchor. Pre-fix `scrub_upload_stamps` stopped at the
+    /// over-run and returned `None`, so `load` copied the RAW poisoned bytes into a fresh anchor no
+    /// future load would sweep. It now resyncs at the next `<`, scrubs the stamp, and the anchor is
+    /// taken from CLEANED bytes.
+    #[test]
+    fn a_desync_before_a_stamp_does_not_create_a_poisoned_anchor() {
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let poisoned_stamp = format!("rejected|1700000500|bad key={KEY}");
+        // A COMMENT whose declared length over-runs the whole file, followed by the poisoned stamp.
+        let corrupt = format!(
+            "{}<CALL:5>W9XYZ<COMMENT:99999>x{}<eor>\n",
+            adif_header(),
+            field("APP_TEMPO_UL_QRZ", &poisoned_stamp)
+        );
+
+        let path = scratch_adi();
+        let bak = path.with_extension("adi.bak");
+        let marker = path.with_extension("adi.scrubbed");
+        let _ = std::fs::remove_file(&bak);
+        let _ = std::fs::remove_file(&marker);
+        std::fs::write(&path, &corrupt).unwrap();
+        assert!(!bak.exists(), "control: there is no anchor before the load");
+
+        let _ = Logbook::load(&path);
+
+        let anchor = String::from_utf8_lossy(&std::fs::read(&bak).expect("the anchor was taken"))
+            .into_owned();
+        assert!(
+            !anchor.contains(KEY),
+            "a corrupt length routed the key into a fresh anchor: {anchor:?}"
+        );
+        let log = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
+        assert!(
+            !log.contains(KEY),
+            "the log kept the key past the corrupt length: {log:?}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak);
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    /// F11 (round 7): an attacker-supplied length near `usize::MAX` must not panic the scrub inside
+    /// `Logbook::load` (a debug-build `attempt to add with overflow`). The sibling `parse_adif`
+    /// documents exactly this hazard and uses a checked add; the scrub now matches it.
+    #[test]
+    fn a_huge_length_prefix_does_not_panic_the_scrub() {
+        let huge = format!("{}<COMMENT:{}>tail<eor>\n", adif_header(), usize::MAX);
+        // The assertion is that this returns rather than panicking; a clean tail means no change.
+        let _ = scrub_upload_stamps(huge.as_bytes());
+
+        // And with a poisoned stamp after the overflowing length, the resync still scrubs it.
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let with_stamp = format!(
+            "{}<COMMENT:{}>{}<eor>\n",
+            adif_header(),
+            usize::MAX,
+            field(
+                "APP_TEMPO_UL_QRZ",
+                &format!("rejected|1700000500|bad key={KEY}")
+            )
+        );
+        let out = scrub_upload_stamps(with_stamp.as_bytes())
+            .expect("the stamp after an overflowing length is scrubbed, not skipped");
+        assert!(
+            !String::from_utf8_lossy(&out).contains(KEY),
+            "an overflowing length left the key unscrubbed"
+        );
+    }
+
+    /// F4 (round 7) / F2·F3 (round 8): the copy sweep is not one-shot. A copy that could not be
+    /// rewritten this load (a read-only `backups/`) is retried on a later load. Under the manifest
+    /// design the retry is per-copy: the failed snapshot is simply left OUT of the `.scrubbed`
+    /// record, so its `stat` still fails to match and it is re-read next time — while the copies
+    /// that DID clean (the anchor) are recorded and not re-read.
+    #[test]
+    #[cfg(unix)]
+    fn an_unwritable_ring_snapshot_is_retried_on_a_later_load() {
+        use std::os::unix::fs::PermissionsExt;
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let poisoned = adif_header()
+            + "<CALL:5>W9XYZ"
+            + &field(
+                "APP_TEMPO_UL_QRZ",
+                &format!("rejected|1700000500|bad key={KEY}"),
+            )
+            + "<eor>\n";
+
+        // An ISOLATED log dir — this test chmods its `backups/`, so it must not share the one under
+        // the temp dir that other tests write snapshots into.
+        let base = scratch_log_dir();
+        let path = base.join("log.adi");
+        let marker = path.with_extension("adi.scrubbed");
+        let dir = base.join("backups");
+        let snap = dir.join("log-20260101-000000.adi");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, &poisoned).unwrap();
+        std::fs::write(&snap, &poisoned).unwrap();
+
+        // The ring cannot be written this load.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let _ = Logbook::load(&path);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // The log was cleaned, the snapshot was NOT (control) — the unwritable ring left it poisoned.
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(&path).unwrap()).contains(KEY),
+            "the log itself was cleaned"
+        );
+        assert!(
+            String::from_utf8_lossy(&std::fs::read(&snap).unwrap()).contains(KEY),
+            "control: the snapshot really was left poisoned by the unwritable ring"
+        );
+        // The point: the snapshot is NOT recorded as clean, so a later load retries IT specifically.
+        // The manifest may exist (the anchor cleaned fine) but must not name the snapshot.
+        let manifest = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert!(
+            !manifest.contains("log-20260101-000000.adi"),
+            "the unswept snapshot was recorded as clean — no retry would run: {manifest:?}"
+        );
+
+        // The retry: a later load, ring now writable, cleans the snapshot and records it.
+        let _ = Logbook::load(&path);
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(&snap).unwrap()).contains(KEY),
+            "the snapshot was never retried"
+        );
+        let manifest = std::fs::read_to_string(&marker).unwrap_or_default();
+        assert!(
+            manifest.contains("log-20260101-000000.adi"),
+            "a clean sweep records the snapshot: {manifest:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// ⛔ **A poisoned copy RESTORED after the first sweep is still swept (round 8 F2).**
+    ///
+    /// Round 7's one-time marker made the sweep one-shot: a poisoned `log.adi.bak` dropped beside a
+    /// clean log by a restore / profile sync / laptop migration AFTER the marker existed was never
+    /// swept, and the key sat at 0644 forever. The manifest sweep is driven by "has this copy
+    /// changed", so a copy that appears (or changes) after the record is not the signature we stored
+    /// and IS swept.
+    #[test]
+    #[cfg(unix)]
+    fn a_poisoned_copy_restored_after_the_first_sweep_is_still_swept() {
+        use std::os::unix::fs::PermissionsExt;
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let stamp = format!("rejected|1700000500|Unable to add QSO: bad key={KEY}");
+        let clean_log = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8<eor>\n";
+        let poisoned = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+            + &field("APP_TEMPO_UL_QRZ", &stamp)
+            + "<eor>\n";
+
+        let base = scratch_log_dir();
+        let path = base.join("log.adi");
+        let bak = path.with_extension("adi.bak");
+        std::fs::write(&path, &clean_log).unwrap();
+
+        // First load of a CLEAN install: writes the anchor (clean) and records the manifest.
+        let _ = Logbook::load(&path);
+        assert!(
+            !String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).contains(KEY),
+            "control: the anchor the first load took is clean"
+        );
+
+        // NOW a restore drops a pre-1.11 poisoned anchor over it, world-readable — after the marker.
+        std::fs::write(&bak, &poisoned).unwrap();
+        std::fs::set_permissions(&bak, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // Control: the restored copy really holds the key, at 0644, before the next load.
+        assert!(
+            String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).contains(KEY),
+            "control: the restored anchor holds the key before the load"
+        );
+
+        // The next load must catch it — the one-time marker did not.
+        let _ = Logbook::load(&path);
+        let text = String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).into_owned();
+        assert!(
+            !text.contains(KEY),
+            "a poisoned anchor restored after the first sweep kept the key: {text:?}"
+        );
+        assert!(text.contains("W9XYZ"), "the anchor lost the QSO: {text:?}");
+        let mode = std::fs::metadata(&bak).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the swept anchor is left world-readable at {mode:o}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// ⛔ **A stale / empty / foreign marker cannot suppress the sweep (round 8 F3).**
+    ///
+    /// Round 7 trusted the marker's mere existence, so a zero-byte `log.adi.scrubbed` present before
+    /// the first 1.11 load — a leftover, or a whole-profile sync where machine A wrote the marker and
+    /// machine B still holds its own local poisoned anchor — made the first-ever sweep a no-op. The
+    /// manifest reads an empty/foreign marker as "nothing recorded", so every present copy is swept.
+    #[test]
+    #[cfg(unix)]
+    fn a_stale_or_empty_marker_does_not_suppress_the_first_sweep() {
+        use std::os::unix::fs::PermissionsExt;
+        const KEY: &str = "qrz10gb00kk3y0123456789ABCDEFxyz";
+        let stamp = format!("rejected|1700000500|Unable to add QSO: bad key={KEY}");
+        let clean_log = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8<eor>\n";
+        let poisoned = adif_header()
+            + "<CALL:5>W9XYZ<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8"
+            + &field("APP_TEMPO_UL_QRZ", &stamp)
+            + "<eor>\n";
+
+        let base = scratch_log_dir();
+        let path = base.join("log.adi");
+        let bak = path.with_extension("adi.bak");
+        let marker = path.with_extension("adi.scrubbed");
+        std::fs::write(&path, &clean_log).unwrap();
+        // A poisoned anchor already beside the log (this machine's own pre-1.11 copy)…
+        std::fs::write(&bak, &poisoned).unwrap();
+        std::fs::set_permissions(&bak, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // …and a pre-existing EMPTY marker (a leftover, or one synced from another machine).
+        std::fs::write(&marker, b"").unwrap();
+
+        // Controls: the copy holds the key and the marker exists but is empty (the F1 hole reopener).
+        assert!(
+            String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).contains(KEY),
+            "control: the anchor holds the key before load"
+        );
+        assert!(
+            marker.exists(),
+            "control: a marker is present before the first sweep"
+        );
+        assert_eq!(
+            std::fs::read(&marker).unwrap().len(),
+            0,
+            "control: the pre-existing marker is empty"
+        );
+
+        // The first sweep must run regardless of the marker's existence.
+        let _ = Logbook::load(&path);
+        let text = String::from_utf8_lossy(&std::fs::read(&bak).unwrap()).into_owned();
+        assert!(
+            !text.contains(KEY),
+            "an empty marker suppressed the first sweep and the key survived: {text:?}"
+        );
+        let mode = std::fs::metadata(&bak).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "the swept anchor is left world-readable at {mode:o}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

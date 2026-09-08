@@ -484,6 +484,9 @@ pub struct Js8Armed {
     pub relay: bool,
     pub hb_ack: bool,
     pub hb: bool,
+    /// The repeating CQ — armed only when the session switch, the TX latch and a clear idle
+    /// watchdog all agree, exactly like `hb`.
+    pub cq: bool,
 }
 
 /// One activity-pane row: a decoded frame (or a reassembled multi-frame message).
@@ -544,6 +547,12 @@ pub struct Js8State {
     pub hb_on: bool,
     pub hb_next_at_ms: Option<u64>,
     pub hb_interval_min: u16,
+    /// The repeating CQ: session-only (never persisted), its next fire time, and the
+    /// persisted interval that decides whether the cockpit's CQ button is a one-shot
+    /// (0) or JS8Call's checkable auto-repeat with a live countdown (> 0).
+    pub cq_on: bool,
+    pub cq_next_at_ms: Option<u64>,
+    pub cq_interval_min: u16,
     /// The persisted switches (the second act), echoed so the chips render engine truth.
     pub autoreply: bool,
     pub relay: bool,
@@ -1435,6 +1444,15 @@ pub struct UploadStatusDto {
     /// "pending" | "accepted" | "duplicate" | "rejected" | "authfail".
     pub outcome: String,
     pub when_unix: i64,
+    /// The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record"
+    /// | "partial" | "unclassified" | "declared" — exactly like `outcome`, and for the same
+    /// reason. [`tempo_core::logbook::UploadDetail::ALL`] is the set; this list is a reading
+    /// aid and cannot be relied on to be current.
+    ///
+    /// ⛔ Not the service's prose, and not the English sentence either: this DTO round-trips
+    /// back into a `QsoRecord`, so a free string here would be a way to write text into
+    /// `log.adi` from the webview. Anything that is not a known token is dropped on the way
+    /// back. See [`tempo_core::logbook::UploadDetail`].
     pub detail: Option<String>,
 }
 
@@ -1457,7 +1475,7 @@ impl From<tempo_core::logbook::UploadStatus> for UploadStatusDto {
         UploadStatusDto {
             outcome: s.outcome.code().to_string(),
             when_unix: s.when_unix,
-            detail: s.detail,
+            detail: s.detail.map(|d| d.code().to_string()),
         }
     }
 }
@@ -1467,7 +1485,10 @@ impl From<UploadStatusDto> for tempo_core::logbook::UploadStatus {
             outcome: tempo_core::logbook::UploadOutcome::from_code(&s.outcome)
                 .unwrap_or(tempo_core::logbook::UploadOutcome::Rejected),
             when_unix: s.when_unix,
-            detail: s.detail,
+            detail: s
+                .detail
+                .as_deref()
+                .and_then(tempo_core::logbook::UploadDetail::from_code),
         }
     }
 }
@@ -2642,6 +2663,9 @@ mod tests {
             hb_on: false,
             hb_next_at_ms: None,
             hb_interval_min: 0,
+            cq_on: true,
+            cq_next_at_ms: Some(9_000),
+            cq_interval_min: 5,
             autoreply: true,
             relay: true,
             hb_ack: false,
@@ -2650,6 +2674,7 @@ mod tests {
                 relay: false,
                 hb_ack: false,
                 hb: false,
+                cq: false,
             },
             idle_minutes: 3,
             idle_limit_min: 60,
@@ -2687,7 +2712,10 @@ mod tests {
             "\"hbNextAtMs\":null",
             "\"hbIntervalMin\":0",
             "\"hbAck\":false",
-            "\"armed\":{\"autoreply\":false,\"relay\":false,\"hbAck\":false,\"hb\":false}",
+            "\"armed\":{\"autoreply\":false,\"relay\":false,\"hbAck\":false,\"hb\":false,\"cq\":false}",
+            "\"cqOn\":true",
+            "\"cqNextAtMs\":9000",
+            "\"cqIntervalMin\":5",
             "\"idleMinutes\":3",
             "\"idleLimitMin\":60",
             "\"idleTripped\":false",
