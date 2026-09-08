@@ -40,6 +40,16 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Require Remote staging source on the selected ref
+        run: |
+          set -euo pipefail
+          for script in remote/scripts/cloudflare-staging.mjs remote/scripts/staging-artifact.mjs remote/scripts/deploy-staging.mjs; do
+            if [ ! -f "$script" ]; then
+              echo '::error::Remote staging source is absent from this ref. Select the reviewed Remote branch when dispatching this workflow.'
+              exit 1
+            fi
+          done
+
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:

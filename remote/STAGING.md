@@ -92,6 +92,10 @@ workflow on main before dispatch, and read the run's actual job/step results. Or
 pushes and pull requests never deploy this service. The workflow's scoped web checks
 do not replace the application CI or desktop installer/hardware acceptance gates.
 
+The workflow can be registered on main ahead of the Remote implementation. In that
+case, dispatch with `--ref` set to the reviewed Remote branch. A ref without the
+administration scripts fails before any provider access.
+
 The artifact contains only the compiled Worker, browser assets/licenses, migrations,
 public configuration and `manifest.json`. Its source URL points to the exact commit.
 Wrangler diagnostics use a discarded temporary directory and are not uploaded as
