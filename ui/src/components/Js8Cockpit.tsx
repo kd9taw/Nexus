@@ -24,6 +24,7 @@ import {
   js8Arm,
   js8CallCq,
   js8Cancel,
+  js8CqRepeat,
   js8DropQueue,
   js8Enter,
   js8InboxDelete,
@@ -120,7 +121,9 @@ function inboxStateLabel(s: Js8InboxState): string {
  * THE STOP LINE census here (outside every ⊞-removable pane; mirrored in stop-line.test.tsx's
  * JS8 case): Stop TX (header → halt_tx, never disabled), Tune (header; the carrier it starts),
  * and Esc (keyboard-only, census-only — bound while this is the visible view). The TX-enable
- * latch is NOT a stop in a slotted mode; "Drop queue" is a SENDER-class control.
+ * latch is NOT a stop in a slotted mode; "Drop queue" is a SENDER-class control, and so are
+ * the CQ/HB repeat toggles — switching one OFF cancels the SCHEDULE, never an over in
+ * flight, so neither may enter the stop-line sweep.
  *
  * Mounted in a keep-alive host (like RTTY/PSK/SSTV/APRS) so the activity stream keeps its
  * scroll position and selection while the operator is on another section.
@@ -296,6 +299,14 @@ export function Js8Cockpit({
       if (s) setJs8(s)
     })
   }
+  // JS8Call's CHECKABLE CQ button (mainwindow.cpp:6353): with a repeat interval set it arms
+  // a schedule instead of sending once. Session-only and never persisted; keys nothing on
+  // its own — the TX latch is the first act and the engine re-reads it every slot.
+  const toggleCqRepeat = () => {
+    void withErrorToast(() => js8CqRepeat(js8?.cqOn !== true, cqIdx), t('js8.toast.arm.failed')).then((s) => {
+      if (s) setJs8(s)
+    })
+  }
   const quickQuery = (call: string, cmd: number) => {
     if (refuseIfUnready()) return
     void withErrorToast(() => js8SendCommand(call, cmd, ''), t('js8.toast.command.failed')).then((s) => {
@@ -341,6 +352,27 @@ export function Js8Cockpit({
         ? t('js8.dock.hb.title.on')
         : t('js8.dock.hb.title.off')
 
+  /** JS8Call renders the countdown IN the button — `CQ (12)`, `HB (42)`, `HB (now)`
+   *  (`updateRepeatButtonDisplay`, mainwindow.cpp:7800). Whole seconds, truncated, exactly
+   *  as `QDateTime::secsTo` gives them; a deadline already passed reads "now". `null` when
+   *  nothing is scheduled, and the button shows its bare token. */
+  const repeatCountdown = (on: boolean | undefined, nextAtMs: number | null | undefined): string | null => {
+    if (on !== true || nextAtMs == null) return null
+    const secs = Math.floor((nextAtMs - now) / 1000)
+    return secs > 0 ? String(secs) : t('js8.dock.repeat.now')
+  }
+  const hbCount = repeatCountdown(js8?.hbOn, js8?.hbNextAtMs)
+  const cqCount = repeatCountdown(js8?.cqOn, js8?.cqNextAtMs)
+  /** A repeat interval of 0 is JS8Call's "on demand": the CQ button stays the one-shot it
+   *  has always been. Above 0 it becomes the checkable auto-repeat. */
+  const cqRepeats = (js8?.cqIntervalMin ?? 0) > 0
+  const cqRepeatTitle =
+    js8?.cqOn && js8.armed.cq
+      ? t('js8.dock.cqRepeat.title.armed', { min: js8?.cqIntervalMin ?? 0 })
+      : js8?.cqOn
+        ? t('js8.dock.cqRepeat.title.on')
+        : t('js8.dock.cqRepeat.title.off', { min: js8?.cqIntervalMin ?? 0 })
+
   // THE ESTIMATE beside Send — a hint, not a gate (js8Vocab.estimateFrames). The engine is
   // the authority and refuses over the §97.119 cap; the `over` face and the disabled Send
   // just save the round trip.
@@ -380,6 +412,8 @@ export function Js8Cockpit({
         return t('js8.dock.origin.autoReply')
       case 'relay':
         return t('js8.dock.origin.relay')
+      case 'cqRepeat':
+        return t('js8.dock.origin.cqRepeat')
     }
   }
   /** One second-act chip with its three faces: off · on-but-TX-off · ARMED. */
@@ -814,9 +848,25 @@ export function Js8Cockpit({
               </option>
             ))}
           </select>
-          <button type="button" className="cw-macro js8-cq" onClick={callCq} title={t('js8.dock.cq.title')}>
-            <span className="cw-macro-label">{CQ}</span>
-          </button>
+          {/* CQ — one button, two behaviours, exactly as JS8Call's `cqMacroButton`: a plain
+              one-shot at interval 0, and the checkable auto-repeat above it, carrying the
+              live countdown in its own label. Turning the repeat off cancels the SCHEDULE;
+              it is a sender, not a stop. */}
+          {cqRepeats ? (
+            <button
+              type="button"
+              className={`cw-macro rtty-arm js8-arm js8-cq js8-cq-repeat${js8?.cqOn ? ' on' : ''}${js8?.cqOn && js8.armed.cq ? ' armed' : ''}`}
+              aria-pressed={js8?.cqOn === true}
+              onClick={toggleCqRepeat}
+              title={cqRepeatTitle}
+            >
+              <span className="cw-macro-label">{cqCount ? `${CQ} (${cqCount})` : CQ}</span>
+            </button>
+          ) : (
+            <button type="button" className="cw-macro js8-cq" onClick={callCq} title={t('js8.dock.cq.title')}>
+              <span className="cw-macro-label">{CQ}</span>
+            </button>
+          )}
           <button
             type="button"
             className={`cw-macro rtty-arm js8-arm js8-hb${js8?.hbOn ? ' on' : ''}${js8?.hbOn && js8.armed.hb ? ' armed' : ''}`}
@@ -824,7 +874,7 @@ export function Js8Cockpit({
             onClick={toggleHb}
             title={hbTitle}
           >
-            <span className="cw-macro-label">{HB}</span>
+            <span className="cw-macro-label">{hbCount ? `${HB} (${hbCount})` : HB}</span>
           </button>
           {armChip('autoreply', 'js8-autoreply', AUTOREPLY, js8?.autoreply === true, js8?.armed.autoreply === true, [
             t('js8.dock.autoreply.title.off'),

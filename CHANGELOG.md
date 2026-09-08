@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JS8: CQ and the heartbeat repeat on their own, with the countdown on the button.** JS8Call's
+  CQ and HB buttons are switches — arm one and it calls or beacons on a timer, with the seconds to
+  the next transmission ticking down in the button's own label (`CQ (12)`, `HB (42)`, `HB (now)`).
+  Nexus's were one-shots. They aren't any more. Set **Settings ▸ Digital ▸ JS8 ▸ CQ repeat
+  interval**; at 0 the CQ button stays the single-shot it always was, above 0 it becomes the
+  switch. The heartbeat's countdown appears whenever its schedule is running. This is the POTA and
+  beacon habit: set it going and walk away.
+
+  It stops when it should, and every existing transmit guard still holds. It keys nothing until
+  **both** acts are present — the session TX latch and the repeat switch itself — so arming one
+  with TX off shows "on", never "armed", and sends nothing. A station answering you turns the CQ
+  repeat off, exactly as JS8Call does. The idle watchdog (60 min by default) stands both down, and
+  a scheduled call cannot reset that clock the way your own sends do — an unattended station has a
+  bound. Stop TX, leaving JS8 and changing operating mode each cancel the schedule and drop
+  anything already queued. It is never remembered across launches: the app can never come back
+  calling CQ.
+
 - **The FT-710 can draw its own band scope.** The radio has a real spectrum display inside it and
   an internal USB bridge that will hand it over; until now Nexus could only show the sound card's
   4 kHz slice. Turn it on per radio in Settings ▸ Radio (it appears only for an FT-710), and the

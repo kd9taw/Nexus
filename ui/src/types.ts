@@ -1447,8 +1447,9 @@ export interface PskState {
 
 /** JS8 speed, lowercase on the wire (serde `rename_all = "lowercase"`). */
 export type Js8Speed = 'slow' | 'normal' | 'fast' | 'turbo'
-/** Who originated a queued/pending frame (serde camelCase). CQ counts as `operator`. */
-export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay'
+/** Who originated a queued/pending frame (serde camelCase). A CQ the operator CLICKS is
+ * `operator`; a CQ the repeat schedule produced is `cqRepeat`, an automatic origin. */
+export type Js8Origin = 'operator' | 'heartbeat' | 'hbAck' | 'autoReply' | 'relay' | 'cqRepeat'
 /** The second act of the two-act rule: three persisted switches + the session-only HB. */
 export type Js8Switch = 'autoreply' | 'relay' | 'hback' | 'hb'
 /** Inbox row state, lowercase on the wire. */
@@ -1458,6 +1459,8 @@ export type Js8InboxState = 'unread' | 'read' | 'store' | 'delivered'
  * "armed" from THIS, never from the persisted switch alone. */
 export interface Js8Armed {
   autoreply: boolean
+  /** The repeating CQ — the session switch AND the TX latch AND no idle trip. */
+  cq: boolean
   relay: boolean
   hbAck: boolean
   hb: boolean
@@ -1540,6 +1543,12 @@ export interface Js8State {
   hbOn: boolean
   hbNextAtMs: number | null
   hbIntervalMin: number
+  /** JS8Call's checkable auto-repeating CQ: session-only, its next fire time (drives the
+   * live countdown ON the CQ button), and the persisted interval that decides whether the
+   * button is a one-shot (0) or the repeat toggle (> 0). */
+  cqOn: boolean
+  cqNextAtMs: number | null
+  cqIntervalMin: number
   /** The persisted switches (the second act), echoed so the chips render engine truth. */
   autoreply: boolean
   relay: boolean
@@ -2741,6 +2750,10 @@ export interface Settings {
   /** Heartbeat repeat interval in minutes; 0 = on demand. HB on/off itself is
    * session-only and is NOT here — the app can never launch beaconing. */
   js8HbIntervalMin: number
+  /** CQ repeat interval in minutes; 0 = on demand, which leaves the cockpit's CQ button
+   * the one-shot it has always been. Whether the repeat is ON is session-only and is NOT
+   * here — the app can never launch calling CQ. */
+  js8CqIntervalMin: number
   /** Answer heard heartbeats with HEARTBEAT SNR (JS8Call default off). The persisted
    * second act of the two-act rule; the session TX latch is the first. */
   js8HbAck: boolean

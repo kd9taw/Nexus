@@ -627,6 +627,12 @@ pub struct Settings {
     /// app can never launch beaconing.
     #[serde(default)]
     pub js8_hb_interval_min: u16,
+    /// CQ repeat interval in minutes; 0 = on demand (JS8Call `CQInterval` default), which
+    /// leaves the cockpit's CQ button the one-shot it is today. Whether the repeat is ON is
+    /// NOT a setting — it is session-only (`Station::cq_on`), so the app can never launch
+    /// calling CQ, exactly as for the heartbeat.
+    #[serde(default)]
+    pub js8_cq_interval_min: u16,
     /// Answer heard heartbeats with `HEARTBEAT SNR +NN` (JS8Call `SubModeHBAck`, default
     /// OFF). The persisted SECOND act of the two-act rule; the session TX latch is the first.
     #[serde(default)]
@@ -3259,6 +3265,7 @@ impl Default for Settings {
             js8_speed: default_js8_speed(),
             js8_rx_speeds: default_js8_rx_speeds(),
             js8_hb_interval_min: 0,
+            js8_cq_interval_min: 0,
             js8_hb_ack: false,
             js8_autoreply: default_js8_autoreply(),
             js8_relay: default_js8_relay(),
@@ -6617,6 +6624,10 @@ mod tests {
             s.js8_hb_interval_min, 0,
             "HB on demand (JS8Call HBInterval=0)"
         );
+        assert_eq!(
+            s.js8_cq_interval_min, 0,
+            "CQ on demand (JS8Call CQInterval=0) — the CQ button stays a one-shot"
+        );
         assert!(!s.js8_hb_ack, "JS8Call SubModeHBAck default false");
         assert!(s.js8_autoreply, "JS8Call autoreply default ON (G3)");
         assert!(s.js8_relay, "JS8Call relay default ON (G3)");
@@ -6631,6 +6642,7 @@ mod tests {
             "\"js8Speed\":1",
             "\"js8RxSpeeds\":15",
             "\"js8HbIntervalMin\":0",
+            "\"js8CqIntervalMin\":0",
             "\"js8HbAck\":false",
             "\"js8Autoreply\":true",
             "\"js8Relay\":true",
@@ -6667,6 +6679,7 @@ mod tests {
             "js8Speed",
             "js8RxSpeeds",
             "js8HbIntervalMin",
+            "js8CqIntervalMin",
             "js8HbAck",
             "js8Autoreply",
             "js8Relay",
@@ -6683,8 +6696,9 @@ mod tests {
         }
         // CONTROL: a key that must NOT exist is not found, so the scan is not vacuous.
         assert!(
-            !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:")),
-            "HB on/off is session-only and must never be a setting"
+            !body.lines().any(|l| l.trim_start().starts_with("js8HbOn:"))
+                && !body.lines().any(|l| l.trim_start().starts_with("js8CqOn:")),
+            "HB and CQ-repeat on/off are session-only and must never be settings"
         );
     }
 

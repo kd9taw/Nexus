@@ -2252,6 +2252,13 @@ export async function js8Arm(which: Js8Switch, on: boolean): Promise<Js8State> {
   return invoke<Js8State>('js8_arm', { which, on })
 }
 
+/** Arm/disarm JS8Call's repeating CQ (`idx` = the CQS variant to send). Session-only and
+ * never persisted, like the HB toggle; the interval is the persisted half (js8CqIntervalMin).
+ * Arming keys nothing — the session TX latch is the first act. */
+export async function js8CqRepeat(on: boolean, idx: number): Promise<Js8State> {
+  return invoke<Js8State>('js8_cq_repeat', { on, idx })
+}
+
 /** Cancel the pending automatic reply (its countdown chip's Cancel). */
 export async function js8Cancel(): Promise<Js8State> {
   return invoke<Js8State>('js8_cancel')

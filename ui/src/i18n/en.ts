@@ -5303,6 +5303,9 @@ export const EN = {
   'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
   'settings.js8.hbIntervalMin.hint':
     '0 = a heartbeat only when you press HB. Otherwise, while the HB chip is on, one goes out every this-many minutes on a random free slot between 500 and 1000 Hz. The HB chip itself is never remembered across launches, and nothing keys unless TX is on.',
+  'settings.js8.cqIntervalMin.label': 'CQ repeat interval (minutes)',
+  'settings.js8.cqIntervalMin.hint':
+    '0 = the CQ button sends one CQ, as it does today. Above 0 the button becomes a switch: leave it on and a CQ goes out every this-many minutes, with the seconds to the next one counting down on the button — the POTA and beacon habit. A station answering you turns it off, so does the idle watchdog, and so does Stop TX. It is never remembered across launches, and nothing keys unless TX is on.',
   'settings.js8.hbAck.label': 'Answer heartbeats',
   'settings.js8.hbAck.hint':
     'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
@@ -7083,6 +7086,13 @@ export const EN = {
   'js8.dock.send.label': 'Send',
   'js8.dock.cq.aria': 'CQ variant',
   'js8.dock.cq.title': 'Call CQ — a heartbeat frame addressed to @ALLCALL, in the next period',
+  'js8.dock.cqRepeat.title.off':
+    'Repeating CQ is off. Click to call CQ every {{min}} min until someone answers — the button counts down to the next one. It keys only while TX is on, and it is never remembered across launches.',
+  'js8.dock.cqRepeat.title.on':
+    'Repeating CQ is on, but TX is off — nothing keys. Enable TX (the header pill) to let the CQs go out.',
+  'js8.dock.cqRepeat.title.armed':
+    'Calling CQ every {{min}} min, on your TX offset. Stops on its own when a station answers you, or at the idle watchdog. Click to stop the schedule — a CQ already on the air finishes; Stop TX cuts it.',
+  'js8.dock.repeat.now': 'now',
   'js8.dock.hb.title.off':
     'Heartbeat schedule is off. Click to send a heartbeat every period’s interval (Settings ▸ Digital ▸ JS8) — it keys only while TX is on, and it is never remembered across launches.',
   'js8.dock.hb.title.on':
@@ -7131,6 +7141,7 @@ export const EN = {
   'js8.dock.origin.hbAck': 'heartbeat ack',
   'js8.dock.origin.autoReply': 'auto-reply',
   'js8.dock.origin.relay': 'relay',
+  'js8.dock.origin.cqRepeat': 'repeating CQ',
   'js8.dock.idle': 'Idle {{min}}/{{limit}} min',
   'js8.dock.idle.off': 'Idle watchdog off',
   'js8.dock.idle.tripped': 'Idle watchdog tripped — heartbeats, auto-reply and relay are off until you send something',
