@@ -190,6 +190,27 @@ const SHOTS = {
   'operate-roster.webp': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateRoster.tsx'],
   'awards-official.webp': ['ui/src/components/AwardsView.tsx'],
   'satellites-console.webp': ['ui/src/components/SatellitesView.tsx'],
+  // The 1.10.3 audit crops. Each names the component whose pixels it shows, so a change
+  // there ranks the image stale — the same rule as the entries above.
+  'awards-sat-vucc.webp': ['ui/src/components/AwardsView.tsx'],
+  'journey.webp': ['ui/src/components/JourneyView.tsx'],
+  'logbook.webp': ['ui/src/components/Logbook.tsx'],
+  'logbook-entry-form.webp': ['ui/src/components/Logbook.tsx'],
+  'stats.webp': ['ui/src/components/StatsView.tsx', 'ui/src/features/logStats.ts'],
+  'stats-by-band.webp': ['ui/src/components/StatsView.tsx', 'ui/src/features/logStats.ts'],
+  'connect-map-layers.webp': ['ui/src/components/ConnectView.tsx'],
+  'connect-pane-picker.webp': ['ui/src/components/connect/PaneFrame.tsx', 'ui/src/components/connect/panes.tsx'],
+  'satellites-schedule.webp': ['ui/src/components/SatellitesView.tsx'],
+  'satellites-pass-column.webp': ['ui/src/components/SatellitesView.tsx'],
+  'satellite-transponders.webp': ['ui/src/components/SatellitesView.tsx'],
+  'pota-hunter.webp': ['ui/src/components/PotaSotaView.tsx'],
+  'program-search.webp': ['ui/src/components/RadioProgView.tsx'],
+  'program-repeaters.webp': ['ui/src/components/RadioProgView.tsx'],
+  'program-channel-list.webp': ['ui/src/components/RadioProgView.tsx'],
+  'settings-wrl.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
+  'settings-field-day.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
+  'settings-club-sync.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
+  'settings-connect-tv.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
 }
 
 function checkScreenshots() {
