@@ -2,6 +2,23 @@
 //! web logbooks with an identical QSO API: `POST {base}/index.php/api/qso` with the instance
 //! API key + station-profile id + one ADIF record. The URL + JSON builders are pure (unit-
 //! tested); [`upload`] does the blocking POST.
+//!
+//! # ⛔ Where the API key is kept out of, and by what
+//!
+//! The key rides in the REQUEST body, and an instance can echo a request back — a debug-mode
+//! PHP notice, a WAF page, a proxy error. So every string this module hands upwards is
+//! assumed to be able to contain the key, and the boundary that matters is **what gets
+//! written down**:
+//!
+//! - **Persisted** (`conn-health.json`, mode 0644, survives the session): guarded by an
+//!   ALLOW-LIST at the sink — `note_conn_health` in `src-tauri/src/lib.rs` takes
+//!   `&'static str`, so nothing built out of a response can reach it at all. That is the
+//!   guarantee, and it is the only one.
+//! - **Ephemeral** (the operator's toast for this upload, and the in-memory connection log):
+//!   carries the instance's own words, because #226 is precisely that Nexus threw them away.
+//!   [`echoes_key`] reduces the chance the key is among them, and **it is best-effort, not a
+//!   guarantee** — see its own note. Do not build anything on it, and do not add a round to
+//!   it: three were spent, and the server picks the encoding.
 
 use super::neterr;
 
@@ -22,8 +39,9 @@ use super::neterr;
 ///
 /// ⚠️ It is a SIZE bound and nothing else. It was once described as a backstop for the API-key
 /// scrub; it never was one, and the arithmetic says so plainly — a Cloudlog key is 33
-/// characters and this is 160, so a key echoed near-verbatim fits with 120 to spare. The
-/// scrub's backstop is [`echoes_key`], which fails closed.
+/// characters and this is 160, so a key echoed near-verbatim fits with 120 to spare. What
+/// keeps the key out of the persisted file is the allow-list at the sink (module header);
+/// [`echoes_key`] only thins the ephemeral surfaces.
 const REASON_MAX_CHARS: usize = 160;
 
 /// Build the QSO API endpoint from a user-entered base URL. Tolerant of a trailing slash, an
@@ -173,24 +191,30 @@ fn strip_escapes(text: &str) -> String {
     out
 }
 
-/// ⛔ CREDENTIAL. Could a reader recover the API key from `text`?
+/// ⚠️ BEST EFFORT, AND KNOWN TO BE DEFEATABLE. Does the API key show through `text`?
 ///
-/// The literal `str::replace` in [`server_reason`] catches a verbatim echo and nothing else:
-/// **one re-encoded character defeats it**. A server that echoes the request body does not
-/// have to echo it byte for byte — a PHP notice HTML-escapes what it prints, a WAF page
-/// percent-encodes it, a JSON error writes it as `\uXXXX`, and a zero-width character
-/// anywhere inside it leaves something that still reads as the key on screen. And truncation
-/// is not the backstop it was once described as: see [`REASON_MAX_CHARS`].
+/// **This is not what keeps the key off disk** — the allow-list at `note_conn_health` is (see
+/// the module header). It runs on the surfaces that are shown once and dropped: the toast for
+/// this upload and the in-memory connection log. There it is worth having and worth no more
+/// rounds than it has had.
 ///
-/// So this asks a much weaker question than "is the key present". Ignoring every
-/// non-alphanumeric, and again with escape-shaped runs deleted, does **any
-/// [`KEY_WINDOW`]-character stretch** of the key appear? A window rather than the whole key
-/// because encoding a single *letter* (`&#99;l0udl0g…`) drops one character out of the middle
-/// of the projection and whole-key containment then sees nothing — which is the same
-/// one-character defeat as `str::replace`, only better disguised.
+/// What it does: ignoring every non-alphanumeric, and again with escape-shaped runs deleted,
+/// does any [`KEY_WINDOW`]-character stretch of the key appear? That catches the echoes a
+/// server produces without trying — a PHP notice HTML-escaping what it prints, a WAF page
+/// percent-encoding it, a JSON error writing `\uXXXX`, a zero-width character wedged inside.
 ///
-/// Weaker is the point: a false positive costs a sentence, a false negative writes a
-/// credential into a world-readable file that nothing ever cleans up.
+/// **What it does not catch, measured rather than assumed:**
+/// - an echo with EVERY character escaped (`%63%6C…`, `&#99;…`, `&#x63;…`). [`strip_escapes`]
+///   deletes escape runs instead of decoding them, so both views go blind and all 33
+///   characters stay recoverable from the text.
+/// - fragmentation: [`KEY_WINDOW`] is a fixed 12, so two escaped characters at roughly
+///   one-third and two-thirds leave no 12-character stretch in either view.
+///
+/// Those are recorded, not scheduled. Round 1 was `str::replace`, defeated by one re-encoded
+/// character; round 2 was this, defeated two ways; the server chooses the encoding, so a
+/// blocklist here has no last move. Round 3 was to stop playing and allow-list the sink
+/// instead. If a persisted surface ever needs the instance's words, the answer is a bounded
+/// classification of the response, not a better detector here.
 fn echoes_key(text: &str, key: &str) -> bool {
     let needle: Vec<char> = alnum_lower(key).chars().collect();
     let win = needle.len().min(KEY_WINDOW);
@@ -217,14 +241,14 @@ fn echoes_key(text: &str, key: &str) -> bool {
 ///
 /// Two things are done to the body before any of it is shown:
 ///
-/// 1. **The API key is scrubbed, and the scrub fails closed.** The key rides in the REQUEST
-///    body, and a debug-mode PHP notice or a WAF page can echo a request straight back. This
-///    string does not stop at the panel — `src-tauri/src/lib.rs` keeps it in the connection
-///    log and writes it into `conn-health.json`, which is world-readable and persisted — so an
-///    echoed key would land on disk in cleartext. The literal replacement below catches a
-///    verbatim echo; [`echoes_key`] catches the rest, and when it fires **none of the body is
-///    shown**. There is no safe way to excise a key from a string that has been re-encoded
-///    around it, and a lost sentence is recoverable where a leaked credential is not.
+/// 1. **The API key is scrubbed as far as a scrub can go.** The key rides in the REQUEST
+///    body, and a debug-mode PHP notice or a WAF page can echo a request straight back. The
+///    literal replacement below catches a verbatim echo; [`echoes_key`] catches the ordinary
+///    re-encodings, and when it fires **none of the body is shown**. ⚠️ Neither is a
+///    guarantee, and this string must not be treated as one: it is for the surfaces that are
+///    read once and dropped. Nothing derived from it may be persisted — `conn-health.json`
+///    takes only Nexus's own sentences, enforced by the type of `note_conn_health` in
+///    `src-tauri/src/lib.rs`. See the module header.
 /// 2. **It is flattened to one line and cut to [`REASON_MAX_CHARS`].** A size bound, not a
 ///    security one — see that constant.
 ///

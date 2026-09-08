@@ -90,17 +90,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lapsed months ago showed the same grey "not verified yet" row, and the only way anyone found
   to clear it was to push a QSO through. Every callbook lookup now updates that row, and so
   does the Test connection button on the QRZ Logbook row — which also could not clear its own
-  dot before. A lapsed subscription reads red with QRZ's own sentence on it, and because the
-  row is a lookup and not an upload it now says "last lookup" rather than "last upload".
+  dot before. Because the row is a lookup and not an upload it now says "last lookup" rather
+  than "last upload".
+
+  A lookup QRZ *refuses* is kept apart from a callsign QRZ simply does not have. QRZ answers
+  both the same way — on a live session, with an error and no record — so a refused lookup was
+  being counted as a completed one: the row went green, and green does not just fail to warn,
+  it clears a red that was already there. A match and a genuine miss now read as a working
+  subscription; a refusal and a session QRZ will not accept read as failures, each naming what
+  to go and check.
 
 - **Cloudlog and Wavelog threw away the reason your upload was rejected.** The instance sends
   back what it actually refused — a read-only API key, a station profile id not linked to that
   key, a missing ADIF field — and Nexus replaced all of it with "auth rejected — check the API
-  key", which sent people to check the one thing that was usually fine. The server's own words
-  now lead, and where it said nothing the guess names the station profile id as well as the
-  key. A failure to reach the instance at all is no longer blamed on the URL either: an
-  antivirus or company proxy inspecting HTTPS traffic is named as the likely cause, which is
-  what it usually is.
+  key", which sent people to check the one thing that was usually fine. The instance's own
+  words now lead in the upload result, and where it said nothing the guess names the station
+  profile id as well as the key. A failure to reach the instance at all is no longer blamed on
+  the URL either: an antivirus or company proxy inspecting HTTPS traffic is named as the likely
+  cause, which is what it usually is.
+
+- **A logbook service's own error text is no longer written to disk.** The Connections panel's
+  failure line was stored word for word in a file in your config directory, and for Cloudlog
+  and Wavelog that text can contain your API key — the key travels inside the upload request,
+  and an instance running in debug mode, or a proxy or firewall page in front of it, answers by
+  quoting the request straight back. What gets stored is now always Nexus's own sentence,
+  naming the failure and what to check. The service's exact words are still shown to you, in
+  the upload result and in this session's connection log; they are simply not kept. The same
+  rule now covers HRDLog.net and World Radio League, whose replies were being stored with no
+  length limit at all.
 
 - **A LoTW report that failed to download said which step failed, not what went wrong.** Every
   failure reading the response became "could not read the response body", so a request that

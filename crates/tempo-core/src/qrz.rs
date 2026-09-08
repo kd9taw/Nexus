@@ -78,6 +78,28 @@ impl QrzSession {
                 .as_deref()
                 .is_some_and(|e| e.to_ascii_lowercase().contains("session"))
     }
+
+    /// True iff QRZ answered "there is no such callsign" — an authoritative **miss** on a
+    /// live session, as opposed to a **refusal** of the lookup. Only meaningful when the
+    /// response carried no `<Callsign>` record and [`Self::needs_login`] is false.
+    ///
+    /// ⚠️ QRZ delivers a miss the same way it delivers a refusal: an `<Error>` beside a live
+    /// `<Key>`, with no `<Callsign>`. `Not found: g1srdd` is a miss; `A subscription is
+    /// required…` and a daily-limit or privilege refusal are not. So neither "there is an
+    /// `<Error>`" nor "the session is live" separates them — the wording is the only thing
+    /// that does, and this is the one place that reads it.
+    ///
+    /// **Fails closed.** Anything this cannot positively read as QRZ's not-found wording is
+    /// a refusal, including an answer carrying neither a record nor a reason. The asymmetry
+    /// is deliberate: a miss is what tells the Connections panel the XML subscription is
+    /// verified, so guessing "miss" paints a working row over a subscription that has
+    /// lapsed (#245), while guessing "refusal" costs at worst a red row on a callsign that
+    /// really does not exist.
+    pub fn holds_no_record(&self) -> bool {
+        self.error
+            .as_deref()
+            .is_some_and(|e| e.to_ascii_lowercase().contains("not found"))
+    }
 }
 
 /// A parsed QRZ callsign record. **Pure** (no serde — the serde DTO lives in
@@ -664,6 +686,46 @@ mod tests {
         assert_eq!(s.key.as_deref(), Some("abc"));
         assert!(!s.needs_login());
         assert!(s.error.as_deref().unwrap().contains("Not found"));
+    }
+
+    /// ⛔ A MISS AND A REFUSAL ARRIVE IN THE SAME SHAPE.
+    ///
+    /// Both are an `<Error>` beside a live `<Key>` with no `<Callsign>`, so a reader that
+    /// keys off either the presence of an error or the state of the session gets one of them
+    /// wrong. Reading them as misses is what let a refused lookup report the XML
+    /// subscription verified (#245); reading every error as a refusal would paint the row
+    /// red for looking up a callsign that does not exist.
+    #[test]
+    fn a_refusal_on_a_live_session_is_not_an_authoritative_miss() {
+        // The control, and it is the pairing that matters: these two responses differ ONLY
+        // in QRZ's wording, so a check that read the session or the error's presence would
+        // answer the same for both.
+        assert!(
+            parse_session(NOT_FOUND).holds_no_record(),
+            "control: QRZ's own not-found wording is a miss"
+        );
+        for refusal in [
+            "A subscription is required to access this data",
+            "Lookup limit exceeded for this 24 hour period",
+            "Insufficient privileges for that operation",
+        ] {
+            let xml = format!(
+                "<QRZDatabase><Session><Key>live</Key><Error>{refusal}</Error></Session></QRZDatabase>"
+            );
+            let s = parse_session(&xml);
+            assert!(!s.needs_login(), "control: {refusal:?} is a LIVE session");
+            assert!(
+                !s.holds_no_record(),
+                "a refusal read as an authoritative miss: {refusal:?}"
+            );
+        }
+        // Fails closed: an answer with neither a record nor a reason is not evidence of a
+        // miss either.
+        assert!(
+            !parse_session("<QRZDatabase><Session><Key>live</Key></Session></QRZDatabase>")
+                .holds_no_record(),
+            "an answer with no reason at all was read as an authoritative miss"
+        );
     }
 
     #[test]
