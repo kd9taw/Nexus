@@ -5,7 +5,7 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.11.0] — 2026-09-08
 
 ### Added
 
@@ -91,7 +91,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   This one was reported as already fixed, twice. It was not — see below.
 
+- **The manual is illustrated, and corrected.** Every one of the 22 chapters now carries
+  screenshots — 137 of them, up from 11 — and the pages an operator reaches first were the ones
+  most in need: the first-run wizard, the waterfall, the settings reference. An audit against the
+  running app also turned up a stack of things the manual said that were no longer true: the
+  wizard is four steps and not three, the waterfall takes three mouse gestures and not two, the
+  grid wants all six characters, and the mode chapters described transmit capabilities that
+  several modes do not have. Those are fixed. Where a picture would have had to be staged to
+  exist, there is no picture and the text says what is missing instead.
+
 ### Fixed
+
+- **The JS8 screen was drawing the Tempo screen underneath it.** Opening JS8 rendered the whole
+  Tempo workspace below the cockpit: its Fast and Deep tier buttons, its station roster, its
+  conversation pane, and a second waterfall beside JS8's own. Every other digital cockpit is
+  wired to leave that slot empty and JS8 had been missed, so it fell through to the chat screen's
+  layout. JS8 now shows JS8 and nothing else.
 
 - **Nothing could clear the callsign card in the FT cockpit, and F4 did nothing while you were
   typing.** Two separate faults behind one report. The card follows whichever station you have
@@ -140,8 +155,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly like bad propagation. When the DXpedition calendar shows a SuperFox operation on the
   air, the Operate header now names it beside the Hound button and its card on the DXpeditions
   board says the same thing: work that one in WSJT-X.
-
-### Fixed
 
 - **Turning Hound off during a QSO with a Fox could strand the contact.** A DXpedition Fox
   packs two replies into one transmission, and the half confirming you arrives without a
@@ -229,7 +242,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the URL either: an antivirus or company proxy inspecting HTTPS traffic is named as the likely
   cause, which is what it usually is.
 
-- **A logbook service's own error text is no longer written to disk.** The Connections panel's
+- **A logbook service's own error text is no longer kept in your config directory.** The Connections panel's
   failure line was stored word for word in a file in your config directory, and for Cloudlog
   and Wavelog that text can contain your API key — the key travels inside the upload request,
   and an instance running in debug mode, or a proxy or firewall page in front of it, answers by
@@ -370,6 +383,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key from the file whether or not it had actually been stored — so on a Linux box with no Secret
   Service running, the key was silently deleted at launch. It is now cleared only once it is safely
   in the keychain, and the migration retries on a later launch otherwise.
+
 
 ## [1.10.3] — 2026-09-04
 
