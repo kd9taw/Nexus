@@ -15518,6 +15518,50 @@ impl Engine {
         median < DT_OK_THRESHOLD
     }
 
+    /// Constant-size monitoring read. Never builds the full snapshot, scans the
+    /// logbook or drains decode output. Radio and amp are copied in one engine borrow.
+    pub fn remote_monitor_observation(&self) -> crate::remote_monitor::Observation {
+        use crate::remote_monitor::{bounded, Amplifier, Observation, Radio};
+        let profile = self.settings.active_profile();
+        let amplifier = profile
+            .filter(|p| !p.amp_model.is_empty() && !p.amp_port.is_empty())
+            .map(|p| {
+                let waiting = crate::dto::AmpStatusDto {
+                    family: bounded(&p.amp_model),
+                    ..Default::default()
+                };
+                let status = self.amp_live(p.id).filter(|a| a.family == p.amp_model);
+                Amplifier::from_status(status.unwrap_or(&waiting), p.amp_follow_band)
+            });
+        let mode = match self.settings.operating_mode {
+            crate::settings::OperatingMode::Digital => self.tier().label(),
+            crate::settings::OperatingMode::Phone => "SSB",
+            crate::settings::OperatingMode::Cw => "CW",
+            crate::settings::OperatingMode::Rtty => "RTTY",
+            crate::settings::OperatingMode::Keyboard => "Keyboard",
+        };
+        Observation {
+            call: bounded(&self.app.mycall),
+            grid: bounded(&self.app.mygrid),
+            radio: Radio {
+                id: self.settings.active_radio,
+                name: profile.map(|p| bounded(&p.name)).unwrap_or_default(),
+                dial_mhz: self
+                    .settings
+                    .dial_mhz
+                    .is_finite()
+                    .then_some(self.settings.dial_mhz),
+                band: bounded(&self.settings.band),
+                mode: bounded(mode),
+                rig_mode: self.rig_mode.as_deref().map(bounded),
+                cat_connected: self.cat_status.0,
+                rig_keyed: (self.cat_status.0 == Some(true)).then_some(self.rig_keyed),
+                nexus_busy: self.tx_owner().is_some(),
+            },
+            amplifier,
+        }
+    }
+
     /// Full snapshot, with mode + per-mode (QSO / Field Day) status filled in.
     pub fn snapshot(&self) -> AppSnapshot {
         let mut s = self.app.snapshot();
