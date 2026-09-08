@@ -1,10 +1,10 @@
+# Nexus User Guide
+
 <!-- CHAPTER ORDER LIVES HERE: the PDF and EPUB builders take the book's order from the -->
 <!-- FIRST bare `](<page>.md)` link in this file, so a chapter link added above "The -->
 <!-- sections" silently moves that chapter to the front of the book. A cross-reference -->
 <!-- higher up carries an anchor (`](cw.md#macros)`), which does not claim the slot. -->
 <!-- House rules for editing the guide: docs/manual-style-guide.md -->
-
-# Nexus User Guide
 
 Nexus is a free, open-source ham radio workstation for Windows, macOS, Linux and
 Raspberry Pi that puts the whole station — digital, phone, CW, satellites,
