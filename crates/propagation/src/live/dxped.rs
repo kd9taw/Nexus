@@ -137,6 +137,25 @@ fn fetch_plans_uncached() -> Result<Vec<DxpeditionPlan>, String> {
     Ok(plans)
 }
 
+/// What to print when ClubLog answers `mostwanted.php` with an `{"error": …}` body — Nexus's
+/// own breadcrumb, or `None` when the body is not an error at all.
+///
+/// ⛔ **The return type is the guard.** A `&'static str` cannot be ClubLog's sentence, and
+/// ClubLog's sentence is the thing that must not be printed: this request's URL carries the
+/// API key (`?api={key}`), so a refusal is the most likely place for the key to come back —
+/// and stderr is not a dev convenience on Linux, where the desktop session redirects a GUI
+/// process's stderr into `~/.xsession-errors`, mode 0644, kept until the next login. Same
+/// rule as `conn_log` in `src-tauri/src/lib.rs`: a service's own text goes to a screen, never
+/// to something that outlives the moment.
+///
+/// Split out of [`most_wanted`] so it can be driven from a hostile body without a live HTTP
+/// client — the round-4 fix shipped with nothing testing it.
+fn most_wanted_error_breadcrumb(v: &serde_json::Value) -> Option<&'static str> {
+    v.get("error")
+        .and_then(|e| e.as_str())
+        .map(|_| "propagation: ClubLog most-wanted refused the request")
+}
+
 /// ClubLog most-wanted list → entity-name → rank, cached 24 h. Accepts both JSON
 /// shapes ClubLog has used: {"1":"P5",...} (rank→prefix) and {"P5":1,...}
 /// (prefix→rank). Prefixes resolve to entity names via cty.dat so plan calls can
@@ -162,10 +181,18 @@ fn most_wanted(c: &reqwest::blocking::Client) -> HashMap<String, u32> {
     let url = format!("https://clublog.org/mostwanted.php?api={key}");
     if let Ok(resp) = c.get(&url).send() {
         if let Ok(v) = resp.json::<serde_json::Value>() {
-            // ClubLog reports problems as {"error": "..."} with HTTP 200 — surface it
-            // rather than silently behaving like "no key".
-            if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-                eprintln!("propagation: ClubLog most-wanted error: {err}");
+            // ClubLog reports problems as {"error": "..."} with HTTP 200 — say so rather
+            // than silently behaving like "no key".
+            //
+            // ⛔ The breadcrumb names the fetcher and NOT ClubLog's sentence. The API key is
+            // in this request's URL (`?api={key}`), so ClubLog's own words about a rejected
+            // request are the most likely place for it to come back; and stderr is not a
+            // dev convenience on Linux, where the desktop session redirects a GUI process's
+            // stderr into `~/.xsession-errors`, mode 0644, kept until the next login. Same
+            // rule as `conn_log` in `src-tauri/src/lib.rs`: a service's own text goes to a
+            // screen, never to something that outlives the moment.
+            if let Some(crumb) = most_wanted_error_breadcrumb(&v) {
+                eprintln!("{crumb}");
                 return HashMap::new();
             }
             if let Some(obj) = v.as_object() {
@@ -526,6 +553,45 @@ fn parse_modes(info: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⛔ CLUBLOG'S OWN WORDS DO NOT REACH STDERR, AND THE API KEY IS IN THE URL.
+    ///
+    /// `mostwanted.php` is fetched as `?api={key}`, so a refusal is the single most likely
+    /// answer to quote the key back — and on Linux a GUI process's stderr is redirected by
+    /// the desktop session into `~/.xsession-errors`, mode 0644, kept until the next login.
+    /// This used to print ClubLog's `error` string verbatim.
+    ///
+    /// Driven straight through the decider, so no live client is needed; the call site is
+    /// `eprintln!("{crumb}")` over this function's `&'static str`, which cannot carry a body.
+    #[test]
+    fn the_most_wanted_breadcrumb_carries_none_of_clublogs_answer() {
+        const KEY: &str = "clubl0g4p1k3yAbCdEf0123456789xyz";
+        let hostile = serde_json::json!({
+            "error": format!("\u{202e}denied for api={KEY}\u{200b}")
+        });
+        // The control: the body really does carry the key, so the assertion below is about
+        // the breadcrumb and not about the fixture having lost it.
+        assert!(
+            hostile.to_string().contains(KEY),
+            "control: the hostile body must actually hold the key"
+        );
+
+        let crumb = most_wanted_error_breadcrumb(&hostile)
+            .expect("an error body must still produce a breadcrumb");
+        assert!(
+            !crumb.contains(KEY) && !crumb.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "ClubLog's own answer reached stderr: {crumb:?}"
+        );
+        assert!(
+            crumb.contains("refused"),
+            "the breadcrumb must still say what happened: {crumb:?}"
+        );
+
+        // The other half of the guard: a real answer is not mistaken for an error, or the
+        // fetcher would return an empty map on every good fetch.
+        assert!(most_wanted_error_breadcrumb(&serde_json::json!({"1": "P5"})).is_none());
+        assert!(most_wanted_error_breadcrumb(&serde_json::json!({"P5": 1})).is_none());
+    }
 
     #[test]
     fn parses_an_adxo_row() {

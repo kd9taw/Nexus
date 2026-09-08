@@ -1824,6 +1824,12 @@ export interface UploadStatus {
   /** "pending" | "accepted" | "duplicate" | "rejected" | "authfail". */
   outcome: string
   whenUnix: number
+  /**
+   * The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record" |
+   * "partial" | "unclassified" | "declared" — not prose. It rides `log.adi`, which is what
+   * TQSL signs and uploads to ARRL, so it is never the service's own words; anything else is
+   * dropped on the way back into Rust. Render it through a label of your own, not verbatim.
+   */
   detail?: string | null
 }
 export interface UploadState {
@@ -2238,7 +2244,9 @@ export interface CredStatus {
   lastSuccessUnix: number | null
   /** Newest failure, unix seconds. */
   lastFailureUnix: number | null
-  /** The service's own (sanitized) reason for that failure. */
+  /** Why it last failed, in NEXUS's own words — the sentence for the failure class, never
+   *  the service's prose (see `UploadDetail` on the Rust side, and the `conn-health.json`
+   *  allow-list for the connectors that leave no per-QSO stamp). Safe to render verbatim. */
   lastFailureDetail: string | null
   /** Session kill-switch tripped (ClubLog's 403 latch): every leg is being skipped. */
   paused: boolean

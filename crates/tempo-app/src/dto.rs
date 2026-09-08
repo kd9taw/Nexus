@@ -1444,6 +1444,15 @@ pub struct UploadStatusDto {
     /// "pending" | "accepted" | "duplicate" | "rejected" | "authfail".
     pub outcome: String,
     pub when_unix: i64,
+    /// The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record"
+    /// | "partial" | "unclassified" | "declared" — exactly like `outcome`, and for the same
+    /// reason. [`tempo_core::logbook::UploadDetail::ALL`] is the set; this list is a reading
+    /// aid and cannot be relied on to be current.
+    ///
+    /// ⛔ Not the service's prose, and not the English sentence either: this DTO round-trips
+    /// back into a `QsoRecord`, so a free string here would be a way to write text into
+    /// `log.adi` from the webview. Anything that is not a known token is dropped on the way
+    /// back. See [`tempo_core::logbook::UploadDetail`].
     pub detail: Option<String>,
 }
 
@@ -1466,7 +1475,7 @@ impl From<tempo_core::logbook::UploadStatus> for UploadStatusDto {
         UploadStatusDto {
             outcome: s.outcome.code().to_string(),
             when_unix: s.when_unix,
-            detail: s.detail,
+            detail: s.detail.map(|d| d.code().to_string()),
         }
     }
 }
@@ -1476,7 +1485,10 @@ impl From<UploadStatusDto> for tempo_core::logbook::UploadStatus {
             outcome: tempo_core::logbook::UploadOutcome::from_code(&s.outcome)
                 .unwrap_or(tempo_core::logbook::UploadOutcome::Rejected),
             when_unix: s.when_unix,
-            detail: s.detail,
+            detail: s
+                .detail
+                .as_deref()
+                .and_then(tempo_core::logbook::UploadDetail::from_code),
         }
     }
 }

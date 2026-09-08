@@ -9219,7 +9219,7 @@ impl Engine {
                 &indices,
                 tempo_core::logbook::UploadOutcome::Accepted,
                 now_unix_secs() as i64,
-                Some("marked already on LoTW".into()),
+                Some(tempo_core::logbook::UploadDetail::OperatorDeclared),
             );
         }
         n
@@ -18803,7 +18803,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_qrz_upload(pushed, outcome, when_unix, detail)
@@ -18815,7 +18815,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_clublog_upload(pushed, outcome, when_unix, detail)
@@ -18827,7 +18827,7 @@ impl Engine {
         pushed: &QsoRecord,
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) -> bool {
         self.station
             .stamp_eqsl_upload(pushed, outcome, when_unix, detail)
@@ -18878,7 +18878,7 @@ impl Engine {
         indices: &[usize],
         outcome: tempo_core::logbook::UploadOutcome,
         when_unix: i64,
-        detail: Option<String>,
+        detail: Option<tempo_core::logbook::UploadDetail>,
     ) {
         self.station
             .stamp_lotw_upload(indices, outcome, when_unix, detail)

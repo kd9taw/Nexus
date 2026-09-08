@@ -78,6 +78,23 @@ impl QrzSession {
                 .as_deref()
                 .is_some_and(|e| e.to_ascii_lowercase().contains("session"))
     }
+
+    // ⛔ THERE IS DELIBERATELY NO `holds_no_record` HERE, AND THERE CANNOT BE ONE.
+    //
+    // QRZ delivers an authoritative miss and a REFUSAL in the same shape: an `<Error>`
+    // beside a live `<Key>`, with no `<Callsign>`. Nothing structural separates them, so
+    // four rounds of readers each tried to separate them by WORDING — `Ok(None)`,
+    // `NotFound`, `contains("not found")`, then a prefix anchored at `not found` followed
+    // by end-of-string or a colon. The fifth costume broke the anchored one too: QRZ's own
+    // *"Not found: your subscription does not cover this record"* begins exactly like a miss
+    // and is a refusal, and reading it as a miss stamps the Connections row GREEN — which
+    // does not merely fail to warn, it CLEARS an existing red (#245).
+    //
+    // A predicate that has been wrong in five different disguises is not a predicate that
+    // needs a sixth wording; it is a question the data cannot answer. So the honest answer
+    // is that this module does not answer it, and the caller fails closed: an answer with no
+    // record is not a verified lookup, whatever it says. See `QrzOutcome::NoRecord` in
+    // `src-tauri/src/lib.rs`.
 }
 
 /// A parsed QRZ callsign record. **Pure** (no serde — the serde DTO lives in
@@ -180,6 +197,11 @@ pub fn parse_session(xml: &str) -> QrzSession {
 /// it replaced whenever QRZ fell back to `dxcc`, so absence is reported as absence
 /// and the caller falls back to the locator.
 pub fn parse_callsign(xml: &str) -> Option<QrzLookup> {
+    // ⛔ Scope EVERY field to the returned `<Callsign>` record. `tag` is an unscoped substring
+    // scan, so a refusal whose `<Error>`/`<Session>` prose quotes `<call>`/`<grid>` — with no
+    // `<Callsign>` element at all — used to fabricate a record QRZ never sent, shown to the operator
+    // and stamped green (#245, round 7 F2). No record element ⇒ no record.
+    let xml = callsign_scope(xml)?;
     let call = tag(xml, "call")?;
     let name = tag(xml, "name_fmt").or_else(|| match (tag(xml, "fname"), tag(xml, "name")) {
         (Some(f), Some(l)) => Some(format!("{f} {l}")),
@@ -217,6 +239,193 @@ pub fn parse_callsign(xml: &str) -> Option<QrzLookup> {
         itu_zone: tag(xml, "ituzone").and_then(|d| d.parse().ok()),
         image: tag(xml, "image"),
     })
+}
+
+/// ⛔ **THE ONE POSITIVE SIGNAL — the qrz-xml health row goes green on this and nothing else.**
+///
+/// True iff `body` is a QRZ XML response carrying a field QRZ serves **only to an entitled
+/// subscription**: a `<Callsign>` record with a `<grid>` or a `<state>` (this module's header,
+/// and [`parse_callsign`]'s own free-tier test — a free or lapsed account is given
+/// name/address/country and nothing more). Every other body is `false`.
+///
+/// ⚠️ **It is an ALLOW-LIST, and that is the whole fix.** #245 returned six times because the
+/// check was a DENY-list: a lookup counted as proof unless its body matched a known failure, so
+/// every unrecognised body defaulted to GREEN and each round appended one more wording. Five of
+/// those rounds were beaten by the next wording. The sixth costume was not a wording at all —
+/// QRZ's non-subscriber reply (`fixtures::LOOKUP_FREE`) is a *success* body with a real
+/// `<Callsign>` in it, so a reader hunting for failure text found none and stamped the row green
+/// over a subscription that had lapsed. Inverted, a body nobody has ever seen is not-confirmed
+/// **by construction** — there is no list left to be behind.
+///
+/// ⚠️ **The price, stated here rather than discovered later:** an entitled lookup whose record
+/// carries neither a grid nor a state reads as not-confirmed, and the row stays red until a
+/// lookup that returns one. That is the correct direction to be wrong in — a red row costs a
+/// glance and the next real lookup clears it, while a green row over a lapsed subscription is
+/// the bug this was reported as.
+///
+/// ⚠️ **The signal is SCOPED to the returned `<Callsign>` record (round 7).** Round 6's allow-list
+/// read `<grid>`/`<state>` as a bare substring anywhere in the body, so QRZ's own
+/// `<Message>`/`<Session>`/`<Error>` prose — or a tag smuggled into a field VALUE — flipped the
+/// row green. It now asks [`callsign_has_field`], which finds the field only as a DIRECT CHILD of
+/// the record.
+///
+/// ⛔ **NEEDS-BENCH — the vendor claim under the `state` half.** The green condition assumes QRZ
+/// serves BOTH `<grid>` and `<state>` only to an entitled subscription. Nothing in the repo
+/// verifies that, and `<state>` for a US call is derivable from the FCC ULS (which QRZ holds for
+/// every US ham regardless of subscription). If QRZ returns `<state>` to a free/lapsed US account,
+/// every US non-subscriber goes green and #245 returns. Settling it needs a live lookup from a
+/// lapsed/free QRZ XML subscription — **do not send credentials out to check it.** If `state` IS
+/// returned free, the narrowing is one line: drop the `|| callsign_has_field(body, "state")` term
+/// below; `grid` alone stays subscriber-only.
+pub fn proves_entitled_lookup(body: &str) -> bool {
+    proves_entitled_lookup_at(body, now_unix())
+}
+
+/// As [`proves_entitled_lookup`], with the clock injected so the `<SubExp>` expiry check is
+/// deterministic under test. `now_unix` is UTC seconds.
+///
+/// ⛔ **QRZ's own `<SubExp>` is consulted, and an explicit negative disqualifies REGARDLESS of the
+/// two positive tokens (round 7 F1).** Round 6 read only `grid`/`state` and never looked at the
+/// field QRZ provides *specifically* to state entitlement, so a body that literally says
+/// `non-subscriber`, and one whose subscription expired years ago, both stamped the row green. A
+/// definitive negative in hand is now believed over any grid/state — see [`subscription_denied`].
+/// This also blunts the NEEDS-BENCH risk above: a free account's reply carries
+/// `<SubExp>non-subscriber</SubExp>`, which is refused here even if it also carried a `<state>`.
+pub fn proves_entitled_lookup_at(body: &str, now_unix: i64) -> bool {
+    if !is_qrz_xml(body) {
+        return false;
+    }
+    let session = parse_session(body);
+    if session.needs_login() || subscription_denied(&session, now_unix) {
+        return false;
+    }
+    parse_callsign(body).is_some()
+        && (callsign_has_field(body, "grid") || callsign_has_field(body, "state"))
+}
+
+/// True iff `<SubExp>` explicitly says this is NOT an entitled subscription: the literal
+/// `non-subscriber`, or an expiry whose year is already past. QRZ writes SubExp as that literal or
+/// a human date (e.g. `Wed Jan 1 2031`); the year is the first 4-digit run. Deliberately coarse —
+/// it never disqualifies a current/future-year subscriber, and an ABSENT SubExp (a real subscriber
+/// record omits it, e.g. `fixtures::LOOKUP_FULL`) is not a disqualifier. An unparseable date is not
+/// a disqualifier either; the grid/state check remains the gate. A same-year mid-year lapse is not
+/// caught by the year test — the `non-subscriber` literal and the grid/state gate are the backstops.
+fn subscription_denied(session: &QrzSession, now_unix: i64) -> bool {
+    let Some(s) = session
+        .sub_exp
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return false;
+    };
+    if s.eq_ignore_ascii_case("non-subscriber") {
+        return true;
+    }
+    match (subexp_year(s), current_year(now_unix)) {
+        (Some(exp), Some(this)) => exp < this,
+        _ => false,
+    }
+}
+
+/// The first 4-digit run of `s` read as a year in 1900..=9999, or `None`.
+fn subexp_year(s: &str) -> Option<i32> {
+    s.split(|c: char| !c.is_ascii_digit())
+        .find(|g| g.len() == 4)
+        .and_then(|g| g.parse::<i32>().ok())
+        .filter(|y| (1900..=9999).contains(y))
+}
+
+/// The UTC calendar year of `now_unix` (negative times → `None`).
+fn current_year(now_unix: i64) -> Option<i32> {
+    (now_unix >= 0).then(|| crate::logbook::datetime_utc(now_unix as u64).0)
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// True iff the QRZ `<Callsign>` record a lookup returned carries `field` as a **non-empty direct
+/// child element** — the record's OWN `<grid>`/`<state>`, not a tag of that name sitting elsewhere
+/// in the document. This is the whole positive signal for [`proves_entitled_lookup`], so it is
+/// deliberately narrow.
+///
+/// It is NOT a substring test — that was the round-6 hole (#245, round 7). It looks inside the
+/// FIRST `<Callsign>…</Callsign>` element only (so a tag in QRZ's sibling `<Session>`/`<Message>`/
+/// `<Error>` blocks does not count), and within that record it steps over the entire content of
+/// every child, so a `<state>` nested inside an `<addr2>` value is passed over rather than read as
+/// the record's own state.
+///
+/// # Honest limits
+/// tempo-core has no XML parser and adding one for one predicate is not worth a new dependency;
+/// this is the same hand-rolled shape as [`tag`], scoped. It assumes QRZ records are FLAT (every
+/// real field is a direct child — the captured corpus and the vendor format bear this out); it
+/// matches only the attribute-free `<field>` form, refusing an attributed `<grid …>` exactly as
+/// [`tag`] does (no `>`-in-attribute hazard); and a child opened but never closed ends the walk,
+/// which is the fail-closed direction.
+/// The content of the first `<Callsign>…</Callsign>` element, or `None` when there is no record
+/// element at all. Every field a lookup reports must be read from INSIDE this — QRZ's
+/// `<Error>`/`<Session>`/`<Message>` prose can quote `<call>`/`<grid>`, and an unscoped scan
+/// fabricates a record from a refusal that has no `<Callsign>` (#245, round 7). Requires the
+/// opening `<Callsign` tag; a missing close is tolerated (scoped to end) since a well-formed body
+/// always carries one and a truncated record should still parse what it has.
+fn callsign_scope(xml: &str) -> Option<&str> {
+    let lower = xml.to_ascii_lowercase();
+    let open = lower.find("<callsign")?;
+    let gt = lower[open..].find('>')? + open;
+    let start = gt + 1;
+    let end = lower[start..]
+        .find("</callsign>")
+        .map_or(xml.len(), |r| start + r);
+    Some(&xml[start..end])
+}
+
+fn callsign_has_field(body: &str, field: &str) -> bool {
+    // The record the lookup returned; nothing outside it can be entitlement.
+    let Some(scope) = callsign_scope(body) else {
+        return false;
+    };
+    let lower = scope.to_ascii_lowercase();
+    let mut pos = 0usize;
+    let end = lower.len();
+
+    // Walk the record's DIRECT children only.
+    while pos < end {
+        let Some(rel) = lower[pos..end].find('<') else {
+            return false;
+        };
+        let tag_open = pos + rel;
+        let Some(gt_rel) = lower[tag_open..end].find('>') else {
+            return false; // an unterminated tag — stop rather than guess
+        };
+        let inner = &lower[tag_open + 1..tag_open + gt_rel]; // between '<' and '>'
+        let content_start = tag_open + gt_rel + 1;
+        // Element name (for skipping a child's content): up to the first whitespace or '/'.
+        let name_end = inner
+            .find(|c: char| c.is_ascii_whitespace() || c == '/')
+            .unwrap_or(inner.len());
+        let name = &inner[..name_end];
+        // A closing (`</x>`), self-closing (`<x/>`), or nameless tag has no child content to skip.
+        if name.is_empty() || inner.starts_with('/') || inner.ends_with('/') {
+            pos = content_start;
+            continue;
+        }
+        let close = format!("</{name}>");
+        let Some(crel) = lower[content_start..end].find(&close) else {
+            return false; // a child opened but never closed inside the record — fail closed
+        };
+        let child_end = content_start + crel;
+        // Match only the EXACT attribute-free `<field>` (QRZ data tags carry none); the raw slice
+        // must hold something once trimmed.
+        if inner == field && !scope[content_start..child_end].trim().is_empty() {
+            return true;
+        }
+        pos = child_end + close.len();
+    }
+    false
 }
 
 /// Extract the text content of the first `<name>…</name>` element (case-insensitive
@@ -284,6 +493,22 @@ impl QrzPushResult {
             QrzPushResult::Duplicate => U::Duplicate,
             QrzPushResult::AuthFail => U::AuthFail,
             QrzPushResult::Fail => U::Rejected,
+        }
+    }
+
+    /// WHY, for the per-QSO stamp — the CLASS, off the `RESULT` token.
+    ///
+    /// ⛔ Deliberately not [`QrzPush::reason`]. That is QRZ's own prose, QRZ echoes the
+    /// failing request back, and the request carries the API key — and this value is written
+    /// into `log.adi`, which is signed by TQSL and uploaded to ARRL. See
+    /// [`crate::logbook::UploadDetail`]. The reason still reaches the operator; it goes to
+    /// the connection log and the toast, and dies with the session.
+    pub fn to_upload_detail(self) -> Option<crate::logbook::UploadDetail> {
+        use crate::logbook::UploadDetail as D;
+        match self {
+            QrzPushResult::Ok | QrzPushResult::Replace | QrzPushResult::Duplicate => None,
+            QrzPushResult::AuthFail => Some(D::Credentials),
+            QrzPushResult::Fail => Some(D::RecordRefused),
         }
     }
 }
@@ -575,6 +800,164 @@ fn urldecode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// **Every complete QRZ XML response this repo has a sample of — one copy, read by two crates.**
+///
+/// ⚠️ The parser here and the connector-health stamp in `src-tauri` both decide things about
+/// these exact bytes, and #245 is six rounds of those two readers disagreeing about them. A
+/// second copy of a body is a second chance to disagree, so the bodies live here and both
+/// crates read them. `const`, so a build that never mentions them carries nothing.
+///
+/// **In scope: whole responses** — anything with a `<QRZDatabase>` root, which is what comes
+/// off the wire and what `qrz_outcome_from_body` is handed. The bare `<Callsign>…` fragments
+/// elsewhere in this file's tests are [`parse_callsign`] probes, not responses; QRZ never sends
+/// one, and each is exercised where it is written.
+///
+/// [`QrzXmlSample::verifies_subscription`] is the answer the whole chain must give for that
+/// body: `true` only where it carries positive proof of an entitled lookup. It is `true` for
+/// exactly one sample.
+pub mod fixtures {
+    /// One captured QRZ XML response, and what the qrz-xml Connections row may do with it.
+    pub struct QrzXmlSample {
+        /// What this fixture is called, for an assertion message that names the failure.
+        pub name: &'static str,
+        /// The response body.
+        pub body: &'static str,
+        /// May the qrz-xml row go **green** on this body? Green means "the XML subscription is
+        /// live and entitled", and it does not merely fail to warn when it is wrong — it
+        /// CLEARS an existing red.
+        pub verifies_subscription: bool,
+    }
+
+    /// A login round trip: a session key, a quota count, a live subscription expiry — and no
+    /// record, because a login is not a lookup.
+    pub const LOGIN_OK: &str = "<?xml version=\"1.0\" ?>\n\
+<QRZDatabase version=\"1.34\" xmlns=\"http://xmldata.qrz.com\">\n\
+<Session><Key>3b1fc0de</Key><Count>12</Count><SubExp>Wed Jan 1 2031</SubExp></Session>\n\
+</QRZDatabase>";
+
+    /// The session died: an `<Error>` and no `<Key>` at all.
+    pub const EXPIRED: &str = "<?xml version=\"1.0\" ?><QRZDatabase version=\"1.34\">\
+<Session><Error>Session Timeout</Error></Session></QRZDatabase>";
+
+    /// QRZ's genuine miss — a live key, an `<Error>` naming the callsign, no record.
+    pub const NOT_FOUND: &str = "<QRZDatabase version=\"1.34\"><Session><Key>abc</Key>\
+<Error>Not found: g1srdd</Error></Session></QRZDatabase>";
+
+    /// ⛔ **The fifth costume**, kept because it is the one that was still green in round 4: a
+    /// REFUSAL whose wording opens exactly like a miss. Nothing here separates it from
+    /// [`NOT_FOUND`] except the words, which is why nothing tries to.
+    pub const REFUSAL_DRESSED_AS_A_MISS: &str = "<QRZDatabase><Session><Key>live</Key>\
+<Error>Not found: your subscription does not cover this record</Error></Session></QRZDatabase>";
+
+    /// A key QRZ itself will not accept — present, and dead.
+    pub const INVALID_SESSION_KEY: &str = "<QRZDatabase><Session><Key>stale</Key>\
+<Error>Invalid session key</Error></Session></QRZDatabase>";
+
+    /// An answer with neither a record nor a reason.
+    pub const NO_RECORD_NO_REASON: &str =
+        "<QRZDatabase><Session><Key>live</Key></Session></QRZDatabase>";
+
+    /// **A real subscriber record — the only sample in this corpus that proves anything.** The
+    /// `<grid>` and `<state>` are what a free account is not given, so their presence is the
+    /// positive signal (see [`super::proves_entitled_lookup`]); `<lat>`/`<lon>`/`<geoloc>` were
+    /// missing from this fixture until 2026-08-01, which is why nothing caught the caller card
+    /// re-deriving a position QRZ had already given us exactly.
+    pub const LOOKUP_FULL: &str = "<?xml version=\"1.0\" ?>\n\
+<QRZDatabase version=\"1.34\" xmlns=\"http://xmldata.qrz.com\">\n\
+<Callsign><call>AA7BQ</call><fname>Fred</fname><name>Lloyd</name><addr2>Scottsdale</addr2>\
+<state>AZ</state><country>United States</country><grid>DM43bp</grid><dxcc>291</dxcc>\
+<lat>33.634000</lat><lon>-111.887000</lon><geoloc>user</geoloc>\
+<cqzone>3</cqzone><ituzone>6</ituzone><image>https://cdn-xml.qrz.com/q/aa7bq/aa7bq.jpg</image></Callsign>\n\
+<Session><Key>abc</Key><Count>13</Count></Session>\n</QRZDatabase>";
+
+    /// ⛔ **THE SIXTH COSTUME, AND THE REASON THIS CORPUS EXISTS (#245, round 6).**
+    ///
+    /// A free — or lapsed — account: name and country, **no grid, no state**. It is a
+    /// *success* body with a real `<Callsign>` in it, so five rounds of hunting for failure
+    /// wording had nothing to find here and stamped the row GREEN over a subscription that was
+    /// not paying for anything. `verifies_subscription` is `false` and a build that says
+    /// otherwise is the defect, not a new fixture.
+    pub const LOOKUP_FREE: &str = "<QRZDatabase version=\"1.34\"><Callsign><call>AA7BQ</call>\
+<name_fmt>Fred Lloyd</name_fmt><country>United States</country></Callsign>\
+<Session><Key>abc</Key><SubExp>non-subscriber</SubExp>\
+<Message>A subscription is required to obtain the complete data</Message></Session></QRZDatabase>";
+
+    /// ⛔ Round 5's own "control: a record is a working subscription" — a `<call>` and nothing
+    /// else beside a live key. It was asserted GREEN, and it is the shape the free tier
+    /// degrades to. Kept, red, as the fixture that names what changed.
+    pub const BARE_CALL: &str = "<QRZDatabase><Callsign><call>AA7BQ</call></Callsign>\
+<Session><Key>live</Key></Session></QRZDatabase>";
+
+    /// A record whose text needs XML unescaping (and, incidentally, no `<Session>` at all).
+    pub const ENTITY_ESCAPED_NAME: &str = "<QRZDatabase><Callsign><call>X</call>\
+<name>Smith &amp; Jones</name></Callsign></QRZDatabase>";
+
+    /// An attributed `<grid id="a>b">`, which [`super::parse_callsign`] refuses rather than
+    /// mis-bounding at the `>` inside the attribute. So the grid is unreadable — and an
+    /// unreadable subscriber field proves nothing, which is the fail-closed direction.
+    pub const ATTRIBUTED_GRID: &str = "<QRZDatabase><Callsign><call>X</call>\
+<grid id=\"a>b\">DM43</grid></Callsign></QRZDatabase>";
+
+    /// The corpus, in one list, so a walk over it cannot miss a fixture someone added.
+    pub const ALL: &[QrzXmlSample] = &[
+        QrzXmlSample {
+            name: "LOGIN_OK",
+            body: LOGIN_OK,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "EXPIRED",
+            body: EXPIRED,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "NOT_FOUND",
+            body: NOT_FOUND,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "REFUSAL_DRESSED_AS_A_MISS",
+            body: REFUSAL_DRESSED_AS_A_MISS,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "INVALID_SESSION_KEY",
+            body: INVALID_SESSION_KEY,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "NO_RECORD_NO_REASON",
+            body: NO_RECORD_NO_REASON,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "LOOKUP_FULL",
+            body: LOOKUP_FULL,
+            verifies_subscription: true,
+        },
+        QrzXmlSample {
+            name: "LOOKUP_FREE",
+            body: LOOKUP_FREE,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "BARE_CALL",
+            body: BARE_CALL,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "ENTITY_ESCAPED_NAME",
+            body: ENTITY_ESCAPED_NAME,
+            verifies_subscription: false,
+        },
+        QrzXmlSample {
+            name: "ATTRIBUTED_GRID",
+            body: ATTRIBUTED_GRID,
+            verifies_subscription: false,
+        },
+    ];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -614,33 +997,12 @@ mod tests {
         assert!(dbg.contains("<redacted>") && !dbg.contains("sekret"));
     }
 
-    const LOGIN_OK: &str = "<?xml version=\"1.0\" ?>\n\
-<QRZDatabase version=\"1.34\" xmlns=\"http://xmldata.qrz.com\">\n\
-<Session><Key>3b1fc0de</Key><Count>12</Count><SubExp>Wed Jan 1 2031</SubExp></Session>\n\
-</QRZDatabase>";
-
-    const EXPIRED: &str = "<?xml version=\"1.0\" ?><QRZDatabase version=\"1.34\">\
-<Session><Error>Session Timeout</Error></Session></QRZDatabase>";
-
-    const NOT_FOUND: &str = "<QRZDatabase version=\"1.34\"><Session><Key>abc</Key>\
-<Error>Not found: g1srdd</Error></Session></QRZDatabase>";
-
-    // A real subscriber record carries <lat>/<lon>/<geoloc> alongside the grid — the
-    // fixture omitted them until 2026-08-01, which is why nothing caught the caller
-    // card re-deriving a position QRZ had already told us exactly.
-    const LOOKUP_FULL: &str = "<?xml version=\"1.0\" ?>\n\
-<QRZDatabase version=\"1.34\" xmlns=\"http://xmldata.qrz.com\">\n\
-<Callsign><call>AA7BQ</call><fname>Fred</fname><name>Lloyd</name><addr2>Scottsdale</addr2>\
-<state>AZ</state><country>United States</country><grid>DM43bp</grid><dxcc>291</dxcc>\
-<lat>33.634000</lat><lon>-111.887000</lon><geoloc>user</geoloc>\
-<cqzone>3</cqzone><ituzone>6</ituzone><image>https://cdn-xml.qrz.com/q/aa7bq/aa7bq.jpg</image></Callsign>\n\
-<Session><Key>abc</Key><Count>13</Count></Session>\n</QRZDatabase>";
-
-    // A free (non-subscriber) account: name/country only, NO grid/state.
-    const LOOKUP_FREE: &str = "<QRZDatabase version=\"1.34\"><Callsign><call>AA7BQ</call>\
-<name_fmt>Fred Lloyd</name_fmt><country>United States</country></Callsign>\
-<Session><Key>abc</Key><SubExp>non-subscriber</SubExp>\
-<Message>A subscription is required to obtain the complete data</Message></Session></QRZDatabase>";
+    // The response bodies live in `super::fixtures` — ONE copy, shared with src-tauri's
+    // health stamp, because #245 is six rounds of two readers disagreeing about these bytes.
+    use super::fixtures::{
+        ATTRIBUTED_GRID, ENTITY_ESCAPED_NAME, EXPIRED, INVALID_SESSION_KEY, LOGIN_OK, LOOKUP_FREE,
+        LOOKUP_FULL, NOT_FOUND,
+    };
 
     #[test]
     fn session_login_ok_has_key_no_relogin() {
@@ -749,6 +1111,281 @@ mod tests {
         assert_eq!(r.country.as_deref(), Some("United States"));
     }
 
+    /// ⛔ **THE ALLOW-LIST, WALKED OVER EVERY CAPTURED RESPONSE (#245, round 6).**
+    ///
+    /// The pure half of the gate: [`proves_entitled_lookup`] is the only thing that can put the
+    /// qrz-xml row green, so every fixture in [`fixtures::ALL`] is driven through it and checked
+    /// against the answer the corpus records. `LOOKUP_FREE` — QRZ's non-subscriber reply, which
+    /// is a *success* body carrying a real `<Callsign>` — must be `false`; it is the body that
+    /// survived five rounds of hunting for failure wording.
+    ///
+    /// The end-to-end half (the same corpus through `qrz_outcome_from_body` into the health
+    /// stamp) is `every_qrz_fixture_is_classified_and_only_a_subscriber_record_is_green` in
+    /// `src-tauri`.
+    #[test]
+    fn only_a_subscriber_scoped_field_proves_an_entitled_lookup() {
+        // Both controls, because one direction is half a test: the corpus must contain a body
+        // that MUST come out true and bodies that MUST come out false. A predicate hard-wired
+        // to either answer passes half of this and fails the other half.
+        assert!(
+            fixtures::ALL.iter().any(|s| s.verifies_subscription),
+            "control: a corpus with no positive sample cannot catch a predicate stuck at false"
+        );
+        assert!(
+            fixtures::ALL.iter().any(|s| !s.verifies_subscription),
+            "control: a corpus with no negative sample cannot catch a predicate stuck at true"
+        );
+
+        for s in fixtures::ALL {
+            assert_eq!(
+                proves_entitled_lookup(s.body),
+                s.verifies_subscription,
+                "{} was classified wrong — green means the XML subscription is live and \
+                 entitled, and a wrong green CLEARS an existing red (#245)",
+                s.name
+            );
+        }
+
+        // The two subscriber-scoped fields, one at a time, so the disjunction is real and not
+        // just `<grid>` twice: a DX record has no `<state>`, a US record with no locator on
+        // file has no `<grid>`, and either alone is a field a free account is not given.
+        for field in ["<grid>DM43bp</grid>", "<state>AZ</state>"] {
+            let body = format!(
+                "<QRZDatabase><Callsign><call>AA7BQ</call>{field}</Callsign>\
+<Session><Key>live</Key></Session></QRZDatabase>"
+            );
+            assert!(
+                proves_entitled_lookup(&body),
+                "{field} is subscriber-scoped and proves the lookup was entitled"
+            );
+            // …and the same record WITHOUT it does not, which is what makes the line above a
+            // statement about the field rather than about the envelope.
+            let without = body.replace(field, "");
+            assert!(
+                !proves_entitled_lookup(&without),
+                "a record with no subscriber-scoped field proves nothing: {without}"
+            );
+        }
+
+        // Unknown falls on the not-green side BY CONSTRUCTION, not by enumeration — the whole
+        // point of the inversion. Nothing below is a shape QRZ has ever sent.
+        for junk in [
+            "",
+            "<!DOCTYPE html><html><body>QRZ is down</body></html>",
+            "<QRZDatabase><Callsign><call>AA7BQ</call><grid>DM43bp</grid></Callsign></QRZDatabase>",
+            "<QRZDatabase><Session><Key>live</Key><Grid>DM43bp</Grid></Session></QRZDatabase>",
+        ] {
+            assert!(
+                !proves_entitled_lookup(junk),
+                "an unrecognised body must read not-confirmed: {junk}"
+            );
+        }
+    }
+
+    /// ⛔ **THE POSITIVE SIGNAL IS SCOPED TO THE RETURNED `<Callsign>` RECORD (#245, round 7).**
+    ///
+    /// Round 6 inverted the check to an allow-list, which was the right move, but the allow-list
+    /// read `<grid>`/`<state>` as a bare substring ANYWHERE in the body. An adversarial pass showed
+    /// four bodies that a non-subscriber (or QRZ itself) can produce that flip the row green with no
+    /// entitlement: the tag inside QRZ's own `<Message>`/`<Session>`/`<Error>` prose, or smuggled
+    /// into a field VALUE. A green does not merely fail to warn — it CLEARS an existing red. This
+    /// pins that the signal must be a DIRECT CHILD of the record the lookup returned.
+    ///
+    /// Both controls, because one direction is half a test: a real subscriber record must stay
+    /// green (or a predicate stuck at `false` passes every attack row), and the free reply must
+    /// stay red.
+    #[test]
+    fn a_subscriber_field_outside_the_callsign_record_does_not_prove_entitlement() {
+        // Positive controls — these must NOT change with the scoping.
+        assert!(
+            proves_entitled_lookup(LOOKUP_FULL),
+            "control: a real subscriber record (grid+state, direct children) is still green"
+        );
+        assert!(
+            !proves_entitled_lookup(LOOKUP_FREE),
+            "control: the free/lapsed reply is still red"
+        );
+        // A US record with only <state> and a DX record with only <grid>, each a direct child:
+        // either alone still proves entitlement, so the fix did not over-narrow the honest case.
+        assert!(
+            proves_entitled_lookup(
+                "<QRZDatabase><Callsign><call>W1AW</call><state>CT</state></Callsign>\
+<Session><Key>live</Key></Session></QRZDatabase>"
+            ),
+            "control: a real <state> child still proves entitlement"
+        );
+        assert!(
+            proves_entitled_lookup(
+                "<QRZDatabase><Callsign><call>DL1ABC</call><grid>JO31</grid></Callsign>\
+<Session><Key>live</Key></Session></QRZDatabase>"
+            ),
+            "control: a real <grid> child still proves entitlement"
+        );
+
+        // The four attacks. Each carries a live session and a real <call> in the record, so it is
+        // NOT vetoed by `needs_login` or by "a record came back" — the ONLY thing standing between
+        // it and a false green is the scoping. Every one must be red.
+        let attacks: [(&str, &str); 4] = [
+            (
+                "grid inside <Message>",
+                "<QRZDatabase><Callsign><call>AA7BQ</call><name_fmt>Fred</name_fmt>\
+<country>United States</country></Callsign><Session><Key>live</Key>\
+<SubExp>non-subscriber</SubExp><Message>upgrade to see <grid>DM43bp</grid></Message>\
+</Session></QRZDatabase>",
+            ),
+            (
+                "state inside <Session>",
+                "<QRZDatabase><Callsign><call>AA7BQ</call><country>United States</country>\
+</Callsign><Session><Key>live</Key><state>AZ</state></Session></QRZDatabase>",
+            ),
+            (
+                "state smuggled inside an <addr2> value",
+                "<QRZDatabase><Callsign><call>AA7BQ</call>\
+<addr2>Scottsdale<state>AZ</state></addr2></Callsign>\
+<Session><Key>live</Key></Session></QRZDatabase>",
+            ),
+            (
+                "non-session <Error> carrying call+grid",
+                "<QRZDatabase><Error>Not found: <grid>DM43bp</grid></Error>\
+<Callsign><call>AA7BQ</call></Callsign><Session><Key>live</Key></Session></QRZDatabase>",
+            ),
+        ];
+        for (name, body) in attacks {
+            assert!(
+                !proves_entitled_lookup(body),
+                "a subscriber field OUTSIDE the returned record flipped the row green ({name}): \
+                 {body}"
+            );
+        }
+    }
+
+    /// ⛔ **A refusal with no `<Callsign>` must not become a fabricated record (#245, round 7 F2).**
+    ///
+    /// `tag()` is an unscoped substring scan, so a refusal whose `<Error>` prose quotes
+    /// `<call>`/`<grid>` used to produce a `QrzOutcome::Found` — a record QRZ never sent, shown to
+    /// the operator, AND a green stamp. `parse_callsign` now requires a real `<Callsign>` element,
+    /// so a body with none returns `None` (no record) rather than inventing one from loose tags.
+    #[test]
+    fn a_refusal_with_no_callsign_element_is_not_a_record() {
+        // Control: a genuine record still parses.
+        assert!(
+            parse_callsign(LOOKUP_FREE).is_some(),
+            "control: a real <Callsign> record still parses"
+        );
+
+        // An <Error> body quoting the record tokens, with NO <Callsign> element at all.
+        let error_body = "<QRZDatabase><Session><Key>live</Key></Session>\
+<Error>Not found: <call>W1AW</call> <grid>DM43bp</grid> is not covered</Error></QRZDatabase>";
+        assert!(
+            parse_callsign(error_body).is_none(),
+            "a refusal with no <Callsign> was turned into a record: {:?}",
+            parse_callsign(error_body)
+        );
+        assert!(
+            !proves_entitled_lookup(error_body),
+            "a refusal with no <Callsign> stamped the row green"
+        );
+
+        // Two records: the call from one, the grid from another — the scope must not stitch a
+        // field from outside the first record onto it.
+        let split = "<QRZDatabase><Callsign><call>W1AW</call></Callsign>\
+<Callsign><grid>DM43bp</grid></Callsign><Session><Key>live</Key></Session></QRZDatabase>";
+        let rec = parse_callsign(split).expect("the first record parses");
+        assert_eq!(rec.call, "W1AW");
+        assert!(
+            rec.grid.is_none(),
+            "a grid from a SECOND record was stitched onto the first: {:?}",
+            rec.grid
+        );
+        assert!(
+            !proves_entitled_lookup(split),
+            "a grid outside the first record stamped it green"
+        );
+    }
+
+    /// ⛔ **QRZ's `<SubExp>` disqualifies REGARDLESS of grid/state (#245, round 7 F1).**
+    ///
+    /// Round 6 read only the two positive tokens and ignored the field QRZ provides specifically to
+    /// state entitlement, so a body that says `non-subscriber`, and one expired years ago, both
+    /// stamped the row green when they carried a grid. QRZ's own definitive negative is now believed.
+    #[test]
+    fn an_explicit_non_subscriber_or_expired_subexp_is_never_green() {
+        // 2026-01-01 UTC — a fixed "now" so the expiry test is deterministic.
+        const NOW: i64 = 1_767_225_600;
+
+        let with_grid = |session: &str| {
+            format!(
+                "<QRZDatabase><Callsign><call>AA7BQ</call><grid>DM43bp</grid></Callsign>\
+<Session><Key>live</Key>{session}</Session></QRZDatabase>"
+            )
+        };
+
+        // Controls, both directions: a real subscriber record with a grid and NO SubExp is green,
+        // and a subscriber whose SubExp is a FUTURE year stays green (the check must not red-flag a
+        // paid-up account).
+        assert!(
+            proves_entitled_lookup_at(LOOKUP_FULL, NOW),
+            "control: a real subscriber record (no SubExp) is green"
+        );
+        assert!(
+            proves_entitled_lookup_at(&with_grid(""), NOW),
+            "control: a grid with no SubExp is green"
+        );
+        assert!(
+            proves_entitled_lookup_at(&with_grid("<SubExp>Wed Jan 1 2031</SubExp>"), NOW),
+            "control: a future SubExp with a grid stays green"
+        );
+
+        // The finding: an explicit non-subscriber, and an expired subscription, each WITH a grid —
+        // both must be red because SubExp overrides the positive token.
+        assert!(
+            !proves_entitled_lookup_at(&with_grid("<SubExp>non-subscriber</SubExp>"), NOW),
+            "a body that says non-subscriber stamped green over a grid"
+        );
+        assert!(
+            !proves_entitled_lookup_at(&with_grid("<SubExp>Wed Jan 1 2020</SubExp>"), NOW),
+            "a subscription expired in 2020 stamped green over a grid"
+        );
+        assert!(
+            !proves_entitled_lookup_at(&with_grid("<SubExp>2019-12-31</SubExp>"), NOW),
+            "an expired ISO-dated SubExp stamped green over a grid"
+        );
+    }
+
+    /// ⛔ **The SubExp disqualifier makes the `<state>` NEEDS-BENCH question moot.**
+    ///
+    /// The green rests on the vendor assumption that QRZ withholds `<state>` from non-subscribers.
+    /// `<state>` is FCC-ULS-derivable, so QRZ *might* return it to a free US account — the exact
+    /// hypothetical the bench question is about. This is the body that hypothetical produces: a
+    /// non-subscriber whose `<Callsign>` carries a real `<state>` DIRECT child. Without the
+    /// disqualifier it goes green (the scoping passes it — the field is genuinely in the record);
+    /// with it, the explicit `non-subscriber` marker refuses it regardless. So even if the vendor
+    /// assumption is false, #245 cannot return through this door.
+    #[test]
+    fn a_non_subscriber_body_carrying_a_real_state_is_disqualified_by_subexp() {
+        const NOW: i64 = 1_767_225_600;
+
+        // The body the bench question is about: a real <state> child on the record, and the session
+        // declaring the account a non-subscriber.
+        let free_with_state =
+            "<QRZDatabase><Callsign><call>W1AW</call><state>CT</state></Callsign>\
+<Session><Key>live</Key><SubExp>non-subscriber</SubExp></Session></QRZDatabase>";
+
+        // The CONTROL that proves the disqualifier is what does the work: strip the SubExp and the
+        // very same record IS green — so "red" below cannot be an accident of the scoping.
+        let same_without_marker = free_with_state.replace("<SubExp>non-subscriber</SubExp>", "");
+        assert!(
+            proves_entitled_lookup_at(&same_without_marker, NOW),
+            "control: a <state> direct child with no SubExp marker is green (the bench scenario)"
+        );
+
+        // With QRZ's own non-subscriber marker present, it is red no matter the field.
+        assert!(
+            !proves_entitled_lookup_at(free_with_state, NOW),
+            "a non-subscriber body carrying a real <state> was stamped green"
+        );
+    }
+
     #[test]
     fn parses_the_nickname_when_present() {
         let with = "<Callsign><call>W1XYZ</call><name_fmt>John Public</name_fmt>\
@@ -780,9 +1417,8 @@ mod tests {
 
     #[test]
     fn tag_unescapes_entities() {
-        let xml = "<QRZDatabase><Callsign><call>X</call><name>Smith &amp; Jones</name></Callsign></QRZDatabase>";
         assert_eq!(
-            parse_callsign(xml).unwrap().name.as_deref(),
+            parse_callsign(ENTITY_ESCAPED_NAME).unwrap().name.as_deref(),
             Some("Smith & Jones")
         );
     }
@@ -791,18 +1427,14 @@ mod tests {
     fn key_present_but_invalid_session_error_needs_login() {
         // QRZ can return a present-but-dead key with an "Invalid session key" error;
         // must re-login, not keep reusing the dead key.
-        let xml = "<QRZDatabase><Session><Key>stale</Key>\
-<Error>Invalid session key</Error></Session></QRZDatabase>";
-        assert!(parse_session(xml).needs_login());
+        assert!(parse_session(INVALID_SESSION_KEY).needs_login());
     }
 
     #[test]
     fn attributed_tag_yields_none_not_misbounded_value() {
         // Defends the no-open_attr fix: a (non-QRZ) attributed tag must not return a
         // value mis-bounded at a '>' inside the attribute.
-        let xml = "<QRZDatabase><Callsign><call>X</call>\
-<grid id=\"a>b\">DM43</grid></Callsign></QRZDatabase>";
-        assert!(parse_callsign(xml).unwrap().grid.is_none());
+        assert!(parse_callsign(ATTRIBUTED_GRID).unwrap().grid.is_none());
     }
 
     #[test]
