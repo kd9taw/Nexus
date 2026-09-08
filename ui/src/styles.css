@@ -19797,13 +19797,15 @@ button.sat-chip:disabled {
 .rtty-host,
 .psk-host,
 .sstv-host,
-.aprs-host {
+.aprs-host,
+.js8-host {
   display: contents;
 }
 .rtty-host[hidden],
 .psk-host[hidden],
 .sstv-host[hidden],
-.aprs-host[hidden] {
+.aprs-host[hidden],
+.js8-host[hidden] {
   display: none;
 }
 /* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same
@@ -19835,6 +19837,17 @@ button.sat-chip:disabled {
      cockpit-panes.test.ts fails any other rule that sets this — inherited under a
      region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn. */
   --cockpit-fill-min: 10em;
+}
+/* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
+   takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
+   that knob to the region-less shells. Same deficit valve as .layout.single.cw-cockpit. */
+.layout.single.js8-cockpit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  overflow-y: auto;
+  min-height: 0;
 }
 /* Pinned TX dock — mode/Send/Stop/progress. Never a panel; Stop always reachable.
    Sticky is the .cockpit-txdock discipline (cockpit-panes.css): with the composer strip
@@ -19869,7 +19882,8 @@ button.sat-chip:disabled {
    in this scrolling cockpit column, and Waterfall's hidden-canvas guard would then
    skip every row. */
 .rtty-cockpit .waterfall-wrap,
-.psk-cockpit .waterfall-wrap {
+.psk-cockpit .waterfall-wrap,
+.js8-cockpit .waterfall-wrap {
   flex: 0 0 auto;
   /* Effective viewport, matching .ph-scope-panel — raw 22vh was zoom-blind. */
   height: calc(0.22 * var(--vh-eff, 100vh));
@@ -20016,6 +20030,179 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   font-family: var(--font-mono);
   text-transform: uppercase;
+}
+/* =========================================================================
+   JS8 cockpit — CONTENT styling only. Structure (the region, columns, the dock) is in
+   cockpit-panes.css; the feeds' readable minimums sit on their content wrappers here, the
+   sanctioned place. Every colour is a theme variable defined in BOTH themes.
+   ========================================================================= */
+.js8-speeds {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.js8-speed-chip {
+  padding: 0 var(--space-2);
+}
+.js8-dock-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  /* Reachability pin, like .cw-macros / .cw-send: the rows that queue frames never shrink
+     under deficit (guarded in cockpit-shells.test.ts ROWS). */
+  flex: 0 0 auto;
+}
+.js8-to {
+  flex: 0 1 14em;
+}
+.js8-compose {
+  flex: 1 1 12em;
+}
+.js8-cq-select {
+  flex: 0 0 auto;
+  width: auto;
+}
+/* Three faces for a second-act chip: off · on-but-not-armed (the switch is on, the session
+   TX latch is off — nothing keys) · ARMED (both acts agree). Auto-armed must never LOOK
+   ack-capable — the APRS rule. */
+.js8-arm.on {
+  border-color: var(--snr-marginal);
+  color: var(--snr-marginal);
+}
+.js8-arm.armed {
+  border-color: var(--state-ok);
+  color: var(--state-ok);
+}
+/* Feeds: readable minimum on the CONTENT wrapper (never on the frame). */
+.js8-activity,
+.js8-stations,
+.js8-inbox {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  overflow-y: auto;
+  min-height: 6em;
+}
+.js8-row {
+  display: grid;
+  grid-template-columns: 4.6em 1.2em 3.4em 3em minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: 1px var(--space-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-row.mine {
+  color: var(--accent);
+}
+.js8-row.directed {
+  border-left: 3px solid var(--accent);
+}
+.js8-row.low {
+  color: var(--text-dim);
+}
+.js8-row.partial {
+  opacity: 0.7;
+  font-style: italic;
+}
+.js8-time,
+.js8-freq,
+.js8-snr,
+.js8-age {
+  color: var(--text-dim);
+}
+.js8-station,
+.js8-inbox-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.js8-station.selected {
+  border-left: 3px solid var(--accent);
+}
+.js8-station-call {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.js8-station-acts {
+  margin-left: auto;
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.js8-query,
+.js8-inbox-act {
+  padding: 0 var(--space-1);
+}
+.js8-chip {
+  font-size: var(--fs-label);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  color: var(--text-dim);
+}
+.js8-inbox-row.state-unread {
+  font-weight: 700;
+}
+.js8-path {
+  color: var(--text-dim);
+}
+.js8-cmd-select {
+  flex: 0 1 11em;
+}
+.js8-estimate {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.js8-estimate.over {
+  color: var(--snr-weak);
+  font-weight: 700;
+}
+.js8-idle.tripped {
+  border-color: var(--snr-weak);
+  color: var(--snr-weak);
+  font-weight: 700;
+}
+.js8-pending-row {
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+.js8-pending-text,
+.js8-queue-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-label);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.js8-queue-row {
+  font-size: var(--fs-label);
+}
+.js8-queue-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  border-right: 1px solid var(--border);
+}
+.js8-queue-item.origin-operator .js8-queue-text {
+  color: var(--accent);
+}
+/* Settings ▸ Digital ▸ JS8: the four decode-speed switches on one row. */
+.js8-rx-speeds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.js8-rx-speeds .settings-toggle {
+  flex: 0 0 auto;
 }
 /* Stop button in the macro row — live (red-tinted) only while sending. */
 .rtty-stop:not(:disabled) {

@@ -96,6 +96,28 @@ impl RxRing {
         out
     }
 
+    /// The `len` samples that START `age_samples` before the newest sample: the window
+    /// `[n − age, n − age + len)`. Front-zero-padded when the ring does not yet hold `age`
+    /// samples (the `frame()` convention); tail-zero-padded when `age < len` (the window is
+    /// not complete yet — zeros, never the future). Always exactly `len` long.
+    ///
+    /// The multi-speed JS8 scheduler's accessor: `age` = samples since that speed's cycle
+    /// start, `len` = `speed.frames_needed()`, out of the one 36 s ring every speed shares.
+    pub fn tail_window(&self, age_samples: usize, len: usize) -> Vec<f32> {
+        let n = self.buf.len();
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len {
+            // Index into the ring of the i-th sample of the window, if it exists yet.
+            let idx = (n as i64) - (age_samples as i64) + (i as i64);
+            if idx >= 0 && (idx as usize) < n {
+                out.push(self.buf[idx as usize]);
+            } else {
+                out.push(0.0);
+            }
+        }
+        out
+    }
+
     pub fn len(&self) -> usize {
         self.buf.len()
     }
@@ -126,6 +148,29 @@ mod tests {
         let f = r.frame_latest_padded(99);
         assert_eq!(&f[..5], &[9.0, 9.0, 1.0, 2.0, 3.0]);
         assert!(f[5..].iter().all(|&x| x == 0.0));
+    }
+
+    /// `tail_window(age, len)` = the `len` samples starting `age` samples before the newest
+    /// one — the multi-speed scheduler's [cycle_start, cycle_start + frames_needed) slice out
+    /// of the 36 s JS8 ring. Front-zero-padded while the ring is still filling; tail-zero-
+    /// padded when the window is not complete yet (age < len).
+    #[test]
+    fn tail_window_slices_a_completed_cycle_out_of_the_ring() {
+        let mut r = RxRing::with_capacity(10);
+        r.push(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        // Newest is 8.0; age 5 → start at 4.0; len 3 → [4, 5, 6].
+        assert_eq!(r.tail_window(5, 3), vec![4.0, 5.0, 6.0]);
+        // age == len: the window ends exactly at the newest sample.
+        assert_eq!(r.tail_window(3, 3), vec![6.0, 7.0, 8.0]);
+        // Window not complete yet (age < len): the missing tail is zeros, never the future.
+        assert_eq!(r.tail_window(2, 4), vec![7.0, 8.0, 0.0, 0.0]);
+        // Ring not yet holding `age` samples: front-zero-padded (the RxRing::frame convention).
+        assert_eq!(r.tail_window(10, 4), vec![0.0, 0.0, 1.0, 2.0]);
+        // Always exactly `len` long, even when the ring is empty.
+        assert_eq!(
+            RxRing::with_capacity(10).tail_window(6, 3),
+            vec![0.0, 0.0, 0.0]
+        );
     }
 
     #[test]

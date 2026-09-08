@@ -69,7 +69,7 @@ import { useReveals } from './useReveals'
 import { sectionFeatures, featureById, type FeatureId } from './features/registry'
 import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall } from './features/needs'
-import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, usePanelLayout } from './features/panelState'
+import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
 import { usePaneWidths, clampLeft, clampRight } from './usePaneWidths'
 import { TopBar } from './components/TopBar'
@@ -87,6 +87,7 @@ import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
 import { RttyCockpit } from './components/RttyCockpit'
 import { PskCockpit } from './components/PskCockpit'
+import { Js8Cockpit } from './components/Js8Cockpit'
 import { SstvView } from './components/SstvView'
 import { AprsCockpit } from './components/AprsCockpit'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
@@ -438,6 +439,7 @@ export default function App() {
   const cwPanels = usePanelLayout(CW_PANELS)
   const rttyPanels = usePanelLayout(RTTY_PANELS)
   const pskPanels = usePanelLayout(PSK_PANELS)
+  const js8Panels = usePanelLayout(JS8_PANELS)
 
   // One-shot on launch: check the release feed for a newer version (throttled to once/day + cached,
   // silent when offline). Surfaces a dismissible "update available" toast; nothing auto-downloads.
@@ -2070,6 +2072,13 @@ export default function App() {
         setView(m)
         return
       }
+      if (m === 'js8') {
+        // Navigate; the [view] rig-mode effect asserts DATA and re-homes (rigModeForView), and
+        // the cockpit's rising `active` edge calls `js8_enter` — set_tier(JS8) + the JS8
+        // watering hole for the band. RX only: nothing here can key.
+        setView(m)
+        return
+      }
       // PRESERVE the operator's tier if it is already one this screen owns.
       // This used to read `tierRef.current === 'FT4' ? 'FT4' : 'FT8'`, which
       // silently forced anything else back to FT8 — so selecting Q65 (or any of
@@ -2892,6 +2901,7 @@ export default function App() {
           effectiveView === 'psk' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
+          effectiveView === 'js8' ||
           // Satellites: the bird's own surfaces ARE the frequency authority here
           // (transponder cards, passband strip, the binding line). Operator
           // report: "my dropdowns for frequencies are still showing FT8
@@ -2908,13 +2918,16 @@ export default function App() {
           // scoreboard while the rig is keyed from somewhere else.
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
-          // RTTY/PSK/SSTV/APRS are free-running modes with their OWN band selectors — the
+          // RTTY/PSK/SSTV/APRS/JS8 are free-running modes with their OWN band selectors — the
           // top control is fed the DIGITAL (FT8) plan, and the tier tiles / slot
-          // clock / DT readout are slot-sync furniture that means nothing here.
+          // clock / DT readout are slot-sync furniture that means nothing here (JS8 is
+          // slot-synced, but its header carries its own band select, speed chips and Stop
+          // TX, so the TopBar's cluster is hidden here exactly as for the others).
           effectiveView === 'rtty' ||
           effectiveView === 'psk' ||
           effectiveView === 'sstv' ||
           effectiveView === 'aprs' ||
+          effectiveView === 'js8' ||
           effectiveView === 'sats'
         }
         tier={tier}
@@ -3131,6 +3144,26 @@ export default function App() {
                 radio={snap.radio}
                 onSetTxEnabled={handleSetTxEnabled}
                 onOpenSettings={openSettingsAt}
+              />
+            </div>
+          )}
+          {/* JS8 keep-alive host — same contract as .rtty-host/.psk-host: the engine keeps
+              decoding all four speeds while the operator is on another section; `active`
+              gates the display poll and fires js8_enter on the rising edge. Gated on the
+              feature toggle (JS8 ships defaultOff), so a disabled section mounts nothing.
+              `onSetTxEnabled` is the header pill — the only TX latch in this view. */}
+          {isViewEnabled('js8') && (
+            <div className="js8-host" hidden={effectiveView !== 'js8'}>
+              <Js8Cockpit
+                onOpenLogbook={openLogbookFor}
+                snap={snap}
+                onSnap={setSnap}
+                active={effectiveView === 'js8'}
+                onSetFrequency={handleSetFrequency}
+                onSetTxEnabled={handleSetTxEnabled}
+                theme={theme}
+                wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
+                panels={js8Panels}
               />
             </div>
           )}

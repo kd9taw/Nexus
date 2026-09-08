@@ -1,0 +1,11 @@
+A_2_9.wav 2 501 0.1 VkDSPUuGBfqa 3
+A_2_9.wav 2 651 0.1 SIUT1UuGBfqb 3
+A_2_9.wav 2 806 0.2 VkNoM-uGBfqK 3
+A_2_9.wav 2 896 0.1 SKgyQ-uGBfqU 3
+A_2_9.wav 2 950 1.6 Uw2nt-uGBfqS 3
+A_2_9.wav 2 1324 0.3 SQu8IUuGBfqL 3
+A_2_9.wav 2 1762 -0.1 VlPJy-uGBfqI 3
+A_2_9.wav 2 1997 0.2 SJff7UuGBfqY 3
+A_3_3.wav 3 949 1.5 Uw2nt-xLZLqO 3
+A_3_3.wav 3 1762 0.0 VlPJy-uGBfqF 3
+E_2_1.wav 2 1291 0.0 TrMcT8++++++ 7

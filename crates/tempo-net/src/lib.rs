@@ -19,6 +19,10 @@
 //! - [`fdsync`] — Nexus↔Nexus Field Day club sync (NDJSON over TCP + a UDP
 //!   discovery beacon). The one protocol here where Nexus owns BOTH ends, so
 //!   its codec is serde-derived instead of matching an external wire format.
+//! - [`wl2k`] — the Winlink CMS telnet transport (`server.winlink.org:8772`). One
+//!   session per operator action, never a reconnect loop and never a poll; the B2F
+//!   protocol it carries lives in `tempo_core::winlink` and is joined to it through
+//!   [`wl2k::ByteSession`].
 //!
 //! Everything is pure Rust over `std` sockets and byte buffers; encoders take
 //! plain field arguments so there is no dependency on the rest of the workspace
@@ -43,6 +47,7 @@ pub mod pskreporter;
 pub mod qds;
 pub mod server;
 pub mod sntp;
+pub mod wl2k;
 pub mod wsjtx;
 
 // Convenience re-exports for the common entry points.

@@ -24,7 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so Nexus derives it from the band edge. That is measured, not assumed — but check it against the
   rig's own scale, and the tooltip says so.
 
-- **A POTA activity map in FT mode.** A new *Map* button beside Classic/Roster in the FT header
+- **JS8 transmits.** The JS8 section (shipped hidden — Settings ▸ Features) now keys every
+  period like JS8Call: your messages, CQ, heartbeats on a random free 500–1000 Hz slot, and —
+  behind the session TX latch plus the persisted switch — autoreplies, relay and HB-ack, each
+  with a visible, cancellable countdown. Heartbeats are exempt from the 6-minute TX watchdog
+  the way WSPR/FST4W beacons are and bounded by JS8Call's 60-minute idle watchdog; Stop TX
+  clears the queue, the heartbeat schedule and any pending reply.- **A POTA activity map in FT mode.** A new *Map* button beside Classic/Roster in the FT header
   opens the map in its own window — put it on a second monitor next to the roster, the way
   GridTracker is used for park hunting. It plots every spotted POTA activator from the live
   feed (the same source GridTracker reads, with no mode or age filter), coloured by

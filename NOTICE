@@ -271,6 +271,93 @@ GPL-compatible, so the vendored receiver redistributes cleanly inside the GPLv3
 whole. slowrx is an independent project, unmaintained upstream; Nexus is not
 affiliated with or endorsed by it.
 
+### Winlink secure-login algorithm — via wl2k-go (Martin Hebnes Pedersen, LA5NTA)
+License: **MIT**. <https://github.com/la5nta/wl2k-go>
+
+Nexus's Winlink ;PQ:/;PR: challenge-response (crates/tempo-core/src/winlink/secure.rs),
+including the fixed 64-byte salt constant, is transcribed from wl2k-go's fbb/secure.go
+(MIT; the file header reads "Copyright 2015 Martin Hebnes Pedersen (LA5NTA)"). The
+challenge-response is a published Winlink interoperability requirement and the salt is a
+fixed public protocol constant (not a secret or key); the Rust implementation is original.
+The exact digest derivation is not formally specified and is settled against a live CMS.
+MIT combines one-way-inbound into Nexus's GPL-3.0-only whole.
+
+### Winlink LZHUF compression — ARSFI (Amateur Radio Safety Foundation, Inc.)
+License: **BSD-3-Clause** (ARSFI/Winlink-Compression License.txt, "Copyright (c) Amateur
+Radio Safety Foundation, Inc. All rights reserved."). <https://github.com/ARSFI/Winlink-Compression>
+
+Nexus's crates/tempo-core/src/winlink/lzhuf.rs is a Rust port of the LZHUF adaptive-Huffman
+compression used in Winlink B2F forwarding, ported from ARSFI's Winlink-Compression source
+(WinlinkSupport.vb). LZHUF is LZSS (Haruhiko Okumura) plus adaptive Huffman coding (Haruyasu
+Yoshizaki), English translation by Kenji Rikitake. The compressed wire format is a Winlink
+interoperability requirement; the ~450-line codec is a port of expression, so the BSD-3-Clause
+notice is reproduced in the file header and here. BSD-3-Clause is permissive and combines
+one-way-inbound into Nexus's GPL-3.0-only whole. (The underlying LZH patent, US 4,906,991,
+has expired.) The .vb source carries no per-file header notice; the BSD-3-Clause grant is the
+repository License.txt, which the port's own header restores.
+
+The BSD 3-Clause notice, reproduced verbatim from that License.txt:
+
+> Copyright (c) Amateur Radio Safety Foundation, Inc.
+> All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions are met:
+>
+> * Redistributions of source code must retain the above copyright notice,
+>   this list of conditions and the following disclaimer.
+> * Redistributions in binary form must reproduce the above copyright notice,
+>   this list of conditions and the following disclaimer in the
+>   documentation and/or other materials provided with the distribution.
+> * Neither the name of Amateur Radio Safety Foundation, Inc. (ARSFI),
+>   Winlink Global Radio Email(R), nor the names of its contributors
+>   may be used to endorse or promote products derived from this software
+>   without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+> AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+> IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+> ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE FOR
+> ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+> DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+> SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+> CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+> OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+> OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+### JS8Call — protocol facts and transcribed tables
+License of the reference: **GNU GPL, version 3** (GPLv3) at repository level
+<https://github.com/js8call/js8call> (read at commit `a7ff1be0`, 2025-12-05). Per-file
+headers are inconsistent upstream and are stated here rather than assumed: `JS8.cpp`
+carries an "All Rights Reserved" header without a GPL grant; `varicode.cpp`, `jsc.cpp`,
+`jsc_list.cpp` and `jsc_map.cpp` carry the GPLv3 notice plus "All Rights Reserved";
+`JS8Submode.cpp`, `commons.h` and `JS8.hpp` carry no header.
+
+Nexus's JS8 mode (`crates/js8/`) is an **original implementation** written from JS8Call's
+source read as the on-air protocol specification. **No code was copied.** The following are
+transcribed as protocol FACTS, each cited to its upstream file in the Rust source:
+
+- the four submode constants and the two Costas arrays (`commons.h`, `JS8Submode.cpp`,
+  `JS8.hpp`);
+- the CRC-12 constants (`lib/crc12.cpp`), the 64-character 6-bit alphabet (`JS8.cpp`), the
+  41-, 39- and 68-character alphabets, the 51-entry group table, the CQ/HB tables and the
+  32-entry directed-command table with its autoreply/buffered/checksum subsets
+  (`varicode.cpp`);
+- the legacy Huffman table and the JSC dense-coder parameters (`varicode.cpp`, `jsc.cpp`);
+- the 262,144-word JSC dictionary (`jsc_list.cpp`, GPLv3), shipped as the generated blob
+  `crates/js8/src/proto/jsc/dict.bin` (sha256 in `dict.sha256`; generator
+  `scripts/gen-js8-jsc-dict.mjs`);
+- the default dial frequencies (`models/FrequencyList.cpp`).
+
+The LDPC(174,87) generator matrix and column order are WSJT-X's
+(`lib/ft8/ldpc_174_87_params.f90`, GPLv3, K1JT / WSJT Development Group) and the
+parity-check tables are WSJT-X 1.9.1's `lib/ft8/bpdecode174.f90` (GPLv3) — the same file
+JS8Call carries at `lib/ft8/bpdecode174.f90`, which is the copy the generator
+`scripts/gen-js8-ldpc-tables.mjs` reads (sha256-pinned) to emit
+`crates/js8/src/phy/ldpc_tables.rs`; the tables are transcribed, the decoder is original.
+Three decoder test recordings in `crates/js8/tests/fixtures/` (`A_2_9.wav`, `A_3_3.wav`,
+`E_2_1.wav`) are JS8Call's own `media/tests/` files, GPLv3, pinned by sha256. JS8Call is an
+independent project; Nexus is not affiliated with or endorsed by it.
 ---
 
 ## Bundled components (shipped in the Windows installer)
@@ -498,6 +585,11 @@ principal third-party components, not a substitute for that gate:
   server as a CAT backend — `crates/tempo-audio/src/omnirig/com.rs`) — MIT OR Apache-2.0.
   OmniRig itself is a separate program the operator installs; Nexus only calls its published
   COM interface and ships none of it.
+- **md-5** (the MD5 digest for the Winlink secure-login challenge-response,
+  crates/tempo-core/src/winlink/secure.rs — used only as the published Winlink auth
+  primitive, never for integrity or secrecy) — MIT OR Apache-2.0. Brings the RustCrypto
+  digest subtree (digest, block-buffer, crypto-common, generic-array, typenum) newly
+  into the tree; all MIT or MIT/Apache-2.0, all already on deny.toml's allow-list.
 
 `crates/tempo-net` (the WSJT-X-compatible UDP API and PSK Reporter spotting) is otherwise
 pure `std` Rust: **socket2** is its only third-party crate, and only because `std` exposes no

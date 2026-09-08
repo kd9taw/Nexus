@@ -235,7 +235,15 @@ describe('density — the guard the four prior reorgs lacked', () => {
   // Sections-per-tab is what an operator scans. It grew 10→19→22→26→36 across four reorgs, each
   // of which optimised TAB COUNT instead. Raising this ceiling must be a deliberate edit with a
   // reason, not a side effect of landing a feature.
-  const MAX_SECTIONS_PER_TAB = 12
+  //
+  // 12→13 (2026-09, JS8): JS8 is a first-class digital mode joining RTTY/PSK/SSTV/APRS on this
+  // same tab, each of which needs exactly the same shape of section (speed/receiving, the
+  // automatic-transmission switches, station text) that JS8's own settings need — there is no
+  // tab a keyboard-mode's settings belong on besides Digital. Ships `defaultOff: true`, so most
+  // operators never see the JS8 cockpit, but this registry (and the fieldset it renders) is
+  // scanned regardless of that toggle, so the density cost is real and counted here rather than
+  // argued away.
+  const MAX_SECTIONS_PER_TAB = 13
 
   it('keeps every tab under the density ceiling', () => {
     const over = SETTINGS_TABS.map((t) => ({ id: t.id, n: sectionsForTab(t.id).length }))

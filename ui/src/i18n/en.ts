@@ -5288,6 +5288,44 @@ export const EN = {
   'settings.psk.rxAutoArm.hint':
     'The PSK screen starts the decoder as soon as you open it — click a trace on the waterfall and the text prints, no setup. Turn this off to arm the receiver by hand (the Arm RX button in the decoded-text pane). Stopping the receiver yourself is already remembered for the rest of the session. This arms the RECEIVER only — transmitting is never armed for you.',
 
+  // ── Settings ▸ JS8 ──────────────────────────────────────────────────────────────────
+  // Speed names (Slow/Normal/Fast/Turbo) and the command words (SNR?, GRID?, HEARTBEAT SNR,
+  // MSG TO:, @ALLCALL, @GROUP) are the mode's own vocabulary and stay verbatim in every locale.
+  'settings.js8.legend': 'JS8',
+  'settings.js8.receiving.title': 'Speed & receiving',
+  'settings.js8.speed.label': 'Transmit speed',
+  'settings.js8.speed.hint':
+    'The speed your frames go out at, and the period the TX clock follows: Slow 30 s, Normal 15 s, Fast 10 s, Turbo 6 s. Normal is what most of the band runs. The speed chips in the JS8 header change this same setting.',
+  'settings.js8.rxSpeeds.label': 'Decode these speeds',
+  'settings.js8.rxSpeeds.hint':
+    'All four are decoded at once by default, as JS8Call does — a Slow station and a Turbo station on the same band both print. Untick a speed to save CPU on a small machine; each activity row is marked with its speed letter (E/A/B/C).',
+  'settings.js8.automatic.title': 'Automatic transmissions',
+  'settings.js8.hbIntervalMin.label': 'Heartbeat interval (minutes)',
+  'settings.js8.hbIntervalMin.hint':
+    '0 = a heartbeat only when you press HB. Otherwise, while the HB chip is on, one goes out every this-many minutes on a random free slot between 500 and 1000 Hz. The HB chip itself is never remembered across launches, and nothing keys unless TX is on.',
+  'settings.js8.hbAck.label': 'Answer heartbeats',
+  'settings.js8.hbAck.hint':
+    'Off by default, as in JS8Call. On, a heard heartbeat is answered with your signal report (HEARTBEAT SNR), one frame per station, and a message you hold for that station is offered to it. Needs TX on.',
+  'settings.js8.autoreply.label': 'Auto-reply to queries',
+  'settings.js8.autoreply.hint':
+    'On by default, as in JS8Call: SNR?, GRID?, INFO?, STATUS?, HEARING? and QUERY MSGS addressed to you are answered after a one-period countdown you can cancel in the cockpit. @ALLCALL queries are answered at most once per station every 15 minutes. Needs TX on.',
+  'settings.js8.relay.label': 'Relay for other stations',
+  'settings.js8.relay.hint':
+    'On by default, as in JS8Call: a message routed through your callsign is passed along, and MSG TO: messages are held in your inbox until the addressee asks for them. This is third-party traffic — whether it is permitted where you operate is your call.',
+  'settings.js8.idleWatchdogMin.label': 'Idle watchdog (minutes)',
+  'settings.js8.idleWatchdogMin.hint':
+    'After this long with nothing typed, heartbeats, auto-replies and relaying all switch off and the cockpit says so — the JS8Call rule, so an unattended station goes quiet. 60 by default; 0 turns the watchdog off; anything below 5 counts as 5. TX enable is left as it was.',
+  'settings.js8.station.title': 'Station text',
+  'settings.js8.info.label': 'INFO',
+  'settings.js8.info.hint':
+    'What an INFO? query gets back — rig, antenna, power, a QTH. Upper-case letters, digits and basic punctuation pack tightest; anything else costs extra frames.',
+  'settings.js8.status.label': 'STATUS',
+  'settings.js8.status.hint':
+    'What a STATUS? query gets back. Leave it blank for the JS8Call form: IDLE, the idle minutes, and the app name.',
+  'settings.js8.groups.label': 'Groups',
+  'settings.js8.groups.hint':
+    'The @GROUP names you belong to, comma-separated — a message to one of them counts as addressed to you. @ALLCALL is everyone and is always on.',
+
   // ── Settings ▸ SSTV ─────────────────────────────────────────────────────────────────
   // The transmit-mode picker's own rows are built from `SSTV_TX_MODES` — a mode name, its
   // duration and its raster — and are data, not prose. `{{freq}}` is the ISS downlink and
@@ -6994,6 +7032,120 @@ export const EN = {
   'psk.drive.title':
     "PSK31 is an amplitude-shaped mode: if the rig's ALC is compressing, the signal splatters into the neighbors (IMD). Nexus keys at a modest drive by default — set TX audio / power so the rig's ALC meter barely moves.",
 
+  // ── JS8 ▸ the ⊞ panel labels (the pane heads reuse them) ───────────────────────────────
+  'js8.panel.scope': 'Waterfall',
+  'js8.panel.activity': 'Activity',
+  'js8.panel.stations': 'Stations',
+  'js8.panel.inbox': 'Inbox',
+  'js8.panel.log': 'Log',
+  'js8.panel.activity.title':
+    'Every decoded frame at every enabled speed — E/A/B/C is the speed (Slow/Normal/Fast/Turbo), then offset, SNR and the message. Faint rows are low-confidence copy; italic rows closed without their last frame.',
+  'js8.panel.activity.empty': 'Listening… frames decoded at every enabled speed print here',
+  'js8.panel.activity.row.title': 'Double-click to write to this station',
+
+  // ── JS8 ▸ the header ─────────────────────────────────────────────────────────────────
+  'js8.header.power.label': 'Drive',
+  'js8.header.power.title':
+    'TX audio drive — set it so the rig’s ALC barely moves; JS8 is a constant-envelope mode, but an overdriven sound card still splatters',
+  'js8.header.speed.title': 'JS8 — JS8Call-compatible keyboard mode on FT8’s waveform',
+  'js8.header.speed.aria': 'Transmit speed',
+  'js8.header.speed.chip.title':
+    'Transmit at {{speed}} ({{period}} s periods). Receiving decodes every speed ticked in Settings ▸ Digital ▸ JS8, whatever this is set to.',
+  'js8.header.speed.failed': 'JS8 speed change refused',
+  'js8.header.rx.title':
+    'Decoding {{n}} of the 4 speeds at once — choose them in Settings ▸ Digital ▸ JS8',
+  'js8.header.band.title': "Showing the rig's current band",
+
+  // ── JS8 ▸ the stations pane ──────────────────────────────────────────────────────────
+  'js8.station.empty': 'No stations heard yet — the heard list fills as heartbeats and CQs decode',
+  'js8.station.select.title': 'Write to {{call}} (fills the To box and the log strip)',
+  'js8.station.query.title': 'Send {{cmd}} to {{call}} — they answer automatically if their auto-reply is on',
+  'js8.station.stored': { one: '{{count}} message stored for this station', other: '{{count}} messages stored for this station' },
+
+  // ── JS8 ▸ the inbox pane ─────────────────────────────────────────────────────────────
+  'js8.inbox.empty': 'Nothing in the inbox — messages addressed to you, and MSG TO: messages you hold for others, appear here',
+  'js8.inbox.state.unread': 'unread',
+  'js8.inbox.state.read': 'read',
+  'js8.inbox.state.store': 'held for delivery',
+  'js8.inbox.state.delivered': 'delivered',
+  'js8.inbox.read.label': 'Read',
+  'js8.inbox.read.title': 'Mark as read',
+  'js8.inbox.delete.label': 'Delete',
+  'js8.inbox.delete.title': 'Delete this message from the inbox',
+  'js8.inbox.failed': 'Inbox change refused',
+
+  // ── JS8 ▸ the dock: addressee, composer, CQ, HB ──────────────────────────────────────
+  'js8.dock.aria': 'JS8 composer',
+  'js8.dock.to.placeholder': 'To — a callsign, @ALLCALL or @GROUP (blank = everyone)',
+  'js8.dock.to.aria': 'Addressee',
+  'js8.dock.compose.placeholder': 'Type a message… (Enter queues it; one frame goes out per period)',
+  'js8.dock.compose.aria': 'JS8 message',
+  'js8.dock.send.label': 'Send',
+  'js8.dock.cq.aria': 'CQ variant',
+  'js8.dock.cq.title': 'Call CQ — a heartbeat frame addressed to @ALLCALL, in the next period',
+  'js8.dock.hb.title.off':
+    'Heartbeat schedule is off. Click to send a heartbeat every period’s interval (Settings ▸ Digital ▸ JS8) — it keys only while TX is on, and it is never remembered across launches.',
+  'js8.dock.hb.title.on':
+    'Heartbeat schedule is on, but TX is off — nothing keys. Enable TX (the header pill) to let heartbeats go out.',
+  'js8.dock.hb.title.armed':
+    'Heartbeats are going out on schedule, on a random free slot between 500 and 1000 Hz. Click to stop the schedule.',
+
+  // ── JS8 ▸ the dock: command palette, the estimate, the second-act chips, pending, queue ──
+  'js8.dock.cmd.aria': 'Directed command',
+  'js8.dock.cmd.none': 'Message (no command)',
+  'js8.dock.cmd.freetext': 'free text',
+  'js8.dock.estimate': { one: '≈ {{count}} frame · ≈ {{secs}} s', other: '≈ {{count}} frames · ≈ {{secs}} s' },
+  'js8.dock.estimate.over': { one: '≈ {{count}} frame — over the {{max}}-frame airtime cap; shorten it', other: '≈ {{count}} frames — over the {{max}}-frame airtime cap; shorten it' },
+  'js8.dock.estimate.title':
+    'How many periods this takes on the air (one frame per period). An estimate — the engine packs the real frames and refuses anything over ten minutes of airtime.',
+  'js8.dock.autoreply.title.off':
+    'Auto-reply is off — SNR?, GRID?, INFO?, QUERY and MSG to you go unanswered. Click to turn it on (remembered). It answers only while TX is on.',
+  'js8.dock.autoreply.title.on':
+    'Auto-reply is on, but TX is off — nothing keys; a reply is shown as “would have replied”. Enable TX (the header pill) to let replies go out.',
+  'js8.dock.autoreply.title.armed':
+    'Auto-reply is ARMED: SNR?, GRID?, INFO?, QUERY and MSG addressed to you, @ALLCALL or a group you joined are answered after a visible countdown you can cancel. Click to turn it off.',
+  'js8.dock.relay.title.off':
+    'Relay is off — a > message routed through you is displayed and not passed on. Click to turn it on (remembered). Relaying is third-party traffic; you are responsible for it.',
+  'js8.dock.relay.title.on':
+    'Relay is on, but TX is off — nothing keys. Enable TX (the header pill) to relay.',
+  'js8.dock.relay.title.armed':
+    'Relay is ARMED: a > message routed through you is retransmitted with *DE* your call, and the final hop is acknowledged. Click to turn it off.',
+  'js8.dock.hbAck.title.off':
+    'Heartbeat acknowledgements are off (JS8Call’s default). Click to answer heartbeats with HEARTBEAT SNR (remembered). Answers only while TX is on.',
+  'js8.dock.hbAck.title.on':
+    'Heartbeat acknowledgements are on, but TX is off — nothing keys. Enable TX (the header pill).',
+  'js8.dock.hbAck.title.armed':
+    'Heartbeat acknowledgements are ARMED: each heartbeat heard is answered with HEARTBEAT SNR on a random free slot. Click to turn it off.',
+  'js8.dock.pending': 'Auto-reply to {{to}} in {{secs}} s: {{text}}',
+  'js8.dock.pending.txOff': 'Would reply to {{to}} — TX is off, nothing keys: {{text}}',
+  'js8.dock.pending.idle': 'Would reply to {{to}} — not armed (idle watchdog), nothing keys: {{text}}',
+  'js8.toast.idleTripped':
+    'JS8 idle watchdog: no operator activity for {{min}} min — heartbeat, autoreply and relay are off. TX stays as you left it; any send or switch re-arms them.',
+  'js8.dock.pending.cancel.label': 'Cancel',
+  'js8.dock.pending.cancel.title': 'Cancel this automatic reply before it goes out',
+  'js8.dock.queue.title': 'Queued frames — one leaves per period while TX is on. F/L mark the first and last frame of a message.',
+  'js8.dock.queue.drop.label': 'Drop queue',
+  'js8.dock.queue.drop.title': 'Drop every queued frame. Not a stop: a frame already on the air finishes — Stop TX cuts it.',
+  'js8.dock.origin.operator': 'you',
+  'js8.dock.origin.heartbeat': 'heartbeat',
+  'js8.dock.origin.hbAck': 'heartbeat ack',
+  'js8.dock.origin.autoReply': 'auto-reply',
+  'js8.dock.origin.relay': 'relay',
+  'js8.dock.idle': 'Idle {{min}}/{{limit}} min',
+  'js8.dock.idle.off': 'Idle watchdog off',
+  'js8.dock.idle.tripped': 'Idle watchdog tripped — heartbeats, auto-reply and relay are off until you send something',
+
+  // ── JS8 ▸ the toasts ─────────────────────────────────────────────────────────────────
+  'js8.toast.noCallsign': 'Set your callsign in Settings before transmitting',
+  'js8.toast.txLocked': 'TX locked — this frequency is outside your license privileges',
+  'js8.toast.send.failed': 'JS8 send refused',
+  'js8.toast.cq.failed': 'JS8 CQ refused',
+  'js8.toast.arm.failed': 'JS8 switch refused',
+  'js8.toast.command.failed': 'JS8 command refused',
+  'js8.toast.noAddressee': 'A command needs a station — put a callsign, @ALLCALL or a group in To',
+  'js8.toast.cancel.failed': 'Could not cancel the reply',
+  'js8.toast.drop.failed': 'Could not drop the queue',
+
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
   // Positive identification only: an unrecognised header falls through to the decoder, so
   // there is no "unknown format" entry here. The iPhone path names Apple's own menu items —
@@ -7764,6 +7916,8 @@ export const EN = {
   'nav.digital.sstv.title': 'SSTV — slow-scan TV: received images decode into the gallery',
   'nav.digital.aprs.title':
     'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon',
+  'nav.digital.js8.title':
+    'JS8 — JS8Call-compatible keyboard mode: heartbeats, directed messages, relay and a store-and-forward inbox, all four speeds decoded at once',
   'nav.phone.title': 'Phone (SSB) operating — PTT, sideband, RF power, panadapter (casual)',
   'nav.cw.title': 'CW operating — keyboard + F-key macros, WPM, spectrum (casual)',
   'nav.connect.label': 'Connect',
@@ -8362,6 +8516,8 @@ export const EN = {
     'SSTV — slow-scan images auto-decode into a gallery (Martin/Scottie/Robot/PD).',
   'features.aprs.oneLine':
     'APRS — AFSK-1200 packet: decode positions/messages, send a position beacon.',
+  'features.js8.oneLine':
+    'JS8 — JS8Call-compatible keyboard chat on FT8’s waveform: heartbeats, directed messages, relay, store-and-forward inbox.',
   'features.logbook.label': 'Logbook',
   'features.logbook.oneLine': 'Your ADIF contacts — the system of record.',
   'features.settings.label': 'Settings',

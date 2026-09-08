@@ -47,6 +47,7 @@ pub mod textmode;
 pub mod timing;
 pub mod tx;
 pub mod wavfile;
+pub mod winlink;
 pub mod wrl;
 
 pub use modes;

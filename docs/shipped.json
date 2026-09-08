@@ -11,7 +11,8 @@
     "Q65",
     "MSK144",
     "JT65",
-    "WSPR"
+    "WSPR",
+    "JS8"
   ],
   "sections": [
     {
@@ -41,6 +42,10 @@
     {
       "id": "aprs",
       "label": "APRS"
+    },
+    {
+      "id": "js8",
+      "label": "JS8"
     },
     {
       "id": "logbook",
