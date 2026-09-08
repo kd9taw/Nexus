@@ -13815,12 +13815,90 @@ struct ConnEvent {
     connector: String,
     /// "ok" | "info" | "error"
     level: String,
-    message: String,
+    message: EphemeralText,
 }
+
+/// Text that may be a service's own words: shown to the operator now, written down nowhere.
+///
+/// The guard is what this type does **not** implement. No `Display`, no `Debug`, no `Deref`
+/// — so it cannot be handed to `eprintln!`, `format!`, `panic!`, `applog` or any log macro,
+/// and a line that tries does not compile. Its one exit is `serde::Serialize`, which is how
+/// the Connections panel reads the ring, and that is a screen.
+///
+/// ⚠️ The counterpart of [`ConnDetail`], and the two together are the whole rule: a
+/// `ConnDetail` is Nexus's own sentence and may be written down; an `EphemeralText` may be a
+/// server's and may only be shown.
+///
+/// # THE SINK INVENTORY
+///
+/// Three rounds were spent scrubbing the string, and each lost, because the server picks the
+/// encoding. The question that is answerable is not "is this string clean" but "where can it
+/// GO" — so here is every sink a connector failure string reaches, and what may go there.
+/// Anything added to this file that carries one belongs on this list.
+///
+/// | Sink | Lifetime | Server text? | What makes that true |
+/// |---|---|---|---|
+/// | `conn-health.json` (0644) | until overwritten | **no** | [`ConnDetail`]: literal-only by type, and [`conn_health_from_json`] runs the same allow-list on the way IN |
+/// | stderr → `~/.xsession-errors` (0644) | until next login | **no** | [`conn_log`] prints `connector`/`level` only, both `&'static str`; this type has no `Display`/`Debug` to print |
+/// | [`CONN_LOG`] ring (200) → [`get_connection_log`] | the process | yes | it is a screen — that is #226's whole point |
+/// | a command's `Err(String)` → the operator's toast | the moment | yes | same |
+/// | `nexus-diag.log` ([`tempo_core::applog`]) | rotated, on disk | **no** | no connector path calls it, and nothing but this line says so |
+/// | `PendingUpload` retry queue | the process | n/a | it carries the QSO and a retry count, never an error string |
+#[derive(Clone, serde::Serialize)]
+struct EphemeralText(String);
 
 static CONN_LOG: Mutex<std::collections::VecDeque<ConnEvent>> =
     Mutex::new(std::collections::VecDeque::new());
 const CONN_LOG_CAP: usize = 200;
+
+/// A sentence Nexus wrote about itself — the only kind of text a **durable** connector sink
+/// may hold.
+///
+/// # ⛔ Why this is a type and not a `&'static str`
+///
+/// Round 3 made the persisted sink take `&'static str`, on the reasoning that a response body
+/// is a runtime `String` and cannot be coerced to one. That is true, and it holds for every
+/// ordinary way of getting a body to the sink — but not for `String::leak`, which turns a
+/// `String` into a `&'static str` in a single token, compiles clean, trips no clippy lint, and
+/// writes the API key to the file. The header forbade `Box::leak` by convention, and a
+/// convention is what the last three rounds have each been.
+///
+/// So the parameter is a type whose field is private to this module, and the only constructor
+/// is `#[doc(hidden)]` and reached through [`conn_detail!`], whose matcher is `$text:literal`.
+/// `conn_detail!(body.leak())` does not match a literal fragment and does not compile;
+/// `conn_detail!("QRZ refused the login")` does. The residual hole is calling
+/// `__from_literal` by name, which is not something anyone does by reaching for the obvious —
+/// and `the_only_way_to_build_a_conn_detail_is_a_string_literal` reads this file's own source
+/// and fails if it appears anywhere but its definition and the macro.
+mod conn_detail {
+    /// See the module note. Construct with `conn_detail!("…")`.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub struct ConnDetail(&'static str);
+
+    impl ConnDetail {
+        /// ⛔ Not for direct use — `conn_detail!` is the constructor, and it is the half that
+        /// rejects a runtime string. Public only because a `macro_rules!` body expands at the
+        /// call site.
+        #[doc(hidden)]
+        pub const fn __from_literal(text: &'static str) -> Self {
+            Self(text)
+        }
+
+        pub const fn as_str(self) -> &'static str {
+            self.0
+        }
+    }
+}
+use conn_detail::ConnDetail;
+
+/// Build a [`ConnDetail`] from a string literal. The matcher is the guard: a `literal`
+/// fragment is decided by the parser, so no expression — `body`, `body.leak()`,
+/// `Box::leak(body.into_boxed_str())` — can reach it.
+macro_rules! conn_detail {
+    ($text:literal) => {
+        $crate::conn_detail::ConnDetail::__from_literal($text)
+    };
+}
 
 /// Last real ROUND-TRIP outcome for the two connectors that leave no per-QSO stamp
 /// (HRDLog.net, Cloudlog). `(id, last_success, last_failure(when, detail))`.
@@ -13849,6 +13927,12 @@ static CONN_HEALTH_LOADED: std::sync::atomic::AtomicBool =
 /// The connector ids the health rows may carry — the `CredStatus` slug set. Ids are
 /// `&'static str` in memory, so a row read back from disk has to resolve to one of these
 /// or be dropped (a slug from a build that no longer has that connector says nothing).
+/// ⚠️ This list and the rows [`get_credentials_status`] emits are one set, and nothing but
+/// `the health ids cover every connector row` (`ui/src/settings/connHealth.wire.test.ts`)
+/// says so. An id missing here is not a compile error and not a runtime error: the stamp is
+/// taken, the file is written, and the row is silently dropped on the next load — visible
+/// only as the panel going amber again after a restart, which is #245's exact symptom.
+/// `winlink` was missing for that reason, ahead of its own health stamps.
 const CONN_HEALTH_IDS: &[&str] = &[
     "cloudlog",
     "clublog",
@@ -13858,6 +13942,7 @@ const CONN_HEALTH_IDS: &[&str] = &[
     "qrz-logbook",
     "qrz-xml",
     "repeaterbook",
+    "winlink",
     "wrl",
 ];
 
@@ -13913,17 +13998,78 @@ fn conn_health_path() -> PathBuf {
 
 /// Parse `conn-health.json`. Malformed = nothing (never a startup failure over a status
 /// file); an unknown id is dropped, a failure row without a detail keeps its time.
+///
+/// # ⛔ THE ALLOW-LIST RUNS ON THE WAY IN TOO
+///
+/// The write side takes a [`ConnDetail`], so nothing this build produces can put a service's
+/// words in the file. That says nothing about the bytes ALREADY in it. `last_fail_detail`
+/// deserialises as a `String`, and the round-3 reader kept whatever it found and
+/// re-serialised it on every later stamp — so a key written by 1.10.x, or by anything that
+/// edits the file, would ride forward for the life of the installation. The file is a status
+/// cache, not a record: the timestamps are the part worth trusting, and the reason is only
+/// worth keeping when this build could have written it.
+///
+/// So a detail survives the load only if it is one of [`persistable_details`]. Anything else
+/// is dropped and the failure keeps its timestamp — the row still says "failing since 14:02",
+/// it just stops repeating a sentence nothing here wrote.
 fn conn_health_from_json(text: &str) -> ConnHealthRows {
     let rows: Vec<ConnHealthRow> = serde_json::from_str(text).unwrap_or_default();
+    let allowed = persistable_details();
     rows.into_iter()
         .filter_map(|r| {
             let id = CONN_HEALTH_IDS.iter().copied().find(|k| *k == r.id)?;
-            let fail = r
-                .last_fail_unix
-                .map(|w| (w, r.last_fail_detail.clone().unwrap_or_default()));
+            let fail = r.last_fail_unix.map(|w| {
+                let detail = r
+                    .last_fail_detail
+                    .as_deref()
+                    .map(flatten_detail)
+                    .filter(|d| allowed.iter().any(|a| flatten_detail(a.as_str()) == *d))
+                    .unwrap_or_default();
+                (w, detail)
+            });
             Some((id, r.last_ok_unix, fail))
         })
         .collect()
+}
+
+/// Whitespace flattened to single spaces, so a stored detail and a source sentence compare
+/// as the same string. [`note_conn_health`] applies it on the way in; the loader applies it
+/// to both sides of its allow-list check.
+fn flatten_detail(detail: &str) -> String {
+    detail.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Every failure sentence this build can write into `conn-health.json`.
+///
+/// ⚠️ Built by CALLING the deciders rather than by restating their sentences, so the two
+/// halves cannot drift: each sentence has exactly one copy and it lives at the site that
+/// chooses it. A stamp whose whole result domain is not walked here would have its detail
+/// dropped on the next load — which is why `a_persisted_detail_survives_a_restart` drives
+/// the same deciders over the same domains and fails when one is missed.
+fn persistable_details() -> Vec<ConnDetail> {
+    let mut v = Vec::new();
+    // HRDLog and WRL: each service's own closed result set, plus a code it has never sent.
+    for r in ["ok", "duplicate", "authFail", "unknown", "?"] {
+        v.push(hrdlog_stamp(r).1);
+    }
+    for r in ["accepted", "duplicate", "authFail", "pending", "?"] {
+        v.push(wrl_stamp(r).1);
+    }
+    // Cloudlog: one sentence per transport/HTTP class.
+    for c in propagation::live::cloudlog::CloudlogFailure::ALL {
+        v.push(cloudlog_stamp(c));
+    }
+    // QRZ's callbook: the two refusals and the two transport classes. The two success arms
+    // return the empty detail, which is never stored.
+    v.push(qrz_xml_stamp(&Ok(QrzOutcome::Refused(String::new()))).1);
+    v.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1);
+    v.push(qrz_xml_stamp(&Err(QrzFailure::unreachable(String::new()))).1);
+    v.push(qrz_xml_stamp(&Err(QrzFailure::login_rejected(String::new()))).1);
+    v.push(QRZ_LOGBOOK_TEST_FAILED);
+    // The two details that are not a result code: an upload that never got an answer.
+    v.push(HRDLOG_UNREACHABLE);
+    v.push(WRL_UNREACHABLE);
+    v
 }
 
 fn conn_health_to_json(m: &ConnHealthRows) -> String {
@@ -13960,7 +14106,7 @@ fn conn_health_lock() -> std::sync::MutexGuard<'static, ConnHealthRows> {
 ///
 /// # ⛔ THE RULE: `conn-health.json` HOLDS ONLY SENTENCES NEXUS WROTE
 ///
-/// `detail` is `&'static str` and that is not a style choice — it is the guard. This string
+/// `detail` is a [`ConnDetail`] and that is not a style choice — it is the guard. This string
 /// is written to `~/.config/tempo/conn-health.json`, mode 0644, on every change, and it
 /// stays there until something overwrites it. A server's own words must never reach it.
 ///
@@ -13977,23 +14123,31 @@ fn conn_health_lock() -> std::sync::MutexGuard<'static, ConnHealthRows> {
 /// to do about it — a known failure class and its remedy — and a fixed sentence per class
 /// says that better than a verbatim body does.
 ///
-/// **The guard.** A response body is a `String` built at runtime; it cannot be coerced to
-/// `&'static str`. A future contributor who reaches for the server's words gets a compile
-/// error at the call site instead of a credential on disk. Do not widen this parameter, and
-/// do not launder a `String` through `Box::leak` to get past it — if a new detail needs a
-/// runtime value, it needs a bounded one (an HTTP status is a `u16` off the status line, not
-/// text out of the body) and a reviewed constructor, not a free-text hole.
+/// **The guard.** [`ConnDetail`]'s field is private and its only constructor is reached
+/// through the `conn_detail!` macro, whose matcher is `$text:literal` — so the value can only
+/// have come from this source file. A response body cannot; neither can `String::leak`, which
+/// is the one-token hole a bare `&'static str` parameter left open. If a new detail needs a
+/// runtime value, it needs a bounded one — an HTTP status is a `u16` off the status line, not
+/// text out of the body — classified into a fixed sentence here, as
+/// [`propagation::live::cloudlog::CloudlogFailure`] does.
+///
+/// **The read side runs the same allow-list** — see [`conn_health_from_json`]. Bytes already
+/// in the file were written by something else and are not covered by any of the above.
 ///
 /// **What happens to the server's own words.** They are not lost, they are not persisted:
 /// each caller passes them to [`conn_log`] and returns them to the operator as the command's
 /// error, so the sentence a Cloudlog instance sends is read once, in memory, this session,
-/// and then dropped. #226's reporter still gets to see what their instance said.
+/// and then dropped. #226's reporter still gets to see what their instance said. ⚠️ "In
+/// memory" is a claim about every sink, not only about this one: `conn_log` used to mirror
+/// its message to stderr, which on Linux the desktop session redirects into
+/// `~/.xsession-errors`, mode 0644 — the same durability this rule exists to refuse, in a
+/// second file. See that function.
 ///
-/// Whitespace is flattened so the row is one line — with a `&'static str` there is nothing
+/// Whitespace is flattened so the row is one line — with a `ConnDetail` there is nothing
 /// hostile left to strip, and this is convenience, not a guard. Do not treat it as one:
 /// `REASON_MAX_CHARS` was described as a scrub backstop for a release and never was one.
-fn note_conn_health(id: &'static str, ok: bool, detail: &'static str) {
-    let detail = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+fn note_conn_health(id: &'static str, ok: bool, detail: ConnDetail) {
+    let detail = flatten_detail(detail.as_str());
     let now = now_unix();
     // Poisoned-lock recovery, the conn_log pattern: a panicked command holding this must
     // not silently freeze the health panel for the rest of the session.
@@ -14062,19 +14216,23 @@ type HealthTriple = (Option<i64>, Option<i64>, Option<String>);
 ///
 /// ⛔ Every detail returned here is a fixed sentence, because it is persisted — see
 /// [`note_conn_health`]. QRZ's own words are logged by the caller and dropped.
-fn qrz_xml_stamp(r: &Result<QrzOutcome, QrzFailure>) -> (bool, &'static str) {
+fn qrz_xml_stamp(r: &Result<QrzOutcome, QrzFailure>) -> (bool, ConnDetail) {
     match r {
-        Ok(QrzOutcome::Found(_) | QrzOutcome::NotFound) => (true, ""),
+        Ok(QrzOutcome::Found(_) | QrzOutcome::NotFound) => (true, conn_detail!("")),
         Ok(QrzOutcome::Refused(_)) => (
             false,
-            "QRZ answered on a live session and refused the lookup — the XML subscription may \
-             have lapsed or hit its daily limit. QRZ's own wording is in this session's \
-             connection log.",
+            conn_detail!(
+                "QRZ answered on a live session and refused the lookup — the XML subscription \
+                 may have lapsed or hit its daily limit. QRZ's own wording is in this \
+                 session's connection log."
+            ),
         ),
         Ok(QrzOutcome::NeedLogin) => (
             false,
-            "QRZ would not accept a session key it had just issued, so the lookup never \
-             completed — check the XML subscription and the QRZ username/password.",
+            conn_detail!(
+                "QRZ would not accept a session key it had just issued, so the lookup never \
+                 completed — check the XML subscription and the QRZ username/password."
+            ),
         ),
         // The transport's own class, not its words: `QrzFailure` split them at the source so
         // an antivirus-inspected handshake is not reported as a credential problem (D#181).
@@ -14093,21 +14251,28 @@ fn qrz_xml_stamp(r: &Result<QrzOutcome, QrzFailure>) -> (bool, &'static str) {
 /// HRDLog's `message` is unbounded server text; the caller logs it and drops it. The result
 /// codes are HRDLog's own closed set (`HrdLogPushResultDto`), so `_` is "a code HRDLog added
 /// since", which is a refusal we cannot explain — never a success.
-fn hrdlog_stamp(result: &str) -> (bool, &'static str) {
+fn hrdlog_stamp(result: &str) -> (bool, ConnDetail) {
     match result {
-        "ok" | "duplicate" => (true, ""),
+        "ok" | "duplicate" => (true, conn_detail!("")),
         "authFail" => (
             false,
-            "HRDLog would not accept the upload code — check it in Settings ▸ Connectors.",
+            conn_detail!(
+                "HRDLog would not accept the upload code — check it in Settings ▸ Connectors."
+            ),
         ),
         "unknown" => (
             false,
-            "HRDLog did not answer as expected — usually the site being briefly unavailable. \
-             Nexus retries on its own.",
+            conn_detail!(
+                "HRDLog did not answer as expected — usually the site being briefly \
+                 unavailable. Nexus retries on its own."
+            ),
         ),
         _ => (
             false,
-            "HRDLog refused the QSO — this session's connection log has HRDLog's own message.",
+            conn_detail!(
+                "HRDLog refused the QSO — this session's connection log has HRDLog's own \
+                 message."
+            ),
         ),
     }
 }
@@ -14115,23 +14280,93 @@ fn hrdlog_stamp(result: &str) -> (bool, &'static str) {
 /// What one World Radio League upload says about the connector's health. WRL's twin of
 /// [`hrdlog_stamp`], with the same closed result set (`WrlPushResultDto`) and the same rule
 /// about persisted text.
-fn wrl_stamp(result: &str) -> (bool, &'static str) {
+fn wrl_stamp(result: &str) -> (bool, ConnDetail) {
     match result {
-        "accepted" | "duplicate" => (true, ""),
+        "accepted" | "duplicate" => (true, conn_detail!("")),
         "authFail" => (
             false,
-            "World Radio League would not accept the API key — check it in Settings ▸ \
-             Connectors.",
+            conn_detail!(
+                "World Radio League would not accept the API key — check it in Settings ▸ \
+                 Connectors."
+            ),
         ),
         "pending" => (
             false,
-            "World Radio League did not take the QSO this time — a rate limit or a busy \
-             server. Nexus retries on its own.",
+            conn_detail!(
+                "World Radio League did not take the QSO this time — a rate limit or a busy \
+                 server. Nexus retries on its own."
+            ),
         ),
         _ => (
             false,
-            "World Radio League refused the QSO — this session's connection log has what it \
-             said.",
+            conn_detail!(
+                "World Radio League refused the QSO — this session's connection log has what \
+                 it said."
+            ),
+        ),
+    }
+}
+
+/// The two details that do NOT come out of a result code: an upload that never got an answer
+/// out of the service at all.
+///
+/// ⚠️ Named, rather than written inline at the two `Err(e)` arms that use them, because
+/// [`persistable_details`] has to be able to list every sentence this build can persist —
+/// and a sentence it cannot reach is one the loader drops on the next launch. That is the
+/// same shape as D#181's lesson on the other axis: a transport failure is not a credential
+/// failure, and each needs its own remedy.
+const HRDLOG_UNREACHABLE: ConnDetail = conn_detail!(
+    "the upload never reached HRDLog — check the network, and whether antivirus or a proxy \
+     is inspecting HTTPS traffic. This session's connection log has the exact message."
+);
+
+/// WRL's twin of [`HRDLOG_UNREACHABLE`].
+const WRL_UNREACHABLE: ConnDetail = conn_detail!(
+    "the upload never reached World Radio League — check the network, and whether antivirus \
+     or a proxy is inspecting HTTPS traffic. This session's connection log has the exact \
+     message."
+);
+
+/// What one Cloudlog/Wavelog upload says about the connector's health — the twin of
+/// [`hrdlog_stamp`] and [`wrl_stamp`], one fixed sentence per failure class.
+///
+/// ⚠️ This row used to collapse every failure into one sentence, because the module below it
+/// had only `Ok`/`Err(String)` to offer and the string is the instance's. So after a restart
+/// the panel could not tell a station profile id that is not linked to the key from a URL
+/// that is not a Cloudlog instance from an HTTP 500 — the three things #226's reporter was
+/// actually choosing between. [`propagation::live::cloudlog::CloudlogFailure`] is the closed
+/// set that was always there and never named; this is one remedy per member.
+fn cloudlog_stamp(class: propagation::live::cloudlog::CloudlogFailure) -> ConnDetail {
+    use propagation::live::cloudlog::CloudlogFailure as F;
+    match class {
+        F::NotConfigured => conn_detail!(
+            "nothing was sent — the Cloudlog instance URL, API key or station profile id is \
+             missing, or the URL is not https://. Set them in Settings ▸ Connectors."
+        ),
+        F::Unreachable => conn_detail!(
+            "the upload never reached the instance — check the URL and the network, and \
+             whether antivirus or a proxy is inspecting HTTPS traffic. This session's \
+             connection log has the exact message."
+        ),
+        F::Credentials => conn_detail!(
+            "the instance rejected the API key — check it in Settings ▸ Connectors, and that \
+             it is not a read-only key."
+        ),
+        F::NotAnApi => conn_detail!(
+            "the URL answered, but not as a Cloudlog/Wavelog QSO API — check the instance URL \
+             in Settings ▸ Connectors (Nexus appends /index.php/api/qso itself)."
+        ),
+        F::RecordRefused => conn_detail!(
+            "the instance took the request and refused to file the QSO — usually a station \
+             profile id that is not linked to this API key. This session's connection log has \
+             the instance's own words."
+        ),
+        F::ServerError => conn_detail!(
+            "the instance answered with a server error — Cloudlog itself is in trouble, not \
+             the credentials. Nexus retries on its own."
+        ),
+        F::Refused => conn_detail!(
+            "the instance refused the upload. This session's connection log has its own words."
         ),
     }
 }
@@ -14169,10 +14404,33 @@ fn qrz_logbook_health(logged: HealthTriple, session: HealthTriple) -> HealthTrip
     (newer(logged.0, session.0), fail, detail)
 }
 
-/// Record a connectivity event (and mirror it to stderr for dev logs).
-fn conn_log(connector: &str, level: &str, message: impl Into<String>) {
-    let message = message.into();
-    eprintln!("conn[{connector}/{level}]: {message}");
+/// Record a connectivity event.
+///
+/// # ⛔ WHERE `message` IS ALLOWED TO GO
+///
+/// `message` is the one connector string that may quote a service verbatim — that is what
+/// #226 is about, and throwing it away is the defect. It has exactly two destinations, and
+/// both are a screen: the in-memory ring below, which the Connections panel renders and which
+/// dies with the process, and the command's `Err` return, which Tauri turns into the
+/// operator's toast. Read once, this session, then dropped.
+///
+/// **stderr is not one of them, and used to be.** This function mirrored the message with
+/// `eprintln!("conn[{{connector}}/{{level}}]: {{message}}")`, which reads as a dev
+/// convenience and is not one: a Tauri app on Linux is launched by the desktop session, which
+/// redirects a GUI process's stderr into `~/.xsession-errors`, mode 0644, kept until the next
+/// login. So the Cloudlog API key `note_conn_health`'s allow-list refuses to write into one
+/// 0644 file was written verbatim into another one, by the same call, a line earlier — and on
+/// Windows the binary is `windows_subsystem = "windows"`, so nobody was reading it there
+/// anyway. The breadcrumb stays because a trace of WHERE a failure happened is worth having;
+/// what it carries is `connector` and `level`, both `&'static str`, which is the same
+/// allow-list one sink over.
+///
+/// The `message` parameter is wrapped before the breadcrumb is printed so that this is not a
+/// convention: [`EphemeralText`] implements no `Display` and no `Debug`, so a line added below
+/// that formats it does not compile.
+fn conn_log(connector: &'static str, level: &'static str, message: impl Into<String>) {
+    let message = EphemeralText(message.into());
+    eprintln!("conn[{connector}/{level}]");
     let mut log = CONN_LOG.lock().unwrap_or_else(|e| e.into_inner());
     log.push_back(ConnEvent {
         ts_unix: now_unix(),
@@ -14189,7 +14447,7 @@ fn conn_log(connector: &str, level: &str, message: impl Into<String>) {
 /// failure BOTH become visible events (the operator could previously tell
 /// neither). Returns the result unchanged.
 fn conn_logged<T>(
-    connector: &str,
+    connector: &'static str,
     ok_msg: impl FnOnce(&T) -> String,
     r: Result<T, String>,
 ) -> Result<T, String> {
@@ -15369,7 +15627,7 @@ enum QrzOutcome {
 /// sending them to check their QRZ password is exactly the misdirection the transport
 /// wording was rewritten to stop.
 struct QrzFailure {
-    detail: &'static str,
+    detail: ConnDetail,
     message: String,
 }
 
@@ -15378,9 +15636,11 @@ impl QrzFailure {
     /// rejected TLS handshake, an HTTP error, or a body that is not QRZ XML.
     fn unreachable(message: String) -> Self {
         Self {
-            detail: "the lookup never completed — Nexus could not get an answer out of QRZ. \
-                     Check the network, and whether antivirus or a proxy is inspecting HTTPS \
-                     traffic; this session's connection log has the exact message.",
+            detail: conn_detail!(
+                "the lookup never completed — Nexus could not get an answer out of QRZ. Check \
+                 the network, and whether antivirus or a proxy is inspecting HTTPS traffic; \
+                 this session's connection log has the exact message."
+            ),
             message,
         }
     }
@@ -15389,9 +15649,11 @@ impl QrzFailure {
     /// is not current.
     fn login_rejected(message: String) -> Self {
         Self {
-            detail: "QRZ refused the login, so the lookup never ran — check the QRZ \
-                     username and password, and that the XML subscription is current. QRZ's \
-                     own wording is in this session's connection log.",
+            detail: conn_detail!(
+                "QRZ refused the login, so the lookup never ran — check the QRZ username and \
+                 password, and that the XML subscription is current. QRZ's own wording is in \
+                 this session's connection log."
+            ),
             message,
         }
     }
@@ -15803,16 +16065,19 @@ async fn qrz_test_connection(state: State<'_, SharedEngine>) -> Result<String, S
     // the Test button's own result right now — so it has been shown, and nothing server-
     // supplied needs to go on disk (see `note_conn_health`).
     match &res {
-        Ok(_) => note_conn_health("qrz-logbook", true, ""),
-        Err(_) => note_conn_health(
-            "qrz-logbook",
-            false,
-            "the last connection test failed — QRZ did not accept the Logbook API key, or \
-             Nexus could not reach it. This session's connection log has QRZ's own message.",
-        ),
+        Ok(_) => note_conn_health("qrz-logbook", true, conn_detail!("")),
+        Err(_) => note_conn_health("qrz-logbook", false, QRZ_LOGBOOK_TEST_FAILED),
     }
     res
 }
+
+/// The one sentence the QRZ Logbook row persists on a failed Test. Named because
+/// [`persistable_details`] has to be able to list it — every other persisted sentence comes
+/// out of a `*_stamp` function that the list can call.
+const QRZ_LOGBOOK_TEST_FAILED: ConnDetail = conn_detail!(
+    "the last connection test failed — QRZ did not accept the Logbook API key, or Nexus \
+     could not reach it. This session's connection log has QRZ's own message."
+);
 
 /// Wrap QRZ's terse server errors in a plain-language hint (F4MQS: QRZ's "Unable to add
 /// QSO to database" is unhelpful). The raw reason is kept — operators still want the exact
@@ -16547,7 +16812,16 @@ fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String
 /// Forward ONE logged QSO to a Cloudlog/Wavelog instance (HTTP JSON ADIF POST). URL +
 /// station id come from Settings; the API key lives in the OS keychain (never
 /// settings.json), read here at push time.
-fn cloudlog_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<String, String> {
+/// ⚠️ The error carries a CLASS beside the instance's words — see
+/// [`propagation::live::cloudlog::CloudlogError`]. The class is what the Connections row
+/// persists (through [`cloudlog_stamp`]); the words are for the toast and the connection log.
+/// The two Settings-side refusals below classify themselves the same way rather than
+/// returning a bare string, so no caller has to guess which failure it is looking at.
+fn cloudlog_push_qso_impl(
+    dto: &LoggedQso,
+    engine: &SharedEngine,
+) -> Result<String, propagation::live::cloudlog::CloudlogError> {
+    use propagation::live::cloudlog::{CloudlogError, CloudlogFailure};
     let (url, station_id) = {
         let eng = engine_lock(engine);
         let s = eng.settings();
@@ -16556,16 +16830,26 @@ fn cloudlog_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<Stri
             s.cloudlog_station_id.trim().to_string(),
         )
     };
-    let key = cloudlog_keychain()?
+    let key = cloudlog_keychain()
+        .map_err(|e| CloudlogError {
+            class: CloudlogFailure::NotConfigured,
+            message: e,
+        })?
         .get_password()
         .unwrap_or_default()
         .trim()
         .to_string();
     if url.is_empty() {
-        return Err("no Cloudlog URL set".to_string());
+        return Err(CloudlogError {
+            class: CloudlogFailure::NotConfigured,
+            message: "no Cloudlog URL set".to_string(),
+        });
     }
     if key.is_empty() {
-        return Err("no Cloudlog API key set".to_string());
+        return Err(CloudlogError {
+            class: CloudlogFailure::NotConfigured,
+            message: "no Cloudlog API key set".to_string(),
+        });
     }
     let rec: tempo_core::logbook::QsoRecord = dto.clone().into();
     let adif = tempo_core::logbook::adif_record(&rec);
@@ -16710,14 +16994,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-push QSO with {call} — {e}"),
                 );
-                (
-                    format!("HRDLog ✗ {e}"),
-                    false,
-                    "the upload never reached HRDLog — check the network, and whether \
-                     antivirus or a proxy is inspecting HTTPS traffic. This session's \
-                     connection log has the exact message.",
-                    true,
-                )
+                (format!("HRDLog ✗ {e}"), false, HRDLOG_UNREACHABLE, true)
             }
         };
         // HRDLog leaves no per-QSO stamp, so this round trip is the ONLY evidence the
@@ -16798,14 +17075,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
                     "error",
                     format!("auto-push QSO with {call} — {e}"),
                 );
-                (
-                    format!("WRL ✗ {e}"),
-                    false,
-                    "the upload never reached World Radio League — check the network, and \
-                     whether antivirus or a proxy is inspecting HTTPS traffic. This session's \
-                     connection log has the exact message.",
-                    true,
-                )
+                (format!("WRL ✗ {e}"), false, WRL_UNREACHABLE, true)
             }
         };
         note_conn_health("wrl", ok, detail);
@@ -16836,17 +17106,20 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         let (part, ok, detail, transient) = match cloudlog_push_qso_impl(&dto, engine) {
             Ok(_) => {
                 conn_log("Cloudlog", "ok", format!("auto-forward {call}"));
-                ("Cloudlog ✓".to_string(), true, "", false)
+                ("Cloudlog ✓".to_string(), true, conn_detail!(""), false)
             }
             Err(e) => {
-                conn_log("Cloudlog", "error", format!("auto-forward {call} — {e}"));
+                conn_log(
+                    "Cloudlog",
+                    "error",
+                    format!("auto-forward {call} — {}", e.message),
+                );
                 // Cloudlog's error covers both a down instance and a reject; retry
                 // (bounded by MAX_UPLOAD_RETRIES) rather than silently drop.
                 (
-                    format!("Cloudlog ✗ {e}"),
+                    format!("Cloudlog ✗ {}", e.message),
                     false,
-                    "the upload did not go through — Cloudlog refused it, or could not be \
-                     reached. This session's connection log has the instance's own words.",
+                    cloudlog_stamp(e.class),
                     true,
                 )
             }
@@ -16860,11 +17133,13 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         // went to `conn_log` a line above and into the operator's toast through `part`; that
         // is the whole of their life. See `note_conn_health`.
         //
-        // The cost is honest and stated: unlike HRDLog and WRL, whose services answer with a
-        // closed result set, this site has only Ok/Err to go on — the class it used to show
-        // ("HTTP 403 — rejected the credentials", "could not connect") lived in the free text
-        // and does not survive the rule. Recovering it means a typed outcome out of
-        // `cloudlog::classify`, which is a change to that crate's API, not to this sink.
+        // What the rule cost for a release, and no longer does: this row used to collapse
+        // every failure into one sentence, because the sink had only Ok/Err to go on — so
+        // after a restart the panel could not tell a station profile id that is not linked to
+        // the key from a URL that is not a Cloudlog instance from an HTTP 500. `classify` now
+        // returns the CLASS beside the instance's words, and `cloudlog_stamp` maps it to one
+        // of Nexus's own sentences. HRDLog and WRL had this all along; only the naming was
+        // missing here.
         note_conn_health("cloudlog", ok, detail);
         parts.push(part);
         all_ok &= ok;
@@ -22070,11 +22345,23 @@ mod tests {
 
     /// `conn-health.json` round-trips, drops ids this build does not know, and treats a
     /// malformed file as nothing — a status file must never be able to fail a launch.
+    ///
+    /// ⚠️ The failure detail has to be a sentence a stamp really produces. The loader runs
+    /// the persisted-detail allow-list on the way in (see `conn_health_from_json`), so an
+    /// invented one — this test used the string `"AuthFail"` — is dropped, exactly as a key
+    /// poisoned into the file by an older build is.
     #[test]
     fn conn_health_json_round_trips_and_drops_the_unknown() {
         let rows: super::ConnHealthRows = vec![
             ("hrdlog", Some(1_700_000_000), None),
-            ("wrl", None, Some((1_700_000_500, "AuthFail".to_string()))),
+            (
+                "wrl",
+                None,
+                Some((
+                    1_700_000_500,
+                    super::wrl_stamp("authFail").1.as_str().to_string(),
+                )),
+            ),
         ];
         let text = super::conn_health_to_json(&rows);
         assert_eq!(super::conn_health_from_json(&text), rows);
@@ -22580,25 +22867,26 @@ mod tests {
             "control: an unknown connector starts with no history at all"
         );
 
-        note_conn_health(ID, true, "");
+        note_conn_health(ID, true, conn_detail!(""));
         let (ok1, fail1, _) = conn_health_of(ID);
         assert!(ok1.is_some(), "control: a success is recorded");
         assert!(fail1.is_none());
 
         // The failure must NOT take the success with it.
-        note_conn_health(ID, false, "HRDLog ✗ code invalid — check Settings");
+        let why = super::hrdlog_stamp("authFail").1;
+        note_conn_health(ID, false, why);
         let (ok2, fail2, detail2) = conn_health_of(ID);
         assert_eq!(ok2, ok1, "the earlier success must survive a later failure");
         assert!(fail2.is_some());
         assert_eq!(
             detail2.as_deref(),
-            Some("HRDLog ✗ code invalid — check Settings"),
-            "the service's own reason rides with the failure"
+            Some(why.as_str()),
+            "the reason rides with the failure"
         );
 
         // …and the recovery must not take the failure with it, or the row could never
         // show "it recovered at 4pm after failing at 3pm".
-        note_conn_health(ID, true, "");
+        note_conn_health(ID, true, conn_detail!(""));
         let (ok3, fail3, detail3) = conn_health_of(ID);
         assert!(ok3.is_some());
         assert_eq!(
@@ -22609,7 +22897,7 @@ mod tests {
 
         // One slot per connector, not one per call — otherwise the vec grows unbounded
         // for the life of the session.
-        note_conn_health(ID, true, "");
+        note_conn_health(ID, true, conn_detail!(""));
         let m = super::CONN_HEALTH.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(
             m.iter().filter(|(k, _, _)| *k == ID).count(),
@@ -22663,16 +22951,16 @@ mod tests {
     /// recoverable from a file that is mode 0644 and outlives the session. A blocklist
     /// cannot win a game where the other side picks the encoding.
     ///
-    /// So the sink takes an allow-list instead: `&'static str`, which a response body can
-    /// never be. **The strongest half of this rule is not tested here and cannot be** — the
-    /// call that would leak does not compile, and the two tests that used to hand this
-    /// function a `String` had to be rewritten to keep building. What is left to check at
-    /// runtime is that the deciders in front of the sink launder nothing through: every
-    /// service answer, hostile or unrecognised, must come out as one of Nexus's own
-    /// sentences.
+    /// So the sink takes an allow-list instead: a `ConnDetail`, which can only be built from
+    /// a string literal in this file. **The strongest half of this rule is not tested here
+    /// and cannot be** — the call that would leak does not compile, and the two tests that
+    /// used to hand this function a `String` had to be rewritten to keep building. What is
+    /// left to check at runtime is that the deciders in front of the sink launder nothing
+    /// through: every service answer, hostile or unrecognised, must come out as one of
+    /// Nexus's own sentences.
     #[test]
     fn no_service_text_can_reach_conn_health_json() {
-        use super::{conn_health_of, hrdlog_stamp, note_conn_health, wrl_stamp};
+        use super::{cloudlog_stamp, conn_health_of, hrdlog_stamp, note_conn_health, wrl_stamp};
         use super::{qrz_xml_stamp, QrzFailure, QrzOutcome};
 
         // A Cloudlog API key as an echoing instance sends it back, wrapped in the format
@@ -22685,17 +22973,28 @@ mod tests {
         // success or as an echo.
         let mut details: Vec<&str> = Vec::new();
         for r in ["ok", "duplicate", "authFail", "unknown", "rejected"] {
-            details.push(hrdlog_stamp(r).1);
+            details.push(hrdlog_stamp(r).1.as_str());
         }
-        details.push(hrdlog_stamp(&hostile).1);
+        details.push(hrdlog_stamp(&hostile).1.as_str());
         for r in ["accepted", "duplicate", "authFail", "pending", "rejected"] {
-            details.push(wrl_stamp(r).1);
+            details.push(wrl_stamp(r).1.as_str());
         }
-        details.push(wrl_stamp(&hostile).1);
-        details.push(qrz_xml_stamp(&Ok(QrzOutcome::Refused(hostile.clone()))).1);
-        details.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1);
-        details.push(qrz_xml_stamp(&Err(QrzFailure::unreachable(hostile.clone()))).1);
-        details.push(qrz_xml_stamp(&Err(QrzFailure::login_rejected(hostile.clone()))).1);
+        details.push(wrl_stamp(&hostile).1.as_str());
+        for c in propagation::live::cloudlog::CloudlogFailure::ALL {
+            details.push(cloudlog_stamp(c).as_str());
+        }
+        details.push(qrz_xml_stamp(&Ok(QrzOutcome::Refused(hostile.clone()))).1.as_str());
+        details.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1.as_str());
+        details.push(
+            qrz_xml_stamp(&Err(QrzFailure::unreachable(hostile.clone())))
+                .1
+                .as_str(),
+        );
+        details.push(
+            qrz_xml_stamp(&Err(QrzFailure::login_rejected(hostile.clone())))
+                .1
+                .as_str(),
+        );
 
         // The positive control, and this test is worthless without it: the same predicate
         // run over the thing that WOULD leak has to trip.
@@ -22719,16 +23018,235 @@ mod tests {
         let (ok, detail) = hrdlog_stamp("authFail");
         assert!(!ok);
         assert!(
-            detail.contains("upload code"),
+            detail.as_str().contains("upload code"),
             "the row must name what to go and fix: {detail:?}"
         );
         const ID: &str = "hrdlog-test-allow-listed-detail";
         note_conn_health(ID, false, detail);
         assert_eq!(
             conn_health_of(ID).2.as_deref(),
-            Some(detail),
+            Some(detail.as_str()),
             "and it must survive the sink unchanged"
         );
+    }
+
+    /// ⛔ STDERR IS A FILE. THE SERVICE'S OWN WORDS MUST NOT REACH IT.
+    ///
+    /// The allow-list at `note_conn_health` keeps a service's text out of `conn-health.json`
+    /// and nothing else, because that was the only durable sink anybody had listed.
+    /// `conn_log` mirrored its message to stderr — and a Tauri app on Linux is started by the
+    /// desktop session, which redirects a GUI process's stderr into `~/.xsession-errors`,
+    /// mode 0644, kept until the next login. So the Cloudlog API key the type guard refuses
+    /// to write into one 0644 file was still being written verbatim into another one, by the
+    /// same call, one line earlier. Measured on the round-3 code: of the 22 encodings an
+    /// echoing instance can use, 8 carried the whole key and the HTML-entity and `\u` forms
+    /// carried 14–22 contiguous characters.
+    ///
+    /// Checked by actually reading the process's stderr, which needs a child: a test cannot
+    /// capture its own. The child is this same test binary re-run for this one test with
+    /// `--nocapture`, so what is asserted on is the real file descriptor, not a mock of it.
+    #[test]
+    fn the_connection_log_does_not_mirror_a_service_reply_to_stderr() {
+        const SECRET: &str = "c1oudlog7k3yAbCdEf0123456789xyzQR";
+        // The child half: log a reply of the shape an echoing instance sends, and stop.
+        if std::env::var("NEXUS_CONN_STDERR_CHILD").is_ok() {
+            super::conn_log(
+                "Cloudlog",
+                "error",
+                format!("auto-forward W9XYZ — Cloudlog HTTP 403: denied for key={SECRET}"),
+            );
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "tests::the_connection_log_does_not_mirror_a_service_reply_to_stderr",
+                "--nocapture",
+            ])
+            .env("NEXUS_CONN_STDERR_CHILD", "1")
+            .output()
+            .expect("re-run this test binary");
+        let err = String::from_utf8_lossy(&out.stderr);
+
+        // Two controls, and the test proves nothing without them: the child must have RUN,
+        // and it must have reached `conn_log` — a child that failed to start, or a filter
+        // that matched no test, would produce an empty stderr that passes trivially.
+        assert!(
+            out.status.success(),
+            "control: the child test binary did not pass: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert!(
+            err.contains("conn[Cloudlog/error]"),
+            "control: the child never reached conn_log, so stderr proves nothing: {err:?}"
+        );
+
+        assert!(
+            !err.contains(SECRET),
+            "the service's own words reached stderr, which on Linux is ~/.xsession-errors \
+             (0644): {err:?}"
+        );
+        // Not just the whole key: the longest alphanumeric runs are what a person reads a
+        // key out of, whatever escaping an instance puts between them.
+        for run in SECRET.split(|c: char| !c.is_alphanumeric()) {
+            if run.chars().count() >= 8 {
+                assert!(
+                    !err.contains(run),
+                    "readable key material reached stderr ({run}): {err:?}"
+                );
+            }
+        }
+    }
+
+    /// ⛔ `String::leak` WAS A ONE-TOKEN HOLE IN THE PERSISTED-DETAIL ALLOW-LIST.
+    ///
+    /// Round 3's guard was the parameter type `&'static str`, on the reasoning that a
+    /// response body is a runtime `String`. `body.leak()` is a `&'static str`, compiles
+    /// clean and trips no lint, so the guard was really a convention with a type-shaped
+    /// coat. `ConnDetail`'s field is private and its constructor is reached through
+    /// `conn_detail!`, whose `$text:literal` matcher the parser decides — no expression can
+    /// satisfy it.
+    ///
+    /// What is left is calling the hidden constructor by name, and that is what this reads
+    /// the source for. Compile-failure cases cannot be asserted from inside the crate they
+    /// would break, so the residual hole is checked the way the wire-id guards are: by
+    /// reading the file.
+    #[test]
+    fn the_only_way_to_build_a_conn_detail_is_a_string_literal() {
+        let src = include_str!("lib.rs");
+        // Split so this test's own lines are not among the hits it counts.
+        let ctor = concat!("__from", "_literal");
+        // Comment lines are excluded: prose cannot call a constructor, and the module note
+        // above names it on purpose. What is counted is code.
+        let uses: Vec<&str> = src
+            .lines()
+            .filter(|l| l.contains(ctor) && !l.trim_start().starts_with("//"))
+            .collect();
+
+        // The controls: both expected occurrences must actually be found, or an empty
+        // result would satisfy the count below while proving nothing.
+        assert!(
+            uses.iter().any(|l| l.contains("pub const fn")),
+            "control: the constructor's definition was not found — the needle is wrong"
+        );
+        assert!(
+            uses.iter().any(|l| l.contains("ConnDetail::")),
+            "control: the macro's expansion was not found — the needle is wrong"
+        );
+        assert_eq!(
+            uses.len(),
+            2,
+            "the hidden ConnDetail constructor is called outside its macro — that is the \
+             `String::leak` hole reopened: {uses:#?}"
+        );
+        // …and the macro's own guard, which is the half that rejects `conn_detail!(x.leak())`.
+        // Split for the same reason as `ctor`: written whole, this assertion's OWN line
+        // satisfies it, and the check passes against a macro that no longer matches a
+        // literal at all. It did, until the mutation that was supposed to trip it did not.
+        let matcher = concat!("($text:", "literal) => {");
+        assert!(
+            src.contains(matcher),
+            "conn_detail! stopped matching a literal fragment, so any expression now reaches \
+             the persisted sink"
+        );
+    }
+
+    /// ⛔ A POISONED `conn-health.json` MUST NOT RIDE FORWARD FOREVER.
+    ///
+    /// The write side takes a `ConnDetail`, so nothing this build produces can put a service's
+    /// words in the file. That says nothing about bytes already in it: the round-3 loader read
+    /// `last_fail_detail` back as a `String`, kept it, and re-serialised it on every later
+    /// stamp — so a key written by an earlier build stayed for the life of the installation,
+    /// through every upgrade.
+    #[test]
+    fn a_detail_that_this_build_could_not_have_written_is_dropped_on_read() {
+        use super::{conn_health_from_json, hrdlog_stamp};
+        const SECRET: &str = "c1oudlog7k3yAbCdEf0123456789xyzQR";
+        let poisoned = format!(
+            r#"[{{"id":"cloudlog","last_ok_unix":null,"last_fail_unix":1700000000,
+                  "last_fail_detail":"Cloudlog HTTP 403: denied for key={SECRET}"}}]"#
+        );
+        let rows = conn_health_from_json(&poisoned);
+
+        // The control: the row itself must survive, or "the key is gone" would be satisfied
+        // by a loader that simply dropped everything.
+        assert_eq!(rows.len(), 1, "control: the cloudlog row must still load");
+        let (_, _, fail) = &rows[0];
+        let (when, detail) = fail.as_ref().expect("the failure timestamp must survive");
+        assert_eq!(*when, 1_700_000_000, "the failure's time is the honest part");
+        assert!(
+            !detail.contains(SECRET),
+            "a key already in the file rode forward: {detail:?}"
+        );
+
+        // …and the second control, which is the one that stops "clean on read" being
+        // implemented as "drop every detail": a sentence THIS build writes must survive.
+        let ours = hrdlog_stamp("authFail").1;
+        let good = format!(
+            r#"[{{"id":"hrdlog","last_ok_unix":null,"last_fail_unix":1700000000,
+                  "last_fail_detail":{}}}]"#,
+            serde_json::to_string(ours.as_str()).expect("json")
+        );
+        let rows = conn_health_from_json(&good);
+        assert_eq!(
+            rows[0].2.as_ref().map(|(_, d)| d.as_str()),
+            Some(ours.as_str()),
+            "the row lost the reason it is supposed to survive a restart with"
+        );
+    }
+
+    /// …and the tie between the two halves of that allow-list. `persistable_details` is what
+    /// the loader checks against, and it is built by CALLING the deciders — so this drives
+    /// the same deciders over the same domains and asserts every answer round-trips. A stamp
+    /// added without a line in `persistable_details` loses its reason on the next launch,
+    /// silently, and only in the field.
+    #[test]
+    fn every_detail_a_stamp_can_produce_survives_a_restart() {
+        use super::{
+            cloudlog_stamp, conn_health_from_json, conn_health_to_json, hrdlog_stamp,
+            qrz_xml_stamp, wrl_stamp, QrzFailure, QrzOutcome,
+        };
+        let mut details: Vec<&'static str> = Vec::new();
+        for r in ["ok", "duplicate", "authFail", "unknown", "?"] {
+            details.push(hrdlog_stamp(r).1.as_str());
+        }
+        for r in ["accepted", "duplicate", "authFail", "pending", "?"] {
+            details.push(wrl_stamp(r).1.as_str());
+        }
+        for c in propagation::live::cloudlog::CloudlogFailure::ALL {
+            details.push(cloudlog_stamp(c).as_str());
+        }
+        details.push(qrz_xml_stamp(&Ok(QrzOutcome::Refused(String::new()))).1.as_str());
+        details.push(qrz_xml_stamp(&Ok(QrzOutcome::NeedLogin)).1.as_str());
+        details.push(
+            qrz_xml_stamp(&Err(QrzFailure::unreachable(String::new())))
+                .1
+                .as_str(),
+        );
+        details.push(
+            qrz_xml_stamp(&Err(QrzFailure::login_rejected(String::new())))
+                .1
+                .as_str(),
+        );
+        details.push(super::QRZ_LOGBOOK_TEST_FAILED.as_str());
+
+        // The control: there really are sentences here to lose.
+        let real: Vec<&str> = details.iter().copied().filter(|d| !d.is_empty()).collect();
+        assert!(
+            real.len() >= 15,
+            "control: only {} sentences were collected — the domains drifted",
+            real.len()
+        );
+        for d in real {
+            let rows = vec![("hrdlog", None, Some((1_700_000_000_i64, d.to_string())))];
+            let back = conn_health_from_json(&conn_health_to_json(&rows));
+            assert_eq!(
+                back.first().and_then(|r| r.2.as_ref()).map(|(_, s)| s.as_str()),
+                Some(d),
+                "a sentence a stamp can produce is dropped on load — it is missing from \
+                 persistable_details: {d:?}"
+            );
+        }
     }
 
     /// ⛔ NO TEST MAY WRITE THE OPERATOR'S `conn-health.json`.
@@ -22749,7 +23267,7 @@ mod tests {
         // The store writes on every change, so stamping one is how we find out where the
         // bytes actually land — asking the path function alone would only test itself.
         const ID: &str = "hrdlog-test-where-do-the-bytes-land";
-        note_conn_health(ID, true, "");
+        note_conn_health(ID, true, conn_detail!(""));
         let written = conn_health_path();
         // Two controls. Without them a path that is merely never written would pass.
         assert!(
@@ -22785,10 +23303,13 @@ mod tests {
         use super::{qrz_xml_stamp, QrzFailure, QrzOutcome};
         // A hit is a working subscription.
         let found = QrzOutcome::Found(Box::new(tempo_core::qrz::QrzLookup::default().into()));
-        assert_eq!(qrz_xml_stamp(&Ok(found)), (true, ""));
+        assert_eq!(qrz_xml_stamp(&Ok(found)), (true, conn_detail!("")));
         // So is an authoritative miss: QRZ answered on a live session. Calling this a failure
         // would paint the row red for looking up a callsign that simply does not exist.
-        assert_eq!(qrz_xml_stamp(&Ok(QrzOutcome::NotFound)), (true, ""));
+        assert_eq!(
+            qrz_xml_stamp(&Ok(QrzOutcome::NotFound)),
+            (true, conn_detail!(""))
+        );
         // A rejected login is the case M0DHT could not see. QRZ's own sentence goes to the
         // connection log, not to disk, so what the row must carry is the REMEDY — and it must
         // be the credential remedy, not the network one.
@@ -22797,7 +23318,7 @@ mod tests {
         )));
         assert!(!ok);
         assert!(
-            detail.contains("subscription") && detail.contains("username"),
+            detail.as_str().contains("subscription") && detail.as_str().contains("username"),
             "a refused login must send the operator at the credentials: {detail:?}"
         );
         // …and the other failure must NOT, which is D#181's whole lesson: an antivirus
@@ -22805,7 +23326,7 @@ mod tests {
         // to check their QRZ password costs them an evening.
         let (_, detail) = qrz_xml_stamp(&Err(QrzFailure::unreachable("timed out".into())));
         assert!(
-            detail.contains("antivirus") && !detail.contains("password"),
+            detail.as_str().contains("antivirus") && !detail.as_str().contains("password"),
             "a transport failure must not be reported as a credential problem: {detail:?}"
         );
     }
@@ -22838,7 +23359,7 @@ mod tests {
             "a lookup QRZ refused must not report the XML subscription verified"
         );
         assert!(
-            !detail.trim().is_empty(),
+            !detail.as_str().trim().is_empty(),
             "and the row has to say what happened, or it is red with no reason"
         );
     }
@@ -22904,7 +23425,7 @@ mod tests {
             "a refusal QRZ delivered on a live session reported the subscription verified"
         );
         assert!(
-            !refused_detail.trim().is_empty(),
+            !refused_detail.as_str().trim().is_empty(),
             "and the row has to say what happened, or it is red with no reason"
         );
 

@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behind the session TX latch plus the persisted switch — autoreplies, relay and HB-ack, each
   with a visible, cancellable countdown. Heartbeats are exempt from the 6-minute TX watchdog
   the way WSPR/FST4W beacons are and bounded by JS8Call's 60-minute idle watchdog; Stop TX
-  clears the queue, the heartbeat schedule and any pending reply.- **A POTA activity map in FT mode.** A new *Map* button beside Classic/Roster in the FT header
+  clears the queue, the heartbeat schedule and any pending reply.
+- **A POTA activity map in FT mode.** A new *Map* button beside Classic/Roster in the FT header
   opens the map in its own window — put it on a second monitor next to the roster, the way
   GridTracker is used for park hunting. It plots every spotted POTA activator from the live
   feed (the same source GridTracker reads, with no mode or age filter), coloured by
@@ -98,7 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being counted as a completed one: the row went green, and green does not just fail to warn,
   it clears a red that was already there. A match and a genuine miss now read as a working
   subscription; a refusal and a session QRZ will not accept read as failures, each naming what
-  to go and check.
+  to go and check. Telling those two apart reads QRZ's own not-found wording, and it now has to
+  be QRZ's not-found *reply* rather than any refusal that happens to use the words — a
+  subscription-level refusal worded "callsign not found at your subscription level" was being
+  read as a plain miss, which turned the row green.
 
 - **Cloudlog and Wavelog threw away the reason your upload was rejected.** The instance sends
   back what it actually refused — a read-only API key, a station profile id not linked to that
@@ -118,6 +122,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the upload result and in this session's connection log; they are simply not kept. The same
   rule now covers HRDLog.net and World Radio League, whose replies were being stored with no
   length limit at all.
+
+  It covers the diagnostic output as well. On Linux the desktop session captures a program's
+  console output into a world-readable file in your home directory, and the connection log was
+  echoing every service reply there verbatim — so the same API key was landing in a second
+  file, kept until your next login. The console line now names only the connector and whether
+  it succeeded, and the ClubLog most-wanted fetcher, whose request carries your ClubLog key in
+  its URL, no longer echoes ClubLog's refusal there either. And a file that already had a key
+  in it from an earlier version is cleaned the next time Nexus starts: a stored failure line
+  that this version could not have written is dropped, and the row keeps the time it failed.
+
+- **A Cloudlog failure now says which failure, after a restart too.** Every way an upload could
+  fail collapsed into one stored sentence, so once the connection log had gone with the session
+  the Connections row could not tell a station profile id that is not linked to your key from a
+  URL that is not a Cloudlog instance from the instance being down. Each of those now has its
+  own line on the row, naming what to go and check — the same way the HRDLog.net and World Radio
+  League rows already worked.
+
+- **A connector row could read green in the second it failed.** The panel compares when a
+  connector last worked with when it last failed, and those are stamped to the whole second —
+  so a QSO that uploaded and then failed inside the same second read as working, and stayed
+  that way until the next failure. The auto-upload worker pushes to every service back to back
+  with no spacing, and a Cloudlog instance on your own network answers in milliseconds, so this
+  was reachable. A tie now reads as failing.
 
 - **A LoTW report that failed to download said which step failed, not what went wrong.** Every
   failure reading the response became "could not read the response body", so a request that

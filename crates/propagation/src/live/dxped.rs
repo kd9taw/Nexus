@@ -162,10 +162,18 @@ fn most_wanted(c: &reqwest::blocking::Client) -> HashMap<String, u32> {
     let url = format!("https://clublog.org/mostwanted.php?api={key}");
     if let Ok(resp) = c.get(&url).send() {
         if let Ok(v) = resp.json::<serde_json::Value>() {
-            // ClubLog reports problems as {"error": "..."} with HTTP 200 — surface it
-            // rather than silently behaving like "no key".
-            if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
-                eprintln!("propagation: ClubLog most-wanted error: {err}");
+            // ClubLog reports problems as {"error": "..."} with HTTP 200 — say so rather
+            // than silently behaving like "no key".
+            //
+            // ⛔ The breadcrumb names the fetcher and NOT ClubLog's sentence. The API key is
+            // in this request's URL (`?api={key}`), so ClubLog's own words about a rejected
+            // request are the most likely place for it to come back; and stderr is not a
+            // dev convenience on Linux, where the desktop session redirects a GUI process's
+            // stderr into `~/.xsession-errors`, mode 0644, kept until the next login. Same
+            // rule as `conn_log` in `src-tauri/src/lib.rs`: a service's own text goes to a
+            // screen, never to something that outlives the moment.
+            if v.get("error").and_then(|e| e.as_str()).is_some() {
+                eprintln!("propagation: ClubLog most-wanted refused the request");
                 return HashMap::new();
             }
             if let Some(obj) = v.as_object() {

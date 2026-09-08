@@ -95,10 +95,25 @@ impl QrzSession {
     /// verified, so guessing "miss" paints a working row over a subscription that has
     /// lapsed (#245), while guessing "refusal" costs at worst a red row on a callsign that
     /// really does not exist.
+    ///
+    /// ⛔ **Anchored at the start, not searched for.** This defect class has come back three
+    /// times, and the third was `contains("not found")`: a refusal that merely MENTIONS the
+    /// words — *"Callsign not found at your subscription level"* — read as an authoritative
+    /// miss, and the success half of that stamp CLEARS an existing red. A substring search
+    /// asks "did QRZ use these words anywhere", which is not the question; the question is
+    /// "is this answer QRZ's not-found reply", and that reply has one shape:
+    /// `Not found: <callsign>`. So the error must BEGIN with `not found`, and what follows
+    /// must be the end of the sentence or a colon — never more prose, which is always some
+    /// other sentence that happens to contain the phrase.
     pub fn holds_no_record(&self) -> bool {
-        self.error
-            .as_deref()
-            .is_some_and(|e| e.to_ascii_lowercase().contains("not found"))
+        let Some(e) = self.error.as_deref() else {
+            return false;
+        };
+        let e = e.trim().to_ascii_lowercase();
+        let Some(rest) = e.strip_prefix("not found") else {
+            return false;
+        };
+        rest.trim_start().is_empty() || rest.starts_with(':')
     }
 }
 
@@ -708,6 +723,12 @@ mod tests {
             "A subscription is required to access this data",
             "Lookup limit exceeded for this 24 hour period",
             "Insufficient privileges for that operation",
+            // ⚠️ The third round of this defect, and the one a substring match cannot see:
+            // a REFUSAL that happens to contain QRZ's not-found words. `contains("not
+            // found")` reads this as an authoritative miss, which stamps the row green —
+            // and the success half CLEARS an existing red.
+            "Callsign not found at your subscription level",
+            "The requested data was not found in your subscription tier",
         ] {
             let xml = format!(
                 "<QRZDatabase><Session><Key>live</Key><Error>{refusal}</Error></Session></QRZDatabase>"

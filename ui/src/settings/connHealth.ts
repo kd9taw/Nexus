@@ -26,7 +26,13 @@ export type ConnState = 'none' | 'paused' | 'failing' | 'off' | 'working' | 'loo
  *
  *  1. No credential beats everything — there is nothing to be healthy about.
  *  2. A kill-switch beats a stale success: while it is set, nothing is being sent at all.
- *  3. A failure NEWER than the last success beats that success.
+ *  3. A failure not OLDER than the last success beats that success. ⚠️ Not older, not newer:
+ *     the stamps are whole seconds, so a success and a failure inside one second compare
+ *     equal, and a strict `>` rendered that tie GREEN — and green stayed until the next
+ *     failure. The tie is reachable (the auto-push worker loops with no spacing between legs
+ *     and a LAN Cloudlog answers in milliseconds) and it resolves red, because a wrong
+ *     `failing` is corrected by the next successful push while a wrong `working` is a
+ *     connector claiming to work at the moment it does not.
  *  4. Deliberately off beats "never verified" — an operator who turned it off is not
  *     looking at a problem.
  *  5. A success with nothing failing since is working.
@@ -38,7 +44,10 @@ export type ConnState = 'none' | 'paused' | 'failing' | 'off' | 'working' | 'loo
 export function connState(c: CredStatus): ConnState {
   if (!c.stored) return 'none'
   if (c.paused) return 'paused'
-  if (c.lastFailureUnix != null && (c.lastSuccessUnix == null || c.lastFailureUnix > c.lastSuccessUnix))
+  if (
+    c.lastFailureUnix != null &&
+    (c.lastSuccessUnix == null || c.lastFailureUnix >= c.lastSuccessUnix)
+  )
     return 'failing'
   if (c.uploads && !c.enabled) return 'off'
   if (c.lastSuccessUnix != null) return 'working'

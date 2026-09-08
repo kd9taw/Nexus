@@ -45,6 +45,23 @@ describe('connState covers every row a connector can be in', () => {
     expect(connState(cred({ lastFailureUnix: 100 }))).toBe('failing')
   })
 
+  it('a failure in the SAME SECOND as the success before it is failing', () => {
+    // ⛔ The stamps are whole seconds (`now_unix`), so "newer" and "same second" are not the
+    // same question, and a strict `>` answered the wrong one: an upload that succeeded and
+    // then failed inside one second rendered GREEN and stayed green until the next failure.
+    // Reachable, not theoretical — the auto-push worker loops with no spacing between legs
+    // and a Cloudlog instance on the LAN answers in milliseconds.
+    //
+    // The tie resolves to `failing` because it is the honest half of an unknowable order:
+    // a wrong `failing` is corrected by the next successful push, a wrong `working` is a
+    // connector claiming to work at the moment it does not — the same lie in a new costume,
+    // and #245's whole subject.
+    expect(connState(cred({ lastSuccessUnix: 100, lastFailureUnix: 100 }))).toBe('failing')
+    // The control: the reverse ordering must still recover, or "the tie is red" would be
+    // satisfied by a comparison that simply always reads red.
+    expect(connState(cred({ lastSuccessUnix: 101, lastFailureUnix: 100 }))).toBe('working')
+  })
+
   it('deliberately switched off is not a problem', () => {
     expect(connState(cred({ enabled: false }))).toBe('off')
   })
