@@ -10,7 +10,8 @@
     "check": "tsc --noEmit",
     "test": "node --test test/service.test.mjs",
     "test:native": "node scripts/test-native.mjs",
-    "test:browser": "node --test test/browser.test.mjs"
+    "test:browser": "node --test test/browser.test.mjs",
+    "test:staging": "node --test test/staging.test.mjs"
   },
   "dependencies": {
     "jose": "6.2.12"

@@ -11,6 +11,7 @@ export interface RemoteEnv {
   AUTH0_ISSUER: string
   AUTH0_AUDIENCE: string
   AUTH0_CLIENT_ID: string
+  REMOTE_BUILD_REVISION?: string
 }
 
 export class Refusal extends Error {

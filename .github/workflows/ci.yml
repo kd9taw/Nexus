@@ -253,6 +253,8 @@ jobs:
           npm --prefix remote run build
       - name: Service authorization, real sockets and hibernation
         run: npm --prefix remote test
+      - name: Remote staging scope, artifact integrity and deployment checks
+        run: npm --prefix remote run test:staging
       - name: Compiled browser sign-in, approval, observation and responsive layouts
         run: |
           google-chrome --version

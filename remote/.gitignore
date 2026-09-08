@@ -4,3 +4,4 @@ dist/
 .dev.vars*
 wrangler.staging.jsonc
 worker-configuration.d.ts
+staging-artifact/

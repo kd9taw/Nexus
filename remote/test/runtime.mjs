@@ -7,7 +7,7 @@ import { createServer } from 'node:net'
 import assert from 'node:assert/strict'
 import WebSocket from 'ws'
 
-export async function runtime() {
+export async function runtime({ bindings = {} } = {}) {
   const reservation = createServer()
   await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve))
   const port = reservation.address().port
@@ -21,7 +21,7 @@ export async function runtime() {
     compatibilityDate: '2026-07-30', host: '127.0.0.1', port, cf: false,
     telemetry: { enabled: false },
     durableObjects: { STATIONS: { className: 'StationRoom', useSQLite: true } }, d1Databases: ['DB'],
-    bindings: { PUBLIC_REMOTE_ORIGIN: origin, AUTH0_ISSUER: issuer, AUTH0_AUDIENCE: 'remote-test-api', AUTH0_CLIENT_ID: 'remote-test-client' },
+    bindings: { PUBLIC_REMOTE_ORIGIN: origin, AUTH0_ISSUER: issuer, AUTH0_AUDIENCE: 'remote-test-api', AUTH0_CLIENT_ID: 'remote-test-client', ...bindings },
     assets: {
       directory: new URL('../../ui/dist-remote', import.meta.url).pathname,
       routerConfig: { has_user_worker: true },

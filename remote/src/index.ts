@@ -34,6 +34,7 @@ async function api(request: Request, env: RemoteEnv): Promise<Response> {
   if (request.method === 'GET' && path === 'config') return json({
     issuer: env.AUTH0_ISSUER, audience: env.AUTH0_AUDIENCE, clientId: env.AUTH0_CLIENT_ID,
     ready: env.AUTH0_CLIENT_ID !== 'unconfigured',
+    revision: env.REMOTE_BUILD_REVISION ?? 'local',
   })
   const match = /^stations\/([0-9a-f-]{36})\/(.+)$/.exec(path)
   if (request.method === 'GET' && match && ['connect', 'observe'].includes(match[2])) {

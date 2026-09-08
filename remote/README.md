@@ -64,6 +64,9 @@ browser close/reconnect latency on the deployed staging endpoint before acceptan
 
 ## Staging setup
 
+The [staging administration guide](STAGING.md) covers the new Auth0 tenant, existing
+Cloudflare account references, manual deployment workflow, artifact checks and rollback.
+
 Provision a separate Cloudflare Worker, SQLite Durable Object namespace and D1
 database. Use the `remote-staging.hamradiotools.io` custom domain; keep `workers.dev`
 and preview URLs disabled. No queue, object bucket, VM, TURN server or media relay
