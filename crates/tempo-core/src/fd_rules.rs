@@ -17,6 +17,20 @@
 //! [`RulesInitError::AlreadyInitialized`] when something read the ruleset
 //! before the startup install (a code-ordering regression, not a state).
 //!
+//! The file carries a `schema` number and this build reads **schema 2**. It is
+//! a hard refusal, not a best effort: [`RulesetSpec`] gained `exchange`,
+//! `domains`, `dupe` and `scoring` as REQUIRED blocks, and the only other way
+//! to express that would be to serde-default them — which would let a rules
+//! file that forgot a block load and score as though its author had decided
+//! something (spec §8c). A schema-1 file is therefore refused by name here.
+//!
+//! An older build refuses THIS file too, and keeps its own bundled seed — but
+//! not by name: `parse_spec` opens with `serde_json::from_str`, and a 1.x
+//! `RulesetSpec` declares `scoring: String` where schema 2 writes a block, so
+//! serde fails first with `bad JSON: invalid type: map, expected a string` and
+//! the schema check never runs. Same refusal, different message; do not credit
+//! the version check with it.
+//!
 //! `rules_year` stamps each ruleset; the pinned per-event score fixtures in the
 //! tests below run against [`ruleset`] = the BUNDLED SEED (an installed file is
 //! invisible to them by design — its visibility to the operator is the status
@@ -44,14 +58,6 @@ pub struct Bonus {
     pub id: &'static str,
     pub label: &'static str,
     pub points: u32,
-}
-
-/// The exchange both events use today: a transmitter Class (e.g. `3A`) and an
-/// ARRL/RAC Section (e.g. `WI`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExchangeSpec {
-    pub class_label: &'static str,
-    pub section_label: &'static str,
 }
 
 /// One ARRL/RAC Field Day section: the exchange abbreviation sent on the air
@@ -195,7 +201,14 @@ pub struct FdRuleset {
     pub event: FdEvent,
     pub rules_year: u16,
     pub contest_id: &'static str,
-    pub exchange: ExchangeSpec,
+    /// The exchange this event runs, as data. Byte-for-byte the exchange
+    /// `contest::field_day` ships (cross-checked in the tests below).
+    ///
+    /// ⚠️ Nothing CONSUMES this yet — `contest::field_day()` is still the
+    /// definition the RTTY sequencer copies against. Wiring the loaded block
+    /// through the parser is a later batch; doing it here would have made this
+    /// batch a behaviour change.
+    pub exchange: &'static crate::contest::ExchangeSpec,
     pub scoring: ScoringModel,
     pub bonuses: &'static [Bonus],
     pub dupe_rule: DupeRule,
@@ -210,6 +223,12 @@ pub struct FdRuleset {
     /// Display-only objectives menu (WFD; empty today — WFD reuses the bonus
     /// menu, and a real WFD objectives table flows through this field later).
     pub objectives: &'static [Bonus],
+    /// Domains this ruleset DECLARES in the rules file. The reserved derived
+    /// ids ([`arrl_sections_domain`], [`fd_sections_domain`]) are NOT in here —
+    /// they are computed from the top-level section list, and a file that tries
+    /// to declare one is refused. Empty for both Field Day events: neither
+    /// needs a domain the loader does not already derive.
+    pub domains: &'static [&'static crate::contest::Domain],
     pub assistance: AssistancePolicy,
     /// Advisory posture — `"warn"` only today (warn, never remove or disable a
     /// surface — operator ruling).
@@ -317,6 +336,102 @@ pub fn valid_section(code: &str) -> bool {
     sections().iter().any(|s| s.code == up)
 }
 
+/// The Field Day SECTION slot's domain: the 83 ARRL/RAC section codes plus the `MX`
+/// and `DX` extensions DX stations send — exactly the set the RTTY parser accepted
+/// inline as `valid_section(t) || t == "MX" || t == "DX"`. Derived from the same
+/// validated [`sections`] table, so the two can never disagree; nothing here
+/// duplicates a code list a human would have to keep in step.
+///
+/// ⚠️ Same ordering rule as [`ruleset`]: calling this LOADS the rules table, so it
+/// must never run before the startup [`install_from`] or the bundled seed is locked in
+/// for the session (see `tests/fd_rules_too_late.rs`). Its only caller is
+/// `contest::field_day()`, reached from `Engine::set_rtty_auto` — an operator action.
+///
+/// `MX`/`DX` carry their own code as their label: they are not sections and have no
+/// section name, and inventing a display name would be inventing data.
+pub fn fd_sections_domain() -> &'static crate::contest::Domain {
+    static D: OnceLock<crate::contest::Domain> = OnceLock::new();
+    D.get_or_init(|| derive_fd_sections(sections()))
+}
+
+/// [`fd_sections_domain`]'s body, over an EXPLICIT section slice.
+///
+/// ⚠️ It exists split out because [`build`] runs INSIDE `TABLE.get_or_init`, so
+/// anything there that reached for the accessor — which goes through
+/// [`sections`] → `table()` → the same `OnceLock` — would re-enter it and
+/// DEADLOCK. (It did: the exchange block's `enum` slots resolve `fd_sections`,
+/// and the first version of that resolution hung the whole test binary.) So
+/// `build` derives from the slice it is already holding, and only callers
+/// OUTSIDE the initialiser use the accessor.
+fn derive_fd_sections(secs: &'static [Section]) -> crate::contest::Domain {
+    {
+        let mut values: Vec<(&'static str, &'static str)> =
+            secs.iter().map(|s| (s.code, s.name)).collect();
+        values.push(("MX", "MX"));
+        values.push(("DX", "DX"));
+        crate::contest::Domain {
+            id: "fd_sections",
+            // Received: <ARRL_SECT>, which the Field Day ADIF exporter already writes.
+            // Sent: absent — MY_ARRL_SECT is not corroborated anywhere in this tree
+            // (§2.1.1), and batch 6 checks the name against adif.org's field list
+            // before any writer emits it.
+            adif: crate::contest::AdifTags {
+                rcvd: Some("ARRL_SECT"),
+                sent: None,
+            },
+            values: Box::leak(values.into_boxed_slice()),
+        }
+    }
+}
+
+/// The 83 ARRL/RAC section codes as a [`contest::Domain`](crate::contest::Domain)
+/// — the plain section universe, with none of Field Day's `MX`/`DX`
+/// extensions.
+///
+/// This is where §8(d)'s "exactly 83" assertion now lives as a property of a
+/// DOMAIN rather than of the file. Derived from the same validated [`sections`]
+/// table as [`fd_sections_domain`], so the two can never disagree and neither
+/// can drift from the list the worked-sections board renders.
+///
+/// ⚠️ The codes deliberately do NOT move into the rules file's own `domains`
+/// array. A [`Section`] carries three attributes (`code`, `name`, `division`)
+/// and a `Domain` value is a `(code, label)` PAIR — `division` is what the
+/// board groups by and what the TypeScript mirror guard pins, and it would have
+/// nowhere to live. So `arrl_sections` and `fd_sections` are RESERVED ids the
+/// loader derives, and a file that declares either is refused.
+///
+/// Same ordering rule as [`ruleset`]: this LOADS the rules table.
+pub fn arrl_sections_domain() -> &'static crate::contest::Domain {
+    static D: OnceLock<crate::contest::Domain> = OnceLock::new();
+    D.get_or_init(|| derive_arrl_sections(sections()))
+}
+
+/// [`arrl_sections_domain`]'s body over an explicit slice — same re-entrancy
+/// reason as [`derive_fd_sections`].
+fn derive_arrl_sections(secs: &'static [Section]) -> crate::contest::Domain {
+    {
+        let values: Vec<(&'static str, &'static str)> =
+            secs.iter().map(|s| (s.code, s.name)).collect();
+        crate::contest::Domain {
+            id: "arrl_sections",
+            // Received: <ARRL_SECT>. Sent: absent — MY_ARRL_SECT is not
+            // corroborated anywhere in this tree (§2.1.1), and batch 6 checks
+            // the name against adif.org's field list before any writer emits it.
+            adif: crate::contest::AdifTags {
+                rcvd: Some("ARRL_SECT"),
+                sent: None,
+            },
+            values: Box::leak(values.into_boxed_slice()),
+        }
+    }
+}
+
+/// Domain ids the loader DERIVES from the top-level `sections` list. A rules
+/// file that declares one of these in its own `domains` array is refused: it
+/// would be a second copy of a list that already exists, free to drift from it,
+/// and unable to carry `division` at all.
+const RESERVED_DOMAIN_IDS: [&str; 2] = ["arrl_sections", "fd_sections"];
+
 /// Snap a stored power multiplier to the highest legal tier ≤ `v` (or the
 /// smallest tier). Replaces the engine's old `legal_fd_power` for the ARRL
 /// `{1, 2, 5}` tiers — a hand-edited settings file must never score with a
@@ -329,17 +444,6 @@ fn legal_power(tiers: &[u32], v: u32) -> u32 {
         .find(|&t| v >= t)
         .unwrap_or_else(|| tiers.first().copied().unwrap_or(1))
 }
-
-const EXCHANGE_CLASS_SECTION: ExchangeSpec = ExchangeSpec {
-    class_label: "Class",
-    section_label: "Section",
-};
-
-const DUPE_CALL_BAND_MODE: DupeRule = DupeRule {
-    by_call: true,
-    by_band: true,
-    by_mode_class: true,
-};
 
 // ---------------------------------------------------------------------------
 // The rules table: parse + validate + leak — and the startup-only install seam
@@ -464,6 +568,30 @@ pub fn seed_generated() -> &'static str {
     })
 }
 
+/// The BUNDLED seed's ruleset event ids — the floor a downloaded file must
+/// contain (§8d's inversion: a download may ADD contests, never REMOVE one this
+/// build ships with).
+///
+/// Deliberately parsed with its own minimal struct, exactly like
+/// [`seed_generated`]: calling [`parse_spec`] here would recurse, because
+/// `parse_spec` is the very function that consults this list.
+fn seed_events() -> &'static [String] {
+    static E: OnceLock<Vec<String>> = OnceLock::new();
+    E.get_or_init(|| {
+        #[derive(serde::Deserialize)]
+        struct EventsOnly {
+            rulesets: Vec<EventOnly>,
+        }
+        #[derive(serde::Deserialize)]
+        struct EventOnly {
+            event: String,
+        }
+        serde_json::from_str::<EventsOnly>(SEED)
+            .map(|e| e.rulesets.into_iter().map(|r| r.event).collect())
+            .unwrap_or_default()
+    })
+}
+
 /// The ACTIVE rules data's `generated` stamp — whichever file won at startup.
 /// NB this loads the table (with the seed) if nothing has yet, exactly like
 /// [`ruleset`].
@@ -505,9 +633,10 @@ struct RulesetSpec {
     rules_year: u16,
     contest_id: String,
     window: WindowSpec,
-    scoring: String,
-    points_by_mode_class: BTreeMap<String, u32>,
-    power_tiers: Vec<u32>,
+    scoring: ScoringSpec,
+    dupe: DupeSpec,
+    domains: Vec<DomainSpec>,
+    exchange: ExchangeBlockSpec,
     bonuses: Vec<BonusSpec>,
     banned_modes: Vec<String>,
     tempo_fd: bool,
@@ -515,6 +644,145 @@ struct RulesetSpec {
     enforcement: String,
     #[serde(default)]
     objectives: Vec<BonusSpec>,
+}
+
+/// One ADIF tag pair in the rules FILE, one tag per direction.
+///
+/// Both halves are required `String`s and `""` is the explicit "no standard
+/// ADIF column this direction; the value rides the private carrier (§3.5)"
+/// marker. NOT `Option<String>`: serde fills a missing `Option` with `None`
+/// with no attribute at all, so an optional tag would let a file that simply
+/// forgot the sent side load as though its author had decided there was no
+/// sent-side column. Absent must be a refusal; empty must be a decision.
+#[derive(Debug, serde::Deserialize)]
+struct AdifTagsSpec {
+    /// What THEY sent me. `""` = no standard column that way round.
+    rcvd: String,
+    /// What I sent them. `""` = no standard column that way round.
+    sent: String,
+}
+
+/// One legal value of a file-declared domain: the code that goes on the air and
+/// the name a human reads.
+#[derive(Debug, serde::Deserialize)]
+struct DomainValueSpec {
+    code: String,
+    label: String,
+}
+
+/// A named set of legal values a rules file declares for itself — a QSO party's
+/// county list, a state list, a precedence set.
+#[derive(Debug, serde::Deserialize)]
+struct DomainSpec {
+    /// Stable id, `^[a-z][a-z0-9_]*$`, unique within the ruleset and never one
+    /// of [`RESERVED_DOMAIN_IDS`].
+    id: String,
+    adif: AdifTagsSpec,
+    values: Vec<DomainValueSpec>,
+}
+
+/// What kind of value an exchange slot holds, in the rules file.
+///
+/// Internally tagged on `type`, so a slot reads
+/// `{ "type": "pattern", "re": "^[0-9]{1,2}[ABCDEF]$" }`. The arms are exactly
+/// [`contest::FieldKind`](crate::contest::FieldKind)'s nine — a tenth would
+/// mean a contest the model does not cover, not a special case to bolt on.
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum KindSpec {
+    Rst { digits: u8 },
+    Serial { scope: String },
+    Enum { domain: String },
+    Pattern { re: String },
+    Number { min: u32, max: u32 },
+    Grid { chars: u8 },
+    Text { max_len: u8 },
+    Call,
+    OneOf { of: Vec<KindSpec> },
+}
+
+/// One exchange slot in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct FieldBlockSpec {
+    /// SLOT ID, not an export tag: uppercase, unique, named by the roles.
+    key: String,
+    /// The on-air label that introduces the field. `""` = positional.
+    label: String,
+    required: bool,
+    adif: AdifTagsSpec,
+    kind: KindSpec,
+}
+
+/// How a role is matched against the operator.
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SelectorSpec {
+    MyLocationIn { locations: Vec<String> },
+    MyCategoryIs { category: String },
+    Always,
+}
+
+/// One side of an asymmetric contest, in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct RoleBlockSpec {
+    /// `""` for the single role of a symmetric contest.
+    id: String,
+    selector: SelectorSpec,
+    sends: Vec<String>,
+    receives: Vec<String>,
+    constant_sent: Vec<String>,
+}
+
+/// A whole exchange, in the rules file.
+#[derive(Debug, serde::Deserialize)]
+struct ExchangeBlockSpec {
+    name: String,
+    fields: Vec<FieldBlockSpec>,
+    roles: Vec<RoleBlockSpec>,
+}
+
+/// The dupe key for one ruleset, as data.
+///
+/// Replaces the `DUPE_CALL_BAND_MODE` const every ruleset used to share. The
+/// SHAPE is unchanged and so is the enforcement — the check itself still lives
+/// in [`FieldDayLog`](crate::fieldday::FieldDayLog); this is what an event
+/// DECLARES its key to be.
+///
+/// §11.3 generalises this to `by_fields` / `by_sent_fields` naming exchange
+/// slots, and the validator cross-checks that go with it; that is batch 3.
+#[derive(Debug, serde::Deserialize)]
+struct DupeSpec {
+    /// A station counts once per callsign. Required to be `true` — see
+    /// `parse_spec`.
+    by_call: bool,
+    /// …and separately per band.
+    by_band: bool,
+    /// …and separately per mode class (PH / CW / DIG).
+    by_mode_class: bool,
+}
+
+/// The whole scoring model for one ruleset, as one block.
+///
+/// `model` used to sit beside two flat siblings (`points_by_mode_class` and
+/// `power_tiers`) that were just as much part of "how this event scores".
+/// JSON cannot hold both `"scoring": "powered_multiplier"` and
+/// `"scoring": { … }`, and a block containing only the model string beside two
+/// flat siblings is a rename dressed as a block — so the block takes all three.
+///
+/// ⚠️ No `#[serde(default)]` and no `Option` anywhere in here, and that is not
+/// stylistic: serde silently fills a missing `Option` field with `None` even
+/// with no attribute at all, so an optional block would let a rules file that
+/// forgot how an event scores load and score as though its author had decided
+/// something (spec §8c). Absent must be loud, and the schema number is what
+/// makes it loud.
+#[derive(Debug, serde::Deserialize)]
+struct ScoringSpec {
+    /// `"powered_multiplier"` (ARRL FD) or `"objectives"` (WFD).
+    model: String,
+    /// Per-mode-class QSO points. `PH`, `CW` and `DIG` are all required.
+    points_by_mode_class: BTreeMap<String, u32>,
+    /// Legal power multipliers, strictly ascending.
+    power_tiers: Vec<u32>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -571,21 +839,129 @@ fn stats_of(spec: &FileSpec) -> RulesStats {
     }
 }
 
-/// Parse + the structural validation both the loader and the download client
-/// run (and the publish workflow re-runs in node — keep the two in step).
+/// Is `id` a well-formed domain id — `^[a-z][a-z0-9_]*$`? Lowercase snake so a
+/// domain id is never confused with an exchange SLOT id, which is uppercase.
+fn is_domain_id(id: &str) -> bool {
+    let mut cs = id.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_lowercase())
+        && cs.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Is `t` a usable ADIF tag name — `""` (the explicit "no column this
+/// direction" marker) or `^[A-Z][A-Z0-9_]*$`?
+fn is_adif_tag(t: &str) -> bool {
+    if t.is_empty() {
+        return true;
+    }
+    let mut cs = t.chars();
+    matches!(cs.next(), Some(c) if c.is_ascii_uppercase())
+        && cs.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Does `id` name a domain this ruleset can resolve — one it declares itself,
+/// or one of the reserved ids the loader derives from the section list? The one
+/// resolution path, so the file and the loader can never disagree about which
+/// domains exist.
+fn resolve_domain(r: &RulesetSpec, id: &str) -> bool {
+    RESERVED_DOMAIN_IDS.contains(&id) || r.domains.iter().any(|d| d.id == id)
+}
+
+/// Validate one [`KindSpec`], recursing into `one_of` arms. `tag`/`key` are
+/// only for the message.
+fn check_kind(r: &RulesetSpec, tag: &str, key: &str, k: &KindSpec) -> Result<(), String> {
+    match k {
+        KindSpec::Rst { digits } => {
+            // 2 on phone, 3 on CW/digital. Zero would index an empty slice
+            // downstream; anything above 3 is not an RST.
+            if !(2..=3).contains(digits) {
+                return Err(format!(
+                    "{tag}: {key} rst digits {digits} (expected 2 or 3)"
+                ));
+            }
+        }
+        KindSpec::Serial { scope } => match scope.as_str() {
+            "per_contest" => {}
+            "per_band" => {
+                return Err(format!(
+                    "{tag}: {key} serial scope per_band is not supported \
+                     (this build allocates one series per contest)"
+                ))
+            }
+            other => return Err(format!("{tag}: {key} unknown serial scope {other:?}")),
+        },
+        KindSpec::Enum { domain } => {
+            if !resolve_domain(r, domain) {
+                return Err(format!("{tag}: {key} names unknown domain {domain:?}"));
+            }
+        }
+        KindSpec::Pattern { re } => {
+            // Anchored on both ends or it is not the pattern it claims: an
+            // unanchored `[0-9]{1,2}[ABCDEF]` matches inside any longer token.
+            if re.is_empty() || !re.starts_with('^') || !re.ends_with('$') {
+                return Err(format!("{tag}: {key} pattern {re:?} is not ^…$-anchored"));
+            }
+        }
+        KindSpec::Number { min, max } => {
+            if min > max {
+                return Err(format!("{tag}: {key} number min {min} > max {max}"));
+            }
+        }
+        KindSpec::Grid { chars } => {
+            if !matches!(chars, 4 | 6) {
+                return Err(format!("{tag}: {key} grid chars {chars} (expected 4 or 6)"));
+            }
+        }
+        KindSpec::Text { max_len } => {
+            if *max_len == 0 {
+                return Err(format!("{tag}: {key} text max_len 0"));
+            }
+        }
+        KindSpec::Call => {}
+        KindSpec::OneOf { of } => {
+            // One arm is not a choice; zero is not a slot.
+            if of.len() < 2 {
+                return Err(format!("{tag}: {key} one_of needs at least 2 arms"));
+            }
+            for arm in of {
+                check_kind(r, tag, key, arm)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Parse + the structural validation the loader, the download client AND the
+/// publish gate all run.
+///
+/// It is THE authority on what a rules file may be: `.github/workflows/fd-rules.yml`
+/// reaches this same function through `src/bin/fd-rules-check.rs` before pushing
+/// the seed to the rolling `fd-rules` Release, so there is nothing to keep in
+/// step with. (There was: a node port of this function, which four rounds of
+/// parity fixes never reconciled.) A fixture that disagrees with this function
+/// is a wrong fixture.
 fn parse_spec(text: &str) -> Result<FileSpec, String> {
     let spec: FileSpec = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
-    if spec.schema != 1 {
+    // §8(d). A widened RulesetSpec has exactly two expressible forms: bump the
+    // schema, or serde-default every new block. §8(c) rules the second out — a
+    // defaulted `exchange` means a rules file that forgot one loads and scores
+    // as though the contest had no exchange. So the version number is the loud
+    // failure, and it names BOTH numbers so a refusal says which side is stale.
+    if spec.schema != 2 {
         return Err(format!(
-            "schema {} (this build reads schema 1)",
+            "schema {} (this build reads schema 2)",
             spec.schema
         ));
     }
     if spec.generated.is_empty() {
         return Err("empty `generated` stamp".into());
     }
-    for want in ["arrlfd", "wfd"] {
-        if !spec.rulesets.iter().any(|r| r.event == want) {
+    // The inversion (§8d): a download may ADD contests, never REMOVE one the
+    // BUNDLED seed carries. Strictly stronger than the hardcoded pair this
+    // replaces — it grows with the seed instead of having to be re-edited
+    // alongside it, which is exactly the drift that would otherwise appear the
+    // first time a contest is added.
+    for want in seed_events() {
+        if !spec.rulesets.iter().any(|r| &r.event == want) {
             return Err(format!("missing the `{want}` ruleset"));
         }
     }
@@ -602,19 +978,170 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
         if r.contest_id.is_empty() {
             return Err(format!("{tag}: empty contest_id"));
         }
-        if !matches!(r.scoring.as_str(), "powered_multiplier" | "objectives") {
-            return Err(format!("{tag}: unknown scoring model {:?}", r.scoring));
+        // The same four checks as before the block landed, on the block's own
+        // paths. Messages are deliberately unchanged: they are what the corpus
+        // fixtures match on.
+        if !matches!(
+            r.scoring.model.as_str(),
+            "powered_multiplier" | "objectives"
+        ) {
+            return Err(format!(
+                "{tag}: unknown scoring model {:?}",
+                r.scoring.model
+            ));
         }
         for k in ["PH", "CW", "DIG"] {
-            if !r.points_by_mode_class.contains_key(k) {
+            if !r.scoring.points_by_mode_class.contains_key(k) {
                 return Err(format!("{tag}: points_by_mode_class misses {k}"));
             }
         }
-        if r.power_tiers.is_empty() {
+        if r.scoring.power_tiers.is_empty() {
             return Err(format!("{tag}: empty power_tiers"));
         }
-        if !r.power_tiers.windows(2).all(|w| w[0] < w[1]) {
+        if !r.scoring.power_tiers.windows(2).all(|w| w[0] < w[1]) {
             return Err(format!("{tag}: power_tiers not strictly ascending"));
+        }
+        // A dupe rule that does not key on the callsign is not a dupe rule.
+        // Every contest in the researched set keys on it, so a file saying
+        // otherwise is a mistake far more often than it is a new contest shape
+        // — and the failure mode if it is wrong is a log full of contacts that
+        // should have been refused as dupes.
+        if !r.dupe.by_call {
+            return Err(format!(
+                "{tag}: dupe.by_call is false (a dupe rule must key on the callsign)"
+            ));
+        }
+        // File-declared domains. `arrl_sections` / `fd_sections` are DERIVED
+        // from the top-level section list (Ruling B0-C) — a file declaring one
+        // would be a second copy of a list it cannot fully represent, since a
+        // Domain value is a (code, label) pair and a Section also carries a
+        // division.
+        let mut domain_ids: Vec<&str> = Vec::new();
+        for d in &r.domains {
+            if !is_domain_id(&d.id) {
+                return Err(format!(
+                    "{tag}: domain id {:?} is not ^[a-z][a-z0-9_]*$",
+                    d.id
+                ));
+            }
+            if RESERVED_DOMAIN_IDS.contains(&d.id.as_str()) {
+                return Err(format!(
+                    "{tag}: domain id {:?} is reserved (derived from the section list)",
+                    d.id
+                ));
+            }
+            if domain_ids.contains(&d.id.as_str()) {
+                return Err(format!("{tag}: duplicate domain id {:?}", d.id));
+            }
+            domain_ids.push(&d.id);
+            if !is_adif_tag(&d.adif.rcvd) || !is_adif_tag(&d.adif.sent) {
+                return Err(format!("{tag}: domain {} has a malformed adif tag", d.id));
+            }
+            if d.values.is_empty() {
+                return Err(format!("{tag}: domain {} has no values", d.id));
+            }
+            let mut codes: Vec<&str> = Vec::new();
+            for v in &d.values {
+                if v.code.is_empty() || v.code != v.code.to_ascii_uppercase() {
+                    return Err(format!(
+                        "{tag}: domain {} code {:?} not uppercase",
+                        d.id, v.code
+                    ));
+                }
+                if codes.contains(&v.code.as_str()) {
+                    return Err(format!(
+                        "{tag}: domain {} duplicate code {:?}",
+                        d.id, v.code
+                    ));
+                }
+                codes.push(&v.code);
+                if v.label.is_empty() {
+                    return Err(format!(
+                        "{tag}: domain {} code {} has no label",
+                        d.id, v.code
+                    ));
+                }
+            }
+        }
+        // The exchange block (§2.5). Every rule here is a rules bug that must
+        // be a REFUSAL rather than a runtime lookup miss on the air.
+        let x = &r.exchange;
+        if x.name.is_empty() {
+            return Err(format!("{tag}: exchange has no name"));
+        }
+        let mut keys: Vec<&str> = Vec::new();
+        for f in &x.fields {
+            if f.key.is_empty() || f.key != f.key.to_ascii_uppercase() {
+                return Err(format!("{tag}: exchange slot {:?} not uppercase", f.key));
+            }
+            if keys.contains(&f.key.as_str()) {
+                return Err(format!("{tag}: duplicate exchange slot {:?}", f.key));
+            }
+            keys.push(&f.key);
+            if !is_adif_tag(&f.adif.rcvd) || !is_adif_tag(&f.adif.sent) {
+                return Err(format!("{tag}: slot {} has a malformed adif tag", f.key));
+            }
+            check_kind(r, &tag, &f.key, &f.kind)?;
+        }
+        if x.roles.is_empty() {
+            return Err(format!("{tag}: exchange has no roles"));
+        }
+        let mut role_ids: Vec<&str> = Vec::new();
+        for role in &x.roles {
+            if role_ids.contains(&role.id.as_str()) {
+                return Err(format!("{tag}: duplicate role id {:?}", role.id));
+            }
+            role_ids.push(&role.id);
+            for key in role
+                .sends
+                .iter()
+                .chain(&role.receives)
+                .chain(&role.constant_sent)
+            {
+                if !keys.contains(&key.as_str()) {
+                    return Err(format!(
+                        "{tag}: role {:?} names undeclared slot {key:?}",
+                        role.id
+                    ));
+                }
+            }
+            // constant_sent constrains something I actually transmit. Read the
+            // other way round it would refuse legal contacts, because every
+            // station I work legitimately sends a different value.
+            for key in &role.constant_sent {
+                if !role.sends.contains(key) {
+                    return Err(format!(
+                        "{tag}: role {:?} constant_sent {key:?} is not in sends",
+                        role.id
+                    ));
+                }
+            }
+            // Five is the layout budget at the 1024 px supported floor. A limit
+            // the layout cannot honour is not a limit.
+            if role.receives.len() > 5 {
+                return Err(format!(
+                    "{tag}: role {:?} receives {} fields (max 5)",
+                    role.id,
+                    role.receives.len()
+                ));
+            }
+            if matches!(role.selector, SelectorSpec::Always) && x.roles.len() != 1 {
+                return Err(format!(
+                    "{tag}: role {:?} selector `always` must be the only role \
+                     (a role after it could never be reached)",
+                    role.id
+                ));
+            }
+            if let SelectorSpec::MyLocationIn { locations } = &role.selector {
+                if locations.is_empty() {
+                    return Err(format!("{tag}: role {:?} my_location_in is empty", role.id));
+                }
+            }
+            if let SelectorSpec::MyCategoryIs { category } = &role.selector {
+                if category.is_empty() {
+                    return Err(format!("{tag}: role {:?} my_category_is is empty", role.id));
+                }
+            }
         }
         let mut ids: Vec<&str> = Vec::new();
         for b in r.bonuses.iter().chain(&r.objectives) {
@@ -689,6 +1216,19 @@ fn leak_str(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
+/// A rules-file ADIF tag (`""` = no standard column this direction) as the
+/// `Option` the `contest` types use. The file says it with an empty string
+/// because serde must be able to tell "absent" from "deliberately none"; the
+/// Rust side says it with `None` because there is nothing to tell apart once
+/// the file has been validated.
+fn leak_opt_tag(t: String) -> Option<&'static str> {
+    if t.is_empty() {
+        None
+    } else {
+        Some(leak_str(t))
+    }
+}
+
 fn leak_bonuses(v: Vec<BonusSpec>) -> &'static [Bonus] {
     Box::leak(
         v.into_iter()
@@ -702,20 +1242,154 @@ fn leak_bonuses(v: Vec<BonusSpec>) -> &'static [Bonus] {
     )
 }
 
+/// The two DERIVED domains, built from the table's own section slice and
+/// handed down through `build` — never fetched from the public accessors,
+/// which would re-enter `TABLE.get_or_init` and deadlock (see
+/// [`derive_fd_sections`]).
+struct Reserved {
+    arrl_sections: &'static crate::contest::Domain,
+    fd_sections: &'static crate::contest::Domain,
+}
+
+/// A validated [`KindSpec`] as the neutral [`contest::FieldKind`]. `domains` is
+/// the ruleset's already-built domain list; a reserved id resolves to the
+/// derived domain instead. Every lookup here is infallible because
+/// `check_kind` already refused anything that would miss.
+fn build_kind(
+    k: KindSpec,
+    domains: &[&'static crate::contest::Domain],
+    reserved: &Reserved,
+) -> crate::contest::FieldKind {
+    use crate::contest::FieldKind as K;
+    match k {
+        KindSpec::Rst { digits } => K::Rst { digits },
+        // `check_kind` refuses every scope but per_contest, so this build never
+        // constructs a PerBand — the variant exists so a file asking for it is
+        // refused by name rather than silently scored as per-contest.
+        KindSpec::Serial { .. } => K::Serial {
+            scope: crate::contest::SerialScope::PerContest,
+        },
+        KindSpec::Enum { domain } => K::Enum {
+            domain: match domain.as_str() {
+                "arrl_sections" => reserved.arrl_sections,
+                "fd_sections" => reserved.fd_sections,
+                other => domains
+                    .iter()
+                    .copied()
+                    .find(|d| d.id == other)
+                    .expect("validated by resolve_domain"),
+            },
+        },
+        KindSpec::Pattern { re } => K::Pattern { re: leak_str(re) },
+        KindSpec::Number { min, max } => K::Number { min, max },
+        KindSpec::Grid { chars } => K::Grid { chars },
+        KindSpec::Text { max_len } => K::Text { max_len },
+        KindSpec::Call => K::Call,
+        KindSpec::OneOf { of } => K::OneOf(Box::leak(
+            of.into_iter()
+                .map(|a| build_kind(a, domains, reserved))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )),
+    }
+}
+
+/// Leak a list of slot ids as `&'static [&'static str]`.
+fn leak_keys(v: Vec<String>) -> &'static [&'static str] {
+    Box::leak(
+        v.into_iter()
+            .map(leak_str)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    )
+}
+
+/// A validated [`ExchangeBlockSpec`] as the neutral [`contest::ExchangeSpec`].
+fn build_exchange(
+    x: ExchangeBlockSpec,
+    domains: &[&'static crate::contest::Domain],
+    reserved: &Reserved,
+) -> &'static crate::contest::ExchangeSpec {
+    let fields: Vec<crate::contest::FieldSpec> = x
+        .fields
+        .into_iter()
+        .map(|f| crate::contest::FieldSpec {
+            key: leak_str(f.key),
+            adif: crate::contest::AdifTags {
+                rcvd: leak_opt_tag(f.adif.rcvd),
+                sent: leak_opt_tag(f.adif.sent),
+            },
+            // `""` in the file means positional — the same statement `None`
+            // makes in the type.
+            label: if f.label.is_empty() {
+                None
+            } else {
+                Some(leak_str(f.label))
+            },
+            required: f.required,
+            kind: build_kind(f.kind, domains, reserved),
+        })
+        .collect();
+    let roles: Vec<crate::contest::RoleSpec> = x
+        .roles
+        .into_iter()
+        .map(|r| crate::contest::RoleSpec {
+            id: leak_str(r.id),
+            selector: match r.selector {
+                SelectorSpec::MyLocationIn { locations } => {
+                    crate::contest::RoleSelector::MyLocationIn(leak_keys(locations))
+                }
+                SelectorSpec::MyCategoryIs { category } => {
+                    crate::contest::RoleSelector::MyCategoryIs(leak_str(category))
+                }
+                SelectorSpec::Always => crate::contest::RoleSelector::Always,
+            },
+            sends: leak_keys(r.sends),
+            receives: leak_keys(r.receives),
+            constant_sent: leak_keys(r.constant_sent),
+        })
+        .collect();
+    Box::leak(Box::new(crate::contest::ExchangeSpec {
+        name: leak_str(x.name),
+        fields: Box::leak(fields.into_boxed_slice()),
+        roles: Box::leak(roles.into_boxed_slice()),
+    }))
+}
+
 /// One-time at load (validated spec in, `&'static` table out) — the leak IS
 /// the lifetime strategy: every consumer keeps its `&'static` field types.
 fn build(spec: FileSpec) -> RulesTable {
+    // Sections FIRST. The exchange blocks' `enum` slots resolve the reserved
+    // `fd_sections` / `arrl_sections` ids, which are derived from this list —
+    // and they must be derived from the slice rather than fetched through the
+    // public accessors, because `build` runs inside `TABLE.get_or_init` and
+    // those accessors would re-enter it.
+    let sections_static: &'static [Section] = Box::leak(
+        spec.sections
+            .into_iter()
+            .map(|s| Section {
+                code: leak_str(s.code),
+                name: leak_str(s.name),
+                division: leak_str(s.division),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    let reserved = Reserved {
+        arrl_sections: Box::leak(Box::new(derive_arrl_sections(sections_static))),
+        fd_sections: Box::leak(Box::new(derive_fd_sections(sections_static))),
+    };
     let rulesets: Vec<&'static FdRuleset> = spec
         .rulesets
         .into_iter()
         .map(|r| {
             let points = ModePoints {
-                ph: r.points_by_mode_class["PH"],
-                cw: r.points_by_mode_class["CW"],
-                dig: r.points_by_mode_class["DIG"],
+                ph: r.scoring.points_by_mode_class["PH"],
+                cw: r.scoring.points_by_mode_class["CW"],
+                dig: r.scoring.points_by_mode_class["DIG"],
             };
-            let power_tiers: &'static [u32] = Box::leak(r.power_tiers.into_boxed_slice());
-            let scoring = match r.scoring.as_str() {
+            let power_tiers: &'static [u32] = Box::leak(r.scoring.power_tiers.into_boxed_slice());
+            let scoring = match r.scoring.model.as_str() {
                 "powered_multiplier" => ScoringModel::PoweredMultiplier {
                     power_tiers,
                     points,
@@ -740,14 +1414,46 @@ fn build(spec: FileSpec) -> RulesTable {
                 })
                 .collect();
             overrides.sort_unstable_by_key(|(y, _)| *y);
+            // Domains FIRST: the exchange's `enum` slots resolve against them,
+            // and a reserved id resolves to the derived domain instead.
+            let domains_built: &'static [&'static crate::contest::Domain] = Box::leak(
+                r.domains
+                    .into_iter()
+                    .map(|d| {
+                        let values: Vec<(&'static str, &'static str)> = d
+                            .values
+                            .into_iter()
+                            .map(|v| (leak_str(v.code) as &'static str, leak_str(v.label) as _))
+                            .collect();
+                        &*Box::leak(Box::new(crate::contest::Domain {
+                            id: leak_str(d.id),
+                            adif: crate::contest::AdifTags {
+                                // "" in the file means "no standard column this
+                                // direction" — it becomes None here, which is
+                                // the same statement in the type.
+                                rcvd: leak_opt_tag(d.adif.rcvd),
+                                sent: leak_opt_tag(d.adif.sent),
+                            },
+                            values: Box::leak(values.into_boxed_slice()),
+                        }))
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
+            let exchange_built = build_exchange(r.exchange, domains_built, &reserved);
             &*Box::leak(Box::new(FdRuleset {
                 event: event_of(&r.event).expect("validated"),
                 rules_year: r.rules_year,
                 contest_id: leak_str(r.contest_id),
-                exchange: EXCHANGE_CLASS_SECTION,
                 scoring,
                 bonuses: leak_bonuses(r.bonuses),
-                dupe_rule: DUPE_CALL_BAND_MODE,
+                domains: domains_built,
+                exchange: exchange_built,
+                dupe_rule: DupeRule {
+                    by_call: r.dupe.by_call,
+                    by_band: r.dupe.by_band,
+                    by_mode_class: r.dupe.by_mode_class,
+                },
                 tempo_fd: r.tempo_fd,
                 banned_modes: Box::leak(
                     r.banned_modes
@@ -779,17 +1485,7 @@ fn build(spec: FileSpec) -> RulesTable {
     RulesTable {
         generated: leak_str(spec.generated),
         rulesets: Box::leak(rulesets.into_boxed_slice()),
-        sections: Box::leak(
-            spec.sections
-                .into_iter()
-                .map(|s| Section {
-                    code: leak_str(s.code),
-                    name: leak_str(s.name),
-                    division: leak_str(s.division),
-                })
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        ),
+        sections: sections_static,
     }
 }
 
@@ -852,6 +1548,39 @@ fn civil_year_of_unix(unix: u64) -> u16 {
 mod tests {
     use super::*;
     use crate::fieldday::{Exchange, FieldDayLog};
+
+    /// The RTTY parser accepted `valid_section(t) || t == "MX" || t == "DX"`
+    /// (rtty/seq.rs at 82eb3112). Batch 0 replaces that inline test with a domain
+    /// membership test, so the domain must be EXACTLY that set — 83 sections plus
+    /// the two literals a DX station sends — or a legal contact stops being loggable.
+    #[test]
+    fn the_fd_section_domain_is_the_83_sections_plus_mx_and_dx() {
+        let d = fd_sections_domain();
+        assert_eq!(d.id, "fd_sections");
+        assert_eq!(d.values.len(), 85, "83 ARRL/RAC sections + MX + DX");
+        for s in sections() {
+            assert!(
+                d.contains(s.code),
+                "section {} missing from the domain",
+                s.code
+            );
+        }
+        assert!(d.contains("MX"));
+        assert!(d.contains("DX"));
+        // Same normalisation as valid_section, both directions.
+        assert!(d.contains(" wi "));
+        assert!(!d.contains("ZZ"));
+        assert!(
+            !valid_section("MX"),
+            "MX is NOT a section — it is an FD extension"
+        );
+        // The received-side ADIF tag is corroborated in-tree (fieldday.rs writes
+        // <ARRL_SECT>); the sent-side MY_ARRL_SECT is NOT (grepped: zero hits, with
+        // MY_GRIDSQUARE's seven as the positive control), so it ships absent per §2.1.1
+        // and batch 6 checks the name against adif.org before any writer uses it.
+        assert_eq!(d.adif.rcvd, Some("ARRL_SECT"));
+        assert_eq!(d.adif.sent, None);
+    }
 
     /// Build a log from `(call, mode-class)` pairs — distinct calls so nothing
     /// dupes; class/section are constant (irrelevant to the point math).
@@ -1271,11 +2000,19 @@ mod tests {
             f(&mut v);
             parse_spec(&v.to_string())
         };
+        // A schema-1 file is a file from an OLDER build; schema 3 is one from a
+        // NEWER build. Both are refused, and the message names both numbers.
         assert!(
-            corrupt(&|v| v["schema"] = 2.into())
+            corrupt(&|v| v["schema"] = 1.into())
                 .unwrap_err()
-                .contains("schema"),
-            "wrong schema version"
+                .contains("schema 1"),
+            "a schema-1 file is refused by name"
+        );
+        assert!(
+            corrupt(&|v| v["schema"] = 3.into())
+                .unwrap_err()
+                .contains("schema 3"),
+            "a file from a future build is refused by name"
         );
         assert!(
             corrupt(&|v| v["rulesets"][1]["event"] = "arrlfd".into())
@@ -1289,7 +2026,7 @@ mod tests {
                 .contains("duplicate bonus id"),
         );
         assert!(
-            corrupt(&|v| v["rulesets"][0]["power_tiers"] = serde_json::json!([]))
+            corrupt(&|v| v["rulesets"][0]["scoring"]["power_tiers"] = serde_json::json!([]))
                 .unwrap_err()
                 .contains("power_tiers"),
         );
@@ -1310,11 +2047,456 @@ mod tests {
             "this build only warns"
         );
         assert!(corrupt(
-            &|v| v["rulesets"][0]["points_by_mode_class"] = serde_json::json!({"PH": 1})
+            &|v| v["rulesets"][0]["scoring"]["points_by_mode_class"] = serde_json::json!({"PH": 1})
         )
         .unwrap_err()
         .contains("points_by_mode_class"),);
         assert!(validate("not json").is_err(), "garbage is refused");
+    }
+
+    /// §8(d): the schema number is the LOUD failure. A schema-1 file must be
+    /// refused by a schema-2 build with a message that names both numbers, and
+    /// the seed — now schema 2 — must load. The pair is the point: a validator
+    /// that refused everything would "pass" the first assertion alone.
+    #[test]
+    fn schema_2_is_this_builds_number_and_schema_1_is_refused_by_name() {
+        assert!(parse_spec(SEED).is_ok(), "the bundled schema-2 seed loads");
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["schema"] = 1.into();
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(e.contains("schema 1"), "names what it got: {e}");
+        assert!(e.contains("schema 2"), "names what it reads: {e}");
+    }
+
+    /// §8(d)'s inversion: a downloaded file may ADD contests but never REMOVE
+    /// one the bundled seed carries — strictly stronger than the hardcoded
+    /// `["arrlfd", "wfd"]` pair it replaces, because it grows with the seed
+    /// instead of having to be re-edited alongside it.
+    #[test]
+    fn a_file_missing_a_seeded_ruleset_is_refused_and_the_same_file_with_it_loads() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        let dropped = v["rulesets"].as_array_mut().unwrap().pop().expect("wfd");
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(e.contains("wfd"), "names the missing ruleset: {e}");
+        // POSITIVE CONTROL: put it back and the very same file must load.
+        v["rulesets"].as_array_mut().unwrap().push(dropped);
+        assert!(
+            parse_spec(&v.to_string()).is_ok(),
+            "the control file must load"
+        );
+    }
+
+    /// `seed_events` must read the SEED, not a hardcoded pair — otherwise the
+    /// inversion above is the old rule wearing a new name.
+    #[test]
+    fn seed_events_are_read_from_the_bundled_seed() {
+        assert_eq!(seed_events(), ["arrlfd", "wfd"]);
+    }
+
+    /// §11.1: the seed gains CONTENT, not behaviour. `scoring` absorbs the two
+    /// sibling keys that were always part of "today's model" (Ruling B1-B), and
+    /// the numbers inside are the same numbers they were when they were flat.
+    #[test]
+    fn the_scoring_block_carries_todays_model_unchanged() {
+        let arrl = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR);
+        assert!(
+            matches!(
+                arrl.scoring,
+                ScoringModel::PoweredMultiplier {
+                    power_tiers: &[1, 2, 5],
+                    points: ModePoints {
+                        ph: 1,
+                        cw: 2,
+                        dig: 2
+                    },
+                }
+            ),
+            "{:?}",
+            arrl.scoring
+        );
+        let wfd = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR);
+        assert!(
+            matches!(
+                wfd.scoring,
+                ScoringModel::Objectives {
+                    multipliers_at_submission: true,
+                    points: ModePoints {
+                        ph: 1,
+                        cw: 2,
+                        dig: 2
+                    },
+                }
+            ),
+            "{:?}",
+            wfd.scoring
+        );
+    }
+
+    /// §8(c): a missing block must be a LOUD failure. serde defaults a missing
+    /// `Option` field silently even with no `#[serde(default)]` attribute, which
+    /// is exactly why nothing in the new blocks is optional.
+    #[test]
+    fn a_ruleset_with_no_scoring_block_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0].as_object_mut().unwrap().remove("scoring");
+        let e = parse_spec(&v.to_string()).unwrap_err();
+        assert!(e.contains("scoring"), "{e}");
+        // POSITIVE CONTROL: the same file with the block present loads.
+        assert!(parse_spec(SEED).is_ok());
+    }
+
+    /// The three checks that used to sit on flat sibling keys must still fire,
+    /// now that they read `scoring.*` — each with the control that the seed's
+    /// own value in that slot loads.
+    #[test]
+    fn the_moved_scoring_checks_still_fire_on_their_new_path() {
+        let corrupt = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            f(&mut v);
+            parse_spec(&v.to_string())
+        };
+        assert!(
+            corrupt(&|v| v["rulesets"][0]["scoring"]["model"] = "made_up".into())
+                .unwrap_err()
+                .contains("unknown scoring model"),
+        );
+        assert!(corrupt(&|v| {
+            v["rulesets"][0]["scoring"]["points_by_mode_class"] = serde_json::json!({"PH": 1});
+        })
+        .unwrap_err()
+        .contains("points_by_mode_class"),);
+        assert!(corrupt(
+            &|v| v["rulesets"][0]["scoring"]["power_tiers"] = serde_json::json!([5, 2, 1])
+        )
+        .unwrap_err()
+        .contains("power_tiers"),);
+        assert!(
+            corrupt(&|v| v["rulesets"][0]["scoring"]["power_tiers"] = serde_json::json!([]))
+                .unwrap_err()
+                .contains("power_tiers"),
+        );
+        assert!(
+            parse_spec(SEED).is_ok(),
+            "control: the seed's own values load"
+        );
+    }
+
+    /// The dupe key is now DATA rather than the `DUPE_CALL_BAND_MODE` const,
+    /// and it must still be today's key for both events: a station counts once
+    /// per (call, band, mode class).
+    #[test]
+    fn the_dupe_block_reaches_the_ruleset_and_is_todays_key() {
+        for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+            let d = ruleset(e, CURRENT_RULES_YEAR).dupe_rule;
+            assert!(
+                d.by_call && d.by_band && d.by_mode_class,
+                "{e:?}: (call, band, mode class)"
+            );
+        }
+    }
+
+    /// A dupe rule that does not key on the callsign is not a dupe rule — every
+    /// contest in the researched set keys on it, and a file saying otherwise is
+    /// far more likely to be a mistake than a new contest shape. Refused by
+    /// name, with the positive control that the same file with `by_call` true
+    /// loads.
+    #[test]
+    fn a_dupe_rule_that_ignores_the_callsign_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["dupe"]["by_call"] = false.into();
+        assert!(parse_spec(&v.to_string()).unwrap_err().contains("by_call"));
+        v["rulesets"][0]["dupe"]["by_call"] = true.into();
+        assert!(
+            parse_spec(&v.to_string()).is_ok(),
+            "control: by_call true loads"
+        );
+    }
+
+    /// §8(c) again, on this block: absent is loud, never a silent default.
+    #[test]
+    fn a_ruleset_with_no_dupe_block_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0].as_object_mut().unwrap().remove("dupe");
+        assert!(parse_spec(&v.to_string()).unwrap_err().contains("dupe"));
+        assert!(parse_spec(SEED).is_ok(), "control");
+    }
+
+    /// Ruling B0-C: the section codes are DERIVED, never duplicated into the
+    /// file. A rules file that declared a reserved id would create a second,
+    /// drifting copy of a list whose third attribute (`division`) a `Domain`
+    /// cannot even hold.
+    #[test]
+    fn a_file_may_not_redefine_a_reserved_domain_id() {
+        for id in ["arrl_sections", "fd_sections"] {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["domains"] = serde_json::json!([{
+                "id": id,
+                "adif": { "rcvd": "ARRL_SECT", "sent": "" },
+                "values": [{ "code": "WI", "label": "Wisconsin" }]
+            }]);
+            let e = parse_spec(&v.to_string()).unwrap_err();
+            assert!(e.contains(id) && e.contains("reserved"), "{id}: {e}");
+        }
+        // POSITIVE CONTROL: a NON-reserved domain with the same shape loads, so
+        // the refusal is about the id and not about domains being rejected
+        // wholesale.
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0]["domains"] = serde_json::json!([{
+            "id": "us_ca",
+            "adif": { "rcvd": "STATE", "sent": "" },
+            "values": [{ "code": "WI", "label": "Wisconsin" }]
+        }]);
+        assert!(
+            parse_spec(&v.to_string()).is_ok(),
+            "a real domain must load"
+        );
+    }
+
+    /// §8(d): the 83-section assertion, expressed on the domain (Ruling B0-C).
+    #[test]
+    fn the_arrl_sections_domain_is_exactly_the_83() {
+        let d = arrl_sections_domain();
+        assert_eq!(d.id, "arrl_sections");
+        assert_eq!(d.values.len(), 83);
+        assert_eq!(d.adif.rcvd, Some("ARRL_SECT"));
+        // MY_ARRL_SECT is uncorroborated in this tree (§2.1.1); batch 6 checks
+        // the name against adif.org before any writer emits it.
+        assert_eq!(d.adif.sent, None);
+        assert!(!d.contains("MX"), "MX is an FD extension, not a section");
+        assert!(!d.contains("DX"), "…and so is DX");
+        assert!(d.contains("WI") && d.contains(" wi "));
+        assert_eq!(
+            fd_sections_domain().values.len(),
+            85,
+            "…which fd_sections carries, being the 83 plus MX and DX"
+        );
+    }
+
+    /// The per-domain structural rules, each with the control that the same
+    /// file with that one property corrected loads.
+    #[test]
+    fn a_malformed_domain_is_refused_by_the_property_that_is_wrong() {
+        let with = |doms: serde_json::Value| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            v["rulesets"][0]["domains"] = doms;
+            parse_spec(&v.to_string())
+        };
+        let good = serde_json::json!([{
+            "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" },
+            "values": [{ "code": "WI", "label": "Wisconsin" }]
+        }]);
+        assert!(with(good.clone()).is_ok(), "control: the good shape loads");
+
+        // Duplicate id within one ruleset.
+        assert!(with(serde_json::json!([
+            { "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" },
+              "values": [{ "code": "WI", "label": "Wisconsin" }] },
+            { "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" },
+              "values": [{ "code": "IL", "label": "Illinois" }] }
+        ]))
+        .unwrap_err()
+        .contains("duplicate domain id"));
+
+        // Empty values.
+        assert!(with(serde_json::json!([
+            { "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" }, "values": [] }
+        ]))
+        .unwrap_err()
+        .contains("no values"));
+
+        // A code that is not already uppercase.
+        assert!(with(serde_json::json!([
+            { "id": "us_ca", "adif": { "rcvd": "STATE", "sent": "" },
+              "values": [{ "code": "wi", "label": "Wisconsin" }] }
+        ]))
+        .unwrap_err()
+        .contains("not uppercase"));
+
+        // A malformed ADIF tag name.
+        assert!(with(serde_json::json!([
+            { "id": "us_ca", "adif": { "rcvd": "state name", "sent": "" },
+              "values": [{ "code": "WI", "label": "Wisconsin" }] }
+        ]))
+        .unwrap_err()
+        .contains("adif"));
+
+        // A malformed domain id.
+        assert!(with(serde_json::json!([
+            { "id": "US-CA", "adif": { "rcvd": "STATE", "sent": "" },
+              "values": [{ "code": "WI", "label": "Wisconsin" }] }
+        ]))
+        .unwrap_err()
+        .contains("domain id"));
+    }
+
+    /// §8(c): absent is loud. The seed writes `"domains": []` EXPLICITLY —
+    /// Field Day needs no file-declared domain, and saying so in the file is
+    /// the point, because a missing key must be a load failure rather than an
+    /// empty list nobody chose.
+    #[test]
+    fn a_ruleset_with_no_domains_key_is_refused_but_an_empty_list_loads() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0].as_object_mut().unwrap().remove("domains");
+        assert!(parse_spec(&v.to_string()).unwrap_err().contains("domains"));
+        assert!(parse_spec(SEED).is_ok(), "control: the seed's [] loads");
+        for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+            assert!(ruleset(e, CURRENT_RULES_YEAR).domains.is_empty());
+        }
+    }
+
+    /// Every §2.5 structural rule this batch lands, each paired with the
+    /// positive control that the same file with that one property corrected
+    /// loads. Without the control a refusal proves only that SOMETHING was
+    /// wrong, not that the named rule is what caught it.
+    #[test]
+    fn the_exchange_structural_rules_each_fire_with_their_control() {
+        let at = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            f(&mut v);
+            parse_spec(&v.to_string())
+        };
+        assert!(
+            parse_spec(SEED).is_ok(),
+            "control: the seed's own block loads"
+        );
+
+        // A role naming a slot the file does not declare.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["roles"][0]["receives"] =
+                serde_json::json!(["CLASS", "NOPE"]);
+        })
+        .unwrap_err()
+        .contains("NOPE"));
+
+        // An `enum` slot naming a domain nothing resolves.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"][1]["kind"] =
+                serde_json::json!({ "type": "enum", "domain": "no_such_domain" });
+        })
+        .unwrap_err()
+        .contains("no_such_domain"));
+
+        // §2.6: per-band serials are refused BY NAME rather than silently
+        // scored as per-contest.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"][0]["kind"] =
+                serde_json::json!({ "type": "serial", "scope": "per_band" });
+        })
+        .unwrap_err()
+        .contains("per_band"));
+        // …and the control: per_contest is accepted.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"][0]["kind"] =
+                serde_json::json!({ "type": "serial", "scope": "per_contest" });
+        })
+        .is_ok());
+
+        // `always` is only legal as the ONLY role — a second role after it
+        // could never be reached.
+        assert!(at(&|v| {
+            let extra = serde_json::json!({
+                "id": "second", "selector": { "type": "always" },
+                "sends": ["CLASS"], "receives": ["CLASS"], "constant_sent": []
+            });
+            v["rulesets"][0]["exchange"]["roles"]
+                .as_array_mut()
+                .unwrap()
+                .push(extra);
+        })
+        .unwrap_err()
+        .contains("always"));
+
+        // §2.5: five received fields is the layout budget at the 1024 px
+        // supported floor. A limit the layout cannot honour is not a limit.
+        let six = serde_json::json!(["A", "B", "C", "D", "E", "F"]);
+        let five = serde_json::json!(["A", "B", "C", "D", "E"]);
+        let slots = |n: usize| {
+            let mut out = vec![];
+            for k in ["A", "B", "C", "D", "E", "F"].iter().take(n) {
+                out.push(serde_json::json!({
+                    "key": k, "label": "", "required": false,
+                    "adif": { "rcvd": "", "sent": "" },
+                    "kind": { "type": "text", "max_len": 8 }
+                }));
+            }
+            serde_json::Value::Array(out)
+        };
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"] = slots(6);
+            v["rulesets"][0]["exchange"]["roles"][0]["sends"] = six.clone();
+            v["rulesets"][0]["exchange"]["roles"][0]["receives"] = six.clone();
+        })
+        .unwrap_err()
+        .contains("receives"));
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"] = slots(5);
+            v["rulesets"][0]["exchange"]["roles"][0]["sends"] = five.clone();
+            v["rulesets"][0]["exchange"]["roles"][0]["receives"] = five.clone();
+        })
+        .is_ok());
+
+        // `constant_sent` must be a subset of `sends`: it constrains something
+        // I actually transmit.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["roles"][0]["constant_sent"] =
+                serde_json::json!(["SECTION"]);
+            v["rulesets"][0]["exchange"]["roles"][0]["sends"] = serde_json::json!(["CLASS"]);
+        })
+        .unwrap_err()
+        .contains("constant_sent"));
+
+        // §2.1.1: `adif.sent` must be WRITTEN. An absent key is the
+        // direction-blind shape that rule exists to kill.
+        assert!(at(&|v| {
+            v["rulesets"][0]["exchange"]["fields"][0]["adif"]
+                .as_object_mut()
+                .unwrap()
+                .remove("sent");
+        })
+        .unwrap_err()
+        .contains("sent"));
+    }
+
+    /// §8(c) on the last of the four blocks.
+    #[test]
+    fn a_ruleset_with_no_exchange_block_is_refused() {
+        let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+        v["rulesets"][0].as_object_mut().unwrap().remove("exchange");
+        assert!(parse_spec(&v.to_string()).unwrap_err().contains("exchange"));
+        assert!(parse_spec(SEED).is_ok(), "control");
+    }
+
+    /// The seed's exchange block SPELLS OUT today's behaviour (§11.1). Nothing
+    /// reads it yet, so this cross-check is the only thing that stops it
+    /// drifting from the shipped `contest::field_day()` before the batch that
+    /// wires it through — including the per-event class letters, which are the
+    /// one place the two events genuinely differ.
+    #[test]
+    fn the_seeded_exchange_block_matches_the_shipped_field_day_exchange() {
+        for e in [FdEvent::ArrlFd, FdEvent::WinterFd] {
+            let shipped = crate::contest::field_day(e);
+            let loaded = ruleset(e, CURRENT_RULES_YEAR).exchange;
+            assert_eq!(loaded.name, shipped.name, "{e:?}");
+            assert_eq!(loaded.fields.len(), shipped.fields.len(), "{e:?}");
+            for (a, b) in loaded.fields.iter().zip(shipped.fields) {
+                assert_eq!(a.key, b.key, "{e:?}");
+                assert_eq!(a.label, b.label, "{e:?} {}", a.key);
+                assert_eq!(a.required, b.required, "{e:?} {}", a.key);
+                assert_eq!(a.kind, b.kind, "{e:?} {}", a.key);
+                assert_eq!(a.adif, b.adif, "{e:?} {}", a.key);
+            }
+            assert_eq!(loaded.roles.len(), 1, "{e:?}");
+            assert_eq!(loaded.roles[0].sends, shipped.roles[0].sends, "{e:?}");
+            assert_eq!(loaded.roles[0].receives, shipped.roles[0].receives, "{e:?}");
+        }
+        // The two events must NOT be the same block: the class letters differ.
+        let arrl = ruleset(FdEvent::ArrlFd, CURRENT_RULES_YEAR).exchange;
+        let wfd = ruleset(FdEvent::WinterFd, CURRENT_RULES_YEAR).exchange;
+        assert_ne!(
+            arrl.field("CLASS").unwrap().kind,
+            wfd.field("CLASS").unwrap().kind,
+            "the seed must carry each sponsor's own class letters"
+        );
     }
 
     #[test]

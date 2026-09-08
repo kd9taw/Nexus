@@ -19,7 +19,7 @@ fn a_read_before_install_locks_the_seed_in_loudly() {
 
     // The same valid, newer, points-edited file fd_rules_install.rs installs…
     let mut spec: serde_json::Value = serde_json::from_str(SEED).unwrap();
-    spec["rulesets"][0]["points_by_mode_class"]["PH"] = 3.into();
+    spec["rulesets"][0]["scoring"]["points_by_mode_class"]["PH"] = 3.into();
     spec["generated"] = "2026-12-31T00:00:00Z".into();
     // …is refused with the error that names a code-ordering regression.
     assert_eq!(

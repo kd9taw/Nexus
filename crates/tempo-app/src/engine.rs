@@ -14322,14 +14322,22 @@ impl Engine {
                     ("CLASS", self.settings.fd_class.trim()),
                     ("SECTION", self.settings.fd_section.trim()),
                 ];
-                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::rtty::seq::FIELD_DAY, &exch)
+                // Per EVENT: the class letter sets are disjoint (ARRL A-F vs
+                // Winter H/I/O/M), so the active event decides which exchange
+                // the sequencer copies against.
+                let event = tempo_core::fieldday::FdEvent::from_code(&self.settings.fd_event);
+                tempo_core::rtty::RttySeq::new(
+                    &mycall,
+                    tempo_core::contest::field_day(event),
+                    &exch,
+                )
             } else {
                 let exch = [
                     ("RST", "599"),
                     ("NAME", self.settings.op_name.trim()),
                     ("QTH", self.settings.op_state.trim()),
                 ];
-                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::rtty::seq::CASUAL, &exch)
+                tempo_core::rtty::RttySeq::new(&mycall, tempo_core::contest::casual(), &exch)
             };
             self.rtty_seq = Some(seq);
         } else {
@@ -14486,8 +14494,9 @@ impl Engine {
     }
 
     /// The Field Day pair out of a sequencer exchange: `Some((class, section))`
-    /// only when BOTH arrived non-blank. The FIELD_DAY schema marks both
-    /// required, so a completed FD QSO always has them and a CASUAL one
+    /// only when BOTH arrived non-blank. The `contest::field_day()` exchange
+    /// marks both required, so a completed FD QSO always has them and a
+    /// `contest::casual()` one
     /// (RST/NAME/QTH) never does — which is what keeps the contest route off
     /// the ordinary RTTY path without re-reading a settings flag.
     fn fd_exchange(exchange: &[(String, String)]) -> Option<(String, String)> {
@@ -20420,7 +20429,7 @@ mod tests {
     }
 
     /// As [`rtty_auto_engine`], with the Field Day master switch on — which is
-    /// what makes `set_rtty_auto` build the FIELD_DAY exchange (class/section)
+    /// what makes `set_rtty_auto` build the `contest::field_day()` exchange
     /// AND puts the engine in `Mode::FieldDay`, so the contest log exists.
     fn rtty_auto_fd_engine() -> Engine {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
@@ -29155,6 +29164,55 @@ mod tests {
         // banner shows. Duration is clock-independent; the dates aren't, so
         // only the invariants are pinned here (fd_rules pins the dates).
         assert_eq!(fd.event_end_unix - fd.event_start_unix, 27 * 3600);
+        assert!(fd.event_start_unix > 0);
+        assert_eq!(fd.rules_year, 2026);
+        assert!(!fd.rules_generated.is_empty());
+    }
+
+    /// The same gate, on the OTHER event. §8(a) asks for this shape "four times
+    /// over — extend it rather than inventing a new one", and Winter Field Day
+    /// is the leg that was missing: every rules-as-data change since has been
+    /// proved against ARRL Field Day alone.
+    ///
+    /// WFD scores on the `Objectives` model, so `powered == qso_pts` — there is
+    /// no on-air power multiplier — while the bonus menu is the one it shares
+    /// with ARRL FD today. Classes here are WFD's own (H/I/O/M), which is what
+    /// a real WFD log contains.
+    #[test]
+    fn wfd_score_is_byte_identical_after_the_ruleset_refactor() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        {
+            let mut s = e.settings().clone();
+            s.fd_active = true;
+            s.fd_event = "wfd".into();
+            s.fd_class = "3O".into();
+            s.fd_section = "WI".into();
+            s.fd_power_mult = 5; // ignored by the Objectives model
+            s.fd_bonuses = vec!["w1aw-bulletin".into(), "web-submission".into()]; // 100 + 50
+            e.apply_settings(s);
+        }
+        e.set_mode("fieldday-run").unwrap();
+        // 6 QSO points: CW 2 + CW 2 + PH 1 + PH 1 — the same shape as the ARRL
+        // leg, so a divergence is about the MODEL and not about the log.
+        assert!(e.fd_log_manual("K1ABC", "2H", "EMA", "CW").unwrap());
+        assert!(e.fd_log_manual("N0XYZ", "4I", "MN", "CW").unwrap());
+        assert!(e.fd_log_manual("W1AW", "1M", "CT", "PH").unwrap());
+        assert!(e.fd_log_manual("K5ABC", "3O", "STX", "PH").unwrap());
+
+        // Objectives: powered == qso_pts, and the power tier does NOT multiply.
+        assert_eq!(
+            e.fd_score(),
+            Some((6, 6, 150)),
+            "WFD scores raw QSO points — the ×5 tier must not apply"
+        );
+        let fd = e.snapshot().field_day.expect("master on → FD chrome");
+        assert_eq!(fd.points, 6);
+        assert_eq!(fd.powered_points, 6);
+        assert_eq!(fd.bonus_points, 150);
+        assert_eq!(fd.total_score, 156);
+        // WFD's window is 30 h (the ARRL leg pins 27 h) — the two events read
+        // genuinely different window data through the same path.
+        assert_eq!(fd.event_end_unix - fd.event_start_unix, 30 * 3600);
         assert!(fd.event_start_unix > 0);
         assert_eq!(fd.rules_year, 2026);
         assert!(!fd.rules_generated.is_empty());

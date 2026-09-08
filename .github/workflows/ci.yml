@@ -105,6 +105,32 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace
 
+      # The fd-rules publish gate, run here on the file it exists to guard.
+      # `.github/workflows/fd-rules.yml` runs this exact command before pushing
+      # the seed to the rolling `fd-rules` Release that every install downloads,
+      # so a seed edit that the app would refuse goes red at MERGE time rather
+      # than at publish time.
+      #
+      # The gate is `crates/tempo-core/src/bin/fd-rules-check.rs`: a thin shell
+      # around `fd_rules::validate` — i.e. `parse_spec`, the very function the
+      # shipped app enforces. It replaced a SECOND validator written in node
+      # (`scripts/check-fd-rules.mjs` + `scripts/rust-serde-schema.mjs`) that was
+      # kept in step with the loader by a parity corpus. Four rounds of parity
+      # fixes each closed some divergence classes and revealed others, because
+      # agreeing with the loader byte-for-byte means reimplementing serde's
+      # derive behaviour and serde_json's lexer — presence rules, integer widths,
+      # surrogate pairing, the recursion limit, `IgnoredAny` scanning for unknown
+      # fields, and the exact error text. The last round reddened the gate on the
+      # seed's own `_provenance` prose, a file every shipped app accepts. There is
+      # one implementation now, so parity is true by construction.
+      #
+      # The corpus stayed and is walked THROUGH THIS BINARY by
+      # `cargo test -p tempo-core --test fd_rules_corpus` (in the run above):
+      # every refuse fixture must exit 1 with its recorded reason, every accept
+      # fixture must exit 0.
+      - name: fd-rules publish gate on the in-repo seed
+        run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
+
       - name: cargo clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -203,6 +229,11 @@ jobs:
       # rather than shipping a shortened bird list six hours later.
       - name: Test the TLE mirror generator
         run: node --test scripts/gen-tles.test.mjs
+
+      # (The fd-rules publish gate used to have a node half here, walking a
+      # corpus against a second validator written in JS. There is one validator
+      # now — the loader itself — so the gate and its corpus both live in the
+      # `test` job above; see the comment there.)
 
       # The two doc generators, in --check mode: they write nothing, they exit 1
       # when the committed page is behind the source it is derived from.

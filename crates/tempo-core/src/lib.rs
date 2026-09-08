@@ -16,6 +16,7 @@ pub mod aprs;
 pub mod beacon;
 pub mod channel;
 pub mod clublog;
+pub mod contest;
 pub mod cw;
 pub mod cw_decode;
 pub mod cw_parse;

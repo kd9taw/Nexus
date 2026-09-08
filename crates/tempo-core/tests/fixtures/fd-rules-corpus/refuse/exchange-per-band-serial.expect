@@ -1,0 +1,1 @@
+ruleset arrlfd/2026: CLASS serial scope per_band is not supported (this build allocates one series per contest)
