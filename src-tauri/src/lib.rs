@@ -33,6 +33,7 @@
 /// chain registry. Inert at runtime — see the module docs.
 mod chains;
 mod pouncer;
+mod remote_monitor;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
@@ -21821,6 +21822,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(d.engine)
+        .manage(remote_monitor::Publisher::default())
         .manage(d.spectrum_feed)
         .manage(d.meter_feed)
         .manage(d.prop_cache)
@@ -21856,6 +21858,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             ui_state_load,
             ui_state_save,
             get_snapshot,
+            remote_monitor::get_remote_monitor_frame,
             send_message,
             resend_chat,
             select_peer,
