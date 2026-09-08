@@ -930,8 +930,15 @@ fn check_kind(r: &RulesetSpec, tag: &str, key: &str, k: &KindSpec) -> Result<(),
     Ok(())
 }
 
-/// Parse + the structural validation both the loader and the download client
-/// run (and the publish workflow re-runs in node — keep the two in step).
+/// Parse + the structural validation the loader, the download client AND the
+/// publish gate all run.
+///
+/// It is THE authority on what a rules file may be: `.github/workflows/fd-rules.yml`
+/// reaches this same function through `src/bin/fd-rules-check.rs` before pushing
+/// the seed to the rolling `fd-rules` Release, so there is nothing to keep in
+/// step with. (There was: a node port of this function, which four rounds of
+/// parity fixes never reconciled.) A fixture that disagrees with this function
+/// is a wrong fixture.
 fn parse_spec(text: &str) -> Result<FileSpec, String> {
     let spec: FileSpec = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
     // §8(d). A widened RulesetSpec has exactly two expressible forms: bump the
@@ -973,7 +980,7 @@ fn parse_spec(text: &str) -> Result<FileSpec, String> {
         }
         // The same four checks as before the block landed, on the block's own
         // paths. Messages are deliberately unchanged: they are what the corpus
-        // fixtures and the node validator match on.
+        // fixtures match on.
         if !matches!(
             r.scoring.model.as_str(),
             "powered_multiplier" | "objectives"

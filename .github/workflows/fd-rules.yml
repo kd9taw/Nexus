@@ -6,11 +6,15 @@
 # No cron: the rules change ~yearly, and the in-app refresh path is the pre-event
 # "check for updates" button, so a push touching the seed is the only publish trigger.
 # The rolling GitHub Release (`fd-rules`) needs NO secrets — the built-in GITHUB_TOKEN is
-# enough. The gate re-runs the SAME structural validation the in-app loader enforces
-# (scripts/check-fd-rules.mjs mirrors tempo_core::fd_rules::parse_spec): a seed the app
-# would refuse must never ship. Serving under hamradiotools.io is the same one-time
-# `_redirects` site edit as fcc-states/cty; the optional Cloudflare R2 step below hosts it
-# directly under the domain when the secret exists.
+# enough. The gate IS the in-app loader — `cargo run -p tempo-core --bin fd-rules-check`
+# is a thin shell around `tempo_core::fd_rules::validate` (= `parse_spec`), the very
+# function the shipped app enforces, so a seed the app would refuse cannot ship and there
+# is no second validator to drift from. (There was one: a node port of parse_spec that
+# four rounds of parity fixes never reconciled, because matching it byte-for-byte means
+# reimplementing serde's derive behaviour and serde_json's lexer.) Serving under
+# hamradiotools.io is the same one-time `_redirects` site edit as fcc-states/cty; the
+# optional Cloudflare R2 step below hosts it directly under the domain when the secret
+# exists.
 name: Field Day rules data (fd-rules.json)
 
 on:
@@ -18,8 +22,8 @@ on:
     branches: [main]
     paths:
       - crates/tempo-core/src/fd_rules.seed.json
-      - scripts/check-fd-rules.mjs
-      - scripts/rust-serde-schema.mjs
+      - crates/tempo-core/src/fd_rules.rs
+      - crates/tempo-core/src/bin/fd-rules-check.rs
       - .github/workflows/fd-rules.yml
   workflow_dispatch: {}
 
@@ -35,12 +39,49 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # node is here only for the optional `npx wrangler` R2 step at the bottom.
       - uses: actions/setup-node@v7
         with:
           node-version: '20'
 
-      - name: Validate the seed (the loader's own checks — refuses a bad file, exit 1)
-        run: node scripts/check-fd-rules.mjs crates/tempo-core/src/fd_rules.seed.json
+      # The gate below builds tempo-core, which links libtempo — a CMake/Fortran
+      # project. This is the SUBSET of ci.yml's list that libtempo itself needs
+      # (no GTK/WebKit/hamlib: nothing here builds the Tauri shell or the audio
+      # crate). Keep it in step with ci.yml's "Install libtempo build
+      # dependencies" step, which documents what each package is for.
+      - name: Install libtempo build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gfortran \
+            libfftw3-dev \
+            libboost-dev \
+            cmake \
+            ninja-build \
+            pkg-config
+
+      # Same pin as ci.yml — the gate must be the loader the tested build has.
+      - name: Set up Rust 1.93.1 toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-fd-rules-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fd-rules-cargo-
+
+      # THE gate: the app's own loader, on the file about to be published.
+      # Exit 0 = the app would load it. Exit 1 = it would refuse it, and the
+      # reason printed is parse_spec's own — nothing else publishes.
+      - name: Validate the seed with the real loader (refuses a bad file, exit 1)
+        run: cargo run --quiet -p tempo-core --bin fd-rules-check -- crates/tempo-core/src/fd_rules.seed.json
 
       - name: Stage the artifact
         run: |
