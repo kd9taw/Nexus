@@ -54,6 +54,10 @@ Wrangler 4.129.1 uses Miniflare 5.20260907.0-alpha. The harness pins that same v
 it is a development tool, not application runtime code. The service dependency
 graph is checked with `npm audit` in CI.
 
+Miniflare's development dependency `sharp` is overridden to the patched 0.35.4 for
+[GHSA-rgj7-g3m4-5g8c](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c).
+Remove the override when the pinned upstream toolchain requires a patched version.
+
 A local workerd limitation is covered explicitly: when HTTP revokes both sockets
 before either client has sent an application message, both close frames arrive
 promptly but TCP teardown can wait for the `ws` client's 30-second close timeout.
