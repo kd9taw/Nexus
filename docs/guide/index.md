@@ -15,7 +15,7 @@ Nexus left beta at 1.0.0. The habit the beta was written with does not close wit
 it: where a feature is opt-in, or a number comes from simulation rather than the
 air, these pages say so, and each page ends with what its section does **not** do.
 
-**This guide documents Nexus 1.10.3.** These pages ship inside the app, and the same files are
+**This guide documents Nexus 1.11.1.** These pages ship inside the app, and the same files are
 synced to the website and built into the PDF and EPUB at each release — so a copy matches the
 release it came out with. It cannot promise to match the build *you* are running. The website
 and the downloads track the latest release; your installed copy may be older, or newer than a

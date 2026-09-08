@@ -73,6 +73,14 @@ cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 >/dev/nul
 
 # 3. CHANGELOG heading.
 TODAY=$(date +%F)
+# The guide's overview states the version it documents, in prose, on its own line. It ships
+# inside the app, on the website and in the PDF/EPUB, so a stale number here tells every reader
+# the manual describes a release it does not. It was 1.10.3 while the book was 1.11.1.
+if grep -q '^\*\*This guide documents Nexus ' docs/guide/index.md; then
+  sed -i -E "s/^\*\*This guide documents Nexus [0-9]+\.[0-9]+\.[0-9]+[^*]*\.\*\*/**This guide documents Nexus $NEW.**/" docs/guide/index.md
+  echo "guide overview: documents Nexus $NEW"
+fi
+
 if grep -q '^## \[Unreleased\]' CHANGELOG.md; then
   sed -i "0,/^## \[Unreleased\]/s//## [$NEW] — $TODAY/" CHANGELOG.md
   echo "CHANGELOG: [Unreleased] -> [$NEW] — $TODAY"
