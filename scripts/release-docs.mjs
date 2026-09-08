@@ -177,41 +177,126 @@ function checkDocGates() {
 // The mapping has to be declared, because nothing in an image says what it shows. An image with
 // no entry FAILS rather than being skipped: an unmapped capture is a check quietly shrinking,
 // which is how the gap this whole script exists for opened in the first place.
+//
+// WHY THIS IS A PREFIX TABLE AND NOT ONE LINE PER IMAGE. It was one line per image while there
+// were eleven. The illustrated manual is going to ~90, and 33 of those are Settings tabs that
+// all show the same two files — so a per-image table would be 33 identical right-hand sides
+// maintained by hand, on eight branches at once, all editing the same object literal. That is
+// not a gate anyone keeps; it is a merge conflict with a check attached.
+//
+// So a key is a FAMILY PREFIX, and the LONGEST key that a filename starts with wins. Order in
+// this object is irrelevant — you cannot break another family's mapping by where you paste
+// yours, which is the footgun a first-match-wins list would have.
+//
+//   'settings-'        matches settings-radio.webp, settings-audio.webp, all 33 of them
+//   'operate-'         matches operate-waterfall.webp
+//   'operate-classic'  is longer, so it beats 'operate-' for operate-classic.webp
+//
+// HOW TO ADD AN IMAGE. Name it for what it shows (see scripts/build-manual-images.py). If its
+// family prefix is already here, you add NOTHING — the new capture is checked the moment it
+// lands. If it is a new family, add ONE key naming the source files whose change would make
+// the picture wrong. Do not add a key that names a whole directory or a barrel file: an owner
+// that changes every week reports staleness every week, and that is the same as reporting none.
+//
+// A key that matches no image today is NOT a failure — it is a family nobody has captured yet,
+// costs nothing, and pre-declaring it is what keeps eight branches out of each other's diffs.
+// (An exact per-image key that matched nothing WAS a failure, because it meant a real image had
+// been renamed out from under its mapping. A prefix cannot hide that: an image matching no key
+// still FAILS.) Unused keys are counted in the ok line so a dead family stays visible.
 
-const SHOTS = {
-  'settings-radio.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
-  'settings-modes.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
-  'settings-contesting.webp': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
-  'cw-cockpit.webp': ['ui/src/components/CwCockpit.tsx'],
-  'phone-cockpit.webp': ['ui/src/components/PhoneCockpit.tsx'],
-  'rtty-cockpit.webp': ['ui/src/components/RttyCockpit.tsx'],
-  'sstv.webp': ['ui/src/components/SstvView.tsx'],
-  'operate-classic.webp': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateDecodes.tsx'],
-  'operate-roster.webp': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateRoster.tsx'],
-  'awards-official.webp': ['ui/src/components/AwardsView.tsx'],
-  'satellites-console.webp': ['ui/src/components/SatellitesView.tsx'],
+const SHOT_OWNERS = {
+  // Setup — the first-run wizard.
+  'wizard-': ['ui/src/components/SetupWizard.tsx'],
+  'wizard-rig': ['ui/src/components/SetupWizard.tsx', 'ui/src/components/SetupHealth.tsx'],
+
+  // Settings. One family, 33 captures: the panel and the registry that generates it.
+  'settings-': ['ui/src/components/SettingsPanel.tsx', 'ui/src/settings/registry.ts'],
+
+  // The FT8/FT4 cockpit and its panes.
+  'operate-': ['ui/src/components/OperateCockpit.tsx'],
+  'operate-classic': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateDecodes.tsx'],
+  'operate-roster': ['ui/src/components/OperateCockpit.tsx', 'ui/src/components/OperateRoster.tsx'],
+  'operate-waterfall': ['ui/src/components/Waterfall.tsx'],
+
+  // The other mode cockpits.
+  'cw-': ['ui/src/components/CwCockpit.tsx'],
+  'phone-': ['ui/src/components/PhoneCockpit.tsx'],
+  'rtty-': ['ui/src/components/RttyCockpit.tsx'],
+  'psk-': ['ui/src/components/PskCockpit.tsx'],
+  'js8-': ['ui/src/components/Js8Cockpit.tsx'],
+  'sstv': ['ui/src/components/SstvView.tsx'],
+  'aprs-': ['ui/src/components/AprsCockpit.tsx'],
+  'tempo-': ['ui/src/components/Conversation.tsx', 'ui/src/components/Composer.tsx'],
+
+  // Hunting, spotting, events.
+  'needed-': ['ui/src/components/NeededPanel.tsx'],
+  'spots-': ['ui/src/components/SpotsPanel.tsx'],
+  'dxpeditions-': ['ui/src/components/DxpeditionsView.tsx'],
+  'pota-': ['ui/src/components/PotaSotaView.tsx'],
+  'contest-': ['ui/src/components/ContestCalendarPane.tsx'],
+
+  // Log, awards, statistics.
+  'logbook-': ['ui/src/components/Logbook.tsx'],
+  'logbook-entry': ['ui/src/components/Logbook.tsx', 'ui/src/components/LogEntry.tsx'],
+  'awards-official': ['ui/src/components/AwardsView.tsx'],
+  'awards-journey': ['ui/src/components/AwardsJourney.tsx'],
+  'stats-': ['ui/src/components/StatsView.tsx'],
+
+  // Maps, memories, programming, satellites.
+  'connect-': ['ui/src/components/ConnectView.tsx'],
+  'connect-map': ['ui/src/components/ConnectView.tsx', 'ui/src/components/MapView.tsx'],
+  'memories-': ['ui/src/components/MemoriesView.tsx'],
+  'memory-': ['ui/src/components/MemoriesView.tsx'],
+  'program-': ['ui/src/components/RadioProgView.tsx'],
+  'satellites-': ['ui/src/components/SatellitesView.tsx'],
+}
+
+/** The longest family prefix this filename starts with, or null when nothing claims it. */
+function ownerKeyFor(name) {
+  let best = null
+  for (const key of Object.keys(SHOT_OWNERS)) {
+    if (name.startsWith(key) && (best === null || key.length > best.length)) best = key
+  }
+  return best
 }
 
 function checkScreenshots() {
   const dir = path.join(DOCS, 'img', 'manual')
   if (!existsSync(dir)) return SKIP('manual screenshots', `${rel(dir)} does not exist`)
-  const images = readdirSync(dir).filter((f) => !statSync(path.join(dir, f)).isDirectory())
+  const entries = readdirSync(dir).filter((f) => !statSync(path.join(dir, f)).isDirectory())
+
+  // build-manual-images.py emits WEBP and only WEBP, so anything else here is a raw capture
+  // somebody committed by mistake — a 3251-px JPEG that will ship at ten times the byte cost
+  // and render unreadable. It is caught here rather than in review because 75 raw captures are
+  // sitting in a handoff bundle one `cp` away from this directory.
+  const notWebp = entries.filter((f) => !f.endsWith('.webp'))
+  const images = entries.filter((f) => f.endsWith('.webp'))
 
   // Positive control on the mapping itself, in both directions.
-  const unmapped = images.filter((f) => !SHOTS[f])
-  const phantom = Object.keys(SHOTS).filter((f) => !images.includes(f))
-  const badOwners = Object.entries(SHOTS).flatMap(([img, owners]) =>
-    owners.filter((o) => !existsSync(path.join(ROOT, o))).map((o) => `${img} -> ${o} does not exist`))
+  const SHOTS = Object.fromEntries(
+    images.map((f) => [f, SHOT_OWNERS[ownerKeyFor(f)]]).filter(([, owners]) => owners),
+  )
+  const unmapped = images.filter((f) => ownerKeyFor(f) === null)
+  const usedKeys = new Set(images.map(ownerKeyFor).filter(Boolean))
+  const unusedKeys = Object.keys(SHOT_OWNERS).filter((k) => !usedKeys.has(k))
+  const badOwners = Object.entries(SHOT_OWNERS).flatMap(([key, owners]) =>
+    owners.filter((o) => !existsSync(path.join(ROOT, o))).map((o) => `${key}* -> ${o} does not exist`))
   const mappingProblems = [
-    ...unmapped.map((f) => `docs/img/manual/${f} has no SHOTS entry — it is being checked by nobody`),
-    ...phantom.map((f) => `SHOTS names ${f}, which is not in docs/img/manual/ — a dead entry`),
+    ...unmapped.map((f) =>
+      `docs/img/manual/${f} matches no SHOT_OWNERS family — it is being checked by nobody`),
+    ...notWebp.map((f) =>
+      `docs/img/manual/${f} is not a .webp — run scripts/build-manual-images.py, do not commit the raw capture`),
     ...badOwners,
   ]
   if (mappingProblems.length) {
     FAIL('screenshot mapping', mappingProblems,
-      'Fix the SHOTS table in scripts/release-docs.mjs. Every image must name the source it shows.')
+      'Fix SHOT_OWNERS in scripts/release-docs.mjs — one key per FAMILY, not per image. Read the ' +
+        'block comment above it before adding a key.')
   } else {
-    OK('screenshot mapping', `${images.length} images, all mapped to source that exists`)
+    OK('screenshot mapping',
+      `${images.length} images mapped by ${usedKeys.size} of ${Object.keys(SHOT_OWNERS).length} ` +
+        `families, all naming source that exists` +
+        (unusedKeys.length ? ` · ${unusedKeys.length} families not captured yet: ${unusedKeys.join(', ')}` : ''))
   }
 
   // RANKED, not just listed. A commit that touches every cockpit at once (1db7d051 did) puts
@@ -222,7 +307,6 @@ function checkScreenshots() {
   const pending = []
   for (const [img, owners] of Object.entries(SHOTS)) {
     const imgPath = `docs/img/manual/${img}`
-    if (!existsSync(path.join(ROOT, imgPath))) continue // already reported as phantom
     if (isDirty(imgPath)) {
       pending.push(`${img} — recaptured but not committed yet`)
       continue
