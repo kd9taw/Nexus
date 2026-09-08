@@ -2662,9 +2662,20 @@ export default function App() {
     case 'psk':
     case 'sstv':
     case 'aprs':
+    case 'js8':
       // Same keep-alive pattern as Operate: RTTY's + PSK's decoded streams,
-      // SSTV's always-armed VIS receiver, and APRS's decode list must survive
-      // navigation, so all four live in persistent hosts below. Nothing in the slot.
+      // SSTV's always-armed VIS receiver, APRS's decode list and JS8's four-speed
+      // activity stream must survive navigation, so all five live in persistent hosts
+      // below. Nothing in the slot.
+      //
+      // ⚠️ A KEEP-ALIVE COCKPIT WITHOUT A CASE HERE FALLS THROUGH TO `default:` AND DRAWS
+      // THE TEMPO WORKSPACE UNDERNEATH ITSELF. 'js8' was missing and did exactly that —
+      // TempoHeader's TempoFast/TempoDeep chips, the Tempo roster + conversation, and the
+      // right rail's FT waterfall beside the cockpit's own, all on the JS8 screen (operator,
+      // 2026-09: "why is there tempo fast and tempo slow listed?", "also bringing in tempo
+      // chats", and a "split waterfall"). It is the 0.4–0.21 two-mains-in-the-shell class
+      // reached from the SWITCH rather than from the CSS that host-hidden.test.ts guards.
+      // Pinned by App.js8workspace.test.tsx, which mounts App and counts what is on screen.
       workspace = null
       break
     case 'connect':
