@@ -41,6 +41,12 @@ in the shared checkout while other agents are working.
 `--version X.Y.Z` overrides the version it reads. `--no-tests` skips the vitest doc gates when CI
 has just run them on this exact commit.
 
+`--push-gate` runs only the three checks that are true of every commit — screenshot mapping,
+manual assets, internal links and anchors. No network, no `gh`, no git history. **CI runs that
+subset on every push**, in the `ui` job beside the two `--check` generators, so those three are
+already green by the time you get here; a release run is where the other checks live. Nothing
+runs the full script but you.
+
 ## 3. Reading the report
 
 **FAIL** — mechanically wrong, exits 1, fix before calling the release closed.
@@ -51,7 +57,11 @@ has just run them on this exact commit.
 | `gen-wiki.mjs --check` | Either the three derived wiki pages are behind their `docs/` source (re-run it) or a required replacement stopped matching (fix the rule in the script — do NOT ship the page without the transform). |
 | the vitest doc gates | `npm --prefix ui exec -- vitest run src/docs-match-code.test.ts src/docs-settings-pointers.test.ts`. The code is the arbiter: the doc is what changes. |
 | `docs/RELEASE_NOTES-<ver>.md` missing | Write it. Without it the update feed's `notes` degrades to the GitHub release body. |
-| CHANGELOG issue credits | An issue cited as fixed is still open. **A released section is immutable history** — correct it in the next version's section, not by editing the shipped one, and never close the issue to make the check green. |
+| CHANGELOG issue credits | An issue cited as fixed is still open and its bullet claims no NEEDS-BENCH. **A released section is immutable history** — correct it in the next version's section, not by editing the shipped one, and never close the issue to make the check green. A cited number that is neither an issue nor a discussion is a typo; fix it in the next section. |
+| screenshot mapping | An image in `docs/img/manual/` matches no family in `SHOT_OWNERS`, or a family names a source file that is gone. Keys are **family prefixes**, longest match wins — a new capture in an existing family needs no edit at all. A non-`.webp` file here is a raw capture somebody committed; run `scripts/build-manual-images.py`. |
+| manual assets | A page points at an image that is not there, an image is published but on no page, an alt text is empty or a placeholder, or two names hold identical bytes. All mechanical. Alt text describes the picture for somebody who cannot see it — not a caption, not a repeat of the sentence above it. |
+| internal links and anchors | A local link or a heading anchor does not resolve. Usually a heading was reworded in an editing pass. Fix the link or restore the heading; deleting the cross-reference is not the fix. |
+| site manual vs `docs/guide` | A chapter is in the repo and 404s on the live site. This is a **deploy**, not a repo edit — see §4. |
 
 **REVIEW** — a human decides, exits 0, printed last so it is the final thing on screen. It does
 not fail the run on purpose: a check that is red every single release is a check that gets
@@ -66,6 +76,11 @@ switched off, and the FAILs go with it.
 - *older versions named in prose* — grouped by the sentence, because one editorial decision gets
   pasted into several pages. Some are correct history ("1.0.0 installs over 0.27.0"); some are a
   banner that stopped being news three releases ago.
+- *issues credited but still open on purpose* — a fix that shipped under the project's
+  **NEEDS-BENCH** flag, where the hardware to prove it on is not here (1.10.3 had two: #126 wants
+  an FTDX-101D, #233 a Mac). No repo edit closes these, so they are REVIEW rather than a FAIL
+  nobody can act on. Check the flag still belongs before skipping past it — it is published to
+  the operator in the release notes, so a false one is a public claim.
 
 ## 4. By hand — nothing in the repo can reach these
 
@@ -119,6 +134,15 @@ hides.
   names that do not exist ("Share my radio (CAT broker)", "CAT broker port", "Broker PTT").
 - **Whether the paste actually happened.** Nothing in this repo can see the SourceForge or GitHub
   wiki. Verify by loading the page.
+- **Whether an image shows what its alt text says.** `manual assets` checks that alt text EXISTS
+  and is not a placeholder. A new capture committed under the old sentence passes it, which is
+  the whole reason the freshness REVIEW ends with "reword the alt text".
+- **Manual pages outside `docs/guide/`.** The site check lists `docs/guide/*.md` and asks the live
+  index for each. `docs/quick-start.md` is also a chapter of the published manual
+  (`/manual/quick-start`, and `build-manual-pdf.py` puts it first in the book) and is not in that
+  list, so a 404 there would go unseen.
+- **Release notes.** `docs/RELEASE_NOTES-*.md` are excluded from the link, asset and version-prose
+  walks — they are a point-in-time record and rewriting them is the dishonest fix.
 
 ## 6. Then close the release
 
